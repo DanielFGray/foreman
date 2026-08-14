@@ -83,7 +83,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       yield* SubscriptionRef.set(state, current);
 
       yield* settle(current);
-      yield* tidy;
+      yield* tidy(current);
       yield* reclaim(current);
       if (yield* Ref.get(paused)) return;
       yield* fill(yield* observe);
@@ -97,7 +97,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const workerFor = (task: Item): Worker | undefined => {
         const worker = byTask.get(task.id);
         if (!worker) return undefined;
-        const state = reviewedBy(task) ? worker.review : worker.author;
+        const state = worker.roles.get(reviewedBy(task) ? "review" : "author");
         return { ...worker, state: state ?? "gone" };
       };
 
@@ -146,20 +146,28 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const now = yield* DateTime.now;
       const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
 
-      // Foreman's branches that hold commits the checkout does not have. One
-      // read, two questions: which branches nothing in the pipeline accounts
-      // for, and whether a task handed back for review has anything on it.
-      const unmerged = yield* eachProject((project) =>
-        repository.unmerged(project.directory).pipe(
-          Effect.map((branches) =>
-            branches.flatMap((branch) => {
-              const task = taskOf(branch);
-              return task ? [{ project: project.name, branch, task }] : [];
+      // Foreman's branches, in every project. One read, three questions: which
+      // branches nothing in the pipeline accounts for, whether a task handed
+      // back for review has anything on it, and which refs the sweep may
+      // delete. They were three reads once, and the answers disagreed.
+      const branches = yield* eachProject((project) =>
+        repository.branches(project.directory).pipe(
+          Effect.map((refs) =>
+            refs.flatMap((ref) => {
+              const task = taskOf(ref.branch);
+              return task
+                ? [{ ...ref, project: project.name, directory: project.directory, task }]
+                : [];
             }),
           ),
         ),
       );
-      const committed = new Set(unmerged.map((entry) => entry.task));
+      // Authorship, not availability. A branch whose commits the checkout
+      // already has still proves the author wrote something — and a task in
+      // review whose branch was merged by hand needs landing, not requeueing.
+      const committed = new Set(
+        branches.filter((entry) => !entry.empty).map((entry) => entry.task),
+      );
 
       // Every other column is read from prog, which forgets a branch the
       // moment its task is closed, reclaimed or deleted — so the commits
@@ -169,14 +177,31 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // asked about.
       const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
       const orphans = yield* Effect.forEach(
-        unmerged.filter((entry) => !accounted.has(entry.task) && !byTask.has(entry.task)),
-        (orphan) =>
-          prog.show(orphan.task).pipe(
-            Effect.map((task) => ({ ...orphan, title: task.title, status: task.status })),
+        branches.filter(
+          (entry) => !entry.merged && !accounted.has(entry.task) && !byTask.has(entry.task),
+        ),
+        ({ branch, task, project }) =>
+          prog.show(task).pipe(
+            Effect.map((item) => ({ project, branch, task, title: item.title, status: item.status })),
             // A branch whose task was deleted outright. It is the reason to
             // read git rather than prog, so it is shown, not dropped.
-            Effect.orElseSucceed(() => ({ ...orphan, title: undefined, status: undefined })),
+            Effect.orElseSucceed(() => ({
+              project,
+              branch,
+              task,
+              title: undefined,
+              status: undefined,
+            })),
           ),
+      );
+
+      // What the sweep may delete: a merged ref for work nothing in the
+      // pipeline is still pointing at. The branch is a task's only proof that
+      // its author wrote anything, and a merge can arrive from outside foreman
+      // — a hand-merged branch swept on the tick before its reviewer settles
+      // leaves that task looking like one nobody ever committed to.
+      const prunable = branches.filter(
+        (entry) => entry.merged && !accounted.has(entry.task) && !byTask.has(entry.task),
       );
 
       // Work at the operator's rung is ready by every measure prog knows and
@@ -212,6 +237,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         working: claimedActive,
         ...reviewable(reviewingActive, committed),
         committed,
+        prunable,
         orphans,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
@@ -462,29 +488,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
 
     /**
-     * Deletes the branches whose work the projects already have.
+     * Deletes the branches whose work the projects already have and no task
+     * still refers to.
      *
      * A sweep rather than a step inside landing, because a merge is not the
      * only way a branch arrives in the checkout — you land one by hand and the
      * ref should go the same way. It runs every tick against the world as it
      * is, so nothing has to remember what it merged.
+     *
+     * What it may not sweep is a branch some task is still in the middle of,
+     * because that ref is the only proof the task's author committed anything.
+     * Delete it while the task is still in review and the next tick reads a
+     * task with no branch, concludes nothing was written, and sends finished
+     * work back to the queue.
      */
-    const tidy = Effect.forEach(
-      settings.projects,
-      (project) =>
-        repository.prune(project.directory).pipe(
-          Effect.flatMap((deleted) =>
-            deleted.length === 0
-              ? Effect.void
-              : // Named rather than counted. A branch foreman deleted is the one
-                // thing about a prune anyone ever goes looking for afterwards,
-                // and there are only ever a handful in a tick.
-                Effect.logInfo(`pruned ${deleted.join(", ")} in ${project.name}`),
+    const tidy = (current: Observation) =>
+      Effect.forEach(
+        current.prunable,
+        (entry) =>
+          repository.remove(entry.directory, entry.branch).pipe(
+            Effect.flatMap((deleted) =>
+              deleted
+                ? // Named rather than counted. A branch foreman deleted is the
+                  // one thing about a prune anyone ever goes looking for
+                  // afterwards, and there are only ever a handful in a tick.
+                  Effect.logInfo(`pruned ${entry.branch} in ${entry.project}`)
+                : Effect.void,
+            ),
+            Effect.catchAll((error) =>
+              Effect.logWarning(`pruning ${entry.branch} in ${entry.project} failed: ${error}`),
+            ),
           ),
-          Effect.catchAll((error) => Effect.logWarning(`pruning ${project.name} failed: ${error}`)),
-        ),
-      { discard: true },
-    );
+        { discard: true },
+      );
 
     /**
      * Returns claims that nobody is working on any more.
@@ -918,8 +954,11 @@ export const decisionsOf = (
  * nothing, and then a reviewer is paid to read an empty diff — or, on a task
  * small enough to skip review, an empty merge commit lands.
  *
- * `committed` holds the tasks whose branch carries commits the checkout does
- * not have, which is the same read that finds stranded branches.
+ * `committed` holds the tasks whose branch carries commits of its own, which is
+ * the same read that finds stranded branches. Of its own, not merely of ones
+ * the checkout lacks: a branch already merged — by foreman on an earlier tick,
+ * or by hand — proves its author wrote something just as well, and reading that
+ * as an empty branch sends finished work back to the queue.
  */
 export const reviewable = (
   reviewing: ReadonlyArray<Active>,
@@ -1030,12 +1069,19 @@ interface Observation extends FleetState {
   readonly unbacked: ReadonlyArray<Active>;
 
   /**
-   * Tasks whose branch holds commits the project checkout does not have.
+   * Tasks whose branch carries commits of its own, landed or not.
    *
    * Also a step's input rather than a column: settle asks it whether a worker
    * that vanished got anything as far as a commit.
    */
   readonly committed: ReadonlySet<string>;
+
+  /** The merged branches no live task still points at, for the sweep. */
+  readonly prunable: ReadonlyArray<{
+    readonly project: string;
+    readonly directory: string;
+    readonly branch: string;
+  }>;
 }
 
 /** `1 slot`, `2 slots`. The supervised run AGENTS.md recommends is `--slots 1`. */

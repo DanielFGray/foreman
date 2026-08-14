@@ -2,6 +2,7 @@ import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Data, Effect, Layer, Schema, Stream } from "effect";
 import {
+  AgentRole,
   type AttachOptions,
   Fleet,
   FleetError,
@@ -132,8 +133,6 @@ export const HerdrFleet = Layer.effect(
           );
           const pane = paneFor(workspacePanes);
           if (!pane) return [];
-          const author = workspacePanes.find((candidate) => candidate.label === AUTHOR_PANE);
-          const review = workspacePanes.find((candidate) => candidate.label === REVIEW_PANE);
           return [
             {
               task,
@@ -145,8 +144,7 @@ export const HerdrFleet = Layer.effect(
               // done pane outranks current work. Dispatch needs operational
               // state, so aggregate the panes with live work first instead.
               state: workerStateOf(workspacePanes.map((candidate) => candidate.agent_status)),
-              author: roleStateOf(author),
-              review: roleStateOf(review),
+              roles: rolesOf(workspacePanes),
             } satisfies Worker,
           ];
         }),
@@ -189,8 +187,7 @@ export const HerdrFleet = Layer.effect(
             directory: created.result.worktree.path,
             worktree: created.result.worktree.path,
             state: "gone",
-            author: undefined,
-            review: undefined,
+            roles: new Map(),
           } satisfies Worker;
         }),
 
@@ -218,14 +215,13 @@ export const HerdrFleet = Layer.effect(
             directory: options.repository,
             worktree: undefined,
             state: "gone",
-            author: undefined,
-            review: undefined,
+            roles: new Map(),
           } satisfies Worker;
         }),
 
       spawn: (worker: Worker, options: SpawnOptions) =>
         Effect.gen(function* () {
-          const role = options.role === "author" ? AUTHOR_PANE : REVIEW_PANE;
+          const role = paneLabelFor(options.role);
 
           // One agent per role per workspace, checked against the multiplexer
           // rather than against anything foreman remembers. An agent that is
@@ -236,9 +232,10 @@ export const HerdrFleet = Layer.effect(
           // A refusal is a failure of this dispatch, which is exactly right:
           // the caller already hands the claim back on one, so the task returns
           // to the queue and the slot goes to somebody else.
-          const held = (yield* herdrJson(PaneList, "spawn", "pane", "list")).result.panes.filter(
-            (pane) => pane.workspace_id === worker.workspace && pane.label === role,
-          );
+          const workspacePanes = (
+            yield* herdrJson(PaneList, "spawn", "pane", "list", "--workspace", worker.workspace)
+          ).result.panes;
+          const held = workspacePanes.filter((pane) => pane.label === role);
           const live = held.find((pane) => workerStateOf([pane.agent_status]) !== "gone");
           if (live) {
             return yield* new FleetError({
@@ -247,13 +244,16 @@ export const HerdrFleet = Layer.effect(
             });
           }
 
-          // The author takes the workspace's own pane; only a reviewer splits.
-          // Splitting a second pane for the author used to leave a blank shell
-          // beside every worker, so the author spawns in place in the root
-          // pane, and a reviewer splits off it — the new pane lands beside the
-          // author's output, which is the layout a review is for.
+          // Placement is read off the workspace rather than declared per role.
+          // The first agent takes the workspace's own pane, because splitting
+          // one for it used to leave a blank shell beside every worker; the
+          // next role splits off it, and its pane lands beside the output it
+          // was sent to read — which is the layout both a review and a plan's
+          // tasking stage are for. A role that already owns the root pane
+          // takes it back, so a second author continues in the same column.
+          const own = workspacePanes.find((pane) => pane.pane_id === worker.pane);
           const split =
-            options.role === "review"
+            own?.label !== undefined && own.label !== role
               ? yield* herdrJson(
                   PaneSplit,
                   "spawn",
@@ -274,12 +274,12 @@ export const HerdrFleet = Layer.effect(
           const pane = split?.result.pane.pane_id ?? worker.pane;
           const agent = agentNameFor(pane);
 
-          // A review failure takes its own split back down; an author failure
-          // has nothing to take down, because the author's pane is the
-          // workspace's own and pre-dates this dispatch. Closing it would close
-          // the workspace and orphan its worktree, so the failed dispatch is
-          // left as residue for the operator, exactly like a spawn that failed
-          // before any pane existed.
+          // A failure takes back the pane this dispatch made, and nothing else.
+          // A role that reused the workspace's own pane has nothing to take
+          // down: that pane pre-dates the dispatch, and closing it would close
+          // the workspace and orphan its worktree. So that failure is left as
+          // residue for the operator, exactly like a spawn that failed before
+          // any pane existed.
           return yield* Effect.gen(function* () {
             yield* herdr("spawn", "pane", "rename", pane, role);
 
@@ -333,9 +333,7 @@ export const HerdrFleet = Layer.effect(
             return { kind: options.kind, model };
           }).pipe(
             Effect.onError(() =>
-              options.role === "review"
-                ? herdr("spawn", "pane", "close", pane).pipe(Effect.ignore)
-                : Effect.void,
+              split ? herdr("spawn", "pane", "close", pane).pipe(Effect.ignore) : Effect.void,
             ),
           );
         }),
@@ -432,8 +430,20 @@ export const agentNameFor = (pane: string): string =>
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(-24)}`;
 
-const AUTHOR_PANE = "foreman-author";
-const REVIEW_PANE = "foreman-review";
+/**
+ * A pane label naming the role its agent runs, and the role read back off it.
+ *
+ * Namespaced so a pane a person labelled is never mistaken for foreman's, and
+ * parsed rather than matched against a table: the roles are whatever the port
+ * declares, and a label outside that set belongs to somebody else.
+ */
+const paneLabelFor = (role: AgentRole): string => `foreman-${role}`;
+
+const roleOf = (label: string | undefined): AgentRole | undefined => {
+  if (!label?.startsWith("foreman-")) return undefined;
+  const role = label.slice("foreman-".length);
+  return Schema.is(AgentRole)(role) ? role : undefined;
+};
 
 /**
  * herdr distinguishes idle from done by whether the operator has seen the tab.
@@ -495,8 +505,22 @@ export const paneFor = (panes: ReadonlyArray<PaneRecord>): PaneRecord | undefine
     (candidate) => candidate.agent === undefined && candidate.label === undefined,
   ) ?? panes[0];
 
-const roleStateOf = (pane: PaneRecord | undefined): WorkerState | undefined =>
-  pane ? workerStateOf([pane.agent_status]) : undefined;
+/**
+ * Which role each of a workspace's labelled panes is running, and how that
+ * pane is doing.
+ *
+ * The label is the record. herdr keeps it across dispatches, so a role a
+ * workspace has never run is simply absent, and a role whose agent died is
+ * present and `gone` — which is the difference between a task that was never
+ * reviewed and one whose reviewer vanished.
+ */
+const rolesOf = (panes: ReadonlyArray<PaneRecord>): ReadonlyMap<AgentRole, WorkerState> =>
+  new Map(
+    panes.flatMap((pane) => {
+      const role = roleOf(pane.label);
+      return role ? [[role, workerStateOf([pane.agent_status])] as const] : [];
+    }),
+  );
 
 const PaneList = Schema.Struct({
   result: Schema.Struct({ panes: Schema.Array(Pane) }),

@@ -2,7 +2,14 @@ import { FileSystem } from "@effect/platform";
 import { Duration, Effect, Option, Schema } from "effect";
 import { tmpdir } from "node:os";
 import { Settings } from "./config.ts";
-import { directoryFor, Fleet, labelFor, type Worker, type WorkerState } from "./fleet.ts";
+import {
+  type AgentRole,
+  directoryFor,
+  Fleet,
+  labelFor,
+  type Worker,
+  type WorkerState,
+} from "./fleet.ts";
 import { isPlan, PLAN, Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 
@@ -118,6 +125,9 @@ export interface PlanInput {
 
 /** Which agent is running for the plan right now. */
 export type PlanStage = "planning" | "tasking";
+
+/** The agent a stage runs. One role each, so the two never contend for a pane. */
+const roleOf = (stage: PlanStage): AgentRole => (stage === "planning" ? "planner" : "tasker");
 
 /**
  * The stage a plan epic is in, from its derived status.
@@ -274,17 +284,6 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
     const prog = yield* Prog;
     const prompts = yield* Prompts;
 
-    // One agent per role per workspace: the spawn guard refuses a live pane
-    // that already holds the stage's role, and a finished stage — or a previous
-    // attempt, on a resume — leaves one behind. A plan run drives one agent at
-    // a time and reads each stage's deliverable from the store before the next
-    // spawn, so any pane in the workspace belongs to finished work and is
-    // retired before the stage takes the role.
-    const current = (yield* fleet.roster).find((candidate) => candidate.task === epic);
-    if (current) {
-      yield* fleet.dismiss(current, "author");
-    }
-
     const item = yield* prog.show(epic);
     const rung = stage === "planning" ? settings.planner : settings.tasker;
     const prompt =
@@ -292,11 +291,16 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
         ? yield* prompts.planner(item, worker.directory, repository)
         : yield* prompts.tasker(item, worker.directory, repository);
 
+    // A stage is a role. The two stages run different models on different work
+    // — the planner writes the specification, the tasker files it — so the
+    // tasker is a second agent beside the planner rather than a second author
+    // in its pane, and the guard that keeps one agent per role never has to be
+    // talked out of a pane the previous stage is still sitting in.
     yield* fleet.spawn(worker, {
       kind: rung.harness,
       model: rung.model,
       prompt,
-      role: "author",
+      role: roleOf(stage),
     });
     yield* Effect.logInfo(`plan ${epic}: ${stage} by ${rung.name} in ${worker.workspace}`);
     return yield* waitFor(stage, epic, item.description);
@@ -324,9 +328,13 @@ const waitFor = (stage: PlanStage, epic: string, initialDescription: string | nu
     for (;;) {
       yield* Effect.sleep(Duration.seconds(settings.pollInterval));
       const worker = (yield* fleet.roster).find((candidate) => candidate.task === epic);
+      // This stage's own pane, not the workspace's aggregate: once the tasker
+      // has split off beside it, the finished planner is still sitting there
+      // idle, and the loudest pane in the workspace is the wrong one to read.
+      const state = worker?.roles.get(roleOf(stage)) ?? "gone";
       const item = yield* prog.show(epic);
       const specWritten = item.description !== initialDescription;
-      const result = decide(stage, worker?.state ?? "gone", item.status, specWritten);
+      const result = decide(stage, state, item.status, specWritten);
       if (result === "advance") return item.status;
       if (result === "failed") {
         const evidence =
@@ -334,7 +342,7 @@ const waitFor = (stage: PlanStage, epic: string, initialDescription: string | nu
             ? "without writing a specification into the epic's description"
             : `with the epic still ${item.status}`;
         return yield* new PlanError({
-          detail: `the ${stage} agent stopped ${evidence} (workspace ${worker?.state ?? "gone"}). Resume with \`foreman plan --epic ${epic}\`.`,
+          detail: `the ${stage} agent stopped ${evidence} (its pane reads ${state}). Resume with \`foreman plan --epic ${epic}\`.`,
         });
       }
     }

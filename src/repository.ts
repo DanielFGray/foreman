@@ -50,6 +50,21 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
       );
 
+    /** A git command whose answer is a list, and whose failure is an error. */
+    const lines = (directory: string, ...args: Array<string>) =>
+      exec(directory, ...args).pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.succeed(result.stdout.split("\n").filter((line) => line.trim() !== ""))
+            : Effect.fail(
+                new RepositoryError({
+                  directory,
+                  detail: result.stderr.trim() || `git ${args[0]} exited ${result.exitCode}`,
+                }),
+              ),
+        ),
+      );
+
     const isClean = (directory: string) =>
       status(directory, "no").pipe(Effect.map((changes) => changes === ""));
 
@@ -116,61 +131,62 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
 
       /**
-       * Foreman's branches holding commits the checkout does not have.
+       * Every branch foreman owns in this checkout, and the two facts git can
+       * prove about each one.
        *
-       * This is the only record that survives everything else. A workspace can
-       * be closed, a claim reclaimed, a task marked done or deleted outright,
-       * and the commits are still sitting on the branch — so git, not prog, is
-       * what foreman asks to find work it has lost track of.
+       * The branches are the only record that survives everything else. A
+       * workspace can be closed, a claim reclaimed, a task marked done or
+       * deleted outright, and the commits are still sitting on the branch — so
+       * git, not prog, is what foreman asks to find work it has lost track of.
+       *
+       * `empty` is the fact that cannot be inferred from `merged`, and getting
+       * it wrong once cost a landed task. A branch nobody committed to and a
+       * branch whose commits are already in the checkout are both reachable
+       * from `HEAD`, so "not unmerged" says nothing about whether an author
+       * wrote anything. What separates them is where the tip sits: an untouched
+       * branch still points at the trunk commit it was cut from, while a merged
+       * branch's tip arrives through a merge commit's second parent. Foreman
+       * merges `--no-ff`, so the first-parent line is exactly the set of
+       * commits the checkout had before any branch landed.
        */
-      unmerged: (directory: string) =>
-        exec(
-          directory,
-          "for-each-ref",
-          "--no-merged=HEAD",
-          "--format=%(refname:short)",
-          "refs/heads/foreman/",
-        ).pipe(
-          Effect.flatMap((result) =>
-            result.exitCode === 0
-              ? Effect.succeed(result.stdout.split("\n").filter((line) => line.trim() !== ""))
-              : Effect.fail(
-                  new RepositoryError({
-                    directory,
-                    detail: result.stderr.trim() || `git for-each-ref exited ${result.exitCode}`,
-                  }),
-                ),
-          ),
-        ),
+      branches: (directory: string) =>
+        Effect.gen(function* () {
+          const refs = yield* lines(
+            directory,
+            "for-each-ref",
+            "--format=%(objectname) %(refname:short)",
+            "refs/heads/foreman/",
+          );
+          const merged = new Set(
+            yield* lines(
+              directory,
+              "for-each-ref",
+              "--merged=HEAD",
+              "--format=%(refname:short)",
+              "refs/heads/foreman/",
+            ),
+          );
+          const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", "HEAD"));
+          return refs.flatMap((ref) => {
+            const [tip, branch] = ref.split(" ");
+            return tip && branch
+              ? [{ branch, merged: merged.has(branch), empty: trunk.has(tip) } satisfies Branch]
+              : [];
+          });
+        }),
 
       /**
-       * Deletes foreman's branches whose commits the checkout already has, and
-       * says which ones went.
+       * Deletes a branch, and says whether git let it go.
        *
-       * A landed branch is history the merge commit already records, so keeping
-       * it only grows the ref list until `git branch` is unreadable. Deletion
-       * is safe precisely because it is limited to merged refs: `-d` refuses an
-       * unmerged branch, so the one branch worth keeping is the one git will
-       * not let go of. A branch a worktree still has checked out also refuses,
-       * and is picked up on a later tick once that workspace closes.
+       * `--delete` without `--force` is what makes the sweep above it safe:
+       * git refuses a branch holding commits the checkout does not have, and
+       * refuses one a worktree still has checked out — which is picked up on a
+       * later tick, once that workspace closes. A refusal is an answer, not a
+       * failure, so it comes back as `false` rather than as an error.
        */
-      prune: (directory: string) =>
-        exec(
-          directory,
-          "for-each-ref",
-          "--merged=HEAD",
-          "--format=%(refname:short)",
-          "refs/heads/foreman/",
-        ).pipe(
-          Effect.map((result) => result.stdout.split("\n").filter((line) => line.trim() !== "")),
-          Effect.flatMap(
-            Effect.forEach((branch) =>
-              exec(directory, "branch", "--delete", branch).pipe(
-                Effect.map((result) => (result.exitCode === 0 ? [branch] : [])),
-              ),
-            ),
-          ),
-          Effect.map((deleted) => deleted.flat()),
+      remove: (directory: string, branch: string) =>
+        exec(directory, "branch", "--delete", branch).pipe(
+          Effect.map((result) => result.exitCode === 0),
         ),
 
       /**
@@ -220,6 +236,17 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
     } as const;
   }),
 }) {}
+
+/** One of foreman's branches, as git sees it against the checkout's HEAD. */
+export interface Branch {
+  readonly branch: string;
+
+  /** The checkout already has these commits, so the ref is free to delete. */
+  readonly merged: boolean;
+
+  /** Nothing was ever committed here: the tip is still a trunk commit. */
+  readonly empty: boolean;
+}
 
 export class RepositoryError extends Schema.TaggedError<RepositoryError>()("RepositoryError", {
   directory: Schema.String,

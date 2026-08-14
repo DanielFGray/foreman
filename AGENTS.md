@@ -258,36 +258,64 @@ from the moment the verdict is written until the turn ends, and closing the
 workspace runs `worktree remove --force` on the directory the reviewer is
 standing in.
 
-Branch cleanup is a sweep, not a step inside landing. `Repository.prune` deletes
-foreman's refs that `HEAD` already contains, every tick, in every project — so a
-branch merged by hand disappears the same way a landed one does and nothing has
-to remember what it merged. `--delete` without `--force` is what makes it safe:
-git refuses to drop commits the checkout does not have, and refuses a branch a
-worktree still holds, which is picked up on a later tick.
+### The branches are the third source of truth
 
-Stranded branches are read from git, not prog. Every column but this one comes
-from the task store, which stops mentioning a branch the moment its task is
-closed, reclaimed or deleted — while the commits stay on the branch. So
-`Repository.unmerged` asks `for-each-ref --no-merged=HEAD` for foreman's own
-refs, and anything the queue, the claims or the review list already accounts for
-is dropped. `s` sends the selected one back to `reviewing`, where a reviewer decides
-whether the commits are worth landing. A branch whose task was deleted has no id
-to dispatch against, so it is listed and left alone.
+Every column but this one comes from the task store, which stops mentioning a
+branch the moment its task is closed, reclaimed or deleted — while the commits
+stay on the branch. So `Repository.branches` reads foreman's refs directly, and
+answers three questions off one read of each project:
 
-That same read answers a second question, which is why it is taken once and
-kept. A `by-*` label proves foreman authored a branch; it does not prove the
-author wrote anything, and an agent can run `prog review` having committed
-nothing. So a reviewing task whose branch is absent from `unmerged` holds no
-commits: `reviewable` splits it out and settle returns it to the queue on the
-same tick. Without that split a reviewer is paid to read an empty diff, and a
-task small enough to skip review lands an empty merge commit.
+- **`merged`** — `HEAD` already contains the tip, so the ref is free to delete.
+- **`empty`** — the tip is still on `rev-list --first-parent HEAD`, so nothing
+  was ever committed on this branch.
+- Neither — the branch holds work the checkout has not taken.
+
+`merged` cannot stand in for `empty`, and confusing the two cost a landed task.
+A `by-*` label proves foreman authored a branch; it does not prove the author
+wrote anything, and an agent can run `prog review` having committed nothing. The
+old code asked only "is this branch unmerged", and read "no" as "the author
+committed nothing" — but a branch that just landed answers "no" for the opposite
+reason. Foreman handed finished, merged work back to the queue as empty.
+`--no-ff` is what makes the honest question cheap: every landing is a merge
+commit, so the first-parent line is exactly the set of commits the checkout held
+before any branch touched it, and a tip still sitting on it never had a commit
+of its own.
+
+The sweep is not a step inside landing. Every tick, in every project, the
+dispatcher deletes the refs that are `merged` **and** whose task no longer
+appears in the queue, the claims or the review list — so a branch merged by hand
+disappears the same way a landed one does, and nothing has to remember what it
+merged. Both halves are required: sweeping on `merged` alone deletes the branch
+of a task still under review, which is the evidence the next tick needs to tell
+work from nothing. `--delete` without `--force` is the backstop — git refuses to
+drop commits the checkout does not have, and refuses a branch a worktree still
+holds, which is picked up on a later tick.
+
+What is left over — unmerged, not empty, and unaccounted for by any task — is
+stranded. `s` sends the selected one back to `reviewing`, where a reviewer
+decides whether the commits are worth landing. A branch whose task was deleted
+has no id to dispatch against, so it is listed and left alone.
+
+### Roles are panes
+
+Four roles run agents: `author`, `review`, `planner`, `tasker`. A workspace
+carries a `roles` map of the ones it currently has, keyed by that literal, and
+each is read back from a pane labelled `foreman-<role>` — herdr's own record,
+not foreman's memory.
+
+Placement follows from the label. A role that has no pane in the workspace takes
+the workspace's own pane if it is unlabelled; otherwise it splits a new one. So
+the author owns the workspace pane for the whole task, a reviewer splits beside
+it, and plan mode's two stages take one pane each in sequence.
+
+One role per pane is also what makes a stage handoff possible. herdr has no
+command that ends an agent without closing the pane it runs in, so a planner and
+a tasker sharing one pane could never both run; as two roles they simply do not
+contend.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
-therefore aggregates pane statuses itself. The role pane is labelled
-`foreman-author` or `foreman-review`; the author's label lives on the
-workspace's own pane for the whole task, while each reviewer's split is closed
-when the next one starts.
+therefore aggregates pane statuses itself.
 
 ## Ports
 

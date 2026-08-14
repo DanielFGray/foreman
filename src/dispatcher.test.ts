@@ -27,8 +27,10 @@ const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   directory: "/tmp/worktree",
   worktree: "/tmp/worktree",
   state,
-  author: "settled",
-  review: state,
+  roles: new Map([
+    ["author", "settled"],
+    ["review", state],
+  ]),
 });
 
 const active = (task: Item, worker: Worker | undefined) => ({

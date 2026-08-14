@@ -16,15 +16,11 @@ const merge = (directory: string, branch: string, verify?: string) =>
     Repository.merge(directory, branch, verify).pipe(Effect.provide(Repository.Default)),
   );
 
-const unmerged = (directory: string) =>
-  Effect.runPromise(
-    Repository.unmerged(directory).pipe(Effect.provide(Repository.Default)),
-  );
+const branches = (directory: string) =>
+  Effect.runPromise(Repository.branches(directory).pipe(Effect.provide(Repository.Default)));
 
-const prune = (directory: string) =>
-  Effect.runPromise(
-    Repository.prune(directory).pipe(Effect.provide(Repository.Default)),
-  );
+const remove = (directory: string, branch: string) =>
+  Effect.runPromise(Repository.remove(directory, branch).pipe(Effect.provide(Repository.Default)));
 
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() => rm(directory, { recursive: true, force: true }));
@@ -121,28 +117,44 @@ describe("Repository", () => {
     expect(await Bun.file(join(directory, "innocent.txt")).text()).toBe("fine\n");
   });
 
-  test("names only foreman branches the checkout has not taken", async () => {
+  test("tells an untouched branch from one whose work already landed", async () => {
     const base = (await git("branch", "--show-current")).stdout.toString().trim();
+
+    // Three foreman branches, one of each kind the tick has to tell apart.
     await git("checkout", "-qb", "foreman/ts-aaaaaa");
     await writeFile(join(directory, "stranded.txt"), "abandoned\n");
     await git("add", "stranded.txt");
     await git("commit", "-qm", "work nobody landed");
-    await git("checkout", "-qb", "foreman/ts-bbbbbb", base);
-    await git("checkout", "-q", base);
 
-    // Three things must not appear: a branch already merged, a branch with no
-    // commits of its own, and somebody's own topic branch. Only the first
-    // holds work that would be lost.
+    await git("checkout", "-qb", "foreman/ts-bbbbbb", base);
+
+    await git("checkout", "-qb", "foreman/ts-cccccc", base);
+    await writeFile(join(directory, "landed.txt"), "reviewed\n");
+    await git("add", "landed.txt");
+    await git("commit", "-qm", "work that got merged");
+
+    await git("checkout", "-q", base);
+    // Somebody's own topic branch is never foreman's to read or delete.
     await git("branch", "mine");
-    expect(await unmerged(directory)).toEqual(["foreman/ts-aaaaaa"]);
+    expect(await merge(directory, "foreman/ts-cccccc")).toMatchObject({ _tag: "Merged" });
+
+    // The merged branch is the one that used to read as an author who wrote
+    // nothing: its commits are in the checkout, so it is not unmerged — and
+    // reading that as an empty branch sent finished work back to the queue.
+    expect(await branches(directory)).toEqual([
+      { branch: "foreman/ts-aaaaaa", merged: false, empty: false },
+      { branch: "foreman/ts-bbbbbb", merged: true, empty: true },
+      { branch: "foreman/ts-cccccc", merged: true, empty: false },
+    ]);
   });
 
-  test("deletes the merged foreman branches and nothing else", async () => {
-    expect(await prune(directory)).toEqual(["foreman/ts-bbbbbb"]);
+  test("deletes a merged branch and refuses one holding the only copy", async () => {
+    expect(await remove(directory, "foreman/ts-bbbbbb")).toBe(true);
+    expect(await remove(directory, "foreman/ts-cccccc")).toBe(true);
+    // git itself is the guard: --delete refuses commits the checkout lacks.
+    expect(await remove(directory, "foreman/ts-aaaaaa")).toBe(false);
 
     const remaining = (await git("branch", "--format=%(refname:short)")).stdout.toString();
-    // The unmerged one survives because it is the only copy of that work, and
-    // branches outside foreman's namespace are not foreman's to delete.
     expect(remaining).toContain("foreman/ts-aaaaaa");
     expect(remaining).toContain("mine");
     expect(remaining).not.toContain("foreman/ts-bbbbbb");

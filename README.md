@@ -183,8 +183,8 @@ says.
 When a reviewer starts, foreman also writes `review-by-<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
 already running; the label makes that role survive restarts and vanished panes.
-The matching agent pane is labelled `foreman-author` or `foreman-review`, so old
-settled output cannot mask the current role's state.
+The matching agent pane is labelled `foreman-<role>`, so old settled output
+cannot mask the current role's state.
 
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the

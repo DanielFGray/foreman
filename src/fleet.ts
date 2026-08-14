@@ -109,7 +109,17 @@ export interface AgentIdentity {
   readonly model: string | undefined;
 }
 
-export type AgentRole = "author" | "review";
+/**
+ * What an agent is in a workspace for. One live agent per role, so a role is
+ * also the name of the pane its agent runs in.
+ *
+ * The pipeline's two are `author` and `review`; a plan run's two are `planner`
+ * and `tasker`. They are four roles rather than two because the second agent in
+ * a workspace reads what the first one produced, and calling the tasker an
+ * author would have it refuse the pane the planner is still sitting in.
+ */
+export const AgentRole = Schema.Literal("author", "review", "planner", "tasker");
+export type AgentRole = Schema.Schema.Type<typeof AgentRole>;
 
 /**
  * A task's workspace, as the multiplexer currently sees it.
@@ -135,16 +145,17 @@ export interface Worker {
   readonly state: WorkerState;
 
   /**
-   * What the multiplexer sees in the pane each role runs in, when it has one.
+   * What the multiplexer sees in the pane each role runs in, for the roles
+   * that have one.
    *
-   * A worker carries both so a task reads as its author while it is written
-   * and as its reviewer once it is handed off; `workerFor` picks the one the
-   * task store says is active. No pane address is kept here: a dispatch is
-   * refused from the pane list itself, and dismissing the author means closing
-   * the workspace, which needs only the workspace id.
+   * A worker carries every role at once so a task reads as its author while it
+   * is written and as its reviewer once it is handed off; the caller picks the
+   * one it is asking about — `workerFor` takes what the task store says is
+   * active, a plan run takes its current stage. No pane address is kept here: a
+   * dispatch is refused from the pane list itself, and dismissing the author
+   * means closing the workspace, which needs only the workspace id.
    */
-  readonly author: WorkerState | undefined;
-  readonly review: WorkerState | undefined;
+  readonly roles: ReadonlyMap<AgentRole, WorkerState>;
 }
 
 /**
