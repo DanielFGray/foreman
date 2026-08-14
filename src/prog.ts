@@ -129,14 +129,24 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * workspace label, the rescue branch, the summary — is named from it. A
        * malformed one would produce a workspace nobody can find, so it is
        * checked here rather than discovered three calls later.
-      */
+       */
       add: (project: string, title: string, description: string, labels: ReadonlyArray<string>) =>
-        run("add", title, "-p", project, "-d", description, ...labels.flatMap((l) => ["-l", l])).pipe(
+        run(
+          "add",
+          title,
+          "-p",
+          project,
+          "-d",
+          description,
+          ...labels.flatMap((l) => ["-l", l]),
+        ).pipe(
           Effect.flatMap((out) => {
             const id = out.trim();
             return /^ts-[0-9a-f]{6}$/.test(id)
               ? Effect.succeed(id)
-              : Effect.fail(new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }));
+              : Effect.fail(
+                  new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }),
+                );
           }),
         ),
 
