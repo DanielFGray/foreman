@@ -38,24 +38,11 @@ test suite, the linter, the build. Update whatever the change made stale: help t
 docs, tests. Failures in code you touched are yours to fix. Failures that already
 existed on the main branch are not: file them with `prog add` and leave them.
 
-{% if (reviewed) { %}
-When the work is complete and committed, run `prog review {{ task }}`. Another agent
-will review your branch and merge it. Do not merge it yourself and do not mark the
-task done — that is the reviewer's call, not yours.
-{% } else { %}
-When the work is complete and committed it merges into {{ repository }} — a checkout
-a person also works in, so ask git whether they are in it right now:
-
-    git -C {{ repository }} status --porcelain --untracked-files=no
-
-If that prints nothing, land the work with `git -C {{ repository }} merge --no-ff {{ branch }}`,
-run the tests there, then run `prog done {{ task }}`. This task is small enough to skip
-review, so landing it is yours to do.
-
-If it prints anything, someone is editing there. Leave the branch alone, log that the
-work is finished and waiting for a clean checkout, and run `prog open {{ task }}` — your
-branch stays, and the next agent continues from it.
-{% } %}
+When the work is complete and committed, run `prog review {{ task }}`. That hands the
+branch back and is where your job ends. Foreman lands it into {{ repository }} — a
+checkout a person also works in — once that checkout is clean and the project's own
+verification still passes. Do not merge the branch yourself and do not mark the task
+done. Small tasks skip the reviewing agent, but nothing skips the landing step.
 
 Record anything the next agent would want to know with `prog learn`.
 

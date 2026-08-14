@@ -3,13 +3,13 @@ import { awaitingLanding, readyToLand } from "./dispatcher.ts";
 import type { Item } from "./prog.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 
-const task = (labels: ReadonlyArray<string>, status = "reviewing"): Item => ({
+const task = (labels: ReadonlyArray<string>, status = "reviewing", priority = 1): Item => ({
   id: "ts-123456",
   title: "Test task",
   status,
   project: "foreman",
   type: "task",
-  priority: 1,
+  priority,
   labels,
   last_activity_at: new Date(),
 });
@@ -51,5 +51,13 @@ describe("landing a reviewed branch", () => {
   test("ignores a task without a verdict, and one that already left review", () => {
     expect(awaitingLanding(task(["by-opencode", "review-by-claude"]))).toBe(false);
     expect(awaitingLanding(task(["by-opencode", "approved"], "in_progress"))).toBe(false);
+  });
+
+  test("lands work small enough to skip the reviewer, with no verdict at all", () => {
+    // The alternative is an author that merges for itself, which is the one
+    // route past the clean-checkout and verification gate.
+    expect(awaitingLanding(task(["by-opencode", "trivial"]))).toBe(true);
+    expect(awaitingLanding(task(["by-opencode"], "reviewing", 3))).toBe(true);
+    expect(awaitingLanding(task(["by-opencode", "trivial"], "in_progress"))).toBe(false);
   });
 });

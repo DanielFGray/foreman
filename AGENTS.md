@@ -203,6 +203,11 @@ the author's completed handoff and the whole review run. `review-by-*` records
 the latter. If that label exists and the worker vanishes, the dashboard must ask
 instead of silently launching another reviewer.
 
+`reviewing` means the author stopped writing, not that a reviewer must read the
+diff. Work that skips review (priority 3, or the `trivial` label) waits in that
+same status and is landed straight from it. Landing is the only code path that
+writes to the operator's checkout, so no prompt gives an agent merge rights.
+
 Approval is a durable `approved` label, not task completion. The reviewer writes
 that verdict and stops. Foreman re-checks the operator's checkout, merges the
 branch, and only then runs `prog done`. A dirty checkout leaves the verdict in

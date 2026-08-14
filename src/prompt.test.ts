@@ -23,15 +23,19 @@ const ready = {
 } as const;
 
 describe("Prompts", () => {
-  test("gives an unreviewed author the landing checkout", async () => {
+  test("takes the operator's checkout away from the author", async () => {
     const prompt = await Effect.runPromise(
       Effect.gen(function* () {
         const prompts = yield* Prompts;
-        return yield* prompts.author(ready, "/tmp/worktree", "/tmp/repository", false);
+        return yield* prompts.author(ready, "/tmp/worktree", "/tmp/repository");
       }).pipe(Effect.provide(Prompts.Default)),
     );
 
-    expect(prompt).toContain("git -C /tmp/repository merge --no-ff foreman/ts-123456");
+    // Trivial work skips the reviewer, never the landing gate. An author told
+    // to merge for itself is the one route past the verification foreman runs.
+    expect(prompt).toContain("prog review ts-123456");
+    expect(prompt).not.toContain("git -C /tmp/repository merge");
+    expect(prompt).not.toContain("prog done ts-123456");
   });
 
   test("asks a successful reviewer for a verdict, not a merge", async () => {

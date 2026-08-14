@@ -250,7 +250,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         );
       });
 
-    /** Consumes a review verdict; the reviewer never receives merge rights. */
+    /**
+ * Puts a finished branch into the operator's checkout.
+ *
+ * The only code path that writes there. No agent holds merge rights, reviewer
+ * or author, so every branch passes the same clean-checkout and verification
+ * gate however trivial the task that produced it was.
+ */
     const land = (task: Item, worker: Worker | undefined) =>
       Effect.gen(function* () {
         const project = projectFor(task.project);
@@ -266,7 +272,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (result._tag === "Rejected") {
           yield* prog.log(
             task.id,
-            `foreman: approved branch could not be merged: ${result.detail}. Returned to the queue.`,
+            `foreman: finished branch could not be merged: ${result.detail}. Returned to the queue.`,
           );
           yield* prog.escalate(task.id);
           yield* prog.release(task.id);
@@ -276,13 +282,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           );
         }
 
-        // A reviewer approved code that breaks the project. The merge is
-        // already undone; what the task needs is the output, because the next
-        // author's whole job is now the failure below.
+        // The branch broke the project. The merge is already undone; what the
+        // task needs is the output, because the next author's whole job is now
+        // the failure below.
         if (result._tag === "Broke") {
           yield* prog.log(
             task.id,
-            `foreman: approved branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
+            `foreman: finished branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
           );
           yield* prog.escalate(task.id);
           yield* prog.release(task.id);
@@ -367,6 +373,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           if (free <= 0) return;
           if (current.held.includes(task.project)) continue;
           if (reviewedBy(task) !== undefined) continue;
+          // Work small enough to skip the reviewer is waiting to land, not
+          // waiting to be read. Its project is held, or it would be gone.
+          if (!needsReview(task)) continue;
           if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
           yield* dispatchReview(task, authoredBy(task)).pipe(
             Effect.catchAll((error) =>
@@ -406,12 +415,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           directory: directoryFor(task.project, task.id),
         });
 
-        const prompt = yield* prompts.author(
-          task,
-          worker.directory,
-          project.directory,
-          needsReview(task),
-        );
+        const prompt = yield* prompts.author(task, worker.directory, project.directory);
         yield* prog.claim(task.id);
         yield* prog.attribute(task.id, kind).pipe(Effect.tapError(() => prog.release(task.id)));
         const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" }).pipe(
@@ -572,12 +576,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           const project = projectFor(task.project);
           if (!project) return;
           const kind = isEscalated(task) ? settings.escalateTo : settings.author;
-          const prompt = yield* prompts.author(
-            task,
-            worker.directory,
-            project.directory,
-            needsReview(task),
-          );
+          const prompt = yield* prompts.author(task, worker.directory, project.directory);
           const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" });
           yield* prog.attribute(task.id, kind);
           yield* prog.log(task.id, agentLog("author", agent));
@@ -600,22 +599,28 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 }) {}
 
 /**
- * A reviewed branch whose fate is landing rather than the ordinary settle
- * path, whatever the reviewer's pane is doing.
+ * A finished branch whose fate is landing rather than the ordinary settle path,
+ * whatever its pane is doing.
+ *
+ * `reviewing` means the author stopped writing, not that an agent must read the
+ * diff. Work small enough to skip the reviewer is landed straight from there, so
+ * every branch reaches the operator's checkout through the same gate — the one
+ * that re-reads the tree, merges, and verifies. An author that merged its own
+ * work would be the one path around it.
  */
 export const awaitingLanding = (task: Item): boolean =>
-  task.status === "reviewing" && isApproved(task);
+  task.status === "reviewing" && (isApproved(task) || !needsReview(task));
 
 /**
- * An approved branch foreman may merge on this tick.
+ * A finished branch foreman may merge on this tick.
  *
  * Liveness belongs in the predicate rather than in a check beside it, because
- * the two filters in settle must agree about the same task. A reviewer that has
- * written its verdict still has a turn to finish — a closing message, a last
+ * the two filters in settle must agree about the same task. An agent that has
+ * handed its work back still has a turn to finish — a closing message, a last
  * prog call — and landing ends by closing the workspace, which for a worktree
  * worker runs `worktree remove --force` and deletes the directory out from
- * under a running process. The verdict is a durable label, so waiting one tick
- * costs nothing and loses nothing.
+ * under a running process. Status and verdict are both durable, so waiting one
+ * tick costs nothing and loses nothing.
  */
 export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
   awaitingLanding(task) && (worker === undefined || worker.state !== "working");

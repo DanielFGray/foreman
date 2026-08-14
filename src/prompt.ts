@@ -43,11 +43,7 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
       );
 
     return {
-      /**
-       * `reviewed` decides who lands the work, which is the one structural
-       * difference between the two paths an author can take.
-       */
-      author: (task: ReadyTask, worktree: string, repository: string, reviewed: boolean) =>
+      author: (task: ReadyTask, worktree: string, repository: string) =>
         render("author", {
           task: task.id,
           title: task.title,
@@ -55,7 +51,6 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
           worktree,
           repository,
           branch: labelFor(task.id),
-          reviewed,
         }),
 
       /**

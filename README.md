@@ -81,9 +81,10 @@ starts one on its own.
 Agents themselves never enter your checkout, with that one exception. Each works in its own worktree
 under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off your current `HEAD`,
 and the author prompt forbids touching the main checkout or switching branches.
-The one time an agent writes there is the merge, and it re-runs the same check
-first — your tree can go dirty hours after dispatch. If it has, the agent leaves
-its branch, says so on the task, and returns the task to the queue.
+Landing is foreman's own work, not an agent's, so no prompt anywhere hands out
+merge rights. Your tree can go dirty hours after dispatch: foreman re-reads it at
+landing time and leaves the finished branch waiting for a tick that finds it
+clean.
 
 ## One workspace per task
 
@@ -146,7 +147,9 @@ every task in the fleet. Name it per project:
 Who reviews whom is `reviewers` in the config, author to reviewer. Cheap work
 escalates to an expensive model; a uniform fleet reviews itself, which still
 helps — fresh eyes on the same model read the diff as a stranger would. Priority
-3 and anything labelled `trivial` skips review entirely.
+3 and anything labelled `trivial` skips the reviewing agent. It does not skip
+landing: that work goes from `prog review` straight into the merge and verify
+gate, so every branch reaches your checkout the same way.
 
 A re-dispatch replaces the `by-` label rather than adding to it: the question the
 reviewer asks is who wrote the code on this branch now, not who has ever touched
