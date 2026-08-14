@@ -29,6 +29,14 @@ const unmerged = (directory: string) =>
     }).pipe(Effect.provide(Repository.Default)),
   );
 
+const prune = (directory: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const repository = yield* Repository;
+      return yield* repository.prune(directory);
+    }).pipe(Effect.provide(Repository.Default)),
+  );
+
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() => rm(directory, { recursive: true, force: true }));
 
@@ -138,6 +146,17 @@ describe("Repository", () => {
     // holds work that would be lost.
     await git("branch", "mine");
     expect(await unmerged(directory)).toEqual(["foreman/ts-aaaaaa"]);
+  });
+
+  test("deletes the merged foreman branches and nothing else", async () => {
+    expect(await prune(directory)).toEqual(["foreman/ts-bbbbbb"]);
+
+    const remaining = (await git("branch", "--format=%(refname:short)")).stdout.toString();
+    // The unmerged one survives because it is the only copy of that work, and
+    // branches outside foreman's namespace are not foreman's to delete.
+    expect(remaining).toContain("foreman/ts-aaaaaa");
+    expect(remaining).toContain("mine");
+    expect(remaining).not.toContain("foreman/ts-bbbbbb");
   });
 
   test("aborts a conflicting merge", async () => {

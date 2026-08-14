@@ -229,6 +229,13 @@ from the moment the verdict is written until the turn ends, and closing the
 workspace runs `worktree remove --force` on the directory the reviewer is
 standing in.
 
+Branch cleanup is a sweep, not a step inside landing. `Repository.prune` deletes
+foreman's refs that `HEAD` already contains, every tick, in every project — so a
+branch merged by hand disappears the same way a landed one does and nothing has
+to remember what it merged. `--delete` without `--force` is what makes it safe:
+git refuses to drop commits the checkout does not have, and refuses a branch a
+worktree still holds, which is picked up on a later tick.
+
 Stranded branches are read from git, not prog. Every column but this one comes
 from the task store, which stops mentioning a branch the moment its task is
 closed, reclaimed or deleted — while the commits stay on the branch. So

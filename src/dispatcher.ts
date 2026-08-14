@@ -61,6 +61,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       yield* SubscriptionRef.set(state, current);
 
       yield* settle(current);
+      yield* tidy;
       yield* reclaim(current);
       if (yield* Ref.get(paused)) return;
       yield* fill(yield* observe);
@@ -345,6 +346,28 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         if (worker) yield* fleet.close(worker);
       }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
+
+    /**
+     * Deletes the branches whose work the projects already have.
+     *
+     * A sweep rather than a step inside landing, because a merge is not the
+     * only way a branch arrives in the checkout — you land one by hand and the
+     * ref should go the same way. It runs every tick against the world as it
+     * is, so nothing has to remember what it merged.
+     */
+    const tidy = Effect.forEach(
+      settings.projects,
+      (project) =>
+        repository.prune(project.directory).pipe(
+          Effect.flatMap((deleted) =>
+            deleted.length === 0
+              ? Effect.void
+              : Effect.logInfo(`pruned ${deleted.length} merged branches in ${project.name}`),
+          ),
+          Effect.catchAll((error) => Effect.logWarning(`pruning ${project.name} failed: ${error}`)),
+        ),
+      { discard: true },
+    );
 
     /**
      * Returns claims that nobody is working on any more.

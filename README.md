@@ -33,10 +33,13 @@ and `prog list` together tell you everything foreman knows.
    workspace. Unfinished means log why, return the task to the queue with the
    agent's own notes attached, and free the slot. Blocked means notify you and
    change nothing — approvals stay human.
-2. **Reclaim.** A claim with no live worker and no activity for a day goes back
+2. **Tidy.** Foreman's merged branches are deleted from every project. `-d`
+   refuses anything the checkout does not already have, so only redundant refs
+   go.
+3. **Reclaim.** A claim with no live worker and no activity for a day goes back
    to the queue. Ownership decides this, not age: a task with a live workspace
    is never touched.
-3. **Fill.** Reviews first, then new work. A task awaiting review is nearly
+4. **Fill.** Reviews first, then new work. A task awaiting review is nearly
    finished and is blocking whatever depends on it; an unclaimed task has not
    started costing anything yet. This is the only step pausing stops, so a
    paused foreman still lands, tidies and reports.
@@ -101,8 +104,15 @@ agent names cannot contain `/` and old output panes remain visible.
 The workspace outlives the agents inside it. The author finishes and its pane
 closes; the reviewer opens a fresh pane in the same workspace, against the same
 worktree, beside the author's output. The workspace closes when the task leaves
-the fleet. The branch is kept either way: if the work merged the branch is
-harmless, and if it was rejected the branch is the only copy of what happened.
+the fleet.
+
+The branch outlives the workspace only as long as it is the only copy of the
+work. Every tick deletes foreman's merged branches from each project, so a
+landed one goes as soon as its worktree is out of the way — the merge commit
+already records it. A rejected or abandoned branch stays, because `git branch
+-d` refuses to drop commits the checkout does not have. Nothing decides this
+from memory: it is read off the refs each time, so a branch you merge by hand is
+cleaned up the same way.
 
 ## Stranded branches
 

@@ -121,6 +121,36 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
 
       /**
+       * Deletes foreman's branches whose commits the checkout already has, and
+       * says which ones went.
+       *
+       * A landed branch is history the merge commit already records, so keeping
+       * it only grows the ref list until `git branch` is unreadable. Deletion
+       * is safe precisely because it is limited to merged refs: `-d` refuses an
+       * unmerged branch, so the one branch worth keeping is the one git will
+       * not let go of. A branch a worktree still has checked out also refuses,
+       * and is picked up on a later tick once that workspace closes.
+       */
+      prune: (directory: string) =>
+        exec(
+          directory,
+          "for-each-ref",
+          "--merged=HEAD",
+          "--format=%(refname:short)",
+          "refs/heads/foreman/",
+        ).pipe(
+          Effect.map((result) => result.stdout.split("\n").filter((line) => line.trim() !== "")),
+          Effect.flatMap(
+            Effect.forEach((branch) =>
+              exec(directory, "branch", "--delete", branch).pipe(
+                Effect.map((result) => (result.exitCode === 0 ? [branch] : [])),
+              ),
+            ),
+          ),
+          Effect.map((deleted) => deleted.flat()),
+        ),
+
+      /**
        * Lands a reviewed branch without trusting the reviewer with the shared
        * checkout. A failed merge is always aborted before control returns.
        *
