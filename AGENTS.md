@@ -254,6 +254,14 @@ is dropped. `s` sends the selected one back to `reviewing`, where a reviewer dec
 whether the commits are worth landing. A branch whose task was deleted has no id
 to dispatch against, so it is listed and left alone.
 
+That same read answers a second question, which is why it is taken once and
+kept. A `by-*` label proves foreman authored a branch; it does not prove the
+author wrote anything, and an agent can run `prog review` having committed
+nothing. So a reviewing task whose branch is absent from `unmerged` holds no
+commits: `reviewable` splits it out and settle returns it to the queue on the
+same tick. Without that split a reviewer is paid to read an empty diff, and a
+task small enough to skip review lands an empty merge commit.
+
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
 therefore aggregates pane statuses itself. The current role pane is labelled

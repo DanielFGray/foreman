@@ -136,34 +136,37 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const now = yield* DateTime.now;
       const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
 
-      // Branches nothing in the pipeline accounts for. Every other column is
-      // read from prog, which forgets a branch the moment its task is closed,
-      // reclaimed or deleted — so the commits themselves are asked instead.
-      // A task the fleet still holds is not stranded: the queue will dispatch
-      // an author onto that same branch, and a claim with no worker is already
-      // a decision the operator is being asked about.
-      const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
-      const orphans = yield* eachProject((project) =>
+      // Foreman's branches that hold commits the checkout does not have. One
+      // read, two questions: which branches nothing in the pipeline accounts
+      // for, and whether a task handed back for review has anything on it.
+      const unmerged = yield* eachProject((project) =>
         repository.unmerged(project.directory).pipe(
           Effect.map((branches) =>
             branches.flatMap((branch) => {
               const task = taskOf(branch);
-              if (!task || accounted.has(task) || byTask.has(task)) return [];
-              return [{ project: project.name, branch, task }];
+              return task ? [{ project: project.name, branch, task }] : [];
             }),
           ),
         ),
-      ).pipe(
-        Effect.flatMap(
-          Effect.forEach((orphan) =>
-            prog.show(orphan.task).pipe(
-              Effect.map((task) => ({ ...orphan, title: task.title, status: task.status })),
-              // A branch whose task was deleted outright. It is the reason to
-              // read git rather than prog, so it is shown, not dropped.
-              Effect.orElseSucceed(() => ({ ...orphan, title: undefined, status: undefined })),
-            ),
+      );
+      const committed = new Set(unmerged.map((entry) => entry.task));
+
+      // Every other column is read from prog, which forgets a branch the
+      // moment its task is closed, reclaimed or deleted — so the commits
+      // themselves are asked instead. A task the fleet still holds is not
+      // stranded: the queue will dispatch an author onto that same branch, and
+      // a claim with no worker is already a decision the operator is being
+      // asked about.
+      const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
+      const orphans = yield* Effect.forEach(
+        unmerged.filter((entry) => !accounted.has(entry.task) && !byTask.has(entry.task)),
+        (orphan) =>
+          prog.show(orphan.task).pipe(
+            Effect.map((task) => ({ ...orphan, title: task.title, status: task.status })),
+            // A branch whose task was deleted outright. It is the reason to
+            // read git rather than prog, so it is shown, not dropped.
+            Effect.orElseSucceed(() => ({ ...orphan, title: undefined, status: undefined })),
           ),
-        ),
       );
 
       const active = (items: ReadonlyArray<Item>) =>
@@ -190,9 +193,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           settings.projects.map((project) => project.name),
         ),
         working: claimedActive,
-        // `reviewing` is a public task status. Attribution is the durable proof
-        // that this branch was authored by foreman and has something to review.
-        review: reviewingActive.filter(({ task }) => authoredBy(task) !== undefined),
+        ...reviewable(reviewingActive, committed),
         orphans,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
@@ -214,6 +215,25 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* Effect.forEach(
           current.review.filter(({ task, worker }) => readyToLand(task, worker)),
           ({ task, worker }) => land(task, worker),
+          { discard: true },
+        );
+
+        // An author that handed back an empty branch did not finish, whatever
+        // it said by moving the task. Sending a reviewer costs a second agent
+        // to read an empty diff, and a trivial task skips review entirely and
+        // would land a merge commit with nothing in it. So the task goes back
+        // to the queue, which is where unfinished work belongs.
+        yield* Effect.forEach(
+          current.unbacked,
+          ({ task, worker, kind }) =>
+            Effect.gen(function* () {
+              yield* prog.log(
+                task.id,
+                `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)}. Returned to the queue — there is no work to review.`,
+              );
+              yield* prog.release(task.id);
+              if (worker) yield* fleet.close(worker);
+            }),
           { discard: true },
         );
 
@@ -781,6 +801,29 @@ export const decisionsOf = (
   ...owned.filter(({ task }) => task.status !== "in_progress" && task.status !== "reviewing"),
 ];
 
+/**
+ * Splits work handed back for review by whether there is any work in it.
+ *
+ * Two proofs are needed, and prog can only give one. The `by-*` label proves
+ * foreman authored the branch; only a commit on that branch proves the author
+ * produced something. An agent can move a task to `reviewing` having written
+ * nothing, and then a reviewer is paid to read an empty diff — or, on a task
+ * small enough to skip review, an empty merge commit lands.
+ *
+ * `committed` holds the tasks whose branch carries commits the checkout does
+ * not have, which is the same read that finds stranded branches.
+ */
+export const reviewable = (
+  reviewing: ReadonlyArray<Active>,
+  committed: ReadonlySet<string>,
+): { readonly review: ReadonlyArray<Active>; readonly unbacked: ReadonlyArray<Active> } => {
+  const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
+  return {
+    review: authored.filter(({ task }) => committed.has(task.id)),
+    unbacked: authored.filter(({ task }) => !committed.has(task.id)),
+  };
+};
+
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
   readonly queue: ReadonlyArray<ReadyTask>;
@@ -837,6 +880,15 @@ export interface Owned {
 interface Observation extends FleetState {
   readonly workers: ReadonlyArray<Worker>;
   readonly owned: ReadonlyArray<Owned>;
+
+  /**
+   * Tasks handed back for review whose branch holds no commits.
+   *
+   * Not part of `FleetState`: settle returns each of these to the queue on the
+   * same tick that finds it, so it is a step's input rather than anything the
+   * dashboard could draw.
+   */
+  readonly unbacked: ReadonlyArray<Active>;
 }
 
 const empty: FleetState = {

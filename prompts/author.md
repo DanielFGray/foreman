@@ -11,6 +11,11 @@ branch. Work only there. Other agents are working in other worktrees of the same
 repository at the same time, so do not touch the main checkout and do not switch
 branches.
 
+A fresh worktree holds the committed files and nothing else, so the project's
+dependencies are not installed in it. Install them the way this project does —
+read its lockfile and its own instructions — before you run any test, typecheck
+or lint command. Every one of them fails on a worktree nobody has installed.
+
 Start by running `prog show {{ task }}`, which gives you the full description, the
 definition of done, prior logs, and any handoff notes from an agent that worked on
 this before you. Then run `prog context` for the concepts that task suggests. Read

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { awaitingLanding, decisionsOf, readyToLand, type Owned } from "./dispatcher.ts";
+import { awaitingLanding, decisionsOf, readyToLand, reviewable, type Owned } from "./dispatcher.ts";
 import { authoredBy, reviewedBy, type Item } from "./prog.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 
@@ -130,5 +130,26 @@ describe("decisions", () => {
     ];
 
     expect(decisionsOf([], [], ownedWorkspaces)).toEqual([]);
+  });
+});
+
+describe("work handed back for review", () => {
+  test("sends a reviewer only at a branch that holds commits", () => {
+    const written = active(task("ts-111111", ["by-opencode"]), undefined);
+    const empty = active(task("ts-222222", ["by-opencode"]), undefined);
+    const { review, unbacked } = reviewable([written, empty], new Set(["ts-111111"]));
+
+    expect(review.map(({ task }) => task.id)).toEqual(["ts-111111"]);
+    expect(unbacked.map(({ task }) => task.id)).toEqual(["ts-222222"]);
+  });
+
+  test("leaves work foreman did not author alone, committed or not", () => {
+    // `reviewing` is a status anyone can set by hand. Without a by-* label the
+    // branch is not foreman's to review, land or return to its queue.
+    const theirs = active(task("ts-333333", []), undefined);
+    const { review, unbacked } = reviewable([theirs], new Set(["ts-333333"]));
+
+    expect(review).toEqual([]);
+    expect(unbacked).toEqual([]);
   });
 });

@@ -6,6 +6,11 @@ Working directory: {{ worktree }}
 Branch: {{ branch }}
 Repository: {{ repository }}
 
+Your working directory is a git worktree, which holds the committed files and
+nothing else — the project's dependencies are not installed in it. Install them
+the way this project does before you run anything, or every command you use to
+check the author's work fails for a reason that has nothing to do with them.
+
 Read `prog show {{ task }}` first: the description, the definition of done, and the
 author's logs, which say what they tried and why. Then read the actual diff against
 the repository checkout's current target — `git -C {{ repository }} diff HEAD...{{ branch }}`

@@ -111,6 +111,13 @@ closes; the reviewer opens a fresh pane in the same workspace, against the same
 worktree, beside the author's output. The workspace closes when the task leaves
 the fleet.
 
+A fresh worktree holds committed files only, so the project's dependencies are
+not installed in it and every test, typecheck and lint command fails until they
+are. Both prompts tell the agent to install them the way the project does.
+Foreman does not run the install itself: it cannot know the package manager for
+every language, and a table of the JavaScript ones would bias it toward npm
+while helping no other ecosystem.
+
 The branch outlives the workspace only as long as it is the only copy of the
 work. Every tick deletes foreman's merged branches from each project, so a
 landed one goes as soon as its worktree is out of the way — the merge commit
@@ -162,6 +169,13 @@ set, and a task put there by a person or an earlier orchestrator has no branch
 behind it — no diff to read, and nothing to merge. Foreman labels each task
 `by-<kind>` when an agent actually starts, and that label is what marks the task
 as its own.
+
+The branch must also hold a commit. An agent can run `prog review` having
+written nothing, and the label alone would send a second agent to read an empty
+diff. Foreman asks git for the branches carrying commits the checkout does not
+have, and a handoff missing from that list goes straight back to the queue with
+a log line saying so. Nothing committed is unfinished work, whatever the status
+says.
 
 When a reviewer starts, foreman also writes `review-by-<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
