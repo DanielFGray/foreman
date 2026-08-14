@@ -17,11 +17,8 @@ base)`: `Dispatcher.Default` pulls in `Prog` and `Prompts` as its own
 dependencies, and the base set feeds it `Settings` and `Fleet`. `mergeAll`
 alone would build them in parallel and never satisfy that.
 
-Two things known to still be ahead, in the backlog:
+One thing known to still be ahead, in the backlog:
 
-- **The reviewer's merge step has never executed.** No task has yet gone
-  author → review → merge end to end. Prove it at `--slots 1` before trusting
-  the fleet with anything.
 - **The dashboard is designed but not built.** `Dispatcher.state` is a
   `SubscriptionRef<FleetState>` waiting for an opentui + Solid renderer.
 - **Plan mode is built but never proven live.** The planner → tasker → opened
@@ -206,6 +203,12 @@ the author's completed handoff and the whole review run. `review-by-*` records
 the latter. If that label exists and the worker vanishes, the dashboard must ask
 instead of silently launching another reviewer.
 
+Approval is a durable `approved` label, not task completion. The reviewer writes
+that verdict and stops. Foreman re-checks the operator's checkout, merges the
+branch, and only then runs `prog done`. A dirty checkout leaves the verdict in
+place for a later tick. A failed merge is aborted and returned to the queue, so
+the mechanical landing step cannot strand the operator in a conflicted checkout.
+
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
 therefore aggregates pane statuses itself. The current role pane is labelled
@@ -279,9 +282,9 @@ Design settled with the user, not yet built. `Dispatcher.state` is a
   do not replace it with a sleep, because the real wait varies by agent.
 - **Module resolution breaks outside the project directory.** Scratch scripts
   that import `./src/*` must live in the repo root, not in a temp directory.
-- **The reviewer's merge step has never executed.** No task has yet gone
-  author → review → merge end to end. That is the next thing worth proving,
-  at `--slots 1`, before trusting the fleet with anything.
+- **Landing belongs to foreman, not the reviewer.** The reviewer records an
+  `approved` label. Foreman owns the clean-checkout gate, merge, and `prog done`,
+  so reviewer agents need no rights over the operator's checkout.
 
 ## House rules that bite here
 

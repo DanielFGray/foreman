@@ -34,6 +34,19 @@ describe("Prompts", () => {
     expect(prompt).toContain("git -C /tmp/repository merge --no-ff foreman/ts-123456");
   });
 
+  test("asks a successful reviewer for a verdict, not a merge", async () => {
+    const prompt = await Effect.runPromise(
+      Effect.gen(function* () {
+        const prompts = yield* Prompts;
+        return yield* prompts.review(item, "/tmp/worktree", "/tmp/repository");
+      }).pipe(Effect.provide(Prompts.Default)),
+    );
+
+    expect(prompt).toContain("prog label ts-123456 approved");
+    expect(prompt).not.toContain("git -C /tmp/repository merge");
+    expect(prompt).not.toContain("prog done ts-123456");
+  });
+
   test("sends an onboarding agent to the checkout and back off it", async () => {
     const prompt = await Effect.runPromise(
       Effect.gen(function* () {

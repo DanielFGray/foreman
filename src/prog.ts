@@ -95,7 +95,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * more than once, and its next author starts a new lifecycle stage.
        */
       attribute: (task: string, kind: string) =>
-        removeLabels(task, [BY, REVIEW_BY]).pipe(
+        removeLabels(task, [BY, REVIEW_BY, APPROVED]).pipe(
           Effect.andThen(run("label", task, `${BY}${kind}`)),
           Effect.asVoid,
         ),
@@ -199,6 +199,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
       /** The items that belong to one epic. */
       children: (epic: string) => runJson(Schema.Array(Item), "list", "--parent", epic, "--json"),
+
+      /** Marks work complete after foreman has landed its branch. */
+      complete: (task: string) => run("done", task).pipe(Effect.asVoid),
     } as const;
   }),
 }) {}
@@ -257,6 +260,10 @@ export const reviewedBy = (item: Item): string | undefined =>
 export const agentLog = (role: AgentRole, agent: AgentIdentity): string =>
   `foreman: ${role} assigned to ${agent.kind}${agent.model ? ` (${agent.model})` : ""}`;
 
+/** Whether the reviewer accepted the branch for mechanical landing. */
+export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(APPROVED);
+
 /**
  * Salvage work in a project's own checkout, which only the operator starts.
  *
@@ -287,6 +294,8 @@ export const TRIVIAL = "trivial";
 export const ESCALATED = "escalated";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
+
+export const APPROVED = "approved";
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
   command: Schema.String,
