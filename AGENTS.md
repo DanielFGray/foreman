@@ -17,7 +17,10 @@ base)`: `Dispatcher.Default` pulls in `Prog` and `Prompts` as its own
 dependencies, and the base set feeds it `Settings` and `Fleet`. `mergeAll`
 alone would build them in parallel and never satisfy that.
 
-One thing known to still be ahead, in the backlog:
+The author → review → merge pipeline has been proven live once, end to end, at
+`--slots 1`. The proof ran against a scratch project (`foreman-e2e-probe`) with
+a scratch config, so no real task was touched; see the `prog log ts-ded733`
+history for the run. Everything that follows is the still-unproven backlog.
 
 - **The dashboard is built but unproven live.** It is only proven by the
   render tests; nobody has yet sat in front of it while the fleet worked.

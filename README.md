@@ -11,8 +11,9 @@ over. You stop being the thing that moves work from the backlog into a pane.
                          settle, reclaim          roster, focus, close, notify
 ```
 
-> **Status:** compiles and has focused unit tests. The first live author → review
-> → merge proof is still pending; see `AGENTS.md` before running it unattended.
+> **Status:** compiles and has focused unit tests. The author → review → merge
+> pipeline has been proven live once, end to end, at `--slots 1` against a
+> scratch project; see `AGENTS.md` before running it unattended.
 
 ## Foreman remembers nothing
 
