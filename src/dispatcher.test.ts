@@ -223,9 +223,8 @@ describe("scoping the roster to this daemon's projects", () => {
       new Set(["foreman"]),
     );
 
-    expect(owned).toHaveLength(1);
-    expect(owned[0].task).toBe(reviewing);
-    expect(owned[0].worker.state).toBe("working");
-    expect(owned[0].kind).toBe("claude");
+    expect(owned).toEqual([
+      { task: reviewing, worker: worker("working", reviewing.id), kind: "claude" },
+    ]);
   });
 });
