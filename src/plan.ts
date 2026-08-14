@@ -277,9 +277,9 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
     // One agent per role per workspace: the spawn guard refuses a live pane
     // that already holds the stage's role, and a finished stage — or a previous
     // attempt, on a resume — leaves one behind. A plan run drives one agent at
-    // a time and read the previous one's deliverable from the store before
-    // arriving here, so any pane in the workspace belongs to finished work and
-    // is retired before the next stage takes the role.
+    // a time and reads each stage's deliverable from the store before the next
+    // spawn, so any pane in the workspace belongs to finished work and is
+    // retired before the stage takes the role.
     const current = (yield* fleet.roster).find((candidate) => candidate.task === epic);
     if (current) {
       yield* fleet.dismiss(current, "author");
