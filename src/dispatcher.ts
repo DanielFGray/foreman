@@ -97,7 +97,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const workerFor = (task: Item): Worker | undefined => {
         const worker = byTask.get(task.id);
         if (!worker) return undefined;
-        const state = reviewedBy(task) ? worker.review?.state : worker.author?.state;
+        const state = reviewedBy(task) ? worker.review : worker.author;
         return { ...worker, state: state ?? "gone" };
       };
 
@@ -353,11 +353,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               );
               yield* climb(task);
               yield* prog.release(task.id);
-              // The pane goes with the decision. An agent foreman has judged
-              // finished is often still sitting there idle, and leaving it
-              // running means the next dispatch splits a second agent into the
-              // same worktree beside it.
-              yield* fleet.dismiss(worker, reviewedBy(task) ? "review" : "author");
+              // The workspace goes with the decision. A settled agent is still
+              // running idle, and herdr has no way to stop it without closing
+              // the pane it runs in — which, for an author, is the workspace's
+              // own pane. So closing the workspace is what dismissing the agent
+              // means now: the worktree is removed with it, and the next author
+              // continues from the branch tip rather than from uncommitted
+              // edits.
+              yield* fleet.close(worker);
               yield* fleet.notify(
                 "Task returned",
                 `${task.id} stopped unfinished — back in the queue`,

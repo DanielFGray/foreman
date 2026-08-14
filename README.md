@@ -53,8 +53,10 @@ The poll interval is how long foreman waits to notice something nobody told it
 about. Anything you do in the dashboard — start, pause, retry, release, adopt —
 ticks at once, so keys never sit waiting out the clock.
 
-A fresh agent pane per attempt and review, rather than long-lived workers fed
-task after task: no context bleeds between stages or unrelated projects.
+A fresh agent per attempt and review, rather than long-lived workers fed task
+after task: no context bleeds between stages or unrelated projects. The author
+runs in the task workspace's own pane; only a reviewer splits a second pane
+beside it.
 
 ## Projects you are working in
 
@@ -106,8 +108,9 @@ a git worktree on a branch of the same name. That durable label identifies the
 work; ephemeral agents use valid names derived from their pane because herdr
 agent names cannot contain `/` and old output panes remain visible.
 
-The workspace outlives the agents inside it. The author finishes and its pane
-closes; the reviewer opens a fresh pane in the same workspace, against the same
+The author runs in the workspace's own pane, so one task is one pane and there
+is no blank shell beside the worker. Its output stays visible after it stops;
+the reviewer opens a fresh split in the same workspace, against the same
 worktree, beside the author's output. The workspace closes when the task leaves
 the fleet.
 
