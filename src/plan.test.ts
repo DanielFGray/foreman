@@ -4,7 +4,7 @@ import type { WorkerState } from "./fleet.ts";
 import { decide, resolveProject, stageFor, titleFor } from "./plan.ts";
 
 describe("stageFor", () => {
-  test("routes by stored epic status", () => {
+  test("routes by the epic's derived status", () => {
     expect(stageFor("draft")).toBe("planning");
     expect(stageFor("open")).toBe("tasking");
     expect(stageFor("in_progress")).toBe("tasking");

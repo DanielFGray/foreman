@@ -120,10 +120,10 @@ export interface PlanInput {
 export type PlanStage = "planning" | "tasking";
 
 /**
- * The next thing a plan needs, from the epic's stored status.
+ * The stage a plan epic is in, from its derived status.
  *
- * Draft means the planner has not written the specification; anything after
- * draft up to completion means the planner has, so the tasker runs next.
+ * An epic is a draft until it has child tasks, so draft means no children
+ * exist yet; anything after draft means they do; done or canceled is complete.
  */
 export const stageFor = (status: string): "planning" | "tasking" | "complete" => {
   if (status === "draft") return "planning";
