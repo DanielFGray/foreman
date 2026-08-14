@@ -27,4 +27,13 @@ describe("interleave", () => {
 
     expect(result.map(({ id }) => id)).toEqual(["a1", "b1", "a2", "b2"]);
   });
+
+  test("keeps only configured projects from the global ready set", () => {
+    const result = interleave(
+      [task("a1", "a", 1), task("b1", "b", 1), task("c1", "c", 1)],
+      ["a", "c"],
+    );
+
+    expect(result.map(({ id }) => id)).toEqual(["a1", "c1"]);
+  });
 });
