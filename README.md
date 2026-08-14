@@ -198,6 +198,11 @@ at 3am — are all asked long afterwards.
 jq -r 'select(.level == "WARN")' ~/.local/state/foreman/foreman.jsonl
 ```
 
+The jsonl log outlives the session but not the task. So each assignment is also
+appended to the task's own prog history with its role and agent kind, and with
+the model when the agent integration reports one — the record travels with the
+task, which is what makes attempts comparable once it lands.
+
 Worktrees live under `$XDG_STATE_HOME/foreman/worktrees/<project>/<task>`, out of
 the repository — an in-tree worktree would mean editing `.gitignore` in every
 project foreman touches.

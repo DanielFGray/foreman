@@ -264,16 +264,45 @@ export const HerdrFleet = Layer.effect(
           // back down. Without this an agent that fails to start leaves an
           // empty pane behind on every retry, and retrying is what the
           // dispatcher does for a living.
-          yield* Effect.gen(function* () {
+          return yield* Effect.gen(function* () {
             yield* herdr("spawn", "pane", "rename", pane, role);
             yield* Effect.forEach(
               previous,
               (pane) => herdr("spawn", "pane", "rename", pane.pane_id, "--clear"),
               { discard: true },
             );
-            yield* herdr("spawn", "agent", "start", agent, "--kind", options.kind, "--pane", pane);
+            const started = yield* herdrJson(
+              AgentEnvelope,
+              "spawn",
+              "agent",
+              "start",
+              agent,
+              "--kind",
+              options.kind,
+              "--pane",
+              pane,
+            );
 
             yield* prompt(agent, options.prompt);
+
+            // Integrations can add metadata tokens after the first prompt. The
+            // task still started if this optional observation is unavailable.
+            const model = yield* herdrJson(
+              AgentEnvelope,
+              "spawn metadata",
+              "agent",
+              "get",
+              agent,
+            ).pipe(
+              Effect.map((info) => info.result.agent.tokens?.["model"]),
+              Effect.catchAll((error) =>
+                Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
+                  Effect.as(started.result.agent.tokens?.["model"]),
+                ),
+              ),
+            );
+
+            return { kind: options.kind, model };
           }).pipe(Effect.onError(() => herdr("spawn", "pane", "close", pane).pipe(Effect.ignore)));
         }),
 
@@ -419,6 +448,14 @@ const PaneList = Schema.Struct({
 
 const PaneSplit = Schema.Struct({
   result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
+});
+
+const AgentEnvelope = Schema.Struct({
+  result: Schema.Struct({
+    agent: Schema.Struct({
+      tokens: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+    }),
+  }),
 });
 
 const WorkspaceCreated = Schema.Struct({
