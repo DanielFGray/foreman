@@ -37,7 +37,10 @@ export class Fleet extends Effect.Tag("Fleet")<
     readonly attach: (options: AttachOptions) => Effect.Effect<Worker, FleetError>;
 
     /** Starts an agent on a fresh pane inside a task's workspace. */
-    readonly spawn: (worker: Worker, options: SpawnOptions) => Effect.Effect<void, FleetError>;
+    readonly spawn: (
+      worker: Worker,
+      options: SpawnOptions,
+    ) => Effect.Effect<AgentIdentity, FleetError>;
 
     /** Every workspace foreman owns, with what the multiplexer sees in it. */
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
@@ -75,8 +78,16 @@ export interface AttachOptions {
 export interface SpawnOptions {
   readonly kind: string;
   readonly prompt: string;
-  readonly role: "author" | "review";
+  readonly role: AgentRole;
 }
+
+/** The agent identity available after it accepts its task. */
+export interface AgentIdentity {
+  readonly kind: string;
+  readonly model: string | undefined;
+}
+
+export type AgentRole = "author" | "review";
 
 /**
  * A task's workspace, as the multiplexer currently sees it.

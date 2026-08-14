@@ -187,6 +187,10 @@ exactly like a queue that is empty.
 
 ## The log
 
+Each successful assignment is appended to the task history with its role and
+agent kind. The entry also includes the model when the agent integration reports
+one, so attempt outcomes can be compared after the task lands.
+
 Every dispatch, reclaim, return and escalation is appended as one JSON object per
 line to `$XDG_STATE_HOME/foreman/foreman.jsonl`, or `$FOREMAN_LOG`. The pane
 scrolls and dies with the session; the questions worth asking about an unattended

@@ -6,6 +6,7 @@ import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
 import {
   authoredBy,
+  agentLog,
   isEscalated,
   isOnboarding,
   type Item,
@@ -338,11 +339,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         );
         yield* prog.claim(task.id);
         yield* prog.attribute(task.id, kind).pipe(Effect.tapError(() => prog.release(task.id)));
-        yield* fleet.spawn(worker, { kind, prompt, role: "author" }).pipe(
+        const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" }).pipe(
           // The agent never started, so the claim would strand the task until
           // the stale sweep noticed. Hand it back immediately instead.
           Effect.tapError(() => prog.release(task.id)),
         );
+        yield* prog.log(task.id, agentLog("author", agent));
         yield* Effect.logInfo(
           `dispatched ${task.id} (${task.project}) to ${kind} in ${worker.workspace}`,
         );
@@ -363,9 +365,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         const prompt = yield* prompts.review(task, worker.directory, project.directory);
         yield* prog.assignReview(task.id, kind);
-        yield* fleet
+        const agent = yield* fleet
           .spawn(worker, { kind, prompt, role: "review" })
           .pipe(Effect.tapError(() => prog.clearReview(task.id)));
+        yield* prog.log(task.id, agentLog("review", agent));
         yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${kind}`);
       });
 
@@ -406,9 +409,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         yield* prog.claim(task.id);
         yield* prog.attribute(task.id, kind).pipe(Effect.tapError(() => prog.release(task.id)));
-        yield* fleet
+        const agent = yield* fleet
           .spawn(worker, { kind, prompt, role: "author" })
           .pipe(Effect.tapError(() => prog.release(task.id)));
+        yield* prog.log(task.id, agentLog("author", agent));
         yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${kind}`);
       });
 
@@ -499,8 +503,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             project.directory,
             needsReview(task),
           );
-          yield* fleet.spawn(worker, { kind, prompt, role: "author" });
+          const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" });
           yield* prog.attribute(task.id, kind);
+          yield* prog.log(task.id, agentLog("author", agent));
         }),
 
       /** Hands a task back to the queue and takes its workspace down. */

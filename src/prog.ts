@@ -1,6 +1,7 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Effect, Schema } from "effect";
+import type { AgentIdentity, AgentRole } from "./fleet.ts";
 
 /**
  * The task store, reached through the prog CLI.
@@ -202,6 +203,10 @@ export const authoredBy = (item: Item): string | undefined =>
 /** Which reviewer currently owns a reviewing task, if one was dispatched. */
 export const reviewedBy = (item: Item): string | undefined =>
   item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
+
+/** Stable audit entry for one agent attempt on a task. */
+export const agentLog = (role: AgentRole, agent: AgentIdentity): string =>
+  `foreman: ${role} assigned to ${agent.kind}${agent.model ? ` (${agent.model})` : ""}`;
 
 /**
  * Salvage work in a project's own checkout, which only the operator starts.
