@@ -134,14 +134,18 @@ export const stageFor = (status: string): "planning" | "tasking" | "complete" =>
 /**
  * One poll of a running stage: keep waiting, move on, or give up.
  *
- * An agent that is working (or blocked waiting for the operator) means the
- * stage is alive. Once it settles, the only evidence of what it accomplished
- * is what it left in the task store: the planner's job was to write the
- * specification into the epic's description (`specWritten`), the tasker's was
- * to reach done. Settling without that evidence is a failure — except for the
+ * An agent that is working means the stage is alive. Once it is not, the only
+ * evidence of what it accomplished is what it left in the task store: the
+ * planner's job was to write the specification into the epic's description
+ * (`specWritten`), the tasker's was to reach done. A blocked stage agent is
+ * either interviewing the operator or idling after a finished turn — with its
+ * deliverable absent, only an interview explains the block and the run waits
+ * for the operator; with it present, the advance checks above have already
+ * moved the stage on. An epic is a draft until it has child tasks, so the
+ * planner can never move the epic's status itself; its deliverable is the
+ * description. Settling without that evidence is a failure — except for the
  * tasker leaving `open`, which the caller reports for a resume rather than
- * guessing. An epic is a draft until it has child tasks, so the planner can
- * never move the epic's status itself; its deliverable is the description.
+ * guessing.
  */
 export const decide = (
   stage: PlanStage,
@@ -149,9 +153,10 @@ export const decide = (
   epicStatus: string,
   specWritten: boolean,
 ): "wait" | "advance" | "failed" => {
-  if (workerState === "working" || workerState === "blocked") return "wait";
+  if (workerState === "working") return "wait";
   if (stageFor(epicStatus) === "complete") return "advance";
   if (stage === "planning" && specWritten) return "advance";
+  if (workerState === "blocked") return "wait";
   return "failed";
 };
 
@@ -268,6 +273,17 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
     const fleet = yield* Fleet;
     const prog = yield* Prog;
     const prompts = yield* Prompts;
+
+    // One agent per role per workspace: the spawn guard refuses a live pane
+    // that already holds the stage's role, and a finished stage — or a previous
+    // attempt, on a resume — leaves one behind. A plan run drives one agent at
+    // a time and read the previous one's deliverable from the store before
+    // arriving here, so any pane in the workspace belongs to finished work and
+    // is retired before the next stage takes the role.
+    const current = (yield* fleet.roster).find((candidate) => candidate.task === epic);
+    if (current) {
+      yield* fleet.dismiss(current, "author");
+    }
 
     const item = yield* prog.show(epic);
     const rung = stage === "planning" ? settings.planner : settings.tasker;

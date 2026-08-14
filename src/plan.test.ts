@@ -18,10 +18,22 @@ describe("decide", () => {
   const settled: WorkerState = "settled";
   const gone: WorkerState = "gone";
 
-  test("waits while the agent is working or blocked", () => {
+  test("waits while the agent is working", () => {
     expect(decide("planning", working, "draft", false)).toBe("wait");
-    expect(decide("planning", "blocked", "draft", false)).toBe("wait");
     expect(decide("tasking", working, "open", true)).toBe("wait");
+  });
+
+  test("a blocked agent without its deliverable is an interview, so it waits", () => {
+    expect(decide("planning", "blocked", "draft", false)).toBe("wait");
+    expect(decide("tasking", "blocked", "open", true)).toBe("wait");
+  });
+
+  test("a blocked agent whose deliverable exists is done, not stuck", () => {
+    // herdr can keep reporting an agent as blocked after it finished (opencode
+    // idles at its prompt), so the deliverable is what tells an interview from
+    // a finished run.
+    expect(decide("planning", "blocked", "draft", true)).toBe("advance");
+    expect(decide("tasking", "blocked", "done", true)).toBe("advance");
   });
 
   test("planning advances when the planner settles with a written spec", () => {
