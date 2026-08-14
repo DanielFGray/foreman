@@ -526,7 +526,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         }),
 
       /** Marks a task for the frontier model next time it is picked up. */
-      escalate: (task: Item) => prog.escalate(task.id),
+      escalate: (task: { readonly id: string }) => prog.escalate(task.id),
     } as const;
   }),
 }) {}
