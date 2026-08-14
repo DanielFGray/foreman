@@ -44,6 +44,8 @@ const state: FleetState = {
       labels: ["rung-human"],
     },
   ],
+  focus: [{ id: "ts-000111", title: "focused thread", priority: 1, project: "fibrae", labels: [] }],
+  focused: true,
   queue: [
     { id: "ts-aaa111", title: "queue one", priority: 1, project: "fibrae", labels: [] },
     { id: "ts-aaa222", title: "queue two", priority: 2, project: "fibrae", labels: [] },
@@ -161,9 +163,14 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame(
-        (f) => f.includes("queue 2") && f.includes("decisions 3") && f.includes("held 1"),
+        (f) =>
+          f.includes("focus 1") &&
+          f.includes("queue 2") &&
+          f.includes("decisions 3") &&
+          f.includes("held 1"),
       );
       const frame = t.captureCharFrame();
+      expect(frame).toContain("focus: 1 ready");
       expect(frame).toContain("author vanished");
       expect(frame).toContain("reviewer vanished");
       expect(frame).toContain("orphaned workspace");
@@ -181,12 +188,18 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 2"));
+      await t.waitForFrame((f) => f.includes("focus 1"));
 
-      // queue row 0: a queued task can be pushed a rung up the ladder.
+      // focus row 0: the focused thread climbs like the queue does.
       t.mockInput.pressKey("e");
       await t.waitFor(() => calls.climb.length === 1);
-      expect(calls.climb[0]).toBe("ts-aaa111");
+      expect(calls.climb[0]).toBe("ts-000111");
+
+      // queue row 0: a queued task can be pushed a rung up the ladder.
+      t.mockInput.pressArrow("right");
+      t.mockInput.pressKey("e");
+      await t.waitFor(() => calls.climb.length === 2);
+      expect(calls.climb[1]).toBe("ts-aaa111");
 
       // working: focus jumps to the author's pane.
       t.mockInput.pressArrow("right");
@@ -197,8 +210,8 @@ describe("Pipeline", () => {
       // review: climbing sends it back for a stronger author.
       t.mockInput.pressArrow("right");
       t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.climb.length === 2);
-      expect(calls.climb[1]).toBe("ts-bbb222");
+      await t.waitFor(() => calls.climb.length === 3);
+      expect(calls.climb[2]).toBe("ts-bbb222");
 
       // landed takes no actions, and a worker-less decision cannot be taken
       // over. Both presses must be silently ignored; the retry below is the
@@ -210,7 +223,7 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("r");
       await t.waitFor(() => calls.retry.length === 1);
       expect(calls.retry[0]).toBe("ts-ccc111");
-      expect(calls.climb.length).toBe(2);
+      expect(calls.climb.length).toBe(3);
       expect(calls.focus.length).toBe(1);
 
       // decisions row 1: a reviewer-vanished workspace can be taken over.
@@ -246,7 +259,7 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("o");
       await t.waitFor(() => calls.onboard.length === 1);
       expect(calls.onboard[0]).toBe("fibrae");
-      expect(calls.climb.length).toBe(2);
+      expect(calls.climb.length).toBe(3);
       expect(calls.close.length).toBe(1);
 
       // stranded: s sends the branch back for a review to judge its commits.

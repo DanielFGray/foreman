@@ -27,6 +27,7 @@ export interface Controls {
 
 /** The eight selectable stages, in the order the cursor moves through them. */
 const COLUMNS = [
+  "focus",
   "queue",
   "working",
   "review",
@@ -86,6 +87,7 @@ type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "
  * that order, with prog.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
+  focus: ["climb"],
   queue: ["climb"],
   working: ["focus", "climb", "release"],
   review: ["focus", "climb", "release"],
@@ -121,7 +123,7 @@ export const Pipeline = (props: {
   readonly state: Accessor<FleetState>;
   readonly controls: Controls;
 }) => {
-  const [column, setColumn] = createSignal<ColumnName>("queue");
+  const [column, setColumn] = createSignal<ColumnName>("focus");
   const [row, setRow] = createSignal(0);
 
   const rows = (): ReadonlyArray<ColumnRow> => rowsFor(column(), props.state());
@@ -252,6 +254,11 @@ export const Pipeline = (props: {
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
       <box style={{ flexDirection: "row", flexGrow: 1 }}>
         <Column
+          title="focus"
+          rows={() => rowsFor("focus", props.state())}
+          selected={selectedFor("focus")}
+        />
+        <Column
           title="queue"
           rows={() => rowsFor("queue", props.state())}
           selected={selectedFor("queue")}
@@ -376,7 +383,10 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
       {props.state().held.length === 0 ? "" : `held: ${props.state().held.join(", ")}`}
     </text>
     <text style={{ height: 1 }}>
-      {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
+      {props.state().focused
+        ? `focus: ${props.state().focus.length} ready · ${props.state().paused ? "paused" : "running"}`
+        : `${props.state().paused ? "paused" : "running"}`}
+      {`  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
       {"r retry  t take over  f focus  e climb  d release  c close  o onboard  s send for review"}
@@ -387,6 +397,8 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> => {
   switch (column) {
+    case "focus":
+      return state.focus.map(readyRow);
     case "queue":
       return state.queue.map(readyRow);
     case "working":
