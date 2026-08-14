@@ -557,7 +557,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // — and tells the operator, because a focused foreman that wandered on
         // into the backlog would be doing exactly what the label said not to.
         if (current.focused && current.focus.length === 0 && !focusedInFlight) {
-          yield* Effect.logInfo("focus complete — no ready work left in the scope");
           yield* fleet.notify(
             "Focus complete",
             "The focused scope has no ready work left — dispatch paused.",
