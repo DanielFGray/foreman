@@ -160,6 +160,38 @@ applied dependency gates. Tasks are highest priority first, with ties broken by
 rotating between projects — otherwise one project holding a hundred priority-1
 tasks would own the entire fleet until it ran dry.
 
+## Plan mode
+
+The queue drains a backlog; something has to fill it. `foreman plan` is that
+front half: it turns a rough plan into tasks in the backlog, which the daemon
+then drains like any others.
+
+```
+  foreman plan                     # or --file plan.md
+  planner: research → specification  →  prog desc ep-…
+  tasker:  specification → tasks     →  prog add --parent ep-…
+```
+
+A plan is an epic in prog, labelled `plan`, created in draft. The planner agent
+researches the project in its own worktree, interviews you through its question
+tool when the plan genuinely cannot decide something, and writes the full
+specification into the epic's description. The tasker agent then files that
+specification as tasks under the epic — small, atomic, independently shippable,
+each referencing the epic — wires their dependencies with `prog blocks`, and only
+then opens them, so nothing reaches the queue with a missing blocker.
+
+The two agents run one after the other in the same plan workspace, and the
+command drives them to completion before it returns. The daemon is untouched by
+all of this: an epic is never claimed, never `in_progress`, and never ready, so
+the running dispatcher ignores the plan itself while picking up its opened
+children as ordinary reviewed work. Generated tasks carry `--priority 2`, so the
+fleet reviews them like any other real work.
+
+The epic's stored status is the plan's state machine: `draft` while the planner
+works, `open` once the specification is written, `done` once the tasker has
+finished. An interrupted run leaves its workspace in place, and
+`foreman plan --epic ep-…` adopts it and continues from wherever it stopped.
+
 ## Configuration
 
 `~/.config/foreman/config.jsonc`, or `$FOREMAN_CONFIG`. Comments and trailing
@@ -175,6 +207,8 @@ strictly.
   "author": "opencode",     // writes the code by default; keep it cheap
   "escalateTo": "claude",   // where a task goes once cheap has failed on it
   "reviewers": { "opencode": "claude" },
+  "planner": "claude",      // turns a rough plan into a specification (default: escalateTo)
+  "tasker": "opencode",     // turns the specification into tasks (default: author)
   "pollSeconds": 20,
   "staleAfterHours": 24,
   "landedWindowDays": 7,

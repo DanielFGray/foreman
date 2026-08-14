@@ -159,6 +159,46 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
+
+      /**
+       * Creates a plan epic and returns its id.
+       *
+       * A plan is an epic so its generated tasks can hang off it as children,
+       * and it starts in draft so nothing the fleet reads considers it ready
+       * until the planner has written the specification and opened it. Same id
+       * validation as `add`: the workspace, branch and prompts are all named
+       * from the id, so a malformed one is caught here rather than discovered
+       * three calls later.
+       */
+      addEpic: (
+        project: string,
+        title: string,
+        description: string,
+        labels: ReadonlyArray<string>,
+      ) =>
+        run(
+          "add",
+          title,
+          "-p",
+          project,
+          "-e",
+          "--draft",
+          "-d",
+          description,
+          ...labels.flatMap((l) => ["-l", l]),
+        ).pipe(
+          Effect.flatMap((out) => {
+            const id = out.trim();
+            return /^ep-[0-9a-f]{6}$/.test(id)
+              ? Effect.succeed(id)
+              : Effect.fail(
+                  new ProgError({ command: `add -e ${title}`, detail: `unusable id: ${id}` }),
+                );
+          }),
+        ),
+
+      /** The items that belong to one epic. */
+      children: (epic: string) => runJson(Schema.Array(Item), "list", "--parent", epic, "--json"),
     } as const;
   }),
 }) {}
@@ -228,6 +268,14 @@ export const agentLog = (role: AgentRole, agent: AgentIdentity): string =>
 export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
   item.labels.includes(ONBOARD);
 
+/**
+ * A plan epic: a rough plan that is being turned into a specification and then
+ * into tasks. The label is what a resume validates against, and what a future
+ * dashboard column groups on.
+ */
+export const isPlan = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(PLAN);
+
 /** Cheap already failed on this task, or a human asked for frontier directly. */
 export const isEscalated = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
   item.labels.includes(ESCALATED);
@@ -238,6 +286,7 @@ export const REVIEW_BY = "review-by-";
 export const TRIVIAL = "trivial";
 export const ESCALATED = "escalated";
 export const ONBOARD = "onboard";
+export const PLAN = "plan";
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
   command: Schema.String,

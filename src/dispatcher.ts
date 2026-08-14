@@ -1,6 +1,6 @@
 import { DateTime, Duration, Effect, Ref, Schedule, SubscriptionRef } from "effect";
 import { Settings } from "./config.ts";
-import { Fleet, labelFor, type Worker } from "./fleet.ts";
+import { directoryFor, Fleet, labelFor, type Worker } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
@@ -582,12 +582,3 @@ interface Project {
   readonly name: string;
   readonly directory: string;
 }
-
-/**
- * Where a task's worktree lives. Under the state directory rather than inside
- * the repository: an in-tree worktree would mean editing .gitignore in every
- * project foreman touches, and a stray checkout is far more confusing inside a
- * repo than outside it.
- */
-const directoryFor = (project: string, task: string): string =>
-  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman/worktrees/${project}/${task}`;

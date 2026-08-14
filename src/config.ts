@@ -73,6 +73,11 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         author: raw.author,
         escalateTo: raw.escalateTo,
         reviewers: raw.reviewers,
+        // Plan kinds follow the fleet defaults unless named. Planning is
+        // judgement-heavy and runs once per plan, so it defaults to the
+        // frontier kind; tasking is structured and runs beside the author.
+        planner: raw.planner ?? raw.escalateTo,
+        tasker: raw.tasker ?? raw.author,
         pollInterval: raw.pollSeconds,
         staleAfter: raw.staleAfterHours,
         landedWindow: raw.landedWindowDays,
@@ -91,6 +96,8 @@ interface SettingsShape {
   readonly author: string;
   readonly escalateTo: string;
   readonly reviewers: Readonly<Record<string, string>>;
+  readonly planner: string;
+  readonly tasker: string;
   readonly pollInterval: number;
   readonly staleAfter: number;
   readonly landedWindow: number;
@@ -131,6 +138,16 @@ const ConfigFile = Schema.Struct({
   reviewers: Schema.optionalWith(Schema.Record({ key: Schema.String, value: Schema.String }), {
     default: () => ({}),
   }),
+
+  /**
+   * The kind that turns a rough plan into a specification, and the kind that
+   * turns that specification into tasks. Both default to the fleet's own
+   * defaults — planner to `escalateTo`, tasker to `author` — and are named
+   * separately because plan runs happen rarely and their cost is worth a
+   * deliberate choice.
+   */
+  planner: Schema.optional(Schema.String),
+  tasker: Schema.optional(Schema.String),
 
   pollSeconds: Schema.optionalWith(Schema.Positive, { default: () => 20 }),
 
