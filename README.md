@@ -127,7 +127,11 @@ settled output cannot mask the current role's state.
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
-On approval the reviewer merges and marks the task done.
+On approval the reviewer adds the durable `approved` verdict. Foreman then checks
+the shared checkout again, merges the branch, and marks the task done. A dirty
+checkout leaves the approval waiting for a later tick; a conflicting merge is
+aborted and returned to the queue. The reviewer needs neither merge nor completion
+rights.
 
 Who reviews whom is `reviewers` in the config, author to reviewer. Cheap work
 escalates to an expensive model; a uniform fleet reviews itself, which still

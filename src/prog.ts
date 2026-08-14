@@ -95,7 +95,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * more than once, and its next author starts a new lifecycle stage.
        */
       attribute: (task: string, kind: string) =>
-        removeLabels(task, [BY, REVIEW_BY]).pipe(
+        removeLabels(task, [BY, REVIEW_BY, APPROVED]).pipe(
           Effect.andThen(run("label", task, `${BY}${kind}`)),
           Effect.asVoid,
         ),
@@ -132,12 +132,22 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * checked here rather than discovered three calls later.
        */
       add: (project: string, title: string, description: string, labels: ReadonlyArray<string>) =>
-        run("add", title, "-p", project, "-d", description, ...labels.flatMap((l) => ["-l", l])).pipe(
+        run(
+          "add",
+          title,
+          "-p",
+          project,
+          "-d",
+          description,
+          ...labels.flatMap((l) => ["-l", l]),
+        ).pipe(
           Effect.flatMap((out) => {
             const id = out.trim();
             return /^ts-[0-9a-f]{6}$/.test(id)
               ? Effect.succeed(id)
-              : Effect.fail(new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }));
+              : Effect.fail(
+                  new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }),
+                );
           }),
         ),
 
@@ -149,6 +159,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
+
+      /** Marks work complete after foreman has landed its branch. */
+      complete: (task: string) => run("done", task).pipe(Effect.asVoid),
     } as const;
   }),
 }) {}
@@ -203,6 +216,10 @@ export const authoredBy = (item: Item): string | undefined =>
 export const reviewedBy = (item: Item): string | undefined =>
   item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
 
+/** Whether the reviewer accepted the branch for mechanical landing. */
+export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(APPROVED);
+
 /**
  * Salvage work in a project's own checkout, which only the operator starts.
  *
@@ -224,6 +241,7 @@ export const REVIEW_BY = "review-by-";
 export const TRIVIAL = "trivial";
 export const ESCALATED = "escalated";
 export const ONBOARD = "onboard";
+export const APPROVED = "approved";
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
   command: Schema.String,

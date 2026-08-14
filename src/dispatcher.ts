@@ -6,6 +6,7 @@ import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
 import {
   authoredBy,
+  isApproved,
   isEscalated,
   isOnboarding,
   type Item,
@@ -156,77 +157,118 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * stays alive and the review queue picks it up next tick.
      */
     const settle = (current: Observation) =>
-      Effect.forEach(
-        current.owned.filter(({ worker }) => worker.state !== "working"),
-        ({ task, worker, kind }) =>
-          Effect.gen(function* () {
-            if (task.status === "done" || task.status === "canceled") {
-              yield* fleet.notify(
-                task.status === "done" ? "Task landed" : "Task canceled",
-                `${task.id} ${task.title}`,
-              );
-              return yield* fleet.close(worker);
-            }
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          current.review.filter(({ task }) => isApproved(task)),
+          ({ task, worker }) => land(task, worker),
+          { discard: true },
+        );
 
-            const reviewer = reviewedBy(task);
-            if (reviewer && task.status === "open") {
-              yield* prog.escalate(task.id);
-              return yield* fleet.notify(
-                "Review returned",
-                `${task.id} was sent back by ${reviewer} — escalated for its next author`,
-              );
-            }
-
-            // An empty workspace says nothing about why the agent vanished.
-            // It remains claimed until an operator decides or it goes stale.
-            if (worker.state === "gone") return;
-
-            if (worker.state === "blocked") {
-              // Approvals stay with the operator. Foreman says where to look
-              // and then leaves the worker exactly as it is.
-              return yield* fleet.notify("Worker blocked", `${task.id} needs you — ${task.title}`);
-            }
-
-            if (task.status === "reviewing") {
-              if (!reviewer) {
-                return yield* fleet.notify("Ready for review", `${task.id} ${task.title}`);
+        yield* Effect.forEach(
+          current.owned.filter(
+            ({ task, worker }) =>
+              !(task.status === "reviewing" && isApproved(task)) && worker.state !== "working",
+          ),
+          ({ task, worker, kind }) =>
+            Effect.gen(function* () {
+              if (task.status === "done" || task.status === "canceled") {
+                yield* fleet.notify(
+                  task.status === "done" ? "Task landed" : "Task canceled",
+                  `${task.id} ${task.title}`,
+                );
+                return yield* fleet.close(worker);
               }
 
+              const reviewer = reviewedBy(task);
+              if (reviewer && task.status === "open") {
+                yield* prog.escalate(task.id);
+                return yield* fleet.notify(
+                  "Review returned",
+                  `${task.id} was sent back by ${reviewer} — escalated for its next author`,
+                );
+              }
+
+              // An empty workspace says nothing about why the agent vanished.
+              // It remains claimed until an operator decides or it goes stale.
+              if (worker.state === "gone") return;
+
+              if (worker.state === "blocked") {
+                // Approvals stay with the operator. Foreman says where to look
+                // and then leaves the worker exactly as it is.
+                return yield* fleet.notify(
+                  "Worker blocked",
+                  `${task.id} needs you — ${task.title}`,
+                );
+              }
+
+              if (task.status === "reviewing") {
+                if (!reviewer) {
+                  return yield* fleet.notify("Ready for review", `${task.id} ${task.title}`);
+                }
+
+                yield* prog.log(
+                  task.id,
+                  `foreman: reviewer ${reviewer} stopped without a verdict. Returned to the queue and escalated.`,
+                );
+                yield* prog.escalate(task.id);
+                yield* prog.release(task.id);
+                return yield* fleet.notify(
+                  "Review returned",
+                  `${task.id} reviewer stopped without a verdict — back in the queue`,
+                );
+              }
+
+              // A reviewer can explicitly return work with `prog open`. Keep the
+              // workspace: the next author must continue from the same branch.
+              if (task.status !== "in_progress") return;
+
+              // Settled without a verdict on a task that is still open. The
+              // agent stopped of its own accord, so unlike a vanished worker
+              // this is evidence, and the task goes back to the queue with what
+              // it learned attached.
               yield* prog.log(
                 task.id,
-                `foreman: reviewer ${reviewer} stopped without a verdict. Returned to the queue and escalated.`,
+                `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}). Returned to the queue.`,
               );
               yield* prog.escalate(task.id);
               yield* prog.release(task.id);
-              return yield* fleet.notify(
-                "Review returned",
-                `${task.id} reviewer stopped without a verdict — back in the queue`,
+              yield* fleet.notify(
+                "Task returned",
+                `${task.id} stopped unfinished — back in the queue`,
               );
-            }
+            }).pipe(
+              Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
+            ),
+          { discard: true },
+        );
+      });
 
-            // A reviewer can explicitly return work with `prog open`. Keep the
-            // workspace: the next author must continue from the same branch.
-            if (task.status !== "in_progress") return;
+    /** Consumes a review verdict; the reviewer never receives merge rights. */
+    const land = (task: Item, worker: Worker | undefined) =>
+      Effect.gen(function* () {
+        const project = projectFor(task.project);
+        if (!project) return;
 
-            // Settled without a verdict on a task that is still open. The
-            // agent stopped of its own accord, so unlike a vanished worker
-            // this is evidence, and the task goes back to the queue with what
-            // it learned attached.
-            yield* prog.log(
-              task.id,
-              `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}). Returned to the queue.`,
-            );
-            yield* prog.escalate(task.id);
-            yield* prog.release(task.id);
-            yield* fleet.notify(
-              "Task returned",
-              `${task.id} stopped unfinished — back in the queue`,
-            );
-          }).pipe(
-            Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
-          ),
-        { discard: true },
-      );
+        const result = yield* repository.merge(project.directory, labelFor(task.id));
+        if (result._tag === "Held") return;
+
+        if (result._tag === "Rejected") {
+          yield* prog.log(
+            task.id,
+            `foreman: approved branch could not be merged: ${result.detail}. Returned to the queue.`,
+          );
+          yield* prog.escalate(task.id);
+          yield* prog.release(task.id);
+          return yield* fleet.notify(
+            "Landing failed",
+            `${task.id} could not merge cleanly — back in the queue`,
+          );
+        }
+
+        yield* prog.complete(task.id);
+        yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
+        if (worker) yield* fleet.close(worker);
+      }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
 
     /**
      * Returns claims that nobody is working on any more.
@@ -272,8 +314,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     /**
      * Claims work for every free slot, review first.
      *
-     * Tasks in a held project are passed over. Both roles end by merging into
-     * that checkout, so dispatching there would put an agent's merge against
+     * Tasks in a held project are passed over. Every branch eventually merges
+     * into that checkout, so dispatching there would put its landing against
      * the operator's own edits — and the operator would find their branch
      * moving under them mid-change. The tasks stay in the queue, and the
      * dashboard names the project so the reason is visible rather than

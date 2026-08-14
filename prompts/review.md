@@ -28,18 +28,9 @@ act on them without rediscovering anything, then run `prog open {{ task }}` to r
 the task to the queue. The branch stays where it is; the next agent continues from it.
 Returning work is a normal outcome and costs far less than approving something broken.
 
-If it passes, it merges into {{ repository }} — a checkout a person also works in, so
-ask git whether they are in it right now:
-
-    git -C {{ repository }} status --porcelain --untracked-files=no
-
-If that prints nothing, merge with `git -C {{ repository }} merge --no-ff {{ branch }}`,
-confirm the merge is clean and the tests still pass afterwards, then run
-`prog done {{ task }}`.
-
-If it prints anything, someone is editing there. Leave the branch alone, log that the
-work is approved and waiting for a clean checkout, and run `prog open {{ task }}`. The
-same applies if the merge conflicts and the resolution is not obvious: do not force it,
-log what conflicted, and run `prog open {{ task }}`.
+If it passes, run `prog label {{ task }} approved`. That is your verdict. Foreman owns
+the mechanical landing step: it waits for a clean repository checkout, merges the
+branch, and only then marks the task done. Do not merge the branch or mark the task
+done yourself.
 
 Do not start any other work.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authoredBy, reviewedBy, type Item } from "./prog.ts";
+import { authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
@@ -14,9 +14,10 @@ const item = (labels: ReadonlyArray<string>): Item => ({
 
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
-    const task = item(["by-opencode", "review-by-claude"]);
+    const task = item(["by-opencode", "review-by-claude", "approved"]);
 
     expect(authoredBy(task)).toBe("opencode");
     expect(reviewedBy(task)).toBe("claude");
+    expect(isApproved(task)).toBe(true);
   });
 });
