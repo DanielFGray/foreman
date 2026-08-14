@@ -79,6 +79,16 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** All unblocked, unclaimed tasks, highest priority first. */
       ready: () => runJson(Schema.Array(ReadyTask), "ready", "--json"),
 
+      /**
+       * Every item carrying the focus label — tasks, epics, or a mix.
+       *
+       * The scope a focus defines is derived from these roots each tick: every
+       * ready task at or under any of them. Read with `list --label` rather
+       * than remembered, so the scope survives a restart the same way the
+       * paused operator does not need to.
+       */
+      focused: () => runJson(Schema.Array(Item), "list", "--label", FOCUS, "--json"),
+
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
 
@@ -305,6 +315,14 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
   item.labels.includes(ONBOARD);
 
 /**
+ * A focused item. The label is the whole scope: put it on a task, an epic, or
+ * several items, and every ready task at or under them becomes the serialized
+ * thread the fleet works before anything else.
+ */
+export const isFocused = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(FOCUS);
+
+/**
  * A plan epic: a rough plan that is being turned into a specification and then
  * into tasks. The label is what a resume validates against, and what a future
  * dashboard column groups on.
@@ -334,6 +352,8 @@ export const RUNG = "rung-";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
 
+/** Marks an item whose ready descendants form the focus scope. */
+export const FOCUS = "focus";
 export const APPROVED = "approved";
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
