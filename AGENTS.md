@@ -24,10 +24,16 @@ the still-unproven backlog.
 
 - **The dashboard is built but unproven live.** It is only proven by the
   render tests; nobody has yet sat in front of it while the fleet worked.
-- **Plan mode is built but never proven live.** The planner → tasker → opened
-  children sequence in `src/plan.ts` has not run end to end. Prove it against a
-  scratch project not in the config, then `foreman plan --epic ep-...` on the
-  same epic to prove the resume path.
+- **Plan mode has been proven live end to end, at the tasker's worst model.**
+  A full `foreman plan --file` run on a scratch project
+  (`foreman-e2e-probe`, config `FOREMAN_CONFIG=<a scratch config>`) ran
+  planner → tasker → opened children on 2026-08-14, with the tasker at
+  deepseek-flash (the model that filed epics in the original bug): two tasks
+  filed under the epic with `--parent`, dependency wired, the unblocked child
+  in `prog ready`, workspace closed. The resume path was proven only in its
+  closed state (`plan --epic` on a done epic reports complete without
+  re-running); a mid-planning or mid-tasking resume is still unproven. The
+  proof did not touch the real backlog.
 
 ## The design, and why
 
