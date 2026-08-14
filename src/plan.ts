@@ -87,7 +87,10 @@ export const runPlan = (input: PlanInput) =>
       }
       yield* Effect.logInfo(`plan ${epic.id} complete: ${count} tasks under ${project.name}`);
     } else {
-      yield* Effect.logInfo(`plan ${epic.id} left ${status}; the workspace stays for inspection`);
+      // Only a canceled epic reaches this branch — a failed run throws before
+      // the close above, which is what keeps the workspace for `--epic`. Here
+      // the run completed without the tasker finishing, so nothing is left.
+      yield* Effect.logInfo(`plan ${epic.id} ended ${status}; nothing to resume`);
     }
     return epic.id;
   });
@@ -180,12 +183,12 @@ const createEpic = (input: PlanInput, configured: ReadonlyArray<string>) =>
 
     const project = resolveProject(input.project, configured);
     if (Option.isNone(project)) {
-      return yield* new PlanError({
-        detail:
-          configured.length === 1
-            ? `--project ${Option.getOrElse(input.project, () => "")} is not configured (configured: ${configured.join(", ")})`
-            : `--project is required when more than one project is configured (configured: ${configured.join(", ")})`,
-      });
+      const requested = Option.getOrElse(input.project, () => "");
+      const detail =
+        requested !== ""
+          ? `--project ${requested} is not configured (configured: ${configured.join(", ")})`
+          : `--project is required when more than one project is configured (configured: ${configured.join(", ")})`;
+      return yield* new PlanError({ detail });
     }
 
     const text = yield* Option.match(input.plan, {
