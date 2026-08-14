@@ -168,10 +168,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * stranded branch's task is usually done or back in the queue.
        */
       submit: (task: string) =>
-        run("start", task).pipe(
-          Effect.andThen(run("review", task)),
-          Effect.asVoid,
-        ),
+        run("start", task).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),

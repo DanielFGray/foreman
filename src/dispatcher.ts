@@ -1,4 +1,4 @@
-import { DateTime, Duration, Effect, Ref, Schedule, SubscriptionRef } from "effect";
+import { DateTime, Duration, Effect, Queue, Ref, SubscriptionRef } from "effect";
 import { Settings } from "./config.ts";
 import { directoryFor, Fleet, labelFor, taskOf, type Worker } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
@@ -46,6 +46,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // is not racing the first tick to press pause.
     const paused = yield* Ref.make(true);
     const state = yield* SubscriptionRef.make(empty);
+
+    // The poll interval is how long foreman waits to notice something nobody
+    // told it about. An operator pressing a key told it, so that case has no
+    // reason to wait at all — the loop takes whichever arrives first. Sliding
+    // and one deep: a burst of keystrokes means one tick, not a backlog of
+    // them, because each tick already reads the whole world.
+    const wake = yield* Queue.sliding<void>(1);
+    const nudge = Queue.offer(wake, undefined).pipe(Effect.asVoid);
+
+    /** Runs an operator's command, then lets the loop see what it changed. */
+    const commanded = <A, E, R>(command: Effect.Effect<A, E, R>) =>
+      command.pipe(Effect.tap(() => nudge));
 
     /**
      * Reads the whole world and works out what to do about it.
@@ -288,12 +300,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
- * Puts a finished branch into the operator's checkout.
- *
- * The only code path that writes there. No agent holds merge rights, reviewer
- * or author, so every branch passes the same clean-checkout and verification
- * gate however trivial the task that produced it was.
- */
+     * Puts a finished branch into the operator's checkout.
+     *
+     * The only code path that writes there. No agent holds merge rights, reviewer
+     * or author, so every branch passes the same clean-checkout and verification
+     * gate however trivial the task that produced it was.
+     */
     const land = (task: Item, worker: Worker | undefined) =>
       Effect.gen(function* () {
         const project = projectFor(task.project);
@@ -590,13 +602,19 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           `foreman up: ${settings.slots} slots over ${settings.projects.length} projects, polling every ${settings.pollInterval}s`,
         );
         return yield* tick.pipe(
-          Effect.repeat(Schedule.spaced(Duration.seconds(settings.pollInterval))),
+          Effect.andThen(
+            Effect.raceFirst(
+              Effect.sleep(Duration.seconds(settings.pollInterval)),
+              Queue.take(wake),
+            ),
+          ),
+          Effect.forever,
         );
       }),
 
       /** Stops filling slots. Live workers are left to finish. */
-      pause: Ref.set(paused, true),
-      resume: Ref.set(paused, false),
+      pause: commanded(Ref.set(paused, true)),
+      resume: commanded(Ref.set(paused, false)),
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
@@ -607,52 +625,58 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * right now: only the operator knows whether they have stepped away.
        */
       onboard: (project: string) =>
-        Effect.gen(function* () {
-          const found = projectFor(project);
-          if (found) yield* onboard(found);
-        }),
+        commanded(
+          Effect.gen(function* () {
+            const found = projectFor(project);
+            if (found) yield* onboard(found);
+          }),
+        ),
 
       /** Starts a fresh agent on a task whose worker vanished. */
       retry: (task: Item) =>
-        Effect.gen(function* () {
-          if (task.status === "reviewing") {
-            return yield* dispatchReview(task, authoredBy(task));
-          }
+        commanded(
+          Effect.gen(function* () {
+            if (task.status === "reviewing") {
+              return yield* dispatchReview(task, authoredBy(task));
+            }
 
-          // A salvage run that stopped is retried as a salvage run. Sending an
-          // author into a worktree would show it a copy of the last commit,
-          // which is precisely the state that has none of the work in it.
-          if (isOnboarding(task)) {
+            // A salvage run that stopped is retried as a salvage run. Sending an
+            // author into a worktree would show it a copy of the last commit,
+            // which is precisely the state that has none of the work in it.
+            if (isOnboarding(task)) {
+              const project = projectFor(task.project);
+              if (project) yield* dispatchOnboard(task, project);
+              return;
+            }
+
+            const worker = yield* fleet.roster.pipe(
+              Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
+            );
+            if (!worker) return;
             const project = projectFor(task.project);
-            if (project) yield* dispatchOnboard(task, project);
-            return;
-          }
-
-          const worker = yield* fleet.roster.pipe(
-            Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
-          );
-          if (!worker) return;
-          const project = projectFor(task.project);
-          if (!project) return;
-          const kind = isEscalated(task) ? settings.escalateTo : settings.author;
-          const prompt = yield* prompts.author(task, worker.directory, project.directory);
-          const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" });
-          yield* prog.attribute(task.id, kind);
-          yield* prog.log(task.id, agentLog("author", agent));
-        }),
+            if (!project) return;
+            const kind = isEscalated(task) ? settings.escalateTo : settings.author;
+            const prompt = yield* prompts.author(task, worker.directory, project.directory);
+            const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" });
+            yield* prog.attribute(task.id, kind);
+            yield* prog.log(task.id, agentLog("author", agent));
+          }),
+        ),
 
       /** Hands a task back to the queue and takes its workspace down. */
       release: (task: Item) =>
-        Effect.gen(function* () {
-          yield* prog.release(task.id);
-          const worker = yield* fleet.roster.pipe(
-            Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
-          );
-          if (worker) yield* fleet.close(worker);
-        }),
+        commanded(
+          Effect.gen(function* () {
+            yield* prog.release(task.id);
+            const worker = yield* fleet.roster.pipe(
+              Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
+            );
+            if (worker) yield* fleet.close(worker);
+          }),
+        ),
 
       /** Marks a task for the frontier model next time it is picked up. */
-      escalate: (task: Item) => prog.escalate(task.id),
+      escalate: (task: Item) => commanded(prog.escalate(task.id)),
 
       /**
        * Puts stranded branches back in front of a reviewer.
@@ -665,12 +689,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * dispatch against, so it stays on the list until a person deals with it.
        */
       adopt: (orphans: ReadonlyArray<Orphan>) =>
-        Effect.forEach(
-          orphans.filter((orphan) => orphan.status !== undefined),
-          (orphan) =>
-            prog
-              .submit(orphan.task)
-              .pipe(
+        commanded(
+          Effect.forEach(
+            orphans.filter((orphan) => orphan.status !== undefined),
+            (orphan) =>
+              prog.submit(orphan.task).pipe(
                 Effect.andThen(
                   prog.log(
                     orphan.task,
@@ -681,7 +704,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   Effect.logWarning(`adopting ${orphan.task} failed: ${error}`),
                 ),
               ),
-          { discard: true },
+            { discard: true },
+          ),
         ),
     } as const;
   }),

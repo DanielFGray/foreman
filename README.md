@@ -48,6 +48,10 @@ Foreman starts paused. Opening the dashboard to drain the fleet is the common
 case, and it should not be a race against the first tick. Press `p` when you
 want it dispatching.
 
+The poll interval is how long foreman waits to notice something nobody told it
+about. Anything you do in the dashboard — start, pause, retry, release, adopt —
+ticks at once, so keys never sit waiting out the clock.
+
 A fresh agent pane per attempt and review, rather than long-lived workers fed
 task after task: no context bleeds between stages or unrelated projects.
 

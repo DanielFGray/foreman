@@ -24,9 +24,7 @@ export const dashboard = Effect.gen(function* () {
   const runtime = yield* Effect.runtime<never>();
 
   const renderer = yield* Effect.acquireRelease(
-    Effect.promise(() =>
-      createCliRenderer({ exitOnCtrlC: false, targetFps: 30, exitSignals: [] }),
-    ),
+    Effect.promise(() => createCliRenderer({ exitOnCtrlC: false, targetFps: 30, exitSignals: [] })),
     (active) => Effect.sync(() => active.destroy()),
   );
 
@@ -132,9 +130,7 @@ const Column = (props: { readonly title: string; readonly rows: Accessor<Array<R
     title={`${props.title} ${props.rows().length}`}
   >
     <For each={props.rows()}>
-      {(row) => (
-        <text style={{ height: 1, flexShrink: 0 }}>{`${row.id}  ${row.label}`}</text>
-      )}
+      {(row) => <text style={{ height: 1, flexShrink: 0 }}>{`${row.id}  ${row.label}`}</text>}
     </For>
   </box>
 );

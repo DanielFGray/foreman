@@ -54,6 +54,11 @@ an intention. That is the one `Ref`, and it starts paused: settling and
 reclaiming run regardless, so a fresh start lands finished work and tidies dead
 workspaces before it asks for anything new.
 
+The wake queue beside it is not a second one. It holds no state — a tick reads
+everything back either way — it only says "look now" so an operator's keypress
+does not wait out the poll interval. Every command on the dispatcher goes
+through `commanded`, which nudges it.
+
 **If you find yourself adding a second one, stop.** It means something the
 world should be recording is not being recorded, and the fix belongs in herdr
 or prog, not in a field on the dispatcher.
