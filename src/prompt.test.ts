@@ -25,10 +25,9 @@ const ready = {
 describe("Prompts", () => {
   test("takes the operator's checkout away from the author", async () => {
     const prompt = await Effect.runPromise(
-      Effect.gen(function* () {
-        const prompts = yield* Prompts;
-        return yield* prompts.author(ready, "/tmp/worktree", "/tmp/repository");
-      }).pipe(Effect.provide(Prompts.Default)),
+      Prompts.author(ready, "/tmp/worktree", "/tmp/repository").pipe(
+        Effect.provide(Prompts.Default),
+      ),
     );
 
     // Trivial work skips the reviewer, never the landing gate. An author told
@@ -40,10 +39,9 @@ describe("Prompts", () => {
 
   test("asks a successful reviewer for a verdict, not a merge", async () => {
     const prompt = await Effect.runPromise(
-      Effect.gen(function* () {
-        const prompts = yield* Prompts;
-        return yield* prompts.review(item, "/tmp/worktree", "/tmp/repository");
-      }).pipe(Effect.provide(Prompts.Default)),
+      Prompts.review(item, "/tmp/worktree", "/tmp/repository").pipe(
+        Effect.provide(Prompts.Default),
+      ),
     );
 
     expect(prompt).toContain("prog label ts-123456 approved");
@@ -53,10 +51,7 @@ describe("Prompts", () => {
 
   test("sends an onboarding agent to the checkout and back off it", async () => {
     const prompt = await Effect.runPromise(
-      Effect.gen(function* () {
-        const prompts = yield* Prompts;
-        return yield* prompts.onboard(item, "/tmp/repository");
-      }).pipe(Effect.provide(Prompts.Default)),
+      Prompts.onboard(item, "/tmp/repository").pipe(Effect.provide(Prompts.Default)),
     );
 
     expect(prompt).toContain("git -C /tmp/repository checkout -b foreman/ts-123456");

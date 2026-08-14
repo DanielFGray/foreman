@@ -13,6 +13,7 @@ import type { Rung } from "./ladder.ts";
  */
 export class Prog extends Effect.Service<Prog>()("Prog", {
   dependencies: [BunContext.layer],
+  accessors: true,
   effect: Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
 

@@ -18,6 +18,7 @@ import type { Item, ReadyTask } from "./prog.ts";
  */
 export class Prompts extends Effect.Service<Prompts>()("Prompts", {
   dependencies: [BunContext.layer],
+  accessors: true,
   effect: Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
