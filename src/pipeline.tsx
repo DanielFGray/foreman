@@ -1,6 +1,6 @@
-import { createTextAttributes } from "@opentui/core";
+import { createTextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
-import { createSignal, For, type Accessor } from "solid-js";
+import { createEffect, createSignal, For, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import type { Item, ReadyTask } from "./prog.ts";
@@ -306,31 +306,62 @@ export const Pipeline = (props: {
  * left over, so a column full of long titles would otherwise starve an empty
  * one down to a sliver and the pipeline would look broken whenever it was
  * lopsided — which is most of the time.
+ *
+ * The rows live in a scrollbox because a stage holds however much work the
+ * backlog has, which is routinely five times the lines the box can draw. A
+ * plain box does not clip its children: the surplus rows are drawn straight
+ * over the border, the neighbouring column and the status lines below, and the
+ * whole screen reads as corrupted. The scrollbox both clips and gives the
+ * cursor somewhere to go.
  */
 const Column = (props: {
   readonly title: string;
   readonly rows: Accessor<ReadonlyArray<ColumnRow>>;
   readonly selected: Accessor<number | undefined>;
-}) => (
-  <box
-    style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, minWidth: 0, border: true }}
-    title={`${props.title} ${props.rows().length}`}
-  >
-    <For each={props.rows()}>
-      {(row, index) => (
-        <text
-          style={{
-            height: 1,
-            flexShrink: 0,
-            attributes: index() === props.selected() ? createTextAttributes({ inverse: true }) : 0,
-          }}
-        >
-          {`${index() === props.selected() ? "> " : "  "}${row.label}`}
-        </text>
-      )}
-    </For>
-  </box>
-);
+}) => {
+  let viewport: ScrollBoxRenderable | undefined;
+
+  // The cursor is what scrolls the column; there is no separate scroll
+  // position to get out of step with it. Selecting past the fold brings the
+  // row up, so j and k never walk the selection off the screen.
+  createEffect(() => {
+    const index = props.selected();
+    const row = index === undefined ? undefined : props.rows()[index];
+    if (row) viewport?.scrollChildIntoView(rowId(props.title, row.key));
+  });
+
+  return (
+    <box
+      style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, minWidth: 0, border: true }}
+      title={`${props.title} ${props.rows().length}`}
+    >
+      <scrollbox
+        ref={(element) => (viewport = element)}
+        style={{ flexGrow: 1, minWidth: 0, rootOptions: { flexGrow: 1, minWidth: 0 } }}
+        scrollX={false}
+      >
+        <For each={props.rows()}>
+          {(row, index) => (
+            <text
+              id={rowId(props.title, row.key)}
+              style={{
+                height: 1,
+                flexShrink: 0,
+                attributes:
+                  index() === props.selected() ? createTextAttributes({ inverse: true }) : 0,
+              }}
+            >
+              {`${index() === props.selected() ? "> " : "  "}${row.label}`}
+            </text>
+          )}
+        </For>
+      </scrollbox>
+    </box>
+  );
+};
+
+/** Renderable ids are global, so a row's key is only unique within its column. */
+const rowId = (column: string, key: string): string => `${column}:${key}`;
 
 /**
  * Why the pipeline is not moving, when it is not moving, and what to press.
