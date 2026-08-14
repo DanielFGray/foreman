@@ -163,10 +163,11 @@ changing anything about this path.
 
 `foreman plan` turns a rough plan into tasks, so the backlog does not have to be
 filled by hand. A plan is an epic in prog labelled `plan`, created in draft; the
-planner agent writes the specification into the epic's description and runs
-`prog open`; the tasker agent files the specification as children, wires
-`prog blocks`, opens them only once the deps are complete, and runs `prog done`.
-The stored status sequence `draft → open → done` is the whole state machine.
+planner agent writes the specification into the epic's description; the tasker
+agent files the specification as children, wires `prog blocks`, opens them only
+once the deps are complete, and runs `prog done`. The stages follow the epic's
+derived status: a plan is a draft until it has child tasks, so the tasker's
+children are what move it out of draft, and the tasker's `prog done` closes it.
 
 Four decisions shape it, and each has a reason:
 
@@ -181,11 +182,13 @@ Four decisions shape it, and each has a reason:
   never in `prog ready` (draft and epics are both filtered by prog itself), so
   the dispatcher ignores the plan while picking up its opened children as
   ordinary reviewed work. If a plan needs the daemon, the design is wrong.
-- **Stages are sequenced by stored status, never by watching agents.** `prog show`
-  returns stored status — prog derives an epic's displayed status from its
-  children, which would misread a plan at every stage. The agents write the
-  transitions themselves, so `foreman plan --epic ep-...` resumes exactly where
-  a run stopped by re-deriving the stage from the stored status.
+- **Stages are sequenced by what agents leave in the store, never by watching
+  them.** `prog show` returns an epic's *derived* status, which is a draft until
+  the first child task exists — so the planner's deliverable is the
+  specification it writes into the description, and the tasker's children are
+  the transition that moves the epic out of draft. `foreman plan --epic ep-...`
+  resumes exactly where a run stopped: an epic with no children replans, one
+  with children re-tasks, and a closed one stays done.
 - **The planner may interrupt the operator.** It interviews through its question
   tool, one question at a time, only when the plan and codebase genuinely cannot
   decide something. This is the one place an unattended foreman agent is told to
@@ -346,9 +349,10 @@ Two divergences from the settled design, walls hit while building:
 - **Plan epics are drafts and must stay drafts.** The whole "daemon needs no
   plan awareness" property rests on the epic never being claimed or moved to
   `in_progress`; the settle loop treats a settled workspace on an `in_progress`
-  item as an unfinished agent and would climb and release it. `prog show`
-  returns stored status, which is exactly what the plan stages need — do not
-  switch it to the derived status.
+  item as an unfinished agent and would climb and release it. `prog open` on an
+  epic is refused, and its derived status is a draft until children exist — the
+  planner can never move the epic itself. The tasker's `prog done` is the only
+  stored transition in a plan's life.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
   come back as a JSON envelope on stdout; failures come back as a JSON envelope
   on stderr with a non-zero exit. `CommandExecutor.string` reads stdout and

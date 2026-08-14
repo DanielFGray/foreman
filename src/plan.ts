@@ -18,18 +18,24 @@ import { Prompts } from "./prompt.ts";
  * Everything about a plan lives in the task store. The plan is an epic
  * (`ep-...`) labelled `plan`, created in draft; the planner writes the spec
  * into the epic's description; the tasker files the generated tasks as its
- * children. The stages are sequenced by the epic's stored status, which is why
+ * children. The stages follow what the agents leave in the store, which is why
  * the daemon needs no changes for this: an epic is never claimed, never
  * `in_progress`, and never ready, so the running dispatcher ignores the plan
  * while picking up its opened children as ordinary work.
  *
- *   draft   → planner writes spec → `prog open` →   open
- *   open    → tasker files tasks  → `prog done` →   done
+ * An epic's derived status is a draft until it has child tasks, so the planner
+ * can never move the epic's status itself; its deliverable is the spec in the
+ * description. The tasker's children are what make the epic no longer a draft,
+ * and the tasker's `prog done` closes it:
+ *
+ *   draft  → planner writes spec →  draft (spec in the description)
+ *   draft  → tasker files tasks  →  open (children move the epic out of draft)
+ *   open   → tasker runs `prog done` →  done
  *
  * A plan run is one synchronous command, resumable after interruption with
  * `foreman plan --epic ep-...`: the workspace is re-adopted by its label and
- * the stage is read from the stored status, so a half-finished plan continues
- * rather than being orphaned.
+ * the stage is re-derived from the epic's status, so a half-finished plan
+ * continues rather than being orphaned.
  */
 export const runPlan = (input: PlanInput) =>
   Effect.gen(function* () {
@@ -72,7 +78,10 @@ export const runPlan = (input: PlanInput) =>
     if (status === "draft") {
       status = yield* runStage("planning", epic.id, worker, project.directory);
     }
-    if (stageFor(status) === "tasking") {
+    // The tasker files the children that move the epic out of draft, so the
+    // planner -> tasker handoff cannot key on the epic's status: a freshly
+    // planned epic is still "draft". It keys on the plan not being complete.
+    if (stageFor(status) !== "complete") {
       status = yield* runStage("tasking", epic.id, worker, project.directory);
     }
 
@@ -126,20 +135,23 @@ export const stageFor = (status: string): "planning" | "tasking" | "complete" =>
  * One poll of a running stage: keep waiting, move on, or give up.
  *
  * An agent that is working (or blocked waiting for the operator) means the
- * stage is alive. Once it settles, the only evidence of what it accomplished is
- * the epic's status: the planner's job was to leave draft, the tasker's was to
- * reach done. Settling without that transition is a failure — except for the
- * tasker leaving `open`, which the caller treats as "tasks exist, bookkeeping
- * incomplete" and reports for a resume rather than guessing.
+ * stage is alive. Once it settles, the only evidence of what it accomplished
+ * is what it left in the task store: the planner's job was to write the
+ * specification into the epic's description (`specWritten`), the tasker's was
+ * to reach done. Settling without that evidence is a failure — except for the
+ * tasker leaving `open`, which the caller reports for a resume rather than
+ * guessing. An epic is a draft until it has child tasks, so the planner can
+ * never move the epic's status itself; its deliverable is the description.
  */
 export const decide = (
   stage: PlanStage,
   workerState: WorkerState,
   epicStatus: string,
+  specWritten: boolean,
 ): "wait" | "advance" | "failed" => {
   if (workerState === "working" || workerState === "blocked") return "wait";
   if (stageFor(epicStatus) === "complete") return "advance";
-  if (stage === "planning" && epicStatus !== "draft") return "advance";
+  if (stage === "planning" && specWritten) return "advance";
   return "failed";
 };
 
@@ -271,7 +283,7 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
       role: "author",
     });
     yield* Effect.logInfo(`plan ${epic}: ${stage} by ${rung.name} in ${worker.workspace}`);
-    return yield* waitFor(stage, epic);
+    return yield* waitFor(stage, epic, item.description);
   });
 
 /**
@@ -282,8 +294,12 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
  * workspace's loudest status for a moment. Plans have no timeout — they can
  * legitimately run for a long time — so an operator who wants out interrupts
  * the command, which leaves the workspace in place for `--epic` to resume.
+ *
+ * `initialDescription` is what the epic read when the stage started; the
+ * planner replacing it with a specification is how planning signals done, since
+ * an epic's derived status cannot move until its children exist.
  */
-const waitFor = (stage: PlanStage, epic: string) =>
+const waitFor = (stage: PlanStage, epic: string, initialDescription: string | null) =>
   Effect.gen(function* () {
     const settings = yield* Settings;
     const fleet = yield* Fleet;
@@ -293,11 +309,16 @@ const waitFor = (stage: PlanStage, epic: string) =>
       yield* Effect.sleep(Duration.seconds(settings.pollInterval));
       const worker = (yield* fleet.roster).find((candidate) => candidate.task === epic);
       const item = yield* prog.show(epic);
-      const result = decide(stage, worker?.state ?? "gone", item.status);
+      const specWritten = item.description !== initialDescription;
+      const result = decide(stage, worker?.state ?? "gone", item.status, specWritten);
       if (result === "advance") return item.status;
       if (result === "failed") {
+        const evidence =
+          stage === "planning"
+            ? "without writing a specification into the epic's description"
+            : `with the epic still ${item.status}`;
         return yield* new PlanError({
-          detail: `the ${stage} agent stopped with the epic still ${item.status} (workspace ${worker?.state ?? "gone"}). Resume with \`foreman plan --epic ${epic}\`.`,
+          detail: `the ${stage} agent stopped ${evidence} (workspace ${worker?.state ?? "gone"}). Resume with \`foreman plan --epic ${epic}\`.`,
         });
       }
     }
