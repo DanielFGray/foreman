@@ -6,7 +6,7 @@ import { settings } from "./config.ts";
 import { dashboard } from "./dashboard.tsx";
 import { Dispatcher } from "./dispatcher.ts";
 import { HerdrFleet } from "./herdr.ts";
-import { fileLogger } from "./log.ts";
+import { logging } from "./log.ts";
 import { runPlan } from "./plan.ts";
 import { Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
@@ -69,11 +69,10 @@ const planCommand = Command.make(
 
 const foreman = Command.make("foreman", { slots }, ({ slots }) =>
   Effect.gen(function* () {
-    const dispatcher = yield* Dispatcher;
     // The loop is forked and the dashboard is parked on, so closing the
     // dashboard ends the process: an operator who quits the screen means to
     // stop the fleet, not to leave it dispatching where they cannot see it.
-    yield* Effect.forkScoped(dispatcher.run);
+    yield* Effect.forkScoped(Dispatcher.run);
     yield* dashboard;
   }).pipe(Effect.scoped, Effect.provide(live(slots))),
 ).pipe(Command.withSubcommands([planCommand]));
@@ -87,7 +86,7 @@ const foreman = Command.make("foreman", { slots }, ({ slots }) =>
 const live = (slots: Option.Option<number>) =>
   Layer.provideMerge(
     Dispatcher.Default,
-    Layer.mergeAll(HerdrFleet, settings({ slots }), fileLogger()),
+    Layer.mergeAll(HerdrFleet, settings({ slots }), logging()),
   );
 
 /** Plan mode needs the same world as the daemon minus the dispatcher. */
@@ -96,7 +95,7 @@ const planLive = Layer.mergeAll(
   settings({ slots: Option.none() }),
   Prog.Default,
   Prompts.Default,
-  fileLogger(),
+  logging(),
 );
 
 const cli = Command.run(foreman, { name: "foreman", version: "0.1.0" });

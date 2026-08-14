@@ -33,10 +33,10 @@ export const dashboard = Effect.gen(function* () {
   const quit = yield* Deferred.make<void>();
   const [state, setState] = createSignal(yield* SubscriptionRef.get(dispatcher.state));
 
-  // Log lines still go to stdout, which a full-screen TUI would otherwise be
-  // scribbled over. opentui captures them into its own console instead, and
-  // F12 brings that overlay up — so the pane stays a place to read what the
-  // dispatcher decided without a second copy of the log going anywhere.
+  // Creating the renderer routes globalThis.console into opentui's own log,
+  // which the logging layer writes to and F12 brings up. That is the pane's
+  // live view of what the dispatcher decided; the file keeps the copy that
+  // outlives the session.
   const showConsole = () => renderer.console.toggle();
 
   // Forked into the enclosing scope rather than awaited: the stream never ends,

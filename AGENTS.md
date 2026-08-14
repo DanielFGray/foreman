@@ -325,9 +325,18 @@ Two divergences from the settled design, walls hit while building:
 
 ## Things that have already cost an afternoon
 
-- **`Logger.replace(Logger.defaultLogger, …)` does not swap BunRuntime's
-  logger.** Log lines came out doubled for a while. `src/log.ts` uses
-  `Logger.add` as a second sink, which is correct — leave it.
+- **`src/log.ts` must use `Logger.replace`, not `Logger.add`.** The doubling
+  that once made `Logger.add` look right was a symptom of the opposite problem.
+  Creating an opentui renderer assigns a *new* object to `globalThis.console`
+  and routes it to the F12 overlay; Effect resolved the old object when it
+  loaded and keeps that reference, so a default logger left in place goes on
+  writing to the real stdout — underneath a full-screen renderer, scribbling
+  log lines across the dashboard until the next repaint. Captured live on the
+  running fleet: `running · 0 awaiting a decision[10:20:32.517] INFO (#42):
+  dispatched ts-c74234`. Replacing the default and reading `globalThis.console`
+  per line follows the swap instead, and needs no mode flag: under the
+  dashboard the line lands in the overlay, and in plan mode, where nothing ever
+  swapped the console, on the terminal.
 - **Do not run `bun src/main.ts` to "check that it starts".** It dispatches
   live agents against the real backlog within one tick. Two verification runs
   claimed real tasks and had to be unwound by hand. Typecheck instead; when you
