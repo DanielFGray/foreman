@@ -6,35 +6,24 @@ import { Effect } from "effect";
 import { Repository } from "./repository.ts";
 
 const isClean = (directory: string) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const repository = yield* Repository;
-      return yield* repository.isClean(directory);
-    }).pipe(Effect.provide(Repository.Default)),
-  );
+  Effect.runPromise(Repository.isClean(directory).pipe(Effect.provide(Repository.Default)));
+
+const holdsWork = (directory: string) =>
+  Effect.runPromise(Repository.holdsWork(directory).pipe(Effect.provide(Repository.Default)));
 
 const merge = (directory: string, branch: string, verify?: string) =>
   Effect.runPromise(
-    Effect.gen(function* () {
-      const repository = yield* Repository;
-      return yield* repository.merge(directory, branch, verify);
-    }).pipe(Effect.provide(Repository.Default)),
+    Repository.merge(directory, branch, verify).pipe(Effect.provide(Repository.Default)),
   );
 
 const unmerged = (directory: string) =>
   Effect.runPromise(
-    Effect.gen(function* () {
-      const repository = yield* Repository;
-      return yield* repository.unmerged(directory);
-    }).pipe(Effect.provide(Repository.Default)),
+    Repository.unmerged(directory).pipe(Effect.provide(Repository.Default)),
   );
 
 const prune = (directory: string) =>
   Effect.runPromise(
-    Effect.gen(function* () {
-      const repository = yield* Repository;
-      return yield* repository.prune(directory);
-    }).pipe(Effect.provide(Repository.Default)),
+    Repository.prune(directory).pipe(Effect.provide(Repository.Default)),
   );
 
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
@@ -171,5 +160,33 @@ describe("Repository", () => {
     expect(await merge(directory, "conflicting")).toMatchObject({ _tag: "Rejected" });
     expect(await isClean(directory)).toBe(true);
     expect((await git("rev-parse", "-q", "--verify", "MERGE_HEAD")).exitCode).not.toBe(0);
+  });
+
+  // Its own checkout: this is the opposite question to the one every test above
+  // asks, and it must not read the untracked files they leave lying around.
+  test("counts an untracked file in a worktree as work worth keeping", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "foreman-worktree-"));
+    const there = (...args: Array<string>) => Bun.$`git -C ${worktree} ${args}`.quiet().nothrow();
+
+    await there("init", "-q");
+    await there("config", "user.email", "foreman@test");
+    await there("config", "user.name", "foreman");
+    await writeFile(join(worktree, "tracked.txt"), "committed\n");
+    await there("add", "tracked.txt");
+    await there("commit", "-qm", "initial");
+
+    expect(await holdsWork(worktree)).toBe(false);
+
+    // A new file is the most common thing an author makes and the one git says
+    // least about. isClean deliberately ignores it; here it is the whole point.
+    await writeFile(join(worktree, "new-test.ts"), "expect(1).toBe(1)\n");
+    expect(await holdsWork(worktree)).toBe(true);
+    expect(await isClean(worktree)).toBe(true);
+
+    await rm(join(worktree, "new-test.ts"));
+    await writeFile(join(worktree, "tracked.txt"), "half an edit\n");
+    expect(await holdsWork(worktree)).toBe(true);
+
+    await rm(worktree, { recursive: true, force: true });
   });
 });

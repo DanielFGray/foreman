@@ -11,6 +11,7 @@ import { Effect, Schema, Stream } from "effect";
  */
 export class Repository extends Effect.Service<Repository>()("Repository", {
   dependencies: [BunContext.layer],
+  accessors: true,
   effect: Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
 
@@ -35,11 +36,11 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         }),
       ).pipe(Effect.mapError((cause) => new RepositoryError({ directory, detail: String(cause) })));
 
-    const isClean = (directory: string) =>
-      exec(directory, "status", "--porcelain", "--untracked-files=no").pipe(
+    const status = (directory: string, untracked: "no" | "all") =>
+      exec(directory, "status", "--porcelain", `--untracked-files=${untracked}`).pipe(
         Effect.flatMap((result) =>
           result.exitCode === 0
-            ? Effect.succeed(result.stdout.trim() === "")
+            ? Effect.succeed(result.stdout.trim())
             : Effect.fail(
                 new RepositoryError({
                   directory,
@@ -48,6 +49,9 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
               ),
         ),
       );
+
+    const isClean = (directory: string) =>
+      status(directory, "no").pipe(Effect.map((changes) => changes === ""));
 
     /**
      * Runs a project's verification command and says only whether it passed.
@@ -91,6 +95,25 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
        * a merge into this checkout would collide with.
        */
       isClean,
+
+      /**
+       * Whether a task worktree holds anything the agent that lived in it made.
+       *
+       * The same command as isClean, counting untracked files, because the two
+       * ask about opposite kinds of directory. A shared checkout has collected
+       * untracked build output and scratch notes for months. A task worktree
+       * was created empty minutes ago, so anything git does not follow arrived
+       * with the agent: a new module it wrote, or the leavings of a test run it
+       * got as far as starting. Either way the agent was working, which is the
+       * question — and the two mistakes are not the same size. A worktree kept
+       * for nothing costs disk; a worktree deleted wrongly costs the work.
+       *
+       * This is what an agent leaves behind when it dies without committing,
+       * and it is the difference between a worktree to resume in and one to
+       * delete.
+       */
+      holdsWork: (directory: string) =>
+        status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
 
       /**
        * Foreman's branches holding commits the checkout does not have.

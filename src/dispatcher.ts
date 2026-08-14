@@ -38,6 +38,7 @@ import {
  */
 export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
   dependencies: [Prog.Default, Prompts.Default, Repository.Default],
+  accessors: true,
   effect: Effect.gen(function* () {
     const settings = yield* Settings;
     const fleet = yield* Fleet;
@@ -210,6 +211,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yours: queue.filter((task) => isYours(settings.ladder, rungOf(task))),
         working: claimedActive,
         ...reviewable(reviewingActive, committed),
+        committed,
         orphans,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
@@ -276,9 +278,40 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 );
               }
 
-              // An empty workspace says nothing about why the agent vanished.
-              // It remains claimed until an operator decides or it goes stale.
-              if (worker.state === "gone") return;
+              // A worker that vanished said nothing, but the directory it left
+              // behind did. Whether anything is in it decides everything here,
+              // and neither answer is a reason to climb: an agent killed by the
+              // machine it ran on is no evidence its model was too weak.
+              if (worker.state === "gone") {
+                // Except when the directory is not foreman's. A salvage run
+                // works in the checkout the operator also edits, so what is
+                // uncommitted there is theirs, and closing that workspace on
+                // the strength of it would delete a person's work.
+                if (!worker.worktree) return;
+
+                if (
+                  current.committed.has(task.id) ||
+                  (yield* repository.holdsWork(worker.worktree))
+                ) {
+                  // The claim goes back but the workspace stays. herdr adopts a
+                  // workspace by its label, so the next author foreman sends
+                  // opens in this same directory, on this same branch, with
+                  // these edits still in it — and picks up where the last one
+                  // stopped instead of writing them a second time.
+                  yield* prog.log(
+                    task.id,
+                    `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
+                  );
+                  return yield* prog.release(task.id);
+                }
+
+                yield* prog.log(
+                  task.id,
+                  `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
+                );
+                yield* prog.release(task.id);
+                return yield* fleet.close(worker);
+              }
 
               if (worker.state === "blocked") {
                 // Approvals stay with the operator. Foreman says where to look
@@ -351,6 +384,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (result._tag === "Held") return;
 
         if (result._tag === "Rejected") {
+          yield* Effect.logWarning(
+            `landing ${task.id} (${project.name}) rejected: ${result.detail}`,
+          );
           yield* prog.log(
             task.id,
             `foreman: finished branch could not be merged: ${result.detail}. Returned to the queue.`,
@@ -367,6 +403,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // task needs is the output, because the next author's whole job is now
         // the failure below.
         if (result._tag === "Broke") {
+          yield* Effect.logWarning(
+            `landing ${task.id} broke ${project.name}'s verification; merge undone`,
+          );
           yield* prog.log(
             task.id,
             `foreman: finished branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
@@ -386,6 +425,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           );
         }
 
+        // The one line in this file that records a write to a directory a
+        // person also works in. Everything else foreman does happens in a
+        // worktree it owns and can throw away.
+        yield* Effect.logInfo(
+          `landed ${task.id} (${project.name})${result.verified ? "" : ", unverified"}`,
+        );
         yield* prog.complete(task.id);
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         if (worker) yield* fleet.close(worker);
@@ -406,7 +451,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           Effect.flatMap((deleted) =>
             deleted.length === 0
               ? Effect.void
-              : Effect.logInfo(`pruned ${deleted.length} merged branches in ${project.name}`),
+              : // Named rather than counted. A branch foreman deleted is the one
+                // thing about a prune anyone ever goes looking for afterwards,
+                // and there are only ever a handful in a tick.
+                Effect.logInfo(`pruned ${deleted.join(", ")} in ${project.name}`),
           ),
           Effect.catchAll((error) => Effect.logWarning(`pruning ${project.name} failed: ${error}`)),
         ),
@@ -655,7 +703,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
         yield* Effect.logInfo(
-          `foreman up: ${settings.slots} slots over ${settings.projects.length} projects, polling every ${settings.pollInterval}s`,
+          `foreman up: ${plural(settings.slots, "slot")} over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s`,
         );
         return yield* tick.pipe(
           Effect.andThen(
@@ -955,7 +1003,19 @@ interface Observation extends FleetState {
    * dashboard could draw.
    */
   readonly unbacked: ReadonlyArray<Active>;
+
+  /**
+   * Tasks whose branch holds commits the project checkout does not have.
+   *
+   * Also a step's input rather than a column: settle asks it whether a worker
+   * that vanished got anything as far as a commit.
+   */
+  readonly committed: ReadonlySet<string>;
 }
+
+/** `1 slot`, `2 slots`. The supervised run AGENTS.md recommends is `--slots 1`. */
+const plural = (count: number, noun: string): string =>
+  `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 const empty: FleetState = {
   queue: [],
