@@ -167,15 +167,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const settle = (current: Observation) =>
       Effect.gen(function* () {
         yield* Effect.forEach(
-          current.review.filter(({ task }) => isApproved(task)),
+          current.review.filter(({ task, worker }) => readyToLand(task, worker)),
           ({ task, worker }) => land(task, worker),
           { discard: true },
         );
 
         yield* Effect.forEach(
           current.owned.filter(
-            ({ task, worker }) =>
-              !(task.status === "reviewing" && isApproved(task)) && worker.state !== "working",
+            ({ task, worker }) => !awaitingLanding(task) && worker.state !== "working",
           ),
           ({ task, worker, kind }) =>
             Effect.gen(function* () {
@@ -257,7 +256,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const project = projectFor(task.project);
         if (!project) return;
 
-        const result = yield* repository.merge(project.directory, labelFor(task.id));
+        const result = yield* repository.merge(
+          project.directory,
+          labelFor(task.id),
+          project.verify,
+        );
         if (result._tag === "Held") return;
 
         if (result._tag === "Rejected") {
@@ -270,6 +273,29 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           return yield* fleet.notify(
             "Landing failed",
             `${task.id} could not merge cleanly — back in the queue`,
+          );
+        }
+
+        // A reviewer approved code that breaks the project. The merge is
+        // already undone; what the task needs is the output, because the next
+        // author's whole job is now the failure below.
+        if (result._tag === "Broke") {
+          yield* prog.log(
+            task.id,
+            `foreman: approved branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
+          );
+          yield* prog.escalate(task.id);
+          yield* prog.release(task.id);
+          return yield* fleet.notify(
+            "Landing reverted",
+            `${task.id} broke ${project.name} — back in the queue`,
+          );
+        }
+
+        if (!result.verified) {
+          yield* prog.log(
+            task.id,
+            `foreman: landed on git's exit code alone — ${project.name} names no verification command, or its checkout was already failing before the merge.`,
           );
         }
 
@@ -572,6 +598,27 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     } as const;
   }),
 }) {}
+
+/**
+ * A reviewed branch whose fate is landing rather than the ordinary settle
+ * path, whatever the reviewer's pane is doing.
+ */
+export const awaitingLanding = (task: Item): boolean =>
+  task.status === "reviewing" && isApproved(task);
+
+/**
+ * An approved branch foreman may merge on this tick.
+ *
+ * Liveness belongs in the predicate rather than in a check beside it, because
+ * the two filters in settle must agree about the same task. A reviewer that has
+ * written its verdict still has a turn to finish — a closing message, a last
+ * prog call — and landing ends by closing the workspace, which for a worktree
+ * worker runs `worktree remove --force` and deletes the directory out from
+ * under a running process. The verdict is a durable label, so waiting one tick
+ * costs nothing and loses nothing.
+ */
+export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
+  awaitingLanding(task) && (worker === undefined || worker.state !== "working");
 
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {

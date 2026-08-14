@@ -209,6 +209,19 @@ branch, and only then runs `prog done`. A dirty checkout leaves the verdict in
 place for a later tick. A failed merge is aborted and returned to the queue, so
 the mechanical landing step cannot strand the operator in a conflicted checkout.
 
+Landing also runs the project's `verify` command, once before the merge and once
+after. Only a checkout that was green and went red is the branch's fault: that
+merge is reset away, the output is logged, and the task returns to the queue. A
+checkout that was already red still accepts the merge, because a branch cannot be
+blamed for damage that predates it and one broken test would otherwise freeze the
+whole fleet. A project that names no `verify` lands on git's exit code alone, and
+the task log says so.
+
+Landing waits for the reviewer's pane to stop working. The pane stays `working`
+from the moment the verdict is written until the turn ends, and closing the
+workspace runs `worktree remove --force` on the directory the reviewer is
+standing in.
+
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
 therefore aggregates pane statuses itself. The current role pane is labelled
@@ -283,8 +296,8 @@ Design settled with the user, not yet built. `Dispatcher.state` is a
 - **Module resolution breaks outside the project directory.** Scratch scripts
   that import `./src/*` must live in the repo root, not in a temp directory.
 - **Landing belongs to foreman, not the reviewer.** The reviewer records an
-  `approved` label. Foreman owns the clean-checkout gate, merge, and `prog done`,
-  so reviewer agents need no rights over the operator's checkout.
+  `approved` label. Foreman owns the clean-checkout gate, merge, verification and
+  `prog done`, so reviewer agents need no rights over the operator's checkout.
 
 ## House rules that bite here
 

@@ -13,11 +13,11 @@ const isClean = (directory: string) =>
     }).pipe(Effect.provide(Repository.Default)),
   );
 
-const merge = (directory: string, branch: string) =>
+const merge = (directory: string, branch: string, verify?: string) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const repository = yield* Repository;
-      return yield* repository.merge(directory, branch);
+      return yield* repository.merge(directory, branch, verify);
     }).pipe(Effect.provide(Repository.Default)),
   );
 
@@ -62,8 +62,58 @@ describe("Repository", () => {
     expect((await git("branch", "--show-current")).stdout.toString().trim()).toBe(base);
 
     await git("checkout", "--", "tracked.txt");
-    expect(await merge(directory, "reviewed")).toEqual({ _tag: "Merged" });
+    expect(await merge(directory, "reviewed")).toEqual({ _tag: "Merged", verified: false });
     expect(await Bun.file(join(directory, "reviewed.txt")).text()).toBe("approved\n");
+  });
+
+  test("undoes a merge that turns a green checkout red", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    const before = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+
+    await git("checkout", "-qb", "breaks");
+    await writeFile(join(directory, "broken.txt"), "boom\n");
+    await git("add", "broken.txt");
+    await git("commit", "-qm", "breaks the build");
+    await git("checkout", "-q", base);
+
+    // Green until the branch's file exists, red once it does — so the same
+    // command answers differently either side of the merge, which is the whole
+    // signal the gate reads.
+    expect(await merge(directory, "breaks", "test ! -f broken.txt")).toMatchObject({
+      _tag: "Broke",
+    });
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(before);
+    expect(await Bun.file(join(directory, "broken.txt")).exists()).toBe(false);
+    expect(await isClean(directory)).toBe(true);
+  });
+
+  test("lands a branch that keeps the checkout green, and says it verified", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "harmless");
+    await writeFile(join(directory, "harmless.txt"), "fine\n");
+    await git("add", "harmless.txt");
+    await git("commit", "-qm", "harmless work");
+    await git("checkout", "-q", base);
+
+    expect(await merge(directory, "harmless", "true")).toEqual({ _tag: "Merged", verified: true });
+    expect(await Bun.file(join(directory, "harmless.txt")).text()).toBe("fine\n");
+  });
+
+  test("lands into a checkout that was already red, and says it did not verify", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "innocent");
+    await writeFile(join(directory, "innocent.txt"), "fine\n");
+    await git("add", "innocent.txt");
+    await git("commit", "-qm", "innocent work");
+    await git("checkout", "-q", base);
+
+    // A branch cannot be blamed for damage that predates it, and gating on an
+    // absolute pass would freeze the fleet behind one broken test forever.
+    expect(await merge(directory, "innocent", "false")).toEqual({
+      _tag: "Merged",
+      verified: false,
+    });
+    expect(await Bun.file(join(directory, "innocent.txt")).text()).toBe("fine\n");
   });
 
   test("aborts a conflicting merge", async () => {

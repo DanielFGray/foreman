@@ -17,6 +17,12 @@ test suite, the linter, the build yourself rather than trusting the author's rep
 And is it code this project would accept: does it match the conventions around it,
 or did it invent a parallel way of doing something the codebase already does?
 
+Two things are always a rejection, however well the tests pass. A stub — anything
+that returns a plausible value it never computed — and a test that was weakened,
+skipped or deleted to get the suite green. Both look like finished work from the
+outside, which is why you are the one who has to catch them. Read what the diff does
+to the tests, not only what the tests report.
+
 You may fix trivia in place: typos, formatting, a lint rule, a stale comment, a
 missing test that is obvious to add. Commit those to the branch with a message
 saying you fixed them in review.

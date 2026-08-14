@@ -26,6 +26,13 @@ While you work, log to `prog log {{ task }}` after every meaningful step and com
 each logical unit to your branch. Assume you may lose your context at any moment:
 someone picking this up from git log and prog logs alone must be able to continue.
 
+Do not stub. A function that returns a plausible value it never computed is worse
+than one that is missing, because nothing downstream can tell the difference. The
+same test applies to a workaround: if it needs a paragraph of comment to explain why
+it is acceptable, it is not acceptable — the design is wrong somewhere, and saying so
+is the useful result. Never weaken, skip or delete a test to make the suite pass. If
+a test is wrong, write down why in `prog log {{ task }}` and leave it failing.
+
 Before you finish, run the full verification — the definition of done's command, the
 test suite, the linter, the build. Update whatever the change made stale: help text,
 docs, tests. Failures in code you touched are yours to fix. Failures that already

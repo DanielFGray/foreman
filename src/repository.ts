@@ -49,6 +49,37 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
       );
 
+    /**
+     * Runs a project's verification command and says only whether it passed.
+     *
+     * Through a shell because the command comes from the config as a line the
+     * operator would type. Failure to launch counts as a failure to pass: a
+     * command that cannot run tells foreman nothing about the code, and
+     * treating "no answer" as "green" is how an ungated merge would sneak
+     * through the one gate built to stop it.
+     */
+    const check = (directory: string, command: string) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const process = yield* executor.start(
+            Command.make("sh", "-c", command).pipe(
+              Command.workingDirectory(directory),
+              Command.stdout("pipe"),
+              Command.stderr("pipe"),
+            ),
+          );
+          const [exitCode, stdout, stderr] = yield* Effect.all(
+            [
+              process.exitCode,
+              Stream.decodeText(process.stdout).pipe(Stream.mkString),
+              Stream.decodeText(process.stderr).pipe(Stream.mkString),
+            ],
+            { concurrency: 3 },
+          );
+          return { passed: Number(exitCode) === 0, output: `${stdout}${stderr}`.trim() };
+        }),
+      ).pipe(Effect.orElseSucceed(() => ({ passed: false, output: `could not run: ${command}` })));
+
     return {
       /**
        * Whether the checkout is free for foreman to work against.
@@ -64,20 +95,46 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       /**
        * Lands a reviewed branch without trusting the reviewer with the shared
        * checkout. A failed merge is always aborted before control returns.
+       *
+       * `verify` is the project's own command for deciding whether it works —
+       * its test suite, typically. It runs twice: once before the merge to
+       * learn what the checkout was already doing, and once after. A project
+       * that was green and is now red is a branch that broke it, and the merge
+       * is undone. A project that was already red stays landable, because a
+       * branch cannot be blamed for damage that predates it, and gating on an
+       * absolute pass would freeze the fleet behind one broken test forever.
+       *
+       * The undo lives in here rather than beside it. Reverting is the one
+       * operation in foreman that discards commits, and it is only ever safe
+       * against a revision this function captured after proving the tree clean
+       * — so it is never handed out as a capability of its own.
        */
-      merge: (directory: string, branch: string) =>
+      merge: (directory: string, branch: string, verify: string | undefined) =>
         Effect.gen(function* () {
           if (!(yield* isClean(directory))) return { _tag: "Held" } as const;
 
-          const result = yield* exec(directory, "merge", "--no-ff", branch);
-          if (result.exitCode === 0) return { _tag: "Merged" } as const;
+          const before = verify ? yield* check(directory, verify) : undefined;
+          const restore = yield* exec(directory, "rev-parse", "HEAD");
 
-          yield* exec(directory, "merge", "--abort").pipe(Effect.ignore);
-          return {
-            _tag: "Rejected",
-            detail:
-              result.stderr.trim() || result.stdout.trim() || `git merge exited ${result.exitCode}`,
-          } as const;
+          const merged = yield* exec(directory, "merge", "--no-ff", branch);
+          if (merged.exitCode !== 0) {
+            yield* exec(directory, "merge", "--abort").pipe(Effect.ignore);
+            return {
+              _tag: "Rejected",
+              detail:
+                merged.stderr.trim() ||
+                merged.stdout.trim() ||
+                `git merge exited ${merged.exitCode}`,
+            } as const;
+          }
+
+          if (!verify || !before?.passed) return { _tag: "Merged", verified: false } as const;
+
+          const after = yield* check(directory, verify);
+          if (after.passed) return { _tag: "Merged", verified: true } as const;
+
+          yield* exec(directory, "reset", "--hard", restore.stdout.trim());
+          return { _tag: "Broke", output: after.output } as const;
         }),
     } as const;
   }),

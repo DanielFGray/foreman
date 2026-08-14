@@ -128,10 +128,20 @@ A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
 On approval the reviewer adds the durable `approved` verdict. Foreman then checks
-the shared checkout again, merges the branch, and marks the task done. A dirty
-checkout leaves the approval waiting for a later tick; a conflicting merge is
-aborted and returned to the queue. The reviewer needs neither merge nor completion
-rights.
+the shared checkout again, merges the branch, runs the project's `verify` command,
+and marks the task done. A dirty checkout leaves the approval waiting for a later
+tick; a conflicting merge is aborted and returned to the queue. The reviewer needs
+neither merge nor completion rights.
+
+`verify` runs twice, before the merge and after it. A branch that turns a green
+checkout red is reset away and the task goes back to the queue carrying the
+failure output — the next author's whole job is that output. A checkout that was
+already red still takes the merge, because one broken test would otherwise hold
+every task in the fleet. Name it per project:
+
+```jsonc
+"projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]
+```
 
 Who reviews whom is `reviewers` in the config, author to reviewer. Cheap work
 escalates to an expensive model; a uniform fleet reviews itself, which still

@@ -52,8 +52,13 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // project whose name does not match its directory is a naming mistake to
       // fix at the source — `prog projects rename` exists for exactly that — and
       // an override field would let the two drift apart forever instead.
-      const projects = yield* Effect.forEach(raw.projects, (name) =>
+      // A bare string is a project with nothing to say beyond its name, which
+      // is most of them; the object form exists for the few that need to name
+      // a verification command.
+      const projects = yield* Effect.forEach(raw.projects, (entry) =>
         Effect.gen(function* () {
+          const { name, verify } =
+            typeof entry === "string" ? { name: entry, verify: undefined } : entry;
           const directory = path.join(home, "build", name);
           const exists = yield* fs
             .exists(directory)
@@ -63,7 +68,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
               detail: `project "${name}" has no directory at ${directory} — rename the project to match its directory, or drop it from ${file}`,
             });
           }
-          return { name, directory } as const;
+          return { name, directory, verify } as const;
         }),
       );
 
@@ -91,7 +96,11 @@ export interface Overrides {
 }
 
 interface SettingsShape {
-  readonly projects: ReadonlyArray<{ readonly name: string; readonly directory: string }>;
+  readonly projects: ReadonlyArray<{
+    readonly name: string;
+    readonly directory: string;
+    readonly verify: string | undefined;
+  }>;
   readonly slots: number;
   readonly author: string;
   readonly escalateTo: string;
@@ -108,7 +117,25 @@ const ConfigFile = Schema.Struct({
    * Only these projects feed the queue; everything else stays untouched. A name
    * is both the prog project and, under ~/build, its directory.
    */
-  projects: Schema.NonEmptyArray(Schema.String),
+  projects: Schema.NonEmptyArray(
+    Schema.Union(
+      Schema.String,
+      Schema.Struct({
+        name: Schema.String,
+
+        /**
+         * The command that decides whether this project works — its test
+         * suite, usually, written as the operator would type it.
+         *
+         * Foreman runs it before and after every landing and undoes a merge
+         * that turns a green checkout red. A project that names none is landed
+         * on git's exit code alone, which says the merge applied and nothing
+         * whatever about whether the code still runs.
+         */
+        verify: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 
   /** Concurrent workers. Each claimed task occupies one until it lands. */
   slots: Schema.optionalWith(Schema.Positive, { default: () => 3 }),
