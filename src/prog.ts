@@ -83,9 +83,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * Every item carrying the focus label — tasks, epics, or a mix.
        *
        * The scope a focus defines is derived from these roots each tick: every
-       * ready task at or under any of them. Read with `list --label` rather
-       * than remembered, so the scope survives a restart the same way the
-       * paused operator does not need to.
+       * ready task at or under any of them. Read from the store rather than
+       * remembered, so the scope survives a restart the way the `by-*` and
+       * `rung-*` labels do.
        */
       focused: () => runJson(Schema.Array(Item), "list", "--label", FOCUS, "--json"),
 
