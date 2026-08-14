@@ -271,6 +271,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
               const reviewer = reviewedBy(task);
               if (reviewer && task.status === "open") {
+                // Clearing the label is what ends the review, and it has to
+                // happen here. Everything else on this path stays as it is by
+                // design — the task is already open, and the workspace is kept
+                // so the next author continues from the same branch — so the
+                // label is the only thing that can record that the review is
+                // over. Leave it and every condition above is still true next
+                // tick: foreman climbs the task another rung every poll until
+                // it runs out of ladder and parks on the operator, having
+                // learned nothing about it.
+                yield* prog.clearReview(task.id);
+                yield* prog.log(
+                  task.id,
+                  `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
+                );
                 yield* climb(task);
                 return yield* fleet.notify(
                   "Review returned",
@@ -313,19 +327,22 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 return yield* fleet.close(worker);
               }
 
-              if (worker.state === "blocked") {
-                // Approvals stay with the operator. Foreman says where to look
-                // and then leaves the worker exactly as it is.
-                return yield* fleet.notify(
-                  "Worker blocked",
-                  `${task.id} needs you — ${task.title}`,
-                );
-              }
+              // Approvals stay with the operator, so a blocked worker is left
+              // exactly as it is — and is not announced. herdr raises its own
+              // alert the moment an agent blocks, and foreman knows nothing
+              // herdr does not. A second notification for one event is one the
+              // operator learns to dismiss, and because this path changes
+              // nothing, the condition is still true next tick: it would fire
+              // again every poll until they answered.
+              if (worker.state === "blocked") return;
 
               if (task.status === "reviewing") {
-                if (!reviewer) {
-                  return yield* fleet.notify("Ready for review", `${task.id} ${task.title}`);
-                }
+                // An author that handed off and stopped is an agent event, and
+                // herdr has already said so. Foreman's part is to dispatch the
+                // reviewer on the next fill, which needs no announcement — and
+                // announcing it here would repeat every poll until a slot came
+                // free, because waiting for review changes nothing to observe.
+                if (!reviewer) return;
 
                 yield* prog.log(
                   task.id,

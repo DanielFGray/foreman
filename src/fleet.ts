@@ -58,6 +58,19 @@ export class Fleet extends Effect.Tag("Fleet")<
      * Notifies the operator, but only when foreman's own workspace is not the
      * focused one. Telling someone about a thing already on their screen
      * trains them to dismiss notifications without reading them.
+     *
+     * Two rules decide what may come through here, and both exist because they
+     * were broken at once and the fleet dinged on every poll.
+     *
+     * **Only what foreman itself did.** An agent that blocked, stopped or
+     * handed off is herdr's event: herdr sees it first and already alerts.
+     * Foreman announces what herdr cannot know — a branch that landed, a task
+     * that climbed onto the operator, a merge that was undone.
+     *
+     * **Only on a transition, never on a condition.** A tick reads the whole
+     * world back, so a notification on a path that writes nothing fires again
+     * on the next tick, and every tick after. If the code reaching this call
+     * has not written to the task store or the checkout, it must not call it.
      */
     readonly notify: (title: string, body: string) => Effect.Effect<void, FleetError>;
   }
