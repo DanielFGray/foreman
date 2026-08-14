@@ -155,9 +155,10 @@ Escalation is a property of the task, never of which slot happened to be free.
 
 ## The queue
 
-The union of `prog ready` across the allowlisted projects, highest priority
-first, ties broken by rotating between projects — otherwise one project holding
-a hundred priority-1 tasks would own the entire fleet until it ran dry.
+One global `prog ready`, restricted to the allowlisted projects after prog has
+applied dependency gates. Tasks are highest priority first, with ties broken by
+rotating between projects — otherwise one project holding a hundred priority-1
+tasks would own the entire fleet until it ran dry.
 
 ## Configuration
 

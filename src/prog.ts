@@ -73,9 +73,8 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
     return {
       show,
 
-      /** Unblocked, unclaimed tasks in one project, highest priority first. */
-      ready: (project: string) =>
-        runJson(Schema.Array(ReadyTask), "ready", "-p", project, "--json"),
+      /** All unblocked, unclaimed tasks, highest priority first. */
+      ready: () => runJson(Schema.Array(ReadyTask), "ready", "--json"),
 
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
@@ -132,12 +131,22 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * checked here rather than discovered three calls later.
        */
       add: (project: string, title: string, description: string, labels: ReadonlyArray<string>) =>
-        run("add", title, "-p", project, "-d", description, ...labels.flatMap((l) => ["-l", l])).pipe(
+        run(
+          "add",
+          title,
+          "-p",
+          project,
+          "-d",
+          description,
+          ...labels.flatMap((l) => ["-l", l]),
+        ).pipe(
           Effect.flatMap((out) => {
             const id = out.trim();
             return /^ts-[0-9a-f]{6}$/.test(id)
               ? Effect.succeed(id)
-              : Effect.fail(new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }));
+              : Effect.fail(
+                  new ProgError({ command: `add ${title}`, detail: `unusable id: ${id}` }),
+                );
           }),
         ),
 
