@@ -173,6 +173,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           kind: reviewedBy(task) ?? authoredBy(task),
         }));
 
+      // One mapping, three columns. working and review each take a slice of
+      // these, and decisionsOf reads the vanished-worker rows off the same
+      // arrays rather than mapping the lists a second time.
+      const claimedActive = active(claimed);
+      const reviewingActive = active(reviewing);
+
       return {
         workers,
         owned,
@@ -183,25 +189,15 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           queue.filter((task) => !isOnboarding(task)),
           settings.projects.map((project) => project.name),
         ),
-        working: active(claimed),
+        working: claimedActive,
         // `reviewing` is a public task status. Attribution is the durable proof
         // that this branch was authored by foreman and has something to review.
-        review: active(reviewing.filter((task) => authoredBy(task) !== undefined)),
+        review: reviewingActive.filter(({ task }) => authoredBy(task) !== undefined),
         orphans,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
         ),
-        // A dispatched author or reviewer whose workspace is empty did not
-        // produce a verdict. Foreman cannot tell a crash from a person closing
-        // the pane to take over, so the dashboard asks instead.
-        decisions: [
-          ...active(claimed.filter((task) => authoredBy(task) !== undefined)).filter(
-            ({ worker }) => worker === undefined || worker.state === "gone",
-          ),
-          ...active(reviewing.filter((task) => reviewedBy(task) !== undefined)).filter(
-            ({ worker }) => worker === undefined || worker.state === "gone",
-          ),
-        ],
+        decisions: decisionsOf(claimedActive, reviewingActive, owned),
         paused: yield* Ref.get(paused),
       } satisfies Observation;
     });
@@ -580,6 +576,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const projectFor = (name: string) =>
       settings.projects.find((candidate) => candidate.name === name);
 
+    /** The workspace serving a task, if the multiplexer still has one. */
+    const workspaceFor = (task: string) =>
+      fleet.roster.pipe(
+        Effect.map((workers) => workers.find((candidate) => candidate.task === task)),
+      );
+
     const eachProject = <A>(read: (project: Project) => Effect.Effect<ReadonlyArray<A>, unknown>) =>
       Effect.forEach(settings.projects, (project) =>
         read(project).pipe(
@@ -649,9 +651,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               return;
             }
 
-            const worker = yield* fleet.roster.pipe(
-              Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
-            );
+            const worker = yield* workspaceFor(task.id);
             if (!worker) return;
             const project = projectFor(task.project);
             if (!project) return;
@@ -668,9 +668,24 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         commanded(
           Effect.gen(function* () {
             yield* prog.release(task.id);
-            const worker = yield* fleet.roster.pipe(
-              Effect.map((workers) => workers.find((candidate) => candidate.task === task.id)),
-            );
+            const worker = yield* workspaceFor(task.id);
+            if (worker) yield* fleet.close(worker);
+          }),
+        ),
+
+      /**
+       * Takes down a workspace whose task nothing owns.
+       *
+       * The orphaned-workspace decision is residue from a failed dispatch: the
+       * task is neither claimed nor under review, so closing the workspace is
+       * the whole answer. Releasing instead would reopen a done or canceled
+       * task, and the branch survives either way — the sweep prunes a merged
+       * one and the stranded column shows the rest.
+       */
+      close: (task: Item) =>
+        commanded(
+          Effect.gen(function* () {
+            const worker = yield* workspaceFor(task.id);
             if (worker) yield* fleet.close(worker);
           }),
         ),
@@ -735,6 +750,37 @@ export const awaitingLanding = (task: Item): boolean =>
 export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
   awaitingLanding(task) && (worker === undefined || worker.state !== "working");
 
+/**
+ * What the dashboard must ask about.
+ *
+ * Three kinds, and each answers differently. A claimed task with a by-* label
+ * and an empty workspace is an author that vanished and can be retried; a
+ * reviewing task with a review-by-* label and an empty workspace is a reviewer
+ * that vanished mid-verdict; a workspace whose task is neither claimed nor
+ * under review is residue — the task is unclaimed, so nobody owns the
+ * workspace — and the only answer is to close it.
+ *
+ * Residue is surfaced rather than swept because dispatchAuthor opens a
+ * workspace before it claims its task: the brief window a fresh workspace
+ * spends on an open task is exactly what a sweep would race, and it closes
+ * within the same tick, long before anyone reads the dashboard.
+ */
+export const decisionsOf = (
+  claimed: ReadonlyArray<Active>,
+  reviewing: ReadonlyArray<Active>,
+  owned: ReadonlyArray<Owned>,
+): ReadonlyArray<Active> => [
+  ...claimed.filter(
+    ({ task, worker }) =>
+      authoredBy(task) !== undefined && (worker === undefined || worker.state === "gone"),
+  ),
+  ...reviewing.filter(
+    ({ task, worker }) =>
+      reviewedBy(task) !== undefined && (worker === undefined || worker.state === "gone"),
+  ),
+  ...owned.filter(({ task }) => task.status !== "in_progress" && task.status !== "reviewing"),
+];
+
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
   readonly queue: ReadonlyArray<ReadyTask>;
@@ -782,7 +828,7 @@ export interface Active {
   readonly kind: string | undefined;
 }
 
-interface Owned {
+export interface Owned {
   readonly task: Item;
   readonly worker: Worker;
   readonly kind: string | undefined;

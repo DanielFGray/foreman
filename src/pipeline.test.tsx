@@ -57,6 +57,9 @@ const state: FleetState = {
       task("ts-ccc222", "reviewing", ["by-opencode", "review-by-claude"]),
       worker("ts-ccc222", "gone"),
     ),
+    // A workspace whose task is neither claimed nor under review: a failed
+    // spawn left it behind while the by-* label stayed on the task.
+    active(task("ts-ccc333", "open", ["by-opencode"]), worker("ts-ccc333", "gone")),
   ],
   held: ["fibrae"],
   orphans: [
@@ -87,6 +90,7 @@ interface Calls {
   focus: Array<string>;
   retry: Array<string>;
   release: Array<string>;
+  close: Array<string>;
   escalate: Array<string>;
   onboard: Array<string>;
   adopt: Array<string>;
@@ -100,6 +104,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     focus: [],
     retry: [],
     release: [],
+    close: [],
     escalate: [],
     onboard: [],
     adopt: [],
@@ -111,6 +116,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     focus: (w) => calls.focus.push(w.task),
     retry: (t) => calls.retry.push(t.id),
     release: (t) => calls.release.push(t.id),
+    close: (t) => calls.close.push(t.id),
     escalate: (t) => calls.escalate.push(t.id),
     onboard: (p) => calls.onboard.push(p),
     adopt: (o) => calls.adopt.push(o.branch),
@@ -129,8 +135,11 @@ describe("decisionKind", () => {
     );
   });
 
-  test("names a task with no attribution an orphaned workspace", () => {
-    expect(decisionKind(task("ts-1", "in_progress", []))).toBe("orphaned workspace");
+  test("names by status, not by the label a failed spawn left behind", () => {
+    // A failed dispatch leaves the by-* label on while the task returns to the
+    // queue. Status is what makes it residue, so it reads orphaned either way.
+    expect(decisionKind(task("ts-1", "open", ["by-opencode"]))).toBe("orphaned workspace");
+    expect(decisionKind(task("ts-1", "done", []))).toBe("orphaned workspace");
   });
 });
 
@@ -143,11 +152,12 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame(
-        (f) => f.includes("queue 2") && f.includes("decisions 2") && f.includes("held 1"),
+        (f) => f.includes("queue 2") && f.includes("decisions 3") && f.includes("held 1"),
       );
       const frame = t.captureCharFrame();
       expect(frame).toContain("author vanished");
       expect(frame).toContain("reviewer vanished");
+      expect(frame).toContain("orphaned workspace");
       expect(frame).toContain("fibrae");
       expect(frame).toContain("awaiting a decision");
     } finally {
@@ -199,6 +209,19 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("t");
       await t.waitFor(() => calls.focus.length === 2);
       expect(calls.focus[1]).toBe("ts-ccc222");
+
+      // decisions row 2: an orphaned workspace is only ever closed. Retrying,
+      // releasing or taking it over are all ignored — the task is unclaimed,
+      // so nothing is there to restart, and releasing would reopen it.
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressKey("r");
+      t.mockInput.pressKey("d");
+      t.mockInput.pressKey("t");
+      t.mockInput.pressKey("c");
+      await t.waitFor(() => calls.close.length === 1);
+      expect(calls.close[0]).toBe("ts-ccc333");
+      expect(calls.retry.length).toBe(1);
+      expect(calls.release.length).toBe(0);
 
       // held: onboard salvages the uncommitted work.
       t.mockInput.pressArrow("right");
