@@ -44,9 +44,10 @@ So the world is authoritative, not the process:
 | Question | Answered by |
 | --- | --- |
 | What am I working on? | herdr workspaces labelled `foreman/<task-id>` |
-| Who authored this branch? | the task's `by-<kind>` label |
-| Is a reviewer already assigned? | the task's `review-by-<kind>` label |
-| Has cheap already failed here? | the task's `escalated` label |
+| Who authored this branch? | the task's `by-<rung>` label |
+| Is a reviewer already assigned? | the task's `review-by-<rung>` label |
+| Which rung does this task get next? | the task's `rung-<name>` label |
+| Is this one waiting on a person? | its rung names no configured model |
 | Is this task mine to review? | it has a `by-*` label |
 | Is this project free to work in? | `git status` in its checkout |
 
@@ -104,8 +105,9 @@ path is deleted. A vanished worker now becomes a **decision** in `FleetState`,
 surfaced in the dashboard, and the task stays claimed until someone answers.
 After `staleAfterHours` of no activity the claim is released with a log line.
 
-Absence is an unknown, not evidence. Escalation still happens on real evidence:
-an agent that settled without finishing, or a reviewer sending work back.
+Absence is an unknown, not evidence. A task still climbs a rung on real
+evidence: an agent that settled without finishing, a reviewer sending work back,
+or a branch that would not land.
 
 ### The operator's checkout is shared, so it is asked about
 
@@ -132,7 +134,10 @@ cannot read either, so the failure is not a reason to proceed.
 
 A held project is unheld by salvaging what is in it. `Dispatcher.onboard` files a
 task in that project, calls `Fleet.attach` for a workspace on the checkout
-itself, and runs `prompts/onboard.md` at `settings.escalateTo`.
+itself, and runs `prompts/onboard.md` at the top rung of the ladder. Reading a
+hundred files of abandoned work and inferring what somebody meant is the
+judgement cheap models are worst at, and this runs once per project rather than
+once per task.
 
 Three things hold it together, and each of them has a reason:
 
@@ -295,8 +300,8 @@ The renderer is created inside `Effect.acquireRelease`, and the program parks on
 a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
 on exit.
 
-One cursor walks seven columns — queue | working | review | landed, then the
-decisions, held and stranded panels. Each column allows only the actions that
+One cursor walks eight columns — queue | working | review | landed, then the
+decisions, yours, held and stranded panels. Each column allows only the actions that
 make sense there, and a key the selected row cannot take is ignored. Decisions
 are named from the task's status, not its labels: a failed spawn leaves the
 `by-*` label on a task that sits back in the queue, and only the status —
@@ -304,11 +309,16 @@ neither claimed nor under review — marks its workspace as residue. The three
 kinds answer differently: a vanished author or reviewer can be retried, taken
 over, or released, while an orphaned workspace is only ever closed.
 
+`yours` deliberately takes no key. A task waits there because a question about it
+is unanswered, and one key to requeue it would hand the next agent that same
+question — the failure the column exists to prevent. It leaves when the operator
+writes the decision into the task and removes its `rung-human` label, with prog.
+
 Two divergences from the settled design, walls hit while building:
 
 - **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
-  escalate and onboard, but no command cancels a task. "Act on a task" means
-  escalate or release; a cancel command belongs on the dispatcher.
+  climb and onboard, but no command cancels a task. "Act on a task" means climb
+  or release; a cancel command belongs on the dispatcher.
 - **No focus scope.** The focus control jumps to a worker's pane. Making a
   focused scope read differently — the label, pause-on-scope-completion — is a
   separate task.
@@ -328,7 +338,7 @@ Two divergences from the settled design, walls hit while building:
 - **Plan epics are drafts and must stay drafts.** The whole "daemon needs no
   plan awareness" property rests on the epic never being claimed or moved to
   `in_progress`; the settle loop treats a settled workspace on an `in_progress`
-  item as an unfinished agent and would escalate and release it. `prog show`
+  item as an unfinished agent and would climb and release it. `prog show`
   returns stored status, which is exactly what the plan stages need — do not
   switch it to the derived status.
 - **herdr answers on two streams, and a reader of one sees silence.** Results

@@ -281,6 +281,11 @@ export const HerdrFleet = Layer.effect(
               options.kind,
               "--pane",
               pane,
+              // Everything after `--` is herdr's passthrough to the agent's own
+              // command line. `--model` is the flag opencode and claude both
+              // take; a harness that does not know it must be configured as a
+              // rung with no model.
+              ...(options.model ? ["--", "--model", options.model] : []),
             );
 
             yield* prompt(agent, options.prompt);

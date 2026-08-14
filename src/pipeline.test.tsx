@@ -35,6 +35,15 @@ const active = (task: Item, worker: Worker | undefined): Active => ({
 });
 
 const state: FleetState = {
+  yours: [
+    {
+      id: "ts-eee111",
+      title: "needs a decision",
+      priority: 2,
+      project: "fibrae",
+      labels: ["rung-human"],
+    },
+  ],
   queue: [
     { id: "ts-aaa111", title: "queue one", priority: 1, project: "fibrae", labels: [] },
     { id: "ts-aaa222", title: "queue two", priority: 2, project: "fibrae", labels: [] },
@@ -91,7 +100,7 @@ interface Calls {
   retry: Array<string>;
   release: Array<string>;
   close: Array<string>;
-  escalate: Array<string>;
+  climb: Array<string>;
   onboard: Array<string>;
   adopt: Array<string>;
 }
@@ -105,7 +114,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     retry: [],
     release: [],
     close: [],
-    escalate: [],
+    climb: [],
     onboard: [],
     adopt: [],
   };
@@ -117,7 +126,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     retry: (t) => calls.retry.push(t.id),
     release: (t) => calls.release.push(t.id),
     close: (t) => calls.close.push(t.id),
-    escalate: (t) => calls.escalate.push(t.id),
+    climb: (t) => calls.climb.push(t.id),
     onboard: (p) => calls.onboard.push(p),
     adopt: (o) => calls.adopt.push(o.branch),
   };
@@ -174,10 +183,10 @@ describe("Pipeline", () => {
     try {
       await t.waitForFrame((f) => f.includes("queue 2"));
 
-      // queue row 0: escalate forces frontier for a queued task.
+      // queue row 0: a queued task can be pushed a rung up the ladder.
       t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.escalate.length === 1);
-      expect(calls.escalate[0]).toBe("ts-aaa111");
+      await t.waitFor(() => calls.climb.length === 1);
+      expect(calls.climb[0]).toBe("ts-aaa111");
 
       // working: focus jumps to the author's pane.
       t.mockInput.pressArrow("right");
@@ -185,11 +194,11 @@ describe("Pipeline", () => {
       await t.waitFor(() => calls.focus.length === 1);
       expect(calls.focus[0]).toBe("ts-bbb111");
 
-      // review: escalate sends it back for a stronger author.
+      // review: climbing sends it back for a stronger author.
       t.mockInput.pressArrow("right");
       t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.escalate.length === 2);
-      expect(calls.escalate[1]).toBe("ts-bbb222");
+      await t.waitFor(() => calls.climb.length === 2);
+      expect(calls.climb[1]).toBe("ts-bbb222");
 
       // landed takes no actions, and a worker-less decision cannot be taken
       // over. Both presses must be silently ignored; the retry below is the
@@ -201,7 +210,7 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("r");
       await t.waitFor(() => calls.retry.length === 1);
       expect(calls.retry[0]).toBe("ts-ccc111");
-      expect(calls.escalate.length).toBe(2);
+      expect(calls.climb.length).toBe(2);
       expect(calls.focus.length).toBe(1);
 
       // decisions row 1: a reviewer-vanished workspace can be taken over.
@@ -223,11 +232,22 @@ describe("Pipeline", () => {
       expect(calls.retry.length).toBe(1);
       expect(calls.release.length).toBe(0);
 
+      // yours: a task waiting on the operator takes no key at all. Every
+      // action is ignored here, because the decision it waits for is written
+      // into the task with prog and not pressed on this screen.
+      t.mockInput.pressArrow("right");
+      t.mockInput.pressKey("r");
+      t.mockInput.pressKey("e");
+      t.mockInput.pressKey("d");
+      t.mockInput.pressKey("c");
+
       // held: onboard salvages the uncommitted work.
       t.mockInput.pressArrow("right");
       t.mockInput.pressKey("o");
       await t.waitFor(() => calls.onboard.length === 1);
       expect(calls.onboard[0]).toBe("fibrae");
+      expect(calls.climb.length).toBe(2);
+      expect(calls.close.length).toBe(1);
 
       // stranded: s sends the branch back for a review to judge its commits.
       t.mockInput.pressArrow("right");

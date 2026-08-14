@@ -1,14 +1,22 @@
 import { DateTime, Duration, Effect, Queue, Ref, SubscriptionRef } from "effect";
 import { Settings } from "./config.ts";
-import { directoryFor, Fleet, labelFor, taskOf, type Worker } from "./fleet.ts";
+import {
+  type AgentRole,
+  directoryFor,
+  Fleet,
+  labelFor,
+  type SpawnOptions,
+  taskOf,
+  type Worker,
+} from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
+import { above, authorFor, HUMAN, isYours, reviewerFor, type Rung, topOf } from "./ladder.ts";
 import {
   agentLog,
   authoredBy,
   isApproved,
-  isEscalated,
   isOnboarding,
   type Item,
   needsReview,
@@ -16,6 +24,7 @@ import {
   Prog,
   type ReadyTask,
   reviewedBy,
+  rungOf,
 } from "./prog.ts";
 
 /**
@@ -169,6 +178,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ),
       );
 
+      // Work at the operator's rung is ready by every measure prog knows and
+      // still must not be dispatched: it is waiting on a decision no agent can
+      // make. Split here rather than in fill, so the dashboard can say where it
+      // went instead of leaving it to look like a queue that stopped moving.
+      const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
+
       const active = (items: ReadonlyArray<Item>) =>
         items.map((task) => ({
           task,
@@ -189,9 +204,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
         queue: interleave(
-          queue.filter((task) => !isOnboarding(task)),
+          dispatchable.filter((task) => !isOnboarding(task)),
           settings.projects.map((project) => project.name),
         ),
+        yours: queue.filter((task) => isYours(settings.ladder, rungOf(task))),
         working: claimedActive,
         ...reviewable(reviewingActive, committed),
         orphans,
@@ -253,10 +269,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
               const reviewer = reviewedBy(task);
               if (reviewer && task.status === "open") {
-                yield* prog.escalate(task.id);
+                yield* climb(task);
                 return yield* fleet.notify(
                   "Review returned",
-                  `${task.id} was sent back by ${reviewer} — escalated for its next author`,
+                  `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
                 );
               }
 
@@ -280,9 +296,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
                 yield* prog.log(
                   task.id,
-                  `foreman: reviewer ${reviewer} stopped without a verdict. Returned to the queue and escalated.`,
+                  `foreman: reviewer ${reviewer} stopped without a verdict. Returned to the queue one rung up.`,
                 );
-                yield* prog.escalate(task.id);
+                yield* climb(task);
                 yield* prog.release(task.id);
                 return yield* fleet.notify(
                   "Review returned",
@@ -302,7 +318,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 task.id,
                 `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}). Returned to the queue.`,
               );
-              yield* prog.escalate(task.id);
+              yield* climb(task);
               yield* prog.release(task.id);
               yield* fleet.notify(
                 "Task returned",
@@ -339,7 +355,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             task.id,
             `foreman: finished branch could not be merged: ${result.detail}. Returned to the queue.`,
           );
-          yield* prog.escalate(task.id);
+          yield* climb(task);
           yield* prog.release(task.id);
           return yield* fleet.notify(
             "Landing failed",
@@ -355,7 +371,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             task.id,
             `foreman: finished branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
           );
-          yield* prog.escalate(task.id);
+          yield* climb(task);
           yield* prog.release(task.id);
           return yield* fleet.notify(
             "Landing reverted",
@@ -487,10 +503,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const project = projectFor(task.project);
         if (!project) return;
 
-        // Cheap by default; frontier only where cheap has already been tried
-        // and failed. The task carries that history, so it survives restarts
-        // and you can force it by hand with the label.
-        const kind = isEscalated(task) ? settings.escalateTo : settings.author;
+        // The bottom rung by default; higher only where the rungs below have
+        // already been tried and failed. The task carries that history in a
+        // label, so it survives restarts and you can pin it by hand.
+        const rung = authorFor(settings.ladder, rungOf(task));
+        if (!rung) return;
 
         // The workspace opens before the claim. If it opened after, a task
         // would briefly be claimed with nothing to show for it, and that state
@@ -504,15 +521,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         const prompt = yield* prompts.author(task, worker.directory, project.directory);
         yield* prog.claim(task.id);
-        yield* prog.attribute(task.id, kind).pipe(Effect.tapError(() => prog.release(task.id)));
-        const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" }).pipe(
+        yield* prog
+          .attribute(task.id, rung.name)
+          .pipe(Effect.tapError(() => prog.release(task.id)));
+        const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author")).pipe(
           // The agent never started, so the claim would strand the task until
           // the stale sweep noticed. Hand it back immediately instead.
           Effect.tapError(() => prog.release(task.id)),
         );
-        yield* prog.log(task.id, agentLog("author", agent));
+        yield* prog.log(task.id, agentLog("author", rung, agent));
         yield* Effect.logInfo(
-          `dispatched ${task.id} (${task.project}) to ${kind} in ${worker.workspace}`,
+          `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.workspace}`,
         );
       });
 
@@ -521,7 +540,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const project = projectFor(task.project);
         if (!project) return;
 
-        const kind = reviewerFor(author);
+        const rung = reviewerFor(settings.ladder, author);
         const worker = yield* fleet.open({
           task: task.id,
           repository: project.directory,
@@ -530,12 +549,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         });
 
         const prompt = yield* prompts.review(task, worker.directory, project.directory);
-        yield* prog.assignReview(task.id, kind);
+        yield* prog.assignReview(task.id, rung.name);
         const agent = yield* fleet
-          .spawn(worker, { kind, prompt, role: "review" })
+          .spawn(worker, spawnAs(rung, prompt, "review"))
           .pipe(Effect.tapError(() => prog.clearReview(task.id)));
-        yield* prog.log(task.id, agentLog("review", agent));
-        yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${kind}`);
+        yield* prog.log(task.id, agentLog("review", rung, agent));
+        yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${rung.name}`);
       });
 
     /**
@@ -566,7 +585,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
     const dispatchOnboard = (task: Item, project: Project) =>
       Effect.gen(function* () {
-        const kind = settings.escalateTo;
+        const rung = topOf(settings.ladder);
 
         // Attached, not a worktree: the work being rescued exists only in this
         // checkout, so a copy of the last commit would show the agent nothing.
@@ -574,24 +593,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const prompt = yield* prompts.onboard(task, project.directory);
 
         yield* prog.claim(task.id);
-        yield* prog.attribute(task.id, kind).pipe(Effect.tapError(() => prog.release(task.id)));
-        const agent = yield* fleet
-          .spawn(worker, { kind, prompt, role: "author" })
+        yield* prog
+          .attribute(task.id, rung.name)
           .pipe(Effect.tapError(() => prog.release(task.id)));
-        yield* prog.log(task.id, agentLog("author", agent));
-        yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${kind}`);
+        const agent = yield* fleet
+          .spawn(worker, spawnAs(rung, prompt, "author"))
+          .pipe(Effect.tapError(() => prog.release(task.id)));
+        yield* prog.log(task.id, agentLog("author", rung, agent));
+        yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${rung.name}`);
       });
 
     /**
-     * Picks the reviewer for work by a given kind.
+     * Moves a task one rung up the ladder, and says so when that rung is a
+     * person.
      *
-     * Without a configured mapping, escalating a cheap author to an expensive
-     * reviewer is where most of the value is. A uniform fleet reviews itself,
-     * which still helps: the reviewer arrives with no sunk cost in the
-     * implementation and reads the diff as a stranger would.
+     * Every path that hands work back to the queue comes through here, so the
+     * evidence that a rung failed is written where the next dispatch reads it
+     * rather than being lost with the worker. Climbing off the top rung parks
+     * the task in the operator's column: a task the best model could not finish
+     * should stop, not cycle. Silence there would mean waiting forever, so it
+     * is announced like any other worker that needs somebody.
      */
-    const reviewerFor = (author: string | undefined): string =>
-      (author ? settings.reviewers[author] : undefined) ?? settings.escalateTo;
+    const climb = (task: Climbing) =>
+      Effect.gen(function* () {
+        const next = above(settings.ladder, rungOf(task));
+        yield* prog.setRung(task.id, next);
+        if (next === HUMAN) {
+          yield* prog.log(
+            task.id,
+            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then remove the \`rung-${HUMAN}\` label to put it back in the queue.`,
+          );
+          yield* fleet.notify("Needs a decision", `${task.id} ${task.title}`);
+        }
+      });
 
     const projectFor = (name: string) =>
       settings.projects.find((candidate) => candidate.name === name);
@@ -675,11 +709,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             if (!worker) return;
             const project = projectFor(task.project);
             if (!project) return;
-            const kind = isEscalated(task) ? settings.escalateTo : settings.author;
+            const rung = authorFor(settings.ladder, rungOf(task));
+            if (!rung) return;
             const prompt = yield* prompts.author(task, worker.directory, project.directory);
-            const agent = yield* fleet.spawn(worker, { kind, prompt, role: "author" });
-            yield* prog.attribute(task.id, kind);
-            yield* prog.log(task.id, agentLog("author", agent));
+            const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
+            yield* prog.attribute(task.id, rung.name);
+            yield* prog.log(task.id, agentLog("author", rung, agent));
           }),
         ),
 
@@ -710,8 +745,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           }),
         ),
 
-      /** Marks a task for the frontier model next time it is picked up. */
-      escalate: (task: { readonly id: string }) => commanded(prog.escalate(task.id)),
+      /** Moves a task one rung up the ladder for its next dispatch. */
+      climb: (task: Climbing) => commanded(climb(task)),
 
       /**
        * Puts a stranded branch back in front of a reviewer.
@@ -824,9 +859,40 @@ export const reviewable = (
   };
 };
 
+/**
+ * What a climb reads off a task: which rung it is on, and how to name it.
+ *
+ * Written structurally because both a queued task and a claimed one climb, and
+ * they are different shapes — a queued task has no status yet.
+ */
+export interface Climbing {
+  readonly id: string;
+  readonly title: string;
+  readonly labels: ReadonlyArray<string>;
+}
+
+/** A rung, as the multiplexer needs it: which program, and which model inside it. */
+const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => ({
+  kind: rung.harness,
+  model: rung.model,
+  prompt,
+  role,
+});
+
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
   readonly queue: ReadonlyArray<ReadyTask>;
+
+  /**
+   * Tasks parked at the operator's rung, above the last model in the ladder.
+   *
+   * They arrive by climbing off the top — nothing configured could finish them
+   * — or by being pinned there by hand, which is what work that was never
+   * specified needs: dispatching it once to discover that wastes a run. Either
+   * way the answer is a person writing the decision into the task and then
+   * removing the label.
+   */
+  readonly yours: ReadonlyArray<ReadyTask>;
   readonly working: ReadonlyArray<Active>;
   readonly review: ReadonlyArray<Active>;
   readonly landed: ReadonlyArray<Item>;
@@ -893,6 +959,7 @@ interface Observation extends FleetState {
 
 const empty: FleetState = {
   queue: [],
+  yours: [],
   working: [],
   review: [],
   landed: [],

@@ -258,14 +258,19 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
     const prompts = yield* Prompts;
 
     const item = yield* prog.show(epic);
-    const kind = stage === "planning" ? settings.planner : settings.tasker;
+    const rung = stage === "planning" ? settings.planner : settings.tasker;
     const prompt =
       stage === "planning"
         ? yield* prompts.planner(item, worker.directory, repository)
         : yield* prompts.tasker(item, worker.directory, repository);
 
-    yield* fleet.spawn(worker, { kind, prompt, role: "author" });
-    yield* Effect.logInfo(`plan ${epic}: ${stage} by ${kind} in ${worker.workspace}`);
+    yield* fleet.spawn(worker, {
+      kind: rung.harness,
+      model: rung.model,
+      prompt,
+      role: "author",
+    });
+    yield* Effect.logInfo(`plan ${epic}: ${stage} by ${rung.name} in ${worker.workspace}`);
     return yield* waitFor(stage, epic);
   });
 

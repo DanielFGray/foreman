@@ -1,7 +1,7 @@
 import { createTextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
 import { createSignal, For, type Accessor } from "solid-js";
-import type { Active, FleetState, Orphan } from "./dispatcher.ts";
+import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import type { Item, ReadyTask } from "./prog.ts";
 
@@ -20,13 +20,22 @@ export interface Controls {
   readonly retry: (task: Item) => void;
   readonly release: (task: Item) => void;
   readonly close: (task: Item) => void;
-  readonly escalate: (task: { readonly id: string }) => void;
+  readonly climb: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
 }
 
-/** The seven selectable stages, in the order the cursor moves through them. */
-const COLUMNS = ["queue", "working", "review", "landed", "decisions", "held", "stranded"] as const;
+/** The eight selectable stages, in the order the cursor moves through them. */
+const COLUMNS = [
+  "queue",
+  "working",
+  "review",
+  "landed",
+  "decisions",
+  "yours",
+  "held",
+  "stranded",
+] as const;
 type ColumnName = (typeof COLUMNS)[number];
 
 export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned workspace";
@@ -60,29 +69,29 @@ interface ColumnRow {
   readonly orphan: Orphan | undefined;
 }
 
-type Action =
-  | "retry"
-  | "release"
-  | "close"
-  | "takeOver"
-  | "focus"
-  | "escalate"
-  | "onboard"
-  | "adopt";
+type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "onboard" | "adopt";
 
 /**
  * Which keys mean something in which column.
  *
- * Landed is history and takes no action; a queue task is only ever escalated,
- * because releasing a task that was never claimed has nothing to undo. The
- * same key does not change meaning between columns.
+ * Landed is history and takes no action; a queue task can only climb, because
+ * releasing a task that was never claimed has nothing to undo. The same key
+ * does not change meaning between columns.
+ *
+ * `yours` takes no key at all, and that is the design rather than an omission.
+ * A task waits there because a question about it is unanswered, and a single
+ * key to put it back would hand the next agent the same unanswered question —
+ * the exact failure the column exists to prevent. It leaves when the operator
+ * writes the decision into the task and removes its `rung-human` label, in
+ * that order, with prog.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["escalate"],
-  working: ["focus", "escalate", "release"],
-  review: ["focus", "escalate", "release"],
+  queue: ["climb"],
+  working: ["focus", "climb", "release"],
+  review: ["focus", "climb", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "release", "close"],
+  yours: [],
   held: ["onboard"],
   stranded: ["adopt"],
 };
@@ -172,9 +181,9 @@ export const Pipeline = (props: {
       case "focus":
         if (target.worker) props.controls.focus(target.worker);
         break;
-      case "escalate":
-        if (target.task) props.controls.escalate(target.task);
-        else if (target.ready) props.controls.escalate(target.ready);
+      case "climb":
+        if (target.task) props.controls.climb(target.task);
+        else if (target.ready) props.controls.climb(target.ready);
         break;
       case "onboard":
         if (target.project) props.controls.onboard(target.project);
@@ -222,7 +231,7 @@ export const Pipeline = (props: {
         apply("focus");
         break;
       case "e":
-        apply("escalate");
+        apply("climb");
         break;
       case "d":
         apply("release");
@@ -268,6 +277,11 @@ export const Pipeline = (props: {
           title="decisions"
           rows={() => rowsFor("decisions", props.state())}
           selected={selectedFor("decisions")}
+        />
+        <Column
+          title="yours"
+          rows={() => rowsFor("yours", props.state())}
+          selected={selectedFor("yours")}
         />
         <Column
           title="held"
@@ -334,9 +348,7 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
-      {
-        "r retry  t take over  f focus  e escalate  d release  c close  o onboard  s send for review"
-      }
+      {"r retry  t take over  f focus  e climb  d release  c close  o onboard  s send for review"}
     </text>
     <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
   </box>
@@ -354,6 +366,8 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
       return state.landed.map(landedRow);
     case "decisions":
       return state.decisions.map(decisionRow);
+    case "yours":
+      return state.yours.map(readyRow);
     case "held":
       return state.held.map(heldRow);
     case "stranded":

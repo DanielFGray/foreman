@@ -202,9 +202,10 @@ every task in the fleet. Name it per project:
 "projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]
 ```
 
-Who reviews whom is `reviewers` in the config, author to reviewer. Cheap work
-escalates to an expensive model; a uniform fleet reviews itself, which still
-helps — fresh eyes on the same model read the diff as a stranger would. Priority
+Who reviews whom is derived, not configured: the reviewer is the rung above the
+one that wrote the code. Cheap work gets expensive eyes; the top rung reviews
+itself, which still helps — fresh eyes on the same model read the diff as a
+stranger would. Priority
 3 and anything labelled `trivial` skips the reviewing agent. It does not skip
 landing: that work goes from `prog review` straight into the merge and verify
 gate, so every branch reaches your checkout the same way.
@@ -213,20 +214,59 @@ A re-dispatch replaces the `by-` label rather than adding to it: the question th
 reviewer asks is who wrote the code on this branch now, not who has ever touched
 the task.
 
-## Escalation
+## The ladder
 
-The default author is the cheap kind. Most tasks are ordinary, and paying
-frontier prices for all of them to catch the few that are hard is the expensive
-way round.
+Every model foreman may use is one ordered list, cheapest first. Order is the
+rating — there are no price or power numbers to drift out of step with the list,
+and no map from author to reviewer, because both "who reads this" and "who tries
+next" fall out of the order.
 
-A task escalates when cheap has demonstrably failed on it — the agent settled
-without finishing, or a reviewer sent the work back. Foreman then labels the task
-`escalated`, and the next dispatch sends it to `escalateTo`. The label lives in
-the task store rather than in foreman's memory, because the evidence that cheap
-failed here is exactly what a dispatch days later, after a restart, needs to act
-on. Set it by hand to send a task straight to frontier.
+```jsonc
+"ladder": [
+  { "name": "deepseek", "harness": "opencode", "model": "opencode/deepseek-v4-pro" },
+  { "name": "sonnet",   "harness": "opencode", "model": "opencode/claude-sonnet-5" },
+  { "name": "claude",   "harness": "claude" },
+]
+```
 
-Escalation is a property of the task, never of which slot happened to be free.
+`harness` is a herdr agent kind — the program that runs. `model` is handed to it
+as `--model`, which is the flag both opencode and claude take; herdr forwards
+everything after `--` to the agent's own command line. A bare string is a rung
+that is only a harness, running whatever that program defaults to. Two rungs may
+share a harness and differ only in model, which is the point: without the model,
+every rung would be the same rung.
+
+A task starts at the bottom. It climbs one rung — never a jump — when the rung it
+is on demonstrably failed it: the agent settled without finishing, a reviewer
+sent the work back, or the branch would not land. Foreman writes the new rung as
+a `rung-<name>` label, in the task store rather than in its own memory, because
+the evidence that a rung failed here is exactly what a dispatch days later, after
+a restart, needs to act on. Set the label by hand to pin a task to a rung.
+
+The rung is a property of the task, never of which slot happened to be free.
+
+### The top of the ladder is you
+
+Above the last configured rung is the operator. You are not an entry in the
+array: a rung with no harness and no model is a different kind of thing, and an
+explicit entry would invite putting a person in the middle, where every task
+below them would stall.
+
+A task reaches you two ways. It climbs off the top, meaning nothing configured
+could finish it — a task the best model could not do should stop, not cycle. Or
+you pin it there with `prog label <task> rung-human`, which is what work that was
+never specified needs: dispatching it once to discover that wastes a run.
+
+It waits in the dashboard's **yours** column, and foreman notifies you, the same
+as for a blocked worker — a task that arrives at you silently waits forever. The
+column takes no key at all. That is the design: a key to put the task back would
+hand the next agent the same unanswered question. Write the decision into the
+task with `prog append`, then `prog unlabel <task> rung-human`, in that order.
+The next author reads the answer in the description.
+
+A rung label naming a model the config no longer has is yours too. The claim
+"this task needs at least this much" cannot be read once the model is gone, and
+guessing would silently downgrade work that had already earned better.
 
 ## The queue
 
@@ -279,11 +319,14 @@ strictly.
   // A name is both the prog project and its directory under ~/build.
   "projects": ["fibrae", "pg-sourcerer", "tsdoctor"],
   "slots": 3,
-  "author": "opencode",     // writes the code by default; keep it cheap
-  "escalateTo": "claude",   // where a task goes once cheap has failed on it
-  "reviewers": { "opencode": "claude" },
-  "planner": "claude",      // turns a rough plan into a specification (default: escalateTo)
-  "tasker": "opencode",     // turns the specification into tasks (default: author)
+  // Cheapest first. Order is the rating; the reviewer is the rung above.
+  "ladder": [
+    { "name": "deepseek", "harness": "opencode", "model": "opencode/deepseek-v4-pro" },
+    { "name": "sonnet", "harness": "opencode", "model": "opencode/claude-sonnet-5" },
+    "claude",
+  ],
+  "planner": "claude",      // turns a rough plan into a specification (default: the top rung)
+  "tasker": "deepseek",     // turns the specification into tasks (default: the bottom rung)
   "pollSeconds": 20,
   "staleAfterHours": 24,
   "landedWindowDays": 7,
@@ -297,7 +340,7 @@ exactly like a queue that is empty.
 
 ## The log
 
-Every dispatch, reclaim, return and escalation is appended as one JSON object per
+Every dispatch, reclaim, return and climb is appended as one JSON object per
 line to `$XDG_STATE_HOME/foreman/foreman.jsonl`, or `$FOREMAN_LOG`. The pane
 scrolls and dies with the session; the questions worth asking about an unattended
 fleet — why this task went to that model, why a claim was released, what happened

@@ -21,15 +21,24 @@ describe("task attribution", () => {
     expect(isApproved(task)).toBe(true);
   });
 
-  test("records the role, kind, and reported model", () => {
-    expect(agentLog("author", { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
-      "foreman: author assigned to opencode (openai/gpt-5.6-sol)",
+  test("names the rung and the model the agent reported", () => {
+    const rung = { name: "sol", harness: "opencode", model: "opencode/gpt-5.6-sol" };
+    expect(agentLog("author", rung, { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
+      "foreman: author assigned to sol (openai/gpt-5.6-sol)",
     );
   });
 
-  test("omits a model the agent did not report", () => {
-    expect(agentLog("review", { kind: "claude", model: undefined })).toBe(
-      "foreman: review assigned to claude",
+  test("falls back to the model foreman asked for when none is reported", () => {
+    const rung = { name: "sonnet", harness: "opencode", model: "opencode/claude-sonnet-5" };
+    expect(agentLog("review", rung, { kind: "opencode", model: undefined })).toBe(
+      "foreman: review assigned to sonnet (opencode/claude-sonnet-5)",
+    );
+  });
+
+  test("names the harness for a rung that lets the harness choose", () => {
+    const rung = { name: "claude", harness: "claude", model: undefined };
+    expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
+      "foreman: author assigned to claude (claude)",
     );
   });
 });

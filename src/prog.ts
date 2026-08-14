@@ -2,6 +2,7 @@ import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Effect, Schema } from "effect";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
+import type { Rung } from "./ladder.ts";
 
 /**
  * The task store, reached through the prog CLI.
@@ -89,7 +90,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       landed: (project: string) => byStatus(project, "done"),
 
       /**
-       * Records which kind of agent did the work, so review can escalate.
+       * Records which rung of the ladder did the work, so review can pick the next.
        *
        * Replaces earlier author and reviewer ownership. A task can be attempted
        * more than once, and its next author starts a new lifecycle stage.
@@ -111,14 +112,20 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       clearReview: (task: string) => removeLabels(task, [REVIEW_BY]),
 
       /**
-       * Marks a task as needing a stronger model next time it is picked up.
+       * Records which rung of the ladder a task's next dispatch must use.
        *
        * Durable in the task store rather than in foreman's memory, because the
-       * evidence that cheap failed here is exactly what the next dispatch —
+       * evidence that a rung failed here is exactly what the next dispatch —
        * possibly days later, possibly after a restart — needs to act on. You
-       * can also set the label by hand to force a task straight to frontier.
+       * can also set the label by hand to pin a task straight to a rung,
+       * including `rung-human` for one that needs a person before any agent
+       * touches it.
        */
-      escalate: (task: string) => run("label", task, ESCALATED).pipe(Effect.asVoid),
+      setRung: (task: string, rung: string) =>
+        removeLabels(task, [RUNG]).pipe(
+          Effect.andThen(run("label", task, `${RUNG}${rung}`)),
+          Effect.asVoid,
+        ),
 
       /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
       claimed: (project: string) => byStatus(project, "in_progress"),
@@ -269,9 +276,17 @@ export const authoredBy = (item: Item): string | undefined =>
 export const reviewedBy = (item: Item): string | undefined =>
   item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
 
-/** Stable audit entry for one agent attempt on a task. */
-export const agentLog = (role: AgentRole, agent: AgentIdentity): string =>
-  `foreman: ${role} assigned to ${agent.kind}${agent.model ? ` (${agent.model})` : ""}`;
+/**
+ * Stable audit entry for one agent attempt on a task.
+ *
+ * Names the rung rather than the harness, because two rungs can share a
+ * harness and differ only in model — `opencode` would say nothing about which
+ * one ran. The model herdr observed is preferred over the one foreman asked
+ * for, so a harness that ignored the request is visible in the log rather than
+ * hidden behind foreman's intention.
+ */
+export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): string =>
+  `foreman: ${role} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`;
 
 /** Whether the reviewer accepted the branch for mechanical landing. */
 export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
@@ -296,15 +311,25 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
 export const isPlan = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
   item.labels.includes(PLAN);
 
-/** Cheap already failed on this task, or a human asked for frontier directly. */
-export const isEscalated = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(ESCALATED);
+/**
+ * Which rung of the ladder a task's next dispatch must use, if it has moved off
+ * the bottom.
+ *
+ * Not derivable from `by-*`. A task pinned by hand has never been authored and
+ * has no `by-*` label to read at all, and who authored last does not say who
+ * authors next: a reviewer's rejection climbs, while an agent that merely
+ * stopped stays where it is.
+ */
+export const rungOf = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
+  item.labels.find((label) => label.startsWith(RUNG))?.slice(RUNG.length);
 
 /** Prefix of the label naming the kind that authored a task's current branch. */
 export const BY = "by-";
 export const REVIEW_BY = "review-by-";
 export const TRIVIAL = "trivial";
-export const ESCALATED = "escalated";
+
+/** Prefix of the label naming the rung a task's next dispatch must use. */
+export const RUNG = "rung-";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
 

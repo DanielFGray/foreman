@@ -77,6 +77,15 @@ export interface AttachOptions {
 
 export interface SpawnOptions {
   readonly kind: string;
+
+  /**
+   * Which model the harness must run, or undefined to let it choose.
+   *
+   * The ladder is meaningless without this. Two rungs can share a harness and
+   * differ only here, and a dispatch that passes no model runs whatever the
+   * program defaults to — so every rung would be the same rung.
+   */
+  readonly model: string | undefined;
   readonly prompt: string;
   readonly role: AgentRole;
 }
