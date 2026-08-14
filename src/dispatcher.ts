@@ -104,8 +104,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const claimed = yield* eachProject((project) => prog.claimed(project.name));
       const reviewing = yield* eachProject((project) => prog.awaitingReview(project.name));
-      // The global query is the dependency authority. A per-project query can
-      // miss a blocker owned by another project.
+      // One query, gated by prog: `ready` returns a task only once every task
+      // blocking it is done, whichever project that blocker lives in. The
+      // allowlist is applied afterwards, to prog's answer rather than to the
+      // question, so a blocker outside the fleet still holds its dependents.
       const queue = yield* prog.ready();
       const landed = yield* eachProject((project) => prog.landed(project.name));
 
