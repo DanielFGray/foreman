@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentLog, authoredBy, isApproved, isPlan, reviewedBy, type Item } from "./prog.ts";
+import { agentLog, authoredBy, isApproved, isFocused, isPlan, reviewedBy, type Item } from "./prog.ts";
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
@@ -47,5 +47,12 @@ describe("plan label", () => {
   test("recognises a plan epic", () => {
     expect(isPlan(item(["plan"]))).toBe(true);
     expect(isPlan(item(["onboard"]))).toBe(false);
+  });
+});
+
+describe("focus label", () => {
+  test("recognises a focused item", () => {
+    expect(isFocused(item(["focus"]))).toBe(true);
+    expect(isFocused(item(["plan"]))).toBe(false);
   });
 });
