@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { awaitingLanding, readyToLand } from "./dispatcher.ts";
-import type { Item } from "./prog.ts";
+import { awaitingLanding, decisionsOf, readyToLand, type Owned } from "./dispatcher.ts";
+import { authoredBy, reviewedBy, type Item } from "./prog.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 
-const task = (labels: ReadonlyArray<string>, status = "reviewing", priority = 1): Item => ({
-  id: "ts-123456",
-  title: "Test task",
+const task = (
+  id: string,
+  labels: ReadonlyArray<string>,
+  status = "reviewing",
+  priority = 1,
+): Item => ({
+  id,
+  title: `Task ${id}`,
   status,
   project: "foreman",
   type: "task",
@@ -14,8 +19,8 @@ const task = (labels: ReadonlyArray<string>, status = "reviewing", priority = 1)
   last_activity_at: new Date(),
 });
 
-const worker = (state: WorkerState): Worker => ({
-  task: "ts-123456",
+const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
+  task: id,
   workspace: "w1",
   pane: "w1:p1",
   directory: "/tmp/worktree",
@@ -25,9 +30,20 @@ const worker = (state: WorkerState): Worker => ({
   reviewState: state,
 });
 
+const active = (task: Item, worker: Worker | undefined) => ({
+  task,
+  worker,
+  kind: reviewedBy(task) ?? authoredBy(task),
+});
+
+const owned = (id: string, status: string, labels: ReadonlyArray<string>): Owned => {
+  const item = task(id, labels, status);
+  return { task: item, worker: worker("gone", id), kind: reviewedBy(item) ?? authoredBy(item) };
+};
+
 describe("landing a reviewed branch", () => {
   test("waits for a reviewer that is still finishing its turn", () => {
-    const approved = task(["by-opencode", "review-by-claude", "approved"]);
+    const approved = task("ts-123456", ["by-opencode", "review-by-claude", "approved"]);
 
     // The pane stays "working" from the moment the reviewer writes its verdict
     // until its whole turn ends. Landing inside that window closes the
@@ -39,7 +55,7 @@ describe("landing a reviewed branch", () => {
   });
 
   test("keeps an approved task out of the ordinary settle path either way", () => {
-    const approved = task(["by-opencode", "review-by-claude", "approved"]);
+    const approved = task("ts-123456", ["by-opencode", "review-by-claude", "approved"]);
 
     // The two filters in settle must agree. A task excluded from landing
     // because its reviewer is live must not fall through to the branch that
@@ -49,15 +65,70 @@ describe("landing a reviewed branch", () => {
   });
 
   test("ignores a task without a verdict, and one that already left review", () => {
-    expect(awaitingLanding(task(["by-opencode", "review-by-claude"]))).toBe(false);
-    expect(awaitingLanding(task(["by-opencode", "approved"], "in_progress"))).toBe(false);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode", "review-by-claude"]))).toBe(false);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode", "approved"], "in_progress"))).toBe(
+      false,
+    );
   });
 
   test("lands work small enough to skip the reviewer, with no verdict at all", () => {
     // The alternative is an author that merges for itself, which is the one
     // route past the clean-checkout and verification gate.
-    expect(awaitingLanding(task(["by-opencode", "trivial"]))).toBe(true);
-    expect(awaitingLanding(task(["by-opencode"], "reviewing", 3))).toBe(true);
-    expect(awaitingLanding(task(["by-opencode", "trivial"], "in_progress"))).toBe(false);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"]))).toBe(true);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode"], "reviewing", 3))).toBe(true);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"], "in_progress"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("decisions", () => {
+  test("surfaces an author or reviewer whose workspace is empty or gone", () => {
+    const claimed = [active(task("ts-1", ["by-opencode"], "in_progress"), undefined)];
+    const reviewing = [
+      active(
+        task("ts-2", ["by-opencode", "review-by-claude"], "reviewing"),
+        worker("gone", "ts-2"),
+      ),
+    ];
+
+    const decisions = decisionsOf(claimed, reviewing, []);
+    expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-1", "ts-2"]);
+  });
+
+  test("ignores a claimed or reviewing task that is still being worked", () => {
+    const claimed = [
+      active(task("ts-1", ["by-opencode"], "in_progress"), worker("working", "ts-1")),
+    ];
+    const reviewing = [
+      active(
+        task("ts-2", ["by-opencode", "review-by-claude"], "reviewing"),
+        worker("working", "ts-2"),
+      ),
+    ];
+
+    expect(decisionsOf(claimed, reviewing, [])).toEqual([]);
+  });
+
+  test("surfaces a workspace whose task is in any other status", () => {
+    // A failed spawn leaves the by-* label on while the task returns to the
+    // queue; the status is what makes it residue rather than a vanished author.
+    const ownedWorkspaces = [
+      owned("ts-3", "open", ["by-opencode"]),
+      owned("ts-4", "done", []),
+      owned("ts-5", "canceled", ["by-opencode"]),
+    ];
+
+    const decisions = decisionsOf([], [], ownedWorkspaces);
+    expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-3", "ts-4", "ts-5"]);
+  });
+
+  test("keeps claimed and reviewing workspaces out of the orphaned kind", () => {
+    const ownedWorkspaces = [
+      owned("ts-1", "in_progress", ["by-opencode"]),
+      owned("ts-2", "reviewing", ["by-opencode", "review-by-claude"]),
+    ];
+
+    expect(decisionsOf([], [], ownedWorkspaces)).toEqual([]);
   });
 });

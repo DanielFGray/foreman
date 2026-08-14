@@ -144,6 +144,11 @@ or you closed the pane to take over yourself. It cannot tell those apart, so
 foreman does not guess. The task stays claimed and the dashboard asks you:
 retry, hand it back to the queue, or take it over.
 
+A workspace whose task is neither claimed nor under review is residue — a
+dispatch that failed after opening it — and the dashboard offers `c` to close
+it. The task itself is left alone: a done or canceled task must not be
+reopened, and a queued one is dispatched again into a fresh workspace.
+
 Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
 ## Review

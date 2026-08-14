@@ -53,6 +53,7 @@ export const dashboard = Effect.gen(function* () {
     focus: (worker) => Runtime.runFork(runtime)(dispatcher.focus(worker)),
     retry: (task) => Runtime.runFork(runtime)(dispatcher.retry(task)),
     release: (task) => Runtime.runFork(runtime)(dispatcher.release(task)),
+    close: (task) => Runtime.runFork(runtime)(dispatcher.close(task)),
     escalate: (task) => Runtime.runFork(runtime)(dispatcher.escalate(task)),
     onboard: (project) => Runtime.runFork(runtime)(dispatcher.onboard(project)),
     adopt: (orphan) => Runtime.runFork(runtime)(dispatcher.adopt(orphan)),

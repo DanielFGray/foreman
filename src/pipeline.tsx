@@ -3,7 +3,7 @@ import { useKeyboard } from "@opentui/solid";
 import { createSignal, For, type Accessor } from "solid-js";
 import type { Active, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import { authoredBy, reviewedBy, type Item, type ReadyTask } from "./prog.ts";
+import type { Item, ReadyTask } from "./prog.ts";
 
 /**
  * Every command the view can give the dispatcher.
@@ -19,6 +19,7 @@ export interface Controls {
   readonly focus: (worker: Worker) => void;
   readonly retry: (task: Item) => void;
   readonly release: (task: Item) => void;
+  readonly close: (task: Item) => void;
   readonly escalate: (task: { readonly id: string }) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
@@ -31,18 +32,17 @@ type ColumnName = (typeof COLUMNS)[number];
 export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned workspace";
 
 /**
- * Which role stopped, from the task's labels alone.
+ * Which kind of decision a row is, from the task's status.
  *
- * A reviewer-vanished task also carries its author label, so the reviewer
- * check comes first: `reviewing` plus `review-by-*` is the dispatcher's own
- * definition of the reviewer having been dispatched. A task with neither
- * label in the decisions column can only be a workspace left behind by
- * something that never claimed its task.
+ * Status decides, not labels. A workspace left behind by a failed spawn still
+ * carries its by-* label while its task sits back in the queue, so naming from
+ * the labels alone would call it an author that vanished; the task's status —
+ * neither claimed nor under review — is what makes it residue.
  */
 export const decisionKind = (task: Item): DecisionKind =>
-  reviewedBy(task) !== undefined
+  task.status === "reviewing"
     ? "reviewer vanished"
-    : authoredBy(task) !== undefined
+    : task.status === "in_progress"
       ? "author vanished"
       : "orphaned workspace";
 
@@ -60,7 +60,15 @@ interface ColumnRow {
   readonly orphan: Orphan | undefined;
 }
 
-type Action = "retry" | "release" | "takeOver" | "focus" | "escalate" | "onboard" | "adopt";
+type Action =
+  | "retry"
+  | "release"
+  | "close"
+  | "takeOver"
+  | "focus"
+  | "escalate"
+  | "onboard"
+  | "adopt";
 
 /**
  * Which keys mean something in which column.
@@ -74,9 +82,22 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   working: ["focus", "escalate", "release"],
   review: ["focus", "escalate", "release"],
   landed: [],
-  decisions: ["retry", "takeOver", "release"],
+  decisions: ["retry", "takeOver", "release", "close"],
   held: ["onboard"],
   stranded: ["adopt"],
+};
+
+/**
+ * Which decisions allow which answers, because the answers differ.
+ *
+ * A vanished author or reviewer can be retried, taken over, or released. An
+ * orphaned workspace has no claim to undo — releasing would reopen a done or
+ * canceled task — so it is only ever closed.
+ */
+const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
+  "author vanished": ["retry", "takeOver", "release"],
+  "reviewer vanished": ["retry", "takeOver", "release"],
+  "orphaned workspace": ["close"],
 };
 
 /**
@@ -130,12 +151,18 @@ export const Pipeline = (props: {
     if (index === undefined) return;
     const target = rows()[index];
     if (!target) return;
+    if (column() === "decisions" && target.task) {
+      if (!DECISION_ACTIONS[decisionKind(target.task)].includes(action)) return;
+    }
     switch (action) {
       case "retry":
         if (target.task) props.controls.retry(target.task);
         break;
       case "release":
         if (target.task) props.controls.release(target.task);
+        break;
+      case "close":
+        if (target.task) props.controls.close(target.task);
         break;
       case "takeOver":
         // A vanished worker can still be taken over when its workspace
@@ -199,6 +226,9 @@ export const Pipeline = (props: {
         break;
       case "d":
         apply("release");
+        break;
+      case "c":
+        apply("close");
         break;
       case "o":
         apply("onboard");
@@ -304,7 +334,9 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
-      {"r retry  t take over  f focus  e escalate  d release  o onboard  s send for review"}
+      {
+        "r retry  t take over  f focus  e escalate  d release  c close  o onboard  s send for review"
+      }
     </text>
     <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
   </box>
@@ -364,8 +396,14 @@ const landedRow = (task: Item): ColumnRow => ({
 const decisionRow = ({ task, worker, kind }: Active): ColumnRow => ({
   key: task.id,
   // The reason leads: it is the question the column exists to answer, and it
-  // is the half that must survive a narrow terminal truncating the line.
-  label: `${decisionKind(task)}  ${task.id}  ${kind ?? "?"}`,
+  // is the half that must survive a narrow terminal truncating the line. An
+  // orphaned workspace names its status rather than the kind that left it:
+  // done and canceled are pure cleanup, a queued task will be dispatched again
+  // into a fresh workspace once this one is closed.
+  label:
+    decisionKind(task) === "orphaned workspace"
+      ? `orphaned workspace  ${task.id}  ${task.status}`
+      : `${decisionKind(task)}  ${task.id}  ${kind ?? "?"}`,
   task,
   ready: undefined,
   worker,

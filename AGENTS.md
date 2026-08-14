@@ -283,15 +283,18 @@ The renderer is created inside `Effect.acquireRelease`, and the program parks on
 a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
 on exit.
 
-One cursor walks six columns — queue | working | review | landed, then the
-decisions and held panels. Each column allows only the actions that make sense
-there, and a key the selected row cannot take is ignored. Decisions are named
-from the task's labels alone; the third kind, an orphaned workspace, is
-recognised but nothing produces one yet.
+One cursor walks seven columns — queue | working | review | landed, then the
+decisions, held and stranded panels. Each column allows only the actions that
+make sense there, and a key the selected row cannot take is ignored. Decisions
+are named from the task's status, not its labels: a failed spawn leaves the
+`by-*` label on a task that sits back in the queue, and only the status —
+neither claimed nor under review — marks its workspace as residue. The three
+kinds answer differently: a vanished author or reviewer can be retried, taken
+over, or released, while an orphaned workspace is only ever closed.
 
 Two divergences from the settled design, walls hit while building:
 
-- **No cancel.** `Dispatcher` has pause, resume, focus, retry, release,
+- **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
   escalate and onboard, but no command cancels a task. "Act on a task" means
   escalate or release; a cancel command belongs on the dispatcher.
 - **No focus scope.** The focus control jumps to a worker's pane. Making a
