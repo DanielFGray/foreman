@@ -8,11 +8,12 @@
   "module": "index.ts",
   "scripts": {
     "start": "bun src/main.ts",
-    "test": "run-s lint typecheck test:unit",
+    "test": "run-s format:check lint typecheck test:unit",
     "test:unit": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "lint": "oxlint src",
     "format": "oxfmt --write src",
+    "format:check": "oxfmt --check src",
     "prepare": "effect-tsgo patch --typescript --oxlint"
   },
   "dependencies": {

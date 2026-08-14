@@ -133,6 +133,39 @@ Tracked changes only, deliberately. Untracked files are scratch notes and build
 output that live in a repository for months, and counting them would hold a
 project forever.
 
+A checkout with no branch is held too, and that clause was written in blood. The
+branch a landing moves is whichever one `HEAD` names, and `git merge` into a
+detached `HEAD` succeeds: the commits land, the operator's branch stays where it
+was, and the tick sweep then deletes the only ref that reached them. Foreman did
+exactly that to a reviewed task. "Free to work against" therefore means both
+that nobody is mid-edit **and** that there is a branch for the work to land on.
+
+### jj checkouts land through jj
+
+Most of these projects are jj colocated with git, and jj is not a variation on
+the git path — it answers both of those questions differently:
+
+- **There is no checked-out branch.** jj bookmarks do not move by being merged
+  into. The bookmark to land on is derived the way git derives it — the branch
+  the operator is standing on, which here is the nearest bookmark behind the
+  working copy, `heads(::@ & bookmarks())`. `heads` drops the ones already
+  merged into it, foreman's own included. Zero or more than one holds the
+  project rather than guessing.
+- **The working copy is a commit**, so "clean" is `@` being empty. That counts a
+  file git would call untracked, unlike the git path above, because under jj it
+  is not untracked: it is already part of the working-copy commit, and landing
+  would carry it out of the operator's directory.
+- **jj never refuses a merge.** A conflict is a recorded state with markers
+  written into the files, so the conflict check is the ordinary path rather than
+  an error path, and backing out is `edit` then `abandon` rather than an abort.
+
+Everything else stays on git. The refs and worktrees in a colocated repository
+are real, `git for-each-ref` reads them correctly, and `git branch --delete`
+keeps the refusal that makes the sweep safe — a colocated jj imports git's refs
+at the start of every command, so a branch deleted there is a bookmark gone
+here. `Repository` reads which kind of checkout it has from the directory, per
+call, like everything else foreman knows.
+
 The dispatch gate cannot be the only gate: a tree can go dirty hours after an
 agent starts. Both prompt templates therefore run the same `git status
 --porcelain --untracked-files=no` immediately before merging, and on output they

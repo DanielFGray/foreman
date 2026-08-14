@@ -201,4 +201,131 @@ describe("Repository", () => {
 
     await rm(worktree, { recursive: true, force: true });
   });
+
+  // The branch to land on is the one HEAD names. A detached HEAD names none,
+  // and git merges into it anyway: the commits land, the operator's branch
+  // stays behind, and the sweep then deletes the only ref that reached them.
+  test("holds a checkout whose HEAD is not on a branch", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    expect(await isClean(directory)).toBe(true);
+
+    await git("checkout", "-q", "--detach", "HEAD");
+    expect(await isClean(directory)).toBe(false);
+
+    await git("checkout", "-q", base);
+    expect(await isClean(directory)).toBe(true);
+  });
+});
+
+// jj colocated with git is the shape most of these projects are in, and it is
+// not a variation on the git path: jj has no checked-out branch to merge into,
+// records conflicts instead of refusing them, and keeps the working copy as a
+// commit rather than as loose edits.
+const colocated = await mkdtemp(join(tmpdir(), "foreman-jj-"));
+afterAll(() => rm(colocated, { recursive: true, force: true }));
+
+// jj's first commands in a fresh repo snapshot the working copy and build the
+// index, which intermittently runs past bun's 5s default — and a test that times
+// out here kills the jj child mid-merge, so the failure reads as a merge fault.
+const slowly = 30_000;
+
+describe("Repository over a jj-colocated checkout", () => {
+  const there = (...args: Array<string>) => Bun.$`git -C ${colocated} ${args}`.quiet().nothrow();
+  const jj = (...args: Array<string>) =>
+    Bun.$`jj ${args}`
+      .cwd(colocated)
+      .env({ ...process.env, JJ_USER: "foreman", JJ_EMAIL: "foreman@test" })
+      .quiet()
+      .nothrow();
+
+  const bookmark = async (name: string) =>
+    (await jj("log", "-r", name, "--no-graph", "-T", "commit_id")).stdout.toString().trim();
+
+  test(
+    "lands a branch by moving the bookmark the operator is standing on",
+    async () => {
+      await there("init", "-q");
+      await there("config", "user.email", "foreman@test");
+      await there("config", "user.name", "foreman");
+      await writeFile(join(colocated, "tracked.txt"), "committed\n");
+      await there("add", "tracked.txt");
+      await there("commit", "-qm", "initial");
+      await there("branch", "-M", "develop");
+      await there("checkout", "-qb", "foreman/ts-aaaaaa");
+      await writeFile(join(colocated, "landed.txt"), "author work\n");
+      await there("add", "landed.txt");
+      await there("commit", "-qm", "author work");
+      await there("checkout", "-q", "develop");
+      await jj("git", "init");
+
+      const before = await bookmark("develop");
+      expect(await isClean(colocated)).toBe(true);
+
+      expect(await merge(colocated, "foreman/ts-aaaaaa", "true")).toEqual({
+        _tag: "Merged",
+        verified: true,
+      });
+
+      // The point of the whole path: the operator's bookmark moved, and git can
+      // see the merge on it. Landing onto a commit no branch names is the bug.
+      expect(await bookmark("develop")).not.toBe(before);
+      expect((await there("log", "--format=%s", "-1", "develop")).stdout.toString().trim()).toBe(
+        "Merge branch 'foreman/ts-aaaaaa'",
+      );
+      expect(await Bun.file(join(colocated, "landed.txt")).text()).toBe("author work\n");
+
+      // A branch that landed must not read as a branch nobody committed to.
+      expect(await branches(colocated)).toEqual([
+        { branch: "foreman/ts-aaaaaa", merged: true, empty: false },
+      ]);
+    },
+    slowly,
+  );
+
+  // jj does not refuse a conflicting merge; it records the conflict and writes
+  // markers into the files. Backing out is foreman's job, or the operator finds
+  // conflict markers in a checkout they never merged anything into.
+  test(
+    "backs out a conflicting merge and leaves no markers behind",
+    async () => {
+      // A sibling of the temp checkout, so a run that dies midway cannot leave a
+      // path behind that the next run collides with.
+      const side = `${colocated}-side`;
+      await there("branch", "foreman/ts-bbbbbb", "develop");
+      await there("worktree", "add", "-q", side, "foreman/ts-bbbbbb");
+      await writeFile(join(side, "tracked.txt"), "theirs\n");
+      await Bun.$`git -C ${side} commit -qam theirs`.quiet().nothrow();
+      await Bun.$`git -C ${colocated} worktree remove ${side}`.quiet().nothrow();
+
+      await writeFile(join(colocated, "tracked.txt"), "ours\n");
+      await jj("bookmark", "set", "develop", "-r", "@");
+      await jj("new");
+      const before = await bookmark("develop");
+
+      const rejected = await merge(colocated, "foreman/ts-bbbbbb", undefined);
+      expect(rejected).toMatchObject({ _tag: "Rejected" });
+      // Rejected for the right reason: jj recorded a conflict, rather than the
+      // merge command itself failing to run.
+      expect(rejected).toHaveProperty("detail", expect.stringContaining("conflict"));
+      expect(await bookmark("develop")).toBe(before);
+      expect(await Bun.file(join(colocated, "tracked.txt")).text()).toBe("ours\n");
+      expect(await isClean(colocated)).toBe(true);
+    },
+    slowly,
+  );
+
+  // Under git this file would be untracked and ignored. Under jj it is already
+  // part of the working-copy commit, and landing would carry it out of the
+  // operator's directory.
+  test(
+    "holds a checkout whose working copy is not empty",
+    async () => {
+      await writeFile(join(colocated, "half-an-edit.ts"), "export const x = 1\n");
+      expect(await isClean(colocated)).toBe(false);
+
+      await rm(join(colocated, "half-an-edit.ts"));
+      expect(await isClean(colocated)).toBe(true);
+    },
+    slowly,
+  );
 });

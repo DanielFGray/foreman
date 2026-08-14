@@ -69,6 +69,21 @@ branch under you while you edit.
 Untracked files do not hold a project. Scratch notes and build output sit in a
 repository for months; counting them would hold it forever.
 
+A checkout with no branch is held as well, because a landing has nothing to
+move: under git that is a detached `HEAD`, and under jj it is a working copy
+with no bookmark behind it.
+
+### jj projects
+
+A project colocated with jj lands through jj. Foreman moves the bookmark you are
+standing on — the nearest one behind your working copy — rather than merging
+into a branch, because jj has no checked-out branch to merge into. Two things
+follow. A working copy that is not empty holds the project, including files git
+would call untracked, since jj already counts them as yours. And a conflicting
+branch is backed out rather than left in your directory: jj records conflicts
+instead of refusing them, so foreman abandons the merge and returns the task to
+the queue.
+
 ### Onboarding a held project
 
 A held project can be handed to an agent instead of waiting for you. Pick it in

@@ -182,7 +182,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
         ({ branch, task, project }) =>
           prog.show(task).pipe(
-            Effect.map((item) => ({ project, branch, task, title: item.title, status: item.status })),
+            Effect.map((item) => ({
+              project,
+              branch,
+              task,
+              title: item.title,
+              status: item.status,
+            })),
             // A branch whose task was deleted outright. It is the reason to
             // read git rather than prog, so it is shown, not dropped.
             Effect.orElseSucceed(() => ({
@@ -1085,8 +1091,7 @@ interface Observation extends FleetState {
 }
 
 /** `1 slot`, `2 slots`. The supervised run AGENTS.md recommends is `--slots 1`. */
-const plural = (count: number, noun: string): string =>
-  `${count} ${noun}${count === 1 ? "" : "s"}`;
+const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 const empty: FleetState = {
   queue: [],

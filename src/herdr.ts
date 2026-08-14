@@ -232,9 +232,14 @@ export const HerdrFleet = Layer.effect(
           // A refusal is a failure of this dispatch, which is exactly right:
           // the caller already hands the claim back on one, so the task returns
           // to the queue and the slot goes to somebody else.
-          const workspacePanes = (
-            yield* herdrJson(PaneList, "spawn", "pane", "list", "--workspace", worker.workspace)
-          ).result.panes;
+          const workspacePanes = (yield* herdrJson(
+            PaneList,
+            "spawn",
+            "pane",
+            "list",
+            "--workspace",
+            worker.workspace,
+          )).result.panes;
           const held = workspacePanes.filter((pane) => pane.label === role);
           const live = held.find((pane) => workerStateOf([pane.agent_status]) !== "gone");
           if (live) {
@@ -501,9 +506,8 @@ type PaneRecord = Schema.Schema.Type<typeof Pane>;
  * taken the root and labelled it, which is what a restart re-reads.
  */
 export const paneFor = (panes: ReadonlyArray<PaneRecord>): PaneRecord | undefined =>
-  panes.find(
-    (candidate) => candidate.agent === undefined && candidate.label === undefined,
-  ) ?? panes[0];
+  panes.find((candidate) => candidate.agent === undefined && candidate.label === undefined) ??
+  panes[0];
 
 /**
  * Which role each of a workspace's labelled panes is running, and how that

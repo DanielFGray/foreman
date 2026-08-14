@@ -35,9 +35,9 @@ describe("paneFor", () => {
     // The author now runs in the workspace's own pane, so the label lands on
     // the root. It must keep resolving to the same worker that re-dispatch
     // reuses and the reviewer splits from.
-    expect(paneFor([pane("w1:p1", { label: "foreman-author", agent_status: "working" })])?.pane_id).toBe(
-      "w1:p1",
-    );
+    expect(
+      paneFor([pane("w1:p1", { label: "foreman-author", agent_status: "working" })])?.pane_id,
+    ).toBe("w1:p1");
   });
 
   test("the author's pane wins over a reviewer split beside it", () => {
