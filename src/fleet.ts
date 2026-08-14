@@ -42,7 +42,14 @@ export class Fleet extends Effect.Tag("Fleet")<
       options: SpawnOptions,
     ) => Effect.Effect<AgentIdentity, FleetError>;
 
-    /** Every workspace foreman owns, with what the multiplexer sees in it. */
+    /**
+     * Every workspace labelled `foreman/*`, whatever daemon opened it.
+     *
+     * A label records no ownership, and two daemons against different configs
+     * are not competing for the same slots — so the adapter reports everything
+     * and the dispatcher scopes it to the config's project set, which is the
+     * only ownership the world records.
+     */
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
 
     /** Brings a task's workspace to the front so a human can take over. */

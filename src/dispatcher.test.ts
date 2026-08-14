@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { awaitingLanding, decisionsOf, readyToLand, reviewable, type Owned } from "./dispatcher.ts";
+import {
+  awaitingLanding,
+  decisionsOf,
+  readyToLand,
+  reviewable,
+  scopeRoster,
+  type Owned,
+} from "./dispatcher.ts";
 import { authoredBy, reviewedBy, type Item } from "./prog.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 
@@ -8,11 +15,12 @@ const task = (
   labels: ReadonlyArray<string>,
   status = "reviewing",
   priority = 1,
+  project = "foreman",
 ): Item => ({
   id,
   title: `Task ${id}`,
   status,
-  project: "foreman",
+  project,
   type: "task",
   priority,
   labels,
@@ -154,5 +162,70 @@ describe("work handed back for review", () => {
 
     expect(review).toEqual([]);
     expect(unbacked).toEqual([]);
+  });
+});
+
+describe("scoping the roster to this daemon's projects", () => {
+  test("keeps only workspaces whose task lives in a managed project", () => {
+    const own = task("ts-111111", ["by-opencode"], "in_progress");
+    const foreign = task("ts-222222", ["by-opencode"], "in_progress", 1, "elsewhere");
+
+    const { owned, workers } = scopeRoster(
+      [worker("working", own.id), worker("working", foreign.id)],
+      new Map([
+        [own.id, own],
+        [foreign.id, foreign],
+      ]),
+      new Set(["foreman"]),
+    );
+
+    expect(workers.map(({ task }) => task)).toEqual([own.id]);
+    expect(owned.map(({ task }) => task.id)).toEqual([own.id]);
+  });
+
+  test("a foreign daemon's live workspace fills none of this daemon's slots", () => {
+    // The stall that stalled the e2e rig: a second daemon at --slots 1 counted
+    // the first daemon's live workspace as its own busy slot and dispatched
+    // nothing. Two foremen against different configs are not competing for the
+    // same slots, so the foreign workspace must not appear in the roster slots
+    // are counted from.
+    const foreign = task("ts-222222", ["by-opencode"], "in_progress", 1, "elsewhere");
+
+    const { owned, workers } = scopeRoster(
+      [worker("working", foreign.id)],
+      new Map([[foreign.id, foreign]]),
+      new Set(["foreman"]),
+    );
+
+    expect(workers).toEqual([]);
+    expect(owned).toEqual([]);
+  });
+
+  test("drops a workspace whose task the store no longer has", () => {
+    // A workspace with no task has no project to scope by, and as residue it
+    // must not eat a slot nothing will ever free.
+    const { owned, workers } = scopeRoster(
+      [worker("blocked", "ts-333333")],
+      new Map(),
+      new Set(["foreman"]),
+    );
+
+    expect(owned).toEqual([]);
+    expect(workers).toEqual([]);
+  });
+
+  test("joins each kept workspace to its task with the role's state", () => {
+    const reviewing = task("ts-444444", ["by-opencode", "review-by-claude"], "reviewing");
+
+    const { owned } = scopeRoster(
+      [worker("working", reviewing.id)],
+      new Map([[reviewing.id, reviewing]]),
+      new Set(["foreman"]),
+    );
+
+    expect(owned).toHaveLength(1);
+    expect(owned[0].task).toBe(reviewing);
+    expect(owned[0].worker.state).toBe("working");
+    expect(owned[0].kind).toBe("claude");
   });
 });
