@@ -21,6 +21,11 @@ wiring the plan:
 
     prog add "<title>" -p {{ project }} --parent {{ task }} --draft --priority 2 -d "<description>"
 
+Every item you file is a task, never an epic — do not pass `-e` or `--epic`. An epic is a
+container, and epics never appear in `prog ready`, so a plan whose children are epics
+looks like the tasker produced nothing. Pass the parent with `--parent {{ task }}`, and
+never write its id into the title.
+
 `prog add` prints the new task's id. Keep it — you will need it for dependencies.
 
 ## Wire the dependencies

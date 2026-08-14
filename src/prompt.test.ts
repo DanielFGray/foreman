@@ -11,6 +11,7 @@ const item: Item = {
   type: "task",
   priority: 2,
   labels: ["onboard"],
+  description: null,
   last_activity_at: new Date(),
 };
 
@@ -47,6 +48,22 @@ describe("Prompts", () => {
     expect(prompt).toContain("prog label ts-123456 approved");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("prog done ts-123456");
+  });
+
+  test("a tasker files tasks, and the parent rides --parent, not the title", async () => {
+    const prompt = await Effect.runPromise(
+      Prompts.tasker(item, "/tmp/worktree", "/tmp/repository").pipe(
+        Effect.provide(Prompts.Default),
+      ),
+    );
+
+    // The two ways a tasker run once went wrong: every generated item came
+    // back as an epic, and the parent id was appended to the title. Epics are
+    // invisible to `prog ready`, so the mistake cost a whole plan's output.
+    expect(prompt).toContain("is a task, never an epic");
+    expect(prompt).toContain("--parent ts-123456");
+    expect(prompt).not.toContain("-e ");
+    expect(prompt).toContain("never write its id into the title");
   });
 
   test("sends an onboarding agent to the checkout and back off it", async () => {

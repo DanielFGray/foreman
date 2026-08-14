@@ -9,6 +9,7 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   type: "task",
   priority: 1,
   labels,
+  description: null,
   last_activity_at: new Date(),
 });
 

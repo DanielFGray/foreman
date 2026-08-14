@@ -247,6 +247,14 @@ export const Item = Schema.Struct({
   labels: Schema.Array(Schema.String),
 
   /**
+   * The epic's body text. Plan mode reads it to know whether the planner has
+   * written a specification: the planner replaces the rough plan with the full
+   * spec, so a description that changed during planning is the planner's
+   * deliverable. Null only for items created without a description.
+   */
+  description: Schema.NullOr(Schema.String),
+
+  /**
    * Later of the task's own update time and its newest log entry.
    *
    * The reclaimer needs this rather than updated_at: logging does not touch the

@@ -305,10 +305,13 @@ the running dispatcher ignores the plan itself while picking up its opened
 children as ordinary reviewed work. Generated tasks carry `--priority 2`, so the
 fleet reviews them like any other real work.
 
-The epic's stored status is the plan's state machine: `draft` while the planner
-works, `open` once the specification is written, `done` once the tasker has
-finished. An interrupted run leaves its workspace in place, and
-`foreman plan --epic ep-…` adopts it and continues from wherever it stopped.
+An epic is a draft in prog until it has child tasks, and its status is derived
+from them, so the plan's state machine follows what the agents leave in the
+store: `draft` while the planner works, no longer `draft` once the tasker has
+filed the first child, `done` once the tasker's `prog done` closes it. An
+interrupted run leaves its workspace in place, and `foreman plan --epic ep-…`
+adopts it and continues from wherever it stopped — an epic with no children
+replans, one with children re-tasks.
 
 ## Configuration
 

@@ -16,6 +16,7 @@ const task = (
   type: "task",
   priority,
   labels,
+  description: null,
   last_activity_at: new Date(),
 });
 
