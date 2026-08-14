@@ -6,11 +6,10 @@ have already been hit so you do not walk into them again.
 
 ## Status: compiles
 
-The derived-state rewrite is finished; `tsc --noEmit`, `oxlint` and tsdoctor
-diagnostics are all clean. The tree is one `Dispatcher` service over `Fleet`
-and `Prog`, with `main.ts` as the only entry point. `src/worktree.ts` is gone —
-herdr owns worktrees, and `labelFor` in `src/fleet.ts` is the single name for
-`foreman/<task>`.
+The derived-state rewrite is finished; `tsc --noEmit` and `oxlint` diagnostics
+are all clean. The tree is one `Dispatcher` service over `Fleet` and `Prog`,
+with `main.ts` as the only entry point. `src/worktree.ts` is gone — herdr owns
+worktrees, and `labelFor` in `src/fleet.ts` is the single name for `foreman/<task>`.
 
 The layer set in `main.ts` is deliberately `Layer.provideMerge(Dispatcher.Default,
 base)`: `Dispatcher.Default` pulls in `Prog` and `Prompts` as its own
@@ -375,5 +374,4 @@ Two divergences from the settled design, walls hit while building:
   parallel paths to make a broken design compile. The two bugs above were both
   fixed by deleting a concept, not by adding one. Report a blocker instead.
 - Use `prog` for task tracking. The epic is `ep-0e6a7e`.
-- Use `tsdoctor` for typechecking, never `tsc` directly.
 - Bun, not node. Effect-TS throughout.
