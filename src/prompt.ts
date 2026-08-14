@@ -81,6 +81,32 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
           branch: labelFor(item.id),
           repository,
         }),
+
+      /**
+       * Turns the rough plan (the epic's description) into a specification.
+       * The agent works in a plan worktree and writes the spec back into the
+       * epic's description, where the tasker and the fleet read it.
+       */
+      planner: (item: Item, worktree: string, repository: string) =>
+        render("planner", {
+          task: item.id,
+          title: item.title,
+          project: item.project,
+          worktree,
+          branch: labelFor(item.id),
+          repository,
+        }),
+
+      /** Turns the specification into tasks filed under the plan epic. */
+      tasker: (item: Item, worktree: string, repository: string) =>
+        render("tasker", {
+          task: item.id,
+          title: item.title,
+          project: item.project,
+          worktree,
+          branch: labelFor(item.id),
+          repository,
+        }),
     } as const;
   }),
 }) {}

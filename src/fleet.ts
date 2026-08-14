@@ -123,3 +123,12 @@ export const labelFor = (task: string): string => `foreman/${task}`;
 /** The task a workspace belongs to, or undefined if it is not foreman's. */
 export const taskOf = (label: string): string | undefined =>
   label.startsWith("foreman/") ? label.slice("foreman/".length) : undefined;
+
+/**
+ * Where a task's worktree lives. Under the state directory rather than inside
+ * the repository: an in-tree worktree would mean editing .gitignore in every
+ * project foreman touches, and a stray checkout is far more confusing inside a
+ * repo than outside it.
+ */
+export const directoryFor = (project: string, task: string): string =>
+  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman/worktrees/${project}/${task}`;

@@ -24,6 +24,10 @@ Two things known to still be ahead, in the backlog:
   the fleet with anything.
 - **The dashboard is designed but not built.** `Dispatcher.state` is a
   `SubscriptionRef<FleetState>` waiting for an opentui + Solid renderer.
+- **Plan mode is built but never proven live.** The planner → tasker → opened
+  children sequence in `src/plan.ts` has not run end to end. Prove it against a
+  scratch project not in the config, then `foreman plan --epic ep-...` on the
+  same epic to prove the resume path.
 
 ## The design, and why
 
@@ -143,6 +147,42 @@ The prompt forbids `stash`, `reset`, `checkout -- <file>` and `clean` by name,
 and ends by returning the operator's branch to its previous tip. Read it before
 changing anything about this path.
 
+### Plan mode is the front half of the pipeline
+
+`foreman plan` turns a rough plan into tasks, so the backlog does not have to be
+filled by hand. A plan is an epic in prog labelled `plan`, created in draft; the
+planner agent writes the specification into the epic's description and runs
+`prog open`; the tasker agent files the specification as children, wires
+`prog blocks`, opens them only once the deps are complete, and runs `prog done`.
+The stored status sequence `draft → open → done` is the whole state machine.
+
+Four decisions shape it, and each has a reason:
+
+- **The spec lives in the task store, not the repository.** The fleet's authors
+  read `prog show ep-...` for the spec a generated task references, the same way
+  they read a task's description. Nothing about a plan dirties the operator's
+  checkout or leaves a git footprint, and the plan survives a restart because
+  prog owns it.
+- **Plan runs are synchronous and self-contained.** `src/plan.ts` is its own
+  process that drives both agents and closes the workspace. The daemon has zero
+  plan awareness on purpose: an epic is never claimed, never `in_progress`, and
+  never in `prog ready` (draft and epics are both filtered by prog itself), so
+  the dispatcher ignores the plan while picking up its opened children as
+  ordinary reviewed work. If a plan needs the daemon, the design is wrong.
+- **Stages are sequenced by stored status, never by watching agents.** `prog show`
+  returns stored status — prog derives an epic's displayed status from its
+  children, which would misread a plan at every stage. The agents write the
+  transitions themselves, so `foreman plan --epic ep-...` resumes exactly where
+  a run stopped by re-deriving the stage from the stored status.
+- **The planner may interrupt the operator.** It interviews through its question
+  tool, one question at a time, only when the plan and codebase genuinely cannot
+  decide something. This is the one place an unattended foreman agent is told to
+  ask; everything else decides and records.
+
+Generated tasks are ordinary work: `--priority 2`, so the fleet reviews them
+like anything it authored. The `plan` label stays on the epic only; it is what a
+resume validates against.
+
 ### Order inside a tick
 
 Settle, reclaim, then fill — and **reviews are filled before new work**. A task
@@ -214,7 +254,16 @@ Design settled with the user, not yet built. `Dispatcher.state` is a
 - **Do not run `bun src/main.ts` to "check that it starts".** It dispatches
   live agents against the real backlog within one tick. Two verification runs
   claimed real tasks and had to be unwound by hand. Typecheck instead; when you
-  do need a live run, use `--slots 1` and watch it.
+  do need a live run, use `--slots 1` and watch it. The same caution covers
+  `bun src/main.ts plan ...`: it spawns real planner and tasker agents in panes,
+  so a smoke test must target a scratch project that is not in the config —
+  otherwise the opened children go straight into the live queue.
+- **Plan epics are drafts and must stay drafts.** The whole "daemon needs no
+  plan awareness" property rests on the epic never being claimed or moved to
+  `in_progress`; the settle loop treats a settled workspace on an `in_progress`
+  item as an unfinished agent and would escalate and release it. `prog show`
+  returns stored status, which is exactly what the plan stages need — do not
+  switch it to the derived status.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
   come back as a JSON envelope on stdout; failures come back as a JSON envelope
   on stderr with a non-zero exit. `CommandExecutor.string` reads stdout and
