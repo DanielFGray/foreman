@@ -38,7 +38,12 @@ and `prog list` together tell you everything foreman knows.
    is never touched.
 3. **Fill.** Reviews first, then new work. A task awaiting review is nearly
    finished and is blocking whatever depends on it; an unclaimed task has not
-   started costing anything yet.
+   started costing anything yet. This is the only step pausing stops, so a
+   paused foreman still lands, tidies and reports.
+
+Foreman starts paused. Opening the dashboard to drain the fleet is the common
+case, and it should not be a race against the first tick. Press `p` when you
+want it dispatching.
 
 A fresh agent pane per attempt and review, rather than long-lived workers fed
 task after task: no context bleeds between stages or unrelated projects.
@@ -98,6 +103,25 @@ closes; the reviewer opens a fresh pane in the same workspace, against the same
 worktree, beside the author's output. The workspace closes when the task leaves
 the fleet. The branch is kept either way: if the work merged the branch is
 harmless, and if it was rejected the branch is the only copy of what happened.
+
+## Stranded branches
+
+A task can be closed, reclaimed or deleted while its branch still holds commits
+the project never took. Every column in the dashboard reads from prog, which
+stops mentioning that branch the moment its task moves on — so the commits go
+quiet rather than missing, which is worse.
+
+Foreman therefore asks git directly for its own branches that `develop` has not
+taken, and drops the ones the queue, the claims or the review list already
+account for. What is left appears as **stranded branches**, and `o` sends the
+whole list back to `reviewing`. A reviewer reads each diff and either approves
+it, landing it through the same gate as anything else, or returns it with
+findings. Nobody can judge abandoned commits from the outside, and that judgement
+is what a review is.
+
+A branch whose task was deleted outright is listed and left alone. Workspaces,
+prompts and merges are all addressed by task id, so there is nothing left to
+dispatch against — that one is yours to recover by hand.
 
 ## When a worker vanishes
 
@@ -264,6 +288,9 @@ project foreman touches.
 bun src/main.ts               # from a pane inside the multiplexer
 bun src/main.ts --slots 1     # one at a time, to watch a change land
 ```
+
+It comes up paused: it lands what is finished and tidies what died, and waits
+for `p` before it starts anything new.
 
 `--slots` (`-n`) is the one setting available on the command line, because it is
 the one an operator changes per run. Everything else describes the fleet and

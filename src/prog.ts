@@ -157,6 +157,22 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Returns a claimed task to the queue. */
       release: (task: string) => run("open", task).pipe(Effect.asVoid),
 
+      /**
+       * Puts a task back in front of a reviewer, whatever state it was in.
+       *
+       * How a stranded branch rejoins the pipeline: the commits exist and
+       * nobody can say whether they are any good, which is the question a
+       * reviewer answers. From `reviewing` the ordinary loop takes over.
+       *
+       * Claims it first because prog only reviews `in_progress` work, and a
+       * stranded branch's task is usually done or back in the queue.
+       */
+      submit: (task: string) =>
+        run("start", task).pipe(
+          Effect.andThen(run("review", task)),
+          Effect.asVoid,
+        ),
+
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
 

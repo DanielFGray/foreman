@@ -50,7 +50,9 @@ Every tick reads all of it back. A restart re-adopts its live workspaces
 instead of orphaning them — that is what `Fleet.open` returning an existing
 workspace by label is for. The only thing foreman genuinely cannot derive is
 whether the operator has paused dispatch, because nothing in the world records
-an intention. That is the one `Ref`.
+an intention. That is the one `Ref`, and it starts paused: settling and
+reclaiming run regardless, so a fresh start lands finished work and tidies dead
+workspaces before it asks for anything new.
 
 **If you find yourself adding a second one, stop.** It means something the
 world should be recording is not being recorded, and the fix belongs in herdr
@@ -226,6 +228,15 @@ Landing waits for the reviewer's pane to stop working. The pane stays `working`
 from the moment the verdict is written until the turn ends, and closing the
 workspace runs `worktree remove --force` on the directory the reviewer is
 standing in.
+
+Stranded branches are read from git, not prog. Every column but this one comes
+from the task store, which stops mentioning a branch the moment its task is
+closed, reclaimed or deleted — while the commits stay on the branch. So
+`Repository.unmerged` asks `for-each-ref --no-merged=HEAD` for foreman's own
+refs, and anything the queue, the claims or the review list already accounts for
+is dropped. `o` sends the rest back to `reviewing`, where a reviewer decides
+whether the commits are worth landing. A branch whose task was deleted has no id
+to dispatch against, so it is listed and left alone.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`

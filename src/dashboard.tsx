@@ -1,7 +1,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { render, useKeyboard } from "@opentui/solid";
 import { Deferred, Effect, Exit, Runtime, Stream, SubscriptionRef } from "effect";
-import { createSignal, For, type Accessor } from "solid-js";
+import { createSignal, For, Show, type Accessor } from "solid-js";
 import { type Active, Dispatcher, type FleetState } from "./dispatcher.ts";
 import type { Item, ReadyTask } from "./prog.ts";
 
@@ -55,6 +55,7 @@ export const dashboard = Effect.gen(function* () {
           onTogglePause={() =>
             Runtime.runFork(runtime)(state().paused ? dispatcher.resume : dispatcher.pause)
           }
+          onAdopt={() => Runtime.runFork(runtime)(dispatcher.adopt(state().orphans))}
         />
       ),
       renderer,
@@ -69,10 +70,12 @@ const Pipeline = (props: {
   readonly onQuit: () => void;
   readonly onTogglePause: () => void;
   readonly onToggleConsole: () => void;
+  readonly onAdopt: () => void;
 }) => {
   useKeyboard((key) => {
     if (key.name === "q") props.onQuit();
     if (key.name === "p") props.onTogglePause();
+    if (key.name === "o") props.onAdopt();
     if (key.name === "f12") props.onToggleConsole();
   });
 
@@ -84,10 +87,36 @@ const Pipeline = (props: {
         <Column title="review" rows={() => props.state().review.map(active)} />
         <Column title="landed" rows={() => props.state().landed.map(landed)} />
       </box>
+      <Stranded state={props.state} />
       <Status state={props.state} />
     </box>
   );
 };
+
+/**
+ * Branches the pipeline lost track of, and the one key that recovers them.
+ *
+ * It takes the whole list rather than a selected row: the recovery is the same
+ * question about every one of them — are these commits worth keeping — and it
+ * is a reviewer, not the operator, who answers it. So there is nothing to
+ * choose between, and nothing to select with.
+ */
+const Stranded = (props: { readonly state: Accessor<FleetState> }) => (
+  <Show when={props.state().orphans.length > 0}>
+    <box
+      style={{ flexDirection: "column", flexShrink: 0, border: true }}
+      title={`stranded branches ${props.state().orphans.length}  ·  o send for review`}
+    >
+      <For each={props.state().orphans}>
+        {(orphan) => (
+          <text style={{ height: 1, flexShrink: 0 }}>
+            {`${orphan.branch}  ${orphan.project}  ${orphan.title ?? "task deleted — recover this branch by hand"}`}
+          </text>
+        )}
+      </For>
+    </box>
+  </Show>
+);
 
 /**
  * One stage of the pipeline.
@@ -123,7 +152,7 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
       {props.state().held.length === 0 ? "" : `held: ${props.state().held.join(", ")}`}
     </text>
     <text style={{ height: 1 }}>
-      {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision  ·  p pause  F12 log  q quit`}
+      {`${props.state().paused ? "paused — p to start dispatching" : "running  ·  p to pause"}  ·  ${props.state().decisions.length} awaiting a decision  ·  F12 log  q quit`}
     </text>
   </box>
 );

@@ -1,6 +1,6 @@
 import { DateTime, Duration, Effect, Ref, Schedule, SubscriptionRef } from "effect";
 import { Settings } from "./config.ts";
-import { directoryFor, Fleet, labelFor, type Worker } from "./fleet.ts";
+import { directoryFor, Fleet, labelFor, taskOf, type Worker } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
@@ -39,7 +39,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // The one piece of genuinely non-derivable state: whether the operator has
     // asked foreman to stop taking on new work. Nothing in the world records
     // an intention.
-    const paused = yield* Ref.make(false);
+    //
+    // It starts true. Settling and reclaiming run while paused, so a fresh
+    // start lands what is finished and tidies what died before it asks for
+    // anything new — and the operator who opened the screen to drain the fleet
+    // is not racing the first tick to press pause.
+    const paused = yield* Ref.make(true);
     const state = yield* SubscriptionRef.make(empty);
 
     /**
@@ -118,6 +123,36 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const now = yield* DateTime.now;
       const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
 
+      // Branches nothing in the pipeline accounts for. Every other column is
+      // read from prog, which forgets a branch the moment its task is closed,
+      // reclaimed or deleted — so the commits themselves are asked instead.
+      // A task the fleet still holds is not stranded: the queue will dispatch
+      // an author onto that same branch, and a claim with no worker is already
+      // a decision the operator is being asked about.
+      const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
+      const orphans = yield* eachProject((project) =>
+        repository.unmerged(project.directory).pipe(
+          Effect.map((branches) =>
+            branches.flatMap((branch) => {
+              const task = taskOf(branch);
+              if (!task || accounted.has(task) || byTask.has(task)) return [];
+              return [{ project: project.name, branch, task }];
+            }),
+          ),
+        ),
+      ).pipe(
+        Effect.flatMap(
+          Effect.forEach((orphan) =>
+            prog.show(orphan.task).pipe(
+              Effect.map((task) => ({ ...orphan, title: task.title, status: task.status })),
+              // A branch whose task was deleted outright. It is the reason to
+              // read git rather than prog, so it is shown, not dropped.
+              Effect.orElseSucceed(() => ({ ...orphan, title: undefined, status: undefined })),
+            ),
+          ),
+        ),
+      );
+
       const active = (items: ReadonlyArray<Item>) =>
         items.map((task) => ({
           task,
@@ -139,6 +174,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // `reviewing` is a public task status. Attribution is the durable proof
         // that this branch was authored by foreman and has something to review.
         review: active(reviewing.filter((task) => authoredBy(task) !== undefined)),
+        orphans,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
         ),
@@ -594,6 +630,36 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       /** Marks a task for the frontier model next time it is picked up. */
       escalate: (task: Item) => prog.escalate(task.id),
+
+      /**
+       * Puts stranded branches back in front of a reviewer.
+       *
+       * Nobody can say from the outside whether abandoned commits are worth
+       * keeping, and that judgement is exactly a review. The task returns to
+       * `reviewing`, a reviewer reads the diff, and it either approves — which
+       * lands the branch through the ordinary gate — or returns it with
+       * findings. A branch whose task is gone is skipped: it has no id to
+       * dispatch against, so it stays on the list until a person deals with it.
+       */
+      adopt: (orphans: ReadonlyArray<Orphan>) =>
+        Effect.forEach(
+          orphans.filter((orphan) => orphan.status !== undefined),
+          (orphan) =>
+            prog
+              .submit(orphan.task)
+              .pipe(
+                Effect.andThen(
+                  prog.log(
+                    orphan.task,
+                    `foreman: ${orphan.branch} holds commits ${orphan.project} never took, and nothing in the queue was going to bring them back. Sent for review to decide whether they are worth landing.`,
+                  ),
+                ),
+                Effect.catchAll((error) =>
+                  Effect.logWarning(`adopting ${orphan.task} failed: ${error}`),
+                ),
+              ),
+          { discard: true },
+        ),
     } as const;
   }),
 }) {}
@@ -634,6 +700,12 @@ export interface FleetState {
   readonly decisions: ReadonlyArray<Active>;
 
   /**
+   * Branches holding commits the project never took, that nothing in the
+   * pipeline is going to bring back on its own.
+   */
+  readonly orphans: ReadonlyArray<Orphan>;
+
+  /**
    * Projects whose checkout has uncommitted changes to tracked files.
    *
    * The operator is working there, so their tasks stay in the queue until the
@@ -642,6 +714,21 @@ export interface FleetState {
    */
   readonly held: ReadonlyArray<string>;
   readonly paused: boolean;
+}
+
+/**
+ * Work git still has and prog has stopped tracking.
+ *
+ * `title` and `status` are absent when the task itself is gone. Such a branch
+ * can be shown but not recovered: every workspace, prompt and merge in foreman
+ * is addressed by task id, so there is nothing left to dispatch against.
+ */
+export interface Orphan {
+  readonly project: string;
+  readonly branch: string;
+  readonly task: string;
+  readonly title: string | undefined;
+  readonly status: string | undefined;
 }
 
 /** A task and the workspace running it, if the multiplexer still has one. */
@@ -668,6 +755,7 @@ const empty: FleetState = {
   review: [],
   landed: [],
   decisions: [],
+  orphans: [],
   held: [],
   paused: false,
 };

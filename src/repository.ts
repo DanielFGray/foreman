@@ -93,6 +93,34 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       isClean,
 
       /**
+       * Foreman's branches holding commits the checkout does not have.
+       *
+       * This is the only record that survives everything else. A workspace can
+       * be closed, a claim reclaimed, a task marked done or deleted outright,
+       * and the commits are still sitting on the branch — so git, not prog, is
+       * what foreman asks to find work it has lost track of.
+       */
+      unmerged: (directory: string) =>
+        exec(
+          directory,
+          "for-each-ref",
+          "--no-merged=HEAD",
+          "--format=%(refname:short)",
+          "refs/heads/foreman/",
+        ).pipe(
+          Effect.flatMap((result) =>
+            result.exitCode === 0
+              ? Effect.succeed(result.stdout.split("\n").filter((line) => line.trim() !== ""))
+              : Effect.fail(
+                  new RepositoryError({
+                    directory,
+                    detail: result.stderr.trim() || `git for-each-ref exited ${result.exitCode}`,
+                  }),
+                ),
+          ),
+        ),
+
+      /**
        * Lands a reviewed branch without trusting the reviewer with the shared
        * checkout. A failed merge is always aborted before control returns.
        *

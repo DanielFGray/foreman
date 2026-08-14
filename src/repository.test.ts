@@ -21,6 +21,14 @@ const merge = (directory: string, branch: string, verify?: string) =>
     }).pipe(Effect.provide(Repository.Default)),
   );
 
+const unmerged = (directory: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const repository = yield* Repository;
+      return yield* repository.unmerged(directory);
+    }).pipe(Effect.provide(Repository.Default)),
+  );
+
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() => rm(directory, { recursive: true, force: true }));
 
@@ -114,6 +122,22 @@ describe("Repository", () => {
       verified: false,
     });
     expect(await Bun.file(join(directory, "innocent.txt")).text()).toBe("fine\n");
+  });
+
+  test("names only foreman branches the checkout has not taken", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "foreman/ts-aaaaaa");
+    await writeFile(join(directory, "stranded.txt"), "abandoned\n");
+    await git("add", "stranded.txt");
+    await git("commit", "-qm", "work nobody landed");
+    await git("checkout", "-qb", "foreman/ts-bbbbbb", base);
+    await git("checkout", "-q", base);
+
+    // Three things must not appear: a branch already merged, a branch with no
+    // commits of its own, and somebody's own topic branch. Only the first
+    // holds work that would be lost.
+    await git("branch", "mine");
+    expect(await unmerged(directory)).toEqual(["foreman/ts-aaaaaa"]);
   });
 
   test("aborts a conflicting merge", async () => {
