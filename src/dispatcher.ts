@@ -676,10 +676,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
 
       /** Marks a task for the frontier model next time it is picked up. */
-      escalate: (task: Item) => commanded(prog.escalate(task.id)),
+      escalate: (task: { readonly id: string }) => commanded(prog.escalate(task.id)),
 
       /**
-       * Puts stranded branches back in front of a reviewer.
+       * Puts a stranded branch back in front of a reviewer.
        *
        * Nobody can say from the outside whether abandoned commits are worth
        * keeping, and that judgement is exactly a review. The task returns to
@@ -688,12 +688,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * findings. A branch whose task is gone is skipped: it has no id to
        * dispatch against, so it stays on the list until a person deals with it.
        */
-      adopt: (orphans: ReadonlyArray<Orphan>) =>
+      adopt: (orphan: Orphan) =>
         commanded(
-          Effect.forEach(
-            orphans.filter((orphan) => orphan.status !== undefined),
-            (orphan) =>
-              prog.submit(orphan.task).pipe(
+          orphan.status === undefined
+            ? Effect.void
+            : prog.submit(orphan.task).pipe(
                 Effect.andThen(
                   prog.log(
                     orphan.task,
@@ -704,8 +703,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   Effect.logWarning(`adopting ${orphan.task} failed: ${error}`),
                 ),
               ),
-            { discard: true },
-          ),
         ),
     } as const;
   }),

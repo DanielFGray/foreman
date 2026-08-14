@@ -19,8 +19,8 @@ alone would build them in parallel and never satisfy that.
 
 One thing known to still be ahead, in the backlog:
 
-- **The dashboard is designed but not built.** `Dispatcher.state` is a
-  `SubscriptionRef<FleetState>` waiting for an opentui + Solid renderer.
+- **The dashboard is built but unproven live.** It is only proven by the
+  render tests; nobody has yet sat in front of it while the fleet worked.
 - **Plan mode is built but never proven live.** The planner → tasker → opened
   children sequence in `src/plan.ts` has not run end to end. Prove it against a
   scratch project not in the config, then `foreman plan --epic ep-...` on the
@@ -246,7 +246,7 @@ from the task store, which stops mentioning a branch the moment its task is
 closed, reclaimed or deleted — while the commits stay on the branch. So
 `Repository.unmerged` asks `for-each-ref --no-merged=HEAD` for foreman's own
 refs, and anything the queue, the claims or the review list already accounts for
-is dropped. `o` sends the rest back to `reviewing`, where a reviewer decides
+is dropped. `s` sends the selected one back to `reviewing`, where a reviewer decides
 whether the commits are worth landing. A branch whose task was deleted has no id
 to dispatch against, so it is listed and left alone.
 
@@ -271,24 +271,32 @@ checkout: is the operator working in it. Nothing above that file runs `git`.
 **prog itself is not ours.** It is Byron's. Keep edits there minimal and file
 in-house replacements in the backlog rather than patching it.
 
-## Next: the dashboard
+## The dashboard
 
-Design settled with the user, not yet built. `Dispatcher.state` is a
-`SubscriptionRef<FleetState>` that exists purely for it to subscribe to.
+Built over `Dispatcher.state`, a `SubscriptionRef<FleetState>`. `src/pipeline.tsx`
+is the view; `src/dashboard.tsx` owns the renderer's lifetime and forks each
+`Controls` command into the dispatcher's runtime. The view is deliberately free
+of the dispatcher's own imports — it only reads types and prog helpers — so its
+test renders it without dragging in the prompt chain.
 
-- **opentui + Solid**, in foreman's own process — one process, not a client and
-  a server. Follow amux's `src/main.tsx`: `createCliRenderer` inside
-  `Effect.acquireRelease`, `render` from `@opentui/solid`, and a `Deferred` to
-  park on, because `render` resolves after **mount**, not on exit.
-- **Pipeline columns**: queue | working | review | landed.
-- **`state.held` names the projects being passed over**, so a queue that stops
-  moving explains itself instead of looking broken.
-- **Four controls**: resolve a vanished worker (retry / release / take over),
-  jump to a worker's pane, pause and resume dispatch, act on a task (escalate /
-  release / cancel). `Dispatcher` already exposes all of these.
-- **Toasts only when foreman's own workspace is unfocused.** `Fleet.notify`
-  already enforces this by comparing the focused workspace against
-  `$HERDR_PANE_ID`.
+The renderer is created inside `Effect.acquireRelease`, and the program parks on
+a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
+on exit.
+
+One cursor walks six columns — queue | working | review | landed, then the
+decisions and held panels. Each column allows only the actions that make sense
+there, and a key the selected row cannot take is ignored. Decisions are named
+from the task's labels alone; the third kind, an orphaned workspace, is
+recognised but nothing produces one yet.
+
+Two divergences from the settled design, walls hit while building:
+
+- **No cancel.** `Dispatcher` has pause, resume, focus, retry, release,
+  escalate and onboard, but no command cancels a task. "Act on a task" means
+  escalate or release; a cancel command belongs on the dispatcher.
+- **No focus scope.** The focus control jumps to a worker's pane. Making a
+  focused scope read differently — the label, pause-on-scope-completion — is a
+  separate task.
 
 ## Things that have already cost an afternoon
 

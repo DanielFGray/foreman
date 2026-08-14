@@ -127,10 +127,10 @@ quiet rather than missing, which is worse.
 
 Foreman therefore asks git directly for its own branches that `develop` has not
 taken, and drops the ones the queue, the claims or the review list already
-account for. What is left appears as **stranded branches**, and `o` sends the
-whole list back to `reviewing`. A reviewer reads each diff and either approves
-it, landing it through the same gate as anything else, or returns it with
-findings. Nobody can judge abandoned commits from the outside, and that judgement
+account for. What is left appears in the dashboard's **stranded** column, and `s`
+sends the selected branch back to `reviewing`. A reviewer reads the diff and
+either approves it, landing it through the same gate as anything else, or
+returns it with findings. Nobody can judge abandoned commits from the outside, and that judgement
 is what a review is.
 
 A branch whose task was deleted outright is listed and left alone. Workspaces,
