@@ -12,18 +12,19 @@ const task = (id: string, project: string, priority: number): ReadyTask => ({
 
 describe("interleave", () => {
   test("never rotates lower-priority work ahead", () => {
-    const result = interleave([task("a1", "a", 1), task("a2", "a", 1), task("b2", "b", 2)]);
+    const result = interleave(
+      [task("a1", "a", 1), task("a2", "a", 1), task("b2", "b", 2)],
+      ["a", "b"],
+    );
 
     expect(result.map(({ id }) => id)).toEqual(["a1", "a2", "b2"]);
   });
 
   test("rotates projects within a priority", () => {
-    const result = interleave([
-      task("a1", "a", 1),
-      task("a2", "a", 1),
-      task("b1", "b", 1),
-      task("b2", "b", 1),
-    ]);
+    const result = interleave(
+      [task("a1", "a", 1), task("a2", "a", 1), task("b1", "b", 1), task("b2", "b", 1)],
+      ["a", "b"],
+    );
 
     expect(result.map(({ id }) => id)).toEqual(["a1", "b1", "a2", "b2"]);
   });

@@ -104,7 +104,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const claimed = yield* eachProject((project) => prog.claimed(project.name));
       const reviewing = yield* eachProject((project) => prog.awaitingReview(project.name));
-      const queue = yield* eachProject((project) => prog.ready(project.name));
+      // The global query is the dependency authority. A per-project query can
+      // miss a blocker owned by another project.
+      const queue = yield* prog.ready();
       const landed = yield* eachProject((project) => prog.landed(project.name));
 
       // prog list has no limit, so the landed column is bounded here instead
@@ -125,7 +127,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         held,
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
-        queue: interleave(queue.filter((task) => !isOnboarding(task))),
+        queue: interleave(
+          queue.filter((task) => !isOnboarding(task)),
+          settings.projects.map((project) => project.name),
+        ),
         working: active(claimed),
         // `reviewing` is a public task status. Attribution is the durable proof
         // that this branch was authored by foreman and has something to review.

@@ -7,13 +7,18 @@ import type { ReadyTask } from "./prog.ts";
  * Rotation crosses projects only within one priority band. Otherwise a project
  * with lower-priority work could jump ahead merely because its turn arrived.
  */
-export const interleave = (tasks: ReadonlyArray<ReadyTask>): ReadonlyArray<ReadyTask> => {
-  const priorities = [...new Set(tasks.map((task) => task.priority))].sort(Order.number);
+export const interleave = (
+  tasks: ReadonlyArray<ReadyTask>,
+  projects: ReadonlyArray<string>,
+): ReadonlyArray<ReadyTask> => {
+  const configured = new Set(projects);
+  const eligible = tasks.filter((task) => configured.has(task.project));
+  const priorities = [...new Set(eligible.map((task) => task.priority))].sort(Order.number);
   const picked: Array<ReadyTask> = [];
 
   for (const priority of priorities) {
     const byProject = new Map<string, Array<ReadyTask>>();
-    for (const task of tasks) {
+    for (const task of eligible) {
       if (task.priority !== priority) continue;
       const queue = byProject.get(task.project) ?? [];
       queue.push(task);
