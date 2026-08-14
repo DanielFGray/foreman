@@ -24,7 +24,7 @@ const worker = (task: string, state: WorkerState): Worker => ({
   directory: `/tmp/${task}`,
   worktree: `/tmp/wt-${task}`,
   state,
-  author: { pane: `pane-${task}`, state, session: undefined },
+  author: state,
   review: undefined,
 });
 

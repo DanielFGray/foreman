@@ -36,7 +36,7 @@ export class Fleet extends Effect.Tag("Fleet")<
      */
     readonly attach: (options: AttachOptions) => Effect.Effect<Worker, FleetError>;
 
-    /** Starts an agent on a fresh pane inside a task's workspace. */
+    /** Starts an agent on the workspace's own pane, or a fresh split for a reviewer. */
     readonly spawn: (
       worker: Worker,
       options: SpawnOptions,
@@ -53,16 +53,6 @@ export class Fleet extends Effect.Tag("Fleet")<
      * branch survives either way.
      */
     readonly close: (worker: Worker) => Effect.Effect<void, FleetError>;
-
-    /**
-     * Closes the pane one agent ran in, keeping the workspace and its worktree.
-     *
-     * What foreman owes an agent it has decided is finished with. Leaving the
-     * pane alive is how a workspace ends up holding two agents on one task: the
-     * abandoned one goes on running while the next dispatch splits a pane
-     * beside it, and both edit the same directory.
-     */
-    readonly dismiss: (worker: Worker, role: AgentRole) => Effect.Effect<void, FleetError>;
 
     /**
      * Notifies the operator, but only when foreman's own workspace is not the
@@ -132,29 +122,16 @@ export interface Worker {
   readonly state: WorkerState;
 
   /**
-   * The pane each role runs in, when the multiplexer has one.
+   * What the multiplexer sees in the pane each role runs in, when it has one.
    *
-   * The pane rather than its state alone, because every decision foreman makes
-   * about an agent needs to reach it: closing the one it has given up on, and
-   * refusing to start a second one beside a live one. Keeping only the state
-   * threw the address away and left both impossible.
+   * A worker carries both so a task reads as its author while it is written
+   * and as its reviewer once it is handed off; `workerFor` picks the one the
+   * task store says is active. No pane address is kept here: a dispatch is
+   * refused from the pane list itself, and dismissing the author means closing
+   * the workspace, which needs only the workspace id.
    */
-  readonly author: AgentPane | undefined;
-  readonly review: AgentPane | undefined;
-}
-
-/**
- * One agent's pane.
- *
- * `session` is the harness's own resumable session id, which the multiplexer
- * detects — `ses_…` for opencode, a uuid for claude. It is the only identity
- * that outlives the process, so it is what distinguishes an agent foreman
- * dispatched and lost from one it never started.
- */
-export interface AgentPane {
-  readonly pane: string;
-  readonly state: WorkerState;
-  readonly session: string | undefined;
+  readonly author: WorkerState | undefined;
+  readonly review: WorkerState | undefined;
 }
 
 /**

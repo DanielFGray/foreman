@@ -76,10 +76,11 @@ coexist. Agents therefore use ephemeral names derived from their unique pane;
 the workspace label remains the durable task identity that other processes
 read.
 
-The workspace outlives the agents inside it. An author finishes and its pane
-closes; the reviewer opens a new pane in the same workspace, against the same
-worktree, and you can still see the author's output beside it. The workspace
-dies when the task leaves the fleet.
+The author runs in the workspace's own pane; only the reviewer splits a second
+pane beside the author's output. One task is one pane, so the operator never
+sees a blank shell beside a worker. The author's output stays visible after it
+settles; the reviewer reads the diff next to it. The workspace dies when the
+task leaves the fleet.
 
 ### herdr owns the worktree
 
@@ -108,6 +109,12 @@ After `staleAfterHours` of no activity the claim is released with a log line.
 Absence is an unknown, not evidence. A task still climbs a rung on real
 evidence: an agent that settled without finishing, a reviewer sending work back,
 or a branch that would not land.
+
+An author that settled without finishing is still running idle, and herdr has no
+way to stop it without closing the pane it runs in — which, for an author, is
+the workspace's own pane. So that settle closes the workspace: the worktree is
+removed with it, the commits on the branch survive, and the next author opens
+from the branch tip rather than from uncommitted edits.
 
 ### The operator's checkout is shared, so it is asked about
 
@@ -269,13 +276,14 @@ task small enough to skip review lands an empty merge commit.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
-therefore aggregates pane statuses itself. The current role pane is labelled
-`foreman-author` or `foreman-review`; when a new pane takes that role, the old
-one loses the label and remains only as visible history.
+therefore aggregates pane statuses itself. The role pane is labelled
+`foreman-author` or `foreman-review`; the author's label lives on the
+workspace's own pane for the whole task, while each reviewer's split is closed
+when the next one starts.
 
 ## Ports
 
-`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — six methods. herdr
+`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — seven methods. herdr
 is one implementation; an amux plugin would be a second, not a rewrite.
 
 `Prog` (`src/prog.ts`) is the whole task-store surface. Nothing above that file
