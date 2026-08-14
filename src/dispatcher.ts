@@ -5,8 +5,8 @@ import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
 import {
-  authoredBy,
   agentLog,
+  authoredBy,
   isEscalated,
   isOnboarding,
   type Item,

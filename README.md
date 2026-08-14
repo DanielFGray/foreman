@@ -187,10 +187,6 @@ exactly like a queue that is empty.
 
 ## The log
 
-Each successful assignment is appended to the task history with its role and
-agent kind. The entry also includes the model when the agent integration reports
-one, so attempt outcomes can be compared after the task lands.
-
 Every dispatch, reclaim, return and escalation is appended as one JSON object per
 line to `$XDG_STATE_HOME/foreman/foreman.jsonl`, or `$FOREMAN_LOG`. The pane
 scrolls and dies with the session; the questions worth asking about an unattended
@@ -200,6 +196,11 @@ at 3am — are all asked long afterwards.
 ```bash
 jq -r 'select(.level == "WARN")' ~/.local/state/foreman/foreman.jsonl
 ```
+
+The jsonl log outlives the session but not the task. So each assignment is also
+appended to the task's own prog history with its role and agent kind, and with
+the model when the agent integration reports one — the record travels with the
+task, which is what makes attempts comparable once it lands.
 
 Worktrees live under `$XDG_STATE_HOME/foreman/worktrees/<project>/<task>`, out of
 the repository — an in-tree worktree would mean editing `.gitignore` in every
