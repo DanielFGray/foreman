@@ -29,6 +29,10 @@ the still-unproven backlog.
   children sequence in `src/plan.ts` has not run end to end. Prove it against a
   scratch project not in the config, then `foreman plan --epic ep-...` on the
   same epic to prove the resume path.
+- **Focus is built but never proven live.** The `focus` label scope —
+  serialized thread, spillover, pause-on-completion — is in `src/focus.ts` and
+  the dispatcher, proven only by unit tests. Prove it against a scratch project
+  before trusting a focused run unattended.
 
 ## The design, and why
 
@@ -273,6 +277,42 @@ therefore aggregates pane statuses itself. The current role pane is labelled
 `foreman-author` or `foreman-review`; when a new pane takes that role, the old
 one loses the label and remains only as visible history.
 
+### Focus is a scope filter, serialized
+
+A `focus` label is the scope. Put it on a task, an epic, or several items; the
+scope is every ready task at or under anything carrying it, computed by walking
+descendants in `src/focus.ts` (`scopeOf`). Two labelled epics are one larger
+scope.
+
+Focus changes two things and nothing else. Settle, reclaim and the review gate
+are untouched: focus reshapes what `observe` puts in the queue and how `fill`
+spends slots.
+
+- **Depth.** The scope gets exactly one slot. A focused task is "in flight"
+  from claim until landing, and while one is, no other focused task starts —
+  the thread authors, reviews and merges each task before the next, so each
+  branches off the previous one's landed `HEAD`. That is the whole point:
+  siblings in one epic touch the same files, and serializing them is what makes
+  branching off `HEAD` correct. It is correct exactly when the merge step
+  works, which is why focus sat blocked on the end-to-end proof.
+- **Spillover.** The remaining slots take ready work from the projects the
+  scope touches — one project for a single-project epic, several for a scope
+  spanning repos. The scope's slot counts against `--slots`: three slots with a
+  focus is one focused plus two spillover.
+- **Order.** The thread keeps prog's own priority-first order; deep mode takes
+  the head. `interleave`'s project rotation applies to spillover only.
+- **Completion.** When the scope has no ready work left and nothing is in
+  flight, foreman notifies and stops dispatching — spillover included. It does
+  not touch the `paused` Ref: the stop is derived from the same label every
+  tick, so clearing the focus label resumes automatically and the operator's
+  own pause state is never overwritten. The notification repeats each poll
+  while the scope is exhausted, the same way a blocked worker re-notifies.
+- **Storage.** The label itself, in prog. Focus is an operator intention like
+  pause, and it must survive the process because the TUI is the process —
+  closing the dashboard would otherwise drop it. Deriving it from a label keeps
+  foreman down to its one `Ref`. Whole-project focus is expressed by the config
+  allowlist: run foreman with one project in it.
+
 ## Ports
 
 `Fleet` (`src/fleet.ts`) is the whole multiplexer surface — six methods. herdr
@@ -300,14 +340,17 @@ The renderer is created inside `Effect.acquireRelease`, and the program parks on
 a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
 on exit.
 
-One cursor walks eight columns — queue | working | review | landed, then the
-decisions, yours, held and stranded panels. Each column allows only the actions that
-make sense there, and a key the selected row cannot take is ignored. Decisions
-are named from the task's status, not its labels: a failed spawn leaves the
-`by-*` label on a task that sits back in the queue, and only the status —
-neither claimed nor under review — marks its workspace as residue. The three
-kinds answer differently: a vanished author or reviewer can be retried, taken
-over, or released, while an orphaned workspace is only ever closed.
+One cursor walks nine columns — focus | queue | working | review | landed, then
+the decisions, yours, held and stranded panels. The focus column shows the
+serialized thread and is empty when nothing carries the `focus` label; the queue
+column is then spillover — the ready work the thread leaves over. Each column
+allows only the actions that make sense there, and a key the selected row cannot
+take is ignored. Decisions are named from the task's status, not its labels: a
+failed spawn leaves the `by-*` label on a task that sits back in the queue, and
+only the status — neither claimed nor under review — marks its workspace as
+residue. The three kinds answer differently: a vanished author or reviewer can
+be retried, taken over, or released, while an orphaned workspace is only ever
+closed.
 
 `yours` deliberately takes no key. A task waits there because a question about it
 is unanswered, and one key to requeue it would hand the next agent that same
@@ -319,9 +362,10 @@ Two divergences from the settled design, walls hit while building:
 - **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
   climb and onboard, but no command cancels a task. "Act on a task" means climb
   or release; a cancel command belongs on the dispatcher.
-- **No focus scope.** The focus control jumps to a worker's pane. Making a
-  focused scope read differently — the label, pause-on-scope-completion — is a
-  separate task.
+- **Focus is set by hand, not on this screen.** The `focus` label that defines
+  the scope is written into prog with `prog label`, the same way `rung-human`
+  is. The dashboard shows the resulting thread and its completion but never
+  edits labels, so removing a focus is a `prog unlabel` rather than a keypress.
 
 ## Things that have already cost an afternoon
 
