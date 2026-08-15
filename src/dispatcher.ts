@@ -18,6 +18,7 @@ import {
   authoredBy,
   isApproved,
   isOnboarding,
+  isPlan,
   type Item,
   needsReview,
   ONBOARD,
@@ -997,9 +998,9 @@ export const reviewable = (
  * no longer has a project to scope by: as residue it must not eat a slot
  * nothing will ever free, so it is dropped here too.
  *
- * Plan workspaces are also excluded. Their planner and tasker roles share the
- * same labels as pipeline workspaces, but plan mode is a separate synchronous
- * process that the daemon must neither count nor settle.
+ * Plan workspaces are also excluded by their durable task label. The workspace
+ * exists before its planner or tasker role does, and plan mode is a separate
+ * synchronous process that the daemon must neither count nor settle.
  *
  * Both shapes come back from the same pass so they cannot disagree: `owned` is
  * what settle and the dashboard may touch, and `workers` is the roster shape
@@ -1014,13 +1015,7 @@ export const scopeRoster = (
   const kept = new Set<string>();
   for (const worker of roster) {
     const task = tasks.get(worker.task);
-    if (
-      !task ||
-      !managed.has(task.project) ||
-      worker.roles.has("planner") ||
-      worker.roles.has("tasker")
-    )
-      continue;
+    if (!task || !managed.has(task.project) || isPlan(task)) continue;
     kept.add(worker.task);
     const state = reviewedBy(task) ? worker.roles.get("review") : worker.roles.get("author");
     owned.push({

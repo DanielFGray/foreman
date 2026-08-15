@@ -228,9 +228,14 @@ describe("scoping the roster to this daemon's projects", () => {
     ]);
   });
 
-  test("ignores an active plan workspace", () => {
+  test("ignores plan workspaces before and during their stages", () => {
+    const openingEpic = task("ep-444444", ["plan"], "draft");
     const epic = task("ep-555555", ["plan"], "draft");
     const taskerEpic = task("ep-666666", ["plan"], "open");
+    const opening = {
+      ...worker("gone", openingEpic.id),
+      roles: new Map(),
+    };
     const planner = {
       ...worker("working", epic.id),
       roles: new Map([["planner", "working"] as const]),
@@ -241,8 +246,9 @@ describe("scoping the roster to this daemon's projects", () => {
     };
 
     const { owned, workers } = scopeRoster(
-      [planner, tasker],
+      [opening, planner, tasker],
       new Map([
+        [openingEpic.id, openingEpic],
         [epic.id, epic],
         [taskerEpic.id, taskerEpic],
       ]),
