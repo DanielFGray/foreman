@@ -994,8 +994,12 @@ export const reviewable = (
  * competing for the same slots. The config's project set is the only ownership
  * the world records, so a workspace belongs to this daemon exactly when its
  * task lives in a project the config manages. A workspace whose task the store
- * no longer has has no project to scope by: as residue it must not eat a slot
+ * no longer has a project to scope by: as residue it must not eat a slot
  * nothing will ever free, so it is dropped here too.
+ *
+ * Plan workspaces are also excluded. Their planner and tasker roles share the
+ * same labels as pipeline workspaces, but plan mode is a separate synchronous
+ * process that the daemon must neither count nor settle.
  *
  * Both shapes come back from the same pass so they cannot disagree: `owned` is
  * what settle and the dashboard may touch, and `workers` is the roster shape
@@ -1010,7 +1014,13 @@ export const scopeRoster = (
   const kept = new Set<string>();
   for (const worker of roster) {
     const task = tasks.get(worker.task);
-    if (!task || !managed.has(task.project)) continue;
+    if (
+      !task ||
+      !managed.has(task.project) ||
+      worker.roles.has("planner") ||
+      worker.roles.has("tasker")
+    )
+      continue;
     kept.add(worker.task);
     const state = reviewedBy(task) ? worker.roles.get("review") : worker.roles.get("author");
     owned.push({

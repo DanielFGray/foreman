@@ -227,4 +227,29 @@ describe("scoping the roster to this daemon's projects", () => {
       { task: reviewing, worker: worker("working", reviewing.id), kind: "claude" },
     ]);
   });
+
+  test("ignores an active plan workspace", () => {
+    const epic = task("ep-555555", ["plan"], "draft");
+    const taskerEpic = task("ep-666666", ["plan"], "open");
+    const planner = {
+      ...worker("working", epic.id),
+      roles: new Map([["planner", "working"] as const]),
+    };
+    const tasker = {
+      ...worker("working", taskerEpic.id),
+      roles: new Map([["tasker", "working"] as const]),
+    };
+
+    const { owned, workers } = scopeRoster(
+      [planner, tasker],
+      new Map([
+        [epic.id, epic],
+        [taskerEpic.id, taskerEpic],
+      ]),
+      new Set(["foreman"]),
+    );
+
+    expect(workers).toEqual([]);
+    expect(owned).toEqual([]);
+  });
 });
