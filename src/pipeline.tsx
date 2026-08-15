@@ -1,9 +1,9 @@
 import { createTextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
-import { createEffect, createSignal, For, type Accessor } from "solid-js";
+import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import type { Item, ReadyTask } from "./prog.ts";
+import { reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
 
 /**
  * Every command the view can give the dispatcher.
@@ -21,22 +21,34 @@ export interface Controls {
   readonly release: (task: Item) => void;
   readonly close: (task: Item) => void;
   readonly climb: (task: Climbing) => void;
+  readonly descend: (task: Climbing) => void;
+  readonly unassign: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
 }
 
-/** The eight selectable stages, in the order the cursor moves through them. */
-const COLUMNS = [
-  "queue",
-  "working",
-  "review",
-  "landed",
-  "decisions",
-  "yours",
-  "held",
-  "stranded",
-] as const;
+/** The pipeline: work moving left to right. */
+const STAGES = ["queue", "working", "review", "landed"] as const;
+
+/** What the dispatcher needs a person to answer, which is normally nothing. */
+const PANELS = ["decisions", "yours", "held", "stranded"] as const;
+
+/** Every selectable column, in the order the cursor moves through them. */
+const COLUMNS = [...STAGES, ...PANELS] as const;
 type ColumnName = (typeof COLUMNS)[number];
+
+/**
+ * The columns with something in them, which are the only ones drawn.
+ *
+ * An empty box is a claim on the screen that pays nothing back: the count in
+ * its title is already zero, and a fleet with nothing held, nothing stranded
+ * and no decision waiting is the ordinary case rather than news. Drawing them
+ * anyway costs the columns that do hold work the width they need to show a
+ * title. Nothing is reachable that is not drawn, so the cursor and the keys
+ * follow this too.
+ */
+const drawn = (names: ReadonlyArray<ColumnName>, state: FleetState): ReadonlyArray<ColumnName> =>
+  names.filter((name) => rowsFor(name, state).length > 0);
 
 export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned workspace";
 
@@ -55,6 +67,25 @@ export const decisionKind = (task: Item): DecisionKind =>
       ? "author vanished"
       : "orphaned workspace";
 
+/**
+ * Whether a review-by-* label has no live reviewer behind it, so it is stale.
+ *
+ * The world records whether a reviewer was dispatched, not whether that
+ * reviewer is still alive. A task that is open — waiting in the queue — with a
+ * review-by-* label is stale by definition, because a real review keeps the
+ * task in `reviewing` with its reviewer beside it; the label only survives on
+ * an open task when the review is already over. A workspace that is gone, or a
+ * reviewer that settled, is nobody behind the label. Only the operator can say
+ * the label is stale, and this is the only place that asks.
+ */
+export const staleReview = (
+  task: { readonly labels: ReadonlyArray<string>; readonly status?: string },
+  worker: Worker | undefined,
+): boolean =>
+  reviewedBy(task) !== undefined &&
+  (task.status === undefined || task.status === "open") &&
+  (worker === undefined || worker.state === "gone" || worker.state === "settled");
+
 /** One selectable line in any column, with the targets its actions need. */
 interface ColumnRow {
   readonly key: string;
@@ -69,7 +100,17 @@ interface ColumnRow {
   readonly orphan: Orphan | undefined;
 }
 
-type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "onboard" | "adopt";
+type Action =
+  | "retry"
+  | "release"
+  | "close"
+  | "takeOver"
+  | "focus"
+  | "climb"
+  | "descend"
+  | "unassign"
+  | "onboard"
+  | "adopt";
 
 /**
  * Which keys mean something in which column.
@@ -78,20 +119,30 @@ type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "
  * releasing a task that was never claimed has nothing to undo. The same key
  * does not change meaning between columns.
  *
- * `yours` takes no key at all, and that is the design rather than an omission.
+ * The two corrections — `descend` and `unassign` — are offered wherever their
+ * labels could have been written, and a row without the label ignores the key
+ * rather than doing nothing to a claim. `descend` only reaches a row that
+ * carries a `rung-*` label: a task without one is already at the bottom, and
+ * there is nothing to lower. `unassign` only reaches a row whose review-by-*
+ * label has no live reviewer behind it.
+ *
+ * `yours` takes no answer key, and that is the design rather than an omission.
  * A task waits there because a question about it is unanswered, and a single
  * key to put it back would hand the next agent the same unanswered question —
  * the exact failure the column exists to prevent. It leaves when the operator
  * writes the decision into the task and removes its `rung-human` label, in
- * that order, with prog.
+ * that order, with prog. The two corrections do reach it: a task parked at the
+ * operator is exactly the sort of rung that can turn out to have been written
+ * without being earned, and no other column shows a `rung-human` task to lower
+ * it from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["climb"],
-  working: ["focus", "climb", "release"],
-  review: ["focus", "climb", "release"],
+  queue: ["climb", "descend", "unassign"],
+  working: ["focus", "climb", "descend", "release"],
+  review: ["focus", "climb", "descend", "release"],
   landed: [],
-  decisions: ["retry", "takeOver", "release", "close"],
-  yours: [],
+  decisions: ["retry", "takeOver", "release", "close", "unassign"],
+  yours: ["descend", "unassign"],
   held: ["onboard"],
   stranded: ["adopt"],
 };
@@ -101,28 +152,43 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  *
  * A vanished author or reviewer can be retried, taken over, or released. An
  * orphaned workspace has no claim to undo — releasing would reopen a done or
- * canceled task — so it is only ever closed.
+ * canceled task — so it is only ever closed, or, when it carries a review-by-*
+ * label no reviewer is behind, unassigned.
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "release"],
   "reviewer vanished": ["retry", "takeOver", "release"],
-  "orphaned workspace": ["close"],
+  "orphaned workspace": ["close", "unassign"],
 };
 
 /**
  * The pipeline, drawn from whatever the dispatcher last observed.
  *
- * A single cursor walks every column — four stages, then the three panels
- * holding what the dispatcher needs a person to answer. Keys run the command
- * that the selected row and column allow; a key whose action a row cannot take
- * is simply ignored.
+ * A single cursor walks every column that has something in it — the stages,
+ * then the panels holding what the dispatcher needs a person to answer. Keys
+ * run the command that the selected row and column allow; a key whose action a
+ * row cannot take is simply ignored.
  */
 export const Pipeline = (props: {
   readonly state: Accessor<FleetState>;
   readonly controls: Controls;
 }) => {
-  const [column, setColumn] = createSignal<ColumnName>("queue");
+  const [wanted, setWanted] = createSignal<ColumnName>("queue");
   const [row, setRow] = createSignal(0);
+
+  const stages = (): ReadonlyArray<ColumnName> => drawn(STAGES, props.state());
+  const panels = (): ReadonlyArray<ColumnName> => drawn(PANELS, props.state());
+  const columns = (): ReadonlyArray<ColumnName> => [...stages(), ...panels()];
+
+  // A column empties under the cursor — the last decision is answered, the last
+  // queued task is dispatched — and goes. The cursor lands on the nearest
+  // column still drawn to its left, or the first one left on screen.
+  const column = (): ColumnName => {
+    const here = columns();
+    if (here.includes(wanted())) return wanted();
+    const index = COLUMNS.indexOf(wanted());
+    return here.filter((name) => COLUMNS.indexOf(name) < index).at(-1) ?? here[0] ?? wanted();
+  };
 
   const rows = (): ReadonlyArray<ColumnRow> => rowsFor(column(), props.state());
 
@@ -145,11 +211,14 @@ export const Pipeline = (props: {
     setRow((current) => Math.min(Math.max(current + delta, 0), count - 1));
   };
 
+  // Only what is drawn is reachable: a key aimed at a column nobody can see
+  // would read as a dead press.
   const moveColumn = (delta: number) => {
-    const index = COLUMNS.indexOf(column());
-    const next = COLUMNS[(index + delta + COLUMNS.length) % COLUMNS.length];
+    const drawn = columns();
+    const index = drawn.indexOf(column());
+    const next = drawn[(index + delta + drawn.length) % drawn.length];
     if (next) {
-      setColumn(next);
+      setWanted(next);
       setRow(0);
     }
   };
@@ -184,6 +253,23 @@ export const Pipeline = (props: {
       case "climb":
         if (target.task) props.controls.climb(target.task);
         else if (target.ready) props.controls.climb(target.ready);
+        break;
+      case "descend":
+        // A row without a rung label is at the bottom, where there is nothing
+        // to lower. The key is ignored rather than silently writing a label
+        // foreman itself would never have written.
+        if (target.task && rungOf(target.task) !== undefined) props.controls.descend(target.task);
+        else if (target.ready && rungOf(target.ready) !== undefined)
+          props.controls.descend(target.ready);
+        break;
+      case "unassign":
+        // A review-by-* label with a live reviewer behind it is an assignment,
+        // not a stale one, and clearing it would let a second reviewer be
+        // dispatched into the same task.
+        if (target.task && staleReview(target.task, target.worker))
+          props.controls.unassign(target.task);
+        else if (target.ready && staleReview(target.ready, undefined))
+          props.controls.unassign(target.ready);
         break;
       case "onboard":
         if (target.project) props.controls.onboard(target.project);
@@ -233,6 +319,12 @@ export const Pipeline = (props: {
       case "e":
         apply("climb");
         break;
+      case "x":
+        apply("descend");
+        break;
+      case "u":
+        apply("unassign");
+        break;
       case "d":
         apply("release");
         break;
@@ -250,52 +342,72 @@ export const Pipeline = (props: {
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
-      <box style={{ flexDirection: "row", flexGrow: 1 }}>
-        <Column
-          title="queue"
-          rows={() => rowsFor("queue", props.state())}
-          selected={selectedFor("queue")}
-        />
-        <Column
-          title="working"
-          rows={() => rowsFor("working", props.state())}
-          selected={selectedFor("working")}
-        />
-        <Column
-          title="review"
-          rows={() => rowsFor("review", props.state())}
-          selected={selectedFor("review")}
-        />
-        <Column
-          title="landed"
-          rows={() => rowsFor("landed", props.state())}
-          selected={selectedFor("landed")}
-        />
-      </box>
-      <box style={{ flexDirection: "row", flexGrow: 1 }}>
-        <Column
-          title="decisions"
-          rows={() => rowsFor("decisions", props.state())}
-          selected={selectedFor("decisions")}
-        />
-        <Column
-          title="yours"
-          rows={() => rowsFor("yours", props.state())}
-          selected={selectedFor("yours")}
-        />
-        <Column
-          title="held"
-          rows={() => rowsFor("held", props.state())}
-          selected={selectedFor("held")}
-        />
-        <Column
-          title="stranded"
-          rows={() => rowsFor("stranded", props.state())}
-          selected={selectedFor("stranded")}
-        />
-      </box>
+      {/* A row goes when the last column in it does: an empty row still claims
+          half the screen, which is the same empty box one column wider. */}
+      <Row columns={stages} state={props.state} selected={selectedFor} fill />
+      <Row columns={panels} state={props.state} selected={selectedFor} fill={false} />
       <Status state={props.state} />
     </box>
+  );
+};
+
+/**
+ * The tallest a row of panels grows to before its columns start scrolling.
+ *
+ * Stranded branches arrive by the dozen after a bad night, and a report of them
+ * that pushes the pipeline off the screen has answered the wrong question.
+ */
+const PANEL_LINES = 8;
+
+/**
+ * The lines a column spends on itself: the two borders, and one the scrollbox
+ * holds back for a horizontal scrollbar it never shows. Measured from a render,
+ * because a row short by one hides a row of the report.
+ */
+const CHROME = 3;
+
+/**
+ * One band of columns, which is nothing at all when it holds no column.
+ *
+ * `fill` decides who gets the space nobody claimed. The pipeline takes it,
+ * because that is the screen; the panels hug what they hold, because a single
+ * held project stretched down half the terminal is an empty box wearing one
+ * row as a disguise — it was the largest thing on screen precisely when it had
+ * the least to say. Two lines of border plus its rows, capped, is the whole
+ * height it earns.
+ */
+const Row = (props: {
+  readonly columns: Accessor<ReadonlyArray<ColumnName>>;
+  readonly state: Accessor<FleetState>;
+  readonly selected: (name: ColumnName) => Accessor<number | undefined>;
+  readonly fill: boolean;
+}) => {
+  const height = () =>
+    Math.min(
+      Math.max(...props.columns().map((name) => rowsFor(name, props.state()).length)),
+      PANEL_LINES,
+    ) + CHROME;
+
+  return (
+    <Show when={props.columns().length > 0}>
+      <box
+        style={
+          props.fill
+            ? { flexDirection: "row", flexGrow: 1, flexBasis: 0, minHeight: 0 }
+            : { flexDirection: "row", flexGrow: 0, flexShrink: 0, height: height() }
+        }
+      >
+        <For each={props.columns()}>
+          {(name) => (
+            <Column
+              title={name}
+              rows={() => rowsFor(name, props.state())}
+              selected={props.selected(name)}
+            />
+          )}
+        </For>
+      </box>
+    </Show>
   );
 };
 
@@ -364,22 +476,20 @@ const Column = (props: {
 const rowId = (column: string, key: string): string => `${column}:${key}`;
 
 /**
- * Why the pipeline is not moving, when it is not moving, and what to press.
+ * Whether the pipeline is moving, and what to press.
  *
- * Held projects are named because a queue that stops for a reason nobody can
- * see reads as a broken dispatcher, and the reason — the operator's own
- * uncommitted work — is one only they can clear.
+ * This is the one thing always on screen: with every column empty the fleet
+ * still has to say whether it is paused or simply out of work.
  */
 const Status = (props: { readonly state: Accessor<FleetState> }) => (
   <box style={{ flexDirection: "column", flexShrink: 0 }}>
     <text style={{ height: 1 }}>
-      {props.state().held.length === 0 ? "" : `held: ${props.state().held.join(", ")}`}
-    </text>
-    <text style={{ height: 1 }}>
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
-      {"r retry  t take over  f focus  e climb  d release  c close  o onboard  s send for review"}
+      {
+        "r retry  t take over  f focus  e climb  x descend  u unassign  d release  c close  o onboard  s send for review"
+      }
     </text>
     <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
   </box>

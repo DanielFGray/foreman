@@ -52,6 +52,25 @@ export const above = (ladder: Ladder, rung: string | undefined): string => {
 };
 
 /**
+ * The rung one step down, and `undefined` where there is nothing to write.
+ *
+ * One step at a time, never a jump: lowering a task is the operator saying a
+ * climb was not earned, and a rung is only ever as good as the evidence that
+ * wrote it. A task on the operator's own rung comes down to the top rung — a
+ * person was never a model, and correcting the climb puts the strongest model
+ * next rather than dropping to the bottom. Below the bottom rung the ladder
+ * reads no label as the default, so there is nothing to write; a rung the
+ * config no longer has cannot be positioned, so like `above` it is read as
+ * sitting above the top rung.
+ */
+export const below = (ladder: Ladder, rung: string | undefined): string | undefined => {
+  const current = rung === undefined ? 0 : ladder.findIndex((candidate) => candidate.name === rung);
+  if (current < 0) return ladder[ladder.length - 1]?.name;
+  if (current <= 0) return undefined;
+  return ladder[current - 1]?.name;
+};
+
+/**
  * Who reads the work of a given rung.
  *
  * The next rung up, so cheap work gets expensive eyes — which is where most of
