@@ -1,4 +1,4 @@
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
 import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
@@ -223,6 +223,23 @@ export const Pipeline = (props: {
     }
   };
 
+  // The wheel moves the cursor, never the viewport. A scrollbox scrolls itself
+  // by default, which is a second position beside the cursor: one notch put the
+  // selected row off the screen, and the next keypress — or the next tick's
+  // scrollChildIntoView — snapped the view back to wherever the cursor still
+  // was. The cursor is the only position, so the wheel writes to it and the
+  // viewport follows as it always did.
+  //
+  // The column under the pointer becomes the selected one, so the wheel is also
+  // the mouse's h and l. It keeps the row index rather than resetting it the way
+  // a keyed column change does — a wheel gesture is about a place inside the
+  // column it is over — and step's clamp keeps an index carried in from a longer
+  // column in range.
+  const scroll = (name: ColumnName, delta: number) => {
+    setWanted(name);
+    step(delta);
+  };
+
   const apply = (action: Action) => {
     if (!ACTIONS[column()].includes(action)) return;
     const index = selected();
@@ -344,8 +361,14 @@ export const Pipeline = (props: {
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
       {/* A row goes when the last column in it does: an empty row still claims
           half the screen, which is the same empty box one column wider. */}
-      <Row columns={stages} state={props.state} selected={selectedFor} fill />
-      <Row columns={panels} state={props.state} selected={selectedFor} fill={false} />
+      <Row columns={stages} state={props.state} selected={selectedFor} scroll={scroll} fill />
+      <Row
+        columns={panels}
+        state={props.state}
+        selected={selectedFor}
+        scroll={scroll}
+        fill={false}
+      />
       <Status state={props.state} />
     </box>
   );
@@ -380,6 +403,7 @@ const Row = (props: {
   readonly columns: Accessor<ReadonlyArray<ColumnName>>;
   readonly state: Accessor<FleetState>;
   readonly selected: (name: ColumnName) => Accessor<number | undefined>;
+  readonly scroll: (name: ColumnName, delta: number) => void;
   readonly fill: boolean;
 }) => {
   const height = () =>
@@ -403,6 +427,7 @@ const Row = (props: {
               title={name}
               rows={() => rowsFor(name, props.state())}
               selected={props.selected(name)}
+              scroll={(delta) => props.scroll(name, delta)}
             />
           )}
         </For>
@@ -430,6 +455,7 @@ const Column = (props: {
   readonly title: string;
   readonly rows: Accessor<ReadonlyArray<ColumnRow>>;
   readonly selected: Accessor<number | undefined>;
+  readonly scroll: (delta: number) => void;
 }) => {
   let viewport: ScrollBoxRenderable | undefined;
 
@@ -451,6 +477,7 @@ const Column = (props: {
         ref={(element) => (viewport = element)}
         style={{ flexGrow: 1, minWidth: 0, rootOptions: { flexGrow: 1, minWidth: 0 } }}
         scrollX={false}
+        contentOptions={{ onMouseScroll: wheel(props.scroll) }}
       >
         <For each={props.rows()}>
           {(row, index) => (
@@ -470,6 +497,29 @@ const Column = (props: {
     </box>
   );
 };
+
+/**
+ * A wheel notch, turned into one step of the cursor.
+ *
+ * The listener sits on the scrollbox's content rather than on the scrollbox,
+ * and that placement is the whole trick. A mouse event runs a renderable's own
+ * listeners, then its built-in handler, then walks to its parent — so
+ * `stopPropagation` only stops the walk, and a listener on the scrollbox could
+ * never suppress the scrollbox's own scrolling. From the content, the scrollbox
+ * is the parent that is never reached.
+ *
+ * A notch is always a delta of one, so there is nothing to scale; only the
+ * direction is read, and a sideways wheel is ignored because a column scrolls
+ * in one axis.
+ */
+const wheel =
+  (scroll: (delta: number) => void) =>
+  (event: MouseEvent): void => {
+    const direction = event.scroll?.direction;
+    if (direction !== "up" && direction !== "down") return;
+    event.stopPropagation();
+    scroll(direction === "up" ? -1 : 1);
+  };
 
 /**
  * The selected row, painted rather than inverted.

@@ -293,6 +293,59 @@ describe("Pipeline", () => {
     }
   });
 
+  // A scrollbox scrolls itself, which is a second position beside the cursor:
+  // one notch used to carry the selected row off the screen, and the next
+  // keypress or tick snapped the view back to wherever the cursor still was.
+  test("the wheel moves the cursor, and the view follows it", async () => {
+    const { controls, calls } = makeControls();
+    const long: FleetState = {
+      ...corrective,
+      queue: Array.from({ length: 30 }, (_, index) => ({
+        id: `ts-q${index}`,
+        title: `queued ${index}`,
+        priority: 1,
+        project: "fibrae",
+        labels: ["rung-top"],
+      })),
+      decisions: [],
+      yours: [
+        { id: "ts-y1", title: "yours one", priority: 2, project: "fibrae", labels: ["rung-top"] },
+        { id: "ts-y2", title: "yours two", priority: 2, project: "fibrae", labels: ["rung-top"] },
+        { id: "ts-y3", title: "yours three", priority: 2, project: "fibrae", labels: ["rung-top"] },
+      ],
+    };
+    const t = await testRender(() => <Pipeline state={() => long} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("queue 30"));
+
+      await t.mockMouse.scroll(10, 5, "down");
+      await t.flush();
+      const frame = t.captureCharFrame();
+      // The first row is still the first row: the viewport did not move on its
+      // own. The cursor did, and it is the only thing that moved.
+      expect(frame).toContain("  fibrae  queued 0");
+      expect(frame).toContain("> fibrae  queued 1");
+
+      // The column under the pointer becomes the selected one, so the wheel is
+      // also the mouse's h and l. The row index carries over and clamps: 1 in a
+      // thirty-row queue is 1 in a three-row panel, and one more notch is its
+      // last row.
+      const yours = frame.split("\n").findIndex((line) => line.includes("yours 3"));
+      expect(yours).toBeGreaterThan(0);
+      await t.mockMouse.scroll(10, yours + 1, "down");
+      await t.flush();
+
+      t.mockInput.pressKey("x");
+      await t.waitFor(() => calls.descend.length === 1);
+      expect(calls.descend[0]).toBe("ts-y3");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("navigates the pipeline and runs the selected action", async () => {
     const { controls, calls } = makeControls();
     const t = await testRender(() => <Pipeline state={() => state} controls={controls} />, {

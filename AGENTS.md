@@ -477,6 +477,18 @@ The two corrections do reach it: a task parked at the operator is exactly the
 sort of rung that can turn out to have been written without being earned, and no
 other column shows a `rung-human` task to lower it from.
 
+The wheel moves the cursor, never the viewport. A scrollbox scrolls itself by
+default, and that is a second position beside the cursor: one notch carried the
+selected row off the screen, and the next keypress — or the next tick's
+`scrollChildIntoView` — snapped the view back to wherever the cursor still was.
+The listener therefore sits on the scrollbox's *content*, not on the scrollbox.
+A mouse event runs a renderable's own listeners, then its built-in handler, then
+walks to its parent, so `stopPropagation` only stops the walk: from the content,
+the scrollbox is the parent that is never reached, while a listener on the
+scrollbox itself could never suppress its own scrolling. The column under the
+pointer becomes the selected one, which makes the wheel the mouse's `h` and `l`
+as well as its `j` and `k`.
+
 Two divergences from the settled design, walls hit while building:
 
 - **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
