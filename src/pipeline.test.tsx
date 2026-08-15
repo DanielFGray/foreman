@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { createSignal } from "solid-js";
 import type { Active, FleetState } from "./dispatcher.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { decisionKind, Pipeline, staleReview, type Controls } from "./pipeline.tsx";
@@ -275,8 +276,6 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 2") && f.includes("Attention 7"));
-      t.mockInput.pressArrow("left");
-      await t.flush();
       const frame = t.captureCharFrame();
       expect(frame).toContain("author vanished");
       expect(frame).toContain("reviewer vanished");
@@ -301,9 +300,47 @@ describe("Pipeline", () => {
     try {
       await t.waitForFrame((f) => f.includes("Queue 2") && f.includes("selection"));
       const frame = t.captureCharFrame();
-      expect(frame).toContain("ts-aaa111");
-      expect(frame).toContain("status ready");
+      expect(frame).toContain("ts-ccc111");
+      expect(frame).toContain("status    in_progress");
       expect(frame).toContain("priority  1");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("opens attention only when it changes from empty to non-empty", async () => {
+    const { controls } = makeControls();
+    const quiet: FleetState = {
+      ...state,
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      yours: [],
+      held: [],
+      orphans: [],
+    };
+    const [current, setCurrent] = createSignal(quiet);
+    const t = await testRender(() => <Pipeline state={current} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/2"));
+
+      setCurrent({ ...quiet, held: ["fibrae"] });
+      await t.waitForFrame((f) => f.includes("Attention 1/1"));
+
+      t.mockInput.pressArrow("left");
+      await t.waitForFrame((f) => f.includes("Queue 1/2"));
+      setCurrent({ ...quiet, held: ["fibrae", "amux"] });
+      await t.flush();
+      expect(t.captureCharFrame()).toContain("Queue 1/2");
+
+      setCurrent(quiet);
+      await t.flush();
+      setCurrent({ ...quiet, held: ["amux"] });
+      await t.waitForFrame((f) => f.includes("Attention 1/1"));
     } finally {
       t.renderer.destroy();
     }
@@ -317,6 +354,8 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 3"));
+      t.mockInput.pressArrow("left");
+      await t.flush();
       expect(t.captureCharFrame()).toContain("e climb");
       expect(t.captureCharFrame()).not.toContain("u unassign");
 
@@ -342,6 +381,8 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 3"));
+      t.mockInput.pressArrow("left");
+      await t.flush();
       t.mockInput.pressKey("D");
       await t.flush();
       expect(t.captureCharFrame()).toContain("Reason for ts-q100");
@@ -362,6 +403,8 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 3"));
+      t.mockInput.pressArrow("left");
+      await t.flush();
       await t.mockMouse.click(10, 3);
       t.mockInput.pressKey("u");
       await t.waitFor(() => calls.unassign.length === 1);
@@ -486,6 +529,8 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 30"));
+      t.mockInput.pressArrow("left");
+      await t.flush();
 
       await t.mockMouse.scroll(10, 5, "down");
       await t.flush();
@@ -519,6 +564,7 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 2"));
+      t.mockInput.pressArrow("right");
 
       // queue row 0: a queued task can be pushed a rung up the ladder.
       t.mockInput.pressKey("e");
@@ -617,6 +663,7 @@ describe("Pipeline", () => {
     });
     try {
       await t.waitForFrame((f) => f.includes("Queue 3") && f.includes("Attention 1"));
+      t.mockInput.pressArrow("left");
 
       // queue row 0 carries a rung but no reviewer: x lowers it, u is ignored.
       t.mockInput.pressKey("x");

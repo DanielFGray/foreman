@@ -239,6 +239,16 @@ export const Pipeline = (props: {
 
   const views = (): ReadonlyArray<ViewName> => drawn(props.state());
 
+  let hadAttention = false;
+  createEffect(() => {
+    const hasAttention = rowsForView("attention", props.state()).length > 0;
+    if (hasAttention && !hadAttention) {
+      setWanted("attention");
+      setRow(0);
+    }
+    hadAttention = hasAttention;
+  });
+
   // A view that empties under the cursor goes. Keep the cursor as near as
   // possible to where it was in the stable tab order.
   const view = (): ViewName => {

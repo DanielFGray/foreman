@@ -442,6 +442,9 @@ Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, stranded branches, then held projects. Each row keeps its
 source kind, so combining their display does not combine their actions. A view
 that empties under the cursor hands it to the nearest non-empty tab to its left.
+Attention opens when it changes from empty to non-empty, including at startup.
+It does not keep stealing focus while existing items remain; it must clear
+before a later item can interrupt again.
 The status line remains when every view is empty, because an empty fleet still
 has to say whether it is paused or merely out of work.
 
