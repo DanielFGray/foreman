@@ -95,6 +95,13 @@ sees a blank shell beside a worker. The author's output stays visible after it
 settles; the reviewer reads the diff next to it. The workspace dies when the
 task leaves the fleet.
 
+The label records no ownership, and the roster is every daemon's: herdr shows
+all of them, and two foremen against different configs are not competing for
+the same slots. The config's project set is the only ownership the world
+records, so `scopeRoster` in `src/dispatcher.ts` scopes what each daemon may
+act on — the busy count, settle, the dashboard — to workspaces whose task
+lives in a project it manages.
+
 ### herdr owns the worktree
 
 It has to. foreman used to create the worktree with `git worktree add` and then

@@ -18,6 +18,7 @@ import {
   authoredBy,
   isApproved,
   isOnboarding,
+  isPlan,
   type Item,
   needsReview,
   ONBOARD,
@@ -100,32 +101,35 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
     /** The world as it is right now, with no interpretation applied. */
     const observe = Effect.gen(function* () {
-      const workers = yield* fleet.roster;
-      const byTask = new Map(workers.map((worker) => [worker.task, worker] as const));
+      const roster = yield* fleet.roster;
 
-      const workerFor = (task: Item): Worker | undefined => {
-        const worker = byTask.get(task.id);
-        if (!worker) return undefined;
-        const state = worker.roles.get(reviewedBy(task) ? "review" : "author");
-        return { ...worker, state: state ?? "gone" };
-      };
-
-      // Status-filtered lists lose a task at the exact moment it moves to a
-      // different column. Owned workspaces therefore read their task directly;
-      // this is the durable join that lets terminal work be settled.
-      const owned = yield* Effect.forEach(workers, (worker) =>
+      // Every workspace's task, read once. The roster is joined to the store
+      // rather than filtered through status queries, because a task leaves a
+      // column's status at the exact moment it moves to another — the durable
+      // join is what lets work that has reached a terminal state still be
+      // settled.
+      const tasks = yield* Effect.forEach(roster, (worker) =>
         prog.show(worker.task).pipe(
-          Effect.map((task) => {
-            const current = workerFor(task) ?? { ...worker, state: "gone" as const };
-            return [{ task, worker: current, kind: reviewedBy(task) ?? authoredBy(task) }] as const;
-          }),
+          Effect.map((task) => [[worker.task, task]] as const),
           Effect.catchAll((error) =>
             Effect.logWarning(`skipped workspace ${worker.workspace}: ${error}`).pipe(
-              Effect.as<ReadonlyArray<Owned>>([]),
+              Effect.as<ReadonlyArray<readonly [string, Item]>>([]),
             ),
           ),
         ),
-      ).pipe(Effect.map((items) => items.flat()));
+      ).pipe(Effect.map((entries) => new Map(entries.flat())));
+
+      // The roster is every daemon's: herdr lists every workspace labelled
+      // `foreman/*` whoever opened it, and a label records no ownership — two
+      // foremen against different configs are not competing for the same
+      // slots. The config's project set is the only ownership the world
+      // records, so it is what scopes everything read back. A foreign
+      // workspace is another daemon's live work: counted it would fill this
+      // daemon's slots, and settled or reclaimed it would move a task across
+      // the boundary the config draws.
+      const managed = new Set(settings.projects.map((project) => project.name));
+      const { owned, workers } = scopeRoster(roster, tasks, managed);
+      const ownedByTask = new Map(owned.map((entry) => [entry.task.id, entry]));
 
       // Which checkouts the operator is presently working in. Read every tick
       // like everything else: you clean a tree up between two ticks and the
@@ -187,7 +191,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
       const orphans = yield* Effect.forEach(
         branches.filter(
-          (entry) => !entry.merged && !accounted.has(entry.task) && !byTask.has(entry.task),
+          (entry) => !entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
         ),
         ({ branch, task, project }) =>
           prog.show(task).pipe(
@@ -216,7 +220,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // — a hand-merged branch swept on the tick before its reviewer settles
       // leaves that task looking like one nobody ever committed to.
       const prunable = branches.filter(
-        (entry) => entry.merged && !accounted.has(entry.task) && !byTask.has(entry.task),
+        (entry) => entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
       );
 
       // Work at the operator's rung is ready by every measure prog knows and
@@ -226,11 +230,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
 
       const active = (items: ReadonlyArray<Item>) =>
-        items.map((task) => ({
-          task,
-          worker: workerFor(task),
-          kind: reviewedBy(task) ?? authoredBy(task),
-        }));
+        items.map(
+          (task) =>
+            ownedByTask.get(task.id) ?? {
+              task,
+              worker: undefined,
+              kind: reviewedBy(task) ?? authoredBy(task),
+            },
+        );
 
       // One mapping, three columns. working and review each take a slice of
       // these, and decisionsOf reads the vanished-worker rows off the same
@@ -248,7 +255,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           dispatchable.filter((task) => !isOnboarding(task)),
           settings.projects.map((project) => project.name),
         ),
-        yours: queue.filter((task) => isYours(settings.ladder, rungOf(task))),
+        yours: queue.filter(
+          (task) => isYours(settings.ladder, rungOf(task)) && managed.has(task.project),
+        ),
         working: claimedActive,
         ...reviewable(reviewingActive, committed),
         committed,
@@ -984,6 +993,47 @@ export const reviewable = (
     review: authored.filter(({ task }) => committed.has(task.id)),
     unbacked: authored.filter(({ task }) => !committed.has(task.id)),
   };
+};
+
+/**
+ * The workspaces this daemon may act on, split out of a roster that shows
+ * every daemon's.
+ *
+ * herdr lists every workspace labelled `foreman/*` whoever opened it, and the
+ * label carries no ownership — two foremen against different configs are not
+ * competing for the same slots. The config's project set is the only ownership
+ * the world records, so a workspace belongs to this daemon exactly when its
+ * task lives in a project the config manages. A workspace whose task the store
+ * no longer has a project to scope by: as residue it must not eat a slot
+ * nothing will ever free, so it is dropped here too.
+ *
+ * Plan workspaces are also excluded by their durable task label. The workspace
+ * exists before its planner or tasker role does, and plan mode is a separate
+ * synchronous process that the daemon must neither count nor settle.
+ *
+ * Both shapes come back from the same pass so they cannot disagree: `owned` is
+ * what settle and the dashboard may touch, and `workers` is the roster shape
+ * slots are counted from.
+ */
+export const scopeRoster = (
+  roster: ReadonlyArray<Worker>,
+  tasks: ReadonlyMap<string, Item>,
+  managed: ReadonlySet<string>,
+): { readonly owned: ReadonlyArray<Owned>; readonly workers: ReadonlyArray<Worker> } => {
+  const owned: Array<Owned> = [];
+  const kept = new Set<string>();
+  for (const worker of roster) {
+    const task = tasks.get(worker.task);
+    if (!task || !managed.has(task.project) || isPlan(task)) continue;
+    kept.add(worker.task);
+    const state = reviewedBy(task) ? worker.roles.get("review") : worker.roles.get("author");
+    owned.push({
+      task,
+      worker: { ...worker, state: state ?? "gone" },
+      kind: reviewedBy(task) ?? authoredBy(task),
+    });
+  }
+  return { owned, workers: roster.filter((worker) => kept.has(worker.task)) };
 };
 
 /**
