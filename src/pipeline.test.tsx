@@ -163,6 +163,7 @@ interface Calls {
   unassign: Array<string>;
   onboard: Array<string>;
   adopt: Array<string>;
+  complete: Array<string>;
 }
 
 const makeControls = (): { controls: Controls; calls: Calls } => {
@@ -179,6 +180,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     unassign: [],
     onboard: [],
     adopt: [],
+    complete: [],
   };
   const controls: Controls = {
     quit: () => calls.quit.push("quit"),
@@ -193,6 +195,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     unassign: (t) => calls.unassign.push(t.id),
     onboard: (p) => calls.onboard.push(p),
     adopt: (o) => calls.adopt.push(o.branch),
+    complete: (t, reason) => calls.complete.push(`${t.id}:${reason}`),
   };
   return { controls, calls };
 };
@@ -305,6 +308,26 @@ describe("Pipeline", () => {
       await t.flush();
       expect(t.captureCharFrame()).not.toContain("u unassign");
       expect(t.captureCharFrame()).not.toContain("x descend");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("asks for a reason before marking a queued task done", async () => {
+    const { controls, calls } = makeControls();
+    const t = await testRender(() => <Pipeline state={() => corrective} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("queue 3"));
+      t.mockInput.pressKey("D");
+      await t.flush();
+      expect(t.captureCharFrame()).toContain("Reason for ts-q100");
+      await t.mockInput.typeText("obsolete task");
+      t.mockInput.pressEnter();
+      await t.waitFor(() => calls.complete.length === 1);
+      expect(calls.complete[0]).toBe("ts-q100:obsolete task");
     } finally {
       t.renderer.destroy();
     }

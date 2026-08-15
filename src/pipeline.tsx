@@ -25,6 +25,7 @@ export interface Controls {
   readonly unassign: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
+  readonly complete: (task: ReadyTask, reason: string) => void;
 }
 
 /** The pipeline: work moving left to right. */
@@ -101,6 +102,7 @@ interface ColumnRow {
 }
 
 type Action =
+  | "complete"
   | "retry"
   | "release"
   | "close"
@@ -137,7 +139,7 @@ type Action =
  * it from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["climb", "descend", "unassign"],
+  queue: ["complete", "climb", "descend", "unassign"],
   working: ["focus", "climb", "descend", "release"],
   review: ["focus", "climb", "descend", "release"],
   landed: [],
@@ -162,6 +164,7 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
 };
 
 const ACTION_LABELS: Record<Action, string> = {
+  complete: "D done",
   retry: "r retry",
   takeOver: "t take over",
   focus: "f focus",
@@ -197,6 +200,8 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
       case "release":
       case "close":
         return row.task !== undefined;
+      case "complete":
+        return row.ready !== undefined;
       case "climb":
         return row.task !== undefined || row.ready !== undefined;
       case "onboard":
@@ -221,6 +226,7 @@ export const Pipeline = (props: {
 }) => {
   const [wanted, setWanted] = createSignal<ColumnName>("queue");
   const [row, setRow] = createSignal(0);
+  const [completion, setCompletion] = createSignal<ReadyTask | undefined>();
 
   const stages = (): ReadonlyArray<ColumnName> => drawn(STAGES, props.state());
   const panels = (): ReadonlyArray<ColumnName> => drawn(PANELS, props.state());
@@ -293,6 +299,12 @@ export const Pipeline = (props: {
     if (!target) return;
     if (!actionsFor(column(), target).includes(action)) return;
     switch (action) {
+      case "complete":
+        if (target.ready) {
+          // Do not let the key that opens the input become its first character.
+          queueMicrotask(() => setCompletion(target.ready));
+        }
+        break;
       case "retry":
         if (target.task) props.controls.retry(target.task);
         break;
@@ -333,6 +345,10 @@ export const Pipeline = (props: {
   };
 
   useKeyboard((key) => {
+    if (completion() !== undefined) {
+      if (key.name === "escape") setCompletion(undefined);
+      return;
+    }
     switch (key.name) {
       case "q":
         props.controls.quit();
@@ -378,7 +394,10 @@ export const Pipeline = (props: {
         apply("unassign");
         break;
       case "d":
-        apply("release");
+        apply(key.shift ? "complete" : "release");
+        break;
+      case "D":
+        apply("complete");
         break;
       case "c":
         apply("close");
@@ -404,7 +423,19 @@ export const Pipeline = (props: {
         scroll={scroll}
         fill={false}
       />
-      <Status state={props.state} actions={() => actionsFor(column(), rows()[selected() ?? -1])} />
+      <Status
+        state={props.state}
+        actions={() => actionsFor(column(), rows()[selected() ?? -1])}
+        completion={completion}
+        complete={(reason) => {
+          const task = completion();
+          const trimmed = reason.trim();
+          if (!task || trimmed.length === 0) return;
+          props.controls.complete(task, trimmed);
+          setCompletion(undefined);
+        }}
+        cancel={() => setCompletion(undefined)}
+      />
     </box>
   );
 };
@@ -588,15 +619,40 @@ const rowId = (column: string, key: string): string => `${column}:${key}`;
 const Status = (props: {
   readonly state: Accessor<FleetState>;
   readonly actions: Accessor<ReadonlyArray<Action>>;
+  readonly completion: Accessor<ReadyTask | undefined>;
+  readonly complete: (reason: string) => void;
+  readonly cancel: () => void;
 }) => (
   <box style={{ flexDirection: "column", flexShrink: 0 }}>
     <text style={{ height: 1 }}>
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
-    <text style={{ height: 1 }}>
-      {props.actions().map((action) => ACTION_LABELS[action]).join("  ")}
-    </text>
-    <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
+    <Show
+      when={props.completion() === undefined}
+      fallback={
+        <box style={{ flexDirection: "row", height: 1 }}>
+          <text>{`Reason for ${props.completion()?.id}: `}</text>
+          <input
+            focused
+            flexGrow={1}
+            placeholder="required"
+            onSubmit={props.complete as never}
+            onKeyDown={(key) => {
+              if (key.name === "escape") props.cancel();
+            }}
+          />
+        </box>
+      }
+    >
+      <text style={{ height: 1 }}>
+        {[
+          ...props.actions().map((action) => ACTION_LABELS[action]),
+          "p pause",
+          "F12 log",
+          "q quit",
+        ].join("  ")}
+      </text>
+    </Show>
   </box>
 );
 

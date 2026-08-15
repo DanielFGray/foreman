@@ -915,6 +915,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        */
       close: (task: Item) => commanded(teardown(task)),
 
+      /** Closes a queued task without creating a workspace or landing code. */
+      complete: (task: ReadyTask, reason: string) =>
+        commanded(prog.log(task.id, `foreman: marked done from queue: ${reason}`).pipe(Effect.andThen(prog.complete(task.id)))),
+
       /** Moves a task one rung up the ladder for its next dispatch. */
       climb: (task: Climbing) => commanded(climb(task)),
 

@@ -59,6 +59,7 @@ export const dashboard = Effect.gen(function* () {
     unassign: (task) => Runtime.runFork(runtime)(dispatcher.unassign(task)),
     onboard: (project) => Runtime.runFork(runtime)(dispatcher.onboard(project)),
     adopt: (orphan) => Runtime.runFork(runtime)(dispatcher.adopt(orphan)),
+    complete: (task, reason) => Runtime.runFork(runtime)(dispatcher.complete(task, reason)),
   };
 
   yield* Effect.promise(() =>
