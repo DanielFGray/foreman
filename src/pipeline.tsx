@@ -671,13 +671,14 @@ const Status = (props: {
               if (key.name === "escape") props.cancel();
             }}
           />
+          <text> Enter confirm  Esc cancel</text>
         </box>
       }
     >
       <text style={{ height: 1 }}>
         {[
           ...props.actions().map((action) => ACTION_LABELS[action]),
-          "p pause",
+          `p ${props.state().paused ? "resume" : "pause"}`,
           "PgUp/PgDn move",
           "F12 log",
           "q quit",
