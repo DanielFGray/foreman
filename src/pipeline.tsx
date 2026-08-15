@@ -1,4 +1,4 @@
-import { createTextAttributes, type ScrollBoxRenderable } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
 import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
@@ -459,8 +459,7 @@ const Column = (props: {
               style={{
                 height: 1,
                 flexShrink: 0,
-                attributes:
-                  index() === props.selected() ? createTextAttributes({ inverse: true }) : 0,
+                ...(index() === props.selected() ? SELECTED : PLAIN),
               }}
             >
               {`${index() === props.selected() ? "> " : "  "}${row.label}`}
@@ -471,6 +470,26 @@ const Column = (props: {
     </box>
   );
 };
+
+/**
+ * The selected row, painted rather than inverted.
+ *
+ * `inverse` swaps a cell's two colours, and opentui's text defaults are
+ * `#FFFFFF` on `transparent` — so the swap put white in the background and left
+ * the glyphs transparent. The cursor redacted the one row the operator was
+ * reading. Naming both colours is the only way to be sure they differ.
+ */
+const SELECTED = { bg: "#1f4d8f", fg: "#ffffff" } as const;
+
+/**
+ * Those same defaults, named so that leaving a row restores them.
+ *
+ * A style key that is simply absent is not a style key set back: the renderable
+ * keeps whatever it was last given, so the highlight stayed on the row the
+ * cursor had left until the next tick rebuilt the rows. Both states have to
+ * name both colours.
+ */
+const PLAIN = { bg: "transparent", fg: "#FFFFFF" } as const;
 
 /** Renderable ids are global, so a row's key is only unique within its column. */
 const rowId = (column: string, key: string): string => `${column}:${key}`;
