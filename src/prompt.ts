@@ -3,7 +3,7 @@ import { BunContext } from "@effect/platform-bun";
 import { Effect, Schema } from "effect";
 import template from "lodash/template.js";
 import { labelFor } from "./fleet.ts";
-import type { Item, ReadyTask } from "./prog.ts";
+import type { DiagnosticIntent, Item, ReadyTask } from "./prog.ts";
 
 /**
  * The messages workers receive, rendered from files under prompts/.
@@ -76,6 +76,21 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
           worktree,
           branch: labelFor(item.id),
           repository,
+        }),
+
+      diagnose: (item: Item, worktree: string, repository: string, intent: DiagnosticIntent) =>
+        render("diagnose", {
+          task: item.id,
+          title: item.title,
+          project: item.project,
+          worktree,
+          branch: labelFor(item.id),
+          repository,
+          intent,
+          objective:
+            intent === "review"
+              ? "Review the work as it exists, including uncommitted edits. Determine what is sound, what is incomplete, and what prevents it from being ready for formal review."
+              : "Diagnose why this attempt appears stuck. Identify the concrete blocker, failed assumption, missing information, or wrong direction that the next author must handle.",
         }),
 
       /**

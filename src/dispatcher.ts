@@ -25,6 +25,8 @@ import {
 import {
   agentLog,
   authoredBy,
+  diagnosticIntent,
+  type DiagnosticIntent,
   isApproved,
   isOnboarding,
   isPlan,
@@ -189,6 +191,23 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const committed = new Set(
         branches.filter((entry) => !entry.empty).map((entry) => entry.task),
       );
+      const workCandidates = new Map(
+        [...queue, ...claimed, ...reviewing]
+          .filter(
+            (task) =>
+              authoredBy(task) !== undefined &&
+              !committed.has(task.id) &&
+              !ownedByTask.has(task.id),
+          )
+          .map((task) => [task.id, task]),
+      );
+      const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
+        repository.holdsWork(directoryFor(task.project, task.id)).pipe(
+          Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
+          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+        ),
+      ).pipe(Effect.map((ids) => ids.flat()));
+      const resumable = new Set([...committed, ...unfinished]);
 
       // Every other column is read from prog, which forgets a branch the
       // moment its task is closed, reclaimed or deleted — so the commits
@@ -269,6 +288,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         working: claimedActive,
         ...reviewable(reviewingActive, committed),
         committed,
+        resumable,
         prunable,
         orphans,
         landed: landed.filter((item) =>
@@ -315,7 +335,32 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         yield* Effect.forEach(
           current.owned.filter(
-            ({ task, worker }) => !awaitingLanding(task) && worker.state !== "working",
+            ({ task, worker }) =>
+              diagnosticIntent(task) !== undefined &&
+              worker.state !== "working" &&
+              worker.state !== "blocked",
+          ),
+          ({ task, worker }) =>
+            Effect.gen(function* () {
+              yield* prog.release(task.id);
+              yield* fleet.stop(worker, "author");
+              yield* prog.clearDiagnostic(task.id);
+              yield* dispatchAuthor(task);
+              yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
+            }).pipe(
+              Effect.catchAll((error) =>
+                Effect.logWarning(`resuming ${task.id} after diagnosis failed: ${error}`),
+              ),
+            ),
+          { discard: true },
+        );
+
+        yield* Effect.forEach(
+          current.owned.filter(
+            ({ task, worker }) =>
+              diagnosticIntent(task) === undefined &&
+              !awaitingLanding(task) &&
+              worker.state !== "working",
           ),
           ({ task, worker, kind }) =>
             Effect.gen(function* () {
@@ -792,6 +837,102 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const projectFor = (name: string) =>
       settings.projects.find((candidate) => candidate.name === name);
 
+    const branchCommitted = (task: Item) => {
+      const project = projectFor(task.project);
+      if (!project) return Effect.succeed(false);
+      return repository
+        .branches(project.directory)
+        .pipe(
+          Effect.map(
+            (branches) =>
+              branches.find((branch) => branch.branch === labelFor(task.id))?.empty === false,
+          ),
+        );
+    };
+
+    const holdsIntervenableWork = (task: Item, worker: Worker | undefined) =>
+      worker
+        ? Effect.succeed(true)
+        : branchCommitted(task).pipe(
+            Effect.flatMap((committed) =>
+              committed
+                ? Effect.succeed(true)
+                : repository
+                    .holdsWork(directoryFor(task.project, task.id))
+                    .pipe(Effect.orElseSucceed(() => false)),
+            ),
+          );
+
+    const stopActiveRole = (task: Item, worker: Worker | undefined) =>
+      worker
+        ? fleet.stop(worker, reviewedBy(task) !== undefined ? "review" : "author")
+        : Effect.void;
+
+    const dispatchDiagnostic = (
+      target: InterventionTarget,
+      intent: DiagnosticIntent,
+      rungName: string,
+    ) =>
+      Effect.gen(function* () {
+        const task = yield* prog.show(target.task.id);
+        if (task.status === "done" || task.status === "canceled") return;
+        const project = projectFor(task.project);
+        const rung = settings.ladder.find((candidate) => candidate.name === rungName);
+        if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
+
+        yield* stopActiveRole(task, target.worker);
+        if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
+        if (task.status !== "open") yield* prog.release(task.id);
+        yield* prog.markDiagnostic(task.id, intent);
+        yield* Effect.gen(function* () {
+          const worker = yield* fleet.open({
+            task: task.id,
+            repository: project.directory,
+            branch: labelFor(task.id),
+            directory: directoryFor(task.project, task.id),
+          });
+          const prompt = yield* prompts.diagnose(task, worker.directory, project.directory, intent);
+          yield* prog.claim(task.id);
+          const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
+          yield* prog.log(
+            task.id,
+            `foreman: diagnostic ${intent} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`,
+          );
+          yield* Effect.logInfo(`${intent} intervention on ${task.id} with ${rung.name}`);
+        }).pipe(
+          Effect.onError(() =>
+            prog
+              .clearDiagnostic(task.id)
+              .pipe(Effect.andThen(prog.release(task.id)), Effect.ignore),
+          ),
+        );
+      });
+
+    const dispatchFormalReview = (target: InterventionTarget) =>
+      Effect.gen(function* () {
+        const task = yield* prog.show(target.task.id);
+        if (task.status === "done" || task.status === "canceled") return;
+        yield* stopActiveRole(task, target.worker);
+        if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
+        if (task.status === "open") yield* prog.claim(task.id);
+        if (task.status !== "reviewing") yield* prog.review(task.id);
+        yield* dispatchReview(task, authoredBy(task));
+      });
+
+    const dispatchContinuation = (target: InterventionTarget, rungName: string) =>
+      Effect.gen(function* () {
+        const task = yield* prog.show(target.task.id);
+        if (task.status === "done" || task.status === "canceled") return;
+        const rung = settings.ladder.find((candidate) => candidate.name === rungName);
+        if (!rung) return;
+        yield* stopActiveRole(task, target.worker);
+        if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
+        yield* prog.clearDiagnostic(task.id);
+        if (task.status !== "open") yield* prog.release(task.id);
+        yield* prog.setRung(task.id, rung.name);
+        yield* dispatchAuthor(yield* prog.show(task.id));
+      });
+
     /** The checkout a project's work lands in, when foreman is configured for it. */
     const repositoryFor = (task: { readonly project: string }) =>
       projectFor(task.project)?.directory;
@@ -819,6 +960,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     return {
       /** What the dashboard renders. Replaced whole on every tick. */
       state,
+      rungs: settings.ladder.map((rung) => rung.name),
 
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
@@ -916,7 +1058,26 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       /** Closes a queued task without creating a workspace or landing code. */
       complete: (task: ReadyTask, reason: string) =>
-        commanded(prog.log(task.id, `foreman: marked done from queue: ${reason}`).pipe(Effect.andThen(prog.complete(task.id)))),
+        commanded(
+          prog
+            .log(task.id, `foreman: marked done from queue: ${reason}`)
+            .pipe(Effect.andThen(prog.complete(task.id))),
+        ),
+
+      diagnose: (target: InterventionTarget, intent: DiagnosticIntent, rung: string) =>
+        commanded(dispatchDiagnostic(target, intent, rung)),
+
+      reviewIntervention: (target: InterventionTarget, diagnosticRung: string | undefined) =>
+        commanded(
+          Effect.gen(function* () {
+            const task = yield* prog.show(target.task.id);
+            if (yield* branchCommitted(task)) return yield* dispatchFormalReview(target);
+            if (diagnosticRung) yield* dispatchDiagnostic(target, "review", diagnosticRung);
+          }),
+        ),
+
+      continueAt: (target: InterventionTarget, rung: string) =>
+        commanded(dispatchContinuation(target, rung)),
 
       /** Moves a task one rung up the ladder for its next dispatch. */
       climb: (task: Climbing) => commanded(climb(task)),
@@ -1137,6 +1298,8 @@ export interface FleetState {
   readonly review: ReadonlyArray<Active>;
   readonly landed: ReadonlyArray<Item>;
   readonly decisions: ReadonlyArray<Active>;
+  readonly committed: ReadonlySet<string>;
+  readonly resumable: ReadonlySet<string>;
 
   /**
    * Branches holding commits the project never took, that nothing in the
@@ -1177,6 +1340,11 @@ export interface Active {
   readonly kind: string | undefined;
 }
 
+export interface InterventionTarget {
+  readonly task: Item | ReadyTask;
+  readonly worker: Worker | undefined;
+}
+
 export interface Owned {
   readonly task: Item;
   readonly worker: Worker;
@@ -1196,14 +1364,6 @@ interface Observation extends FleetState {
    */
   readonly unbacked: ReadonlyArray<Active>;
 
-  /**
-   * Tasks whose branch carries commits of its own, landed or not.
-   *
-   * Also a step's input rather than a column: settle asks it whether a worker
-   * that vanished got anything as far as a commit.
-   */
-  readonly committed: ReadonlySet<string>;
-
   /** The merged branches no live task still points at, for the sweep. */
   readonly prunable: ReadonlyArray<{
     readonly project: string;
@@ -1222,6 +1382,8 @@ const empty: FleetState = {
   review: [],
   landed: [],
   decisions: [],
+  committed: new Set(),
+  resumable: new Set(),
   orphans: [],
   held: [],
   paused: false,

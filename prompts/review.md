@@ -14,7 +14,10 @@ check the author's work fails for a reason that has nothing to do with them.
 Read `prog show {{ task }}` first: the description, the definition of done, and the
 author's logs, which say what they tried and why. Then read the actual diff against
 the repository checkout's current target — `git -C {{ repository }} diff HEAD...{{ branch }}`
-— and the project's CLAUDE.md or AGENTS.md.
+— `git status`, the uncommitted diff in the worktree, and the project's CLAUDE.md or
+AGENTS.md. Approval means every change worth landing is committed on the branch. If
+the stopped author left valid uncommitted work, commit it; if it is substantive and
+not ready, reject with findings instead. Never approve work that landing would omit.
 
 Judge the work against three things, in this order. Does it do what the task asked?
 Does the verification actually verify it — run the definition of done's command, the

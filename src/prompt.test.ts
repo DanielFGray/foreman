@@ -49,6 +49,30 @@ describe("Prompts", () => {
     expect(prompt).toContain("prog label ts-123456 approved");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("prog done ts-123456");
+    expect(prompt).toContain("Never approve work that landing would omit");
+  });
+
+  test("diagnoses stuck work without taking over its implementation", async () => {
+    const prompt = await Effect.runPromise(
+      Prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "diagnose").pipe(
+        Effect.provide(Prompts.Default),
+      ),
+    );
+
+    expect(prompt).toContain("Diagnose why this attempt appears stuck");
+    expect(prompt).toContain("prog log ts-123456");
+    expect(prompt).toContain("Do not take over the implementation");
+    expect(prompt).not.toContain("prog open ts-123456");
+  });
+
+  test("diagnostic review includes uncommitted edits", async () => {
+    const prompt = await Effect.runPromise(
+      Prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "review").pipe(
+        Effect.provide(Prompts.Default),
+      ),
+    );
+
+    expect(prompt).toContain("Review the work as it exists, including uncommitted edits");
   });
 
   test("a tasker files tasks, and the parent rides --parent, not the title", async () => {

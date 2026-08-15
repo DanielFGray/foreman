@@ -439,6 +439,44 @@ export const HerdrFleet = Layer.effect(
           );
         }),
 
+      stop: (worker: Worker, role: AgentRole) =>
+        Effect.gen(function* () {
+          const panes = (yield* herdrJson(
+            PaneList,
+            "stop role",
+            "pane",
+            "list",
+            "--workspace",
+            worker.workspace,
+          )).result.panes;
+          const held = panes.filter((pane) => pane.label === paneLabelFor(role));
+          const anchor = held[0];
+          if (!anchor) return;
+
+          // Closing the workspace's last pane destroys its view. Split an
+          // unlabelled shell first so the worktree and its uncommitted edits
+          // survive while the replacement role is prepared.
+          if (held.length === panes.length) {
+            yield* herdrJson(
+              PaneSplit,
+              "stop role",
+              "pane",
+              "split",
+              "--pane",
+              anchor.pane_id,
+              "--direction",
+              "right",
+              "--cwd",
+              worker.directory,
+              "--no-focus",
+            );
+          }
+
+          yield* Effect.forEach(held, (pane) => herdr("stop role", "pane", "close", pane.pane_id), {
+            discard: true,
+          });
+        }).pipe(Effect.asVoid),
+
       focus: (worker: Worker) =>
         herdr("focus", "workspace", "focus", worker.workspace).pipe(Effect.asVoid),
 

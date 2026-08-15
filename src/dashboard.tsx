@@ -54,16 +54,20 @@ export const dashboard = Effect.gen(function* () {
     retry: (task) => Runtime.runFork(runtime)(dispatcher.retry(task)),
     release: (task) => Runtime.runFork(runtime)(dispatcher.release(task)),
     close: (task) => Runtime.runFork(runtime)(dispatcher.close(task)),
-    climb: (task) => Runtime.runFork(runtime)(dispatcher.climb(task)),
     descend: (task) => Runtime.runFork(runtime)(dispatcher.descend(task)),
     unassign: (task) => Runtime.runFork(runtime)(dispatcher.unassign(task)),
     onboard: (project) => Runtime.runFork(runtime)(dispatcher.onboard(project)),
     adopt: (orphan) => Runtime.runFork(runtime)(dispatcher.adopt(orphan)),
     complete: (task, reason) => Runtime.runFork(runtime)(dispatcher.complete(task, reason)),
+    diagnose: (target, intent, rung) =>
+      Runtime.runFork(runtime)(dispatcher.diagnose(target, intent, rung)),
+    reviewIntervention: (target, rung) =>
+      Runtime.runFork(runtime)(dispatcher.reviewIntervention(target, rung)),
+    continueAt: (target, rung) => Runtime.runFork(runtime)(dispatcher.continueAt(target, rung)),
   };
 
   yield* Effect.promise(() =>
-    render(() => <Pipeline state={state} controls={controls} />, renderer),
+    render(() => <Pipeline state={state} controls={controls} rungs={dispatcher.rungs} />, renderer),
   );
 
   yield* Deferred.await(quit);

@@ -138,6 +138,14 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        */
       clearRung: (task: string) => removeLabels(task, [RUNG]),
 
+      markDiagnostic: (task: string, intent: DiagnosticIntent) =>
+        removeLabels(task, [DIAGNOSING]).pipe(
+          Effect.andThen(run("label", task, `${DIAGNOSING}${intent}`)),
+          Effect.asVoid,
+        ),
+
+      clearDiagnostic: (task: string) => removeLabels(task, [DIAGNOSING]),
+
       /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
       claimed: (project: string) => byStatus(project, "in_progress"),
 
@@ -187,6 +195,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        */
       submit: (task: string) =>
         run("start", task).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
+
+      /** Moves already-claimed work to formal review. */
+      review: (task: string) => run("review", task).pipe(Effect.asVoid),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
@@ -350,10 +361,22 @@ export const TRIVIAL = "trivial";
 
 /** Prefix of the label naming the rung a task's next dispatch must use. */
 export const RUNG = "rung-";
+export const DIAGNOSING = "diagnosing-";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
 
 export const APPROVED = "approved";
+
+export type DiagnosticIntent = "diagnose" | "review";
+
+export const diagnosticIntent = (item: {
+  readonly labels: ReadonlyArray<string>;
+}): DiagnosticIntent | undefined => {
+  const intent = item.labels
+    .find((label) => label.startsWith(DIAGNOSING))
+    ?.slice(DIAGNOSING.length);
+  return intent === "diagnose" || intent === "review" ? intent : undefined;
+};
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
   command: Schema.String,

@@ -406,7 +406,7 @@ therefore aggregates pane statuses itself.
 
 ## Ports
 
-`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — seven methods. herdr
+`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — eight methods. herdr
 is one implementation; an amux plugin would be a second, not a rewrite.
 
 `Prog` (`src/prog.ts`) is the whole task-store surface. Nothing above that file
@@ -454,11 +454,12 @@ are named from the task's status, not its labels: a failed spawn leaves the
 `by-*` label on a task that sits back in the queue, and only the status —
 neither claimed nor under review — marks its workspace as residue. The three
 kinds answer differently: a vanished author or reviewer can be retried, taken
-over, or released, while an orphaned workspace is only ever closed.
+over, released, or intervened on, while terminal orphaned workspaces are only
+ever closed.
 
-The two corrections follow the labels, not the columns. `x` lowers a task one
-rung, the mirror of `e` climb: a rung is only ever as good as the evidence that
-wrote it, and a bug, an OOM or a killed run all write a rung nothing earned.
+The two corrections follow the labels, not the views. `x` lowers a task one
+rung: a rung is only ever as good as the evidence that wrote it, and a bug, an
+OOM or a killed run all write a rung nothing earned.
 One step per press, writing the same `rung-*` label the ladder reads; off the
 bottom rung the label is removed, because the ladder reads no label as the
 bottom. `u` clears a `review-by-*` label no reviewer is behind. The world
@@ -467,6 +468,15 @@ only the operator can say the label is stale — a task that is open with a
 `review-by-*` label and no live reviewer behind it is stale by definition. Both
 keys write exactly what foreman itself would have written, so the result is the
 same state a hand-corrected task would be in.
+
+`e` intervenes rather than silently editing a rung. Continue stops the live role,
+preserves its worktree and uncommitted edits, asks which configured rung should
+take over, and dispatches it immediately. Diagnose and Review are offered only
+where git or a surviving worktree proves an attempt left work. Committed Review
+uses the formal verdict pipeline; uncommitted Review and Diagnose run a chosen
+diagnostic agent. It may fix trivia and logs findings, then Foreman resumes the
+original rung. `diagnosing-*` is the durable marker that makes this lifecycle
+survive a restart; no in-process intervention state exists.
 
 `yours` takes no answer key. A task waits there because a question about it is
 unanswered, and one key to requeue it would hand the next agent that same

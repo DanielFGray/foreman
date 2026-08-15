@@ -275,6 +275,18 @@ a restart, needs to act on. Set the label by hand to pin a task to a rung.
 
 The rung is a property of the task, never of which slot happened to be free.
 
+### Intervening in stuck work
+
+`e` opens an intervention menu for the selected task. Continue stops any live
+role, preserves its worktree and uncommitted edits, asks which configured rung
+should take over, and dispatches it immediately. Diagnose and Review appear only
+when a branch or surviving worktree proves there is work to inspect. A committed
+branch enters formal review; uncommitted Review and Diagnose run a chosen agent
+that may fix trivia and logs findings before Foreman resumes the original rung.
+
+The diagnostic lifecycle is durable. Its `diagnosing-*` task label and labelled
+agent pane survive a Foreman restart; no intervention depends on process memory.
+
 ### The top of the ladder is you
 
 Above the last configured rung is the operator. You are not an entry in the

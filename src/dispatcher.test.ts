@@ -7,7 +7,7 @@ import {
   scopeRoster,
   type Owned,
 } from "./dispatcher.ts";
-import { authoredBy, reviewedBy, type Item } from "./prog.ts";
+import { authoredBy, diagnosticIntent, reviewedBy, type Item } from "./prog.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 
 const task = (
@@ -90,6 +90,14 @@ describe("landing a reviewed branch", () => {
     expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"], "in_progress"))).toBe(
       false,
     );
+  });
+});
+
+describe("diagnostic intervention", () => {
+  test("derives its durable intent from the task label", () => {
+    expect(diagnosticIntent(task("ts-1", ["by-opencode", "diagnosing-diagnose"]))).toBe("diagnose");
+    expect(diagnosticIntent(task("ts-2", ["diagnosing-review"]))).toBe("review");
+    expect(diagnosticIntent(task("ts-3", ["by-opencode"]))).toBeUndefined();
   });
 });
 

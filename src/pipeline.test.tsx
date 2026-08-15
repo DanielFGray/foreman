@@ -1,11 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { createSignal } from "solid-js";
+import { createSignal, type Accessor } from "solid-js";
 import type { Active, FleetState } from "./dispatcher.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { decisionKind, Pipeline, staleReview, type Controls } from "./pipeline.tsx";
+import {
+  decisionKind,
+  Pipeline as DashboardPipeline,
+  staleReview,
+  type Controls,
+} from "./pipeline.tsx";
 import { authoredBy, reviewedBy, type Item, type ReadyTask } from "./prog.ts";
+
+const RUNGS = ["flash", "pro", "sol"];
+const Pipeline = (props: { readonly state: Accessor<FleetState>; readonly controls: Controls }) => (
+  <DashboardPipeline {...props} rungs={RUNGS} />
+);
 
 const task = (id: string, status: string, labels: ReadonlyArray<string>): Item => ({
   id,
@@ -105,6 +115,8 @@ const state: FleetState = {
       status: undefined,
     },
   ],
+  committed: new Set(["ts-bbb222"]),
+  resumable: new Set(["ts-bbb111", "ts-bbb222"]),
   paused: false,
 };
 
@@ -148,6 +160,8 @@ const corrective: FleetState = {
   ],
   held: [],
   orphans: [],
+  committed: new Set(),
+  resumable: new Set(["ts-d100"]),
   paused: false,
 };
 
@@ -159,12 +173,14 @@ interface Calls {
   retry: Array<string>;
   release: Array<string>;
   close: Array<string>;
-  climb: Array<string>;
   descend: Array<string>;
   unassign: Array<string>;
   onboard: Array<string>;
   adopt: Array<string>;
   complete: Array<string>;
+  diagnose: Array<string>;
+  reviewIntervention: Array<string>;
+  continueAt: Array<string>;
 }
 
 const makeControls = (): { controls: Controls; calls: Calls } => {
@@ -176,12 +192,14 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     retry: [],
     release: [],
     close: [],
-    climb: [],
     descend: [],
     unassign: [],
     onboard: [],
     adopt: [],
     complete: [],
+    diagnose: [],
+    reviewIntervention: [],
+    continueAt: [],
   };
   const controls: Controls = {
     quit: () => calls.quit.push("quit"),
@@ -191,12 +209,15 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
     retry: (t) => calls.retry.push(t.id),
     release: (t) => calls.release.push(t.id),
     close: (t) => calls.close.push(t.id),
-    climb: (t) => calls.climb.push(t.id),
     descend: (t) => calls.descend.push(t.id),
     unassign: (t) => calls.unassign.push(t.id),
     onboard: (p) => calls.onboard.push(p),
     adopt: (o) => calls.adopt.push(o.branch),
     complete: (t, reason) => calls.complete.push(`${t.id}:${reason}`),
+    diagnose: (target, intent, rung) => calls.diagnose.push(`${target.task.id}:${intent}:${rung}`),
+    reviewIntervention: (target, rung) =>
+      calls.reviewIntervention.push(`${target.task.id}:${rung ?? "formal"}`),
+    continueAt: (target, rung) => calls.continueAt.push(`${target.task.id}:${rung}`),
   };
   return { controls, calls };
 };
@@ -356,7 +377,7 @@ describe("Pipeline", () => {
       await t.waitForFrame((f) => f.includes("Queue 3"));
       t.mockInput.pressArrow("left");
       await t.flush();
-      expect(t.captureCharFrame()).toContain("e climb");
+      expect(t.captureCharFrame()).toContain("e intervene");
       expect(t.captureCharFrame()).not.toContain("u unassign");
 
       t.mockInput.pressArrow("down");
@@ -395,6 +416,73 @@ describe("Pipeline", () => {
     }
   });
 
+  test("offers only continuation when queued work has no prior attempt", async () => {
+    const { controls, calls } = makeControls();
+    const quiet = { ...corrective, decisions: [], resumable: new Set<string>() };
+    const t = await testRender(() => <Pipeline state={() => quiet} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/3"));
+      t.mockInput.pressKey("e");
+      await t.waitForFrame((f) => f.includes("c continue"));
+      const menu = t.captureCharFrame();
+      expect(menu).not.toContain("d diagnose");
+      expect(menu).not.toContain("r review");
+
+      t.mockInput.pressKey("c");
+      await t.waitForFrame((f) => f.includes("continue rung"));
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressEnter();
+      await t.waitFor(() => calls.continueAt.length === 1);
+      expect(calls.continueAt[0]).toBe("ts-q100:pro");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("diagnoses uncommitted work and formally reviews committed work", async () => {
+    const { controls, calls } = makeControls();
+    const worked: FleetState = {
+      ...corrective,
+      decisions: [],
+      resumable: new Set(["ts-q100", "ts-q200"]),
+      committed: new Set(["ts-q200"]),
+    };
+    const t = await testRender(() => <Pipeline state={() => worked} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/3"));
+      t.mockInput.pressKey("e");
+      await t.waitForFrame((f) => f.includes("d diagnose") && f.includes("r review"));
+      t.mockInput.pressKey("d");
+      await t.waitForFrame((f) => f.includes("diagnose rung"));
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressEnter();
+      await t.waitFor(() => calls.diagnose.length === 1);
+      expect(calls.diagnose[0]).toBe("ts-q100:diagnose:pro");
+
+      t.mockInput.pressKey("e");
+      t.mockInput.pressKey("r");
+      await t.waitForFrame((f) => f.includes("review rung"));
+      t.mockInput.pressEnter();
+      await t.waitFor(() => calls.reviewIntervention.length === 1);
+      expect(calls.reviewIntervention[0]).toBe("ts-q100:flash");
+
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressKey("e");
+      await t.waitForFrame((f) => f.includes("r review"));
+      t.mockInput.pressKey("r");
+      await t.waitFor(() => calls.reviewIntervention.length === 2);
+      expect(calls.reviewIntervention[1]).toBe("ts-q200:formal");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("selects a row by clicking it", async () => {
     const { controls, calls } = makeControls();
     const t = await testRender(() => <Pipeline state={() => corrective} controls={controls} />, {
@@ -419,7 +507,7 @@ describe("Pipeline", () => {
   // reachable either: the cursor stays where there is work rather than walking
   // through columns the operator cannot see.
   test("draws no column for an empty list, and does not let the cursor into one", async () => {
-    const { controls, calls } = makeControls();
+    const { controls } = makeControls();
     const quiet: FleetState = {
       ...state,
       working: [],
@@ -442,12 +530,11 @@ describe("Pipeline", () => {
       for (const empty of ["Working", "Review", "Landed", "Attention"])
         expect(frame).not.toContain(`${empty} 0`);
 
-      // Right from the only column wraps back onto itself, so the queue's own
-      // key still lands rather than falling into a column that is not there.
+      // Right from the only column wraps back onto itself, so its menu still
+      // opens rather than targeting an invisible view.
       t.mockInput.pressArrow("right");
       t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.climb.length === 1);
-      expect(calls.climb[0]).toBe("ts-aaa111");
+      await t.waitForFrame((f) => f.includes("c continue"));
     } finally {
       t.renderer.destroy();
     }
@@ -566,22 +653,17 @@ describe("Pipeline", () => {
       await t.waitForFrame((f) => f.includes("Queue 2"));
       t.mockInput.pressArrow("right");
 
-      // queue row 0: a queued task can be pushed a rung up the ladder.
-      t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.climb.length === 1);
-      expect(calls.climb[0]).toBe("ts-aaa111");
-
       // working: focus jumps to the author's pane.
       t.mockInput.pressArrow("right");
       t.mockInput.pressKey("f");
       await t.waitFor(() => calls.focus.length === 1);
       expect(calls.focus[0]).toBe("ts-bbb111");
 
-      // review: climbing sends it back for a stronger author.
+      // review: focus jumps to the review workspace too.
       t.mockInput.pressArrow("right");
-      t.mockInput.pressKey("e");
-      await t.waitFor(() => calls.climb.length === 2);
-      expect(calls.climb[1]).toBe("ts-bbb222");
+      t.mockInput.pressKey("f");
+      await t.waitFor(() => calls.focus.length === 2);
+      expect(calls.focus[1]).toBe("ts-bbb222");
 
       // landed takes no actions, and a worker-less decision cannot be taken
       // over. Both presses must be silently ignored; the retry below is the
@@ -593,14 +675,13 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("r");
       await t.waitFor(() => calls.retry.length === 1);
       expect(calls.retry[0]).toBe("ts-ccc111");
-      expect(calls.climb.length).toBe(2);
-      expect(calls.focus.length).toBe(1);
+      expect(calls.focus.length).toBe(2);
 
       // decisions row 1: a reviewer-vanished workspace can be taken over.
       t.mockInput.pressArrow("down");
       t.mockInput.pressKey("t");
-      await t.waitFor(() => calls.focus.length === 2);
-      expect(calls.focus[1]).toBe("ts-ccc222");
+      await t.waitFor(() => calls.focus.length === 3);
+      expect(calls.focus[2]).toBe("ts-ccc222");
 
       // decisions row 2: an orphaned workspace is only ever closed. Retrying,
       // releasing or taking it over are all ignored — the task is unclaimed,
@@ -621,7 +702,6 @@ describe("Pipeline", () => {
       // the sort of rung that can turn out to be unearned, so x lowers it.
       t.mockInput.pressArrow("down");
       t.mockInput.pressKey("r");
-      t.mockInput.pressKey("e");
       t.mockInput.pressKey("d");
       t.mockInput.pressKey("c");
       t.mockInput.pressKey("x");
@@ -642,7 +722,6 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("o");
       await t.waitFor(() => calls.onboard.length === 1);
       expect(calls.onboard[0]).toBe("fibrae");
-      expect(calls.climb.length).toBe(2);
       expect(calls.close.length).toBe(1);
 
       // The global keys work from any column.

@@ -63,6 +63,9 @@ export class Fleet extends Effect.Tag("Fleet")<
     /** Brings a task's workspace to the front so a human can take over. */
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;
 
+    /** Stops one live role while leaving its workspace and worktree available. */
+    readonly stop: (worker: Worker, role: AgentRole) => Effect.Effect<void, FleetError>;
+
     /**
      * Closes a task's workspace, removing the worktree when foreman made one.
      * The branch survives either way.

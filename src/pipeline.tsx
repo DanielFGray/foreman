@@ -1,9 +1,16 @@
 import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
-import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
+import type { Active, Climbing, FleetState, InterventionTarget, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import { reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
+import {
+  diagnosticIntent,
+  reviewedBy,
+  rungOf,
+  type DiagnosticIntent,
+  type Item,
+  type ReadyTask,
+} from "./prog.ts";
 
 /**
  * Every command the view can give the dispatcher.
@@ -20,12 +27,17 @@ export interface Controls {
   readonly retry: (task: Item) => void;
   readonly release: (task: Item) => void;
   readonly close: (task: Item) => void;
-  readonly climb: (task: Climbing) => void;
   readonly descend: (task: Climbing) => void;
   readonly unassign: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
   readonly complete: (task: ReadyTask, reason: string) => void;
+  readonly diagnose: (target: InterventionTarget, intent: DiagnosticIntent, rung: string) => void;
+  readonly reviewIntervention: (
+    target: InterventionTarget,
+    diagnosticRung: string | undefined,
+  ) => void;
+  readonly continueAt: (target: InterventionTarget, rung: string) => void;
 }
 
 const COLUMNS = [
@@ -106,6 +118,8 @@ interface ColumnRow {
   readonly project: string | undefined;
   /** The branch behind a stranded row, which no task in the fleet accounts for. */
   readonly orphan: Orphan | undefined;
+  readonly hasWork: boolean;
+  readonly committed: boolean;
 }
 
 type Action =
@@ -115,7 +129,7 @@ type Action =
   | "close"
   | "takeOver"
   | "focus"
-  | "climb"
+  | "intervene"
   | "descend"
   | "unassign"
   | "onboard"
@@ -146,12 +160,12 @@ type Action =
  * it from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["complete", "climb", "descend", "unassign"],
-  working: ["focus", "climb", "descend", "release"],
-  review: ["focus", "climb", "descend", "release"],
+  queue: ["complete", "intervene", "descend", "unassign"],
+  working: ["focus", "intervene", "descend", "release"],
+  review: ["focus", "intervene", "descend", "release"],
   landed: [],
-  decisions: ["retry", "takeOver", "release", "close", "unassign"],
-  yours: ["descend", "unassign"],
+  decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
+  yours: ["intervene", "descend", "unassign"],
   held: ["onboard"],
   stranded: ["adopt"],
 };
@@ -165,9 +179,9 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  * label no reviewer is behind, unassigned.
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
-  "author vanished": ["retry", "takeOver", "release"],
-  "reviewer vanished": ["retry", "takeOver", "release"],
-  "orphaned workspace": ["close", "unassign"],
+  "author vanished": ["retry", "takeOver", "intervene", "release"],
+  "reviewer vanished": ["retry", "takeOver", "intervene", "release"],
+  "orphaned workspace": ["intervene", "close", "unassign"],
 };
 
 const ACTION_LABELS: Record<Action, string> = {
@@ -175,7 +189,7 @@ const ACTION_LABELS: Record<Action, string> = {
   retry: "r retry",
   takeOver: "t take over",
   focus: "f focus",
-  climb: "e climb",
+  intervene: "e intervene",
   descend: "x descend",
   unassign: "u unassign",
   release: "d release",
@@ -211,8 +225,11 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
         return row.task !== undefined;
       case "complete":
         return row.ready !== undefined;
-      case "climb":
-        return row.task !== undefined || row.ready !== undefined;
+      case "intervene":
+        return (
+          row.ready !== undefined ||
+          (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled")
+        );
       case "onboard":
         return row.project !== undefined;
       case "adopt":
@@ -231,11 +248,17 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
 export const Pipeline = (props: {
   readonly state: Accessor<FleetState>;
   readonly controls: Controls;
+  readonly rungs: ReadonlyArray<string>;
 }) => {
   const dimensions = useTerminalDimensions();
   const [wanted, setWanted] = createSignal<ViewName>("queue");
   const [row, setRow] = createSignal(0);
   const [completion, setCompletion] = createSignal<ReadyTask | undefined>();
+  const [intervention, setIntervention] = createSignal<ColumnRow | undefined>();
+  const [rungChoice, setRungChoice] = createSignal<{
+    readonly action: "diagnose" | "review" | "continue";
+    readonly index: number;
+  }>();
 
   const views = (): ReadonlyArray<ViewName> => drawn(props.state());
 
@@ -278,6 +301,19 @@ export const Pipeline = (props: {
     setRow(index);
   };
 
+  const targetOf = (target: ColumnRow): InterventionTarget | undefined => {
+    const task = target.task ?? target.ready;
+    return task ? { task, worker: target.worker } : undefined;
+  };
+
+  const chooseRung = (action: "diagnose" | "review" | "continue") => {
+    const target = intervention();
+    if (!target || props.rungs.length === 0) return;
+    const current = rungOf(target.task ?? target.ready ?? { labels: [] });
+    const index = Math.max(props.rungs.indexOf(current ?? ""), 0);
+    setRungChoice({ action, index });
+  };
+
   const moveView = (delta: number) => {
     const visible = views();
     const index = visible.indexOf(view());
@@ -316,9 +352,8 @@ export const Pipeline = (props: {
       case "focus":
         if (target.worker) props.controls.focus(target.worker);
         break;
-      case "climb":
-        if (target.task) props.controls.climb(target.task);
-        else if (target.ready) props.controls.climb(target.ready);
+      case "intervene":
+        setIntervention(target);
         break;
       case "descend":
         if (target.task && rungOf(target.task) !== undefined) props.controls.descend(target.task);
@@ -343,6 +378,45 @@ export const Pipeline = (props: {
   useKeyboard((key) => {
     if (completion() !== undefined) {
       if (key.name === "escape") setCompletion(undefined);
+      return;
+    }
+    const choosing = rungChoice();
+    if (choosing) {
+      if (key.name === "escape") {
+        setRungChoice(undefined);
+        setIntervention(undefined);
+      } else if (key.name === "up" || key.name === "k") {
+        setRungChoice({ ...choosing, index: Math.max(choosing.index - 1, 0) });
+      } else if (key.name === "down" || key.name === "j") {
+        setRungChoice({
+          ...choosing,
+          index: Math.min(choosing.index + 1, props.rungs.length - 1),
+        });
+      } else if (key.name === "return") {
+        const row = intervention();
+        const target = row ? targetOf(row) : undefined;
+        const rung = props.rungs[choosing.index];
+        if (target && rung) {
+          if (choosing.action === "continue") props.controls.continueAt(target, rung);
+          else if (choosing.action === "diagnose")
+            props.controls.diagnose(target, "diagnose", rung);
+          else props.controls.reviewIntervention(target, rung);
+        }
+        setRungChoice(undefined);
+        setIntervention(undefined);
+      }
+      return;
+    }
+    const intervening = intervention();
+    if (intervening) {
+      if (key.name === "escape") setIntervention(undefined);
+      else if (key.name === "d" && intervening.hasWork) chooseRung("diagnose");
+      else if (key.name === "r" && intervening.committed) {
+        const target = targetOf(intervening);
+        if (target) props.controls.reviewIntervention(target, undefined);
+        setIntervention(undefined);
+      } else if (key.name === "r" && intervening.hasWork) chooseRung("review");
+      else if (key.name === "c") chooseRung("continue");
       return;
     }
     switch (key.name) {
@@ -387,7 +461,7 @@ export const Pipeline = (props: {
         apply("focus");
         break;
       case "e":
-        apply("climb");
+        apply("intervene");
         break;
       case "x":
         apply("descend");
@@ -439,6 +513,9 @@ export const Pipeline = (props: {
           return target ? actionsFor(target.column, target) : [];
         }}
         completion={completion}
+        intervention={intervention}
+        rungChoice={rungChoice}
+        rungs={props.rungs}
         complete={(reason) => {
           const task = completion();
           const trimmed = reason.trim();
@@ -644,6 +721,11 @@ const Status = (props: {
   readonly state: Accessor<FleetState>;
   readonly actions: Accessor<ReadonlyArray<Action>>;
   readonly completion: Accessor<ReadyTask | undefined>;
+  readonly intervention: Accessor<ColumnRow | undefined>;
+  readonly rungChoice: Accessor<
+    { readonly action: "diagnose" | "review" | "continue"; readonly index: number } | undefined
+  >;
+  readonly rungs: ReadonlyArray<string>;
   readonly complete: (reason: string) => void;
   readonly cancel: () => void;
 }) => (
@@ -652,33 +734,58 @@ const Status = (props: {
       {`${props.state().paused ? "paused" : "running"}  ·  ${attentionStatus(props.state())}`}
     </text>
     <Show
-      when={props.completion() === undefined}
+      when={props.rungChoice() === undefined}
       fallback={
-        <box style={{ flexDirection: "row", height: 1 }}>
-          <text>{`Reason for ${props.completion()?.id}: `}</text>
-          <input
-            focused
-            flexGrow={1}
-            placeholder="required"
-            onSubmit={props.complete as never}
-            onKeyDown={(key) => {
-              if (key.name === "escape") props.cancel();
-            }}
-          />
-          <text> Enter confirm Esc cancel</text>
-        </box>
+        <text style={{ height: 1 }}>
+          {`${props.rungChoice()?.action} rung  ${props.rungs.map((rung, index) => (index === props.rungChoice()?.index ? `[${rung}]` : rung)).join("  ")}  j/k choose  Enter confirm  Esc cancel`}
+        </text>
       }
     >
-      <text style={{ height: 1 }}>
-        {[
-          ...props.actions().map((action) => ACTION_LABELS[action]),
-          "h/l view",
-          "j/k move",
-          `p ${props.state().paused ? "resume" : "pause"}`,
-          "F12 log",
-          "q quit",
-        ].join("  ")}
-      </text>
+      <Show
+        when={props.intervention() === undefined}
+        fallback={
+          <text style={{ height: 1 }}>
+            {[
+              props.intervention()?.hasWork ? "d diagnose" : undefined,
+              props.intervention()?.hasWork ? "r review" : undefined,
+              "c continue",
+              "Esc cancel",
+            ]
+              .filter((label) => label !== undefined)
+              .join("  ")}
+          </text>
+        }
+      >
+        <Show
+          when={props.completion() === undefined}
+          fallback={
+            <box style={{ flexDirection: "row", height: 1 }}>
+              <text>{`Reason for ${props.completion()?.id}: `}</text>
+              <input
+                focused
+                flexGrow={1}
+                placeholder="required"
+                onSubmit={props.complete as never}
+                onKeyDown={(key) => {
+                  if (key.name === "escape") props.cancel();
+                }}
+              />
+              <text> Enter confirm Esc cancel</text>
+            </box>
+          }
+        >
+          <text style={{ height: 1 }}>
+            {[
+              ...props.actions().map((action) => ACTION_LABELS[action]),
+              "h/l view",
+              "j/k move",
+              `p ${props.state().paused ? "resume" : "pause"}`,
+              "F12 log",
+              "q quit",
+            ].join("  ")}
+          </text>
+        </Show>
+      </Show>
     </Show>
   </box>
 );
@@ -686,17 +793,17 @@ const Status = (props: {
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> => {
   switch (column) {
     case "queue":
-      return state.queue.map((task) => readyRow(task, "queue"));
+      return state.queue.map((task) => readyRow(task, "queue", state));
     case "working":
-      return state.working.map((active) => activeRow(active, "working"));
+      return state.working.map((active) => activeRow(active, "working", state));
     case "review":
-      return state.review.map((active) => activeRow(active, "review"));
+      return state.review.map((active) => activeRow(active, "review", state));
     case "landed":
-      return state.landed.map(landedRow);
+      return state.landed.map((task) => landedRow(task, state));
     case "decisions":
-      return state.decisions.map(decisionRow);
+      return state.decisions.map((active) => decisionRow(active, state));
     case "yours":
-      return state.yours.map((task) => readyRow(task, "yours"));
+      return state.yours.map((task) => readyRow(task, "yours", state));
     case "held":
       return state.held.map(heldRow);
     case "stranded":
@@ -718,7 +825,7 @@ const attentionRow =
   (kind: string) =>
   (row: ColumnRow): ColumnRow => ({ ...row, label: `${kind}  ${row.label}` });
 
-const readyRow = (task: ReadyTask, column: "queue" | "yours"): ColumnRow => ({
+const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState): ColumnRow => ({
   column,
   key: task.id,
   label: `${task.project}  ${task.title}`,
@@ -727,22 +834,30 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours"): ColumnRow => ({
   worker: undefined,
   project: undefined,
   orphan: undefined,
+  hasWork: state.resumable.has(task.id),
+  committed: state.committed.has(task.id),
 });
 
 // The kind is shown rather than the project: in the middle columns the question
 // is which model is on the work, and the project is already visible upstream.
-const activeRow = ({ task, worker, kind }: Active, column: "working" | "review"): ColumnRow => ({
+const activeRow = (
+  { task, worker, kind }: Active,
+  column: "working" | "review",
+  state: FleetState,
+): ColumnRow => ({
   column,
   key: task.id,
-  label: `${kind ?? "?"}  ${task.title}`,
+  label: `${diagnosticIntent(task) ?? kind ?? "?"}  ${task.title}`,
   task,
   ready: undefined,
   worker,
   project: undefined,
   orphan: undefined,
+  hasWork: worker !== undefined || state.resumable.has(task.id),
+  committed: state.committed.has(task.id),
 });
 
-const landedRow = (task: Item): ColumnRow => ({
+const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   column: "landed",
   key: task.id,
   label: `${task.project}  ${task.title}`,
@@ -751,9 +866,11 @@ const landedRow = (task: Item): ColumnRow => ({
   worker: undefined,
   project: undefined,
   orphan: undefined,
+  hasWork: state.resumable.has(task.id),
+  committed: state.committed.has(task.id),
 });
 
-const decisionRow = ({ task, worker, kind }: Active): ColumnRow => ({
+const decisionRow = ({ task, worker, kind }: Active, state: FleetState): ColumnRow => ({
   column: "decisions",
   key: task.id,
   // The reason leads: it is the question the column exists to answer, and it
@@ -770,6 +887,8 @@ const decisionRow = ({ task, worker, kind }: Active): ColumnRow => ({
   worker,
   project: undefined,
   orphan: undefined,
+  hasWork: worker !== undefined || state.resumable.has(task.id),
+  committed: state.committed.has(task.id),
 });
 
 const heldRow = (project: string): ColumnRow => ({
@@ -781,6 +900,8 @@ const heldRow = (project: string): ColumnRow => ({
   worker: undefined,
   project,
   orphan: undefined,
+  hasWork: false,
+  committed: false,
 });
 
 // A branch whose task is gone has no id to dispatch against, so the row says
@@ -794,4 +915,6 @@ const orphanRow = (orphan: Orphan): ColumnRow => ({
   worker: undefined,
   project: undefined,
   orphan,
+  hasWork: true,
+  committed: true,
 });
