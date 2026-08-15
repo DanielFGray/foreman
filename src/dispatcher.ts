@@ -291,7 +291,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         yield* Effect.forEach(
           current.review.filter(({ task, worker }) => readyToLand(task, worker)),
-          ({ task, worker }) => land(task, worker),
+          ({ task }) => land(task),
           { discard: true },
         );
 
@@ -302,14 +302,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // to the queue, which is where unfinished work belongs.
         yield* Effect.forEach(
           current.unbacked,
-          ({ task, worker, kind }) =>
+          ({ task, kind }) =>
             Effect.gen(function* () {
               yield* prog.log(
                 task.id,
                 `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)}. Returned to the queue — there is no work to review.`,
               );
               yield* prog.release(task.id);
-              if (worker) yield* fleet.close(worker);
+              yield* teardown(task);
             }),
           { discard: true },
         );
@@ -325,7 +325,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   task.status === "done" ? "Task landed" : "Task canceled",
                   `${task.id} ${task.title}`,
                 );
-                return yield* fleet.close(worker);
+                return yield* teardown(task);
               }
 
               const reviewer = reviewedBy(task);
@@ -383,7 +383,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
                 );
                 yield* prog.release(task.id);
-                return yield* fleet.close(worker);
+                return yield* teardown(task);
               }
 
               // Approvals stay with the operator, so a blocked worker is left
@@ -436,7 +436,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               // means now: the worktree is removed with it, and the next author
               // continues from the branch tip rather than from uncommitted
               // edits.
-              yield* fleet.close(worker);
+              yield* teardown(task);
               yield* fleet.notify(
                 "Task returned",
                 `${task.id} stopped unfinished — back in the queue`,
@@ -455,7 +455,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * or author, so every branch passes the same clean-checkout and verification
      * gate however trivial the task that produced it was.
      */
-    const land = (task: Item, worker: Worker | undefined) =>
+    const land = (task: Item) =>
       Effect.gen(function* () {
         const project = projectFor(task.project);
         if (!project) return;
@@ -517,7 +517,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         );
         yield* prog.complete(task.id);
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
-        if (worker) yield* fleet.close(worker);
+        yield* teardown(task);
       }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
 
     /**
@@ -585,7 +585,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 `foreman: claim released — no activity since ${task.last_activity_at.toISOString()}.`,
               );
               yield* prog.release(task.id);
-              if (worker) yield* fleet.close(worker);
+              // Only a workspace that still exists is taken down. A worker
+              // whose workspace already closed leaves its worktree behind on
+              // purpose: it may hold the interrupted agent's edits, and the
+              // next author opens onto them.
+              if (worker) yield* teardown(task);
               yield* Effect.logInfo(`reclaimed ${task.id} (${task.project})`);
             }).pipe(
               Effect.catchAll((error) =>
@@ -789,11 +793,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const projectFor = (name: string) =>
       settings.projects.find((candidate) => candidate.name === name);
 
-    /** The workspace serving a task, if the multiplexer still has one. */
-    const workspaceFor = (task: string) =>
-      fleet.roster.pipe(
-        Effect.map((workers) => workers.find((candidate) => candidate.task === task)),
-      );
+    /** The checkout a project's work lands in, when foreman is configured for it. */
+    const repositoryFor = (task: { readonly project: string }) =>
+      projectFor(task.project)?.directory;
+
+    /**
+     * Takes down a task's workspace and, with it, the worktree foreman made.
+     * `fleet.close` resolves the same way `open` does, so a workspace herdr has
+     * already dropped still leaves its worktree removed rather than orphaned.
+     */
+    const teardown = (task: { readonly id: string; readonly project: string }) =>
+      fleet.close({ task: task.id, repository: repositoryFor(task) });
 
     const eachProject = <A>(read: (project: Project) => Effect.Effect<ReadonlyArray<A>, unknown>) =>
       Effect.forEach(settings.projects, (project) =>
@@ -864,12 +874,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               return;
             }
 
-            const worker = yield* workspaceFor(task.id);
-            if (!worker) return;
             const project = projectFor(task.project);
             if (!project) return;
             const rung = authorFor(settings.ladder, rungOf(task));
             if (!rung) return;
+            // The workspace may be gone — the pane that was its only one closed
+            // by hand. `fleet.open` resolves to the worktree git still has, so
+            // a retry re-adopts the same directory with its edits instead of
+            // losing them.
+            const worker = yield* fleet.open({
+              task: task.id,
+              repository: project.directory,
+              branch: labelFor(task.id),
+              directory: directoryFor(task.project, task.id),
+            });
             const prompt = yield* prompts.author(task, worker.directory, project.directory);
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             yield* prog.attribute(task.id, rung.name);
@@ -882,8 +900,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         commanded(
           Effect.gen(function* () {
             yield* prog.release(task.id);
-            const worker = yield* workspaceFor(task.id);
-            if (worker) yield* fleet.close(worker);
+            yield* teardown(task);
           }),
         ),
 
@@ -896,13 +913,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * task, and the branch survives either way — the sweep prunes a merged
        * one and the stranded column shows the rest.
        */
-      close: (task: Item) =>
-        commanded(
-          Effect.gen(function* () {
-            const worker = yield* workspaceFor(task.id);
-            if (worker) yield* fleet.close(worker);
-          }),
-        ),
+      close: (task: Item) => commanded(teardown(task)),
 
       /** Moves a task one rung up the ladder for its next dispatch. */
       climb: (task: Climbing) => commanded(climb(task)),
