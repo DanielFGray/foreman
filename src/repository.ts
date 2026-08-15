@@ -26,6 +26,11 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           const process = yield* executor.start(
             Command.make(program, ...args).pipe(
               Command.workingDirectory(directory),
+              // Repository reads must not refresh the shared index. If an
+              // observational subprocess is interrupted while doing that,
+              // Git leaves index.lock behind and later landings cannot merge.
+              // Required write locks are not optional and remain enabled.
+              Command.env({ GIT_OPTIONAL_LOCKS: "0" }),
               Command.stdout("pipe"),
               Command.stderr("pipe"),
             ),

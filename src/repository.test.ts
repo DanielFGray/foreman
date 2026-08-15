@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -48,6 +48,18 @@ describe("Repository", () => {
 
     await git("checkout", "--", "tracked.txt");
     expect(await isClean(directory)).toBe(true);
+  });
+
+  test("does not refresh the index while checking cleanliness", async () => {
+    const tracked = join(directory, "tracked.txt");
+    const index = join(directory, ".git", "index");
+
+    // A newer worktree timestamp makes plain `git status` refresh the index.
+    await utimes(tracked, new Date(Date.now() + 2_000), new Date(Date.now() + 2_000));
+    const before = (await stat(index)).ino;
+
+    expect(await isClean(directory)).toBe(true);
+    expect((await stat(index)).ino).toBe(before);
   });
 
   test("merges only into a clean checkout", async () => {
