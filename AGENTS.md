@@ -60,9 +60,17 @@ Every tick reads all of it back. A restart re-adopts its live workspaces
 instead of orphaning them — that is what `Fleet.open` returning an existing
 workspace by label is for. The only thing foreman genuinely cannot derive is
 whether the operator has paused dispatch, because nothing in the world records
-an intention. That is the one `Ref`, and it starts paused: settling and
-reclaiming run regardless, so a fresh start lands finished work and tidies dead
-workspaces before it asks for anything new.
+an intention. That is the one `Ref`, and it starts paused unless `--running`
+says otherwise: settling and reclaiming run regardless, so a fresh start lands
+finished work and tidies dead workspaces before it asks for anything new.
+
+`--running` exists because a restart is not an operator. Under `bun --watch` the
+daemon restarts whenever foreman's own source changes, and landing a task into
+foreman's own checkout does exactly that — so pausing by default parked the
+fleet after every landing and waited for a person. The command line is the only
+thing a restart inherits, which is why the intention is stated there and nowhere
+durable. Writing it to disk would make foreman remember, and the operator's last
+keypress is not a fact about the world.
 
 The wake queue beside it is not a second one. It holds no state — a tick reads
 everything back either way — it only says "look now" so an operator's keypress

@@ -50,11 +50,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // asked foreman to stop taking on new work. Nothing in the world records
     // an intention.
     //
-    // It starts true. Settling and reclaiming run while paused, so a fresh
-    // start lands what is finished and tidies what died before it asks for
-    // anything new — and the operator who opened the screen to drain the fleet
-    // is not racing the first tick to press pause.
-    const paused = yield* Ref.make(true);
+    // It starts true unless the operator said otherwise on the command line.
+    // Settling and reclaiming run while paused, so a fresh start lands what is
+    // finished and tidies what died before it asks for anything new — and the
+    // operator who opened the screen to drain the fleet is not racing the first
+    // tick to press pause.
+    //
+    // `--running` is how a restart inherits the answer. Under `bun --watch` the
+    // daemon restarts whenever foreman's own source changes — which includes
+    // landing a task into foreman's own checkout — so pausing by default parked
+    // the fleet after every landing and waited for a person. The command line is
+    // the only thing a restart carries over, which is why the intention is
+    // stated there and nowhere durable: recording it would make foreman
+    // remember, and the operator's last keypress is not a fact about the world.
+    const paused = yield* Ref.make(!settings.running);
     const state = yield* SubscriptionRef.make(empty);
 
     // The poll interval is how long foreman waits to notice something nobody
