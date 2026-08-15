@@ -54,31 +54,6 @@ describe("below", () => {
     expect(below(ladder, "top")).toBe("middle");
   });
 
-  test("has nothing below the bottom rung", () => {
-    // The ladder reads no label as the bottom, so a task lowered off the
-    // bottom rung loses its label and starts fresh rather than carrying a
-    // redundant rung-<bottom>.
-    expect(below(ladder, undefined)).toBeUndefined();
-    expect(below(ladder, "cheap")).toBeUndefined();
-  });
-
-  test("brings a task back down from the operator to the top rung", () => {
-    expect(below(ladder, HUMAN)).toBe("top");
-  });
-
-  test("sends an unknown rung to the top, matching above", () => {
-    // A config that no longer has the rung cannot say what sits under it, so
-    // it is read like above reads it — as a claim the ladder cannot place.
-    expect(below(ladder, "retired")).toBe("top");
-  });
-});
-
-describe("below", () => {
-  test("lowers one rung at a time", () => {
-    expect(below(ladder, "middle")).toBe("cheap");
-    expect(below(ladder, "top")).toBe("middle");
-  });
-
   test("has nothing to write below the bottom rung", () => {
     // The ladder reads no label as the bottom, so descending off it removes
     // the label rather than pinning a redundant rung-<bottom>.

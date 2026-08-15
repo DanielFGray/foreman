@@ -917,9 +917,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * The world records whether a reviewer was dispatched, not whether that
        * reviewer is still alive, so only the operator can say the label is
        * stale — the dashboard offers this exactly where the workspace is gone
-       * and the task is open. The label is re-checked here so a command can
-       * never clear a live assignment, and it is cleared through the same
-       * method the settle loop uses when a review ends.
+       * and the task is open. Liveness is the view's call; the label is
+       * re-checked here only so an already-cleared snapshot clears nothing,
+       * and it is cleared through the same method the settle loop uses when a
+       * review ends.
        */
       unassign: (task: Climbing) =>
         commanded(
