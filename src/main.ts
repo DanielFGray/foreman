@@ -2,7 +2,7 @@
 import { Command, Options } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer, Option, Schema } from "effect";
-import { settings } from "./config.ts";
+import { type Overrides, settings } from "./config.ts";
 import { dashboard } from "./dashboard.tsx";
 import { Dispatcher } from "./dispatcher.ts";
 import { HerdrFleet } from "./herdr.ts";
@@ -26,6 +26,20 @@ const slots = Options.integer("slots").pipe(
   // daemon written the long way round, and a negative one is a typo.
   Options.withSchema(Schema.Positive),
   Options.optional,
+);
+
+/**
+ * Whether this run starts dispatching, rather than paused.
+ *
+ * Foreman pauses on start so an operator can drain a fleet without racing the
+ * first tick. A restart is not that operator: `bun --watch` restarts the daemon
+ * whenever foreman's own source changes — landing a task into foreman's own
+ * checkout does exactly that — and the fleet parked itself after every landing.
+ * The command line is the only thing a restart inherits, so it is where the
+ * answer belongs.
+ */
+const running = Options.boolean("running").pipe(
+  Options.withDescription("Start dispatching immediately, rather than paused"),
 );
 
 /**
@@ -67,14 +81,14 @@ const planCommand = Command.make(
   ),
 );
 
-const foreman = Command.make("foreman", { slots }, ({ slots }) =>
+const foreman = Command.make("foreman", { slots, running }, ({ slots, running }) =>
   Effect.gen(function* () {
     // The loop is forked and the dashboard is parked on, so closing the
     // dashboard ends the process: an operator who quits the screen means to
     // stop the fleet, not to leave it dispatching where they cannot see it.
     yield* Effect.forkScoped(Dispatcher.run);
     yield* dashboard;
-  }).pipe(Effect.scoped, Effect.provide(live(slots))),
+  }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
 ).pipe(Command.withSubcommands([planCommand]));
 
 /**
@@ -83,16 +97,18 @@ const foreman = Command.make("foreman", { slots }, ({ slots }) =>
  * its own dependencies — Prog and Prompts — and sits on top of the base set,
  * which feeds it the Settings and Fleet it cannot build itself.
  */
-const live = (slots: Option.Option<number>) =>
+const live = (overrides: Overrides) =>
   Layer.provideMerge(
     Dispatcher.Default,
-    Layer.mergeAll(HerdrFleet, settings({ slots }), logging()),
+    Layer.mergeAll(HerdrFleet, settings(overrides), logging()),
   );
 
 /** Plan mode needs the same world as the daemon minus the dispatcher. */
 const planLive = Layer.mergeAll(
   HerdrFleet,
-  settings({ slots: Option.none() }),
+  // Plan mode drives its own agents to completion and never dispatches, so
+  // the pause the daemon starts under has nothing to hold back.
+  settings({ slots: Option.none(), running: true }),
   Prog.Default,
   Prompts.Default,
   logging(),

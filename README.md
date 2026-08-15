@@ -47,7 +47,12 @@ and `prog list` together tell you everything foreman knows.
 
 Foreman starts paused. Opening the dashboard to drain the fleet is the common
 case, and it should not be a race against the first tick. Press `p` when you
-want it dispatching.
+want it dispatching, or start it with `--running` to skip the keypress.
+
+Use `--running` for anything that restarts by itself. `bun --watch` restarts the
+daemon whenever foreman's own source changes — which is what landing a task into
+foreman's own checkout does — and the command line is the only thing a restart
+carries over.
 
 The poll interval is how long foreman waits to notice something nobody told it
 about. Anything you do in the dashboard — start, pause, retry, release, adopt —

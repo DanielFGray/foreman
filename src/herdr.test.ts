@@ -4,6 +4,7 @@ import {
   paneFor,
   resolveClose,
   resolveOpen,
+  stillRunning,
   workerStateOf,
   type WorktreeRecord,
 } from "./herdr.ts";
@@ -160,5 +161,20 @@ describe("resolveClose", () => {
 
   test("nothing to tear down", () => {
     expect(resolveClose([], [], "ts-1")).toEqual({ kind: "nothing" });
+  });
+});
+
+describe("stillRunning", () => {
+  test("work in progress is what a second agent would collide with", () => {
+    expect(stillRunning("working")).toBe(true);
+    expect(stillRunning("blocked")).toBe(true);
+  });
+
+  // Reading a settled agent as a reason to refuse is a stall with no exit:
+  // nothing ends that agent, so the task returns to the queue and the same
+  // dispatch fails again every poll, forever.
+  test("a settled agent is spent, not a reason to refuse the next dispatch", () => {
+    expect(stillRunning("settled")).toBe(false);
+    expect(stillRunning("gone")).toBe(false);
   });
 });

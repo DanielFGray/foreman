@@ -57,13 +57,26 @@ So the world is authoritative, not the process:
 | Is this project free to work in? | `git status` in its checkout |
 
 Every tick reads all of it back. A restart re-adopts its live workspaces
-instead of orphaning them, and a worktree whose workspace a keypress destroyed
-is adopted rather than collided with — that is what `Fleet.open` resolving a
-workspace, then a worktree, then creating both is for. The only thing foreman
-genuinely cannot derive is whether the operator has paused dispatch, because
-nothing in the world records an intention. That is the one `Ref`, and it starts
-paused: settling and reclaiming run regardless, so a fresh start lands finished
-work and tidies dead workspaces before it asks for anything new.
+instead of orphaning them — that is what `Fleet.open` returning an existing
+workspace by label is for. The only thing foreman genuinely cannot derive is
+whether the operator has paused dispatch, because nothing in the world records
+an intention. That is the one `Ref`, and it starts paused unless `--running`
+says otherwise: settling and reclaiming run regardless, so a fresh start lands
+finished work and tidies dead workspaces before it asks for anything new.
+
+`--running` exists because a restart is not an operator. Under `bun --watch` the
+daemon restarts whenever foreman's own source changes, and landing a task into
+foreman's own checkout does exactly that — so pausing by default parked the
+fleet after every landing and waited for a person. The command line is the only
+thing a restart inherits, which is why the intention is stated there and nowhere
+durable. Writing it to disk would make foreman remember, and the operator's last
+keypress is not a fact about the world.
+
+A worktree whose workspace a keypress destroyed is adopted rather than
+collided with. `Fleet.open` resolves a workspace, then a worktree, then creates
+both, and teardown reads the same order. The worktree and branch survive the
+workspace, so a fresh start can continue the interrupted work and remove it
+when the task leaves the fleet.
 
 The wake queue beside it is not a second one. It holds no state — a tick reads
 everything back either way — it only says "look now" so an operator's keypress
@@ -95,6 +108,13 @@ order: a workspace carrying the task's label, else a worktree git still has
 registered for the branch (attaching a fresh workspace to it), else creating
 both. Teardown reads the same order, so a worktree whose workspace already
 closed is removed rather than orphaned.
+
+The label records no ownership, and the roster is every daemon's: herdr shows
+all of them, and two foremen against different configs are not competing for
+the same slots. The config's project set is the only ownership the world
+records, so `scopeRoster` in `src/dispatcher.ts` scopes what each daemon may
+act on — the busy count, settle, the dashboard — to workspaces whose task
+lives in a project it manages.
 
 ### herdr owns the worktree
 
@@ -157,9 +177,13 @@ the git path — it answers both of those questions differently:
 - **There is no checked-out branch.** jj bookmarks do not move by being merged
   into. The bookmark to land on is derived the way git derives it — the branch
   the operator is standing on, which here is the nearest bookmark behind the
-  working copy, `heads(::@ & bookmarks())`. `heads` drops the ones already
-  merged into it, foreman's own included. Zero or more than one holds the
-  project rather than guessing.
+  working copy, `heads(::@ & bookmarks())`. `heads` drops the bookmarks already
+  merged into that one, and foreman's own names are filtered out of what is
+  left: every author branches from the trunk's tip, so until that author commits
+  its bookmark sits on the very commit being asked about. Reading it as a second
+  candidate held the project for as long as anyone was working in it — a fleet
+  that stops landing the moment it starts working. Of the bookmarks that remain,
+  zero or more than one holds the project rather than guessing.
 - **The working copy is a commit**, so "clean" is `@` being empty. That counts a
   file git would call untracked, unlike the git path above, because under jj it
   is not untracked: it is already part of the working-copy commit, and landing
@@ -350,15 +374,31 @@ carries a `roles` map of the ones it currently has, keyed by that literal, and
 each is read back from a pane labelled `foreman-<role>` — herdr's own record,
 not foreman's memory.
 
-Placement follows from the label. A role that has no pane in the workspace takes
-the workspace's own pane if it is unlabelled; otherwise it splits a new one. So
-the author owns the workspace pane for the whole task, a reviewer splits beside
-it, and plan mode's two stages take one pane each in sequence.
+Placement follows from the label. A role takes the workspace's own pane if it is
+unlabelled; otherwise it splits a new one. So the first author owns the workspace
+pane, a reviewer splits beside it, and plan mode's two stages take one pane each
+in sequence.
 
 One role per pane is also what makes a stage handoff possible. herdr has no
 command that ends an agent without closing the pane it runs in, so a planner and
 a tasker sharing one pane could never both run; as two roles they simply do not
 contend.
+
+**Only work in progress refuses a dispatch.** A role that is `working` or
+`blocked` rejects a second agent, because two agents in one worktree edit over
+each other. A *settled* one does not: it has stopped, it is editing nothing, and
+because herdr cannot end an agent without closing its pane, nothing will ever end
+it. Reading settled as live made every workspace foreman deliberately keeps — a
+reviewer that returned work with `prog open`, a vanished author's edits — into a
+permanent stall: the dispatch is refused, the caller hands the claim back, the
+queue offers the task again, and the same refusal repeats every poll forever.
+Captured live at one failure every eleven seconds for four minutes until the
+daemon was stopped.
+
+So a pane already carrying a role is never reused, not even by the same role. The
+replacement splits first and the spent pane is closed after — that order is what
+ends the settled agent inside it, and what keeps the workspace alive when the
+spent pane is its only one.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`

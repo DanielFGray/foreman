@@ -114,6 +114,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       return {
         projects,
         slots: Option.getOrElse(overrides.slots, () => raw.slots),
+        running: overrides.running,
         ladder,
         planner: yield* namedRung(raw.planner, topOf(ladder)),
         tasker: yield* namedRung(raw.tasker, ladder[0]),
@@ -124,9 +125,19 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
     }),
   ).pipe(Layer.provide(BunContext.layer));
 
-/** What the command line may say instead of the config file. */
+/**
+ * What the command line says: values that stand in for the config file, and
+ * values only a single run can have.
+ *
+ * `running` is the second kind. Whether dispatch is paused is an intention, not
+ * a description of the fleet, so it has no place in a file that outlives the
+ * run — but it does have to survive a restart, because `bun --watch` restarts
+ * the daemon whenever foreman's own source changes and the command line is the
+ * only thing a restart inherits.
+ */
 export interface Overrides {
   readonly slots: Option.Option<number>;
+  readonly running: boolean;
 }
 
 interface SettingsShape {
@@ -136,6 +147,8 @@ interface SettingsShape {
     readonly verify: string | undefined;
   }>;
   readonly slots: number;
+  /** Whether this run starts dispatching, rather than paused. */
+  readonly running: boolean;
   readonly ladder: Ladder;
   readonly planner: Rung;
   readonly tasker: Rung;
