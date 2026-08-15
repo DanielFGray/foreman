@@ -3,7 +3,7 @@ import { useKeyboard } from "@opentui/solid";
 import { createEffect, createSignal, For, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import type { Item, ReadyTask } from "./prog.ts";
+import { reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
 
 /**
  * Every command the view can give the dispatcher.
@@ -21,6 +21,8 @@ export interface Controls {
   readonly release: (task: Item) => void;
   readonly close: (task: Item) => void;
   readonly climb: (task: Climbing) => void;
+  readonly descend: (task: Climbing) => void;
+  readonly unassign: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
   readonly adopt: (orphan: Orphan) => void;
 }
@@ -55,6 +57,25 @@ export const decisionKind = (task: Item): DecisionKind =>
       ? "author vanished"
       : "orphaned workspace";
 
+/**
+ * Whether a review-by-* label has no live reviewer behind it, so it is stale.
+ *
+ * The world records whether a reviewer was dispatched, not whether that
+ * reviewer is still alive. A task that is open — waiting in the queue — with a
+ * review-by-* label is stale by definition, because a real review keeps the
+ * task in `reviewing` with its reviewer beside it; the label only survives on
+ * an open task when the review is already over. A workspace that is gone, or a
+ * reviewer that settled, is nobody behind the label. Only the operator can say
+ * the label is stale, and this is the only place that asks.
+ */
+export const staleReview = (
+  task: { readonly labels: ReadonlyArray<string>; readonly status?: string },
+  worker: Worker | undefined,
+): boolean =>
+  reviewedBy(task) !== undefined &&
+  (task.status === undefined || task.status === "open") &&
+  (worker === undefined || worker.state === "gone" || worker.state === "settled");
+
 /** One selectable line in any column, with the targets its actions need. */
 interface ColumnRow {
   readonly key: string;
@@ -69,7 +90,17 @@ interface ColumnRow {
   readonly orphan: Orphan | undefined;
 }
 
-type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "onboard" | "adopt";
+type Action =
+  | "retry"
+  | "release"
+  | "close"
+  | "takeOver"
+  | "focus"
+  | "climb"
+  | "descend"
+  | "unassign"
+  | "onboard"
+  | "adopt";
 
 /**
  * Which keys mean something in which column.
@@ -78,20 +109,30 @@ type Action = "retry" | "release" | "close" | "takeOver" | "focus" | "climb" | "
  * releasing a task that was never claimed has nothing to undo. The same key
  * does not change meaning between columns.
  *
- * `yours` takes no key at all, and that is the design rather than an omission.
+ * The two corrections — `descend` and `unassign` — are offered wherever their
+ * labels could have been written, and a row without the label ignores the key
+ * rather than doing nothing to a claim. `descend` only reaches a row that
+ * carries a `rung-*` label: a task without one is already at the bottom, and
+ * there is nothing to lower. `unassign` only reaches a row whose review-by-*
+ * label has no live reviewer behind it.
+ *
+ * `yours` takes no answer key, and that is the design rather than an omission.
  * A task waits there because a question about it is unanswered, and a single
  * key to put it back would hand the next agent the same unanswered question —
  * the exact failure the column exists to prevent. It leaves when the operator
  * writes the decision into the task and removes its `rung-human` label, in
- * that order, with prog.
+ * that order, with prog. The two corrections do reach it: a task parked at the
+ * operator is exactly the sort of rung that can turn out to have been written
+ * without being earned, and no other column shows a `rung-human` task to lower
+ * it from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["climb"],
-  working: ["focus", "climb", "release"],
-  review: ["focus", "climb", "release"],
+  queue: ["climb", "descend", "unassign"],
+  working: ["focus", "climb", "descend", "release"],
+  review: ["focus", "climb", "descend", "release"],
   landed: [],
-  decisions: ["retry", "takeOver", "release", "close"],
-  yours: [],
+  decisions: ["retry", "takeOver", "release", "close", "unassign"],
+  yours: ["descend", "unassign"],
   held: ["onboard"],
   stranded: ["adopt"],
 };
@@ -101,12 +142,13 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  *
  * A vanished author or reviewer can be retried, taken over, or released. An
  * orphaned workspace has no claim to undo — releasing would reopen a done or
- * canceled task — so it is only ever closed.
+ * canceled task — so it is only ever closed, or, when it carries a review-by-*
+ * label no reviewer is behind, unassigned.
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "release"],
   "reviewer vanished": ["retry", "takeOver", "release"],
-  "orphaned workspace": ["close"],
+  "orphaned workspace": ["close", "unassign"],
 };
 
 /**
@@ -185,6 +227,23 @@ export const Pipeline = (props: {
         if (target.task) props.controls.climb(target.task);
         else if (target.ready) props.controls.climb(target.ready);
         break;
+      case "descend":
+        // A row without a rung label is at the bottom, where there is nothing
+        // to lower. The key is ignored rather than silently writing a label
+        // foreman itself would never have written.
+        if (target.task && rungOf(target.task) !== undefined) props.controls.descend(target.task);
+        else if (target.ready && rungOf(target.ready) !== undefined)
+          props.controls.descend(target.ready);
+        break;
+      case "unassign":
+        // A review-by-* label with a live reviewer behind it is an assignment,
+        // not a stale one, and clearing it would let a second reviewer be
+        // dispatched into the same task.
+        if (target.task && staleReview(target.task, target.worker))
+          props.controls.unassign(target.task);
+        else if (target.ready && staleReview(target.ready, undefined))
+          props.controls.unassign(target.ready);
+        break;
       case "onboard":
         if (target.project) props.controls.onboard(target.project);
         break;
@@ -232,6 +291,12 @@ export const Pipeline = (props: {
         break;
       case "e":
         apply("climb");
+        break;
+      case "x":
+        apply("descend");
+        break;
+      case "u":
+        apply("unassign");
         break;
       case "d":
         apply("release");
@@ -379,7 +444,9 @@ const Status = (props: { readonly state: Accessor<FleetState> }) => (
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
-      {"r retry  t take over  f focus  e climb  d release  c close  o onboard  s send for review"}
+      {
+        "r retry  t take over  f focus  e climb  x descend  u unassign  d release  c close  o onboard  s send for review"
+      }
     </text>
     <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
   </box>

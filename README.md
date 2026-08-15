@@ -206,6 +206,11 @@ already running; the label makes that role survive restarts and vanished panes.
 The matching agent pane is labelled `foreman-<role>`, so old settled output
 cannot mask the current role's state.
 
+The world records that a reviewer was dispatched, not whether it is still alive.
+A task that is open in the queue with a `review-by-*` label and no live reviewer
+behind it has a stale label, and only you can say so: the dashboard's `u` clears
+it — the same `prog unlabel` foreman runs when a review ends.
+
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
@@ -282,10 +287,16 @@ never specified needs: dispatching it once to discover that wastes a run.
 
 It waits in the dashboard's **yours** column, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
-column takes no key at all. That is the design: a key to put the task back would
+column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
 task with `prog append`, then `prog unlabel <task> rung-human`, in that order.
 The next author reads the answer in the description.
+
+The one exception is `x`, which lowers the task one rung — including down from
+`rung-human` to the strongest model. A rung is only ever as good as the evidence
+that wrote it, and a bug or a killed run can write one that was never earned, so
+the operator correcting the climb is the same sort of correction `prog unlabel`
+used to be. `x` writes exactly the `rung-*` label foreman would have written.
 
 A rung label naming a model the config no longer has is yours too. The claim
 "this task needs at least this much" cannot be read once the model is gone, and

@@ -128,6 +128,16 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
           Effect.asVoid,
         ),
 
+      /**
+       * Removes the rung label, returning a task to the bottom-rung default.
+       *
+       * The operator lowering a task off the bottom rung, where the ladder
+       * reads no label as the bottom and a `rung-<bottom>` would be a
+       * redundant pin. Foreman itself never clears a rung — it only ever
+       * replaces one on the way up — so this is an operator's correction.
+       */
+      clearRung: (task: string) => removeLabels(task, [RUNG]),
+
       /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
       claimed: (project: string) => byStatus(project, "in_progress"),
 
@@ -278,11 +288,11 @@ export const needsReview = (item: {
 }): boolean => item.priority < 3 && !item.labels.includes(TRIVIAL);
 
 /** Which kind of agent authored the work, if foreman recorded it. */
-export const authoredBy = (item: Item): string | undefined =>
+export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(BY))?.slice(BY.length);
 
 /** Which reviewer currently owns a reviewing task, if one was dispatched. */
-export const reviewedBy = (item: Item): string | undefined =>
+export const reviewedBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
 
 /**

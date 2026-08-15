@@ -421,16 +421,31 @@ neither claimed nor under review — marks its workspace as residue. The three
 kinds answer differently: a vanished author or reviewer can be retried, taken
 over, or released, while an orphaned workspace is only ever closed.
 
-`yours` deliberately takes no key. A task waits there because a question about it
-is unanswered, and one key to requeue it would hand the next agent that same
+The two corrections follow the labels, not the columns. `x` lowers a task one
+rung, the mirror of `e` climb: a rung is only ever as good as the evidence that
+wrote it, and a bug, an OOM or a killed run all write a rung nothing earned.
+One step per press, writing the same `rung-*` label the ladder reads; off the
+bottom rung the label is removed, because the ladder reads no label as the
+bottom. `u` clears a `review-by-*` label no reviewer is behind. The world
+records whether a reviewer was dispatched, not whether it is still alive, so
+only the operator can say the label is stale — a task that is open with a
+`review-by-*` label and no live reviewer behind it is stale by definition. Both
+keys write exactly what foreman itself would have written, so the result is the
+same state a hand-corrected task would be in.
+
+`yours` takes no answer key. A task waits there because a question about it is
+unanswered, and one key to requeue it would hand the next agent that same
 question — the failure the column exists to prevent. It leaves when the operator
 writes the decision into the task and removes its `rung-human` label, with prog.
+The two corrections do reach it: a task parked at the operator is exactly the
+sort of rung that can turn out to have been written without being earned, and no
+other column shows a `rung-human` task to lower it from.
 
 Two divergences from the settled design, walls hit while building:
 
 - **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
-  climb and onboard, but no command cancels a task. "Act on a task" means climb
-  or release; a cancel command belongs on the dispatcher.
+  climb, descend, unassign and onboard, but no command cancels a task. "Act on
+  a task" means climb or descend; a cancel command belongs on the dispatcher.
 - **No focus scope.** The focus control jumps to a worker's pane. Making a
   focused scope read differently — the label, pause-on-scope-completion — is a
   separate task.

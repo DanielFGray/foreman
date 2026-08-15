@@ -12,7 +12,16 @@ import {
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { Repository } from "./repository.ts";
-import { above, authorFor, HUMAN, isYours, reviewerFor, type Rung, topOf } from "./ladder.ts";
+import {
+  above,
+  authorFor,
+  below,
+  HUMAN,
+  isYours,
+  reviewerFor,
+  type Rung,
+  topOf,
+} from "./ladder.ts";
 import {
   agentLog,
   authoredBy,
@@ -760,6 +769,23 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         }
       });
 
+    /**
+     * Moves a task one rung down the ladder, at the operator's word.
+     *
+     * The mirror of `climb`, and the correction for every way a rung gets
+     * written without being earned — a bug, an OOM, an operator killing a run.
+     * One step per press, writing the same `rung-*` label the ladder reads, so
+     * the result is exactly what foreman itself would have written. Off the
+     * bottom rung the label is removed: the ladder reads no label as the
+     * bottom, so a redundant `rung-<bottom>` would never be written by hand.
+     */
+    const descend = (task: Climbing) =>
+      Effect.gen(function* () {
+        const next = below(settings.ladder, rungOf(task));
+        if (next === undefined) return yield* prog.clearRung(task.id);
+        yield* prog.setRung(task.id, next);
+      });
+
     const projectFor = (name: string) =>
       settings.projects.find((candidate) => candidate.name === name);
 
@@ -880,6 +906,28 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       /** Moves a task one rung up the ladder for its next dispatch. */
       climb: (task: Climbing) => commanded(climb(task)),
+
+      /** Moves a task one rung down the ladder, correcting an unearned climb. */
+      descend: (task: Climbing) => commanded(descend(task)),
+
+      /**
+       * Clears a review-by-* label no reviewer is behind, at the operator's
+       * word.
+       *
+       * The world records whether a reviewer was dispatched, not whether that
+       * reviewer is still alive, so only the operator can say the label is
+       * stale — the dashboard offers this exactly where the workspace is gone
+       * and the task is open. The label is re-checked here so a command can
+       * never clear a live assignment, and it is cleared through the same
+       * method the settle loop uses when a review ends.
+       */
+      unassign: (task: Climbing) =>
+        commanded(
+          Effect.gen(function* () {
+            if (reviewedBy(task) === undefined) return;
+            yield* prog.clearReview(task.id);
+          }),
+        ),
 
       /**
        * Puts a stranded branch back in front of a reviewer.
