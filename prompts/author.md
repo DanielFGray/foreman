@@ -48,6 +48,20 @@ test suite, the linter, the build. Update whatever the change made stale: help t
 docs, tests. Failures in code you touched are yours to fix. Failures that already
 existed on the main branch are not: file them with `prog add` and leave them.
 
+Then read your own work as an adversary would, once. Read the diff itself — `git
+diff HEAD...{{ branch }}` — rather than your memory of writing it: the memory is
+what produced any mistake in there, so it cannot be what finds one. Walk the
+definition of done a line at a time and point at the code that satisfies each part.
+Then look for what you would catch in a stranger's diff: a case that is not handled,
+something left half-renamed, a file the change made stale, a test that passes without
+exercising the new path.
+
+Fix what you find. If it is substantive and you cannot fix it, log it and leave the
+task unfinished, the same as any other blocker. This is one pass and not a loop, and
+it is not a review: you chose everything in front of you, so a reader who did not
+will still catch things you cannot. Do not use it to reopen decisions you have
+already made and recorded.
+
 When the work is complete and committed, run `prog review {{ task }}`. That hands the
 branch back and is where your job ends. Foreman lands it into {{ repository }} — a
 checkout a person also works in — once that checkout is clean and the project's own

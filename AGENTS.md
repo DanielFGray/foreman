@@ -310,6 +310,15 @@ diff. Work that skips review (priority 3, or the `trivial` label) waits in that
 same status and is landed straight from it. Landing is the only code path that
 writes to the operator's checkout, so no prompt gives an agent merge rights.
 
+The author critiques its own diff before handing off, and that is not a review.
+It reads `git diff` rather than recalling its intent, because the intent is what
+wrote any mistake in there. It catches the mechanical class — an unhandled case, a
+half-finished rename, a test that never runs the new path — so the reviewer reads a
+cleaner diff. It cannot replace the reviewer: the transcript that makes self-critique
+cheap is also where the anchoring lives, and a session grading itself will not
+conclude that the model which wrote the code was too weak for it — which is the
+evidence a rung climb needs.
+
 Approval is a durable `approved` label, not task completion. The reviewer writes
 that verdict and stops. Foreman re-checks the operator's checkout, merges the
 branch, and only then runs `prog done`. A dirty checkout leaves the verdict in
