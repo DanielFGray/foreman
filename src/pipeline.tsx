@@ -1,5 +1,5 @@
 import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/solid";
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
@@ -28,29 +28,34 @@ export interface Controls {
   readonly complete: (task: ReadyTask, reason: string) => void;
 }
 
-/** The pipeline: work moving left to right. */
-const STAGES = ["queue", "working", "review", "landed"] as const;
-
-/** What the dispatcher needs a person to answer, which is normally nothing. */
-const PANELS = ["decisions", "yours", "held", "stranded"] as const;
-
-/** Every selectable column, in the order the cursor moves through them. */
-const COLUMNS = [...STAGES, ...PANELS] as const;
+const COLUMNS = [
+  "queue",
+  "working",
+  "review",
+  "landed",
+  "decisions",
+  "yours",
+  "held",
+  "stranded",
+] as const;
 type ColumnName = (typeof COLUMNS)[number];
+const VIEWS = ["queue", "working", "review", "landed", "attention"] as const;
+type ViewName = (typeof VIEWS)[number];
 const PAGE_STEP = 5;
+const DETAIL_BREAKPOINT = 120;
 
 /**
- * The columns with something in them, which are the only ones drawn.
+ * The non-empty views, which are the only tabs drawn.
  *
  * An empty box is a claim on the screen that pays nothing back: the count in
  * its title is already zero, and a fleet with nothing held, nothing stranded
  * and no decision waiting is the ordinary case rather than news. Drawing them
  * anyway costs the columns that do hold work the width they need to show a
- * title. Nothing is reachable that is not drawn, so the cursor and the keys
- * follow this too.
+ * title. Nothing is reachable that is not drawn, so the cursor and keys follow
+ * this too.
  */
-const drawn = (names: ReadonlyArray<ColumnName>, state: FleetState): ReadonlyArray<ColumnName> =>
-  names.filter((name) => rowsFor(name, state).length > 0);
+const drawn = (state: FleetState): ReadonlyArray<ViewName> =>
+  VIEWS.filter((name) => rowsForView(name, state).length > 0);
 
 export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned workspace";
 
@@ -90,6 +95,7 @@ export const staleReview = (
 
 /** One selectable line in any column, with the targets its actions need. */
 interface ColumnRow {
+  readonly column: ColumnName;
   readonly key: string;
   readonly label: string;
   /** The full task, for rows that came out of a claimed status. */
@@ -182,9 +188,7 @@ const ACTION_LABELS: Record<Action, string> = {
 const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArray<Action> => {
   if (!row) return [];
   const actions =
-    column === "decisions" && row.task
-      ? DECISION_ACTIONS[decisionKind(row.task)]
-      : ACTIONS[column];
+    column === "decisions" && row.task ? DECISION_ACTIONS[decisionKind(row.task)] : ACTIONS[column];
 
   return actions.filter((action) => {
     switch (action) {
@@ -192,11 +196,15 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
       case "focus":
         return row.worker !== undefined;
       case "descend":
-        return (row.task !== undefined && rungOf(row.task) !== undefined) ||
-          (row.ready !== undefined && rungOf(row.ready) !== undefined);
+        return (
+          (row.task !== undefined && rungOf(row.task) !== undefined) ||
+          (row.ready !== undefined && rungOf(row.ready) !== undefined)
+        );
       case "unassign":
-        return (row.task !== undefined && staleReview(row.task, row.worker)) ||
-          (row.ready !== undefined && staleReview(row.ready, undefined));
+        return (
+          (row.task !== undefined && staleReview(row.task, row.worker)) ||
+          (row.ready !== undefined && staleReview(row.ready, undefined))
+        );
       case "retry":
       case "release":
       case "close":
@@ -216,36 +224,33 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
 /**
  * The pipeline, drawn from whatever the dispatcher last observed.
  *
- * A single cursor walks every column that has something in it — the stages,
- * then the panels holding what the dispatcher needs a person to answer. Keys
- * run the command that the selected row and column allow; a key whose action a
- * row cannot take is simply ignored.
+ * A single cursor walks one list at a time. Non-empty views become tabs; all
+ * exceptional states share an attention view so ordinary work keeps the width
+ * needed to remain readable in a small pane.
  */
 export const Pipeline = (props: {
   readonly state: Accessor<FleetState>;
   readonly controls: Controls;
 }) => {
-  const [wanted, setWanted] = createSignal<ColumnName>("queue");
+  const dimensions = useTerminalDimensions();
+  const [wanted, setWanted] = createSignal<ViewName>("queue");
   const [row, setRow] = createSignal(0);
   const [completion, setCompletion] = createSignal<ReadyTask | undefined>();
 
-  const stages = (): ReadonlyArray<ColumnName> => drawn(STAGES, props.state());
-  const panels = (): ReadonlyArray<ColumnName> => drawn(PANELS, props.state());
-  const columns = (): ReadonlyArray<ColumnName> => [...stages(), ...panels()];
+  const views = (): ReadonlyArray<ViewName> => drawn(props.state());
 
-  // A column empties under the cursor — the last decision is answered, the last
-  // queued task is dispatched — and goes. The cursor lands on the nearest
-  // column still drawn to its left, or the first one left on screen.
-  const column = (): ColumnName => {
-    const here = columns();
+  // A view that empties under the cursor goes. Keep the cursor as near as
+  // possible to where it was in the stable tab order.
+  const view = (): ViewName => {
+    const here = views();
     if (here.includes(wanted())) return wanted();
-    const index = COLUMNS.indexOf(wanted());
-    return here.filter((name) => COLUMNS.indexOf(name) < index).at(-1) ?? here[0] ?? wanted();
+    const index = VIEWS.indexOf(wanted());
+    return here.filter((name) => VIEWS.indexOf(name) < index).at(-1) ?? here[0] ?? wanted();
   };
 
-  const rows = (): ReadonlyArray<ColumnRow> => rowsFor(column(), props.state());
+  const rows = (): ReadonlyArray<ColumnRow> => rowsForView(view(), props.state());
 
-  // The cursor clamps to the column it sits in: a shrinking column never
+  // The cursor clamps to the view it sits in: a shrinking list never
   // strands the selection past its last row.
   const selected = (): number | undefined => {
     const count = rows().length;
@@ -253,49 +258,24 @@ export const Pipeline = (props: {
     return Math.min(row(), count - 1);
   };
 
-  const selectedFor =
-    (name: ColumnName): Accessor<number | undefined> =>
-    () =>
-      column() === name ? selected() : undefined;
-
   const step = (delta: number) => {
     const count = rows().length;
     if (count === 0) return;
     setRow((current) => Math.min(Math.max(current + delta, 0), count - 1));
   };
 
-  const selectRow = (name: ColumnName, index: number) => {
-    setWanted(name);
+  const selectRow = (index: number) => {
     setRow(index);
   };
 
-  // Only what is drawn is reachable: a key aimed at a column nobody can see
-  // would read as a dead press.
-  const moveColumn = (delta: number) => {
-    const drawn = columns();
-    const index = drawn.indexOf(column());
-    const next = drawn[(index + delta + drawn.length) % drawn.length];
+  const moveView = (delta: number) => {
+    const visible = views();
+    const index = visible.indexOf(view());
+    const next = visible[(index + delta + visible.length) % visible.length];
     if (next) {
       setWanted(next);
       setRow(0);
     }
-  };
-
-  // The wheel moves the cursor, never the viewport. A scrollbox scrolls itself
-  // by default, which is a second position beside the cursor: one notch put the
-  // selected row off the screen, and the next keypress — or the next tick's
-  // scrollChildIntoView — snapped the view back to wherever the cursor still
-  // was. The cursor is the only position, so the wheel writes to it and the
-  // viewport follows as it always did.
-  //
-  // The column under the pointer becomes the selected one, so the wheel is also
-  // the mouse's h and l. It keeps the row index rather than resetting it the way
-  // a keyed column change does — a wheel gesture is about a place inside the
-  // column it is over — and step's clamp keeps an index carried in from a longer
-  // column in range.
-  const scroll = (name: ColumnName, delta: number) => {
-    setWanted(name);
-    step(delta);
   };
 
   const apply = (action: Action) => {
@@ -303,7 +283,7 @@ export const Pipeline = (props: {
     if (index === undefined) return;
     const target = rows()[index];
     if (!target) return;
-    if (!actionsFor(column(), target).includes(action)) return;
+    if (!actionsFor(target.column, target).includes(action)) return;
     switch (action) {
       case "complete":
         if (target.ready) {
@@ -381,11 +361,11 @@ export const Pipeline = (props: {
         break;
       case "left":
       case "h":
-        moveColumn(-1);
+        moveView(-1);
         break;
       case "right":
       case "l":
-        moveColumn(1);
+        moveView(1);
         break;
       case "r":
         apply("retry");
@@ -425,27 +405,29 @@ export const Pipeline = (props: {
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
-      {/* A row goes when the last column in it does: an empty row still claims
-          half the screen, which is the same empty box one column wider. */}
-      <Row
-        columns={stages}
+      <Tabs
+        views={views}
+        selected={view}
         state={props.state}
-        selected={selectedFor}
-        scroll={scroll}
-        select={selectRow}
-        fill
+        select={(name) => {
+          setWanted(name);
+          setRow(0);
+        }}
       />
-      <Row
-        columns={panels}
-        state={props.state}
-        selected={selectedFor}
-        scroll={scroll}
-        select={selectRow}
-        fill={false}
-      />
+      <box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>
+        <Show when={rows().length > 0}>
+          <TaskList view={view} rows={rows} selected={selected} scroll={step} select={selectRow} />
+          <Show when={dimensions().width >= DETAIL_BREAKPOINT}>
+            <Details row={() => rows()[selected() ?? -1]} />
+          </Show>
+        </Show>
+      </box>
       <Status
         state={props.state}
-        actions={() => actionsFor(column(), rows()[selected() ?? -1])}
+        actions={() => {
+          const target = rows()[selected() ?? -1];
+          return target ? actionsFor(target.column, target) : [];
+        }}
         completion={completion}
         complete={(reason) => {
           const task = completion();
@@ -460,110 +442,50 @@ export const Pipeline = (props: {
   );
 };
 
-/**
- * The tallest a row of panels grows to before its columns start scrolling.
- *
- * Stranded branches arrive by the dozen after a bad night, and a report of them
- * that pushes the pipeline off the screen has answered the wrong question.
- */
-const PANEL_LINES = 8;
-
-/**
- * The lines a column spends on itself: the two borders, and one the scrollbox
- * holds back for a horizontal scrollbar it never shows. Measured from a render,
- * because a row short by one hides a row of the report.
- */
-const CHROME = 3;
-
-/**
- * One band of columns, which is nothing at all when it holds no column.
- *
- * `fill` decides who gets the space nobody claimed. The pipeline takes it,
- * because that is the screen; the panels hug what they hold, because a single
- * held project stretched down half the terminal is an empty box wearing one
- * row as a disguise — it was the largest thing on screen precisely when it had
- * the least to say. Two lines of border plus its rows, capped, is the whole
- * height it earns.
- */
-const Row = (props: {
-  readonly columns: Accessor<ReadonlyArray<ColumnName>>;
+const Tabs = (props: {
+  readonly views: Accessor<ReadonlyArray<ViewName>>;
+  readonly selected: Accessor<ViewName>;
   readonly state: Accessor<FleetState>;
-  readonly selected: (name: ColumnName) => Accessor<number | undefined>;
-  readonly scroll: (name: ColumnName, delta: number) => void;
-  readonly select: (name: ColumnName, index: number) => void;
-  readonly fill: boolean;
-}) => {
-  const height = () =>
-    Math.min(
-      Math.max(...props.columns().map((name) => rowsFor(name, props.state()).length)),
-      PANEL_LINES,
-    ) + CHROME;
+  readonly select: (name: ViewName) => void;
+}) => (
+  <box style={{ flexDirection: "row", height: 1, flexShrink: 0 }}>
+    <For each={props.views()}>
+      {(name) => (
+        <text
+          style={props.selected() === name ? SELECTED : TAB}
+          onMouseDown={() => props.select(name)}
+        >
+          {` ${viewLabel(name)} ${rowsForView(name, props.state()).length} `}
+        </text>
+      )}
+    </For>
+  </box>
+);
 
-  return (
-    <Show when={props.columns().length > 0}>
-      <box
-        style={
-          props.fill
-            ? { flexDirection: "row", flexGrow: 1, flexBasis: 0, minHeight: 0 }
-            : { flexDirection: "row", flexGrow: 0, flexShrink: 0, height: height() }
-        }
-      >
-        <For each={props.columns()}>
-          {(name) => (
-            <Column
-              title={name}
-              rows={() => rowsFor(name, props.state())}
-              selected={props.selected(name)}
-              scroll={(delta) => props.scroll(name, delta)}
-              select={(index) => props.select(name, index)}
-              active={() => props.selected(name)() !== undefined}
-            />
-          )}
-        </For>
-      </box>
-    </Show>
-  );
-};
-
-/**
- * One stage of the pipeline.
- *
- * flexBasis 0 rather than plain flexGrow: growth only shares out the space
- * left over, so a column full of long titles would otherwise starve an empty
- * one down to a sliver and the pipeline would look broken whenever it was
- * lopsided — which is most of the time.
- *
- * The rows live in a scrollbox because a stage holds however much work the
- * backlog has, which is routinely five times the lines the box can draw. A
- * plain box does not clip its children: the surplus rows are drawn straight
- * over the border, the neighbouring column and the status lines below, and the
- * whole screen reads as corrupted. The scrollbox both clips and gives the
- * cursor somewhere to go.
- */
-const Column = (props: {
-  readonly title: string;
+/** One full-height list. The cursor remains the only scroll position. */
+const TaskList = (props: {
+  readonly view: Accessor<ViewName>;
   readonly rows: Accessor<ReadonlyArray<ColumnRow>>;
   readonly selected: Accessor<number | undefined>;
   readonly scroll: (delta: number) => void;
   readonly select: (index: number) => void;
-  readonly active: Accessor<boolean>;
 }) => {
   let viewport: ScrollBoxRenderable | undefined;
 
-  // The cursor is what scrolls the column; there is no separate scroll
+  // The cursor is what scrolls the list; there is no separate scroll
   // position to get out of step with it. Selecting past the fold brings the
   // row up, so j and k never walk the selection off the screen.
   createEffect(() => {
     const index = props.selected();
     const row = index === undefined ? undefined : props.rows()[index];
-    if (row) viewport?.scrollChildIntoView(rowId(props.title, row.key));
+    if (row) viewport?.scrollChildIntoView(rowId(props.view(), row.key));
   });
 
   return (
     <box
       style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, minWidth: 0, border: true }}
-      borderColor={props.active() ? ACTIVE_BORDER : INACTIVE_BORDER}
-      title={`${props.title} ${props.rows().length}`}
+      borderColor={ACTIVE_BORDER}
+      title={`${viewLabel(props.view())} ${(props.selected() ?? 0) + 1}/${props.rows().length}`}
     >
       <scrollbox
         ref={(element) => (viewport = element)}
@@ -574,7 +496,7 @@ const Column = (props: {
         <For each={props.rows()}>
           {(row, index) => (
             <text
-              id={rowId(props.title, row.key)}
+              id={rowId(props.view(), row.key)}
               style={{
                 height: 1,
                 flexShrink: 0,
@@ -591,6 +513,54 @@ const Column = (props: {
     </box>
   );
 };
+
+const Details = (props: { readonly row: Accessor<ColumnRow | undefined> }) => (
+  <box
+    title="selection"
+    border
+    borderColor={INACTIVE_BORDER}
+    style={{ flexDirection: "column", width: "38%", flexShrink: 0, paddingX: 1 }}
+  >
+    <Show when={props.row()}>
+      {(row: Accessor<ColumnRow>) => (
+        <>
+          <text fg="#60a5fa">{row().key}</text>
+          <text>{row().label}</text>
+          <text>{`view      ${viewLabel(sourceView(row().column))}`}</text>
+          <Show when={row().task}>
+            {(task: Accessor<Item>) => (
+              <>
+                <text>{`status    ${task().status}`}</text>
+                <text>{`project   ${task().project}`}</text>
+                <text>{`priority  ${task().priority}`}</text>
+                <text>{`labels    ${task().labels.join(", ") || "none"}`}</text>
+              </>
+            )}
+          </Show>
+          <Show when={row().ready}>
+            {(task: Accessor<ReadyTask>) => (
+              <>
+                <text>status ready</text>
+                <text>{`project   ${task().project}`}</text>
+                <text>{`priority  ${task().priority}`}</text>
+                <text>{`labels    ${task().labels.join(", ") || "none"}`}</text>
+              </>
+            )}
+          </Show>
+          <Show when={row().worker}>
+            {(worker: Accessor<Worker>) => <text>{`worker    ${worker().state}`}</text>}
+          </Show>
+          <Show when={row().project && !row().task && !row().ready}>
+            <text>{`project   ${row().project}`}</text>
+          </Show>
+          <Show when={row().orphan}>
+            {(orphan: Accessor<Orphan>) => <text>{`project   ${orphan().project}`}</text>}
+          </Show>
+        </>
+      )}
+    </Show>
+  </box>
+);
 
 /**
  * A wheel notch, turned into one step of the cursor.
@@ -624,6 +594,7 @@ const wheel =
  * reading. Naming both colours is the only way to be sure they differ.
  */
 const SELECTED = { bg: "#1f4d8f", fg: "#ffffff" } as const;
+const TAB = { bg: "transparent", fg: "#94a3b8" } as const;
 
 /**
  * Those same defaults, named so that leaving a row restores them.
@@ -640,6 +611,19 @@ const INACTIVE_BORDER = "#334155";
 /** Renderable ids are global, so a row's key is only unique within its column. */
 const rowId = (column: string, key: string): string => `${column}:${key}`;
 
+const viewLabel = (view: ViewName): string =>
+  view === "attention" ? "Attention" : `${view[0]?.toUpperCase()}${view.slice(1)}`;
+
+const sourceView = (column: ColumnName): ViewName =>
+  column === "decisions" || column === "yours" || column === "held" || column === "stranded"
+    ? "attention"
+    : column;
+
+const attentionStatus = (state: FleetState): string => {
+  const count = rowsForView("attention", state).length;
+  return `${count} ${count === 1 ? "needs" : "need"} attention`;
+};
+
 /**
  * Whether the pipeline is moving, and what to press.
  *
@@ -655,7 +639,7 @@ const Status = (props: {
 }) => (
   <box style={{ flexDirection: "column", flexShrink: 0 }}>
     <text style={{ height: 1 }}>
-      {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
+      {`${props.state().paused ? "paused" : "running"}  ·  ${attentionStatus(props.state())}`}
     </text>
     <Show
       when={props.completion() === undefined}
@@ -671,15 +655,16 @@ const Status = (props: {
               if (key.name === "escape") props.cancel();
             }}
           />
-          <text> Enter confirm  Esc cancel</text>
+          <text> Enter confirm Esc cancel</text>
         </box>
       }
     >
       <text style={{ height: 1 }}>
         {[
           ...props.actions().map((action) => ACTION_LABELS[action]),
+          "h/l view",
+          "j/k move",
           `p ${props.state().paused ? "resume" : "pause"}`,
-          "PgUp/PgDn move",
           "F12 log",
           "q quit",
         ].join("  ")}
@@ -691,17 +676,17 @@ const Status = (props: {
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> => {
   switch (column) {
     case "queue":
-      return state.queue.map(readyRow);
+      return state.queue.map((task) => readyRow(task, "queue"));
     case "working":
-      return state.working.map(activeRow);
+      return state.working.map((active) => activeRow(active, "working"));
     case "review":
-      return state.review.map(activeRow);
+      return state.review.map((active) => activeRow(active, "review"));
     case "landed":
       return state.landed.map(landedRow);
     case "decisions":
       return state.decisions.map(decisionRow);
     case "yours":
-      return state.yours.map(readyRow);
+      return state.yours.map((task) => readyRow(task, "yours"));
     case "held":
       return state.held.map(heldRow);
     case "stranded":
@@ -709,7 +694,22 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
   }
 };
 
-const readyRow = (task: ReadyTask): ColumnRow => ({
+const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow> => {
+  if (view !== "attention") return rowsFor(view, state);
+  return [
+    ...rowsFor("decisions", state),
+    ...rowsFor("yours", state).map(attentionRow("needs you")),
+    ...rowsFor("stranded", state).map(attentionRow("stranded")),
+    ...rowsFor("held", state).map(attentionRow("held")),
+  ];
+};
+
+const attentionRow =
+  (kind: string) =>
+  (row: ColumnRow): ColumnRow => ({ ...row, label: `${kind}  ${row.label}` });
+
+const readyRow = (task: ReadyTask, column: "queue" | "yours"): ColumnRow => ({
+  column,
   key: task.id,
   label: `${task.project}  ${task.title}`,
   task: undefined,
@@ -721,7 +721,8 @@ const readyRow = (task: ReadyTask): ColumnRow => ({
 
 // The kind is shown rather than the project: in the middle columns the question
 // is which model is on the work, and the project is already visible upstream.
-const activeRow = ({ task, worker, kind }: Active): ColumnRow => ({
+const activeRow = ({ task, worker, kind }: Active, column: "working" | "review"): ColumnRow => ({
+  column,
   key: task.id,
   label: `${kind ?? "?"}  ${task.title}`,
   task,
@@ -732,6 +733,7 @@ const activeRow = ({ task, worker, kind }: Active): ColumnRow => ({
 });
 
 const landedRow = (task: Item): ColumnRow => ({
+  column: "landed",
   key: task.id,
   label: `${task.project}  ${task.title}`,
   task,
@@ -742,6 +744,7 @@ const landedRow = (task: Item): ColumnRow => ({
 });
 
 const decisionRow = ({ task, worker, kind }: Active): ColumnRow => ({
+  column: "decisions",
   key: task.id,
   // The reason leads: it is the question the column exists to answer, and it
   // is the half that must survive a narrow terminal truncating the line. An
@@ -760,6 +763,7 @@ const decisionRow = ({ task, worker, kind }: Active): ColumnRow => ({
 });
 
 const heldRow = (project: string): ColumnRow => ({
+  column: "held",
   key: project,
   label: project,
   task: undefined,
@@ -772,6 +776,7 @@ const heldRow = (project: string): ColumnRow => ({
 // A branch whose task is gone has no id to dispatch against, so the row says
 // so rather than offering a key that would do nothing.
 const orphanRow = (orphan: Orphan): ColumnRow => ({
+  column: "stranded",
   key: orphan.branch,
   label: `${orphan.branch}  ${orphan.title ?? "task deleted — recover by hand"}`,
   task: undefined,

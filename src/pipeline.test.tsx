@@ -270,19 +270,40 @@ describe("Pipeline", () => {
   test("renders the pipeline and names each decision", async () => {
     const { controls } = makeControls();
     const t = await testRender(() => <Pipeline state={() => state} controls={controls} />, {
-      width: 120,
+      width: 92,
       height: 30,
     });
     try {
-      await t.waitForFrame(
-        (f) => f.includes("queue 2") && f.includes("decisions 3") && f.includes("held 1"),
-      );
+      await t.waitForFrame((f) => f.includes("Queue 2") && f.includes("Attention 7"));
+      t.mockInput.pressArrow("left");
+      await t.flush();
       const frame = t.captureCharFrame();
       expect(frame).toContain("author vanished");
       expect(frame).toContain("reviewer vanished");
       expect(frame).toContain("orphaned workspace");
+      expect(frame.indexOf("author vanished")).toBeLessThan(frame.indexOf("needs you"));
+      expect(frame.indexOf("needs you")).toBeLessThan(frame.indexOf("stranded"));
+      expect(frame.indexOf("stranded")).toBeLessThan(frame.indexOf("held"));
       expect(frame).toContain("fibrae");
-      expect(frame).toContain("awaiting a decision");
+      expect(frame).toContain("7 need attention");
+      expect(frame).not.toContain("selection");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("uses extra width for selected-task details", async () => {
+    const { controls } = makeControls();
+    const t = await testRender(() => <Pipeline state={() => state} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 2") && f.includes("selection"));
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("ts-aaa111");
+      expect(frame).toContain("status ready");
+      expect(frame).toContain("priority  1");
     } finally {
       t.renderer.destroy();
     }
@@ -295,7 +316,7 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 3"));
+      await t.waitForFrame((f) => f.includes("Queue 3"));
       expect(t.captureCharFrame()).toContain("e climb");
       expect(t.captureCharFrame()).not.toContain("u unassign");
 
@@ -320,7 +341,7 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 3"));
+      await t.waitForFrame((f) => f.includes("Queue 3"));
       t.mockInput.pressKey("D");
       await t.flush();
       expect(t.captureCharFrame()).toContain("Reason for ts-q100");
@@ -340,8 +361,8 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 3"));
-      await t.mockMouse.click(10, 2);
+      await t.waitForFrame((f) => f.includes("Queue 3"));
+      await t.mockMouse.click(10, 3);
       t.mockInput.pressKey("u");
       await t.waitFor(() => calls.unassign.length === 1);
       expect(calls.unassign[0]).toBe("ts-q200");
@@ -371,11 +392,11 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 2"));
+      await t.waitForFrame((f) => f.includes("Queue 2"));
       const frame = t.captureCharFrame();
       // A drawn column carries its count in the border title, so that is what
       // must be absent — the key hints below name several of these words.
-      for (const empty of ["working", "review", "landed", "decisions", "yours", "held", "stranded"])
+      for (const empty of ["Working", "Review", "Landed", "Attention"])
         expect(frame).not.toContain(`${empty} 0`);
 
       // Right from the only column wraps back onto itself, so the queue's own
@@ -384,6 +405,33 @@ describe("Pipeline", () => {
       t.mockInput.pressKey("e");
       await t.waitFor(() => calls.climb.length === 1);
       expect(calls.climb[0]).toBe("ts-aaa111");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("an empty fleet keeps only its status and controls", async () => {
+    const { controls } = makeControls();
+    const empty: FleetState = {
+      ...state,
+      queue: [],
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      yours: [],
+      held: [],
+      orphans: [],
+    };
+    const t = await testRender(() => <Pipeline state={() => empty} controls={controls} />, {
+      width: 92,
+      height: 20,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("0 need attention"));
+      const frame = t.captureCharFrame();
+      expect(frame).not.toContain("Queue 0");
+      expect(frame).not.toContain("1/0");
     } finally {
       t.renderer.destroy();
     }
@@ -437,7 +485,7 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 30"));
+      await t.waitForFrame((f) => f.includes("Queue 30"));
 
       await t.mockMouse.scroll(10, 5, "down");
       await t.flush();
@@ -451,15 +499,10 @@ describe("Pipeline", () => {
       await t.flush();
       expect(t.captureCharFrame()).toContain("> fibrae  queued 6");
 
-      // The column under the pointer becomes the selected one, so the wheel is
-      // also the mouse's h and l. The row index carries over and clamps: 1 in a
-      // thirty-row queue is 1 in a three-row panel, and one more notch is its
-      // last row.
-      const yours = frame.split("\n").findIndex((line) => line.includes("yours 3"));
-      expect(yours).toBeGreaterThan(0);
-      await t.mockMouse.scroll(10, yours + 1, "down");
-      await t.flush();
-
+      // Changing tabs resets the row; two steps reach the last attention item.
+      t.mockInput.pressArrow("right");
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressArrow("down");
       t.mockInput.pressKey("x");
       await t.waitFor(() => calls.descend.length === 1);
       expect(calls.descend[0]).toBe("ts-y3");
@@ -475,7 +518,7 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 2"));
+      await t.waitForFrame((f) => f.includes("Queue 2"));
 
       // queue row 0: a queued task can be pushed a rung up the ladder.
       t.mockInput.pressKey("e");
@@ -526,11 +569,11 @@ describe("Pipeline", () => {
       expect(calls.retry.length).toBe(1);
       expect(calls.release.length).toBe(0);
 
-      // yours: a task waiting on the operator takes no answer key — retry,
+      // The next attention row is yours. A task waiting on the operator takes no answer key — retry,
       // climb and release would hand the next agent the same unanswered
       // question. The corrections do reach it: a rung-human climb is exactly
       // the sort of rung that can turn out to be unearned, so x lowers it.
-      t.mockInput.pressArrow("right");
+      t.mockInput.pressArrow("down");
       t.mockInput.pressKey("r");
       t.mockInput.pressKey("e");
       t.mockInput.pressKey("d");
@@ -541,19 +584,20 @@ describe("Pipeline", () => {
       // ts-eee111 carries no review-by-* label, so u is ignored.
       t.mockInput.pressKey("u");
 
-      // held: onboard salvages the uncommitted work.
-      t.mockInput.pressArrow("right");
+      // Stranded follows yours in urgency order.
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressKey("s");
+      await t.waitFor(() => calls.adopt.length === 1);
+      expect(calls.adopt[0]).toBe("foreman/ts-ddd111");
+
+      // Held is last; two more rows pass the deleted-task branch and reach it.
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressArrow("down");
       t.mockInput.pressKey("o");
       await t.waitFor(() => calls.onboard.length === 1);
       expect(calls.onboard[0]).toBe("fibrae");
       expect(calls.climb.length).toBe(2);
       expect(calls.close.length).toBe(1);
-
-      // stranded: s sends the branch back for a review to judge its commits.
-      t.mockInput.pressArrow("right");
-      t.mockInput.pressKey("s");
-      await t.waitFor(() => calls.adopt.length === 1);
-      expect(calls.adopt[0]).toBe("foreman/ts-ddd111");
 
       // The global keys work from any column.
       t.mockInput.pressKey("p");
@@ -572,7 +616,7 @@ describe("Pipeline", () => {
       height: 30,
     });
     try {
-      await t.waitForFrame((f) => f.includes("queue 3") && f.includes("decisions 1"));
+      await t.waitForFrame((f) => f.includes("Queue 3") && f.includes("Attention 1"));
 
       // queue row 0 carries a rung but no reviewer: x lowers it, u is ignored.
       t.mockInput.pressKey("x");

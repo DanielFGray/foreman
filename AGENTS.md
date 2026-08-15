@@ -22,8 +22,8 @@ a scratch config, so no real task was touched. The rig is checked in at
 `e2e/` — read `e2e/README.md` before running it. Everything that follows is
 the still-unproven backlog.
 
-- **The dashboard is built but unproven live.** It is only proven by the
-  render tests; nobody has yet sat in front of it while the fleet worked.
+- **The dashboard has been used live against the fleet.** Its compact tabbed
+  layout was captured at 92 columns with 135 queued and 149 landed tasks.
 - **Plan mode has been proven live end to end, at the tasker's worst model.**
   A full `foreman plan --file` run on a scratch project
   (`foreman-e2e-probe`, config `FOREMAN_CONFIG=<a scratch config>`) ran
@@ -431,25 +431,21 @@ The renderer is created inside `Effect.acquireRelease`, and the program parks on
 a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
 on exit.
 
-One cursor walks eight columns — queue | working | review | landed, then the
-decisions, yours, held and stranded panels. Only the columns holding something
-are drawn: an empty box is a claim on the screen that pays nothing back, since
-the count in its title is already zero and a fleet with nothing held, nothing
-stranded and no decision waiting is the ordinary case rather than news. Nothing
-undrawn is reachable either, so the cursor never stops where the operator sees
-no column, and a column that empties under the cursor hands it to the nearest
-one still drawn to its left. The two rows go the same way when their last
-column does. The status line is what always shows, because a screen with no
-columns at all still has to say whether the fleet is paused or merely out of
-work.
+One cursor walks five views — queue | working | review | landed | attention —
+one full-width list at a time. Only non-empty views become tabs. Landed history
+is therefore a count until selected rather than a permanent column squeezing
+active work: the old three-column render gave 149 landed tasks a third of a
+92-column pane and left queue titles unreadable. At 120 columns, extra width
+adds selected-row details; it never restores the crowded columns.
 
-The panels row hugs what it holds — its tallest column, capped, plus the
-column's own chrome — while the pipeline row takes everything left over. Space
-shared evenly is space handed to whoever has least to say: one held project
-stretched down half the terminal was the largest thing on screen precisely
-because it held one row, which is the same empty box wearing a disguise.
+Attention combines the exceptional states in urgency order: vanished-worker
+decisions, yours, stranded branches, then held projects. Each row keeps its
+source kind, so combining their display does not combine their actions. A view
+that empties under the cursor hands it to the nearest non-empty tab to its left.
+The status line remains when every view is empty, because an empty fleet still
+has to say whether it is paused or merely out of work.
 
-Each column allows only the actions that
+Each source kind allows only the actions that
 make sense there, and a key the selected row cannot take is ignored. Decisions
 are named from the task's status, not its labels: a failed spawn leaves the
 `by-*` label on a task that sits back in the queue, and only the status —
@@ -485,9 +481,8 @@ The listener therefore sits on the scrollbox's *content*, not on the scrollbox.
 A mouse event runs a renderable's own listeners, then its built-in handler, then
 walks to its parent, so `stopPropagation` only stops the walk: from the content,
 the scrollbox is the parent that is never reached, while a listener on the
-scrollbox itself could never suppress its own scrolling. The column under the
-pointer becomes the selected one, which makes the wheel the mouse's `h` and `l`
-as well as its `j` and `k`.
+scrollbox itself could never suppress its own scrolling. Tabs and rows are
+clickable; page keys move five rows at a time.
 
 Two divergences from the settled design, walls hit while building:
 

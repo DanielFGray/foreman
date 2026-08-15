@@ -160,7 +160,7 @@ quiet rather than missing, which is worse.
 
 Foreman therefore asks git directly for its own branches that `develop` has not
 taken, and drops the ones the queue, the claims or the review list already
-account for. What is left appears in the dashboard's **stranded** column, and `s`
+account for. What is left appears under dashboard **Attention**, and `s`
 sends the selected branch back to `reviewing`. A reviewer reads the diff and
 either approves it, landing it through the same gate as anything else, or
 returns it with findings. Nobody can judge abandoned commits from the outside, and that judgement
@@ -287,7 +287,7 @@ could finish it — a task the best model could not do should stop, not cycle. O
 you pin it there with `prog label <task> rung-human`, which is what work that was
 never specified needs: dispatching it once to discover that wastes a run.
 
-It waits in the dashboard's **yours** column, and foreman notifies you, the same
+It waits under dashboard **Attention**, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
 column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
