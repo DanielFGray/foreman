@@ -37,6 +37,7 @@ const PANELS = ["decisions", "yours", "held", "stranded"] as const;
 /** Every selectable column, in the order the cursor moves through them. */
 const COLUMNS = [...STAGES, ...PANELS] as const;
 type ColumnName = (typeof COLUMNS)[number];
+const PAGE_STEP = 5;
 
 /**
  * The columns with something in them, which are the only ones drawn.
@@ -263,6 +264,11 @@ export const Pipeline = (props: {
     setRow((current) => Math.min(Math.max(current + delta, 0), count - 1));
   };
 
+  const selectRow = (name: ColumnName, index: number) => {
+    setWanted(name);
+    setRow(index);
+  };
+
   // Only what is drawn is reachable: a key aimed at a column nobody can see
   // would read as a dead press.
   const moveColumn = (delta: number) => {
@@ -367,6 +373,12 @@ export const Pipeline = (props: {
       case "j":
         step(1);
         break;
+      case "pageup":
+        step(-PAGE_STEP);
+        break;
+      case "pagedown":
+        step(PAGE_STEP);
+        break;
       case "left":
       case "h":
         moveColumn(-1);
@@ -415,12 +427,20 @@ export const Pipeline = (props: {
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
       {/* A row goes when the last column in it does: an empty row still claims
           half the screen, which is the same empty box one column wider. */}
-      <Row columns={stages} state={props.state} selected={selectedFor} scroll={scroll} fill />
+      <Row
+        columns={stages}
+        state={props.state}
+        selected={selectedFor}
+        scroll={scroll}
+        select={selectRow}
+        fill
+      />
       <Row
         columns={panels}
         state={props.state}
         selected={selectedFor}
         scroll={scroll}
+        select={selectRow}
         fill={false}
       />
       <Status
@@ -470,6 +490,7 @@ const Row = (props: {
   readonly state: Accessor<FleetState>;
   readonly selected: (name: ColumnName) => Accessor<number | undefined>;
   readonly scroll: (name: ColumnName, delta: number) => void;
+  readonly select: (name: ColumnName, index: number) => void;
   readonly fill: boolean;
 }) => {
   const height = () =>
@@ -494,6 +515,8 @@ const Row = (props: {
               rows={() => rowsFor(name, props.state())}
               selected={props.selected(name)}
               scroll={(delta) => props.scroll(name, delta)}
+              select={(index) => props.select(name, index)}
+              active={() => props.selected(name)() !== undefined}
             />
           )}
         </For>
@@ -522,6 +545,8 @@ const Column = (props: {
   readonly rows: Accessor<ReadonlyArray<ColumnRow>>;
   readonly selected: Accessor<number | undefined>;
   readonly scroll: (delta: number) => void;
+  readonly select: (index: number) => void;
+  readonly active: Accessor<boolean>;
 }) => {
   let viewport: ScrollBoxRenderable | undefined;
 
@@ -537,6 +562,7 @@ const Column = (props: {
   return (
     <box
       style={{ flexDirection: "column", flexGrow: 1, flexBasis: 0, minWidth: 0, border: true }}
+      borderColor={props.active() ? ACTIVE_BORDER : INACTIVE_BORDER}
       title={`${props.title} ${props.rows().length}`}
     >
       <scrollbox
@@ -554,6 +580,8 @@ const Column = (props: {
                 flexShrink: 0,
                 ...(index() === props.selected() ? SELECTED : PLAIN),
               }}
+              truncate
+              onMouseDown={() => props.select(index())}
             >
               {`${index() === props.selected() ? "> " : "  "}${row.label}`}
             </text>
@@ -606,6 +634,8 @@ const SELECTED = { bg: "#1f4d8f", fg: "#ffffff" } as const;
  * name both colours.
  */
 const PLAIN = { bg: "transparent", fg: "#FFFFFF" } as const;
+const ACTIVE_BORDER = "#60a5fa";
+const INACTIVE_BORDER = "#334155";
 
 /** Renderable ids are global, so a row's key is only unique within its column. */
 const rowId = (column: string, key: string): string => `${column}:${key}`;
@@ -648,6 +678,7 @@ const Status = (props: {
         {[
           ...props.actions().map((action) => ACTION_LABELS[action]),
           "p pause",
+          "PgUp/PgDn move",
           "F12 log",
           "q quit",
         ].join("  ")}

@@ -333,6 +333,23 @@ describe("Pipeline", () => {
     }
   });
 
+  test("selects a row by clicking it", async () => {
+    const { controls, calls } = makeControls();
+    const t = await testRender(() => <Pipeline state={() => corrective} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("queue 3"));
+      await t.mockMouse.click(10, 2);
+      t.mockInput.pressKey("u");
+      await t.waitFor(() => calls.unassign.length === 1);
+      expect(calls.unassign[0]).toBe("ts-q200");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   // An idle fleet is the ordinary case, and a screen of bordered boxes all
   // titled zero says nothing the counts do not. Nothing drawn is nothing
   // reachable either: the cursor stays where there is work rather than walking
@@ -429,6 +446,10 @@ describe("Pipeline", () => {
       // own. The cursor did, and it is the only thing that moved.
       expect(frame).toContain("  fibrae  queued 0");
       expect(frame).toContain("> fibrae  queued 1");
+
+      t.mockInput.pressKey("\x1b[6~");
+      await t.flush();
+      expect(t.captureCharFrame()).toContain("> fibrae  queued 6");
 
       // The column under the pointer becomes the selected one, so the wheel is
       // also the mouse's h and l. The row index carries over and clamps: 1 in a
