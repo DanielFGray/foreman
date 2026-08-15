@@ -42,11 +42,26 @@ const state: FleetState = {
       priority: 2,
       project: "fibrae",
       labels: ["rung-human"],
+      last_activity_at: new Date(),
     },
   ],
   queue: [
-    { id: "ts-aaa111", title: "queue one", priority: 1, project: "fibrae", labels: [] },
-    { id: "ts-aaa222", title: "queue two", priority: 2, project: "fibrae", labels: [] },
+    {
+      id: "ts-aaa111",
+      title: "queue one",
+      priority: 1,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    },
+    {
+      id: "ts-aaa222",
+      title: "queue two",
+      priority: 2,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    },
   ],
   working: [
     active(task("ts-bbb111", "in_progress", ["by-opencode"]), worker("ts-bbb111", "working")),
@@ -98,15 +113,30 @@ const state: FleetState = {
 const corrective: FleetState = {
   yours: [],
   queue: [
-    { id: "ts-q100", title: "pinned up", priority: 1, project: "fibrae", labels: ["rung-top"] },
+    {
+      id: "ts-q100",
+      title: "pinned up",
+      priority: 1,
+      project: "fibrae",
+      labels: ["rung-top"],
+      last_activity_at: new Date(),
+    },
     {
       id: "ts-q200",
       title: "stale reviewer",
       priority: 1,
       project: "fibrae",
       labels: ["review-by-claude"],
+      last_activity_at: new Date(),
     },
-    { id: "ts-q300", title: "fresh", priority: 1, project: "fibrae", labels: [] },
+    {
+      id: "ts-q300",
+      title: "fresh",
+      priority: 1,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    },
   ],
   working: [],
   review: [],
@@ -227,6 +257,7 @@ describe("staleReview", () => {
       priority: 1,
       project: "fibrae",
       labels: ["review-by-claude"],
+      last_activity_at: new Date(),
     };
     expect(staleReview(ready, undefined)).toBe(true);
   });
@@ -306,12 +337,34 @@ describe("Pipeline", () => {
         priority: 1,
         project: "fibrae",
         labels: ["rung-top"],
+        last_activity_at: new Date(),
       })),
       decisions: [],
       yours: [
-        { id: "ts-y1", title: "yours one", priority: 2, project: "fibrae", labels: ["rung-top"] },
-        { id: "ts-y2", title: "yours two", priority: 2, project: "fibrae", labels: ["rung-top"] },
-        { id: "ts-y3", title: "yours three", priority: 2, project: "fibrae", labels: ["rung-top"] },
+        {
+          id: "ts-y1",
+          title: "yours one",
+          priority: 2,
+          project: "fibrae",
+          labels: ["rung-top"],
+          last_activity_at: new Date(),
+        },
+        {
+          id: "ts-y2",
+          title: "yours two",
+          priority: 2,
+          project: "fibrae",
+          labels: ["rung-top"],
+          last_activity_at: new Date(),
+        },
+        {
+          id: "ts-y3",
+          title: "yours three",
+          priority: 2,
+          project: "fibrae",
+          labels: ["rung-top"],
+          last_activity_at: new Date(),
+        },
       ],
     };
     const t = await testRender(() => <Pipeline state={() => long} controls={controls} />, {

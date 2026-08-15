@@ -21,6 +21,7 @@ const ready = {
   priority: 3,
   project: "foreman",
   labels: [],
+  last_activity_at: new Date(),
 } as const;
 
 describe("Prompts", () => {

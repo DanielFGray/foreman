@@ -244,6 +244,7 @@ export const ReadyTask = Schema.Struct({
   priority: Schema.Number,
   project: Schema.String,
   labels: Schema.Array(Schema.String),
+  last_activity_at: Schema.DateFromString,
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
