@@ -285,6 +285,31 @@ describe("Pipeline", () => {
     }
   });
 
+  test("shows only actions valid for the selected row", async () => {
+    const { controls } = makeControls();
+    const t = await testRender(() => <Pipeline state={() => corrective} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("queue 3"));
+      expect(t.captureCharFrame()).toContain("e climb");
+      expect(t.captureCharFrame()).not.toContain("u unassign");
+
+      t.mockInput.pressArrow("down");
+      await t.flush();
+      expect(t.captureCharFrame()).not.toContain("x descend");
+      expect(t.captureCharFrame()).toContain("u unassign");
+
+      t.mockInput.pressArrow("down");
+      await t.flush();
+      expect(t.captureCharFrame()).not.toContain("u unassign");
+      expect(t.captureCharFrame()).not.toContain("x descend");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   // An idle fleet is the ordinary case, and a screen of bordered boxes all
   // titled zero says nothing the counts do not. Nothing drawn is nothing
   // reachable either: the cursor stays where there is work rather than walking

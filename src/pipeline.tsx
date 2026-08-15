@@ -161,6 +161,52 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "orphaned workspace": ["close", "unassign"],
 };
 
+const ACTION_LABELS: Record<Action, string> = {
+  retry: "r retry",
+  takeOver: "t take over",
+  focus: "f focus",
+  climb: "e climb",
+  descend: "x descend",
+  unassign: "u unassign",
+  release: "d release",
+  close: "c close",
+  onboard: "o onboard",
+  adopt: "s adopt",
+};
+
+/** The commands that are meaningful for this exact row, not just its column. */
+const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArray<Action> => {
+  if (!row) return [];
+  const actions =
+    column === "decisions" && row.task
+      ? DECISION_ACTIONS[decisionKind(row.task)]
+      : ACTIONS[column];
+
+  return actions.filter((action) => {
+    switch (action) {
+      case "takeOver":
+      case "focus":
+        return row.worker !== undefined;
+      case "descend":
+        return (row.task !== undefined && rungOf(row.task) !== undefined) ||
+          (row.ready !== undefined && rungOf(row.ready) !== undefined);
+      case "unassign":
+        return (row.task !== undefined && staleReview(row.task, row.worker)) ||
+          (row.ready !== undefined && staleReview(row.ready, undefined));
+      case "retry":
+      case "release":
+      case "close":
+        return row.task !== undefined;
+      case "climb":
+        return row.task !== undefined || row.ready !== undefined;
+      case "onboard":
+        return row.project !== undefined;
+      case "adopt":
+        return row.orphan !== undefined;
+    }
+  });
+};
+
 /**
  * The pipeline, drawn from whatever the dispatcher last observed.
  *
@@ -241,14 +287,11 @@ export const Pipeline = (props: {
   };
 
   const apply = (action: Action) => {
-    if (!ACTIONS[column()].includes(action)) return;
     const index = selected();
     if (index === undefined) return;
     const target = rows()[index];
     if (!target) return;
-    if (column() === "decisions" && target.task) {
-      if (!DECISION_ACTIONS[decisionKind(target.task)].includes(action)) return;
-    }
+    if (!actionsFor(column(), target).includes(action)) return;
     switch (action) {
       case "retry":
         if (target.task) props.controls.retry(target.task);
@@ -260,8 +303,6 @@ export const Pipeline = (props: {
         if (target.task) props.controls.close(target.task);
         break;
       case "takeOver":
-        // A vanished worker can still be taken over when its workspace
-        // exists; a decision with no workspace is retry or release only.
         if (target.worker) props.controls.focus(target.worker);
         break;
       case "focus":
@@ -272,17 +313,11 @@ export const Pipeline = (props: {
         else if (target.ready) props.controls.climb(target.ready);
         break;
       case "descend":
-        // A row without a rung label is at the bottom, where there is nothing
-        // to lower. The key is ignored rather than silently writing a label
-        // foreman itself would never have written.
         if (target.task && rungOf(target.task) !== undefined) props.controls.descend(target.task);
         else if (target.ready && rungOf(target.ready) !== undefined)
           props.controls.descend(target.ready);
         break;
       case "unassign":
-        // A review-by-* label with a live reviewer behind it is an assignment,
-        // not a stale one, and clearing it would let a second reviewer be
-        // dispatched into the same task.
         if (target.task && staleReview(target.task, target.worker))
           props.controls.unassign(target.task);
         else if (target.ready && staleReview(target.ready, undefined))
@@ -369,7 +404,7 @@ export const Pipeline = (props: {
         scroll={scroll}
         fill={false}
       />
-      <Status state={props.state} />
+      <Status state={props.state} actions={() => actionsFor(column(), rows()[selected() ?? -1])} />
     </box>
   );
 };
@@ -550,15 +585,16 @@ const rowId = (column: string, key: string): string => `${column}:${key}`;
  * This is the one thing always on screen: with every column empty the fleet
  * still has to say whether it is paused or simply out of work.
  */
-const Status = (props: { readonly state: Accessor<FleetState> }) => (
+const Status = (props: {
+  readonly state: Accessor<FleetState>;
+  readonly actions: Accessor<ReadonlyArray<Action>>;
+}) => (
   <box style={{ flexDirection: "column", flexShrink: 0 }}>
     <text style={{ height: 1 }}>
       {`${props.state().paused ? "paused" : "running"}  ·  ${props.state().decisions.length} awaiting a decision`}
     </text>
     <text style={{ height: 1 }}>
-      {
-        "r retry  t take over  f focus  e climb  x descend  u unassign  d release  c close  o onboard  s send for review"
-      }
+      {props.actions().map((action) => ACTION_LABELS[action]).join("  ")}
     </text>
     <text style={{ height: 1 }}>{"p pause  F12 log  q quit"}</text>
   </box>
