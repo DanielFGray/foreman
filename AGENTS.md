@@ -148,9 +148,13 @@ the git path — it answers both of those questions differently:
 - **There is no checked-out branch.** jj bookmarks do not move by being merged
   into. The bookmark to land on is derived the way git derives it — the branch
   the operator is standing on, which here is the nearest bookmark behind the
-  working copy, `heads(::@ & bookmarks())`. `heads` drops the ones already
-  merged into it, foreman's own included. Zero or more than one holds the
-  project rather than guessing.
+  working copy, `heads(::@ & bookmarks())`. `heads` drops the bookmarks already
+  merged into that one, and foreman's own names are filtered out of what is
+  left: every author branches from the trunk's tip, so until that author commits
+  its bookmark sits on the very commit being asked about. Reading it as a second
+  candidate held the project for as long as anyone was working in it — a fleet
+  that stops landing the moment it starts working. Of the bookmarks that remain,
+  zero or more than one holds the project rather than guessing.
 - **The working copy is a commit**, so "clean" is `@` being empty. That counts a
   file git would call untracked, unlike the git path above, because under jj it
   is not untracked: it is already part of the working-copy commit, and landing

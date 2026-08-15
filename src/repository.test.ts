@@ -328,4 +328,34 @@ describe("Repository over a jj-colocated checkout", () => {
     },
     slowly,
   );
+
+  // Every author's branch is cut from the trunk's tip, so until that author
+  // commits its bookmark sits on the very commit the trunk names. Counting it
+  // as a second candidate held the project for as long as anyone worked in it,
+  // which is a fleet that stops landing the moment it starts working.
+  test(
+    "lands while an author's fresh branch shares the trunk's commit",
+    async () => {
+      await there("branch", "foreman/ts-dddddd", "develop");
+
+      const side = `${colocated}-fresh`;
+      await there("branch", "foreman/ts-eeeeee", "develop");
+      await there("worktree", "add", "-q", side, "foreman/ts-eeeeee");
+      await writeFile(join(side, "reviewed.txt"), "approved\n");
+      await Bun.$`git -C ${side} add reviewed.txt`.quiet().nothrow();
+      await Bun.$`git -C ${side} commit -qm reviewed`.quiet().nothrow();
+      await Bun.$`git -C ${colocated} worktree remove ${side}`.quiet().nothrow();
+
+      const before = await bookmark("develop");
+      expect(await isClean(colocated)).toBe(true);
+
+      expect(await merge(colocated, "foreman/ts-eeeeee", undefined)).toEqual({
+        _tag: "Merged",
+        verified: false,
+      });
+      expect(await bookmark("develop")).not.toBe(before);
+      expect(await Bun.file(join(colocated, "reviewed.txt")).text()).toBe("approved\n");
+    },
+    slowly,
+  );
 });

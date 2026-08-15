@@ -2,6 +2,9 @@ import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Effect, Schema, Stream } from "effect";
 
+/** The namespace `labelFor` puts every branch foreman authors under. */
+const ours = "foreman/";
+
 /**
  * The checkout a project's tasks branch from and merge back into.
  *
@@ -121,11 +124,16 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
     const trunkOf = (directory: string) =>
       jjOutput(directory, "log", "-r", "heads(::@ & bookmarks())", ...template("bookmarks")).pipe(
         Effect.map((text) => {
-          // jj suffixes a bookmark whose git ref has drifted from it.
           const names = text
             .split(/\s+/)
             .filter((name) => name !== "")
-            .map((name) => name.replace(/\*$/, ""));
+            // jj suffixes a bookmark whose git ref has drifted from it.
+            .map((name) => name.replace(/\*$/, ""))
+            // Foreman's own branches are cut from the trunk's tip, so an author
+            // that has not committed yet leaves its bookmark on the very commit
+            // being asked about. It is never a landing target, and counting it
+            // would hold the project for as long as anyone is working in it.
+            .filter((name) => !name.startsWith(ours));
           return names.length === 1 ? names[0] : undefined;
         }),
       );
@@ -339,7 +347,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             directory,
             "for-each-ref",
             "--format=%(objectname) %(refname:short)",
-            "refs/heads/foreman/",
+            `refs/heads/${ours}`,
           );
           const merged = new Set(
             yield* lines(
@@ -347,7 +355,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
               "for-each-ref",
               "--merged=HEAD",
               "--format=%(refname:short)",
-              "refs/heads/foreman/",
+              `refs/heads/${ours}`,
             ),
           );
           const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", "HEAD"));
