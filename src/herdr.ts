@@ -4,6 +4,7 @@ import { Data, Effect, Layer, Schema, Stream } from "effect";
 import {
   AgentRole,
   type AttachOptions,
+  type CloseOptions,
   Fleet,
   FleetError,
   labelFor,
@@ -139,7 +140,14 @@ export const HerdrFleet = Layer.effect(
               workspace: workspace.workspace_id,
               pane: pane.pane_id,
               directory: workspace.worktree?.checkout_path ?? pane.cwd,
-              worktree: workspace.worktree?.checkout_path,
+              // A linked worktree is one foreman made; a workspace attached to
+              // a checkout that was already there reports a worktree that is
+              // not linked. The field says which directory teardown may
+              // delete, so it keys on that distinction rather than on the mere
+              // presence of a checkout path.
+              worktree: workspace.worktree?.is_linked_worktree
+                ? workspace.worktree.checkout_path
+                : undefined,
               // Workspace status is an attention aggregate where an unseen old
               // done pane outranks current work. Dispatch needs operational
               // state, so aggregate the panes with live work first instead.
@@ -151,44 +159,122 @@ export const HerdrFleet = Layer.effect(
       ),
     );
 
+    /** Every worktree git has registered in a project's checkout. */
+    const worktreesFor = (repository: string) =>
+      herdrJson(WorktreeList, "open", "worktree", "list", "--cwd", repository).pipe(
+        Effect.map((list) => list.result.worktrees),
+      );
+
+    /**
+     * Attaches a fresh workspace to a worktree git already has, returning it
+     * like a created one. This is the durable half of open and close: a
+     * worktree survives its workspace, so reaching the work does not.
+     */
+    const adoptWorktree = (options: {
+      readonly task: string;
+      readonly repository: string;
+      readonly branch: string;
+    }) =>
+      herdrJson(
+        WorktreeResolved,
+        "open",
+        "worktree",
+        "open",
+        "--cwd",
+        options.repository,
+        "--branch",
+        options.branch,
+        "--label",
+        labelFor(options.task),
+        "--no-focus",
+      ).pipe(
+        Effect.map(
+          (opened) =>
+            ({
+              task: options.task,
+              workspace: opened.result.workspace.workspace_id,
+              pane: opened.result.root_pane.pane_id,
+              directory: opened.result.worktree.path,
+              worktree: opened.result.worktree.path,
+              state: "gone",
+              roles: new Map(),
+            }) satisfies Worker,
+        ),
+      );
+
+    /** Creates the worktree and the workspace over it in one call. */
+    const createWorktree = (options: OpenOptions) =>
+      herdrJson(
+        WorktreeResolved,
+        "open",
+        "worktree",
+        "create",
+        "--cwd",
+        options.repository,
+        "--branch",
+        options.branch,
+        "--base",
+        "HEAD",
+        "--path",
+        options.directory,
+        "--label",
+        labelFor(options.task),
+        "--no-focus",
+      ).pipe(
+        Effect.map(
+          (created) =>
+            ({
+              task: options.task,
+              workspace: created.result.workspace.workspace_id,
+              pane: created.result.root_pane.pane_id,
+              directory: created.result.worktree.path,
+              worktree: created.result.worktree.path,
+              state: "gone",
+              roles: new Map(),
+            }) satisfies Worker,
+        ),
+      );
+
+    /** Removes a worktree whose workspace herdr has already dropped. */
+    const removeWorktreeByAdoption = (repository: string, task: string) =>
+      adoptWorktree({ task, repository, branch: labelFor(task) }).pipe(
+        Effect.flatMap((adopted) =>
+          herdr("close", "worktree", "remove", "--workspace", adopted.workspace, "--force"),
+        ),
+      );
+
     return {
       roster,
 
       open: (options: OpenOptions) =>
         Effect.gen(function* () {
-          // Adopting an existing workspace is what makes a restart safe: the
-          // label is the identity, so foreman recognises work it started in a
-          // previous life instead of opening a second workspace beside it.
-          const existing = (yield* roster).find((worker) => worker.task === options.task);
-          if (existing) return existing;
-
-          const created = yield* herdrJson(
-            WorktreeCreated,
-            "open",
-            "worktree",
-            "create",
-            "--cwd",
-            options.repository,
-            "--branch",
-            options.branch,
-            "--base",
-            "HEAD",
-            "--path",
-            options.directory,
-            "--label",
-            labelFor(options.task),
-            "--no-focus",
+          const resolution = resolveOpen(
+            yield* roster,
+            yield* worktreesFor(options.repository),
+            options,
           );
+          switch (resolution.kind) {
+            case "workspace":
+              // Adopting an existing workspace is what makes a restart safe:
+              // the label is the identity, so foreman recognises work it
+              // started in a previous life instead of opening a second
+              // workspace beside it.
+              return resolution.worker;
 
-          return {
-            task: options.task,
-            workspace: created.result.workspace.workspace_id,
-            pane: created.result.root_pane.pane_id,
-            directory: created.result.worktree.path,
-            worktree: created.result.worktree.path,
-            state: "gone",
-            roles: new Map(),
-          } satisfies Worker;
+            case "worktree":
+              // The workspace is gone — closing its last pane closed it — but
+              // the worktree git still has is where the interrupted agent's
+              // edits live. Adopting it is the difference between continuing
+              // that work and `worktree create` colliding with a directory
+              // that already exists forever.
+              yield* Effect.logInfo(
+                `adopting ${options.branch} at ${resolution.worktree.path}: its workspace closed but the worktree survives`,
+              );
+              return yield* adoptWorktree(options);
+
+            case "create":
+              return yield* createWorktree(options);
+          }
         }),
 
       attach: (options: AttachOptions) =>
@@ -346,21 +432,52 @@ export const HerdrFleet = Layer.effect(
       focus: (worker: Worker) =>
         herdr("focus", "workspace", "focus", worker.workspace).pipe(Effect.asVoid),
 
-      close: (worker: Worker) =>
-        // Two different teardowns, chosen by who owns the directory. A worktree
-        // foreman created is removed with it; a checkout that was already there
-        // belongs to the operator, and only the workspace over it is closed.
-        // `workspace close` alone would leave the worktree on disk and
-        // registered with git, and `worktree remove` refuses on an attached
-        // workspace and would leave the workspace open.
-        //
-        // The branch is deliberately left behind. If the work merged the branch
-        // is redundant and harmless; if it was rejected the branch is the only
-        // copy of what the agent did.
-        (worker.worktree === undefined
-          ? herdr("close", "workspace", "close", worker.workspace)
-          : herdr("close", "worktree", "remove", "--workspace", worker.workspace, "--force")
-        ).pipe(Effect.asVoid, Effect.ignore),
+      close: (options: CloseOptions) =>
+        Effect.gen(function* () {
+          const workers = yield* roster;
+          const worker = workers.find((candidate) => candidate.task === options.task);
+          const worktrees =
+            worker !== undefined || options.repository === undefined
+              ? []
+              : yield* worktreesFor(options.repository);
+          const resolution = resolveClose(workers, worktrees, options.task);
+          switch (resolution.kind) {
+            case "workspace":
+              // Attached to a checkout that was already there, which belongs to
+              // the operator: only the workspace over it closes.
+              yield* herdr("close", "workspace", "close", resolution.worker.workspace);
+              return;
+
+            case "worktree":
+              // The worktree is the durable thing, and the branch survives
+              // either way. A live workspace is removed with it; one herdr has
+              // already dropped — its last pane closed by hand — leaves a
+              // worktree that must be adopted to be removed rather than
+              // orphaned in place.
+              if (resolution.worker) {
+                yield* herdr(
+                  "close",
+                  "worktree",
+                  "remove",
+                  "--workspace",
+                  resolution.worker.workspace,
+                  "--force",
+                ).pipe(
+                  Effect.orElse(() =>
+                    options.repository
+                      ? removeWorktreeByAdoption(options.repository, options.task)
+                      : Effect.void,
+                  ),
+                );
+              } else if (options.repository) {
+                yield* removeWorktreeByAdoption(options.repository, options.task);
+              }
+              return;
+
+            case "nothing":
+              return;
+          }
+        }).pipe(Effect.asVoid, Effect.ignore),
 
       notify: (title: string, body: string) =>
         Effect.gen(function* () {
@@ -468,7 +585,69 @@ export const workerStateOf = (statuses: ReadonlyArray<string>): WorkerState => {
   return "gone";
 };
 
-const Worktree = Schema.Struct({ checkout_path: Schema.String });
+/**
+ * Which record a task's open resolves to: a workspace carrying its label, else
+ * a worktree git still has for its branch, else neither.
+ *
+ * The order is the point. A workspace is the live view and dies with its last
+ * pane, while the worktree and branch are durable — so the workspace is tried
+ * first for a restart's sake, and the worktree is what keeps a task whose
+ * workspace a keypress destroyed reachable instead of colliding with a
+ * `worktree create` on a directory that already exists.
+ */
+export type OpenResolution =
+  | { readonly kind: "workspace"; readonly worker: Worker }
+  | { readonly kind: "worktree"; readonly worktree: WorktreeRecord }
+  | { readonly kind: "create" };
+
+export const resolveOpen = (
+  workers: ReadonlyArray<Worker>,
+  worktrees: ReadonlyArray<WorktreeRecord>,
+  options: OpenOptions,
+): OpenResolution => {
+  const worker = workers.find((candidate) => candidate.task === options.task);
+  if (worker) return { kind: "workspace", worker };
+  const worktree = worktrees.find(
+    (candidate) => candidate.branch === options.branch && !candidate.is_prunable,
+  );
+  return worktree ? { kind: "worktree", worktree } : { kind: "create" };
+};
+
+/**
+ * Which teardown a task's close resolves to, the same order as open.
+ *
+ * A workspace over a checkout that was already there is only closed; a worktree
+ * foreman made is removed whether or not its workspace survives — when it does,
+ * the remove takes both, and when it does not the worktree is adopted first so
+ * it can be removed at all rather than orphaned in place.
+ */
+export type CloseResolution =
+  | { readonly kind: "workspace"; readonly worker: Worker }
+  | { readonly kind: "worktree"; readonly worker: Worker | undefined }
+  | { readonly kind: "nothing" };
+
+export const resolveClose = (
+  workers: ReadonlyArray<Worker>,
+  worktrees: ReadonlyArray<WorktreeRecord>,
+  task: string,
+): CloseResolution => {
+  const worker = workers.find((candidate) => candidate.task === task);
+  if (worker) {
+    return worker.worktree === undefined
+      ? { kind: "workspace", worker }
+      : { kind: "worktree", worker };
+  }
+  return worktrees.some(
+    (candidate) => candidate.branch === labelFor(task) && !candidate.is_prunable,
+  )
+    ? { kind: "worktree", worker: undefined }
+    : { kind: "nothing" };
+};
+
+const Worktree = Schema.Struct({
+  checkout_path: Schema.String,
+  is_linked_worktree: Schema.Boolean,
+});
 
 const Workspace = Schema.Struct({
   workspace_id: Schema.String,
@@ -549,10 +728,27 @@ const WorkspaceCreated = Schema.Struct({
   }),
 });
 
-const WorktreeCreated = Schema.Struct({
+/** A workspace over a worktree, whether the worktree was just made or adopted. */
+const WorktreeResolved = Schema.Struct({
   result: Schema.Struct({
     workspace: Schema.Struct({ workspace_id: Schema.String }),
     root_pane: Schema.Struct({ pane_id: Schema.String }),
     worktree: Schema.Struct({ path: Schema.String }),
   }),
+});
+
+/**
+ * One worktree git has registered, as herdr reports it. `is_prunable` excludes
+ * a registration whose directory is gone — such a worktree has nothing to
+ * adopt and nothing to remove.
+ */
+const WorktreeRecord = Schema.Struct({
+  branch: Schema.optional(Schema.String),
+  path: Schema.String,
+  is_prunable: Schema.Boolean,
+});
+export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecord>;
+
+const WorktreeList = Schema.Struct({
+  result: Schema.Struct({ worktrees: Schema.Array(WorktreeRecord) }),
 });

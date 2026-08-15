@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { agentNameFor, paneFor, workerStateOf } from "./herdr.ts";
+import {
+  agentNameFor,
+  paneFor,
+  resolveClose,
+  resolveOpen,
+  workerStateOf,
+  type WorktreeRecord,
+} from "./herdr.ts";
+import type { Worker } from "./fleet.ts";
 
 const pane = (
   pane_id: string,
@@ -61,5 +69,96 @@ describe("workerStateOf", () => {
 
   test("blocked work still requires attention", () => {
     expect(workerStateOf(["done", "working", "blocked"])).toBe("blocked");
+  });
+});
+
+const worker = (task: string, worktree: string | undefined): Worker => ({
+  task,
+  workspace: "w1",
+  pane: "w1:p1",
+  directory: worktree ?? "/home/dan/build/project",
+  worktree,
+  state: "gone",
+  roles: new Map(),
+});
+
+const worktree = (
+  branch: string | undefined,
+  overrides: Partial<WorktreeRecord> = {},
+): WorktreeRecord => ({
+  branch,
+  path: `/worktrees/${branch ?? "detached"}`,
+  is_prunable: false,
+  ...overrides,
+});
+
+const openFor = (task: string) => ({
+  task,
+  repository: "/home/dan/build/project",
+  branch: `foreman/${task}`,
+  directory: `/worktrees/${task}`,
+});
+
+describe("resolveOpen", () => {
+  test("a workspace carrying the task's label wins outright", () => {
+    const resolution = resolveOpen(
+      [worker("ts-1", "/worktrees/ts-1")],
+      [worktree("foreman/ts-1")],
+      openFor("ts-1"),
+    );
+
+    expect(resolution).toEqual({ kind: "workspace", worker: worker("ts-1", "/worktrees/ts-1") });
+  });
+
+  test("a worktree git still has is adopted when the workspace is gone", () => {
+    const registered = worktree("foreman/ts-1");
+    const resolution = resolveOpen([], [registered], openFor("ts-1"));
+
+    expect(resolution).toEqual({ kind: "worktree", worktree: registered });
+  });
+
+  test("a prunable registration has nothing to adopt", () => {
+    // The directory is gone, so opening it would fail; creating takes over.
+    const resolution = resolveOpen(
+      [],
+      [worktree("foreman/ts-1", { is_prunable: true })],
+      openFor("ts-1"),
+    );
+
+    expect(resolution).toEqual({ kind: "create" });
+  });
+
+  test("another task's worktree is not this task's", () => {
+    const resolution = resolveOpen([], [worktree("foreman/ts-2")], openFor("ts-1"));
+
+    expect(resolution).toEqual({ kind: "create" });
+  });
+
+  test("nothing registered means create both", () => {
+    expect(resolveOpen([], [], openFor("ts-1"))).toEqual({ kind: "create" });
+  });
+});
+
+describe("resolveClose", () => {
+  test("a worktree worker is removed through its workspace", () => {
+    const resolution = resolveClose([worker("ts-1", "/worktrees/ts-1")], [], "ts-1");
+
+    expect(resolution).toEqual({ kind: "worktree", worker: worker("ts-1", "/worktrees/ts-1") });
+  });
+
+  test("a workspace on a checkout that was already there is only closed", () => {
+    const resolution = resolveClose([worker("ts-1", undefined)], [], "ts-1");
+
+    expect(resolution).toEqual({ kind: "workspace", worker: worker("ts-1", undefined) });
+  });
+
+  test("a workspace whose workspace died is removed by adopting the worktree", () => {
+    const resolution = resolveClose([], [worktree("foreman/ts-1")], "ts-1");
+
+    expect(resolution).toEqual({ kind: "worktree", worker: undefined });
+  });
+
+  test("nothing to tear down", () => {
+    expect(resolveClose([], [], "ts-1")).toEqual({ kind: "nothing" });
   });
 });

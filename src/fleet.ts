@@ -17,9 +17,17 @@ export class Fleet extends Effect.Tag("Fleet")<
   Fleet,
   {
     /**
-     * Opens the workspace for a task, creating its worktree and branch from
-     * the repository's HEAD. Returns the existing one if it is already open,
-     * so a restart adopts its workspaces instead of duplicating them.
+     * Opens the workspace for a task, resolving in order: a workspace already
+     * carrying this task's label, else a worktree git still has registered for
+     * this task's branch — attaching a fresh workspace to it — else creating
+     * both from the repository's HEAD.
+     *
+     * The worktree is the durable identity and the workspace a view onto it.
+     * A workspace dies when its last pane closes, but the worktree and branch
+     * survive, so resolution reads the durable record second. Without that
+     * step, a task whose workspace a keypress destroyed fell through to
+     * `worktree create`, which fails on a directory that already exists — and
+     * retried that same collision forever instead of re-adopting the work.
      */
     readonly open: (options: OpenOptions) => Effect.Effect<Worker, FleetError>;
 
@@ -49,10 +57,16 @@ export class Fleet extends Effect.Tag("Fleet")<
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;
 
     /**
-     * Closes the workspace, removing the worktree when foreman made one. The
-     * branch survives either way.
+     * Closes a task's workspace, removing the worktree when foreman made one.
+     * The branch survives either way.
+     *
+     * Resolution mirrors `open`: the workspace carrying the task's label, else
+     * a worktree git still has for its branch. The workspace half only needs
+     * the multiplexer; the worktree half re-adopts the worktree to get a
+     * workspace to remove it with — so a worktree whose workspace already
+     * closed, its last pane closed by hand, is removed rather than orphaned.
      */
-    readonly close: (worker: Worker) => Effect.Effect<void, FleetError>;
+    readonly close: (options: CloseOptions) => Effect.Effect<void, FleetError>;
 
     /**
      * Notifies the operator, but only when foreman's own workspace is not the
@@ -81,6 +95,16 @@ export interface OpenOptions {
   readonly repository: string;
   readonly branch: string;
   readonly directory: string;
+}
+
+export interface CloseOptions {
+  readonly task: string;
+
+  /**
+   * The project's main checkout, needed only when the workspace is gone and
+   * the worktree must be adopted to be removed.
+   */
+  readonly repository: string | undefined;
 }
 
 export interface AttachOptions {

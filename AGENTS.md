@@ -48,7 +48,7 @@ So the world is authoritative, not the process:
 
 | Question | Answered by |
 | --- | --- |
-| What am I working on? | herdr workspaces labelled `foreman/<task-id>` |
+| What am I working on? | the worktree git has registered for `foreman/<task-id>`, shown by its workspace |
 | Who authored this branch? | the task's `by-<rung>` label |
 | Is a reviewer already assigned? | the task's `review-by-<rung>` label |
 | Which rung does this task get next? | the task's `rung-<name>` label |
@@ -57,12 +57,13 @@ So the world is authoritative, not the process:
 | Is this project free to work in? | `git status` in its checkout |
 
 Every tick reads all of it back. A restart re-adopts its live workspaces
-instead of orphaning them — that is what `Fleet.open` returning an existing
-workspace by label is for. The only thing foreman genuinely cannot derive is
-whether the operator has paused dispatch, because nothing in the world records
-an intention. That is the one `Ref`, and it starts paused: settling and
-reclaiming run regardless, so a fresh start lands finished work and tidies dead
-workspaces before it asks for anything new.
+instead of orphaning them, and a worktree whose workspace a keypress destroyed
+is adopted rather than collided with — that is what `Fleet.open` resolving a
+workspace, then a worktree, then creating both is for. The only thing foreman
+genuinely cannot derive is whether the operator has paused dispatch, because
+nothing in the world records an intention. That is the one `Ref`, and it starts
+paused: settling and reclaiming run regardless, so a fresh start lands finished
+work and tidies dead workspaces before it asks for anything new.
 
 The wake queue beside it is not a second one. It holds no state — a tick reads
 everything back either way — it only says "look now" so an operator's keypress
@@ -78,14 +79,22 @@ or prog, not in a field on the dispatcher.
 `foreman/<task-id>` is the workspace label and git branch. It cannot also be the
 herdr agent name: agent names reject `/`, and author/reviewer output panes
 coexist. Agents therefore use ephemeral names derived from their unique pane;
-the workspace label remains the durable task identity that other processes
-read.
+the branch, and the worktree holding it, is the durable task identity that
+other processes read.
 
 The author runs in the workspace's own pane; only the reviewer splits a second
 pane beside the author's output. One task is one pane, so the operator never
 sees a blank shell beside a worker. The author's output stays visible after it
 settles; the reviewer reads the diff next to it. The workspace dies when the
 task leaves the fleet.
+
+The worktree, not the workspace, is where the work lives. A workspace is a view
+onto it and evaporates when its last pane closes — a keypress can destroy it —
+while the worktree and branch survive. `Fleet.open` therefore resolves in
+order: a workspace carrying the task's label, else a worktree git still has
+registered for the branch (attaching a fresh workspace to it), else creating
+both. Teardown reads the same order, so a worktree whose workspace already
+closed is removed rather than orphaned.
 
 ### herdr owns the worktree
 
@@ -194,7 +203,12 @@ Three things hold it together, and each of them has a reason:
   workspace and leaves the workspace open. Neither is a superset, so `close`
   reads which kind it has. That field comes from herdr's own workspace record
   every tick — deriving it from foreman's memory is how you eventually delete
-  somebody's work.
+  somebody's work. The field keys on the record's `is_linked_worktree`, not on
+  the mere presence of a checkout path: a workspace attached to a checkout that
+  was already there reports a worktree that is not linked, and `close` must
+  treat that directory as the operator's. When the workspace is gone, `close`
+  adopts the worktree to get a workspace to remove it with — so a worktree
+  whose workspace a keypress destroyed is removed rather than orphaned.
 - **The `onboard` label keeps it out of the queue.** The queue is work the fleet
   may start by itself, and this stands in a directory a person is using. The
   label survives a failed attempt, so a released salvage task never gets picked

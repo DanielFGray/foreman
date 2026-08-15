@@ -94,7 +94,7 @@ export const runPlan = (input: PlanInput) =>
 
     // Only a completed run takes the workspace down; a failed or interrupted
     // one stays so `--epic` can resume it.
-    yield* fleet.close(worker);
+    yield* fleet.close({ task: epic.id, repository: project.directory });
 
     if (status === "done") {
       const count = (yield* prog.children(epic.id)).length;
