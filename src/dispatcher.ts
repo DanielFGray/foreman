@@ -61,10 +61,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // an intention.
     //
     // It starts true unless the operator said otherwise on the command line.
-    // Settling and reclaiming run while paused, so a fresh start lands what is
-    // finished and tidies what died before it asks for anything new — and the
-    // operator who opened the screen to drain the fleet is not racing the first
-    // tick to press pause.
+    // A paused run observes and reports the world but does not settle, tidy,
+    // reclaim, or fill it. The operator who opened the screen to drain the
+    // fleet therefore gets a quiet first tick rather than racing it to pause.
     //
     // `--running` is how a restart inherits the answer. Under `bun --watch` the
     // daemon restarts whenever foreman's own source changes — which includes
@@ -101,10 +100,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const current = yield* observe;
       yield* SubscriptionRef.set(state, current);
 
+      if (yield* Ref.get(paused)) return;
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
-      if (yield* Ref.get(paused)) return;
       yield* fill(yield* observe);
     });
 

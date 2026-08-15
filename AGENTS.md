@@ -61,8 +61,8 @@ instead of orphaning them — that is what `Fleet.open` returning an existing
 workspace by label is for. The only thing foreman genuinely cannot derive is
 whether the operator has paused dispatch, because nothing in the world records
 an intention. That is the one `Ref`, and it starts paused unless `--running`
-says otherwise: settling and reclaiming run regardless, so a fresh start lands
-finished work and tidies dead workspaces before it asks for anything new.
+says otherwise: a paused tick only observes and reports, while settle, tidy,
+reclaim and fill wait for resume.
 
 `--running` exists because a restart is not an operator. Under `bun --watch` the
 daemon restarts whenever foreman's own source changes, and landing a task into

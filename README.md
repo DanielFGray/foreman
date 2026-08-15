@@ -42,8 +42,10 @@ and `prog list` together tell you everything foreman knows.
    is never touched.
 4. **Fill.** Reviews first, then new work. A task awaiting review is nearly
    finished and is blocking whatever depends on it; an unclaimed task has not
-   started costing anything yet. This is the only step pausing stops, so a
-   paused foreman still lands, tidies and reports.
+   started costing anything yet.
+
+Pausing stops all tick mutations. A paused foreman observes and reports, but
+does not settle, tidy, reclaim, or fill until `p` resumes it.
 
 Foreman starts paused. Opening the dashboard to drain the fleet is the common
 case, and it should not be a race against the first tick. Press `p` when you
@@ -403,8 +405,8 @@ bun src/main.ts               # from a pane inside the multiplexer
 bun src/main.ts --slots 1     # one at a time, to watch a change land
 ```
 
-It comes up paused: it lands what is finished and tidies what died, and waits
-for `p` before it starts anything new.
+It comes up paused: it observes and reports, and waits for `p` before it changes
+anything.
 
 `--slots` (`-n`) is the one setting available on the command line, because it is
 the one an operator changes per run. Everything else describes the fleet and
