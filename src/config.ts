@@ -120,6 +120,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         tasker: yield* namedRung(raw.tasker, ladder[0]),
         pollInterval: raw.pollSeconds,
         staleAfter: raw.staleAfterHours,
+        coachWindow: raw.coachWindowMinutes,
         landedWindow: raw.landedWindowDays,
       } as const;
     }),
@@ -154,6 +155,9 @@ interface SettingsShape {
   readonly tasker: Rung;
   readonly pollInterval: number;
   readonly staleAfter: number;
+
+  /** Minutes an author's agent survives its handoff, for a reviewer to coach. */
+  readonly coachWindow: number;
   readonly landedWindow: number;
 }
 
@@ -224,6 +228,18 @@ const ConfigFile = Schema.Struct({
    * interrupted.
    */
   staleAfterHours: Schema.optionalWith(Schema.Positive, { default: () => 24 }),
+
+  /**
+   * How long an author's agent is kept alive after it hands off, so the
+   * reviewer can send mechanical findings back to the session that wrote the
+   * code instead of paying a rung climb to re-derive its context.
+   *
+   * The cost is a second resident model per task in review, so this bounds it:
+   * past the window foreman closes the pane itself and the reviewer simply
+   * loses the option. Reviews are filled before new work, so the window only
+   * matters when reviews are queued behind a held project.
+   */
+  coachWindowMinutes: Schema.optionalWith(Schema.Positive, { default: () => 30 }),
 
   /**
    * How far back the dashboard's landed column reaches. prog list has no

@@ -166,28 +166,62 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         verify: string | undefined,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
-          const before = verify ? yield* check(directory, verify) : undefined;
           const restore = yield* gitOutput(directory, "rev-parse", "HEAD");
 
-          const merged = yield* git(directory, "merge", "--no-ff", branch);
-          if (merged.exitCode !== 0) {
-            yield* git(directory, "merge", "--abort").pipe(Effect.ignore);
-            return {
-              _tag: "Rejected",
-              detail:
+          /**
+           * Applies the merge, or says why not — and the two whys are not the
+           * same answer. git exits 1 when it merged and the content would not
+           * reconcile, which is a fact about this branch and the evidence a
+           * rung climb rests on. It exits 128 when it never got that far: a
+           * ref it could not read, or an `index.lock` another git process in
+           * the operator's checkout is holding. Reading the second as the
+           * first sent an approved branch with seven commits back to the queue
+           * a rung more expensive, because something else touched the index
+           * for a moment. So a fatal error holds the project instead, exactly
+           * as an unreadable checkout already does.
+           */
+          const apply = git(directory, "merge", "--no-ff", branch).pipe(
+            Effect.tap((merged) =>
+              merged.exitCode === 0
+                ? Effect.void
+                : git(directory, "merge", "--abort").pipe(Effect.ignore),
+            ),
+            Effect.map((merged) => {
+              if (merged.exitCode === 0) return undefined;
+              const detail =
                 merged.stderr.trim() ||
                 merged.stdout.trim() ||
-                `git merge exited ${merged.exitCode}`,
-            } as const;
-          }
+                `git merge exited ${merged.exitCode}`;
+              return merged.exitCode >= 128
+                ? ({ _tag: "Held", detail } as const)
+                : ({ _tag: "Rejected", detail } as const);
+            }),
+          );
 
-          if (!verify || !before?.passed) return { _tag: "Merged", verified: false } as const;
+          const rejected = yield* apply;
+          if (rejected) return rejected;
+
+          if (!verify) return { _tag: "Merged", verified: false } as const;
 
           const after = yield* check(directory, verify);
           if (after.passed) return { _tag: "Merged", verified: true } as const;
 
+          // The baseline is only worth its runtime once the merged checkout has
+          // failed. A landing that passes is the common case and needs no
+          // second opinion, so paying for the baseline first doubled the price
+          // of every good merge — and the tick is one fiber, so the whole fleet
+          // waited out both runs. Here the checkout is red and the question
+          // becomes live: is the branch to blame, or was it red already?
           yield* gitOutput(directory, "reset", "--hard", restore);
-          return { _tag: "Broke", output: after.output } as const;
+          const before = yield* check(directory, verify);
+          if (before.passed) return { _tag: "Broke", output: after.output } as const;
+
+          // Red before the branch touched it, so the branch is not the cause and
+          // the merge is put back. Gating on an absolute pass would freeze the
+          // fleet behind one broken test forever.
+          const refused = yield* apply;
+          if (refused) return refused;
+          return { _tag: "Merged", verified: false } as const;
         }),
     };
 
@@ -223,36 +257,45 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           const trunk = yield* trunkOf(directory);
-          if (!trunk) return { _tag: "Held" } as const;
+          if (!trunk) return { _tag: "Held", detail: undefined } as const;
 
-          const before = verify ? yield* check(directory, verify) : undefined;
           const restore = yield* revision(directory, "@");
 
-          const merged = yield* jj(
-            directory,
-            "new",
-            trunk,
-            branch,
-            "-m",
-            `Merge branch '${branch}'`,
-          );
-          if (merged.exitCode !== 0) {
-            return { _tag: "Rejected", detail: merged.stderr.trim() || "jj new failed" } as const;
-          }
+          /** Returns to `restore` and abandons whatever the merge left behind. */
+          const backOut = Effect.gen(function* () {
+            const merge = yield* revision(directory, "@");
+            yield* jjOutput(directory, "edit", restore);
+            yield* jjOutput(directory, "abandon", merge);
+          });
 
-          const merge = yield* revision(directory, "@");
-          const backOut = jjOutput(directory, "edit", restore).pipe(
-            Effect.andThen(jjOutput(directory, "abandon", merge)),
-          );
+          /** Applies the merge, or says why it cannot stand. */
+          const apply = Effect.gen(function* () {
+            const merged = yield* jj(
+              directory,
+              "new",
+              trunk,
+              branch,
+              "-m",
+              `Merge branch '${branch}'`,
+            );
+            // Never the branch's fault. jj records a conflict rather than
+            // refusing one, so the check below is the only thing that can say
+            // this branch will not merge; a non-zero exit here means jj could
+            // not run the command at all, and the project is held for it.
+            if (merged.exitCode !== 0) {
+              return { _tag: "Held", detail: merged.stderr.trim() || "jj new failed" } as const;
+            }
 
-          const conflicts = yield* jjOutput(directory, "log", "-r", "@", ...template("conflict"));
-          if (conflicts === "true") {
-            yield* backOut;
-            return {
-              _tag: "Rejected",
-              detail: merged.stderr.trim() || `merging ${branch} into ${trunk} conflicts`,
-            } as const;
-          }
+            const conflicts = yield* jjOutput(directory, "log", "-r", "@", ...template("conflict"));
+            if (conflicts === "true") {
+              yield* backOut;
+              return {
+                _tag: "Rejected",
+                detail: merged.stderr.trim() || `merging ${branch} into ${trunk} conflicts`,
+              } as const;
+            }
+            return undefined;
+          });
 
           const land = jjOutput(directory, "bookmark", "set", trunk, "-r", "@").pipe(
             // A fresh empty child, so the operator's next edit amends their own
@@ -260,19 +303,30 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             Effect.andThen(jjOutput(directory, "new")),
           );
 
-          if (!verify || !before?.passed) {
+          const rejected = yield* apply;
+          if (rejected) return rejected;
+
+          if (!verify) {
             yield* land;
             return { _tag: "Merged", verified: false } as const;
           }
 
           const after = yield* check(directory, verify);
-          if (!after.passed) {
-            yield* backOut;
-            return { _tag: "Broke", output: after.output } as const;
+          if (after.passed) {
+            yield* land;
+            return { _tag: "Merged", verified: true } as const;
           }
 
+          // Same lazy baseline as the git path: only a failed merge makes the
+          // "was it red already?" question worth a second full run.
+          yield* backOut;
+          const before = yield* check(directory, verify);
+          if (before.passed) return { _tag: "Broke", output: after.output } as const;
+
+          const refused = yield* apply;
+          if (refused) return refused;
           yield* land;
-          return { _tag: "Merged", verified: true } as const;
+          return { _tag: "Merged", verified: false } as const;
         }),
     };
 
@@ -326,6 +380,31 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
        */
       holdsWork: (directory: string) =>
         status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
+
+      /**
+       * The commit a task's branch was cut from, so a reviewer can read the
+       * author's work without going near the operator's checkout.
+       *
+       * A reviewer used to be told to run `git -C <repository> diff
+       * HEAD...<branch>`, because naming the author's work needs both ends of
+       * it and only the checkout knew where the branch forked. That put an
+       * agent's git process in the one directory foreman claims no agent
+       * writes to, and `git diff` refreshes the index: it collided with a
+       * landing mid-merge, left `index.lock` behind, and the failed merge was
+       * charged to the branch — a task climbed a rung for foreman's own
+       * concurrency. Resolving the fork point here instead leaves the reviewer
+       * one revision it can diff entirely inside its own worktree.
+       *
+       * A commit rather than the trunk's name, because the operator's branch
+       * moves while a review runs, and the question is what this author wrote.
+       * Always git: worktrees are git's whatever records the project, and a
+       * colocated jj keeps real git refs for its bookmarks.
+       */
+      base: (directory: string, branch: string) =>
+        gitOutput(directory, "merge-base", "HEAD", branch).pipe(
+          Effect.map((sha) => (sha === "" ? undefined : sha)),
+          Effect.orElseSucceed(() => undefined),
+        ),
 
       /**
        * Every branch foreman owns in this checkout, and the two facts git can
@@ -409,7 +488,8 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       merge: (directory: string, branch: string, verify: string | undefined) =>
         Effect.gen(function* () {
           const checkout = yield* checkoutAt(directory);
-          if (!(yield* checkout.isClean(directory))) return { _tag: "Held" } as const;
+          if (!(yield* checkout.isClean(directory)))
+            return { _tag: "Held", detail: undefined } as const;
           return yield* checkout.merge(directory, branch, verify);
         }),
     } as const;
@@ -418,7 +498,13 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
 /** What became of a branch foreman tried to put into the operator's checkout. */
 export type Landing =
-  | { readonly _tag: "Held" }
+  /**
+   * Not now. The checkout was not in a state to land into, which says nothing
+   * about the branch — so the verdict stays on the task and a later tick tries
+   * again. `detail` names the obstacle when it was not simply the operator
+   * working there.
+   */
+  | { readonly _tag: "Held"; readonly detail: string | undefined }
   | { readonly _tag: "Rejected"; readonly detail: string }
   | { readonly _tag: "Merged"; readonly verified: boolean }
   | { readonly _tag: "Broke"; readonly output: string };

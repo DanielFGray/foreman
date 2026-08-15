@@ -449,28 +449,12 @@ export const HerdrFleet = Layer.effect(
             "--workspace",
             worker.workspace,
           )).result.panes;
+          // Closing the last pane evaporates the workspace, and that is the
+          // intended end: the worktree and its uncommitted edits outlive it,
+          // and whatever runs next re-adopts them through `open`. Keeping the
+          // view alive with an unlabelled shell leaves a blank pane and a
+          // workspace the roster reads as residue.
           const held = panes.filter((pane) => pane.label === paneLabelFor(role));
-          const anchor = held[0];
-          if (!anchor) return;
-
-          // Closing the workspace's last pane destroys its view. Split an
-          // unlabelled shell first so the worktree and its uncommitted edits
-          // survive while the replacement role is prepared.
-          if (held.length === panes.length) {
-            yield* herdrJson(
-              PaneSplit,
-              "stop role",
-              "pane",
-              "split",
-              "--pane",
-              anchor.pane_id,
-              "--direction",
-              "right",
-              "--cwd",
-              worker.directory,
-              "--no-focus",
-            );
-          }
 
           yield* Effect.forEach(held, (pane) => herdr("stop role", "pane", "close", pane.pane_id), {
             discard: true,

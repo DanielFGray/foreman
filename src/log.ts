@@ -12,15 +12,9 @@ import { dirname, join } from "node:path";
  * to that model, why was this claim released, what did it do at 3am. One JSON
  * object per line, so the answer is a jq query rather than a full read.
  *
- * The screen copy replaces Effect's default logger rather than joining it,
- * which is the whole reason this layer exists. Creating an opentui renderer
- * assigns a NEW object to globalThis.console and routes it to the F12 overlay.
- * Effect resolved the old object when it loaded and holds that reference, so
- * its own logger keeps writing to the real stdout — underneath a full-screen
- * renderer, which scribbles log lines across the frame until the next repaint.
- * Reading globalThis.console per line follows the swap instead: under the
- * dashboard the text lands in the overlay, and in plan mode, where no renderer
- * ever swapped it, on the terminal. Same line, no mode to choose.
+ * The screen copy replaces Effect's default logger rather than joining it.
+ * OpenTUI replaces globalThis.console when its renderer starts, so reading it
+ * at log time sends dashboard records to the F12 overlay instead of stdout.
  */
 export const logging = (path = defaultPath()): Layer.Layer<never> =>
   Logger.replace(
@@ -39,11 +33,6 @@ export const logging = (path = defaultPath()): Layer.Layer<never> =>
         path,
         `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
       );
-      // No time on this copy. The overlay stamps every line it shows, so
-      // carrying one here reads as `[10:45:40] [LOG] '10:45:40 INFO ...'`, and
-      // plan mode is a foreground run somebody is watching, where the clock is
-      // noise. The durable timestamp is the file's. The level does stay: the
-      // overlay labels everything LOG, so a warning is otherwise invisible.
       globalThis.console.log(`${logLevel.label} ${text}`);
     }),
   ).pipe(Layer.tap(() => Effect.sync(() => mkdirSync(dirname(path), { recursive: true }))));

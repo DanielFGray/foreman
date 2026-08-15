@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { DateTime } from "effect";
 import {
   awaitingLanding,
+  handoffExpired,
   decisionsOf,
   readyToLand,
   reviewable,
@@ -8,7 +10,7 @@ import {
   type Owned,
 } from "./dispatcher.ts";
 import { authoredBy, diagnosticIntent, reviewedBy, type Item } from "./prog.ts";
-import type { Worker, WorkerState } from "./fleet.ts";
+import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 
 const task = (
   id: string,
@@ -47,9 +49,21 @@ const active = (task: Item, worker: Worker | undefined) => ({
   kind: reviewedBy(task) ?? authoredBy(task),
 });
 
-const owned = (id: string, status: string, labels: ReadonlyArray<string>): Owned => {
+const owned = (
+  id: string,
+  status: string,
+  labels: ReadonlyArray<string>,
+  roles: ReadonlyArray<AgentRole> = [],
+): Owned => {
   const item = task(id, labels, status);
-  return { task: item, worker: worker("gone", id), kind: reviewedBy(item) ?? authoredBy(item) };
+  return {
+    task: item,
+    worker: {
+      ...worker("gone", id),
+      roles: new Map(roles.map((role) => [role, "settled" as const])),
+    },
+    kind: reviewedBy(item) ?? authoredBy(item),
+  };
 };
 
 describe("landing a reviewed branch", () => {
@@ -90,6 +104,28 @@ describe("landing a reviewed branch", () => {
     expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"], "in_progress"))).toBe(
       false,
     );
+  });
+});
+
+describe("the author's pane after a handoff", () => {
+  const at = (item: Item, when: Date): Item => ({ ...item, last_activity_at: when });
+  const cutoff = DateTime.unsafeFromDate(new Date("2026-08-15T12:00:00Z"));
+
+  test("keeps a fresh handoff alive for a reviewer to coach", () => {
+    // The author's session is the only place its context exists, and a
+    // mechanical finding sent back to it costs a fraction of the rung climb
+    // that would otherwise re-derive all of it.
+    const handed = at(task("ts-123456", ["by-opencode"]), new Date("2026-08-15T12:15:00Z"));
+
+    expect(handoffExpired(handed, cutoff)).toBe(false);
+  });
+
+  test("closes one nobody reached inside the window", () => {
+    // A second resident model per task in review is the cost, so a review
+    // backlog must not accumulate one for every task waiting in it.
+    const stranded = at(task("ts-123456", ["by-opencode"]), new Date("2026-08-15T11:15:00Z"));
+
+    expect(handoffExpired(stranded, cutoff)).toBe(true);
   });
 });
 
@@ -142,6 +178,42 @@ describe("decisions", () => {
     expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-3", "ts-4", "ts-5"]);
   });
 
+  // A role proves the claim happened and was given up, because dispatch labels
+  // the pane only when it spawns. Settle sweeps those itself; a workspace with
+  // no role is the one case foreman cannot prove is spent.
+  test("asks only about residue it cannot prove is spent", () => {
+    const ownedWorkspaces = [
+      owned("ts-3", "open", ["by-opencode"], ["author"]),
+      owned("ts-4", "open", ["by-opencode", "review-by-claude"], ["author", "review"]),
+      owned("ts-5", "open", ["by-opencode"]),
+    ];
+
+    const decisions = decisionsOf([], [], ownedWorkspaces);
+    expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-5"]);
+  });
+
+  // The reviewer's pane closes the moment its verdict is written, so until the
+  // checkout is clean the task has a review-by-* label and no worker — the
+  // exact shape of a vanished reviewer. A held project would otherwise turn
+  // every review it had passed into a question whose only answer is "wait".
+  test("does not mistake a finished review waiting on a held project for a vanished one", () => {
+    const approved = active(
+      task("ts-2", ["by-opencode", "review-by-claude", "approved"], "reviewing"),
+      undefined,
+    );
+    const trivial = active(
+      task("ts-3", ["by-opencode", "review-by-claude", "trivial"], "reviewing"),
+      undefined,
+    );
+    const unfinished = active(
+      task("ts-4", ["by-opencode", "review-by-claude"], "reviewing"),
+      undefined,
+    );
+
+    const decisions = decisionsOf([], [approved, trivial, unfinished], []);
+    expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-4"]);
+  });
+
   test("keeps claimed and reviewing workspaces out of the orphaned kind", () => {
     const ownedWorkspaces = [
       owned("ts-1", "in_progress", ["by-opencode"]),
@@ -192,11 +264,9 @@ describe("scoping the roster to this daemon's projects", () => {
   });
 
   test("a foreign daemon's live workspace fills none of this daemon's slots", () => {
-    // The stall that stalled the e2e rig: a second daemon at --slots 1 counted
-    // the first daemon's live workspace as its own busy slot and dispatched
-    // nothing. Two foremen against different configs are not competing for the
-    // same slots, so the foreign workspace must not appear in the roster slots
-    // are counted from.
+    // Two foremen against different configs are not competing for the same
+    // slots, so a foreign workspace must not appear in the roster slots are
+    // counted from — at --slots 1 it fills the only one and nothing dispatches.
     const foreign = task("ts-222222", ["by-opencode"], "in_progress", 1, "elsewhere");
 
     const { owned, workers } = scopeRoster(

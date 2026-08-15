@@ -296,6 +296,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
         decisions: decisionsOf(claimedActive, reviewingActive, owned),
         paused: yield* Ref.get(paused),
+        observedAt: yield* DateTime.now,
       } satisfies Observation;
     });
 
@@ -308,9 +309,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      */
     const settle = (current: Observation) =>
       Effect.gen(function* () {
+        const coachCutoff = DateTime.subtract(yield* DateTime.now, {
+          minutes: settings.coachWindow,
+        });
+
         yield* Effect.forEach(
           current.review.filter(({ task, worker }) => readyToLand(task, worker)),
-          ({ task }) => land(task),
+          ({ task, worker }) => land(task, worker),
           { discard: true },
         );
 
@@ -389,6 +394,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
                 );
                 yield* climb(task);
+                yield* stopAgents(worker);
                 return yield* fleet.notify(
                   "Review returned",
                   `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
@@ -445,7 +451,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 // reviewer on the next fill, which needs no announcement — and
                 // announcing it here would repeat every poll until a slot came
                 // free, because waiting for review changes nothing to observe.
-                if (!reviewer) return;
+                //
+                // Its pane stays open. The reviewer sends mechanical findings
+                // back to the session that wrote the code rather than paying a
+                // rung climb for a missed case, and that session only exists
+                // while its pane does. Ownership passes with it: the reviewer
+                // closes the author, and this is only the backstop for a task
+                // no reviewer reached inside the window. The handoff is the
+                // last activity on it, so the wait is derivable and foreman
+                // still counts nothing.
+                if (!reviewer) {
+                  return handoffExpired(task, coachCutoff) ? yield* stopAgents(worker) : undefined;
+                }
 
                 yield* prog.log(
                   task.id,
@@ -453,15 +470,27 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 );
                 yield* climb(task);
                 yield* prog.release(task.id);
+                yield* stopAgents(worker);
                 return yield* fleet.notify(
                   "Review returned",
                   `${task.id} reviewer stopped without a verdict — back in the queue`,
                 );
               }
 
-              // A reviewer can explicitly return work with `prog open`. Keep the
-              // workspace: the next author must continue from the same branch.
-              if (task.status !== "in_progress") return;
+              // Residue: the task is neither claimed nor under review, so no
+              // agent is coming back to these panes. A role is what proves the
+              // claim happened and was given up, since dispatch opens the
+              // workspace before claiming and only labels the pane when it
+              // spawns — so a workspace carrying none may be a dispatch in
+              // flight and is left for `decisionsOf`. Panes only: the worktree
+              // and anything uncommitted in it survive for `Fleet.open`.
+              if (task.status !== "in_progress") {
+                return yield* Effect.forEach(
+                  [...worker.roles.keys()],
+                  (role) => fleet.stop(worker, role),
+                  { discard: true },
+                );
+              }
 
               // Settled without a verdict on a task that is still open. The
               // agent stopped of its own accord, so unlike a vanished worker
@@ -499,7 +528,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * or author, so every branch passes the same clean-checkout and verification
      * gate however trivial the task that produced it was.
      */
-    const land = (task: Item) =>
+    const land = (task: Item, worker: Worker | undefined) =>
       Effect.gen(function* () {
         const project = projectFor(task.project);
         if (!project) return;
@@ -509,7 +538,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           labelFor(task.id),
           project.verify,
         );
-        if (result._tag === "Held") return;
+        // The verdict is a durable label, so a later tick lands from it with no
+        // pane at all — and a project can stay dirty for hours.
+        if (result._tag === "Held") {
+          // An operator editing clears itself and is not worth a line every
+          // poll. A detail means git or jj could not run the merge at all,
+          // which never clears and must not retry in silence.
+          if (result.detail) {
+            yield* Effect.logWarning(`landing ${task.id} (${project.name}) held: ${result.detail}`);
+          }
+          return yield* stopAgents(worker);
+        }
 
         if (result._tag === "Rejected") {
           yield* Effect.logWarning(
@@ -730,6 +769,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const project = projectFor(task.project);
         if (!project) return;
 
+        // The fork point is how the reviewer names the author's work from
+        // inside its own worktree; without it the only diff it could read is in
+        // the operator's checkout. The status is untouched, so a later tick
+        // tries again.
+        const base = yield* repository.base(project.directory, labelFor(task.id));
+        if (!base) {
+          return yield* Effect.logWarning(
+            `review of ${task.id} deferred: no merge base for ${labelFor(task.id)} in ${project.directory}`,
+          );
+        }
+
         const rung = reviewerFor(settings.ladder, author);
         const worker = yield* fleet.open({
           task: task.id,
@@ -738,7 +788,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           directory: directoryFor(task.project, task.id),
         });
 
-        const prompt = yield* prompts.review(task, worker.directory, project.directory);
+        const prompt = yield* prompts.review(
+          task,
+          worker.directory,
+          project.directory,
+          base,
+          project.verify,
+        );
         yield* prog.assignReview(task.id, rung.name);
         const agent = yield* fleet
           .spawn(worker, spawnAs(rung, prompt, "review"))
@@ -863,9 +919,27 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             ),
           );
 
-    const stopActiveRole = (task: Item, worker: Worker | undefined) =>
+    /**
+     * Ends every agent on a task's workspace.
+     *
+     * herdr cannot end an agent without closing its pane, so a settled agent
+     * holds its model's memory for as long as the pane exists, and a pane
+     * already carrying a role is never dispatched into again. Every settle
+     * whose record is already in the task store therefore ends here: what the
+     * agent did is in the log, and the pane is only cost from there on. The
+     * worktree outlives the workspace, so the next role re-adopts it through
+     * `Fleet.open` with the uncommitted work still in it.
+     *
+     * All roles, not the one the labels call active. An author outlives its
+     * handoff now, so author and reviewer are legitimately live at once and
+     * naming a single role from the task store would guess wrong exactly when
+     * both exist. Every caller here means "end this task's agents" anyway.
+     */
+    const stopAgents = (worker: Worker | undefined) =>
       worker
-        ? fleet.stop(worker, reviewedBy(task) !== undefined ? "review" : "author")
+        ? Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
+            discard: true,
+          })
         : Effect.void;
 
     const dispatchDiagnostic = (
@@ -880,7 +954,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
 
-        yield* stopActiveRole(task, target.worker);
+        yield* stopAgents(target.worker);
         if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
         if (task.status !== "open") yield* prog.release(task.id);
         yield* prog.markDiagnostic(task.id, intent);
@@ -912,7 +986,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const task = yield* prog.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
-        yield* stopActiveRole(task, target.worker);
+        yield* stopAgents(target.worker);
         if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
         if (task.status === "open") yield* prog.claim(task.id);
         if (task.status !== "reviewing") yield* prog.review(task.id);
@@ -925,7 +999,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (task.status === "done" || task.status === "canceled") return;
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!rung) return;
-        yield* stopActiveRole(task, target.worker);
+        yield* stopAgents(target.worker);
         if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
         yield* prog.clearDiagnostic(task.id);
         if (task.status !== "open") yield* prog.release(task.id);
@@ -1149,6 +1223,21 @@ export const awaitingLanding = (task: Item): boolean =>
   task.status === "reviewing" && (isApproved(task) || !needsReview(task));
 
 /**
+ * Whether an author that handed off has waited too long to be worth keeping.
+ *
+ * Its pane outlives the handoff so a reviewer can send one mechanical finding
+ * back to the session that holds the context, but that is a second resident
+ * model per task in review, and a review backlog would otherwise keep one for
+ * every task in it. Past the window foreman closes the pane and the reviewer
+ * loses the option.
+ *
+ * The handoff is the last thing written to the task, so the wait is derivable
+ * from the store and foreman still counts nothing of its own.
+ */
+export const handoffExpired = (task: Item, cutoff: DateTime.Utc): boolean =>
+  DateTime.lessThan(DateTime.unsafeFromDate(task.last_activity_at), cutoff);
+
+/**
  * A finished branch foreman may merge on this tick.
  *
  * Liveness belongs in the predicate rather than in a check beside it, because
@@ -1172,10 +1261,13 @@ export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
  * under review is residue — the task is unclaimed, so nobody owns the
  * workspace — and the only answer is to close it.
  *
- * Residue is surfaced rather than swept because dispatchAuthor opens a
- * workspace before it claims its task: the brief window a fresh workspace
- * spends on an open task is exactly what a sweep would race, and it closes
- * within the same tick, long before anyone reads the dashboard.
+ * Residue is only asked about when foreman cannot prove it is spent, and a role
+ * is that proof: dispatch opens a workspace, claims the task, and only then
+ * spawns the agent that labels the pane, so a role on an unclaimed task's
+ * workspace means the claim happened and was given up — settle sweeps those. A
+ * workspace with no role is either a dispatch in flight, which resolves itself
+ * within the tick, or one that died between opening and spawning, which nothing
+ * else clears if the task is never offered again.
  */
 export const decisionsOf = (
   claimed: ReadonlyArray<Active>,
@@ -1188,9 +1280,17 @@ export const decisionsOf = (
   ),
   ...reviewing.filter(
     ({ task, worker }) =>
-      reviewedBy(task) !== undefined && (worker === undefined || worker.state === "gone"),
+      reviewedBy(task) !== undefined &&
+      // A reviewer that wrote its verdict did not vanish, it finished: the task
+      // waits on the checkout being clean, not on an answer, and its pane is
+      // gone precisely because there was nothing left for it to do.
+      !awaitingLanding(task) &&
+      (worker === undefined || worker.state === "gone"),
   ),
-  ...owned.filter(({ task }) => task.status !== "in_progress" && task.status !== "reviewing"),
+  ...owned.filter(
+    ({ task, worker }) =>
+      task.status !== "in_progress" && task.status !== "reviewing" && worker.roles.size === 0,
+  ),
 ];
 
 /**
@@ -1316,6 +1416,19 @@ export interface FleetState {
    */
   readonly held: ReadonlyArray<string>;
   readonly paused: boolean;
+
+  /**
+   * When this reading of the world was taken.
+   *
+   * The only thing foreman knows about its own progress. A tick reads the
+   * world, publishes it, and only then acts on it — and acting can take
+   * minutes, because landing runs the project's verification command. Nothing
+   * else records that foreman is mid-verify rather than wedged, so the age of
+   * this timestamp is that signal: it counts up while a tick works and resets
+   * when the next one reads. Seconds mean a moving fleet, minutes mean a tick
+   * inside something long. `undefined` before the first read completes.
+   */
+  readonly observedAt: DateTime.Utc | undefined;
 }
 
 /**
@@ -1387,6 +1500,7 @@ const empty: FleetState = {
   orphans: [],
   held: [],
   paused: false,
+  observedAt: undefined,
 };
 
 interface Project {

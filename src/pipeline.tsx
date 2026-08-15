@@ -1,6 +1,7 @@
 import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
-import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
+import { DateTime } from "effect";
+import { createEffect, createSignal, For, onCleanup, Show, type Accessor } from "solid-js";
 import type { Active, Climbing, FleetState, InterventionTarget, Orphan } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import {
@@ -712,6 +713,24 @@ const attentionStatus = (state: FleetState): string => {
 };
 
 /**
+ * How long ago the dispatcher last read the world.
+ *
+ * Seconds mean a fleet cycling on its poll interval. Minutes mean a tick is
+ * inside something long — a landing running a project's test suite is the
+ * usual one — and the same reading is what a wedged daemon shows, which is the
+ * point: an operator who can see the number can tell those apart by watching
+ * it, instead of reading the process tree.
+ */
+const readAge = (state: FleetState, now: number): string => {
+  const observedAt = state.observedAt;
+  if (observedAt === undefined) return "starting";
+  const seconds = Math.max(0, Math.round((now - DateTime.toEpochMillis(observedAt)) / 1000));
+  if (seconds < 60) return `read ${seconds}s ago`;
+  if (seconds < 3600) return `read ${Math.floor(seconds / 60)}m ago`;
+  return `read ${Math.floor(seconds / 3600)}h ago`;
+};
+
+/**
  * Whether the pipeline is moving, and what to press.
  *
  * This is the one thing always on screen: with every column empty the fleet
@@ -728,67 +747,76 @@ const Status = (props: {
   readonly rungs: ReadonlyArray<string>;
   readonly complete: (reason: string) => void;
   readonly cancel: () => void;
-}) => (
-  <box style={{ flexDirection: "column", flexShrink: 0 }}>
-    <text style={{ height: 1 }}>
-      {`${props.state().paused ? "paused" : "running"}  ·  ${attentionStatus(props.state())}`}
-    </text>
-    <Show
-      when={props.rungChoice() === undefined}
-      fallback={
-        <text style={{ height: 1 }}>
-          {`${props.rungChoice()?.action} rung  ${props.rungs.map((rung, index) => (index === props.rungChoice()?.index ? `[${rung}]` : rung)).join("  ")}  j/k choose  Enter confirm  Esc cancel`}
-        </text>
-      }
-    >
+}) => {
+  // The age has to advance on its own clock. A tick publishes its reading and
+  // then works, and nothing republishes while it works — so an age derived from
+  // state alone would sit frozen at the very moment it is worth reading.
+  const [now, setNow] = createSignal(Date.now());
+  const clock = setInterval(() => setNow(Date.now()), 1000);
+  onCleanup(() => clearInterval(clock));
+
+  return (
+    <box style={{ flexDirection: "column", flexShrink: 0 }}>
+      <text style={{ height: 1 }}>
+        {`${props.state().paused ? "paused" : "running"}  ·  ${readAge(props.state(), now())}  ·  ${attentionStatus(props.state())}`}
+      </text>
       <Show
-        when={props.intervention() === undefined}
+        when={props.rungChoice() === undefined}
         fallback={
           <text style={{ height: 1 }}>
-            {[
-              props.intervention()?.hasWork ? "d diagnose" : undefined,
-              props.intervention()?.hasWork ? "r review" : undefined,
-              "c continue",
-              "Esc cancel",
-            ]
-              .filter((label) => label !== undefined)
-              .join("  ")}
+            {`${props.rungChoice()?.action} rung  ${props.rungs.map((rung, index) => (index === props.rungChoice()?.index ? `[${rung}]` : rung)).join("  ")}  j/k choose  Enter confirm  Esc cancel`}
           </text>
         }
       >
         <Show
-          when={props.completion() === undefined}
+          when={props.intervention() === undefined}
           fallback={
-            <box style={{ flexDirection: "row", height: 1 }}>
-              <text>{`Reason for ${props.completion()?.id}: `}</text>
-              <input
-                focused
-                flexGrow={1}
-                placeholder="required"
-                onSubmit={props.complete as never}
-                onKeyDown={(key) => {
-                  if (key.name === "escape") props.cancel();
-                }}
-              />
-              <text> Enter confirm Esc cancel</text>
-            </box>
+            <text style={{ height: 1 }}>
+              {[
+                props.intervention()?.hasWork ? "d diagnose" : undefined,
+                props.intervention()?.hasWork ? "r review" : undefined,
+                "c continue",
+                "Esc cancel",
+              ]
+                .filter((label) => label !== undefined)
+                .join("  ")}
+            </text>
           }
         >
-          <text style={{ height: 1 }}>
-            {[
-              ...props.actions().map((action) => ACTION_LABELS[action]),
-              "h/l view",
-              "j/k move",
-              `p ${props.state().paused ? "resume" : "pause"}`,
-              "F12 log",
-              "q quit",
-            ].join("  ")}
-          </text>
+          <Show
+            when={props.completion() === undefined}
+            fallback={
+              <box style={{ flexDirection: "row", height: 1 }}>
+                <text>{`Reason for ${props.completion()?.id}: `}</text>
+                <input
+                  focused
+                  flexGrow={1}
+                  placeholder="required"
+                  onSubmit={props.complete as never}
+                  onKeyDown={(key) => {
+                    if (key.name === "escape") props.cancel();
+                  }}
+                />
+                <text> Enter confirm Esc cancel</text>
+              </box>
+            }
+          >
+            <text style={{ height: 1 }}>
+              {[
+                ...props.actions().map((action) => ACTION_LABELS[action]),
+                "h/l view",
+                "j/k move",
+                `p ${props.state().paused ? "resume" : "pause"}`,
+                "F12 log",
+                "q quit",
+              ].join("  ")}
+            </text>
+          </Show>
         </Show>
       </Show>
-    </Show>
-  </box>
-);
+    </box>
+  );
+};
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> => {
   switch (column) {

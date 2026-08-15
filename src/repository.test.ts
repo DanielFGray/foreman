@@ -71,7 +71,7 @@ describe("Repository", () => {
     await git("checkout", "-q", base);
 
     await writeFile(join(directory, "tracked.txt"), "operator edit\n");
-    expect(await merge(directory, "reviewed")).toEqual({ _tag: "Held" });
+    expect(await merge(directory, "reviewed")).toEqual({ _tag: "Held", detail: undefined });
     expect((await git("branch", "--show-current")).stdout.toString().trim()).toBe(base);
 
     await git("checkout", "--", "tracked.txt");
@@ -127,6 +127,45 @@ describe("Repository", () => {
       verified: false,
     });
     expect(await Bun.file(join(directory, "innocent.txt")).text()).toBe("fine\n");
+  });
+
+  // The baseline is what the whole fleet waits out: the tick is one fiber, so
+  // a verification run is a run during which nothing else is dispatched,
+  // settled or landed. A merge that passes has already answered the only
+  // question the baseline exists to answer, so it is never asked.
+  test("pays for the baseline only when the merged checkout is red", async () => {
+    const counter = join(tmpdir(), `foreman-verify-${process.pid}.count`);
+    const runs = async () =>
+      (await Bun.file(counter).exists()) ? (await Bun.file(counter).text()).length : 0;
+    const count = (command: string) => `printf x >> ${counter}; ${command}`;
+
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "counted");
+    await writeFile(join(directory, "counted.txt"), "fine\n");
+    await git("add", "counted.txt");
+    await git("commit", "-qm", "counted work");
+    await git("checkout", "-q", base);
+
+    expect(await merge(directory, "counted", count("true"))).toEqual({
+      _tag: "Merged",
+      verified: true,
+    });
+    expect(await runs()).toBe(1);
+
+    await git("checkout", "-qb", "counted-breaks");
+    await writeFile(join(directory, "counted-broken.txt"), "boom\n");
+    await git("add", "counted-broken.txt");
+    await git("commit", "-qm", "breaks the build");
+    await git("checkout", "-q", base);
+
+    // Red after the merge and green before it: the second run is the branch's
+    // accusation being tested, and it is only ever spent on a failure.
+    expect(
+      await merge(directory, "counted-breaks", count("test ! -f counted-broken.txt")),
+    ).toMatchObject({ _tag: "Broke" });
+    expect(await runs()).toBe(3);
+
+    await rm(counter, { force: true });
   });
 
   test("tells an untouched branch from one whose work already landed", async () => {

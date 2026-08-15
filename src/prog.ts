@@ -181,7 +181,19 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       claim: (task: string) => run("start", task).pipe(Effect.asVoid),
 
       /** Returns a claimed task to the queue. */
-      release: (task: string) => run("open", task).pipe(Effect.asVoid),
+      /**
+       * Returns a task to the queue, and with it the reviewer's verdict.
+       *
+       * `approved` says a reviewer read a diff and found it sound, so it stops
+       * being true the moment the task is handed back for someone to change
+       * that diff — and `awaitingLanding` reads it with no other corroboration.
+       * `attribute` also clears it, which is what has kept a released approval
+       * from landing unreviewed so far, but that puts the invariant a caller
+       * away from the transition it belongs to. Here it holds for every path
+       * that requeues a task, including one that never reaches an author.
+       */
+      release: (task: string) =>
+        removeLabels(task, [APPROVED]).pipe(Effect.andThen(run("open", task)), Effect.asVoid),
 
       /**
        * Puts a task back in front of a reviewer, whatever state it was in.
@@ -194,10 +206,15 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * stranded branch's task is usually done or back in the queue.
        */
       submit: (task: string) =>
-        run("start", task).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
+        removeLabels(task, [APPROVED]).pipe(
+          Effect.andThen(run("start", task)),
+          Effect.andThen(run("review", task)),
+          Effect.asVoid,
+        ),
 
-      /** Moves already-claimed work to formal review. */
-      review: (task: string) => run("review", task).pipe(Effect.asVoid),
+      /** Moves already-claimed work to formal review, and with it any stale verdict. */
+      review: (task: string) =>
+        removeLabels(task, [APPROVED]).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),

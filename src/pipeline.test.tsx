@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { DateTime } from "effect";
 import { createSignal, type Accessor } from "solid-js";
 import type { Active, FleetState } from "./dispatcher.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
@@ -118,6 +119,7 @@ const state: FleetState = {
   committed: new Set(["ts-bbb222"]),
   resumable: new Set(["ts-bbb111", "ts-bbb222"]),
   paused: false,
+  observedAt: undefined,
 };
 
 // The shapes the corrective keys act on: rows that carry a rung-* label, rows
@@ -163,6 +165,7 @@ const corrective: FleetState = {
   committed: new Set(),
   resumable: new Set(["ts-d100"]),
   paused: false,
+  observedAt: undefined,
 };
 
 interface Calls {
@@ -307,6 +310,41 @@ describe("Pipeline", () => {
       expect(frame).toContain("fibrae");
       expect(frame).toContain("7 need attention");
       expect(frame).not.toContain("selection");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  // A tick that is landing runs a project's whole test suite before it reads
+  // the world again, and a fleet doing that was indistinguishable from a wedged
+  // one. The age of the last read is the only thing that tells them apart.
+  test("says how long ago the dispatcher last read the world", async () => {
+    const { controls } = makeControls();
+    const stale: FleetState = {
+      ...state,
+      observedAt: DateTime.subtract(DateTime.unsafeNow(), { minutes: 4 }),
+    };
+    const t = await testRender(() => <Pipeline state={() => stale} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("read 4m ago"));
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  // Before the first tick completes there is no reading to be old, and the
+  // status line must not imply one was taken at startup.
+  test("says it is starting before the first reading", async () => {
+    const { controls } = makeControls();
+    const t = await testRender(() => <Pipeline state={() => state} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("running  ·  starting"));
     } finally {
       t.renderer.destroy();
     }

@@ -63,7 +63,11 @@ will still catch things you cannot. Do not use it to reopen decisions you have
 already made and recorded.
 
 When the work is complete and committed, run `prog review {{ task }}`. That hands the
-branch back and is where your job ends. Foreman lands it into {{ repository }} — a
+branch back and is where your job ends. Your session stays open a while longer, so a
+reviewer may send you one concrete defect to fix — an unhandled case, a rename you
+left half done, a test that never runs the new path. Fix exactly what it names,
+commit, and stop again. It is not a new task and not an invitation to revisit
+decisions you already recorded. Foreman lands it into {{ repository }} — a
 checkout a person also works in — once that checkout is clean and the project's own
 verification still passes. Do not merge the branch yourself and do not mark the task
 done. Small tasks skip the reviewing agent, but nothing skips the landing step.

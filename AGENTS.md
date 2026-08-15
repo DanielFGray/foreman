@@ -1,223 +1,173 @@
 # Working on foreman
 
-Read this before you touch the code. The README says what foreman does; this
-says where it currently is, why it is shaped the way it is, and which walls
-have already been hit so you do not walk into them again.
+The README says what foreman does. This says why it is shaped the way it is, and
+which walls are already known so you do not walk into them again.
 
-## Status: compiles
+Keep it that way. This file is loaded into every session and read by every agent
+the fleet dispatches, so its length is a cost paid on every turn. Record the
+constraint and the reason it exists — never the incident that revealed it. No
+dates, no task ids as evidence, no counts, no proof-run narration.
 
-The derived-state rewrite is finished; `tsc --noEmit` and `oxlint` diagnostics
-are all clean. The tree is one `Dispatcher` service over `Fleet` and `Prog`,
-with `main.ts` as the only entry point. `src/worktree.ts` is gone — herdr owns
-worktrees, and `labelFor` in `src/fleet.ts` is the single name for `foreman/<task>`.
+## Status
 
-The layer set in `main.ts` is deliberately `Layer.provideMerge(Dispatcher.Default,
-base)`: `Dispatcher.Default` pulls in `Prog` and `Prompts` as its own
-dependencies, and the base set feeds it `Settings` and `Fleet`. `mergeAll`
-alone would build them in parallel and never satisfy that.
+The tree is one `Dispatcher` service over `Fleet`, `Prog` and `Repository`, with
+`main.ts` as the only entry point.
 
-The author → review → merge pipeline has been proven live once, end to end, at
-`--slots 1`. The proof ran against a scratch project (`foreman-e2e-probe`) with
-a scratch config, so no real task was touched. The rig is checked in at
-`e2e/` — read `e2e/README.md` before running it. Everything that follows is
-the still-unproven backlog.
+Proven live: the author → review → merge pipeline end to end, the dashboard
+against a real fleet, and plan mode at the tasker's worst model. The rig is in
+`e2e/` — read `e2e/README.md` before running it.
 
-- **The dashboard has been used live against the fleet.** Its compact tabbed
-  layout was captured at 92 columns with 135 queued and 149 landed tasks.
-- **Plan mode has been proven live end to end, at the tasker's worst model.**
-  A full `foreman plan --file` run on a scratch project
-  (`foreman-e2e-probe`, config `FOREMAN_CONFIG=<a scratch config>`) ran
-  planner → tasker → opened children on 2026-08-14, with the tasker at
-  deepseek-flash (the model that filed epics in the original bug): two tasks
-  filed under the epic with `--parent`, dependency wired, the unblocked child
-  in `prog ready`, workspace closed. The resume path was proven only in its
-  closed state (`plan --epic` on a done epic reports complete without
-  re-running); a mid-planning or mid-tasking resume is still unproven. The
-  proof did not touch the real backlog.
+Unproven: resuming a plan run that stopped mid-planning or mid-tasking. Only the
+closed state is proven, where `plan --epic` on a done epic reports complete.
+
+The layer set in `main.ts` is `Layer.provideMerge(Dispatcher.Default, base)`.
+`Dispatcher.Default` pulls in `Prog` and `Prompts` itself, and the base set feeds
+it `Settings` and `Fleet`; `mergeAll` builds them in parallel and cannot satisfy
+that.
 
 ## The design, and why
 
 ### Foreman remembers nothing
 
-The first version held a `Ref<Map<string, Assignment>>`. That map was the only
-record of what foreman was doing, so every restart orphaned the whole fleet:
-tasks stayed claimed, panes stayed open, and nothing could tell foreman's own
-work from a claim made by hand. Every session ended in manual cleanup.
-
-So the world is authoritative, not the process:
+The world is authoritative, not the process. A dispatcher whose memory is
+authoritative loses the fleet on every restart: tasks stay claimed, panes stay
+open, and nothing can tell foreman's own work from a claim made by hand.
 
 | Question | Answered by |
 | --- | --- |
-| What am I working on? | the worktree git has registered for `foreman/<task-id>`, shown by its workspace |
+| What am I working on? | the worktree git has registered for `foreman/<task-id>` |
 | Who authored this branch? | the task's `by-<rung>` label |
-| Is a reviewer already assigned? | the task's `review-by-<rung>` label |
-| Which rung does this task get next? | the task's `rung-<name>` label |
+| Is a reviewer assigned? | the task's `review-by-<rung>` label |
+| Which rung comes next? | the task's `rung-<name>` label |
 | Is this one waiting on a person? | its rung names no configured model |
 | Is this task mine to review? | it has a `by-*` label |
 | Is this project free to work in? | `git status` in its checkout |
 
-Every tick reads all of it back. A restart re-adopts its live workspaces
-instead of orphaning them — that is what `Fleet.open` returning an existing
-workspace by label is for. The only thing foreman genuinely cannot derive is
-whether the operator has paused dispatch, because nothing in the world records
-an intention. That is the one `Ref`, and it starts paused unless `--running`
-says otherwise: a paused tick only observes and reports, while settle, tidy,
-reclaim and fill wait for resume.
+Every tick reads all of it back, so a restart re-adopts its live workspaces
+instead of orphaning them. The only thing foreman cannot derive is whether the
+operator has paused dispatch, because nothing in the world records an intention.
+That is the one `Ref`. A paused tick observes and reports; settle, tidy, reclaim
+and fill wait for resume.
 
-`--running` exists because a restart is not an operator. Under `bun --watch` the
-daemon restarts whenever foreman's own source changes, and landing a task into
-foreman's own checkout does exactly that — so pausing by default parked the
-fleet after every landing and waited for a person. The command line is the only
-thing a restart inherits, which is why the intention is stated there and nowhere
-durable. Writing it to disk would make foreman remember, and the operator's last
-keypress is not a fact about the world.
+It starts paused unless `--running` says otherwise, because a restart is not an
+operator — under `bun --watch` the daemon restarts whenever its own source
+changes, which landing a task into foreman's own checkout does. The command line
+is the only thing a restart inherits, which is why the intention is stated there
+and nowhere durable. Writing it to disk would make foreman remember.
 
-A worktree whose workspace a keypress destroyed is adopted rather than
-collided with. `Fleet.open` resolves a workspace, then a worktree, then creates
-both, and teardown reads the same order. The worktree and branch survive the
-workspace, so a fresh start can continue the interrupted work and remove it
-when the task leaves the fleet.
+The wake queue beside it is not a second memory. It holds no state — a tick
+reads everything back either way — it only says "look now" so a keypress does
+not wait out the poll interval. Every dispatcher command goes through
+`commanded`, which nudges it.
 
-The wake queue beside it is not a second one. It holds no state — a tick reads
-everything back either way — it only says "look now" so an operator's keypress
-does not wait out the poll interval. Every command on the dispatcher goes
-through `commanded`, which nudges it.
-
-**If you find yourself adding a second one, stop.** It means something the
-world should be recording is not being recorded, and the fix belongs in herdr
-or prog, not in a field on the dispatcher.
+**If you find yourself adding durable state, stop.** It means something the world
+should record is not being recorded, and the fix belongs in herdr or prog.
 
 ### One workspace per task
 
-`foreman/<task-id>` is the workspace label and git branch. It cannot also be the
-herdr agent name: agent names reject `/`, and author/reviewer output panes
-coexist. Agents therefore use ephemeral names derived from their unique pane;
-the branch, and the worktree holding it, is the durable task identity that
-other processes read.
-
-The author runs in the workspace's own pane; only the reviewer splits a second
-pane beside the author's output. One task is one pane, so the operator never
-sees a blank shell beside a worker. The author's output stays visible after it
-settles; the reviewer reads the diff next to it. The workspace dies when the
-task leaves the fleet.
+`foreman/<task-id>` is the workspace label and the git branch. It cannot also be
+the herdr agent name: agent names reject `/`, and author and reviewer panes
+coexist. Agents use ephemeral names derived from their pane; the branch is the
+durable identity other processes read.
 
 The worktree, not the workspace, is where the work lives. A workspace is a view
 onto it and evaporates when its last pane closes — a keypress can destroy it —
-while the worktree and branch survive. `Fleet.open` therefore resolves in
-order: a workspace carrying the task's label, else a worktree git still has
-registered for the branch (attaching a fresh workspace to it), else creating
-both. Teardown reads the same order, so a worktree whose workspace already
-closed is removed rather than orphaned.
+while the worktree and branch survive. `Fleet.open` therefore resolves in order:
+a workspace carrying the label, else a worktree git still has registered for the
+branch, else creating both. Teardown reads the same order, so a worktree whose
+workspace already closed is removed rather than orphaned.
 
-The label records no ownership, and the roster is every daemon's: herdr shows
-all of them, and two foremen against different configs are not competing for
-the same slots. The config's project set is the only ownership the world
-records, so `scopeRoster` in `src/dispatcher.ts` scopes what each daemon may
-act on — the busy count, settle, the dashboard — to workspaces whose task
-lives in a project it manages.
+The label records no ownership, and the roster is every daemon's. The config's
+project set is the only ownership the world records, so `scopeRoster` in
+`src/dispatcher.ts` scopes what each daemon may act on.
 
 ### herdr owns the worktree
 
-It has to. foreman used to create the worktree with `git worktree add` and then
-ask herdr to split a pane, and every worker landed in whichever window happened
-to be focused — because herdr had never been told the two were related.
 `herdr worktree create` makes the worktree, the branch, the workspace and its
-label in one call, and returns all four ids.
-
-This is why `src/worktree.ts` is gone: the code foreman used to need for
-creating worktrees was deleted rather than fixed, because the concern moved
-wholly into herdr.
+label in one call. Foreman used to create the worktree itself and then ask for a
+pane, and herdr — never told the two were related — put every worker in whichever
+window happened to be focused. `src/worktree.ts` is gone rather than fixed,
+because the concern moved wholly into herdr.
 
 ### A vanished worker is not a verdict
 
 herdr reports `unknown` for a workspace with no agent running. That covers an
 agent that exited cleanly **and** a pane a human closed to take over, and herdr
-cannot tell them apart — so neither does foreman.
+cannot tell them apart — so neither does foreman. Treating it as failure means
+closing a pane to stop a run spends money on the next rung.
 
-An earlier version treated it as failure and escalated the task to the frontier
-model. Closing a pane to stop a run therefore spent money on the next one. That
-path is deleted. A vanished worker now becomes a **decision** in `FleetState`,
-surfaced in the dashboard, and the task stays claimed until someone answers.
-After `staleAfterHours` of no activity the claim is released with a log line.
+A vanished worker becomes a **decision** in `FleetState`, surfaced in the
+dashboard, and the task stays claimed until someone answers. After
+`staleAfterHours` of no activity the claim is released with a log line.
 
-Absence is an unknown, not evidence. A task still climbs a rung on real
-evidence: an agent that settled without finishing, a reviewer sending work back,
-or a branch that would not land.
-
-An author that settled without finishing is still running idle, and herdr has no
-way to stop it without closing the pane it runs in — which, for an author, is
-the workspace's own pane. So that settle closes the workspace: the worktree is
-removed with it, the commits on the branch survive, and the next author opens
-from the branch tip rather than from uncommitted edits.
+Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
+an agent that settled without finishing, a reviewer sending work back, or a
+branch that would not land.
 
 ### The operator's checkout is shared, so it is asked about
 
-Every task ends by merging into the project's main checkout — the one the
-operator edits in. `Repository.isClean` is the whole answer: a project with
-uncommitted changes to tracked files is **held**, and `fill` passes over its
-tasks in both the review and the author pass. It is read every tick like
-everything else, so a project frees itself the moment the tree is clean.
+Every task ends by merging into the project's main checkout, the one the operator
+edits in. `Repository.isClean` is the whole answer: a project with uncommitted
+changes to tracked files is **held**, and `fill` passes over its tasks in both
+the review and the author pass. It is read every tick, so a project frees itself
+the moment the tree is clean.
 
-Tracked changes only, deliberately. Untracked files are scratch notes and build
-output that live in a repository for months, and counting them would hold a
-project forever.
+Tracked changes only. Untracked files are scratch notes and build output that
+live in a repository for months, and counting them would hold a project forever.
 
-A checkout with no branch is held too, and that clause was written in blood. The
-branch a landing moves is whichever one `HEAD` names, and `git merge` into a
-detached `HEAD` succeeds: the commits land, the operator's branch stays where it
-was, and the tick sweep then deletes the only ref that reached them. Foreman did
-exactly that to a reviewed task. "Free to work against" therefore means both
-that nobody is mid-edit **and** that there is a branch for the work to land on.
+A checkout with no branch is held too. The branch a landing moves is whichever
+one `HEAD` names, and `git merge` into a detached `HEAD` succeeds: the commits
+land, the operator's branch stays put, and the tick sweep then deletes the only
+ref that reached them. "Free to work against" means both that nobody is mid-edit
+**and** that there is a branch for the work to land on.
+
+An unreadable repository counts as held — foreman cannot merge into a checkout it
+cannot read either.
+
+The dispatch gate cannot be the only gate, because a tree can go dirty in the
+hours between an agent starting and its branch being ready. `Repository.merge`
+asks the same question again as its first act and returns `Held`: the landing is
+not attempted, the verdict stays on the task, and a later tick lands it. No
+prompt is involved, because no agent merges.
+
+Agents stay out of that checkout entirely. `git` commands there refresh the
+index, which collides with a landing mid-merge and leaves `index.lock` behind;
+foreman's own reads set `GIT_OPTIONAL_LOCKS=0`, and an agent's cannot be made to.
+`Repository.base` resolves a branch's fork point so a reviewer can diff
+`<base>..HEAD` inside its own worktree. Onboarding is the one exception, and only
+ever on a project already held.
 
 ### jj checkouts land through jj
 
-Most of these projects are jj colocated with git, and jj is not a variation on
-the git path — it answers both of those questions differently:
+Most of these projects are jj colocated with git, and jj answers both gate
+questions differently:
 
 - **There is no checked-out branch.** jj bookmarks do not move by being merged
-  into. The bookmark to land on is derived the way git derives it — the branch
-  the operator is standing on, which here is the nearest bookmark behind the
-  working copy, `heads(::@ & bookmarks())`. `heads` drops the bookmarks already
-  merged into that one, and foreman's own names are filtered out of what is
-  left: every author branches from the trunk's tip, so until that author commits
-  its bookmark sits on the very commit being asked about. Reading it as a second
-  candidate held the project for as long as anyone was working in it — a fleet
-  that stops landing the moment it starts working. Of the bookmarks that remain,
-  zero or more than one holds the project rather than guessing.
-- **The working copy is a commit**, so "clean" is `@` being empty. That counts a
-  file git would call untracked, unlike the git path above, because under jj it
-  is not untracked: it is already part of the working-copy commit, and landing
-  would carry it out of the operator's directory.
+  into. The bookmark to land on is the nearest one behind the working copy,
+  `heads(::@ & bookmarks())`. `heads` drops bookmarks already merged into that
+  one, and foreman's own names are filtered out of what remains: every author
+  branches from the trunk's tip, so until it commits its bookmark sits on the
+  very commit being asked about, and counting it would hold the project for as
+  long as anyone is working in it. Zero or more than one candidate holds the
+  project rather than guessing.
+- **The working copy is a commit**, so clean means `@` is empty. That counts a
+  file git would call untracked, because under jj it is already part of the
+  working-copy commit and landing would carry it out of the operator's directory.
 - **jj never refuses a merge.** A conflict is a recorded state with markers
   written into the files, so the conflict check is the ordinary path rather than
   an error path, and backing out is `edit` then `abandon` rather than an abort.
 
 Everything else stays on git. The refs and worktrees in a colocated repository
-are real, `git for-each-ref` reads them correctly, and `git branch --delete`
-keeps the refusal that makes the sweep safe — a colocated jj imports git's refs
-at the start of every command, so a branch deleted there is a bookmark gone
-here. `Repository` reads which kind of checkout it has from the directory, per
-call, like everything else foreman knows.
-
-The dispatch gate cannot be the only gate: a tree can go dirty hours after an
-agent starts. Both prompt templates therefore run the same `git status
---porcelain --untracked-files=no` immediately before merging, and on output they
-leave the branch, log why, and `prog open` the task. Foreman then holds that
-project until you are done, and the next agent continues from the branch.
-
-An unreadable repository counts as held. Foreman cannot merge into a checkout it
-cannot read either, so the failure is not a reason to proceed.
+are real, and `git branch --delete` keeps the refusal that makes the sweep safe.
+`Repository` reads which kind of checkout it has per call.
 
 ### Onboarding is the one agent inside the operator's checkout
 
 A held project is unheld by salvaging what is in it. `Dispatcher.onboard` files a
 task in that project, calls `Fleet.attach` for a workspace on the checkout
-itself, and runs `prompts/onboard.md` at the top rung of the ladder. Reading a
-hundred files of abandoned work and inferring what somebody meant is the
-judgement cheap models are worst at, and this runs once per project rather than
-once per task.
-
-Three things hold it together, and each of them has a reason:
+itself, and runs `prompts/onboard.md` at the top rung. Reading abandoned work and
+inferring what somebody meant is the judgement cheap models are worst at, and
+this runs once per project rather than once per task.
 
 - **`Fleet.attach`, not `Fleet.open`.** The work exists only in that checkout. A
   worktree would hand the agent a copy of the last commit — the one state that
@@ -225,19 +175,15 @@ Three things hold it together, and each of them has a reason:
 - **`Worker.worktree` decides teardown.** `workspace close` leaves a worktree on
   disk and registered with git; `worktree remove` refuses on an attached
   workspace and leaves the workspace open. Neither is a superset, so `close`
-  reads which kind it has. That field comes from herdr's own workspace record
-  every tick — deriving it from foreman's memory is how you eventually delete
-  somebody's work. The field keys on the record's `is_linked_worktree`, not on
-  the mere presence of a checkout path: a workspace attached to a checkout that
-  was already there reports a worktree that is not linked, and `close` must
-  treat that directory as the operator's. When the workspace is gone, `close`
-  adopts the worktree to get a workspace to remove it with — so a worktree
-  whose workspace a keypress destroyed is removed rather than orphaned.
+  reads which kind it has, from herdr's own record every tick. Deriving it from
+  foreman's memory is how you eventually delete somebody's work. It keys on
+  `is_linked_worktree`, not on the presence of a checkout path: a workspace
+  attached to a checkout that was already there reports a worktree that is not
+  linked, and `close` must treat that directory as the operator's.
 - **The `onboard` label keeps it out of the queue.** The queue is work the fleet
   may start by itself, and this stands in a directory a person is using. The
-  label survives a failed attempt, so a released salvage task never gets picked
-  up as ordinary work — and `retry` routes it back through `dispatchOnboard`
-  rather than sending an author into a worktree.
+  label survives a failed attempt, and `retry` routes it back through
+  `dispatchOnboard` rather than sending an author into a worktree.
 
 The prompt forbids `stash`, `reset`, `checkout -- <file>` and `clean` by name,
 and ends by returning the operator's branch to its previous tip. Read it before
@@ -245,42 +191,30 @@ changing anything about this path.
 
 ### Plan mode is the front half of the pipeline
 
-`foreman plan` turns a rough plan into tasks, so the backlog does not have to be
-filled by hand. A plan is an epic in prog labelled `plan`, created in draft; the
-planner agent writes the specification into the epic's description; the tasker
-agent files the specification as children, wires `prog blocks`, opens them only
-once the deps are complete, and runs `prog done`. The stages follow the epic's
-derived status: a plan is a draft until it has child tasks, so the tasker's
-children are what move it out of draft, and the tasker's `prog done` closes it.
+`foreman plan` turns a rough plan into tasks. A plan is an epic in prog labelled
+`plan`, created in draft; the planner writes the specification into the epic's
+description; the tasker files it as children, wires `prog blocks`, opens them
+once their deps are complete, and runs `prog done`.
 
-Four decisions shape it, and each has a reason:
-
-- **The spec lives in the task store, not the repository.** The fleet's authors
-  read `prog show ep-...` for the spec a generated task references, the same way
-  they read a task's description. Nothing about a plan dirties the operator's
-  checkout or leaves a git footprint, and the plan survives a restart because
-  prog owns it.
-- **Plan runs are synchronous and self-contained.** `src/plan.ts` is its own
-  process that drives both agents and closes the workspace. The daemon has zero
-  plan awareness on purpose: an epic is never claimed, never `in_progress`, and
-  never in `prog ready` (draft and epics are both filtered by prog itself), so
-  the dispatcher ignores the plan while picking up its opened children as
-  ordinary reviewed work. If a plan needs the daemon, the design is wrong.
+- **The spec lives in the task store, not the repository.** Authors read
+  `prog show ep-...` the same way they read a task's description. Nothing about a
+  plan dirties the operator's checkout, and the plan survives a restart.
+- **Plan runs are synchronous and self-contained.** `src/plan.ts` drives both
+  agents and closes the workspace. The daemon has zero plan awareness: an epic is
+  never claimed, never `in_progress`, and never in `prog ready`, so the dispatcher
+  ignores the plan while picking up its opened children as ordinary reviewed work.
+  If a plan needs the daemon, the design is wrong.
 - **Stages are sequenced by what agents leave in the store, never by watching
-  them.** `prog show` returns an epic's *derived* status, which is a draft until
-  the first child task exists — so the planner's deliverable is the
-  specification it writes into the description, and the tasker's children are
-  the transition that moves the epic out of draft. `foreman plan --epic ep-...`
-  resumes exactly where a run stopped: an epic with no children replans, one
-  with children re-tasks, and a closed one stays done.
-- **The planner may interrupt the operator.** It interviews through its question
-  tool, one question at a time, only when the plan and codebase genuinely cannot
-  decide something. This is the one place an unattended foreman agent is told to
-  ask; everything else decides and records.
+  them.** `prog show` returns an epic's derived status, a draft until the first
+  child exists — so the planner's deliverable is the specification and the
+  tasker's children are the transition out of draft. `plan --epic` resumes where
+  a run stopped: no children replans, children re-tasks, closed stays done.
+- **The planner may interrupt the operator**, through its question tool, one
+  question at a time, only when the plan and codebase genuinely cannot decide
+  something. This is the one place an unattended foreman agent is told to ask.
 
-Generated tasks are ordinary work: `--priority 2`, so the fleet reviews them
-like anything it authored. The `plan` label stays on the epic only; it is what a
-resume validates against.
+Generated tasks are ordinary work at `--priority 2`. The `plan` label stays on
+the epic only; it is what a resume validates against.
 
 ### Order inside a tick
 
@@ -291,127 +225,154 @@ new work while reviews pile up grows a permanent tail of almost-done tasks.
 
 ### The review gate
 
-`reviewing` is a status anything can set. There are tasks in the backlog that
-have sat in `reviewing` since before foreman existed, with no branch behind
-them. Dispatching a reviewer to one gives it no diff to read and nothing to
-merge; it will invent something.
+`reviewing` is a status anything can set, including tasks that predate foreman
+and have no branch behind them. Dispatching a reviewer to one gives it no diff to
+read and nothing to merge; it will invent something.
 
-A task is foreman's to review only if it carries a `by-*` label — which foreman
-writes when an agent actually starts. Do not weaken this into "has a
-workspace": the workspace can legitimately be absent while the label is not.
+A task is foreman's to review only if it carries a `by-*` label, which foreman
+writes when an agent actually starts. **Do not weaken this into "has a
+workspace"** — the workspace can legitimately be absent while the label is not.
 
 `reviewing` also does not say whether a reviewer was dispatched: it covers both
 the author's completed handoff and the whole review run. `review-by-*` records
-the latter. If that label exists and the worker vanishes, the dashboard must ask
-instead of silently launching another reviewer.
+the latter, so a vanished worker under that label is a question for the dashboard
+rather than grounds for silently launching another reviewer.
 
-`reviewing` means the author stopped writing, not that a reviewer must read the
-diff. Work that skips review (priority 3, or the `trivial` label) waits in that
-same status and is landed straight from it. Landing is the only code path that
-writes to the operator's checkout, so no prompt gives an agent merge rights.
+Work that skips review — priority 3, or the `trivial` label — waits in that same
+status and is landed straight from it. Landing is the only code path that writes
+to the operator's checkout, so no prompt gives an agent merge rights.
 
-The author critiques its own diff before handing off, and that is not a review.
-It reads `git diff` rather than recalling its intent, because the intent is what
-wrote any mistake in there. It catches the mechanical class — an unhandled case, a
-half-finished rename, a test that never runs the new path — so the reviewer reads a
-cleaner diff. It cannot replace the reviewer: the transcript that makes self-critique
-cheap is also where the anchoring lives, and a session grading itself will not
-conclude that the model which wrote the code was too weak for it — which is the
-evidence a rung climb needs.
+The author critiques its own diff before handing off, reading `git diff` rather
+than recalling its intent, because the intent is what wrote any mistake in there.
+It catches the mechanical class — an unhandled case, a half-finished rename, a
+test that never runs the new path. It cannot replace the reviewer: the transcript
+that makes self-critique cheap is also where the anchoring lives, and a session
+grading itself will not conclude that the model which wrote the code was too weak
+for it, which is the evidence a rung climb needs.
+
+The reviewer does not re-run the project's test suite. Foreman runs `verify`
+either side of the merge, so repeating it changes no outcome, and several agents
+on one machine each running a full suite slows every worker down for signal
+already being collected. What the reviewer uniquely catches is a stub, or a test
+weakened to get the suite green — neither of which is found by running tests,
+since a green suite is what both produce. So it reads what the diff does to the
+tests and runs only those covering the code it touched. `Prompts.review` renders
+the project's `verify` into the prompt; a project naming none has no landing
+gate, and there the full run is the reviewer's after all.
 
 Approval is a durable `approved` label, not task completion. The reviewer writes
-that verdict and stops. Foreman re-checks the operator's checkout, merges the
-branch, and only then runs `prog done`. A dirty checkout leaves the verdict in
-place for a later tick. A failed merge is aborted and returned to the queue, so
-the mechanical landing step cannot strand the operator in a conflicted checkout.
+that verdict and stops. Foreman re-checks the checkout, merges, and only then
+runs `prog done`. `awaitingLanding` reads that label with no other
+corroboration, so any transition handing the task back for its diff to change
+must clear it — `Prog.release`, `review` and `submit` all do.
 
-Landing also runs the project's `verify` command, once before the merge and once
-after. Only a checkout that was green and went red is the branch's fault: that
-merge is reset away, the output is logged, and the task returns to the queue. A
-checkout that was already red still accepts the merge, because a branch cannot be
-blamed for damage that predates it and one broken test would otherwise freeze the
-whole fleet. A project that names no `verify` lands on git's exit code alone, and
-the task log says so.
+**A merge that did not happen and a merge that would not happen are different
+answers.** Only the second is about the branch, and only the second may climb a
+rung. git exits 1 when it merged and the content would not reconcile; it exits
+128 when it never got that far — a lock, a ref it cannot read. Under jj there is
+no first case: jj records a conflict rather than refusing one, so the conflict
+check is the whole verdict and any non-zero exit is the machine. Everything in
+the second class is `Held`, and `Held` carries a `detail` so it is logged — an
+operator editing clears itself and is not worth a line every poll, a stale lock
+never clears and must not retry in silence.
 
-Landing waits for the reviewer's pane to stop working. The pane stays `working`
-from the moment the verdict is written until the turn ends, and closing the
-workspace runs `worktree remove --force` on the directory the reviewer is
-standing in.
+Landing also runs `verify`. Only a checkout that was green and went red is the
+branch's fault: that merge is undone, the output logged, and the task returned to
+the queue. A checkout already red still accepts the merge, because a branch
+cannot be blamed for damage that predates it and one broken test would otherwise
+freeze the whole fleet. A project naming no `verify` lands on git's exit code
+alone, and the task log says so.
+
+**The baseline is lazy, and that is not an optimisation.** The merge is applied
+first and the merged checkout verified; only if that fails is the pre-merge
+baseline worth running, because only then is "was it red already?" a live
+question. The tick is one fiber, so a verification run is time in which nothing
+else is dispatched, settled or landed, and an eager baseline made every good
+landing cost two full suite runs. A failure still costs two, plus re-applying the
+merge when the baseline proves the branch innocent. Never worse where it matters,
+and half the price in the common case.
+
+Landing waits for the reviewer's pane to stop working: it stays `working` from
+the moment the verdict is written until the turn ends, and closing the workspace
+runs `worktree remove --force` on the directory the reviewer is standing in.
 
 ### The branches are the third source of truth
 
-Every column but this one comes from the task store, which stops mentioning a
-branch the moment its task is closed, reclaimed or deleted — while the commits
-stay on the branch. So `Repository.branches` reads foreman's refs directly, and
-answers three questions off one read of each project:
+Every other column comes from the task store, which stops mentioning a branch the
+moment its task is closed, reclaimed or deleted — while the commits stay. So
+`Repository.branches` reads foreman's refs directly and answers three questions
+off one read per project:
 
 - **`merged`** — `HEAD` already contains the tip, so the ref is free to delete.
 - **`empty`** — the tip is still on `rev-list --first-parent HEAD`, so nothing
   was ever committed on this branch.
 - Neither — the branch holds work the checkout has not taken.
 
-`merged` cannot stand in for `empty`, and confusing the two cost a landed task.
-A `by-*` label proves foreman authored a branch; it does not prove the author
-wrote anything, and an agent can run `prog review` having committed nothing. The
-old code asked only "is this branch unmerged", and read "no" as "the author
-committed nothing" — but a branch that just landed answers "no" for the opposite
-reason. Foreman handed finished, merged work back to the queue as empty.
-`--no-ff` is what makes the honest question cheap: every landing is a merge
-commit, so the first-parent line is exactly the set of commits the checkout held
-before any branch touched it, and a tip still sitting on it never had a commit
-of its own.
+**`merged` cannot stand in for `empty`.** A `by-*` label proves foreman authored
+a branch; it does not prove the author wrote anything, and an agent can run
+`prog review` having committed nothing. Asking only "is this branch unmerged" and
+reading "no" as "nothing was committed" hands finished, merged work back to the
+queue as empty. `--no-ff` is what makes the honest question cheap: every landing
+is a merge commit, so the first-parent line is exactly the set of commits the
+checkout held before any branch touched it.
 
 The sweep is not a step inside landing. Every tick, in every project, the
-dispatcher deletes the refs that are `merged` **and** whose task no longer
-appears in the queue, the claims or the review list — so a branch merged by hand
-disappears the same way a landed one does, and nothing has to remember what it
-merged. Both halves are required: sweeping on `merged` alone deletes the branch
-of a task still under review, which is the evidence the next tick needs to tell
-work from nothing. `--delete` without `--force` is the backstop — git refuses to
-drop commits the checkout does not have, and refuses a branch a worktree still
-holds, which is picked up on a later tick.
+dispatcher deletes refs that are `merged` **and** whose task no longer appears in
+the queue, the claims or the review list — so a branch merged by hand disappears
+the same way a landed one does. Both halves are required: sweeping on `merged`
+alone deletes the branch of a task still under review, which is the evidence the
+next tick needs to tell work from nothing. `--delete` without `--force` is the
+backstop, since git refuses to drop commits the checkout does not have and
+refuses a branch a worktree still holds.
 
-What is left over — unmerged, not empty, and unaccounted for by any task — is
-stranded. `s` sends the selected one back to `reviewing`, where a reviewer
-decides whether the commits are worth landing. A branch whose task was deleted
-has no id to dispatch against, so it is listed and left alone.
+What is left over — unmerged, not empty, unaccounted for by any task — is
+stranded. `s` sends the selected one back to `reviewing`. A branch whose task was
+deleted has no id to dispatch against, so it is listed and left alone.
 
 ### Roles are panes
 
 Four roles run agents: `author`, `review`, `planner`, `tasker`. A workspace
-carries a `roles` map of the ones it currently has, keyed by that literal, and
-each is read back from a pane labelled `foreman-<role>` — herdr's own record,
-not foreman's memory.
+carries a `roles` map keyed by that literal, each read back from a pane labelled
+`foreman-<role>` — herdr's record, not foreman's memory.
 
-Placement follows from the label. A role takes the workspace's own pane if it is
-unlabelled; otherwise it splits a new one. So the first author owns the workspace
+Placement follows from the label: a role takes the workspace's own pane if it is
+unlabelled, otherwise it splits a new one. So the first author owns the workspace
 pane, a reviewer splits beside it, and plan mode's two stages take one pane each
-in sequence.
-
-One role per pane is also what makes a stage handoff possible. herdr has no
-command that ends an agent without closing the pane it runs in, so a planner and
-a tasker sharing one pane could never both run; as two roles they simply do not
-contend.
+in sequence. One role per pane is also what makes a stage handoff possible —
+herdr cannot end an agent without closing its pane, so a planner and a tasker
+sharing one could never both run.
 
 **Only work in progress refuses a dispatch.** A role that is `working` or
 `blocked` rejects a second agent, because two agents in one worktree edit over
 each other. A *settled* one does not: it has stopped, it is editing nothing, and
-because herdr cannot end an agent without closing its pane, nothing will ever end
-it. Reading settled as live made every workspace foreman deliberately keeps — a
-reviewer that returned work with `prog open`, a vanished author's edits — into a
-permanent stall: the dispatch is refused, the caller hands the claim back, the
-queue offers the task again, and the same refusal repeats every poll forever.
-Captured live at one failure every eleven seconds for four minutes until the
-daemon was stopped.
+nothing will ever end it. Reading settled as live turns every workspace foreman
+deliberately keeps into a permanent stall — the dispatch is refused, the caller
+hands the claim back, the queue offers the task again, and the refusal repeats
+every poll forever.
 
 So a pane already carrying a role is never reused, not even by the same role. The
-replacement splits first and the spent pane is closed after — that order is what
-ends the settled agent inside it, and what keeps the workspace alive when the
-spent pane is its only one.
+replacement splits first and the spent pane is closed after; that order is what
+ends the settled agent inside it.
+
+**A settled agent is closed at the settle, not at the next dispatch.** It is
+editing nothing and will never work another turn, but it still holds its model's
+resident memory — enough of it that a full fleet exhausts this machine. `slots`
+does not bound that: `busy` counts `working` and `blocked`, so a settled agent
+frees its slot and keeps its process. Each settle path that has already written
+its record to the store therefore ends with `stopActiveRole`: the author that
+handed off, the reviewer that returned work, the reviewer that stopped without a
+verdict, and the reviewer waiting out a held project. What the agent did is in
+the task's log, which is where the next one is told to read it.
+
+Closing the workspace's last pane is the intended end of that. The worktree and
+its uncommitted edits outlive the workspace and `Fleet.open` re-adopts them.
+
+The one settle deliberately not closed is a **vanished** worker, which has no
+pane to close.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
-therefore aggregates pane statuses itself.
+aggregates pane statuses itself.
 
 ## Ports
 
@@ -419,11 +380,10 @@ therefore aggregates pane statuses itself.
 is one implementation; an amux plugin would be a second, not a rewrite.
 
 `Prog` (`src/prog.ts`) is the whole task-store surface. Nothing above that file
-builds a `prog` command line. Replacing prog with an in-house store means
-writing another implementation of those methods and nothing else.
+builds a `prog` command line.
 
-`Repository` (`src/repository.ts`) answers one question about a project's git
-checkout: is the operator working in it. Nothing above that file runs `git`.
+`Repository` (`src/repository.ts`) answers what foreman needs to know about a
+project's git checkout. Nothing above that file runs `git`.
 
 **prog itself is not ours.** It is Byron's. Keep edits there minimal and file
 in-house replacements in the backlog rather than patching it.
@@ -433,139 +393,138 @@ in-house replacements in the backlog rather than patching it.
 Built over `Dispatcher.state`, a `SubscriptionRef<FleetState>`. `src/pipeline.tsx`
 is the view; `src/dashboard.tsx` owns the renderer's lifetime and forks each
 `Controls` command into the dispatcher's runtime. The view is deliberately free
-of the dispatcher's own imports — it only reads types and prog helpers — so its
-test renders it without dragging in the prompt chain.
+of the dispatcher's imports — it reads types and prog helpers only — so its test
+renders it without dragging in the prompt chain.
 
 The renderer is created inside `Effect.acquireRelease`, and the program parks on
-a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not
-on exit.
+a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not on
+exit.
 
-One cursor walks five views — queue | working | review | landed | attention —
-one full-width list at a time. Only non-empty views become tabs. Landed history
-is therefore a count until selected rather than a permanent column squeezing
-active work: the old three-column render gave 149 landed tasks a third of a
-92-column pane and left queue titles unreadable. At 120 columns, extra width
-adds selected-row details; it never restores the crowded columns.
+One cursor walks five views — queue | working | review | landed | attention — one
+full-width list at a time. Only non-empty views become tabs, so landed history is
+a count until selected rather than a permanent column squeezing active work. At
+120 columns extra width adds selected-row details; it never restores columns.
 
 Attention combines the exceptional states in urgency order: vanished-worker
-decisions, yours, stranded branches, then held projects. Each row keeps its
-source kind, so combining their display does not combine their actions. A view
-that empties under the cursor hands it to the nearest non-empty tab to its left.
-Attention opens when it changes from empty to non-empty, including at startup.
-It does not keep stealing focus while existing items remain; it must clear
-before a later item can interrupt again.
+decisions, yours, stranded branches, then held projects. Each row keeps its source
+kind, so combining their display does not combine their actions. A view that
+empties under the cursor hands it to the nearest non-empty tab to its left.
+Attention opens when it changes from empty to non-empty, including at startup,
+and must clear before a later item can interrupt again.
+
 The status line remains when every view is empty, because an empty fleet still
-has to say whether it is paused or merely out of work.
+has to say whether it is paused or merely out of work. It also says how long ago
+the dispatcher last read the world — `FleetState.observedAt`, set by `observe`
+and aged by the view's own one-second clock, because a tick publishes its reading
+and *then* works. Seconds mean a fleet cycling on its poll interval; minutes mean
+a tick is inside something long, usually a landing running a test suite. Without
+it a working fleet and a wedged one look identical. It is not durable and must not
+become so: it describes this process, not the world.
 
-Each source kind allows only the actions that
-make sense there, and a key the selected row cannot take is ignored. Decisions
-are named from the task's status, not its labels: a failed spawn leaves the
-`by-*` label on a task that sits back in the queue, and only the status —
-neither claimed nor under review — marks its workspace as residue. The three
-kinds answer differently: a vanished author or reviewer can be retried, taken
-over, released, or intervened on, while terminal orphaned workspaces are only
-ever closed.
+Each source kind allows only the actions that make sense there, and a key the
+selected row cannot take is ignored. Decisions are named from the task's status,
+not its labels: a failed spawn leaves the `by-*` label on a task that sits back in
+the queue, and only the status — neither claimed nor under review — marks its
+workspace as residue.
 
-The two corrections follow the labels, not the views. `x` lowers a task one
-rung: a rung is only ever as good as the evidence that wrote it, and a bug, an
-OOM or a killed run all write a rung nothing earned.
-One step per press, writing the same `rung-*` label the ladder reads; off the
-bottom rung the label is removed, because the ladder reads no label as the
-bottom. `u` clears a `review-by-*` label no reviewer is behind. The world
-records whether a reviewer was dispatched, not whether it is still alive, so
-only the operator can say the label is stale — a task that is open with a
-`review-by-*` label and no live reviewer behind it is stale by definition. Both
-keys write exactly what foreman itself would have written, so the result is the
-same state a hand-corrected task would be in.
+**Residue foreman can prove is spent is swept, not asked about.** Dispatch opens
+the workspace, claims the task, and only then spawns the agent that labels the
+pane. So a role on an unclaimed task's workspace proves the claim happened and
+was given up, and settle closes those panes itself; only a workspace carrying no
+role reaches the dashboard as a question, because that is the one case foreman
+cannot prove is spent. Panes, not the workspace: what is uncommitted in the
+worktree belongs to a returned reviewer or a vanished author, and closing a pane
+is the one teardown that cannot lose it.
+
+The two corrections follow the labels, not the views. `x` lowers a task one rung,
+because a rung is only ever as good as the evidence that wrote it and a bug, an
+OOM or a killed run all write one nothing earned; one step per press, writing the
+same `rung-*` label the ladder reads, and off the bottom rung the label is
+removed because the ladder reads no label as the bottom. `u` clears a
+`review-by-*` label no reviewer is behind — the world records whether a reviewer
+was dispatched, not whether it is still alive, so only the operator can say the
+label is stale. Both keys write exactly what foreman itself would have written.
 
 `e` intervenes rather than silently editing a rung. Continue stops the live role,
-preserves its worktree and uncommitted edits, asks which configured rung should
-take over, and dispatches it immediately. Diagnose and Review are offered only
-where git or a surviving worktree proves an attempt left work. Committed Review
-uses the formal verdict pipeline; uncommitted Review and Diagnose run a chosen
-diagnostic agent. It may fix trivia and logs findings, then Foreman resumes the
-original rung. `diagnosing-*` is the durable marker that makes this lifecycle
-survive a restart; no in-process intervention state exists.
+preserves its worktree and uncommitted edits, asks which rung takes over, and
+dispatches it. Diagnose and Review are offered only where git or a surviving
+worktree proves an attempt left work. Committed Review uses the formal verdict
+pipeline; uncommitted Review and Diagnose run a chosen diagnostic agent, which
+may fix trivia and logs findings before foreman resumes the original rung.
+`diagnosing-*` is the durable marker that makes this survive a restart; no
+in-process intervention state exists.
 
 `yours` takes no answer key. A task waits there because a question about it is
 unanswered, and one key to requeue it would hand the next agent that same
 question — the failure the column exists to prevent. It leaves when the operator
-writes the decision into the task and removes its `rung-human` label, with prog.
-The two corrections do reach it: a task parked at the operator is exactly the
-sort of rung that can turn out to have been written without being earned, and no
-other column shows a `rung-human` task to lower it from.
+writes the decision into the task and removes its `rung-human` label. The two
+corrections do reach it, since a task parked at the operator is exactly the sort
+of rung that can turn out not to have been earned.
 
 The wheel moves the cursor, never the viewport. A scrollbox scrolls itself by
-default, and that is a second position beside the cursor: one notch carried the
-selected row off the screen, and the next keypress — or the next tick's
-`scrollChildIntoView` — snapped the view back to wherever the cursor still was.
-The listener therefore sits on the scrollbox's *content*, not on the scrollbox.
-A mouse event runs a renderable's own listeners, then its built-in handler, then
-walks to its parent, so `stopPropagation` only stops the walk: from the content,
+default, and that is a second position beside the cursor: one notch carries the
+selected row off the screen, and the next keypress snaps the view back. The
+listener therefore sits on the scrollbox's *content*, not on the scrollbox. A
+mouse event runs a renderable's own listeners, then its built-in handler, then
+walks to its parent, so `stopPropagation` only stops the walk — from the content,
 the scrollbox is the parent that is never reached, while a listener on the
 scrollbox itself could never suppress its own scrolling. Tabs and rows are
 clickable; page keys move five rows at a time.
 
-Two divergences from the settled design, walls hit while building:
+Two divergences from the settled design:
 
 - **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
-  climb, descend, unassign and onboard, but no command cancels a task. "Act on
-  a task" means climb or descend; a cancel command belongs on the dispatcher.
+  climb, descend, unassign and onboard. "Act on a task" means climb or descend; a
+  cancel command belongs on the dispatcher.
 - **No focus scope.** The focus control jumps to a worker's pane. Making a
-  focused scope read differently — the label, pause-on-scope-completion — is a
-  separate task.
+  focused scope read differently is a separate task.
 
-## Things that have already cost an afternoon
+## Traps
 
-- **`src/log.ts` must use `Logger.replace`, not `Logger.add`.** The doubling
-  that once made `Logger.add` look right was a symptom of the opposite problem.
-  Creating an opentui renderer assigns a *new* object to `globalThis.console`
-  and routes it to the F12 overlay; Effect resolved the old object when it
-  loaded and keeps that reference, so a default logger left in place goes on
-  writing to the real stdout — underneath a full-screen renderer, scribbling
-  log lines across the dashboard until the next repaint. Captured live on the
-  running fleet: `running · 0 awaiting a decision[10:20:32.517] INFO (#42):
-  dispatched ts-c74234`. Replacing the default and reading `globalThis.console`
-  per line follows the swap instead, and needs no mode flag: under the
-  dashboard the line lands in the overlay, and in plan mode, where nothing ever
-  swapped the console, on the terminal.
-- **Do not run `bun src/main.ts` to "check that it starts".** It dispatches
-  live agents against the real backlog within one tick. Two verification runs
-  claimed real tasks and had to be unwound by hand. Typecheck instead; when you
-  do need a live run, use `--slots 1` and watch it. The same caution covers
-  `bun src/main.ts plan ...`: it spawns real planner and tasker agents in panes,
-  so a smoke test must target a scratch project that is not in the config —
-  otherwise the opened children go straight into the live queue.
-- **Plan epics are drafts and must stay drafts.** The whole "daemon needs no
-  plan awareness" property rests on the epic never being claimed or moved to
-  `in_progress`; the settle loop treats a settled workspace on an `in_progress`
-  item as an unfinished agent and would climb and release it. `prog open` on an
-  epic is refused, and its derived status is a draft until children exist — the
-  planner can never move the epic itself. The tasker's `prog done` is the only
-  stored transition in a plan's life.
+- **Do not run `bun src/main.ts` to check that it starts.** It dispatches live
+  agents against the real backlog within one tick. Typecheck instead; when you
+  need a live run, use `--slots 1` and watch it. The same covers
+  `bun src/main.ts plan ...`, which spawns real planner and tasker agents — a
+  smoke test must target a scratch project outside the config, or its opened
+  children go straight into the live queue.
+- **`src/log.ts` must use `Logger.replace`, not `Logger.add`.** Creating an
+  opentui renderer assigns a *new* object to `globalThis.console` and routes it
+  to the F12 overlay. Effect resolved the old object when it loaded and keeps
+  that reference, so a default logger left in place writes to the real stdout
+  underneath a full-screen renderer. Replacing the default and reading
+  `globalThis.console` per line follows the swap, and needs no mode flag.
+- **Plan epics are drafts and must stay drafts.** The "daemon needs no plan
+  awareness" property rests on the epic never being claimed or moved to
+  `in_progress`; the settle loop would read a settled workspace on an
+  `in_progress` item as an unfinished agent and climb and release it. The
+  tasker's `prog done` is the only stored transition in a plan's life.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
-  come back as a JSON envelope on stdout; failures come back as a JSON envelope
-  on stderr with a non-zero exit. `CommandExecutor.string` reads stdout and
-  ignores the exit status, so every refusal read as an empty success — foreman
-  dispatched agents that never got a prompt, then claimed and labelled their
-  tasks. `exec` in `src/herdr.ts` now collects the exit code and both streams,
-  and `errorOf` looks for the envelope in either.
+  come back as a JSON envelope on stdout; failures come back as an envelope on
+  stderr with a non-zero exit. `CommandExecutor.string` reads stdout and ignores
+  the exit status, so every refusal reads as an empty success. `exec` in
+  `src/herdr.ts` collects the exit code and both streams, and `errorOf` looks for
+  the envelope in either.
 - **A cold agent refuses its first prompt.** `herdr agent start` reports
   `interactive_ready` about three seconds in; opencode does not accept typed
-  input until about nine. `agent prompt --wait` has a hard 5000 ms floor for the
-  first observed state change that `--timeout` can only shorten, so the first
-  prompt always comes back `agent_prompt_stalled`. `prompt` retries that code —
-  do not replace it with a sleep, because the real wait varies by agent.
+  input until about nine. `agent prompt --wait` has a hard 5000 ms floor that
+  `--timeout` can only shorten, so the first prompt always returns
+  `agent_prompt_stalled`. `prompt` retries that code — do not replace it with a
+  sleep, because the real wait varies by agent.
 - **Module resolution breaks outside the project directory.** Scratch scripts
-  that import `./src/*` must live in the repo root, not in a temp directory.
+  that import `./src/*` must live in the repo root.
 - **Landing belongs to foreman, not the reviewer.** The reviewer records an
   `approved` label. Foreman owns the clean-checkout gate, merge, verification and
-  `prog done`, so reviewer agents need no rights over the operator's checkout.
+  `prog done`.
 
-## House rules that bite here
+## House rules
 
 - Never patch around a wall. No flags, special cases, conversion shims, or
-  parallel paths to make a broken design compile. The two bugs above were both
-  fixed by deleting a concept, not by adding one. Report a blocker instead.
+  parallel paths to make a broken design compile. The bugs above were fixed by
+  deleting a concept, not adding one. Report a blocker instead.
 - Use `prog` for task tracking. The epic is `ep-0e6a7e`.
 - Bun, not node. Effect-TS throughout.
+- **A gap in herdr is a task in `amux`, not a workaround here.** Foreman is
+  herdr's heaviest user, so it finds the missing capabilities first, and the cost
+  of each is a shim here encoding what herdr should have told us. File it with
+  `prog -p amux add` describing the capability rather than the symptom, and say
+  in the foreman task that it is blocked on it.

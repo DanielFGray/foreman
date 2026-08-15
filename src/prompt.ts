@@ -68,7 +68,26 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
           branch: labelFor(item.id),
         }),
 
-      review: (item: Item, worktree: string, repository: string) =>
+      /**
+       * `verify` is the project's own verification command, and the reviewer is
+       * told about it rather than told to run it. Foreman runs that command
+       * either side of the merge, so a reviewer repeating it buys no signal —
+       * while several agents sharing one machine each running a full suite buys
+       * a real slowdown. A project that names none has no such gate, and there
+       * the full run is the reviewer's.
+       *
+       * `base` is the commit the branch was cut from, and it is what keeps the
+       * reviewer's every command inside its own worktree. The repository is
+       * still named, because the reviewer has to know which project it is
+       * reading, but nothing in the prompt runs anything there.
+       */
+      review: (
+        item: Item,
+        worktree: string,
+        repository: string,
+        base: string,
+        verify: string | undefined,
+      ) =>
         render("review", {
           task: item.id,
           title: item.title,
@@ -76,6 +95,10 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
           worktree,
           branch: labelFor(item.id),
           repository,
+          base,
+          verification: verify
+            ? `Foreman runs \`${verify}\` in ${repository} immediately before and after it merges this branch, and undoes a merge that turns a green checkout red. That is the mechanical gate and it does not need your help: do not spend a full suite run repeating it. Several agents share this machine, and a redundant run starves the ones doing new work.`
+            : `Foreman lands this branch on git's exit code alone: ${item.project} names no verification command. The full run is yours — nothing downstream will do it.`,
         }),
 
       diagnose: (item: Item, worktree: string, repository: string, intent: DiagnosticIntent) =>
