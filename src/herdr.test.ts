@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentNameFor, paneFor, workerStateOf } from "./herdr.ts";
+import { agentNameFor, paneFor, stillRunning, workerStateOf } from "./herdr.ts";
 
 const pane = (
   pane_id: string,
@@ -61,5 +61,20 @@ describe("workerStateOf", () => {
 
   test("blocked work still requires attention", () => {
     expect(workerStateOf(["done", "working", "blocked"])).toBe("blocked");
+  });
+});
+
+describe("stillRunning", () => {
+  test("work in progress is what a second agent would collide with", () => {
+    expect(stillRunning("working")).toBe(true);
+    expect(stillRunning("blocked")).toBe(true);
+  });
+
+  // Reading a settled agent as a reason to refuse is a stall with no exit:
+  // nothing ends that agent, so the task returns to the queue and the same
+  // dispatch fails again every poll, forever.
+  test("a settled agent is spent, not a reason to refuse the next dispatch", () => {
+    expect(stillRunning("settled")).toBe(false);
+    expect(stillRunning("gone")).toBe(false);
   });
 });

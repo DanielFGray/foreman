@@ -223,15 +223,21 @@ export const HerdrFleet = Layer.effect(
         Effect.gen(function* () {
           const role = paneLabelFor(options.role);
 
-          // One agent per role per workspace, checked against the multiplexer
-          // rather than against anything foreman remembers. An agent that is
-          // still alive here is one foreman lost track of — killed and restored
-          // by herdr, or idle after work foreman read as abandoned. Letting a
-          // second one in puts two agents in one worktree, both editing.
+          // One *running* agent per role per workspace, checked against the
+          // multiplexer rather than against anything foreman remembers. Two
+          // agents working one worktree edit over each other, so a role still
+          // working or blocked refuses the dispatch — and refusing is right,
+          // because the caller hands the claim back and the slot goes to
+          // somebody else.
           //
-          // A refusal is a failure of this dispatch, which is exactly right:
-          // the caller already hands the claim back on one, so the task returns
-          // to the queue and the slot goes to somebody else.
+          // A settled agent is not that. It has stopped, it is editing nothing,
+          // and nothing will ever end it on its own: herdr cannot stop an agent
+          // without closing the pane it runs in, and the paths that keep a
+          // workspace across dispatches — a reviewer returning work, a vanished
+          // author's edits — keep its role panes too. Reading settled as live
+          // made those the permanent stall: the task returns to the queue, the
+          // queue offers it back, and the same refusal repeats every poll
+          // forever. Settled panes are spent, and are closed below.
           const workspacePanes = (yield* herdrJson(
             PaneList,
             "spawn",
@@ -241,7 +247,7 @@ export const HerdrFleet = Layer.effect(
             worker.workspace,
           )).result.panes;
           const held = workspacePanes.filter((pane) => pane.label === role);
-          const live = held.find((pane) => workerStateOf([pane.agent_status]) !== "gone");
+          const live = held.find((pane) => stillRunning(workerStateOf([pane.agent_status])));
           if (live) {
             return yield* new FleetError({
               operation: "spawn",
@@ -254,11 +260,16 @@ export const HerdrFleet = Layer.effect(
           // one for it used to leave a blank shell beside every worker; the
           // next role splits off it, and its pane lands beside the output it
           // was sent to read — which is the layout both a review and a plan's
-          // tasking stage are for. A role that already owns the root pane
-          // takes it back, so a second author continues in the same column.
+          // tasking stage are for.
+          //
+          // A pane that already carries this role is never reused, even by the
+          // same role: the settled agent inside it can only be ended by closing
+          // it, so the replacement has to be split before the spent one goes.
+          // Splitting first is also what keeps the workspace alive when the
+          // spent pane is its only one.
           const own = workspacePanes.find((pane) => pane.pane_id === worker.pane);
           const split =
-            own?.label !== undefined && own.label !== role
+            own?.label !== undefined
               ? yield* herdrJson(
                   PaneSplit,
                   "spawn",
@@ -280,20 +291,19 @@ export const HerdrFleet = Layer.effect(
           const agent = agentNameFor(pane);
 
           // A failure takes back the pane this dispatch made, and nothing else.
-          // A role that reused the workspace's own pane has nothing to take
-          // down: that pane pre-dates the dispatch, and closing it would close
-          // the workspace and orphan its worktree. So that failure is left as
-          // residue for the operator, exactly like a spawn that failed before
-          // any pane existed.
+          // The first role in a workspace takes the workspace's own pane, which
+          // pre-dates the dispatch: closing it would close the workspace and
+          // orphan its worktree. So that failure is left as residue for the
+          // operator, exactly like a spawn that failed before any pane existed.
           return yield* Effect.gen(function* () {
             yield* herdr("spawn", "pane", "rename", pane, role);
 
-            // The spent panes go, rather than losing their label. Every one
-            // here is dead — a live one refused the dispatch above. Clearing
-            // the label instead left a pane nothing could name, which is how an
-            // agent stayed alive in a workspace foreman believed was empty. The
-            // author's own pane is the exception: it carries the role label
-            // across dispatches and is being reused, not spent.
+            // The spent panes go, rather than losing their label. None of them
+            // is running — a working or blocked one refused the dispatch above
+            // — and closing the pane is the only way to end the settled agent
+            // still sitting in it. Clearing the label instead left a pane
+            // nothing could name, which is how an agent stayed alive in a
+            // workspace foreman believed was empty.
             yield* Effect.forEach(
               held.filter((spent) => spent.pane_id !== pane),
               (spent) => herdr("spawn", "pane", "close", spent.pane_id).pipe(Effect.ignore),
@@ -461,6 +471,17 @@ const roleOf = (label: string | undefined): AgentRole | undefined => {
  * from the task store, and if the task store says nothing happened, the
  * question goes to the operator rather than to a guess.
  */
+/**
+ * Whether an agent in this state must finish before its role is dispatched
+ * again.
+ *
+ * Only work in progress can collide. A settled agent has stopped and is
+ * editing nothing, and nothing will end it on its own — so treating it as a
+ * reason to refuse is a stall with no exit, not caution.
+ */
+export const stillRunning = (state: WorkerState): boolean =>
+  state === "working" || state === "blocked";
+
 export const workerStateOf = (statuses: ReadonlyArray<string>): WorkerState => {
   if (statuses.includes("blocked")) return "blocked";
   if (statuses.some((status) => !["idle", "done", "unknown"].includes(status))) return "working";

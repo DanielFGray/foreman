@@ -340,15 +340,31 @@ carries a `roles` map of the ones it currently has, keyed by that literal, and
 each is read back from a pane labelled `foreman-<role>` — herdr's own record,
 not foreman's memory.
 
-Placement follows from the label. A role that has no pane in the workspace takes
-the workspace's own pane if it is unlabelled; otherwise it splits a new one. So
-the author owns the workspace pane for the whole task, a reviewer splits beside
-it, and plan mode's two stages take one pane each in sequence.
+Placement follows from the label. A role takes the workspace's own pane if it is
+unlabelled; otherwise it splits a new one. So the first author owns the workspace
+pane, a reviewer splits beside it, and plan mode's two stages take one pane each
+in sequence.
 
 One role per pane is also what makes a stage handoff possible. herdr has no
 command that ends an agent without closing the pane it runs in, so a planner and
 a tasker sharing one pane could never both run; as two roles they simply do not
 contend.
+
+**Only work in progress refuses a dispatch.** A role that is `working` or
+`blocked` rejects a second agent, because two agents in one worktree edit over
+each other. A *settled* one does not: it has stopped, it is editing nothing, and
+because herdr cannot end an agent without closing its pane, nothing will ever end
+it. Reading settled as live made every workspace foreman deliberately keeps — a
+reviewer that returned work with `prog open`, a vanished author's edits — into a
+permanent stall: the dispatch is refused, the caller hands the claim back, the
+queue offers the task again, and the same refusal repeats every poll forever.
+Captured live at one failure every eleven seconds for four minutes until the
+daemon was stopped.
+
+So a pane already carrying a role is never reused, not even by the same role. The
+replacement splits first and the spent pane is closed after — that order is what
+ends the settled agent inside it, and what keeps the workspace alive when the
+spent pane is its only one.
 
 Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
