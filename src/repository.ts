@@ -635,8 +635,8 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
       /**
        * Clears the jj commits a landing interrupted before publishing left
-       * behind, in every colocated checkout. Nothing to do in one git is
-       * keeping: its merge is atomic, so no landing ever leaves an orphan
+       * behind, in every colocated checkout. Nothing to do in a checkout git
+       * is keeping: its merge is atomic, so no landing ever leaves an orphan
        * there. Called every tick, like the branch sweep — the litter appears
        * whenever a restart kills the daemon mid-merge, and only the world
        * records where.
