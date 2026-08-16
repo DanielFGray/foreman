@@ -1165,6 +1165,15 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             // author to retry, not a dispatch to re-attempt.
             if (((yield* Ref.get(dispatchFailures)).get(task.id)?.count ?? 0) >= 2) {
               yield* clearFailure(task.id);
+              if (isOnboarding(task)) {
+                const project = projectFor(task.project);
+                if (project) {
+                  yield* dispatchOnboard(task, project).pipe(
+                    Effect.catchAll((error) => recordFailure(task.id, error)),
+                  );
+                }
+                return;
+              }
               if (task.status === "reviewing") {
                 return yield* dispatchReview(task, authoredBy(task)).pipe(
                   Effect.catchAll((error) => recordFailure(task.id, error)),
