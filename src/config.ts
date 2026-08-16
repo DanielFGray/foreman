@@ -25,13 +25,19 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       const path = yield* Path.Path;
       const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
 
+      // A FOREMAN_CONFIG that is relative must be resolved against the working
+      // directory here: it is handed to a dynamic import() below, which treats
+      // a relative string as a module specifier and looks for it beside this
+      // file instead. Absolute paths pass through resolve unchanged.
+      const configured = process.env["FOREMAN_CONFIG"];
       const file =
-        process.env["FOREMAN_CONFIG"] ??
-        path.join(
-          process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
-          "foreman",
-          "config.jsonc",
-        );
+        configured === undefined
+          ? path.join(
+              process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
+              "foreman",
+              "config.jsonc",
+            )
+          : path.resolve(configured);
 
       // Imported rather than read and parsed: Bun's loader accepts comments and
       // trailing commas in .jsonc, so the config can explain itself without
