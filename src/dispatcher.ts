@@ -20,10 +20,12 @@ import {
   isYours,
   reviewerFor,
   type Rung,
+  rungSpent,
   topOf,
 } from "./ladder.ts";
 import {
   agentLog,
+  attemptsOf,
   authoredBy,
   diagnosticIntent,
   type DiagnosticIntent,
@@ -328,11 +330,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           current.unbacked,
           ({ task, kind }) =>
             Effect.gen(function* () {
-              yield* prog.log(
-                task.id,
-                `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)}. Returned to the queue — there is no work to review.`,
+              yield* unfinished(
+                task,
+                `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
               );
-              yield* prog.release(task.id);
               yield* teardown(task);
             }),
           { discard: true },
@@ -464,12 +465,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   return handoffExpired(task, coachCutoff) ? yield* stopAgents(worker) : undefined;
                 }
 
-                yield* prog.log(
-                  task.id,
-                  `foreman: reviewer ${reviewer} stopped without a verdict. Returned to the queue one rung up.`,
-                );
-                yield* climb(task);
-                yield* prog.release(task.id);
+                yield* unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`);
                 yield* stopAgents(worker);
                 return yield* fleet.notify(
                   "Review returned",
@@ -496,12 +492,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               // agent stopped of its own accord, so unlike a vanished worker
               // this is evidence, and the task goes back to the queue with what
               // it learned attached.
-              yield* prog.log(
-                task.id,
-                `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}). Returned to the queue.`,
+              yield* unfinished(
+                task,
+                `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
               );
-              yield* climb(task);
-              yield* prog.release(task.id);
               // The workspace goes with the decision. A settled agent is still
               // running idle, and herdr has no way to stop it without closing
               // the pane it runs in — which, for an author, is the workspace's
@@ -908,15 +902,56 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
+     * Routes an agent that stopped without finishing, which has said nothing
+     * about its rung.
+     *
+     * A crash, a timeout and a usage wall all end identically, so the task
+     * stays on the rung and is tried again, up to `attemptsPerRung`; the
+     * attempt that reaches the limit is the one that climbs, and the climb
+     * clears the count for the next rung. Every ending writes its count to the
+     * task, so a dispatch days later reads how many tries this rung has
+     * already had. A reviewer rejecting the work is a judgement and never
+     * passes through here.
+     *
+     * The task is released before the count is written. A release that fails
+     * leaves the task claimed, so a count written ahead of it would be read
+     * again on the next tick and climb the task a rung early; a count left
+     * unwritten by the opposite order merely gives the rung one more try.
+     */
+    const unfinished = (task: Climbing, detail: string) =>
+      Effect.gen(function* () {
+        yield* prog.release(task.id);
+        const rung = rungOf(task) ?? settings.ladder[0].name;
+        const attempts = attemptsOf(task, rung) + 1;
+        if (rungSpent(attempts, settings.attemptsPerRung)) {
+          yield* prog.log(
+            task.id,
+            `${detail} Returned to the queue one rung up — ${attempts} attempts on ${rung} exhausted it.`,
+          );
+          yield* climb(task);
+        } else {
+          yield* prog.log(
+            task.id,
+            `${detail} Returned to the queue to try ${rung} again (attempt ${attempts} of ${settings.attemptsPerRung}).`,
+          );
+          yield* prog.markAttempt(task.id, rung, attempts);
+        }
+      });
+
+    /**
      * Moves a task one rung up the ladder, and says so when that rung is a
      * person.
      *
-     * Every path that hands work back to the queue comes through here, so the
-     * evidence that a rung failed is written where the next dispatch reads it
-     * rather than being lost with the worker. Climbing off the top rung parks
-     * the task in the operator's column: a task the best model could not finish
-     * should stop, not cycle. Silence there would mean waiting forever, so it
-     * is announced like any other worker that needs somebody.
+     * The paths that hand work back to the queue with a judgement about it come
+     * through here — a reviewer sending work back, a branch that would not land
+     * — so the evidence that a rung failed is written where the next dispatch
+     * reads it rather than being lost with the worker. An agent that merely
+     * stopped unfinished does not climb until its rung is spent. The climb
+     * rewrites the rung label, which clears any attempt count the old rung
+     * earned. Climbing off the top rung parks the task in the operator's
+     * column: a task the best model could not finish should stop, not cycle.
+     * Silence there would mean waiting forever, so it is announced like any
+     * other worker that needs somebody.
      */
     const climb = (task: Climbing) =>
       Effect.gen(function* () {
@@ -937,9 +972,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * The mirror of `climb`, and the correction for every way a rung gets
      * written without being earned — a bug, an OOM, an operator killing a run.
      * One step per press, writing the same `rung-*` label the ladder reads, so
-     * the result is exactly what foreman itself would have written. Off the
-     * bottom rung the label is removed: the ladder reads no label as the
-     * bottom, so a redundant `rung-<bottom>` would never be written by hand.
+     * the result is exactly what foreman itself would have written — and the
+     * rung change clears any attempt count, so the lowered rung starts fresh.
+     * Off the bottom rung the label is removed: the ladder reads no label as
+     * the bottom, so a redundant `rung-<bottom>` would never be written by
+     * hand.
      */
     const descend = (task: Climbing) =>
       Effect.gen(function* () {

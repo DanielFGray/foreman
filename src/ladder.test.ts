@@ -7,6 +7,7 @@ import {
   isYours,
   type Ladder,
   reviewerFor,
+  rungSpent,
   topOf,
 } from "./ladder.ts";
 
@@ -71,6 +72,25 @@ describe("below", () => {
     // Like above(): an unreadable claim cannot be positioned, so it is treated
     // as though it sits just above the top rung.
     expect(below(ladder, "retired")).toBe("top");
+  });
+});
+
+describe("rungSpent", () => {
+  test("retries in place until the rung's attempts run out", () => {
+    // A crash, a timeout and a usage wall say nothing about the model, so the
+    // first attemptsPerRung - 1 failures stay on the rung.
+    expect(rungSpent(1, 2)).toBe(false);
+    expect(rungSpent(2, 3)).toBe(false);
+  });
+
+  test("climbs on the attempt that reaches the limit", () => {
+    expect(rungSpent(2, 2)).toBe(true);
+    expect(rungSpent(3, 3)).toBe(true);
+    expect(rungSpent(4, 2)).toBe(true);
+  });
+
+  test("with attemptsPerRung 1, every failure climbs", () => {
+    expect(rungSpent(1, 1)).toBe(true);
   });
 });
 

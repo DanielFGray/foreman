@@ -122,6 +122,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         staleAfter: raw.staleAfterHours,
         coachWindow: raw.coachWindowMinutes,
         landedWindow: raw.landedWindowDays,
+        attemptsPerRung: raw.attemptsPerRung,
       } as const;
     }),
   ).pipe(Layer.provide(BunContext.layer));
@@ -159,6 +160,17 @@ interface SettingsShape {
   /** Minutes an author's agent survives its handoff, for a reviewer to coach. */
   readonly coachWindow: number;
   readonly landedWindow: number;
+
+  /**
+   * How many attempts one rung of the ladder gets before a task climbs.
+   *
+   * An agent that stops without finishing — a crash, a timeout, a usage wall —
+   * has said nothing about its model, so the task retries the same rung rather
+   * than paying for a stronger one. Only repeated failure exhausts the rung.
+   * A reviewer that sends work back is a judgement about the work and climbs
+   * immediately, so it spends none of this budget.
+   */
+  readonly attemptsPerRung: number;
 }
 
 const ConfigFile = Schema.Struct({
@@ -194,11 +206,12 @@ const ConfigFile = Schema.Struct({
    * ladder has nothing to dispatch, and a default here would silently pick
    * somebody's models for them.
    *
-   * A task starts at the bottom and climbs one rung each time the rung it is on
-   * demonstrably fails it. `name` is what tasks record and the dashboard shows,
-   * `harness` is a herdr agent kind, and `model` is passed to that harness as
-   * `--model`. A bare string is a rung that is only a harness, running whatever
-   * that program defaults to.
+   * A task starts at the bottom and climbs one rung on real evidence that the
+   * rung it is on failed it — a reviewer sending work back, a branch that
+   * would not land, or `attemptsPerRung` attempts ending unfinished. `name` is
+   * what tasks record and the dashboard shows, `harness` is a herdr agent
+   * kind, and `model` is passed to that harness as `--model`. A bare string is
+   * a rung that is only a harness, running whatever that program defaults to.
    */
   ladder: Schema.NonEmptyArray(
     Schema.Union(
@@ -221,6 +234,18 @@ const ConfigFile = Schema.Struct({
   tasker: Schema.optional(Schema.String),
 
   pollSeconds: Schema.optionalWith(Schema.Positive, { default: () => 20 }),
+
+  /**
+   * How many times a task may end unfinished on one rung before it climbs.
+   *
+   * An agent that stops without finishing says nothing about its model — a
+   * crash, a timeout and a usage wall all end the same way — so the task stays
+   * on the rung and is tried again. The attempt that reaches this limit is the
+   * one that climbs; a reviewer rejecting the work climbs at once and spends
+   * none of it. Both are written to the task as labels, so the count survives
+   * a dispatch days later.
+   */
+  attemptsPerRung: Schema.optionalWith(Schema.Positive, { default: () => 2 }),
 
   /**
    * How long a claimed task may go without activity before the queue takes it

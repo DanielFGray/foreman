@@ -73,6 +73,29 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         Effect.asVoid,
       );
 
+    /**
+     * Removes the attempt labels naming one rung.
+     *
+     * Prefix matching alone would be wrong here: a rung whose name is a prefix
+     * of another's (`deepseek`, `deepseek-flash`) would clear the other's
+     * count. The count must follow the label, so only labels whose suffix is a
+     * plain number are that rung's.
+     */
+    const removeAttempts = (task: string, rung: string) =>
+      show(task).pipe(
+        Effect.flatMap((item) =>
+          Effect.forEach(
+            item.labels.filter((label) => {
+              const prefix = `${ATTEMPT}${rung}-`;
+              return label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length));
+            }),
+            (label) => run("unlabel", task, label),
+            { discard: true },
+          ),
+        ),
+        Effect.asVoid,
+      );
+
     return {
       show,
 
@@ -121,10 +144,28 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * can also set the label by hand to pin a task straight to a rung,
        * including `rung-human` for one that needs a person before any agent
        * touches it.
+       *
+       * Any rung change is a fresh start, so the attempt labels are cleared
+       * with it: a count earned on one rung says nothing about the next, and a
+       * task that revisits a lower rung must not inherit the old count.
        */
       setRung: (task: string, rung: string) =>
-        removeLabels(task, [RUNG]).pipe(
+        removeLabels(task, [RUNG, ATTEMPT]).pipe(
           Effect.andThen(run("label", task, `${RUNG}${rung}`)),
+          Effect.asVoid,
+        ),
+
+      /**
+       * Writes how many times the named rung has ended the task unfinished.
+       *
+       * The rung is named in the label, so a count follows its rung: reading
+       * ignores what a rung the task left recorded, and pinning a task by hand
+       * starts the pinned rung fresh. The old count for the same rung is
+       * removed first, so a rung holds at most one attempt label.
+       */
+      markAttempt: (task: string, rung: string, count: number) =>
+        removeAttempts(task, rung).pipe(
+          Effect.andThen(run("label", task, `${ATTEMPT}${rung}-${count}`)),
           Effect.asVoid,
         ),
 
@@ -365,11 +406,31 @@ export const isPlan = (item: { readonly labels: ReadonlyArray<string> }): boolea
  *
  * Not derivable from `by-*`. A task pinned by hand has never been authored and
  * has no `by-*` label to read at all, and who authored last does not say who
- * authors next: a reviewer's rejection climbs, while an agent that merely
- * stopped stays where it is.
+ * authors next: a reviewer's rejection climbs, while an agent that stopped
+ * without finishing stays on the rung until its attempts run out.
  */
 export const rungOf = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(RUNG))?.slice(RUNG.length);
+
+/**
+ * How many times the named rung has ended the task unfinished.
+ *
+ * `0` when the rung has never been tried, or was climbed away from — the label
+ * names its rung, so a stale count from a rung the task left is ignored and a
+ * task pinned by hand starts fresh. The count is what the escalation reads on
+ * a dispatch days later.
+ */
+export const attemptsOf = (
+  item: { readonly labels: ReadonlyArray<string> },
+  rung: string,
+): number => {
+  const prefix = `${ATTEMPT}${rung}-`;
+  const counts = item.labels
+    .filter((label) => label.startsWith(prefix))
+    .map((label) => Number(label.slice(prefix.length)))
+    .filter((count) => Number.isInteger(count) && count > 0);
+  return counts.length === 0 ? 0 : Math.max(...counts);
+};
 
 /** Prefix of the label naming the kind that authored a task's current branch. */
 export const BY = "by-";
@@ -381,6 +442,9 @@ export const RUNG = "rung-";
 export const DIAGNOSING = "diagnosing-";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
+
+/** Prefix of the label counting a rung's unfinished attempts. */
+export const ATTEMPT = "attempt-";
 
 export const APPROVED = "approved";
 

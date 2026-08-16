@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { agentLog, authoredBy, isApproved, isPlan, reviewedBy, type Item } from "./prog.ts";
+import {
+  agentLog,
+  attemptsOf,
+  authoredBy,
+  isApproved,
+  isPlan,
+  reviewedBy,
+  type Item,
+} from "./prog.ts";
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
@@ -48,5 +56,38 @@ describe("plan label", () => {
   test("recognises a plan epic", () => {
     expect(isPlan(item(["plan"]))).toBe(true);
     expect(isPlan(item(["onboard"]))).toBe(false);
+  });
+});
+
+describe("unfinished attempts on a rung", () => {
+  test("reads zero for a rung that was never tried", () => {
+    expect(attemptsOf(item([]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["by-opencode"]), "deepseek")).toBe(0);
+  });
+
+  test("reads the count recorded for the named rung", () => {
+    expect(attemptsOf(item(["attempt-deepseek-1"]), "deepseek")).toBe(1);
+    expect(attemptsOf(item(["attempt-deepseek-2"]), "deepseek")).toBe(2);
+  });
+
+  test("ignores a count a rung the task left recorded", () => {
+    // The count follows its rung, so a task pinned elsewhere starts fresh and
+    // a climb-away clears nothing it might meet again.
+    expect(attemptsOf(item(["attempt-deepseek-2"]), "sol")).toBe(0);
+    expect(attemptsOf(item(["attempt-deepseek-2", "attempt-sol-1"]), "sol")).toBe(1);
+  });
+
+  test("reads the newest count when more than one was written", () => {
+    expect(attemptsOf(item(["attempt-deepseek-1", "attempt-deepseek-3"]), "deepseek")).toBe(3);
+  });
+
+  test("keeps two rungs whose names share a prefix apart", () => {
+    expect(attemptsOf(item(["attempt-deepseek-flash-2"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["attempt-deepseek-flash-2"]), "deepseek-flash")).toBe(2);
+  });
+
+  test("ignores a count that is not a plain number", () => {
+    expect(attemptsOf(item(["attempt-deepseek-x"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["attempt-deepseek-2.5"]), "deepseek")).toBe(0);
   });
 });
