@@ -242,6 +242,15 @@ describe("decisionKind", () => {
     expect(decisionKind(task("ts-1", "open", ["by-opencode"]))).toBe("orphaned workspace");
     expect(decisionKind(task("ts-1", "done", []))).toBe("orphaned workspace");
   });
+
+  test("names a dispatch failure from the error, not the status", () => {
+    // A task whose dispatch failed is ordinary queue work — open, unclaimed —
+    // so only the failure itself distinguishes it from an orphaned workspace.
+    expect(decisionKind(task("ts-1", "open", ["by-opencode"]), "open: already exists")).toBe(
+      "dispatch failed",
+    );
+    expect(decisionKind(task("ts-1", "open", ["by-opencode"]))).toBe("orphaned workspace");
+  });
 });
 
 describe("staleReview", () => {
@@ -427,6 +436,38 @@ describe("Pipeline", () => {
       await t.flush();
       expect(t.captureCharFrame()).not.toContain("u unassign");
       expect(t.captureCharFrame()).not.toContain("x descend");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("surfaces a dispatch failure with the error, and retries it", async () => {
+    const { controls, calls } = makeControls();
+    const failed: FleetState = {
+      ...corrective,
+      decisions: [
+        {
+          task: task("ts-f100", "open", ["by-opencode"]),
+          worker: undefined,
+          kind: undefined,
+          failure: "FleetError: open: worktree_create_failed: already exists",
+        },
+      ],
+    };
+    const t = await testRender(() => <Pipeline state={() => failed} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Attention 1"));
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("dispatch failed");
+      expect(frame).toContain("worktree_create_failed");
+
+      // The decision opens as the selected view, so retry reaches it directly.
+      t.mockInput.pressKey("r");
+      await t.waitFor(() => calls.retry.length === 1);
+      expect(calls.retry[0]).toBe("ts-f100");
     } finally {
       t.renderer.destroy();
     }

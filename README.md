@@ -184,6 +184,13 @@ dispatch that failed after opening it — and the dashboard offers `c` to close
 it. The task itself is left alone: a done or canceled task must not be
 reopened, and a queued one is dispatched again into a fresh workspace.
 
+A task whose dispatch fails twice with the same error stops being offered and
+appears under **Attention** as a dispatch failure, with the error on the row.
+The failure is a fact about the world — the worktree or workspace that refused
+it is still there next tick — so waiting changes nothing. Clear the cause and
+press `r` to retry; the log records the failure once with a count rather than a
+line every poll.
+
 Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
 ## Review

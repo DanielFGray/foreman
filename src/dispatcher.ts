@@ -77,6 +77,16 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const paused = yield* Ref.make(!settings.running);
     const state = yield* SubscriptionRef.make(empty);
 
+    // The second piece of in-process state, kept for the same reason as
+    // `paused`: the world does not record foreman's own attempts. A dispatch
+    // failure is only observed by trying, and the trying is what must stop —
+    // the worktree that made `open` fail will still exist next tick, so a
+    // second attempt learns nothing. Two identical failures move the task to a
+    // decision instead of a third attempt. A restart forgets the tally, which
+    // costs the daemon two attempts to relearn it; the tasks themselves stay
+    // safe in the queue either way.
+    const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
+
     // The poll interval is how long foreman waits to notice something nobody
     // told it about. An operator pressing a key told it, so that case has no
     // reason to wait at all — the loop takes whichever arrives first. Sliding
@@ -88,6 +98,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     /** Runs an operator's command, then lets the loop see what it changed. */
     const commanded = <A, E, R>(command: Effect.Effect<A, E, R>) =>
       command.pipe(Effect.tap(() => nudge));
+
+    /**
+     * Records a dispatch failure against its task, and says so in the log once
+     * per failure rather than once per tick.
+     *
+     * The first failure is news and is logged. The second identical failure is
+     * a decision: logged once with the count, and from there the task is held
+     * out of the queue and surfaced in decisions. A different failure resets
+     * the tally, because it is a new fact rather than a repeat.
+     */
+    const recordFailure = (task: string, error: unknown) =>
+      Ref.modify(dispatchFailures, (current) => {
+        const detail = String(error);
+        const { failures: next, count, report } = nextFailure(current, task, detail);
+        const log =
+          report === "first"
+            ? Effect.logWarning(`dispatching ${task} failed: ${detail}`)
+            : report === "repeat"
+              ? Effect.logWarning(
+                  `dispatching ${task} failed ${count} times: ${detail} — stopped retrying; retry once the cause is cleared`,
+                )
+              : Effect.void;
+        return [log, next] as const;
+      }).pipe(Effect.flatten);
+
+    /** Forgets a task's dispatch failures, so a retry starts the tally over. */
+    const clearFailure = (task: string) =>
+      Ref.update(dispatchFailures, (current) => {
+        if (!current.has(task)) return current;
+        const next = new Map(current);
+        next.delete(task);
+        return next;
+      });
 
     /**
      * Reads the whole world and works out what to do about it.
@@ -255,6 +298,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // make. Split here rather than in fill, so the dashboard can say where it
       // went instead of leaving it to look like a queue that stopped moving.
       const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
+      const failed = failedTasks(yield* Ref.get(dispatchFailures));
+      const failedIds = new Set(failed.map(([task]) => task));
 
       const active = (items: ReadonlyArray<Item>) =>
         items.map(
@@ -272,6 +317,23 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const claimedActive = active(claimed);
       const reviewingActive = active(reviewing);
 
+      // A task whose dispatch failed twice with the same error is a decision,
+      // not a queue entry to keep offering. The failure rides the row so the
+      // operator sees what to clear before retrying. The tally lives across
+      // ticks, so the decision outlasts the tick that recorded the failure.
+      const failedDecisions = yield* Effect.forEach(failed, ([task, failure]) =>
+        prog.show(task).pipe(
+          Effect.map((item): Active => ({
+            task: item,
+            worker: undefined,
+            kind: undefined,
+            failure: failure.detail,
+          })),
+          // The task may have been closed or deleted since it failed.
+          Effect.orElseSucceed(() => undefined),
+        ),
+      ).pipe(Effect.map((rows) => rows.filter((row): row is Active => row !== undefined)));
+
       return {
         workers,
         owned,
@@ -279,7 +341,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
         queue: interleave(
-          dispatchable.filter((task) => !isOnboarding(task)),
+          excludeFailedTasks(
+            dispatchable.filter((task) => !isOnboarding(task)),
+            failed,
+          ),
           settings.projects.map((project) => project.name),
         ),
         yours: queue.filter(
@@ -294,7 +359,15 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
         ),
-        decisions: decisionsOf(claimedActive, reviewingActive, owned),
+        decisions: [
+          // A task whose dispatch failed is that decision, not whatever its
+          // leftover workspace or label would name it — so it is filtered out
+          // of the ordinary kinds rather than shown twice.
+          ...decisionsOf(claimedActive, reviewingActive, owned).filter(
+            (decision) => !failedIds.has(decision.task.id),
+          ),
+          ...failedDecisions,
+        ],
         paused: yield* Ref.get(paused),
         observedAt: yield* DateTime.now,
       } satisfies Observation;
@@ -742,6 +815,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         let free = settings.slots - busy;
         if (free <= 0) return;
 
+        // A task whose dispatch has failed twice is held out of both passes.
+        // Its failure is a fact about the world, so a third attempt would
+        // repeat the second; the operator clears the cause and retries.
+        const failed = new Set(failedTasks(yield* Ref.get(dispatchFailures)).map(([task]) => task));
+
         for (const { task, worker } of current.review) {
           if (free <= 0) return;
           if (current.held.includes(task.project)) continue;
@@ -750,20 +828,21 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           // waiting to be read. Its project is held, or it would be gone.
           if (!needsReview(task)) continue;
           if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
+          if (failed.has(task.id)) continue;
           yield* dispatchReview(task, authoredBy(task)).pipe(
-            Effect.catchAll((error) =>
-              Effect.logWarning(`review dispatch failed ${task.id}: ${error}`),
-            ),
+            Effect.tap(() => clearFailure(task.id)),
+            Effect.catchAll((error) => recordFailure(task.id, error)),
           );
           free -= 1;
         }
 
-        const available = current.queue.filter((task) => !current.held.includes(task.project));
+        const available = current.queue.filter(
+          (task) => !current.held.includes(task.project) && !failed.has(task.id),
+        );
         for (const task of available.slice(0, free)) {
           yield* dispatchAuthor(task).pipe(
-            Effect.catchAll((error) =>
-              Effect.logWarning(`dispatching ${task.id} failed: ${error}`),
-            ),
+            Effect.tap(() => clearFailure(task.id)),
+            Effect.catchAll((error) => recordFailure(task.id, error)),
           );
         }
       });
@@ -1129,6 +1208,35 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       retry: (task: Item) =>
         commanded(
           Effect.gen(function* () {
+            // A dispatch that failed is not a claim: the failure happened
+            // before the claim, so the task is still open (or still reviewing,
+            // when the review dispatch failed). Retrying clears the failure and
+            // dispatches fresh, which claims it on the way; a failed retry
+            // starts the tally over instead of resurrecting the old one. The
+            // threshold, not mere presence, is the test: a task can carry a
+            // single remembered failure and still be claimed, and that is an
+            // author to retry, not a dispatch to re-attempt.
+            if (((yield* Ref.get(dispatchFailures)).get(task.id)?.count ?? 0) >= 2) {
+              yield* clearFailure(task.id);
+              if (isOnboarding(task)) {
+                const project = projectFor(task.project);
+                if (project) {
+                  yield* dispatchOnboard(task, project).pipe(
+                    Effect.catchAll((error) => recordFailure(task.id, error)),
+                  );
+                }
+                return;
+              }
+              if (task.status === "reviewing") {
+                return yield* dispatchReview(task, authoredBy(task)).pipe(
+                  Effect.catchAll((error) => recordFailure(task.id, error)),
+                );
+              }
+              return yield* dispatchAuthor(task).pipe(
+                Effect.catchAll((error) => recordFailure(task.id, error)),
+              );
+            }
+
             if (task.status === "reviewing") {
               return yield* dispatchReview(task, authoredBy(task));
             }
@@ -1342,6 +1450,66 @@ export const decisionsOf = (
 ];
 
 /**
+ * A dispatch failure, remembered between ticks so a repeat can be told from a
+ * first failure.
+ *
+ * Only the detail and the count: which error, and how many times it has
+ * repeated. Two with the same detail is the point at which the task stops
+ * being offered and becomes a decision.
+ */
+export interface DispatchFailure {
+  readonly detail: string;
+  readonly count: number;
+}
+
+/**
+ * What one dispatch failure means, from the failures already tallied.
+ *
+ * The first failure is news and is logged. The second identical failure is a
+ * decision: logged once with the count, and from there the task is held out of
+ * the queue rather than re-attempted. A different failure resets the tally —
+ * it is a new fact, not a repeat. Further identical failures are quiet, since
+ * nothing has changed to report.
+ */
+export type FailureReport = "first" | "repeat" | "quiet";
+
+export const nextFailure = (
+  failures: ReadonlyMap<string, DispatchFailure>,
+  task: string,
+  detail: string,
+): {
+  readonly failures: Map<string, DispatchFailure>;
+  readonly count: number;
+  readonly report: FailureReport;
+} => {
+  const prior = failures.get(task);
+  const same = prior !== undefined && prior.detail === detail;
+  const count = same ? prior.count + 1 : 1;
+  const report: FailureReport = !same ? "first" : count === 2 ? "repeat" : "quiet";
+  return { failures: new Map(failures).set(task, { detail, count }), count, report };
+};
+
+/**
+ * The tasks whose dispatch has failed at least twice with the same error.
+ *
+ * These are held out of the queue and surfaced as decisions instead of being
+ * re-attempted every tick.
+ */
+export const failedTasks = (
+  failures: ReadonlyMap<string, DispatchFailure>,
+): ReadonlyArray<readonly [string, DispatchFailure]> =>
+  [...failures].filter(([, failure]) => failure.count >= 2);
+
+/** Keeps a failed task in decisions, not in the ordinary queue. */
+export const excludeFailedTasks = <Task extends { readonly id: string }>(
+  tasks: ReadonlyArray<Task>,
+  failures: ReadonlyArray<readonly [string, DispatchFailure]>,
+): ReadonlyArray<Task> => {
+  const failedIds = new Set(failures.map(([task]) => task));
+  return tasks.filter((task) => !failedIds.has(task.id));
+};
+
+/**
  * Splits work handed back for review by whether there is any work in it.
  *
  * Two proofs are needed, and prog can only give one. The `by-*` label proves
@@ -1499,6 +1667,8 @@ export interface Active {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly kind: string | undefined;
+  /** The error behind a dispatch-failed decision, absent for the other kinds. */
+  readonly failure?: string;
 }
 
 export interface InterventionTarget {
