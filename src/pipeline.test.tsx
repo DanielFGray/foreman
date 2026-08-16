@@ -681,6 +681,170 @@ describe("Pipeline", () => {
     }
   });
 
+  test("follows a tracked task from queue through working to review", async () => {
+    const { controls } = makeControls();
+    const alpha: ReadyTask = {
+      id: "ts-a",
+      title: "alpha",
+      priority: 1,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    };
+    const beta: ReadyTask = {
+      id: "ts-b",
+      title: "beta",
+      priority: 1,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    };
+    const base: FleetState = {
+      ...state,
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      yours: [],
+      held: [],
+      orphans: [],
+      queue: [alpha, beta],
+    };
+    const [current, setCurrent] = createSignal(base);
+    const t = await testRender(() => <Pipeline state={current} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/2"));
+
+      // A tick claims ts-a: it leaves the queue and the highlight follows it
+      // into working, instead of a positional cursor sitting on whatever now
+      // holds the old spot in the queue.
+      setCurrent({
+        ...base,
+        queue: [beta],
+        working: [active(task("ts-a", "in_progress", ["by-opencode"]), worker("ts-a", "working"))],
+      });
+      await t.waitForFrame((f) => f.includes("Working 1/1"));
+      expect(t.captureCharFrame()).toContain("> opencode  task ts-a");
+
+      // It settles, and the follow carries it into review the same way.
+      setCurrent({
+        ...base,
+        queue: [beta],
+        review: [active(task("ts-a", "reviewing", ["by-opencode"]), worker("ts-a", "working"))],
+      });
+      await t.waitForFrame((f) => f.includes("Review 1/1"));
+      expect(t.captureCharFrame()).toContain("> opencode  task ts-a");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("gives up the cursor to the nearest surviving row when the tracked task lands", async () => {
+    const { controls } = makeControls();
+    const queued = (id: string, title: string): ReadyTask => ({
+      id,
+      title,
+      priority: 1,
+      project: "fibrae",
+      labels: [],
+      last_activity_at: new Date(),
+    });
+    const base: FleetState = {
+      ...state,
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      yours: [],
+      held: [],
+      orphans: [],
+      queue: [queued("ts-a", "queued a"), queued("ts-b", "queued b"), queued("ts-c", "queued c")],
+    };
+    const [current, setCurrent] = createSignal(base);
+    const t = await testRender(() => <Pipeline state={current} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/3"));
+      t.mockInput.pressArrow("down");
+      await t.flush();
+
+      // ts-b lands: the follow stops at the review gate, so the cursor stays
+      // in the queue on the row that survived next to it rather than chasing
+      // the finished task into history.
+      setCurrent({
+        ...base,
+        queue: [queued("ts-a", "queued a"), queued("ts-c", "queued c")],
+        landed: [task("ts-b", "done", [])],
+      });
+      await t.waitForFrame((f) => f.includes("Queue 2/2"));
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("> fibrae  queued c");
+      expect(frame).not.toContain("Landed 1/1");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("keeps the highlight on the tracked task when rows shift under it", async () => {
+    const { controls } = makeControls();
+    const base: FleetState = {
+      ...state,
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      yours: [],
+      held: [],
+      orphans: [],
+      queue: ["a", "b", "c"].map((letter) => ({
+        id: `ts-${letter}`,
+        title: `queued ${letter}`,
+        priority: 1,
+        project: "fibrae",
+        labels: [],
+        last_activity_at: new Date(),
+      })),
+    };
+    const [current, setCurrent] = createSignal(base);
+    const t = await testRender(() => <Pipeline state={current} controls={controls} />, {
+      width: 92,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Queue 1/3"));
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressArrow("down");
+      await t.flush();
+
+      // A higher-priority task arrives at the head of the queue. A positional
+      // cursor would now sit on ts-b; the id cursor stays on ts-c, which moved
+      // to the fourth row.
+      setCurrent({
+        ...base,
+        queue: [
+          {
+            id: "ts-x",
+            title: "pinned",
+            priority: 1,
+            project: "fibrae",
+            labels: [],
+            last_activity_at: new Date(),
+          },
+          ...base.queue,
+        ],
+      });
+      await t.waitForFrame((f) => f.includes("Queue 4/4"));
+      expect(t.captureCharFrame()).toContain("> fibrae  queued c");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("navigates the pipeline and runs the selected action", async () => {
     const { controls, calls } = makeControls();
     const t = await testRender(() => <Pipeline state={() => state} controls={controls} />, {
