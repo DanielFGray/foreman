@@ -36,7 +36,9 @@ and `prog list` together tell you everything foreman knows.
    change nothing — approvals stay human.
 2. **Tidy.** Foreman's merged branches are deleted from every project. `-d`
    refuses anything the checkout does not already have, so only redundant refs
-   go.
+   go. In a jj checkout it also abandons the unpublished merge commits a landing
+   interrupted by a restart leaves behind, which is what landing into foreman's
+   own checkout under `bun --watch` does.
 3. **Reclaim.** A claim with no live worker and no activity for a day goes back
    to the queue. Ownership decides this, not age: a task with a live workspace
    is never touched.
