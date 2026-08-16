@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { DateTime } from "effect";
 import {
   awaitingLanding,
+  failedTasks,
   handoffExpired,
   decisionsOf,
+  nextFailure,
   readyToLand,
   reviewable,
   scopeRoster,
@@ -221,6 +223,42 @@ describe("decisions", () => {
     ];
 
     expect(decisionsOf([], [], ownedWorkspaces)).toEqual([]);
+  });
+});
+
+describe("dispatch failures", () => {
+  test("counts the first failure as news and the second identical one as a decision", () => {
+    const first = nextFailure(new Map(), "ts-1", "open: already exists");
+    expect(first.report).toBe("first");
+    expect(first.failures.get("ts-1")).toEqual({ detail: "open: already exists", count: 1 });
+
+    const second = nextFailure(first.failures, "ts-1", "open: already exists");
+    expect(second.report).toBe("repeat");
+    expect(second.failures.get("ts-1")).toEqual({ detail: "open: already exists", count: 2 });
+
+    // Past the decision nothing changes to report.
+    const third = nextFailure(second.failures, "ts-1", "open: already exists");
+    expect(third.report).toBe("quiet");
+    expect(third.failures.get("ts-1")?.count).toBe(3);
+  });
+
+  test("resets the tally when the error changes", () => {
+    const first = nextFailure(new Map(), "ts-1", "open: already exists");
+    const changed = nextFailure(first.failures, "ts-1", "spawn: already runs an author");
+
+    expect(changed.report).toBe("first");
+    expect(changed.failures.get("ts-1")).toEqual({
+      detail: "spawn: already runs an author",
+      count: 1,
+    });
+  });
+
+  test("failedTasks names only tasks that failed twice with the same error", () => {
+    const once = nextFailure(new Map(), "ts-1", "open");
+    const twice = nextFailure(once.failures, "ts-1", "open");
+    const otherOnce = nextFailure(twice.failures, "ts-2", "spawn");
+
+    expect(failedTasks(otherOnce.failures).map(([task]) => task)).toEqual(["ts-1"]);
   });
 });
 

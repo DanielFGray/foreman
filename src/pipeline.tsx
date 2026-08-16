@@ -70,7 +70,11 @@ const DETAIL_BREAKPOINT = 120;
 const drawn = (state: FleetState): ReadonlyArray<ViewName> =>
   VIEWS.filter((name) => rowsForView(name, state).length > 0);
 
-export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned workspace";
+export type DecisionKind =
+  | "author vanished"
+  | "reviewer vanished"
+  | "orphaned workspace"
+  | "dispatch failed";
 
 /**
  * Which kind of decision a row is, from the task's status.
@@ -78,14 +82,18 @@ export type DecisionKind = "author vanished" | "reviewer vanished" | "orphaned w
  * Status decides, not labels. A workspace left behind by a failed spawn still
  * carries its by-* label while its task sits back in the queue, so naming from
  * the labels alone would call it an author that vanished; the task's status —
- * neither claimed nor under review — is what makes it residue.
+ * neither claimed nor under review — is what makes it residue. A dispatch
+ * failure is the one kind status cannot name: the task is ordinary queue work,
+ * so the failure itself is what marks the row.
  */
-export const decisionKind = (task: Item): DecisionKind =>
-  task.status === "reviewing"
-    ? "reviewer vanished"
-    : task.status === "in_progress"
-      ? "author vanished"
-      : "orphaned workspace";
+export const decisionKind = (task: Item, failure: string | undefined = undefined): DecisionKind =>
+  failure !== undefined
+    ? "dispatch failed"
+    : task.status === "reviewing"
+      ? "reviewer vanished"
+      : task.status === "in_progress"
+        ? "author vanished"
+        : "orphaned workspace";
 
 /**
  * Whether a review-by-* label has no live reviewer behind it, so it is stale.
@@ -119,6 +127,8 @@ interface ColumnRow {
   readonly project: string | undefined;
   /** The branch behind a stranded row, which no task in the fleet accounts for. */
   readonly orphan: Orphan | undefined;
+  /** The error behind a dispatch-failed decision row. */
+  readonly failure: string | undefined;
   readonly hasWork: boolean;
   readonly committed: boolean;
 }
@@ -183,6 +193,9 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "intervene", "release"],
   "reviewer vanished": ["retry", "takeOver", "intervene", "release"],
   "orphaned workspace": ["intervene", "close", "unassign"],
+  // Nothing to take over or release: the agent never started. The one answer
+  // is to clear the cause and retry.
+  "dispatch failed": ["retry"],
 };
 
 const ACTION_LABELS: Record<Action, string> = {
@@ -203,7 +216,9 @@ const ACTION_LABELS: Record<Action, string> = {
 const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArray<Action> => {
   if (!row) return [];
   const actions =
-    column === "decisions" && row.task ? DECISION_ACTIONS[decisionKind(row.task)] : ACTIONS[column];
+    column === "decisions" && row.task
+      ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
+      : ACTIONS[column];
 
   return actions.filter((action) => {
     switch (action) {
@@ -862,6 +877,7 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   worker: undefined,
   project: undefined,
   orphan: undefined,
+  failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -881,6 +897,7 @@ const activeRow = (
   worker,
   project: undefined,
   orphan: undefined,
+  failure: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -894,27 +911,32 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   worker: undefined,
   project: undefined,
   orphan: undefined,
+  failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
 
-const decisionRow = ({ task, worker, kind }: Active, state: FleetState): ColumnRow => ({
+const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState): ColumnRow => ({
   column: "decisions",
   key: task.id,
   // The reason leads: it is the question the column exists to answer, and it
   // is the half that must survive a narrow terminal truncating the line. An
   // orphaned workspace names its status rather than the kind that left it:
   // done and canceled are pure cleanup, a queued task will be dispatched again
-  // into a fresh workspace once this one is closed.
+  // into a fresh workspace once this one is closed. A dispatch failure names
+  // the error, because that is what the operator must clear before retrying.
   label:
-    decisionKind(task) === "orphaned workspace"
-      ? `orphaned workspace  ${task.id}  ${task.status}`
-      : `${decisionKind(task)}  ${task.id}  ${kind ?? "?"}`,
+    failure !== undefined
+      ? `dispatch failed  ${task.id}  ${failure}`
+      : decisionKind(task) === "orphaned workspace"
+        ? `orphaned workspace  ${task.id}  ${task.status}`
+        : `${decisionKind(task)}  ${task.id}  ${kind ?? "?"}`,
   task,
   ready: undefined,
   worker,
   project: undefined,
   orphan: undefined,
+  failure,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -928,6 +950,7 @@ const heldRow = (project: string): ColumnRow => ({
   worker: undefined,
   project,
   orphan: undefined,
+  failure: undefined,
   hasWork: false,
   committed: false,
 });
@@ -943,6 +966,7 @@ const orphanRow = (orphan: Orphan): ColumnRow => ({
   worker: undefined,
   project: undefined,
   orphan,
+  failure: undefined,
   hasWork: true,
   committed: true,
 });

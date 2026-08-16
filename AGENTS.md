@@ -44,10 +44,21 @@ open, and nothing can tell foreman's own work from a claim made by hand.
 | Is this project free to work in? | `git status` in its checkout |
 
 Every tick reads all of it back, so a restart re-adopts its live workspaces
-instead of orphaning them. The only thing foreman cannot derive is whether the
-operator has paused dispatch, because nothing in the world records an intention.
-That is the one `Ref`. A paused tick observes and reports; settle, tidy, reclaim
+instead of orphaning them. Two things foreman cannot derive are kept in `Ref`s,
+because nothing in the world records them: whether the operator has paused
+dispatch (an intention), and how a dispatch attempt failed (an event of
+foreman's own doing). A paused tick observes and reports; settle, tidy, reclaim
 and fill wait for resume.
+
+A dispatch failure is observed by trying, and the trying is what must stop: the
+worktree that made `open` fail will still exist next tick, so a retry learns
+nothing. Two identical failures for a task stop it being offered and surface it
+as a decision with the error on the row. The tally is in-process, not durable —
+a restart forgets it and costs two attempts to relearn — because the count is a
+property of foreman's attempts, not of the task, and the task store has no
+place for it. The tasks themselves stay safe in the queue either way.
+`nextFailure` in `src/dispatcher.ts` is the pure counting; `recordFailure`
+writes the one log line per failure instead of one per tick.
 
 It starts paused unless `--running` says otherwise, because a restart is not an
 operator — under `bun --watch` the daemon restarts whenever its own source
