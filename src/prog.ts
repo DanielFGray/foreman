@@ -426,9 +426,8 @@ export const attemptsOf = (
 ): number => {
   const prefix = `${ATTEMPT}${rung}-`;
   const counts = item.labels
-    .filter((label) => label.startsWith(prefix))
-    .map((label) => Number(label.slice(prefix.length)))
-    .filter((count) => Number.isInteger(count) && count > 0);
+    .filter((label) => label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length)))
+    .map((label) => Number(label.slice(prefix.length)));
   return counts.length === 0 ? 0 : Math.max(...counts);
 };
 
