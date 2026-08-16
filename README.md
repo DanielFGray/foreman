@@ -244,10 +244,9 @@ every task in the fleet. Name it per project:
 Who reviews whom is derived, not configured: the reviewer is the rung above the
 one that wrote the code. Cheap work gets expensive eyes; the top rung reviews
 itself, which still helps — fresh eyes on the same model read the diff as a
-stranger would. Priority
-3 and anything labelled `trivial` skips the reviewing agent. It does not skip
-landing: that work goes from `prog review` straight into the merge and verify
-gate, so every branch reaches your checkout the same way.
+stranger would. Every branch is reviewed: no priority and no label routes work
+around the reviewer, because a task's own estimate of how small it is arrives
+before anybody has read the diff.
 
 A re-dispatch replaces the `by-` label rather than adding to it: the question the
 reviewer asks is who wrote the code on this branch now, not who has ever touched
@@ -331,6 +330,14 @@ One global `prog ready`, restricted to the allowlisted projects after prog has
 applied dependency gates. Tasks are highest priority first, with ties broken by
 rotating between projects — otherwise one project holding a hundred priority-1
 tasks would own the entire fleet until it ran dry.
+
+Two things bend that order. Waiting earns a task a bounded amount of urgency, so
+low-priority work is not starved forever but cannot displace new urgent work
+either. And anything labelled `bug` enters holding more credit than waiting can
+ever earn, so defects lead their priority band on arrival: a backlog filed
+almost entirely at one priority otherwise sorts by age alone, which dispatches
+defects in the order they were discovered, behind whatever feature batch was
+entered first.
 
 ## Plan mode
 

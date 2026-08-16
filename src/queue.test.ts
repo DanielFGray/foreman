@@ -4,14 +4,25 @@ import type { ReadyTask } from "./prog.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
 
-const task = (id: string, project: string, priority: number, lastActivityAt = now): ReadyTask => ({
+const task = (
+  id: string,
+  project: string,
+  priority: number,
+  lastActivityAt = now,
+  labels: ReadonlyArray<string> = [],
+): ReadyTask => ({
   id,
   project,
   priority,
   title: id,
-  labels: [],
+  labels,
   last_activity_at: lastActivityAt,
 });
+
+const bug = (id: string, project: string, priority: number, lastActivityAt = now): ReadyTask =>
+  task(id, project, priority, lastActivityAt, ["bug"]);
+
+const ancient = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
 
 describe("interleave", () => {
   test("never rotates lower-priority work ahead", () => {
@@ -72,5 +83,30 @@ describe("interleave", () => {
     );
 
     expect(result.map(({ id }) => id)).toEqual(["a1", "b1", "a2", "b2"]);
+  });
+
+  // The case that started this: a backlog filed almost entirely at one priority
+  // sorts by age alone, so a feature batch entered first drains ahead of every
+  // defect discovered after it.
+  test("puts a defect ahead of same-priority work no matter how long that has waited", () => {
+    const result = interleave(
+      [task("feature", "a", 1, ancient), bug("defect", "a", 1)],
+      ["a"],
+      now,
+    );
+
+    expect(result.map(({ id }) => id)).toEqual(["defect", "feature"]);
+  });
+
+  test("puts a defect ahead of fresh work one priority above it", () => {
+    const result = interleave([task("feature", "a", 1), bug("defect", "a", 2)], ["a"], now);
+
+    expect(result.map(({ id }) => id)).toEqual(["defect", "feature"]);
+  });
+
+  test("still ranks defects among themselves by priority", () => {
+    const result = interleave([bug("low", "a", 3), bug("high", "a", 1)], ["a"], now);
+
+    expect(result.map(({ id }) => id)).toEqual(["high", "low"]);
   });
 });

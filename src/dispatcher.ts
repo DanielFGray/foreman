@@ -31,7 +31,6 @@ import {
   isOnboarding,
   isPlan,
   type Item,
-  needsReview,
   ONBOARD,
   Prog,
   type ReadyTask,
@@ -394,9 +393,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         // An author that handed back an empty branch did not finish, whatever
         // it said by moving the task. Sending a reviewer costs a second agent
-        // to read an empty diff, and a trivial task skips review entirely and
-        // would land a merge commit with nothing in it. So the task goes back
-        // to the queue, which is where unfinished work belongs.
+        // to read an empty diff. So the task goes back to the queue, which is
+        // where unfinished work belongs.
         yield* Effect.forEach(
           current.unbacked,
           ({ task, kind }) =>
@@ -599,7 +597,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      *
      * The only code path that writes there. No agent holds merge rights, reviewer
      * or author, so every branch passes the same clean-checkout and verification
-     * gate however trivial the task that produced it was.
+     * gate.
      */
     const land = (task: Item, worker: Worker | undefined) =>
       Effect.gen(function* () {
@@ -824,9 +822,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           if (free <= 0) return;
           if (current.held.includes(task.project)) continue;
           if (reviewedBy(task) !== undefined) continue;
-          // Work small enough to skip the reviewer is waiting to land, not
-          // waiting to be read. Its project is held, or it would be gone.
-          if (!needsReview(task)) continue;
           if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
           if (failed.has(task.id)) continue;
           yield* dispatchReview(task, authoredBy(task)).pipe(
@@ -1369,14 +1364,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
  * A finished branch whose fate is landing rather than the ordinary settle path,
  * whatever its pane is doing.
  *
- * `reviewing` means the author stopped writing, not that an agent must read the
- * diff. Work small enough to skip the reviewer is landed straight from there, so
- * every branch reaches the operator's checkout through the same gate — the one
- * that re-reads the tree, merges, and verifies. An author that merged its own
- * work would be the one path around it.
+ * `reviewing` means the author stopped writing, not that the diff has been read:
+ * an approving reviewer is the only thing that makes a branch landable. So the
+ * verdict label is the whole question here, and no task size or priority routes
+ * around it.
  */
 export const awaitingLanding = (task: Item): boolean =>
-  task.status === "reviewing" && (isApproved(task) || !needsReview(task));
+  task.status === "reviewing" && isApproved(task);
 
 /**
  * Whether an author that handed off has waited too long to be worth keeping.

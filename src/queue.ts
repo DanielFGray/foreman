@@ -1,4 +1,4 @@
-import type { ReadyTask } from "./prog.ts";
+import { BUG, type ReadyTask } from "./prog.ts";
 
 const AGING_RATE_PER_DAY = 0.25;
 const AGING_CAP_DAYS = 7;
@@ -6,14 +6,38 @@ const DAYS_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 const ROTATION_SCORE_WINDOW = 0.5;
 
 /**
+ * What a defect is worth: one day more than any task can gain by waiting.
+ *
+ * A backlog states priority in three coarse bands, so most of it sits in one
+ * band and the score inside that band is decided by age alone — which sorts by
+ * when the work was filed, not by what it is. Defects are then dispatched in
+ * the order they happened to be discovered, behind whatever feature batch was
+ * entered first.
+ *
+ * Deriving the credit from the aging cap is what makes the rule exact rather
+ * than tuned, and the extra day is what makes it strict: at exactly the cap a
+ * fully aged feature would tie a fresh defect, and a tie is decided by the
+ * order the task store happened to return — the thing this credit exists to
+ * stop deciding the queue.
+ */
+const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
+
+/**
  * A ready task becomes more urgent while it waits, but only by a bounded
  * amount. The cap prevents old low-priority work from permanently displacing
  * newly created urgent work.
+ *
+ * A defect carries the full aging credit from the moment it is filed, so it
+ * leads its priority band on arrival instead of earning its way up. That is a
+ * band and a half of score, so a defect also outranks ordinary work one
+ * priority above it — a broken thing beats an unbuilt one, which is the whole
+ * point of saying it in the score rather than in the backlog's priorities.
  */
 export const effectivePriority = (task: ReadyTask, now: Date): number => {
   const ageDays =
     Math.max(0, now.getTime() - task.last_activity_at.getTime()) / DAYS_IN_MILLISECONDS;
-  return task.priority - AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS);
+  const credit = task.labels.includes(BUG) ? DEFECT_CREDIT : 0;
+  return task.priority - AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS) - credit;
 };
 
 /**

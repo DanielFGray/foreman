@@ -269,6 +269,20 @@ awaiting review is nearly finished and is blocking whatever depends on it,
 whereas an unclaimed task has not started costing anything. Filling slots with
 new work while reviews pile up grows a permanent tail of almost-done tasks.
 
+### The queue is one score, not a sort key per rule
+
+`src/queue.ts` ranks ready work by a single continuous score: priority, minus a
+bounded credit for waiting, minus a fixed credit for carrying the `bug` label.
+Both credits are derived from the aging cap rather than tuned, and the defect
+credit deliberately exceeds it — a backlog states priority in three coarse bands,
+so nearly everything lands in one band where age alone decides, and age is the
+order work was filed, not what it is.
+
+New rules belong in that score, not beside it. A second sort key ahead of it
+would have to restate what the score already says about priority and age, and the
+project rotation reads the score to decide which tasks are close enough to
+interleave.
+
 ### The review gate
 
 `reviewing` is a status anything can set, including tasks that predate foreman
@@ -284,9 +298,12 @@ the author's completed handoff and the whole review run. `review-by-*` records
 the latter, so a vanished worker under that label is a question for the dashboard
 rather than grounds for silently launching another reviewer.
 
-Work that skips review — priority 3, or the `trivial` label — waits in that same
-status and is landed straight from it. Landing is the only code path that writes
-to the operator's checkout, so no prompt gives an agent merge rights.
+Nothing skips review. A task's priority and its labels are written before anyone
+has read the diff, so they cannot say whether the diff is worth reading — and
+the work most likely to be filed as too small to check is the work an author is
+most likely to have stubbed. An approving reviewer is the only thing that makes
+a branch landable, and landing is the only code path that writes to the
+operator's checkout, so no prompt gives an agent merge rights.
 
 The author critiques its own diff before handing off, reading `git diff` rather
 than recalling its intent, because the intent is what wrote any mistake in there.

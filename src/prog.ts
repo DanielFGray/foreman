@@ -305,17 +305,6 @@ export const Item = Schema.Struct({
 });
 export type Item = typeof Item.Type;
 
-/**
- * Work substantial enough to be worth a second agent's time.
- *
- * Priority 3 is the backlog's own statement that a task is minor, and the
- * `trivial` label is the escape hatch for the ones priority does not capture.
- */
-export const needsReview = (item: {
-  readonly priority: number;
-  readonly labels: ReadonlyArray<string>;
-}): boolean => item.priority < 3 && !item.labels.includes(TRIVIAL);
-
 /** Which kind of agent authored the work, if foreman recorded it. */
 export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(BY))?.slice(BY.length);
@@ -374,7 +363,9 @@ export const rungOf = (item: { readonly labels: ReadonlyArray<string> }): string
 /** Prefix of the label naming the kind that authored a task's current branch. */
 export const BY = "by-";
 export const REVIEW_BY = "review-by-";
-export const TRIVIAL = "trivial";
+
+/** The label that marks a task as a defect in shipped code rather than new work. */
+export const BUG = "bug";
 
 /** Prefix of the label naming the rung a task's next dispatch must use. */
 export const RUNG = "rung-";

@@ -99,14 +99,11 @@ describe("landing a reviewed branch", () => {
     );
   });
 
-  test("lands work small enough to skip the reviewer, with no verdict at all", () => {
-    // The alternative is an author that merges for itself, which is the one
-    // route past the clean-checkout and verification gate.
-    expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"]))).toBe(true);
-    expect(awaitingLanding(task("ts-123456", ["by-opencode"], "reviewing", 3))).toBe(true);
-    expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"], "in_progress"))).toBe(
-      false,
-    );
+  test("lands nothing on size or priority alone", () => {
+    // A branch reaches the operator's checkout on a reviewer's verdict and
+    // nothing else, however small the task that produced it says it is.
+    expect(awaitingLanding(task("ts-123456", ["by-opencode", "trivial"]))).toBe(false);
+    expect(awaitingLanding(task("ts-123456", ["by-opencode"], "reviewing", 3))).toBe(false);
   });
 });
 
@@ -204,16 +201,12 @@ describe("decisions", () => {
       task("ts-2", ["by-opencode", "review-by-claude", "approved"], "reviewing"),
       undefined,
     );
-    const trivial = active(
-      task("ts-3", ["by-opencode", "review-by-claude", "trivial"], "reviewing"),
-      undefined,
-    );
     const unfinished = active(
       task("ts-4", ["by-opencode", "review-by-claude"], "reviewing"),
       undefined,
     );
 
-    const decisions = decisionsOf([], [approved, trivial, unfinished], []);
+    const decisions = decisionsOf([], [approved, unfinished], []);
     expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-4"]);
   });
 
