@@ -555,7 +555,7 @@ Two divergences from the settled design:
 - **Plan epics are drafts and must stay drafts.** The "daemon needs no plan
   awareness" property rests on the epic never being claimed or moved to
   `in_progress`; the settle loop would read a settled workspace on an
-  `in_progress` item as an unfinished agent and climb and release it. The
+  `in_progress` item as an unfinished agent and release it. The
   tasker's `prog done` is the only stored transition in a plan's life.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
   come back as a JSON envelope on stdout; failures come back as an envelope on
