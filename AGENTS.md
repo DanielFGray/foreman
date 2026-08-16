@@ -156,6 +156,14 @@ questions differently:
 - **jj never refuses a merge.** A conflict is a recorded state with markers
   written into the files, so the conflict check is the ordinary path rather than
   an error path, and backing out is `edit` then `abandon` rather than an abort.
+- **A landing interrupted before the bookmark moves leaves an anonymous head.**
+  `jj new` writes the merged files into the working copy, which is what restarts
+  a daemon watching its own checkout; only `bookmark set` publishes. So the
+  tick sweeps anonymous heads that carry foreman's own landing signature — a
+  clean merge of two parents whose description is the one `merge` writes. The
+  branch still holds the work, so abandoning one re-does the landing honestly
+  instead of publishing an unverified merge, and only the working copy is never
+  touched, because that is the one anonymous head a person may be standing on.
 
 Everything else stays on git. The refs and worktrees in a colocated repository
 are real, and `git branch --delete` keeps the refusal that makes the sweep safe.
