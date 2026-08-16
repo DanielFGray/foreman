@@ -54,6 +54,18 @@ const COLUMNS = [
 type ColumnName = (typeof COLUMNS)[number];
 const VIEWS = ["queue", "working", "review", "landed", "attention"] as const;
 type ViewName = (typeof VIEWS)[number];
+
+/**
+ * The views the cursor follows a tracked task through.
+ *
+ * A task climbs queue → working → review and the highlight chases it, and a
+ * task parked at the operator or needing a decision is still live work, so
+ * attention is followed too. Landed is not: a task that landed is finished,
+ * and chasing it into history only walks the operator out of the work still to
+ * do. Landing ends the follow, and the cursor falls back where it was.
+ */
+const FOLLOW_VIEWS = ["queue", "working", "review", "attention"] as const;
+
 const PAGE_STEP = 5;
 const DETAIL_BREAKPOINT = 120;
 
@@ -252,8 +264,22 @@ export const Pipeline = (props: {
   readonly rungs: ReadonlyArray<string>;
 }) => {
   const dimensions = useTerminalDimensions();
-  const [wanted, setWanted] = createSignal<ViewName>("queue");
-  const [row, setRow] = createSignal(0);
+
+  /**
+   * The cursor, one signal because every key rewrites all three parts together.
+   *
+   * `key` is the tracked row, by id rather than by position, so a tick that
+   * reorders rows or moves the task to another column does not swap the row out
+   * from under the operator. `index` is only a fallback anchor: the key's last
+   * position in the current view, kept so a vanished task gives up its cursor
+   * to the nearest surviving row instead of to the front of the list. `view` is
+   * where the operator is looking, and the follow keeps it on the tracked key.
+   */
+  const [cursor, setCursor] = createSignal<{
+    readonly view: ViewName;
+    readonly key: string | undefined;
+    readonly index: number;
+  }>({ view: "queue", key: undefined, index: 0 });
   const [completion, setCompletion] = createSignal<ReadyTask | undefined>();
   const [intervention, setIntervention] = createSignal<ColumnRow | undefined>();
   const [rungChoice, setRungChoice] = createSignal<{
@@ -266,40 +292,104 @@ export const Pipeline = (props: {
   let hadAttention = false;
   createEffect(() => {
     const hasAttention = rowsForView("attention", props.state()).length > 0;
-    if (hasAttention && !hadAttention) {
-      setWanted("attention");
-      setRow(0);
-    }
+    if (hasAttention && !hadAttention) select("attention");
     hadAttention = hasAttention;
+  });
+
+  /**
+   * Keeps the cursor consistent with the world after every tick.
+   *
+   * The view resolves to where the tracked key is, unless it has left the
+   * followed views entirely. A key in both the current view and attention — a
+   * vanished worker's task sits in working and decisions at once — stays where
+   * the operator is, so the follow never fights a deliberate placement. When
+   * the key is present, its position becomes the anchor; when it is gone, the
+   * anchor is clamped and the key rebases onto that surviving row.
+   */
+  createEffect(() => {
+    const current = view();
+    const cur = cursor();
+    const inCurrent =
+      cur.key !== undefined &&
+      rowsForView(current, props.state()).some((row) => row.key === cur.key);
+    const followed =
+      cur.key === undefined
+        ? undefined
+        : inCurrent
+          ? current
+          : FOLLOW_VIEWS.find(
+              (name) =>
+                views().includes(name) &&
+                rowsForView(name, props.state()).some((row) => row.key === cur.key),
+            );
+    const target = followed ?? current;
+    const rows = rowsForView(target, props.state());
+    if (rows.length === 0) {
+      if (target !== cur.view || cur.key !== undefined || cur.index !== 0)
+        setCursor({ view: target, key: undefined, index: 0 });
+      return;
+    }
+    const at = rows.findIndex((row) => row.key === cur.key);
+    if (at !== -1) {
+      if (target !== cur.view || at !== cur.index)
+        setCursor({ view: target, key: cur.key, index: at });
+    } else {
+      const index = Math.min(cur.index, rows.length - 1);
+      const row = rows[index];
+      if (row && (target !== cur.view || index !== cur.index || row.key !== cur.key))
+        setCursor({ view: target, key: row.key, index });
+    }
   });
 
   // A view that empties under the cursor goes. Keep the cursor as near as
   // possible to where it was in the stable tab order.
   const view = (): ViewName => {
     const here = views();
-    if (here.includes(wanted())) return wanted();
-    const index = VIEWS.indexOf(wanted());
-    return here.filter((name) => VIEWS.indexOf(name) < index).at(-1) ?? here[0] ?? wanted();
+    if (here.includes(cursor().view)) return cursor().view;
+    const index = VIEWS.indexOf(cursor().view);
+    return here.filter((name) => VIEWS.indexOf(name) < index).at(-1) ?? here[0] ?? cursor().view;
   };
 
   const rows = (): ReadonlyArray<ColumnRow> => rowsForView(view(), props.state());
 
-  // The cursor clamps to the view it sits in: a shrinking list never
-  // strands the selection past its last row.
+  // The cursor is the key, not a position: a shrinking list never strands it
+  // past the last row, and the row is whoever the key names rather than
+  // whatever a reshuffle left at this spot.
   const selected = (): number | undefined => {
-    const count = rows().length;
-    if (count === 0) return undefined;
-    return Math.min(row(), count - 1);
+    const here = rows();
+    if (here.length === 0) return undefined;
+    const at = here.findIndex((row) => row.key === cursor().key);
+    return at !== -1 ? at : Math.min(cursor().index, here.length - 1);
   };
 
   const step = (delta: number) => {
-    const count = rows().length;
-    if (count === 0) return;
-    setRow((current) => Math.min(Math.max(current + delta, 0), count - 1));
+    const here = rows();
+    if (here.length === 0) return;
+    const at = here.findIndex((row) => row.key === cursor().key);
+    const base = at !== -1 ? at : cursor().index;
+    const index = Math.min(Math.max(base + delta, 0), here.length - 1);
+    const row = here[index];
+    if (row) setCursor({ view: view(), key: row.key, index });
   };
 
   const selectRow = (index: number) => {
-    setRow(index);
+    const row = rows()[index];
+    if (row) setCursor({ view: view(), key: row.key, index });
+  };
+
+  /** Moves the cursor into a view, keeping the tracked key when it is there. */
+  const select = (view: ViewName) => {
+    const here = rowsForView(view, props.state());
+    const at = here.findIndex((row) => row.key === cursor().key);
+    const first = here[0];
+    const next =
+      at !== -1
+        ? { view, key: cursor().key, index: at }
+        : first !== undefined
+          ? { view, key: first.key, index: 0 }
+          : { view, key: undefined, index: 0 };
+    const cur = cursor();
+    if (next.view !== cur.view || next.key !== cur.key || next.index !== cur.index) setCursor(next);
   };
 
   const targetOf = (target: ColumnRow): InterventionTarget | undefined => {
@@ -319,10 +409,7 @@ export const Pipeline = (props: {
     const visible = views();
     const index = visible.indexOf(view());
     const next = visible[(index + delta + visible.length) % visible.length];
-    if (next) {
-      setWanted(next);
-      setRow(0);
-    }
+    if (next) select(next);
   };
 
   const apply = (action: Action) => {
@@ -490,15 +577,7 @@ export const Pipeline = (props: {
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
-      <Tabs
-        views={views}
-        selected={view}
-        state={props.state}
-        select={(name) => {
-          setWanted(name);
-          setRow(0);
-        }}
-      />
+      <Tabs views={views} selected={view} state={props.state} select={(name) => select(name)} />
       <box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>
         <Show when={rows().length > 0}>
           <TaskList view={view} rows={rows} selected={selected} scroll={step} select={selectRow} />

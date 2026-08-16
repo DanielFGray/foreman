@@ -447,9 +447,17 @@ a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not o
 exit.
 
 One cursor walks five views — queue | working | review | landed | attention — one
-full-width list at a time. Only non-empty views become tabs, so landed history is
-a count until selected rather than a permanent column squeezing active work. At
-120 columns extra width adds selected-row details; it never restores columns.
+full-width list at a time. The cursor stores the tracked row's id, never a
+position, because a tick reorders rows and moves tasks between columns every
+twenty seconds: a positional highlight would hand the key about to be pressed to
+whatever reshuffle left at that spot. The highlight follows the tracked task
+through queue, working, review and attention, and stops at landing — chasing
+finished work into history would walk the operator out of the work still to do.
+A task that leaves the followed views entirely gives the cursor to the nearest
+surviving row in the column it left. Only non-empty views become tabs, so landed
+history is a count until selected rather than a permanent column squeezing
+active work. At 120 columns extra width adds selected-row details; it never
+restores columns.
 
 Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, stranded branches, then held projects. Each row keeps its source
