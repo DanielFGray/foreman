@@ -264,8 +264,7 @@ describe("Repository", () => {
 
   // Its own checkout: this is the opposite question to the one every test above
   // asks, and it must not read the untracked files they leave lying around.
-  test("counts an untracked file in a worktree as work worth keeping", async () => {
-    const worktree = await mkdtemp(join(tmpdir(), "foreman-worktree-"));
+  test("counts an untracked file in a worktree as work worth keeping", async () => {    const worktree = await mkdtemp(join(tmpdir(), "foreman-worktree-"));
     const there = (...args: Array<string>) => Bun.$`git -C ${worktree} ${args}`.quiet().nothrow();
 
     await there("init", "-q");
@@ -302,6 +301,13 @@ describe("Repository", () => {
 
     await git("checkout", "-q", base);
     expect(await isClean(directory)).toBe(true);
+  });
+
+  // The litter sweep exists for jj's three-step landing, whose middle is
+  // interruptible. A git merge is one atomic command, so there is nothing for
+  // the sweep to find in a checkout git alone is keeping.
+  test("sweeps nothing in a git-only checkout", async () => {
+    expect(await sweep(directory)).toEqual([]);
   });
 });
 
