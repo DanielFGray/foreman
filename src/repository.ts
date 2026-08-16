@@ -113,8 +113,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             : Effect.fail(
                 new RepositoryError({
                   directory,
-                  detail:
-                    result.stderr.trim() || `git merge-base exited ${result.exitCode}`,
+                  detail: result.stderr.trim() || `git merge-base exited ${result.exitCode}`,
                 }),
               ),
         ),
@@ -259,6 +258,13 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           if (refused) return refused;
           return { _tag: "Merged", verified: false } as const;
         }),
+
+      /**
+       * The git path has no landing litter: `git merge` commits onto the
+       * checked-out branch in one atomic command, so an interruption either
+       * happens before anything or after everything.
+       */
+      sweepUnpublishedMerges: (_directory: string) => Effect.succeed<ReadonlyArray<string>>([]),
     };
 
     /**
@@ -363,6 +369,69 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           if (refused) return refused;
           yield* land;
           return { _tag: "Merged", verified: false } as const;
+        }),
+
+      /**
+       * Abandons the merges a landing killed mid-flight leaves behind.
+       *
+       * A jj landing is three steps — `jj new` creates the merge and moves the
+       * working copy onto it, verify runs, and only then does `bookmark set`
+       * publish it. Killed between the first and the last — which is exactly
+       * what happens when the daemon lands into its own checkout under
+       * `bun --watch`, where writing the merged files restarts the process —
+       * the merge sits as an anonymous head whose parents are the trunk and a
+       * foreman branch, and nothing ever names it. The retry lands the branch
+       * honestly, so the leftover commit is pure litter.
+       *
+       * Only that shape is touched: an anonymous head that is a clean merge of
+       * exactly two parents and whose description is the one `merge` writes.
+       * Abandoning it loses nothing — an empty merge's tree is derived from its
+       * parents, and the branch still holds the work — so the guard is about
+       * leaving the operator's own anonymous merges alone, not about keeping
+       * anything that would be lost. The working copy is excluded outright: it
+       * is the one anonymous head a person may be standing on, and abandoning
+       * it would move the ground under their checkout.
+       */
+      sweepUnpublishedMerges: (directory: string) =>
+        Effect.gen(function* () {
+          const heads = yield* jjOutput(
+            directory,
+            "log",
+            "-r",
+            "heads(all()) & ~bookmarks() & ~working_copies()",
+            ...template(
+              'commit_id ++ "|" ++ parents.len() ++ "|" ++ empty ++ "|" ++ description.first_line()',
+            ),
+          );
+          const litter = heads.split("\n").flatMap((line) => {
+            const [id, parents, empty, description] = line.split("|");
+            return id &&
+              parents === "2" &&
+              empty === "true" &&
+              description?.startsWith("Merge branch 'foreman/")
+              ? [id]
+              : [];
+          });
+
+          yield* Effect.forEach(
+            litter,
+            (id) =>
+              jj(directory, "abandon", id).pipe(
+                Effect.flatMap((result) =>
+                  result.exitCode === 0
+                    ? Effect.void
+                    : Effect.fail(
+                        new RepositoryError({
+                          directory,
+                          detail:
+                            result.stderr.trim() || `jj abandon ${id} exited ${result.exitCode}`,
+                        }),
+                      ),
+                ),
+              ),
+            { discard: true },
+          );
+          return litter;
         }),
     };
 
@@ -563,6 +632,19 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             return { _tag: "Held", detail: undefined } as const;
           return yield* checkout.merge(directory, branch, verify);
         }),
+
+      /**
+       * Clears the jj commits a landing interrupted before publishing left
+       * behind, in every colocated checkout. Nothing to do in a checkout git
+       * is keeping: its merge is atomic, so no landing ever leaves an orphan
+       * there. Called every tick, like the branch sweep — the litter appears
+       * whenever a restart kills the daemon mid-merge, and only the world
+       * records where.
+       */
+      sweepUnpublishedMerges: (directory: string) =>
+        checkoutAt(directory).pipe(
+          Effect.flatMap((checkout) => checkout.sweepUnpublishedMerges(directory)),
+        ),
     } as const;
   }),
 }) {}

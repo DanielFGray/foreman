@@ -25,6 +25,11 @@ const branches = (directory: string) =>
 const remove = (directory: string, branch: string) =>
   Effect.runPromise(Repository.remove(directory, branch).pipe(Effect.provide(Repository.Default)));
 
+const sweep = (directory: string) =>
+  Effect.runPromise(
+    Repository.sweepUnpublishedMerges(directory).pipe(Effect.provide(Repository.Default)),
+  );
+
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() => rm(directory, { recursive: true, force: true }));
 
@@ -298,6 +303,13 @@ describe("Repository", () => {
     await git("checkout", "-q", base);
     expect(await isClean(directory)).toBe(true);
   });
+
+  // The litter sweep exists for jj's three-step landing, whose middle is
+  // interruptible. A git merge is one atomic command, so there is nothing for
+  // the sweep to find in a checkout git alone is keeping.
+  test("sweeps nothing in a git-only checkout", async () => {
+    expect(await sweep(directory)).toEqual([]);
+  });
 });
 
 // jj colocated with git is the shape most of these projects are in, and it is
@@ -438,6 +450,94 @@ describe("Repository over a jj-colocated checkout", () => {
       });
       expect(await bookmark("develop")).not.toBe(before);
       expect(await Bun.file(join(colocated, "reviewed.txt")).text()).toBe("approved\n");
+    },
+    slowly,
+  );
+
+  // A landing is three steps and only the last publishes. Killed between them —
+  // which is exactly what `bun --watch` does when foreman lands into its own
+  // checkout, because writing the merged files restarts the daemon — the merge
+  // sits as an anonymous head nobody names. The retry lands the branch honestly,
+  // so the leftover is swept rather than kept.
+  test(
+    "sweeps the merge an interrupted landing leaves, but not the one still in flight",
+    async () => {
+      const side = `${colocated}-sweep`;
+      await there("branch", "foreman/ts-sweep", "develop");
+      await there("worktree", "add", "-q", side, "foreman/ts-sweep");
+      await writeFile(join(side, "swept.txt"), "work\n");
+      await Bun.$`git -C ${side} add swept.txt`.quiet().nothrow();
+      await Bun.$`git -C ${side} commit -qm swept`.quiet().nothrow();
+      await Bun.$`git -C ${colocated} worktree remove ${side}`.quiet().nothrow();
+
+      // The daemon dies here, between `jj new` and `bookmark set`: the merge
+      // exists, the working copy is standing on it, and develop never moved.
+      await jj("new", "develop", "foreman/ts-sweep", "-m", "Merge branch 'foreman/ts-sweep'");
+      const inFlight = await bookmark("@");
+      expect(await sweep(colocated)).toEqual([]);
+      // The working copy is the one anonymous head a person may be standing on;
+      // it is the next tick's landing, not litter, so the sweep leaves it.
+      expect(await bookmark("@")).toBe(inFlight);
+
+      // The retry lands: `jj new` moves the working copy off the old merge,
+      // which now reads as exactly the litter the sweep exists for.
+      await jj("new", "develop", "foreman/ts-sweep", "-m", "Merge branch 'foreman/ts-sweep'");
+      expect(await sweep(colocated)).toEqual([inFlight]);
+      const remaining = (
+        await jj(
+          "log",
+          "-r",
+          "heads(all()) & ~bookmarks() & ~working_copies()",
+          "--no-graph",
+          "-T",
+          "commit_id",
+        )
+      ).stdout.toString();
+      expect(remaining).not.toContain(inFlight);
+
+      await jj("bookmark", "set", "develop", "-r", "@");
+      await jj("new");
+    },
+    slowly,
+  );
+
+  // The guard is not about keeping work — an empty merge's content is derived
+  // from its parents, so nothing would be lost — but about leaving anonymous
+  // merges the operator made for themselves alone. Only the shape and the
+  // description `merge` itself writes are swept.
+  test(
+    "leaves an anonymous merge that is not a foreman landing alone",
+    async () => {
+      await there("branch", "mine", "develop");
+
+      // An operator's own merge: empty, two parents, not foreman's description.
+      await jj("new", "develop", "mine", "-m", "unrelated merge");
+      const unrelated = await bookmark("@");
+      await jj("new", "develop");
+
+      // Foreman's description but manual work in it — no landing writes content
+      // a parent does not already hold, so this is not one either.
+      await jj("new", "develop", "mine", "-m", "Merge branch 'foreman/ts-sweep'");
+      await writeFile(join(colocated, "manual.txt"), "resolved by hand\n");
+      const manual = await bookmark("@");
+      await jj("new", "develop");
+
+      expect(await sweep(colocated)).toEqual([]);
+      const remaining = (
+        await jj(
+          "log",
+          "-r",
+          "heads(all()) & ~bookmarks() & ~working_copies()",
+          "--no-graph",
+          "-T",
+          "commit_id",
+        )
+      ).stdout.toString();
+      expect(remaining).toContain(unrelated);
+      expect(remaining).toContain(manual);
+
+      await jj("bookmark", "set", "develop", "-r", "@");
+      await jj("new");
     },
     slowly,
   );

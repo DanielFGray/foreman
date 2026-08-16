@@ -634,24 +634,50 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * work back to the queue.
      */
     const tidy = (current: Observation) =>
-      Effect.forEach(
-        current.prunable,
-        (entry) =>
-          repository.remove(entry.directory, entry.branch).pipe(
-            Effect.flatMap((deleted) =>
-              deleted
-                ? // Named rather than counted. A branch foreman deleted is the
-                  // one thing about a prune anyone ever goes looking for
-                  // afterwards, and there are only ever a handful in a tick.
-                  Effect.logInfo(`pruned ${entry.branch} in ${entry.project}`)
-                : Effect.void,
+      Effect.gen(function* () {
+        // A landing killed mid-merge leaves an unpublished merge commit in a
+        // colocated checkout, and a restart is what kills it — landing into
+        // its own checkout under `bun --watch` restarts the daemon on every
+        // write. The branch still holds the work, so the retry re-lands it
+        // honestly and the leftover head is swept here, beside the branch
+        // sweep, where every tick's cleanup lives.
+        yield* Effect.forEach(
+          settings.projects,
+          (project) =>
+            repository.sweepUnpublishedMerges(project.directory).pipe(
+              Effect.flatMap((litter) =>
+                Effect.forEach(
+                  litter,
+                  (id) => Effect.logInfo(`abandoned ${id.slice(0, 8)} in ${project.name}`),
+                  { discard: true },
+                ),
+              ),
+              Effect.catchAll((error) =>
+                Effect.logWarning(`sweeping landing litter in ${project.name} failed: ${error}`),
+              ),
             ),
-            Effect.catchAll((error) =>
-              Effect.logWarning(`pruning ${entry.branch} in ${entry.project} failed: ${error}`),
+          { discard: true },
+        );
+
+        yield* Effect.forEach(
+          current.prunable,
+          (entry) =>
+            repository.remove(entry.directory, entry.branch).pipe(
+              Effect.flatMap((deleted) =>
+                deleted
+                  ? // Named rather than counted. A branch foreman deleted is the
+                    // one thing about a prune anyone ever goes looking for
+                    // afterwards, and there are only ever a handful in a tick.
+                    Effect.logInfo(`pruned ${entry.branch} in ${entry.project}`)
+                  : Effect.void,
+              ),
+              Effect.catchAll((error) =>
+                Effect.logWarning(`pruning ${entry.branch} in ${entry.project} failed: ${error}`),
+              ),
             ),
-          ),
-        { discard: true },
-      );
+          { discard: true },
+        );
+      });
 
     /**
      * Returns claims that nobody is working on any more.
