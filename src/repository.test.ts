@@ -264,7 +264,8 @@ describe("Repository", () => {
 
   // Its own checkout: this is the opposite question to the one every test above
   // asks, and it must not read the untracked files they leave lying around.
-  test("counts an untracked file in a worktree as work worth keeping", async () => {    const worktree = await mkdtemp(join(tmpdir(), "foreman-worktree-"));
+  test("counts an untracked file in a worktree as work worth keeping", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "foreman-worktree-"));
     const there = (...args: Array<string>) => Bun.$`git -C ${worktree} ${args}`.quiet().nothrow();
 
     await there("init", "-q");
