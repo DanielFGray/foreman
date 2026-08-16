@@ -216,6 +216,33 @@ once their deps are complete, and runs `prog done`.
 Generated tasks are ordinary work at `--priority 2`. The `plan` label stays on
 the epic only; it is what a resume validates against.
 
+### Foreman does the deterministic part
+
+Where a step has one right answer, foreman runs it. Where it needs judgement, the
+answer is to make dispatching an agent easy — not to make foreman guess. A step
+with one right answer, written as prose in a prompt, is the worst of both: it
+costs tokens every dispatch, a cheap model can skip it, and the failure it causes
+gets charged to the task rather than to the setup.
+
+`scripts/worktree-setup.sh` is that split made concrete. A worktree does not
+share the checkout's installed dependencies, so `workspaceFor` runs the script
+before every dispatch and refuses to hand over a worktree whose setup failed —
+that failure is the project's or the machine's, never the task's.
+
+- **The project records the command, not the config.** A checked-in script is a
+  fact about the project foreman reads back like every other, and a project that
+  gains one is picked up with no config edit. Absent is a valid answer.
+- **It runs before every dispatch**, not only into a worktree foreman just made,
+  because nothing in the world says "this directory is already set up" and
+  foreman remembers nothing. So the script must be safe to re-run — which a
+  package manager's install already is, and which a clone needs a guard to
+  become. Re-running is also what repairs a half-written worktree.
+- **The prompts close the loop.** An agent that repairs a worktree by hand is
+  told to add the missing step to the script and commit it. That is the ratchet:
+  every hand repair converts one non-deterministic step into a deterministic one,
+  and the next agent arrives in a worktree that already builds instead of solving
+  the same puzzle on its own task's budget.
+
 ### Order inside a tick
 
 Settle, reclaim, then fill — and **reviews are filled before new work**. A task
@@ -291,6 +318,17 @@ else is dispatched, settled or landed, and an eager baseline made every good
 landing cost two full suite runs. A failure still costs two, plus re-applying the
 merge when the baseline proves the branch innocent. Never worse where it matters,
 and half the price in the common case.
+
+**A landing is several steps and only the merge is atomic.** Interrupt it after
+the merge — a stranded `index.lock` is enough — and the commits are in while the
+task still reads as awaiting a landing, so every later tick lands the same branch
+again. So landing's first question is whether `HEAD` already contains the branch,
+and an already-merged one returns `Present`: the task is completed without
+merging or verifying. Re-merging is a harmless no-op, but re-verifying is not —
+it is a full suite run the whole one-fiber tick waits out, repeated forever for a
+task that is done. It is asked ahead of the clean gate, because a checkout that
+already has the commits is not going to be written to, and holding there would
+strand the task for as long as the operator kept editing.
 
 Landing waits for the reviewer's pane to stop working: it stays `working` from
 the moment the verdict is written until the turn ends, and closing the workspace

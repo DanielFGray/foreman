@@ -6,6 +6,13 @@ import { Effect, Schema, Stream } from "effect";
 const ours = "foreman/";
 
 /**
+ * The script a project may keep to make a fresh worktree usable. A path rather
+ * than a config field: the project is what knows how to build itself, and
+ * saying it twice lets the two drift.
+ */
+const SETUP_SCRIPT = "scripts/worktree-setup.sh";
+
+/**
  * The checkout a project's tasks branch from and merge back into.
  *
  * Foreman shares this directory with the operator, who edits in it while the
@@ -83,6 +90,35 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
     const status = (directory: string, untracked: "no" | "all") =>
       gitOutput(directory, "status", "--porcelain", `--untracked-files=${untracked}`);
+
+    /**
+     * Whether the checkout already has this branch's commits — the same fact
+     * `branches` reports as `merged`, asked about one branch instead of all of
+     * them.
+     *
+     * Always git, as `branches` is: a colocated jj keeps real git refs, and
+     * git's HEAD follows the working copy's parent, so this is what the
+     * checkout holds under either tool. It reads no index and takes no lock,
+     * which is what lets it run ahead of everything else in a landing.
+     *
+     * git exits 1 for a plain "no" and something else when it could not
+     * answer — an unreadable ref is not evidence the branch is absent, and
+     * treating it as one would re-land commits the checkout already has.
+     */
+    const contains = (directory: string, branch: string) =>
+      git(directory, "merge-base", "--is-ancestor", branch, "HEAD").pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0 || result.exitCode === 1
+            ? Effect.succeed(result.exitCode === 0)
+            : Effect.fail(
+                new RepositoryError({
+                  directory,
+                  detail:
+                    result.stderr.trim() || `git merge-base exited ${result.exitCode}`,
+                }),
+              ),
+        ),
+      );
 
     /**
      * Runs a project's verification command and says only whether it passed.
@@ -469,6 +505,35 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
 
       /**
+       * Makes a fresh worktree usable, and says whether it worked.
+       *
+       * A worktree does not share the checkout's installed dependencies, so
+       * something has to install them. That used to be a paragraph in the
+       * author and reviewer prompts, which is the wrong place for a step with
+       * one right answer: it spent tokens on it every dispatch, a cheap model
+       * could skip it and misread the resulting failure as the task's, and it
+       * was prose in two files that had to stay in sync.
+       *
+       * The project records the command, not foreman's config — a checked-in
+       * script is a fact about the project that foreman reads back like every
+       * other, and a project that gains one is picked up with no config edit.
+       * Absent is a valid answer: most projects need nothing.
+       *
+       * Run before every dispatch rather than only into a worktree foreman just
+       * made, because nothing in the world says "this directory is already set
+       * up" and foreman remembers nothing. So the script must be safe to re-run
+       * — which is what a package manager's install already is, and what a
+       * clone needs a guard to become. Re-running is also what repairs a
+       * worktree whose dependencies were removed or half-written.
+       */
+      setup: (directory: string) =>
+        Effect.gen(function* () {
+          const script = `${directory}/${SETUP_SCRIPT}`;
+          const present = yield* fs.exists(script).pipe(Effect.orElseSucceed(() => false));
+          return present ? yield* check(directory, `./${SETUP_SCRIPT}`) : undefined;
+        }),
+
+      /**
        * Lands a reviewed branch without trusting the reviewer with the shared
        * checkout. A failed merge is always backed out before control returns.
        *
@@ -487,6 +552,12 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
        */
       merge: (directory: string, branch: string, verify: string | undefined) =>
         Effect.gen(function* () {
+          // Asked before the clean gate, because a checkout that already has
+          // the commits is not going to be written to and its cleanliness is
+          // beside the point. Holding here would strand the task exactly as
+          // long as the operator kept editing.
+          if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
+
           const checkout = yield* checkoutAt(directory);
           if (!(yield* checkout.isClean(directory)))
             return { _tag: "Held", detail: undefined } as const;
@@ -505,6 +576,14 @@ export type Landing =
    * working there.
    */
   | { readonly _tag: "Held"; readonly detail: string | undefined }
+  /**
+   * The checkout already had the commits, so nothing was merged and nothing
+   * was verified. Distinct from `Merged` because no write happened: foreman
+   * cannot claim to have landed the branch, and cannot claim the checkout was
+   * green either. What it can do is finish the task, which is the step a
+   * landing interrupted after its merge would otherwise never reach.
+   */
+  | { readonly _tag: "Present" }
   | { readonly _tag: "Rejected"; readonly detail: string }
   | { readonly _tag: "Merged"; readonly verified: boolean }
   | { readonly _tag: "Broke"; readonly output: string };

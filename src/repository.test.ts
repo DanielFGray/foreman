@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -15,6 +15,9 @@ const merge = (directory: string, branch: string, verify?: string) =>
   Effect.runPromise(
     Repository.merge(directory, branch, verify).pipe(Effect.provide(Repository.Default)),
   );
+
+const setup = (directory: string) =>
+  Effect.runPromise(Repository.setup(directory).pipe(Effect.provide(Repository.Default)));
 
 const branches = (directory: string) =>
   Effect.runPromise(Repository.branches(directory).pipe(Effect.provide(Repository.Default)));
@@ -166,6 +169,35 @@ describe("Repository", () => {
     expect(await runs()).toBe(3);
 
     await rm(counter, { force: true });
+  });
+
+  // A landing is several steps, and only the merge is atomic. Interrupt it
+  // after the merge — a stranded index.lock is enough — and the commits are in
+  // while the task still reads as awaiting one, so every later tick lands the
+  // same branch again. Re-merging is a no-op, but re-verifying is not: it is a
+  // full suite run the whole fleet waits out, forever, for a task that is done.
+  test("completes a branch the checkout already has, without merging or verifying", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "twice");
+    await writeFile(join(directory, "twice.txt"), "once\n");
+    await git("add", "twice.txt");
+    await git("commit", "-qm", "work landed once");
+    await git("checkout", "-q", base);
+
+    expect(await merge(directory, "twice", "true")).toEqual({ _tag: "Merged", verified: true });
+    const landed = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+
+    const sentinel = join(tmpdir(), `foreman-present-${process.pid}`);
+    expect(await merge(directory, "twice", `touch ${sentinel}`)).toEqual({ _tag: "Present" });
+    expect(await Bun.file(sentinel).exists()).toBe(false);
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(landed);
+
+    // Asked ahead of the clean gate, because a checkout that already has the
+    // commits is not going to be written to. Holding here would strand the
+    // task for as long as the operator kept editing.
+    await writeFile(join(directory, "tracked.txt"), "operator edit\n");
+    expect(await merge(directory, "twice", "true")).toEqual({ _tag: "Present" });
+    await git("checkout", "--", "tracked.txt");
   });
 
   test("tells an untouched branch from one whose work already landed", async () => {
@@ -409,4 +441,37 @@ describe("Repository over a jj-colocated checkout", () => {
     },
     slowly,
   );
+});
+
+// The setup script is how a project says what a bare worktree is missing.
+// Foreman runs it and reports; it never guesses the command, because the
+// project is what knows how to build itself.
+const fresh = await mkdtemp(join(tmpdir(), "foreman-setup-"));
+afterAll(() => rm(fresh, { recursive: true, force: true }));
+
+describe("Repository.setup", () => {
+  const script = join(fresh, "scripts", "worktree-setup.sh");
+  const write = (body: string) => writeFile(script, body, { mode: 0o755 });
+
+  test("says nothing when the project keeps no script", async () => {
+    expect(await setup(fresh)).toBeUndefined();
+  });
+
+  test("runs the script from the worktree it is setting up", async () => {
+    await mkdir(join(fresh, "scripts"), { recursive: true });
+    await write("#!/bin/sh\npwd > ran.txt\n");
+
+    expect(await setup(fresh)).toMatchObject({ passed: true });
+    expect((await Bun.file(join(fresh, "ran.txt")).text()).trim()).toBe(fresh);
+  });
+
+  // A worktree that cannot build is not the task's fault, so the output has to
+  // survive: it is the only evidence of why the dispatch did not happen.
+  test("reports a failing script with its output", async () => {
+    await write("#!/bin/sh\necho 'no zig toolchain' >&2\nexit 1\n");
+
+    const result = await setup(fresh);
+    expect(result).toMatchObject({ passed: false });
+    expect(result?.output).toContain("no zig toolchain");
+  });
 });

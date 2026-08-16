@@ -11,7 +11,7 @@ import {
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
-import { Repository } from "./repository.ts";
+import { Repository, RepositoryError } from "./repository.ts";
 import {
   above,
   authorFor,
@@ -585,19 +585,34 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           );
         }
 
-        if (!result.verified) {
+        // Both remaining verdicts end the task, and differ only in what foreman
+        // may honestly say it did. `Present` wrote nothing and ran nothing, so
+        // it claims neither a merge nor a verification; it exists to close the
+        // task an interrupted landing left open after its merge had gone in.
+        if (result._tag === "Present") {
+          yield* Effect.logInfo(
+            `${task.id} (${project.name}) was already in the checkout; completing`,
+          );
           yield* prog.log(
             task.id,
-            `foreman: landed on git's exit code alone — ${project.name} names no verification command, or its checkout was already failing before the merge.`,
+            `foreman: ${project.name}'s checkout already contained this branch, so there was nothing to merge. An earlier landing put the commits in without reaching this step.`,
+          );
+        } else {
+          if (!result.verified) {
+            yield* prog.log(
+              task.id,
+              `foreman: landed on git's exit code alone — ${project.name} names no verification command, or its checkout was already failing before the merge.`,
+            );
+          }
+
+          // The one line in this file that records a write to a directory a
+          // person also works in. Everything else foreman does happens in a
+          // worktree it owns and can throw away.
+          yield* Effect.logInfo(
+            `landed ${task.id} (${project.name})${result.verified ? "" : ", unverified"}`,
           );
         }
 
-        // The one line in this file that records a write to a directory a
-        // person also works in. Everything else foreman does happens in a
-        // worktree it owns and can throw away.
-        yield* Effect.logInfo(
-          `landed ${task.id} (${project.name})${result.verified ? "" : ", unverified"}`,
-        );
         yield* prog.complete(task.id);
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
@@ -727,6 +742,33 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         }
       });
 
+    /**
+     * The workspace a task's agents run in, with its worktree made usable.
+     *
+     * Every dispatch goes through here so the setup step cannot drift between
+     * the paths that need it. A worktree whose setup failed is not handed to an
+     * agent: the failure is the project's or the machine's, never the task's,
+     * and an agent given a directory that cannot build will spend its run
+     * discovering that and charge it to the branch.
+     */
+    const workspaceFor = (task: { id: string; project: string }, project: Project) =>
+      Effect.gen(function* () {
+        const worker = yield* fleet.open({
+          task: task.id,
+          repository: project.directory,
+          branch: labelFor(task.id),
+          directory: directoryFor(task.project, task.id),
+        });
+        const setup = yield* repository.setup(worker.directory);
+        if (setup && !setup.passed) {
+          return yield* new RepositoryError({
+            directory: worker.directory,
+            detail: `worktree setup failed:\n${setup.output}`,
+          });
+        }
+        return worker;
+      });
+
     const dispatchAuthor = (task: ReadyTask) =>
       Effect.gen(function* () {
         const project = projectFor(task.project);
@@ -741,12 +783,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // The workspace opens before the claim. If it opened after, a task
         // would briefly be claimed with nothing to show for it, and that state
         // is indistinguishable from an abandoned claim.
-        const worker = yield* fleet.open({
-          task: task.id,
-          repository: project.directory,
-          branch: labelFor(task.id),
-          directory: directoryFor(task.project, task.id),
-        });
+        const worker = yield* workspaceFor(task, project);
 
         const prompt = yield* prompts.author(task, worker.directory, project.directory);
         yield* prog.claim(task.id);
@@ -781,12 +818,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         }
 
         const rung = reviewerFor(settings.ladder, author);
-        const worker = yield* fleet.open({
-          task: task.id,
-          repository: project.directory,
-          branch: labelFor(task.id),
-          directory: directoryFor(task.project, task.id),
-        });
+        const worker = yield* workspaceFor(task, project);
 
         const prompt = yield* prompts.review(
           task,
@@ -959,12 +991,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (task.status !== "open") yield* prog.release(task.id);
         yield* prog.markDiagnostic(task.id, intent);
         yield* Effect.gen(function* () {
-          const worker = yield* fleet.open({
-            task: task.id,
-            repository: project.directory,
-            branch: labelFor(task.id),
-            directory: directoryFor(task.project, task.id),
-          });
+          const worker = yield* workspaceFor(task, project);
           const prompt = yield* prompts.diagnose(task, worker.directory, project.directory, intent);
           yield* prog.claim(task.id);
           const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
@@ -1097,12 +1124,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             // by hand. `fleet.open` resolves to the worktree git still has, so
             // a retry re-adopts the same directory with its edits instead of
             // losing them.
-            const worker = yield* fleet.open({
-              task: task.id,
-              repository: project.directory,
-              branch: labelFor(task.id),
-              directory: directoryFor(task.project, task.id),
-            });
+            const worker = yield* workspaceFor(task, project);
             const prompt = yield* prompts.author(task, worker.directory, project.directory);
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             yield* prog.attribute(task.id, rung.name);
