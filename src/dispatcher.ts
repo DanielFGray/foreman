@@ -298,6 +298,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // make. Split here rather than in fill, so the dashboard can say where it
       // went instead of leaving it to look like a queue that stopped moving.
       const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
+      const failed = failedTasks(yield* Ref.get(dispatchFailures));
+      const failedIds = new Set(failed.map(([task]) => task));
 
       const active = (items: ReadonlyArray<Item>) =>
         items.map(
@@ -319,8 +321,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // not a queue entry to keep offering. The failure rides the row so the
       // operator sees what to clear before retrying. The tally lives across
       // ticks, so the decision outlasts the tick that recorded the failure.
-      const failed = failedTasks(yield* Ref.get(dispatchFailures));
-      const failedIds = new Set(failed.map(([task]) => task));
       const failedDecisions = yield* Effect.forEach(failed, ([task, failure]) =>
         prog.show(task).pipe(
           Effect.map((item): Active => ({
@@ -341,7 +341,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
         queue: interleave(
-          dispatchable.filter((task) => !isOnboarding(task)),
+          excludeFailedTasks(
+            dispatchable.filter((task) => !isOnboarding(task)),
+            failed,
+          ),
           settings.projects.map((project) => project.name),
         ),
         yours: queue.filter(
@@ -1439,6 +1442,15 @@ export const failedTasks = (
   failures: ReadonlyMap<string, DispatchFailure>,
 ): ReadonlyArray<readonly [string, DispatchFailure]> =>
   [...failures].filter(([, failure]) => failure.count >= 2);
+
+/** Keeps a failed task in decisions, not in the ordinary queue. */
+export const excludeFailedTasks = <Task extends { readonly id: string }>(
+  tasks: ReadonlyArray<Task>,
+  failures: ReadonlyArray<readonly [string, DispatchFailure]>,
+): ReadonlyArray<Task> => {
+  const failedIds = new Set(failures.map(([task]) => task));
+  return tasks.filter((task) => !failedIds.has(task.id));
+};
 
 /**
  * Splits work handed back for review by whether there is any work in it.
