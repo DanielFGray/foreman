@@ -11,9 +11,13 @@ const isClean = (directory: string) =>
 const holdsWork = (directory: string) =>
   Effect.runPromise(Repository.holdsWork(directory).pipe(Effect.provide(Repository.Default)));
 
+// Nested under a directory that does not exist, because the real ground lives
+// at $XDG_STATE_HOME/foreman/verify/<project> and nothing makes that first.
+const groundFor = (directory: string) => `${directory}.grounds/verify`;
+
 const merge = (directory: string, branch: string, verify?: string) =>
   Effect.runPromise(
-    Repository.merge(directory, branch, verify, `${directory}.verify`).pipe(
+    Repository.merge(directory, branch, verify, groundFor(directory)).pipe(
       Effect.provide(Repository.Default),
     ),
   );
@@ -35,7 +39,7 @@ const sweep = (directory: string) =>
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() =>
   Promise.all(
-    [directory, `${directory}.verify`].map((path) => rm(path, { recursive: true, force: true })),
+    [directory, `${directory}.grounds`].map((path) => rm(path, { recursive: true, force: true })),
   ),
 );
 
@@ -347,7 +351,7 @@ describe("Repository", () => {
 const colocated = await mkdtemp(join(tmpdir(), "foreman-jj-"));
 afterAll(() =>
   Promise.all(
-    [colocated, `${colocated}.verify`].map((path) => rm(path, { recursive: true, force: true })),
+    [colocated, `${colocated}.grounds`].map((path) => rm(path, { recursive: true, force: true })),
   ),
 );
 
@@ -506,7 +510,9 @@ describe("Repository over a jj-colocated checkout", () => {
       // exists, the working copy is standing on it, and develop never moved.
       await jj("new", "develop", "foreman/ts-sweep", "-m", "Merge branch 'foreman/ts-sweep'");
       const inFlight = await bookmark("@");
-      expect(await sweep(colocated)).toEqual([]);
+      // Not toEqual([]): earlier landings in this repo left their own proving
+      // ground's merges behind, and those are litter the sweep is right to take.
+      expect(await sweep(colocated)).not.toContain(inFlight);
       // The working copy is the one anonymous head a person may be standing on;
       // it is the next tick's landing, not litter, so the sweep leaves it.
       expect(await bookmark("@")).toBe(inFlight);
@@ -514,7 +520,7 @@ describe("Repository over a jj-colocated checkout", () => {
       // The retry lands: `jj new` moves the working copy off the old merge,
       // which now reads as exactly the litter the sweep exists for.
       await jj("new", "develop", "foreman/ts-sweep", "-m", "Merge branch 'foreman/ts-sweep'");
-      expect(await sweep(colocated)).toEqual([inFlight]);
+      expect(await sweep(colocated)).toContain(inFlight);
       const remaining = (
         await jj(
           "log",
@@ -554,7 +560,9 @@ describe("Repository over a jj-colocated checkout", () => {
       const manual = await bookmark("@");
       await jj("new", "develop");
 
-      expect(await sweep(colocated)).toEqual([]);
+      const swept = await sweep(colocated);
+      expect(swept).not.toContain(unrelated);
+      expect(swept).not.toContain(manual);
       const remaining = (
         await jj(
           "log",

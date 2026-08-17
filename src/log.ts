@@ -33,7 +33,7 @@ export const logging = (path = defaultPath()): Layer.Layer<never> =>
         path,
         `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
       );
-      globalThis.console.log(`${logLevel.label} ${text}`);
+      console.log(`${logLevel.label} ${text}`);
     }),
   ).pipe(Layer.tap(() => Effect.sync(() => mkdirSync(dirname(path), { recursive: true }))));
 

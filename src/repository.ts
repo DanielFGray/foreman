@@ -1,4 +1,4 @@
-import { Command, CommandExecutor, FileSystem } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Effect, Schema, Stream } from "effect";
 
@@ -26,6 +26,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
   effect: Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
 
     const run = (directory: string, program: string, args: ReadonlyArray<string>) =>
       Effect.scoped(
@@ -187,10 +188,22 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      * outcome is a `Landing` verdict already and passes straight through.
      */
     type Proof =
-      | { readonly _tag: "Proven"; readonly verified: boolean }
+      | { readonly _tag: "Proven"; readonly commit: string; readonly verified: boolean }
       | { readonly _tag: "Held"; readonly detail: string }
       | { readonly _tag: "Rejected"; readonly detail: string }
       | { readonly _tag: "Broke"; readonly output: string };
+
+    /**
+     * Makes the directory a proving ground is about to be created in, leaving
+     * the ground's own path free for the tool to create.
+     *
+     * Foreman's job, not the tool's: `git worktree add` makes the path it is
+     * given along with everything above it, and `jj workspace add` refuses one
+     * whose parent is missing. Doing it here means neither ground depends on
+     * which of the two it got.
+     */
+    const clearFor = (proving: string) =>
+      fs.makeDirectory(path.dirname(proving), { recursive: true }).pipe(Effect.ignore);
 
     /**
      * Installs a proving ground's dependencies, the same way a task worktree
@@ -228,6 +241,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           .pipe(Effect.orElseSucceed(() => false));
         if (!registered) {
           yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
+          yield* clearFor(proving);
           // A worktree git still lists at a path that is gone would make `add`
           // refuse; pruning is what makes remaking it the honest repair.
           yield* git(directory, "worktree", "prune");
@@ -299,10 +313,14 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             : ({ _tag: "Held", detail } as const);
         }
 
-        if (!verify) return { _tag: "Proven", verified: false } as const;
+        // What gets published is this commit, not a merge re-derived later, so
+        // the checkout takes exactly the tree that was verified.
+        const commit = yield* gitOutput(proving, "rev-parse", "HEAD");
+
+        if (!verify) return { _tag: "Proven", commit, verified: false } as const;
 
         const after = yield* check(proving, verify);
-        if (after.passed) return { _tag: "Proven", verified: true } as const;
+        if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
 
         const restored = yield* gitGround(proving, directory, base);
         if (restored) return restored;
@@ -312,7 +330,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         // test forever.
         return before.passed
           ? ({ _tag: "Broke", output: after.output } as const)
-          : ({ _tag: "Proven", verified: false } as const);
+          : ({ _tag: "Proven", commit, verified: false } as const);
       });
 
     /**
@@ -356,14 +374,13 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             } as const;
           }
 
-          // The branch is proven mergeable against exactly this commit, so a
-          // refusal here cannot be about content: it is a lock, or a ref git
-          // could not read. That is what makes this one call the whole write —
-          // no undo, and no window in which the checkout holds a merge nobody
-          // has verified.
-          const applied = yield* git(directory, "merge", "--no-ff", branch);
+          // The merge already exists, in the ground, and the ground shares this
+          // repository's objects — so landing is moving the checkout onto it.
+          // A fast-forward cannot reconcile anything, which is the point: every
+          // question about content was answered before this line, and a refusal
+          // here can only be the machine.
+          const applied = yield* git(directory, "merge", "--ff-only", proof.commit);
           if (applied.exitCode !== 0) {
-            yield* git(directory, "merge", "--abort").pipe(Effect.ignore);
             return {
               _tag: "Held",
               detail:
@@ -409,6 +426,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           .pipe(Effect.orElseSucceed(() => false));
         if (!registered) {
           yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
+          yield* clearFor(proving);
           yield* jj(directory, "workspace", "forget", GROUND).pipe(Effect.ignore);
           const added = yield* jj(
             directory,
@@ -429,7 +447,6 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           return yield* prepare(proving);
         }
 
-        const spent = yield* revision(proving, "@");
         const moved = yield* jj(proving, "new", base);
         if (moved.exitCode !== 0) {
           return {
@@ -437,7 +454,10 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             detail: moved.stderr.trim() || `jj new exited ${moved.exitCode}`,
           } as const;
         }
-        yield* jj(proving, "abandon", spent).pipe(Effect.ignore);
+        // The commit just stepped off is not abandoned here. A proof that was
+        // applied is what the trunk now points at, and one that was not is
+        // ordinary unpublished litter — which is exactly what the tick sweep
+        // already knows how to tell apart.
         return yield* prepare(proving);
       });
 
@@ -473,17 +493,19 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           } as const;
         }
 
-        if (!verify) return { _tag: "Proven", verified: false } as const;
+        const commit = yield* revision(proving, "@");
+
+        if (!verify) return { _tag: "Proven", commit, verified: false } as const;
 
         const after = yield* check(proving, verify);
-        if (after.passed) return { _tag: "Proven", verified: true } as const;
+        if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
 
         const restored = yield* jjGround(proving, directory, base);
         if (restored) return restored;
         const before = yield* check(proving, verify);
         return before.passed
           ? ({ _tag: "Broke", output: after.output } as const)
-          : ({ _tag: "Proven", verified: false } as const);
+          : ({ _tag: "Proven", commit, verified: false } as const);
       });
 
     /**
@@ -496,13 +518,16 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      *
      * The working copy is a commit, so "clean" is `@` being empty. That counts
      * a new file git would call untracked, unlike the git checkout above,
-     * because under jj it is not untracked: it is part of the working-copy
-     * commit, and landing would carry it out of the operator's directory.
+     * because under jj it is not untracked: it is already part of the
+     * working-copy commit, and a project somebody is mid-edit in is held for
+     * the same reason it is under git.
      *
-     * jj never refuses a merge — a conflict becomes a recorded state with
-     * markers written into the files — so the conflict check is not an error
-     * path but the ordinary one, and backing out is `edit` then `abandon`
-     * rather than an abort.
+     * Landing publishes the commit the proving ground already built and
+     * verified, so the bookmark moves in one command and no unpublished merge
+     * ever exists in this checkout. Only afterwards does the working copy step
+     * onto it — the operator has to see the files land, and an interruption
+     * before that leaves them merely one `jj new` behind a bookmark that is
+     * already correct.
      */
     const jjCheckout = {
       isClean: (directory: string) =>
@@ -535,16 +560,32 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             } as const;
           }
 
-          // Proved against exactly this commit, so nothing here can be about
-          // content. Only the machine can refuse now.
-          const applied = yield* jj(directory, "new", base, branch, "-m", messageFor(branch));
-          if (applied.exitCode !== 0) {
-            return { _tag: "Held", detail: applied.stderr.trim() || "jj new failed" } as const;
+          // Asked again, and here rather than only at the gate, because `jj new`
+          // below rewrites the operator's directory unconditionally. Their work
+          // is a commit and survives, but it leaves their screen — and a proof
+          // takes as long as the project's suite, which is long enough to start
+          // typing in. The git path needs no such recheck: a fast-forward
+          // refuses rather than overwrites.
+          if (!(yield* jjCheckout.isClean(directory))) {
+            return { _tag: "Held", detail: undefined } as const;
           }
-          yield* jjOutput(directory, "bookmark", "set", trunk, "-r", "@");
-          // A fresh empty child, so the operator's next edit amends their own
-          // working copy rather than the merge that was just published.
-          yield* jjOutput(directory, "new");
+
+          // The merge already exists, in the ground, and a jj workspace shares
+          // the repository — so publishing is one command that names it, and
+          // nothing unpublished ever exists in between.
+          const applied = yield* jj(directory, "bookmark", "set", trunk, "-r", proof.commit);
+          if (applied.exitCode !== 0) {
+            return {
+              _tag: "Held",
+              detail: applied.stderr.trim() || `jj bookmark set exited ${applied.exitCode}`,
+            } as const;
+          }
+
+          // The operator's working copy is behind the bookmark until this runs,
+          // which is the whole of what an interruption here costs: the landing
+          // is already published and correct, and one `jj new` is the repair.
+          // Its empty predecessor is left for the sweep.
+          yield* jj(directory, "new", proof.commit);
           return { _tag: "Merged", verified: proof.verified } as const;
         }),
 
