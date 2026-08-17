@@ -205,33 +205,39 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
           /**
            * Applies the merge, or says why not — and the two whys are not the
-           * same answer. git exits 1 when it merged and the content would not
-           * reconcile, which is a fact about this branch and the evidence a
-           * rung climb rests on. It exits 128 when it never got that far: a
-           * ref it could not read, or an `index.lock` another git process in
-           * the operator's checkout is holding. Reading the second as the
-           * first sent an approved branch with seven commits back to the queue
-           * a rung more expensive, because something else touched the index
-           * for a moment. So a fatal error holds the project instead, exactly
-           * as an unreadable checkout already does.
+           * same answer. A branch whose content will not reconcile is a fact
+           * about that branch, and the evidence a rung climb rests on. A merge
+           * that never got that far — an `index.lock` another git process in
+           * the operator's checkout is holding, a ref git could not read — is a
+           * fact about the machine, and climbing on it sends an approved branch
+           * back to the queue a rung more expensive because something touched
+           * the index for a moment.
+           *
+           * So the conflict is asked about rather than inferred, exactly as the
+           * jj path already does. git's exit status cannot carry the
+           * distinction: it reports a lock it could not take through the same
+           * non-zero codes as a merge it would not complete, and the diagnostic
+           * text is the only thing that separates them. An unmerged index entry
+           * is the durable fact instead — git writes one per conflicting path
+           * and nothing else does — so it is read before the abort that would
+           * erase it. Unreadable means unknown, and unknown holds rather than
+           * climbs.
            */
-          const apply = git(directory, "merge", "--no-ff", branch).pipe(
-            Effect.tap((merged) =>
-              merged.exitCode === 0
-                ? Effect.void
-                : git(directory, "merge", "--abort").pipe(Effect.ignore),
-            ),
-            Effect.map((merged) => {
-              if (merged.exitCode === 0) return undefined;
-              const detail =
-                merged.stderr.trim() ||
-                merged.stdout.trim() ||
-                `git merge exited ${merged.exitCode}`;
-              return merged.exitCode >= 128
-                ? ({ _tag: "Held", detail } as const)
-                : ({ _tag: "Rejected", detail } as const);
-            }),
-          );
+          const apply = Effect.gen(function* () {
+            const merged = yield* git(directory, "merge", "--no-ff", branch);
+            if (merged.exitCode === 0) return undefined;
+
+            const conflicts = yield* lines(directory, "ls-files", "--unmerged").pipe(
+              Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+            );
+            yield* git(directory, "merge", "--abort").pipe(Effect.ignore);
+
+            const detail =
+              merged.stderr.trim() || merged.stdout.trim() || `git merge exited ${merged.exitCode}`;
+            return conflicts.length > 0
+              ? ({ _tag: "Rejected", detail } as const)
+              : ({ _tag: "Held", detail } as const);
+          });
 
           const rejected = yield* apply;
           if (rejected) return rejected;

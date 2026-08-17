@@ -9,6 +9,8 @@ import {
   isUnread,
   nextDispatch,
   nextFailure,
+  recoverable,
+  waiting,
   readyToLand,
   reviewable,
   scopeRoster,
@@ -383,33 +385,70 @@ describe("scoping the roster to this daemon's projects", () => {
 });
 
 describe("unread branches", () => {
-  const branch = (task: string, merged: boolean, status: string | undefined) => ({
-    task,
-    merged,
-    status,
-  });
+  const branch = (merged: boolean, status: string | undefined) => ({ merged, status });
 
-  test("shows commits nothing is going to read, whatever became of the task", () => {
-    const editing = new Set<string>();
-
-    // Back in the queue with a branch behind it: the author eventually sent to
-    // it resumes the work rather than reading it, so nobody ever reviews this.
-    expect(isUnread(branch("ts-1", false, "open"), editing)).toBe(true);
-    // A vanished author's claim. It is also a decision, and the two answers
-    // are different questions about the same task.
-    expect(isUnread(branch("ts-2", false, "in_progress"), editing)).toBe(true);
+  test("names only the branches that have fallen out of every mechanism", () => {
+    // Finished, and yet the commits never reached the checkout: the landing
+    // stopped part way, and nothing reaches a done task to finish it.
+    expect(isUnread(branch(false, "done"))).toBe(true);
+    // Somebody decided this work should not happen, and the commits outlived
+    // the decision. Shown, but never recovered automatically.
+    expect(isUnread(branch(false, "canceled"))).toBe(true);
     // The task was deleted outright, which is why git is asked and not prog.
-    expect(isUnread(branch("ts-3", false, undefined), editing)).toBe(true);
+    expect(isUnread(branch(false, undefined))).toBe(true);
   });
 
-  test("leaves alone what the pipeline already holds", () => {
-    // An author working right now hands its own diff to review when it stops.
-    expect(isUnread(branch("ts-1", false, "in_progress"), new Set(["ts-1"]))).toBe(false);
-    // Already in review, dispatched or not.
-    expect(isUnread(branch("ts-2", false, "reviewing"), new Set())).toBe(false);
+  test("leaves alone every branch something still reaches", () => {
+    // Back in the queue. Not abandoned — next in line, and the queue already
+    // works oldest first. Dispatching a reviewer here reads a half-written
+    // diff and takes the verdict on it.
+    expect(isUnread(branch(false, "open"))).toBe(false);
+    // A claim: worked, or vanished and therefore already a decision, and
+    // reclaimed back to the queue once it goes stale.
+    expect(isUnread(branch(false, "in_progress"))).toBe(false);
+    expect(isUnread(branch(false, "reviewing"))).toBe(false);
     // Merged, so the commits are in and the sweep takes the ref. An untouched
     // branch is merged by definition, so nothing empty reaches the column.
-    expect(isUnread(branch("ts-3", true, "done"), new Set())).toBe(false);
+    expect(isUnread(branch(true, "done"))).toBe(false);
+  });
+});
+
+describe("recovering an unread branch", () => {
+  const row = (task: string, status: string | undefined, activity: Date | undefined) => ({
+    project: "amux",
+    branch: `foreman/${task}`,
+    task,
+    title: `Task ${task}`,
+    status,
+    activity,
+  });
+
+  test("recovers finished work whose landing never completed, and nothing else", () => {
+    // Done says somebody meant to keep this, and unmerged commits behind it
+    // mean a landing that stopped part way — foreman's own doing, so foreman
+    // corrects it without asking.
+    expect(recoverable(row("ts-1", "done", new Date()))).toBe(true);
+    // A cancellation is a decision a person made. Reviewing it automatically
+    // spends a rung relitigating that decision.
+    expect(recoverable(row("ts-2", "canceled", new Date()))).toBe(false);
+    // No id left to dispatch against.
+    expect(recoverable(row("ts-3", undefined, undefined))).toBe(false);
+  });
+
+  test("orders by how long the work has waited, unreachable first", () => {
+    const rows = [
+      row("ts-new", "done", new Date("2026-08-16T00:00:00Z")),
+      row("ts-old", "done", new Date("2026-08-10T00:00:00Z")),
+      row("ts-gone", undefined, undefined),
+    ].sort((first, second) => waiting(first) - waiting(second));
+
+    // A branch whose task is gone has no activity to read and leads: it is the
+    // one nothing recovers on its own, so it must not sit under the rows
+    // foreman is already working off.
+    expect(rows.map((entry) => entry.task)).toEqual(["ts-gone", "ts-old", "ts-new"]);
+    // One per tick, oldest first: submitting this one is what makes the next
+    // tick find a different oldest.
+    expect(rows.find(recoverable)?.task).toBe("ts-old");
   });
 });
 

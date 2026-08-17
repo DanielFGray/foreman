@@ -327,6 +327,14 @@ tests and runs only those covering the code it touched. `Prompts.review` renders
 the project's `verify` into the prompt; a project naming none has no landing
 gate, and there the full run is the reviewer's after all.
 
+**Whatever ends a review clears `review-by-*`.** A label left behind is read as
+evidence of something that never happened: a reviewer that is over on a task
+that is open is exactly the shape a rejection leaves, so the settle loop takes
+it for one — climbing a second rung and logging that the reviewer sent work
+back, on a task whose reviewer approved it and whose landing failed on the
+machine. `Prog.release` therefore clears it alongside `approved`, for every path
+that requeues a task.
+
 Approval is a durable `approved` label, not task completion. The reviewer writes
 that verdict and stops. Foreman re-checks the checkout, merges, and only then
 runs `prog done`. `awaitingLanding` reads that label with no other
@@ -335,13 +343,20 @@ must clear it — `Prog.release`, `review` and `submit` all do.
 
 **A merge that did not happen and a merge that would not happen are different
 answers.** Only the second is about the branch, and only the second may climb a
-rung. git exits 1 when it merged and the content would not reconcile; it exits
-128 when it never got that far — a lock, a ref it cannot read. Under jj there is
-no first case: jj records a conflict rather than refusing one, so the conflict
-check is the whole verdict and any non-zero exit is the machine. Everything in
-the second class is `Held`, and `Held` carries a `detail` so it is logged — an
-operator editing clears itself and is not worth a line every poll, a stale lock
-never clears and must not retry in silence.
+rung. So the conflict is **asked about, not inferred** — the same shape as the jj
+path, where a conflict is a recorded state rather than an error. git's exit
+status cannot carry the distinction: it reports a lock it could not take through
+the same non-zero codes as content it would not reconcile, and only the
+diagnostic text separates them. An unmerged index entry is the durable fact
+instead — git writes one per conflicting path and nothing else does — so it is
+read before the `merge --abort` that would erase it, and an unreadable index
+holds rather than climbs. Everything not a conflict is `Held`, and `Held` carries
+a `detail` so it is logged — an operator editing clears itself and is not worth a
+line every poll, a stale lock never clears and must not retry in silence.
+
+`Held` is also what keeps a verdict alive. It leaves the task in `reviewing` with
+its `approved` label, so a later tick lands the same reviewed branch; nothing
+about a lock invalidates a diff a reviewer already read.
 
 Landing also runs `verify`. Only a checkout that was green and went red is the
 branch's fault: that merge is undone, the output logged, and the task returned to
@@ -403,19 +418,23 @@ next tick needs to tell work from nothing. `--delete` without `--force` is the
 backstop, since git refuses to drop commits the checkout does not have and
 refuses a branch a worktree still holds.
 
-Everything unmerged that no reviewer is going to read is **unreviewed**, and
-`isUnread` is the whole rule. Two cases are already in hand: an author working
-or blocked right now hands its own diff to review when it stops, and a task in
-`reviewing` is in the pipeline's hands whether or not its reviewer has been
-dispatched yet. Everything else with commits on it is unread indefinitely — most
-importantly a task that went back to the queue with a branch behind it, which
-looks like ordinary queue work, because the author eventually sent to it resumes
-the work rather than reading it.
+What is left over is **unreviewed**, and `isUnread` is the whole rule: unmerged,
+and its task in no status that still reaches an agent. `open`, `in_progress` and
+`reviewing` all end with the branch read — the queue resumes it, a claim is
+worked or reclaimed, a review reads it — so a queued task with commits behind it
+is not abandoned but next in line, and the queue already works oldest first.
+Listing those names the ordinary case as an exception, and dispatching a
+reviewer at one reads a diff its author is half way through. The queue row says
+`resume` instead, which is `resumable` it already carries.
 
-`s` writes `reviewing` on the selected one and stops there. It does not spawn a
-reviewer: fill already puts reviews ahead of new work, so the operator names the
-branch and the ordinary order still decides when. A branch whose task was deleted
-has no id to dispatch against, so it is listed and left alone.
+`recover` then works the list off without a keypress, one per tick, oldest
+first: `submit` on the longest-waiting one, and the review pass dispatches. No
+counter is needed, because submitting the oldest is what makes the next tick
+see a different oldest. **Only `done` is recovered.** It says somebody meant to
+keep the work, so unmerged commits mean a landing that stopped part way — which
+is foreman's own doing and foreman's to correct. A `canceled` task is a decision
+a person made, and an automatic review spends a rung relitigating it; a deleted
+one has no id to dispatch against. Both are shown, and `s` submits one by hand.
 
 ### Roles are panes
 

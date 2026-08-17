@@ -173,16 +173,20 @@ queue with seven commits behind it looks like ordinary unstarted work, and the
 author eventually sent to it resumes the work rather than reading it.
 
 Foreman therefore asks git directly for its own branches the checkout has not
-taken, and sets aside the two that are already accounted for — a task somebody
-is actively working on, whose author will hand its own diff over when it stops,
-and a task already in `reviewing`. Everything left appears under dashboard
-**Attention** as unreviewed, and `s` sends the selected branch to `reviewing`.
+taken, and sets aside every task that still reaches an agent on its own. A task
+in the queue with commits behind it is not abandoned — it is next in line, and
+the queue already works oldest first; its row says `resume` so you can see the
+branch is there. The same goes for a claim and for anything in `reviewing`.
 
-`s` does not open a pane. It writes the status and stops; the next tick's review
-pass dispatches the reviewer, because reviews already come before new work and
-the order should not change just because you named the branch by hand. Combine
-it with drain (`p`) when you want to clear a backlog of unread work without new
-tasks starting underneath you.
+What is left has fallen out of every mechanism foreman has: a task marked done
+whose branch never landed, one canceled with commits still on it, one deleted
+outright. Foreman works that list off itself, one per tick, oldest first, with
+no keypress — but only the **done** ones. Those say somebody meant to keep the
+work, so unmerged commits mean a landing that stopped part way, which is
+foreman's own doing to correct. A cancellation is a decision a person made, and
+an automatic review would spend a rung relitigating it; a deleted task has no id
+to dispatch against. Both are shown under **Attention**, and `s` submits one by
+hand.
 
 A reviewer then reads the diff and either approves it, landing it through the
 same gate as anything else, or returns it with findings. Nobody can judge

@@ -105,6 +105,7 @@ const state: FleetState = {
       task: "ts-ddd111",
       title: "abandoned work",
       status: "done",
+      activity: new Date("2026-08-15T10:00:00Z"),
     },
     // A branch whose task was deleted: it still shows, because the commits are
     // real, but there is nothing to send for review.
@@ -114,6 +115,7 @@ const state: FleetState = {
       task: "ts-ddd222",
       title: undefined,
       status: undefined,
+      activity: undefined,
     },
   ],
   committed: new Set(["ts-bbb222"]),

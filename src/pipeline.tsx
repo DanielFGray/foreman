@@ -956,10 +956,15 @@ const attentionRow =
   (kind: string) =>
   (row: ColumnRow): ColumnRow => ({ ...row, label: `${kind}  ${row.label}` });
 
+// A queued task with a branch behind it is not new work, it is a resumption:
+// an earlier author committed and the task came back here. Marked rather than
+// listed apart, because it is still ordinary queue work and the queue's own
+// order decides when it goes out. Marked rather than counted, because the
+// commit count is a read per branch per tick to say what "resume" already says.
 const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState): ColumnRow => ({
   column,
   key: task.id,
-  label: `${task.project}  ${task.title}`,
+  label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
   task: undefined,
   ready: task,
   worker: undefined,

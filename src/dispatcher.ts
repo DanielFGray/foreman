@@ -156,6 +156,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
+      yield* recover(current);
       yield* fill(yield* observe, mode);
     });
 
@@ -262,32 +263,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // Every branch, joined to whatever prog still says about its task. Read
       // for all of them rather than for a pre-filtered few, so the one rule
       // that decides which are unread sees the same rows the operator does.
-      // A branch whose task was deleted outright resolves to no status at all,
+      // A branch whose task was deleted outright resolves to nothing at all,
       // and it is the reason to read git rather than prog, so it is kept.
-      const editing = new Set(
-        owned
-          .filter(({ worker }) => worker.state === "working" || worker.state === "blocked")
-          .map(({ task }) => task.id),
-      );
+      //
+      // Oldest first, which is the order they are recovered in.
       const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
         prog.show(task).pipe(
-          Effect.map((item) => ({ title: item.title, status: item.status })),
-          Effect.orElseSucceed(() => ({ title: undefined, status: undefined })),
+          Effect.map((item) => ({
+            title: item.title as string | undefined,
+            status: item.status as string | undefined,
+            activity: item.last_activity_at as Date | undefined,
+          })),
+          Effect.orElseSucceed(() => ({
+            title: undefined,
+            status: undefined,
+            activity: undefined,
+          })),
           Effect.map((item) => ({ project, branch, task, merged, ...item })),
         ),
       ).pipe(
         Effect.map((rows) =>
           rows
-            .filter((row) => isUnread(row, editing))
+            .filter(isUnread)
             // `merged` is what the rule was decided from, and every surviving
             // row has the same answer, so it is not carried into the column.
-            .map(({ project, branch, task, title, status }): Unreviewed => ({
+            .map(({ project, branch, task, title, status, activity }): Unreviewed => ({
               project,
               branch,
               task,
               title,
               status,
-            })),
+              activity,
+            }))
+            .sort((first, second) => waiting(first) - waiting(second)),
         ),
       );
 
@@ -806,6 +814,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           { discard: true },
         );
       });
+
+    /**
+     * Puts the longest-waiting recoverable branch back in front of a reviewer.
+     *
+     * Everything else foreman does about a branch is reached through its task,
+     * and these are the branches whose task no longer reaches anything. Nothing
+     * will pick them up, so nothing will pick them up next tick either: without
+     * this they wait on an operator noticing a row, which is the manual step
+     * this exists to delete.
+     *
+     * One per tick, oldest first, so the list works itself off in the order the
+     * work was abandoned and never arrives as a burst of reviewers. It needs no
+     * counter to do that: submitting the oldest is what makes the next tick see
+     * a different oldest, and a tick that finds none does nothing.
+     *
+     * `submit`, not a dispatch. The review pass already orders reviews ahead of
+     * new work and picks the rung off the ladder, and recovered work has no
+     * claim to jump that. It runs while draining for the same reason the review
+     * pass does: this is the pipeline emptying itself, not taking work on.
+     */
+    const recover = (current: Observation) =>
+      Effect.gen(function* () {
+        const oldest = current.unreviewed.find(recoverable);
+        if (!oldest) return;
+        yield* prog.submit(oldest.task);
+        yield* prog.log(
+          oldest.task,
+          `foreman: ${oldest.task} is done, but ${oldest.branch} still holds commits ${oldest.project} never took, so the landing never completed. Nothing in the pipeline reaches a done task, so it is back in review to decide whether the work is worth landing.`,
+        );
+        yield* Effect.logInfo(`recovered ${oldest.task} (${oldest.project}) for review`);
+      }).pipe(
+        Effect.catchAll((error) => Effect.logWarning(`recovering a branch failed: ${error}`)),
+      );
 
     /**
      * Claims work for every free slot, review first.
@@ -1527,35 +1568,67 @@ export const excludeFailedTasks = <Task extends { readonly id: string }>(
 };
 
 /**
- * Whether a branch holds commits that no reviewer is going to read.
+ * The statuses from which a task still reaches an agent on its own.
+ *
+ * `open` is the queue, which resumes the branch rather than reading it, and
+ * orders by age already. `in_progress` is a claim — worked, or vanished and
+ * therefore a decision, and reclaimed back to `open` when it goes stale.
+ * `reviewing` is the review pass. Every one of them ends with the branch read.
+ */
+const REACHABLE: ReadonlySet<string> = new Set(["open", "in_progress", "reviewing"]);
+
+/**
+ * Whether a branch holds commits that nothing is ever going to pick up.
  *
  * Every other column is read from prog, which stops mentioning a branch the
  * moment its task is closed, reclaimed or deleted — while the commits stay. So
- * this asks the branches, and three facts answer it.
+ * this asks the branches, and two facts answer it.
  *
  * `merged` is the whole test for holding commits the checkout has not taken. An
  * untouched branch still points at the trunk commit it was cut from, so it is
  * reachable from `HEAD` and merged by definition; nothing empty survives here.
  *
- * A task being **edited** — an author working or blocked on it right now —
- * will hand its own diff to review when it finishes. Absence of a worker is not
- * that: a vanished or settled agent leaves commits nobody has been sent to.
+ * The status is the whole test for whether anything will reach it. This is a
+ * narrower question than "has anyone reviewed this", deliberately: a task in
+ * the queue with commits behind it is not abandoned, it is next in line, and
+ * the queue is already the bucket that works oldest first. Listing those would
+ * name the ordinary case as an exception — and dispatching a reviewer at one
+ * would read a diff its author is half way through.
  *
- * A task in **`reviewing`** is already in the pipeline's hands, whether or not
- * its reviewer has been dispatched yet. Everything else is unread indefinitely,
- * and that is the case worth surfacing: a task that went back to the queue with
- * a branch behind it looks like ordinary queue work, and the author eventually
- * sent to it resumes the work rather than reading it. A task with no status at
- * all was deleted, so nothing will ever read it either.
+ * What is left is work that has fallen out of every mechanism foreman has: a
+ * task marked done whose branch never landed, one canceled with commits still
+ * on it, and one deleted outright, which has no status at all.
  */
-export const isUnread = (
-  branch: {
-    readonly task: string;
-    readonly merged: boolean;
-    readonly status: string | undefined;
-  },
-  editing: ReadonlySet<string>,
-): boolean => !branch.merged && !editing.has(branch.task) && branch.status !== "reviewing";
+export const isUnread = (branch: {
+  readonly merged: boolean;
+  readonly status: string | undefined;
+}): boolean => !branch.merged && !REACHABLE.has(branch.status ?? "");
+
+/**
+ * How long an unread branch has been waiting, for the oldest-first order.
+ *
+ * A branch whose task is gone has no activity to read and sorts first: it is
+ * the one nothing can recover on its own, so it is the one an operator should
+ * see at the top rather than under everything foreman is already handling.
+ */
+export const waiting = (branch: { readonly activity: Date | undefined }): number =>
+  branch.activity?.getTime() ?? 0;
+
+/**
+ * Whether foreman may put an unread branch back in front of a reviewer itself.
+ *
+ * `done` is the one status where it can. It says the task finished, so the
+ * branch was work somebody meant to keep, and unmerged commits behind it mean
+ * a landing that never completed — a state foreman's own pipeline produced and
+ * can therefore correct without asking.
+ *
+ * `canceled` is not the same answer wearing a different word. Somebody decided
+ * that work should not happen, and an automatic review would spend a rung
+ * relitigating the decision; those branches are shown and left. A deleted task
+ * has no id to dispatch against at all.
+ */
+export const recoverable = (branch: { readonly status: string | undefined }): boolean =>
+  branch.status === "done";
 
 /**
  * Splits work handed back for review by whether there is any work in it.
@@ -1731,6 +1804,8 @@ export interface Unreviewed {
   readonly task: string;
   readonly title: string | undefined;
   readonly status: string | undefined;
+  /** When its task last moved, which is the order these are recovered in. */
+  readonly activity: Date | undefined;
 }
 
 /** A task and the workspace running it, if the multiplexer still has one. */

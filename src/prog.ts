@@ -180,9 +180,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Claims a task. After this the task is invisible to `ready`. */
       claim: (task: string) => run("start", task).pipe(Effect.asVoid),
 
-      /** Returns a claimed task to the queue. */
       /**
-       * Returns a task to the queue, and with it the reviewer's verdict.
+       * Returns a task to the queue, and with it everything the last review
+       * said about it.
        *
        * `approved` says a reviewer read a diff and found it sound, so it stops
        * being true the moment the task is handed back for someone to change
@@ -191,9 +191,21 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * from landing unreviewed so far, but that puts the invariant a caller
        * away from the transition it belongs to. Here it holds for every path
        * that requeues a task, including one that never reaches an author.
+       *
+       * `review-by-*` goes for a sharper reason: left behind, it is read as
+       * evidence of something that never happened. A reviewer that is over and
+       * a task that is open is exactly the shape a rejection leaves, so the
+       * settle loop takes it for one — climbing a second rung and logging that
+       * the reviewer sent work back, on a task whose reviewer approved it and
+       * whose landing failed on the machine. The label is the only record that
+       * a review was dispatched, so whatever ends the review must be what
+       * clears it.
        */
       release: (task: string) =>
-        removeLabels(task, [APPROVED]).pipe(Effect.andThen(run("open", task)), Effect.asVoid),
+        removeLabels(task, [APPROVED, REVIEW_BY]).pipe(
+          Effect.andThen(run("open", task)),
+          Effect.asVoid,
+        ),
 
       /**
        * Puts a task back in front of a reviewer, whatever state it was in.
