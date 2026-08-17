@@ -259,8 +259,9 @@ Proving happens somewhere disposable: a scratch checkout of the project under
 `$XDG_STATE_HOME/foreman/verify/`, reset to your current tip. The merge is made
 there and the project's `verify` command runs there, so no test suite ever runs
 in a directory you are working in, and nothing has to be undone in yours when
-one fails. Only a proof that comes back clean is applied to your checkout, and
-only if your tip has not moved meanwhile.
+one fails. What then lands in your checkout is that same commit — git
+fast-forwards onto it, jj moves the bookmark to it — so you get the exact tree
+that was verified, and only if your tip has not moved meanwhile.
 
 A branch that turns a green project red never lands, and the task goes back to
 the queue carrying the failure output — the next author's whole job is that

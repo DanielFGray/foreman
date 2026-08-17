@@ -178,16 +178,21 @@ questions differently:
   onto the tip and abandoning the working copy left behind — always a merge
   foreman made and has finished with. The tick sweep excludes every workspace's
   working copy, so a proof in flight is never swept out from under itself.
-- **A landing interrupted before the bookmark moves leaves an anonymous head.**
-  `jj new` writes the merged files into the working copy, which is what restarts
-  a daemon watching its own checkout; only `bookmark set` publishes. Proving
-  elsewhere shrinks that window to the three commands of the apply, but does not
-  close it, so the tick still sweeps anonymous heads that carry foreman's own
-  landing signature — a clean merge of two parents whose description is the one
-  `merge` writes. The branch still holds the work, so abandoning one re-does the
-  landing honestly instead of publishing an unverified merge, and only the
-  working copy is never touched, because that is the one anonymous head a person
-  may be standing on.
+- **The bookmark is published before the working copy moves.** The merge the
+  ground built is addressable from the checkout, so landing is `bookmark set`
+  and then `jj new` onto it. Interrupt between the two and the landing is
+  already correct — the operator is one `jj new` behind a published bookmark,
+  not holding an unpublished merge. The sweep survives for the ground's own
+  litter: a failed proof leaves a merge nothing names, and the tick abandons
+  anonymous heads carrying foreman's landing signature — a clean merge of two
+  parents whose description is the one `merge` writes. Working copies are
+  excluded, because that is the one anonymous head a person may be standing on.
+- **The clean gate is re-asked immediately before the working copy moves.**
+  `jj new` rewrites the operator's directory whatever is in it; their work
+  survives as a commit but leaves their screen. A proof lasts as long as the
+  project's suite, which is long enough for them to have started typing, so the
+  gate that ran before the proof is not the gate that matters. The git path
+  needs no such recheck — a fast-forward refuses rather than overwrites.
 
 Everything else stays on git. The refs and worktrees in a colocated repository
 are real, and `git branch --delete` keeps the refusal that makes the sweep safe.
@@ -353,8 +358,15 @@ must clear it — `Prog.release`, `review` and `submit` all do.
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
 `verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree or a jj
-workspace reset to the checkout's current tip. Only when that answers cleanly is
-the same merge applied to the operator's checkout, in one command.
+workspace reset to the checkout's current tip.
+
+**What lands is that commit, not a merge remade from the same parents.** The
+ground shares the repository's objects, so the proved commit is addressable from
+the checkout: git fast-forwards onto it, jj points the bookmark at it. The
+checkout therefore takes the exact tree that was verified, and neither apply can
+reconcile anything — which is what makes a refusal there provably about the
+machine. Remaking the merge instead also puts two merges of the same two parents
+in one repository, which the jj path cannot tell apart.
 
 Every property that makes this the design follows from the operator sharing that
 checkout. A test suite spawns its own processes, and running one in a directory
