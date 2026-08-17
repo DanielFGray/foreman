@@ -98,7 +98,7 @@ const state: FleetState = {
     active(task("ts-ccc333", "open", ["by-opencode"]), worker("ts-ccc333", "gone")),
   ],
   held: ["fibrae"],
-  orphans: [
+  unreviewed: [
     {
       project: "fibrae",
       branch: "foreman/ts-ddd111",
@@ -118,7 +118,7 @@ const state: FleetState = {
   ],
   committed: new Set(["ts-bbb222"]),
   resumable: new Set(["ts-bbb111", "ts-bbb222"]),
-  paused: false,
+  dispatch: "running",
   observedAt: undefined,
 };
 
@@ -161,16 +161,16 @@ const corrective: FleetState = {
     active(task("ts-d100", "open", ["by-opencode", "review-by-claude"]), worker("ts-d100", "gone")),
   ],
   held: [],
-  orphans: [],
+  unreviewed: [],
   committed: new Set(),
   resumable: new Set(["ts-d100"]),
-  paused: false,
+  dispatch: "running",
   observedAt: undefined,
 };
 
 interface Calls {
   quit: Array<string>;
-  togglePause: Array<string>;
+  cycleDispatch: Array<string>;
   toggleConsole: Array<string>;
   focus: Array<string>;
   retry: Array<string>;
@@ -189,7 +189,7 @@ interface Calls {
 const makeControls = (): { controls: Controls; calls: Calls } => {
   const calls: Calls = {
     quit: [],
-    togglePause: [],
+    cycleDispatch: [],
     toggleConsole: [],
     focus: [],
     retry: [],
@@ -206,7 +206,7 @@ const makeControls = (): { controls: Controls; calls: Calls } => {
   };
   const controls: Controls = {
     quit: () => calls.quit.push("quit"),
-    togglePause: () => calls.togglePause.push("pause"),
+    cycleDispatch: () => calls.cycleDispatch.push("cycle"),
     toggleConsole: () => calls.toggleConsole.push("console"),
     focus: (w) => calls.focus.push(w.task),
     retry: (t) => calls.retry.push(t.id),
@@ -314,8 +314,8 @@ describe("Pipeline", () => {
       expect(frame).toContain("reviewer vanished");
       expect(frame).toContain("orphaned workspace");
       expect(frame.indexOf("author vanished")).toBeLessThan(frame.indexOf("needs you"));
-      expect(frame.indexOf("needs you")).toBeLessThan(frame.indexOf("stranded"));
-      expect(frame.indexOf("stranded")).toBeLessThan(frame.indexOf("held"));
+      expect(frame.indexOf("needs you")).toBeLessThan(frame.indexOf("unreviewed"));
+      expect(frame.indexOf("unreviewed")).toBeLessThan(frame.indexOf("held"));
       expect(frame).toContain("fibrae");
       expect(frame).toContain("7 need attention");
       expect(frame).not.toContain("selection");
@@ -386,7 +386,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
     };
     const [current, setCurrent] = createSignal(quiet);
     const t = await testRender(() => <Pipeline state={current} controls={controls} />, {
@@ -595,7 +595,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
     };
     const t = await testRender(() => <Pipeline state={() => quiet} controls={controls} />, {
       width: 120,
@@ -630,7 +630,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
     };
     const t = await testRender(() => <Pipeline state={() => empty} controls={controls} />, {
       width: 92,
@@ -748,7 +748,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
       queue: [alpha, beta],
     };
     const [current, setCurrent] = createSignal(base);
@@ -801,7 +801,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
       queue: [queued("ts-a", "queued a"), queued("ts-b", "queued b"), queued("ts-c", "queued c")],
     };
     const [current, setCurrent] = createSignal(base);
@@ -841,7 +841,7 @@ describe("Pipeline", () => {
       decisions: [],
       yours: [],
       held: [],
-      orphans: [],
+      unreviewed: [],
       queue: ["a", "b", "c"].map((letter) => ({
         id: `ts-${letter}`,
         title: `queued ${letter}`,
@@ -969,7 +969,7 @@ describe("Pipeline", () => {
 
       // The global keys work from any column.
       t.mockInput.pressKey("p");
-      await t.waitFor(() => calls.togglePause.length === 1);
+      await t.waitFor(() => calls.cycleDispatch.length === 1);
       t.mockInput.pressKey("q");
       await t.waitFor(() => calls.quit.length === 1);
     } finally {
@@ -1018,9 +1018,9 @@ describe("Pipeline", () => {
       expect(calls.descend.length).toBe(1);
       t.mockInput.pressKey("d");
 
-      // The global pause key doubles as the barrier for the ignored release.
+      // The global dispatch key doubles as the barrier for the ignored release.
       t.mockInput.pressKey("p");
-      await t.waitFor(() => calls.togglePause.length === 1);
+      await t.waitFor(() => calls.cycleDispatch.length === 1);
       expect(calls.release.length).toBe(0);
       expect(calls.unassign.length).toBe(2);
     } finally {

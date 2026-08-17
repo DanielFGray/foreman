@@ -2,7 +2,14 @@ import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { DateTime } from "effect";
 import { createEffect, createSignal, For, onCleanup, Show, type Accessor } from "solid-js";
-import type { Active, Climbing, FleetState, InterventionTarget, Orphan } from "./dispatcher.ts";
+import {
+  nextDispatch,
+  type Active,
+  type Climbing,
+  type FleetState,
+  type InterventionTarget,
+  type Unreviewed,
+} from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import {
   diagnosticIntent,
@@ -22,7 +29,7 @@ import {
  */
 export interface Controls {
   readonly quit: () => void;
-  readonly togglePause: () => void;
+  readonly cycleDispatch: () => void;
   readonly toggleConsole: () => void;
   readonly focus: (worker: Worker) => void;
   readonly retry: (task: Item) => void;
@@ -31,7 +38,7 @@ export interface Controls {
   readonly descend: (task: Climbing) => void;
   readonly unassign: (task: Climbing) => void;
   readonly onboard: (project: string) => void;
-  readonly adopt: (orphan: Orphan) => void;
+  readonly adopt: (branch: Unreviewed) => void;
   readonly complete: (task: ReadyTask, reason: string) => void;
   readonly diagnose: (target: InterventionTarget, intent: DiagnosticIntent, rung: string) => void;
   readonly reviewIntervention: (
@@ -49,7 +56,7 @@ const COLUMNS = [
   "decisions",
   "yours",
   "held",
-  "stranded",
+  "unreviewed",
 ] as const;
 type ColumnName = (typeof COLUMNS)[number];
 const VIEWS = ["queue", "working", "review", "landed", "attention"] as const;
@@ -73,7 +80,7 @@ const DETAIL_BREAKPOINT = 120;
  * The non-empty views, which are the only tabs drawn.
  *
  * An empty box is a claim on the screen that pays nothing back: the count in
- * its title is already zero, and a fleet with nothing held, nothing stranded
+ * its title is already zero, and a fleet with nothing held, nothing unread
  * and no decision waiting is the ordinary case rather than news. Drawing them
  * anyway costs the columns that do hold work the width they need to show a
  * title. Nothing is reachable that is not drawn, so the cursor and keys follow
@@ -137,8 +144,8 @@ interface ColumnRow {
   readonly ready: ReadyTask | undefined;
   readonly worker: Worker | undefined;
   readonly project: string | undefined;
-  /** The branch behind a stranded row, which no task in the fleet accounts for. */
-  readonly orphan: Orphan | undefined;
+  /** The branch behind an unreviewed row, whose commits nothing is reading. */
+  readonly unreviewed: Unreviewed | undefined;
   /** The error behind a dispatch-failed decision row. */
   readonly failure: string | undefined;
   readonly hasWork: boolean;
@@ -190,7 +197,7 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
   yours: ["intervene", "descend", "unassign"],
   held: ["onboard"],
-  stranded: ["adopt"],
+  unreviewed: ["adopt"],
 };
 
 /**
@@ -261,7 +268,7 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
       case "onboard":
         return row.project !== undefined;
       case "adopt":
-        return row.orphan !== undefined;
+        return row.unreviewed !== undefined;
     }
   });
 };
@@ -473,7 +480,7 @@ export const Pipeline = (props: {
         if (target.project) props.controls.onboard(target.project);
         break;
       case "adopt":
-        if (target.orphan) props.controls.adopt(target.orphan);
+        if (target.unreviewed) props.controls.adopt(target.unreviewed);
         break;
     }
   };
@@ -527,7 +534,7 @@ export const Pipeline = (props: {
         props.controls.quit();
         break;
       case "p":
-        props.controls.togglePause();
+        props.controls.cycleDispatch();
         break;
       case "f12":
         props.controls.toggleConsole();
@@ -735,8 +742,8 @@ const Details = (props: { readonly row: Accessor<ColumnRow | undefined> }) => (
           <Show when={row().project && !row().task && !row().ready}>
             <text>{`project   ${row().project}`}</text>
           </Show>
-          <Show when={row().orphan}>
-            {(orphan: Accessor<Orphan>) => <text>{`project   ${orphan().project}`}</text>}
+          <Show when={row().unreviewed}>
+            {(branch: Accessor<Unreviewed>) => <text>{`project   ${branch().project}`}</text>}
           </Show>
         </>
       )}
@@ -797,7 +804,7 @@ const viewLabel = (view: ViewName): string =>
   view === "attention" ? "Attention" : `${view[0]?.toUpperCase()}${view.slice(1)}`;
 
 const sourceView = (column: ColumnName): ViewName =>
-  column === "decisions" || column === "yours" || column === "held" || column === "stranded"
+  column === "decisions" || column === "yours" || column === "held" || column === "unreviewed"
     ? "attention"
     : column;
 
@@ -828,7 +835,9 @@ const readAge = (state: FleetState, now: number): string => {
  * Whether the pipeline is moving, and what to press.
  *
  * This is the one thing always on screen: with every column empty the fleet
- * still has to say whether it is paused or simply out of work.
+ * still has to say whether it is paused, draining, or simply out of work. The
+ * key's label names the state it moves to rather than the state it is in,
+ * because the three cycle and the operator is choosing where to stop.
  */
 const Status = (props: {
   readonly state: Accessor<FleetState>;
@@ -852,7 +861,7 @@ const Status = (props: {
   return (
     <box style={{ flexDirection: "column", flexShrink: 0 }}>
       <text style={{ height: 1 }}>
-        {`${props.state().paused ? "paused" : "running"}  ·  ${readAge(props.state(), now())}  ·  ${attentionStatus(props.state())}`}
+        {`${props.state().dispatch}  ·  ${readAge(props.state(), now())}  ·  ${attentionStatus(props.state())}`}
       </text>
       <Show
         when={props.rungChoice() === undefined}
@@ -900,7 +909,7 @@ const Status = (props: {
                 ...props.actions().map((action) => ACTION_LABELS[action]),
                 "h/l view",
                 "j/k move",
-                `p ${props.state().paused ? "resume" : "pause"}`,
+                `p ${nextDispatch(props.state().dispatch)}`,
                 "F12 log",
                 "q quit",
               ].join("  ")}
@@ -928,8 +937,8 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
       return state.yours.map((task) => readyRow(task, "yours", state));
     case "held":
       return state.held.map(heldRow);
-    case "stranded":
-      return state.orphans.map(orphanRow);
+    case "unreviewed":
+      return state.unreviewed.map(unreviewedRow);
   }
 };
 
@@ -938,7 +947,7 @@ const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow
   return [
     ...rowsFor("decisions", state),
     ...rowsFor("yours", state).map(attentionRow("needs you")),
-    ...rowsFor("stranded", state).map(attentionRow("stranded")),
+    ...rowsFor("unreviewed", state).map(attentionRow("unreviewed")),
     ...rowsFor("held", state).map(attentionRow("held")),
   ];
 };
@@ -955,7 +964,7 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   ready: task,
   worker: undefined,
   project: undefined,
-  orphan: undefined,
+  unreviewed: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -975,7 +984,7 @@ const activeRow = (
   ready: undefined,
   worker,
   project: undefined,
-  orphan: undefined,
+  unreviewed: undefined,
   failure: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -989,7 +998,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   ready: undefined,
   worker: undefined,
   project: undefined,
-  orphan: undefined,
+  unreviewed: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -1014,7 +1023,7 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   ready: undefined,
   worker,
   project: undefined,
-  orphan: undefined,
+  unreviewed: undefined,
   failure,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -1028,7 +1037,7 @@ const heldRow = (project: string): ColumnRow => ({
   ready: undefined,
   worker: undefined,
   project,
-  orphan: undefined,
+  unreviewed: undefined,
   failure: undefined,
   hasWork: false,
   committed: false,
@@ -1036,15 +1045,15 @@ const heldRow = (project: string): ColumnRow => ({
 
 // A branch whose task is gone has no id to dispatch against, so the row says
 // so rather than offering a key that would do nothing.
-const orphanRow = (orphan: Orphan): ColumnRow => ({
-  column: "stranded",
-  key: orphan.branch,
-  label: `${orphan.branch}  ${orphan.title ?? "task deleted — recover by hand"}`,
+const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
+  column: "unreviewed",
+  key: branch.branch,
+  label: `${branch.branch}  ${branch.title ?? "task deleted — recover by hand"}`,
   task: undefined,
   ready: undefined,
   worker: undefined,
   project: undefined,
-  orphan,
+  unreviewed: branch,
   failure: undefined,
   hasWork: true,
   committed: true,

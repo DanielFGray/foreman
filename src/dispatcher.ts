@@ -57,14 +57,21 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const prompts = yield* Prompts;
     const repository = yield* Repository;
 
-    // The one piece of genuinely non-derivable state: whether the operator has
-    // asked foreman to stop taking on new work. Nothing in the world records
-    // an intention.
+    // The one piece of genuinely non-derivable state: how much work the
+    // operator has asked foreman to take on. Nothing in the world records an
+    // intention.
     //
-    // It starts true unless the operator said otherwise on the command line.
-    // A paused run observes and reports the world but does not settle, tidy,
-    // reclaim, or fill it. The operator who opened the screen to drain the
-    // fleet therefore gets a quiet first tick rather than racing it to pause.
+    // Three states out of one value rather than a boolean and a flag beside
+    // it. `paused` observes and reports the world but does not settle, tidy,
+    // reclaim or fill it. `draining` runs everything except the author pass,
+    // so reviews, landings and the sweep empty the pipeline while nothing new
+    // enters it — which is what aiming the fleet by hand needs, and what a
+    // plain pause cannot give: pause stops landing too, so it strands work a
+    // reviewer already approved.
+    //
+    // It starts paused unless the operator said otherwise on the command line.
+    // The operator who opened the screen to drain the fleet therefore gets a
+    // quiet first tick rather than racing it to pause.
     //
     // `--running` is how a restart inherits the answer. Under `bun --watch` the
     // daemon restarts whenever foreman's own source changes — which includes
@@ -73,7 +80,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // the only thing a restart carries over, which is why the intention is
     // stated there and nowhere durable: recording it would make foreman
     // remember, and the operator's last keypress is not a fact about the world.
-    const paused = yield* Ref.make(!settings.running);
+    const dispatch = yield* Ref.make<Dispatch>(settings.running ? "running" : "paused");
     const state = yield* SubscriptionRef.make(empty);
 
     // The second piece of in-process state, kept for the same reason as
@@ -144,11 +151,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const current = yield* observe;
       yield* SubscriptionRef.set(state, current);
 
-      if (yield* Ref.get(paused)) return;
+      const mode = yield* Ref.get(dispatch);
+      if (mode === "paused") return;
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
-      yield* fill(yield* observe);
+      yield* fill(yield* observe, mode);
     });
 
     /** The world as it is right now, with no interpretation applied. */
@@ -251,43 +259,47 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       ).pipe(Effect.map((ids) => ids.flat()));
       const resumable = new Set([...committed, ...unfinished]);
 
-      // Every other column is read from prog, which forgets a branch the
-      // moment its task is closed, reclaimed or deleted — so the commits
-      // themselves are asked instead. A task the fleet still holds is not
-      // stranded: the queue will dispatch an author onto that same branch, and
-      // a claim with no worker is already a decision the operator is being
-      // asked about.
-      const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
-      const orphans = yield* Effect.forEach(
-        branches.filter(
-          (entry) => !entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
+      // Every branch, joined to whatever prog still says about its task. Read
+      // for all of them rather than for a pre-filtered few, so the one rule
+      // that decides which are unread sees the same rows the operator does.
+      // A branch whose task was deleted outright resolves to no status at all,
+      // and it is the reason to read git rather than prog, so it is kept.
+      const editing = new Set(
+        owned
+          .filter(({ worker }) => worker.state === "working" || worker.state === "blocked")
+          .map(({ task }) => task.id),
+      );
+      const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
+        prog.show(task).pipe(
+          Effect.map((item) => ({ title: item.title, status: item.status })),
+          Effect.orElseSucceed(() => ({ title: undefined, status: undefined })),
+          Effect.map((item) => ({ project, branch, task, merged, ...item })),
         ),
-        ({ branch, task, project }) =>
-          prog.show(task).pipe(
-            Effect.map((item) => ({
+      ).pipe(
+        Effect.map((rows) =>
+          rows
+            .filter((row) => isUnread(row, editing))
+            // `merged` is what the rule was decided from, and every surviving
+            // row has the same answer, so it is not carried into the column.
+            .map(({ project, branch, task, title, status }): Unreviewed => ({
               project,
               branch,
               task,
-              title: item.title,
-              status: item.status,
+              title,
+              status,
             })),
-            // A branch whose task was deleted outright. It is the reason to
-            // read git rather than prog, so it is shown, not dropped.
-            Effect.orElseSucceed(() => ({
-              project,
-              branch,
-              task,
-              title: undefined,
-              status: undefined,
-            })),
-          ),
+        ),
       );
 
       // What the sweep may delete: a merged ref for work nothing in the
       // pipeline is still pointing at. The branch is a task's only proof that
       // its author wrote anything, and a merge can arrive from outside foreman
       // — a hand-merged branch swept on the tick before its reviewer settles
-      // leaves that task looking like one nobody ever committed to.
+      // leaves that task looking like one nobody ever committed to. A task the
+      // fleet still accounts for is never swept: the queue will dispatch onto
+      // that same branch, and a claim with no worker is already a decision the
+      // operator is being asked about.
+      const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
       const prunable = branches.filter(
         (entry) => entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
       );
@@ -354,7 +366,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         committed,
         resumable,
         prunable,
-        orphans,
+        unreviewed,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
         ),
@@ -367,7 +379,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ),
           ...failedDecisions,
         ],
-        paused: yield* Ref.get(paused),
+        dispatch: yield* Ref.get(dispatch),
         observedAt: yield* DateTime.now,
       } satisfies Observation;
     });
@@ -805,7 +817,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Observation) =>
+    const fill = (current: Observation, mode: Dispatch) =>
       Effect.gen(function* () {
         const busy = current.workers.filter(
           (worker) => worker.state === "working" || worker.state === "blocked",
@@ -830,6 +842,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           );
           free -= 1;
         }
+
+        // Draining is exactly this pass being skipped. Everything above it
+        // has already run, so the fleet keeps finishing and landing what it
+        // holds and simply stops taking anything on.
+        if (mode === "draining") return;
 
         const available = current.queue.filter(
           (task) => !current.held.includes(task.project) && !failed.has(task.id),
@@ -1179,9 +1196,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         );
       }),
 
-      /** Stops filling slots. Live workers are left to finish. */
-      pause: commanded(Ref.set(paused, true)),
-      resume: commanded(Ref.set(paused, false)),
+      /**
+       * States how much work the fleet may take on. Live workers are never
+       * interrupted by it; narrowing only stops the next dispatch.
+       */
+      setDispatch: (mode: Dispatch) => commanded(Ref.set(dispatch, mode)),
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
@@ -1331,28 +1350,32 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
 
       /**
-       * Puts a stranded branch back in front of a reviewer.
+       * Puts an unread branch in front of a reviewer.
        *
-       * Nobody can say from the outside whether abandoned commits are worth
-       * keeping, and that judgement is exactly a review. The task returns to
-       * `reviewing`, a reviewer reads the diff, and it either approves — which
-       * lands the branch through the ordinary gate — or returns it with
-       * findings. A branch whose task is gone is skipped: it has no id to
-       * dispatch against, so it stays on the list until a person deals with it.
+       * Nobody can say from the outside whether commits nothing is reading are
+       * worth keeping, and that judgement is exactly a review. The task moves
+       * to `reviewing`, the next tick's review pass dispatches a reviewer at
+       * the ladder's rung, and it either approves — which lands the branch
+       * through the ordinary gate — or returns it with findings. Writing the
+       * status rather than spawning here is what keeps reviews ahead of new
+       * work: the operator names the branch, and fill still decides the order.
+       *
+       * A branch whose task is gone is skipped: it has no id to dispatch
+       * against, so it stays on the list until a person deals with it.
        */
-      adopt: (orphan: Orphan) =>
+      adopt: (branch: Unreviewed) =>
         commanded(
-          orphan.status === undefined
+          branch.status === undefined
             ? Effect.void
-            : prog.submit(orphan.task).pipe(
+            : prog.submit(branch.task).pipe(
                 Effect.andThen(
                   prog.log(
-                    orphan.task,
-                    `foreman: ${orphan.branch} holds commits ${orphan.project} never took, and nothing in the queue was going to bring them back. Sent for review to decide whether they are worth landing.`,
+                    branch.task,
+                    `foreman: ${branch.branch} holds commits ${branch.project} never took, and nothing was going to read them. Sent for review to decide whether they are worth landing.`,
                   ),
                 ),
                 Effect.catchAll((error) =>
-                  Effect.logWarning(`adopting ${orphan.task} failed: ${error}`),
+                  Effect.logWarning(`adopting ${branch.task} failed: ${error}`),
                 ),
               ),
         ),
@@ -1504,6 +1527,37 @@ export const excludeFailedTasks = <Task extends { readonly id: string }>(
 };
 
 /**
+ * Whether a branch holds commits that no reviewer is going to read.
+ *
+ * Every other column is read from prog, which stops mentioning a branch the
+ * moment its task is closed, reclaimed or deleted — while the commits stay. So
+ * this asks the branches, and three facts answer it.
+ *
+ * `merged` is the whole test for holding commits the checkout has not taken. An
+ * untouched branch still points at the trunk commit it was cut from, so it is
+ * reachable from `HEAD` and merged by definition; nothing empty survives here.
+ *
+ * A task being **edited** — an author working or blocked on it right now —
+ * will hand its own diff to review when it finishes. Absence of a worker is not
+ * that: a vanished or settled agent leaves commits nobody has been sent to.
+ *
+ * A task in **`reviewing`** is already in the pipeline's hands, whether or not
+ * its reviewer has been dispatched yet. Everything else is unread indefinitely,
+ * and that is the case worth surfacing: a task that went back to the queue with
+ * a branch behind it looks like ordinary queue work, and the author eventually
+ * sent to it resumes the work rather than reading it. A task with no status at
+ * all was deleted, so nothing will ever read it either.
+ */
+export const isUnread = (
+  branch: {
+    readonly task: string;
+    readonly merged: boolean;
+    readonly status: string | undefined;
+  },
+  editing: ReadonlySet<string>,
+): boolean => !branch.merged && !editing.has(branch.task) && branch.status !== "reviewing";
+
+/**
  * Splits work handed back for review by whether there is any work in it.
  *
  * Two proofs are needed, and prog can only give one. The `by-*` label proves
@@ -1513,7 +1567,7 @@ export const excludeFailedTasks = <Task extends { readonly id: string }>(
  * small enough to skip review, an empty merge commit lands.
  *
  * `committed` holds the tasks whose branch carries commits of its own, which is
- * the same read that finds stranded branches. Of its own, not merely of ones
+ * the same read that finds unread branches. Of its own, not merely of ones
  * the checkout lacks: a branch already merged — by foreman on an earlier tick,
  * or by hand — proves its author wrote something just as well, and reading that
  * as an empty branch sends finished work back to the queue.
@@ -1590,6 +1644,27 @@ const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => (
   role,
 });
 
+/**
+ * How much work the fleet may take on, which is the operator's intention and
+ * so the one thing foreman holds in memory rather than reading back.
+ *
+ * `draining` is the state between the other two, and it is the useful one for
+ * aiming the fleet by hand: the author pass is skipped while reviews,
+ * landings, settles and the sweep all continue, so the pipeline empties itself
+ * instead of freezing with approved branches unlanded.
+ */
+export type Dispatch = "running" | "draining" | "paused";
+
+/**
+ * The next state the operator's key gives them, narrowest last.
+ *
+ * One key rather than one per state, because the three are one continuum —
+ * how much the fleet is taking on — and a second key would have to say which
+ * of the two it overrides.
+ */
+export const nextDispatch = (mode: Dispatch): Dispatch =>
+  mode === "running" ? "draining" : mode === "draining" ? "paused" : "running";
+
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
   readonly queue: ReadonlyArray<ReadyTask>;
@@ -1612,10 +1687,10 @@ export interface FleetState {
   readonly resumable: ReadonlySet<string>;
 
   /**
-   * Branches holding commits the project never took, that nothing in the
-   * pipeline is going to bring back on its own.
+   * Branches holding commits the project never took, that no reviewer is
+   * going to read on its own.
    */
-  readonly orphans: ReadonlyArray<Orphan>;
+  readonly unreviewed: ReadonlyArray<Unreviewed>;
 
   /**
    * Projects whose checkout has uncommitted changes to tracked files.
@@ -1625,7 +1700,7 @@ export interface FleetState {
    * for a reason nobody can see reads as a broken dispatcher.
    */
   readonly held: ReadonlyArray<string>;
-  readonly paused: boolean;
+  readonly dispatch: Dispatch;
 
   /**
    * When this reading of the world was taken.
@@ -1642,13 +1717,15 @@ export interface FleetState {
 }
 
 /**
- * Work git still has and prog has stopped tracking.
+ * A branch carrying commits nobody has been sent to read.
  *
- * `title` and `status` are absent when the task itself is gone. Such a branch
- * can be shown but not recovered: every workspace, prompt and merge in foreman
- * is addressed by task id, so there is nothing left to dispatch against.
+ * `title` and `status` are absent when the task itself is gone — the branch
+ * prog has stopped tracking, which is why git is asked rather than prog. Such
+ * a branch can be shown but not recovered: every workspace, prompt and merge
+ * in foreman is addressed by task id, so there is nothing left to dispatch
+ * against.
  */
-export interface Orphan {
+export interface Unreviewed {
   readonly project: string;
   readonly branch: string;
   readonly task: string;
@@ -1709,9 +1786,11 @@ const empty: FleetState = {
   decisions: [],
   committed: new Set(),
   resumable: new Set(),
-  orphans: [],
+  unreviewed: [],
   held: [],
-  paused: false,
+  // Before the first tick has read anything, and the state foreman starts in
+  // unless the command line said otherwise.
+  dispatch: "paused",
   observedAt: undefined,
 };
 

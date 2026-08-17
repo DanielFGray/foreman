@@ -46,12 +46,20 @@ and `prog list` together tell you everything foreman knows.
    finished and is blocking whatever depends on it; an unclaimed task has not
    started costing anything yet.
 
+`p` cycles how much work the fleet takes on: **running** → **draining** →
+**paused**, and its label names the state it moves to.
+
 Pausing stops all tick mutations. A paused foreman observes and reports, but
-does not settle, tidy, reclaim, or fill until `p` resumes it.
+does not settle, tidy, reclaim, or fill. Draining is the state in between: it
+skips only the new-work half of fill, so reviews, landings and the branch sweep
+keep running and the pipeline empties itself instead of freezing with approved
+branches unlanded. Drain when you want to aim the fleet by hand.
 
 Foreman starts paused. Opening the dashboard to drain the fleet is the common
 case, and it should not be a race against the first tick. Press `p` when you
-want it dispatching, or start it with `--running` to skip the keypress.
+want it dispatching, or start it with `--running` to skip the keypress. Nothing
+else survives a restart: the command line is the only thing that carries over,
+so a daemon restarted mid-drain comes back paused.
 
 Use `--running` for anything that restarts by itself. `bun --watch` restarts the
 daemon whenever foreman's own source changes — which is what landing a task into
@@ -59,7 +67,7 @@ foreman's own checkout does — and the command line is the only thing a restart
 carries over.
 
 The poll interval is how long foreman waits to notice something nobody told it
-about. Anything you do in the dashboard — start, pause, retry, release, adopt —
+about. Anything you do in the dashboard — drain, pause, retry, release, adopt —
 ticks at once, so keys never sit waiting out the clock.
 
 A fresh agent per attempt and review, rather than long-lived workers fed task
@@ -153,20 +161,32 @@ already records it. A rejected or abandoned branch stays, because `git branch
 from memory: it is read off the refs each time, so a branch you merge by hand is
 cleaned up the same way.
 
-## Stranded branches
+## Unreviewed branches
 
-A task can be closed, reclaimed or deleted while its branch still holds commits
-the project never took. Every column in the dashboard reads from prog, which
-stops mentioning that branch the moment its task moves on — so the commits go
-quiet rather than missing, which is worse.
+Work can end up sitting on a branch with nobody on the way to read it. A task
+gets reclaimed, or climbs a rung and goes back to the queue, or is closed or
+deleted outright — and its commits stay exactly where the author left them.
+Every column in the dashboard reads from prog, which stops mentioning that
+branch the moment its task moves on, so the commits go quiet rather than
+missing, which is worse. The worst case is the quietest: a task back in the
+queue with seven commits behind it looks like ordinary unstarted work, and the
+author eventually sent to it resumes the work rather than reading it.
 
-Foreman therefore asks git directly for its own branches that `develop` has not
-taken, and drops the ones the queue, the claims or the review list already
-account for. What is left appears under dashboard **Attention**, and `s`
-sends the selected branch back to `reviewing`. A reviewer reads the diff and
-either approves it, landing it through the same gate as anything else, or
-returns it with findings. Nobody can judge abandoned commits from the outside, and that judgement
-is what a review is.
+Foreman therefore asks git directly for its own branches the checkout has not
+taken, and sets aside the two that are already accounted for — a task somebody
+is actively working on, whose author will hand its own diff over when it stops,
+and a task already in `reviewing`. Everything left appears under dashboard
+**Attention** as unreviewed, and `s` sends the selected branch to `reviewing`.
+
+`s` does not open a pane. It writes the status and stops; the next tick's review
+pass dispatches the reviewer, because reviews already come before new work and
+the order should not change just because you named the branch by hand. Combine
+it with drain (`p`) when you want to clear a backlog of unread work without new
+tasks starting underneath you.
+
+A reviewer then reads the diff and either approves it, landing it through the
+same gate as anything else, or returns it with findings. Nobody can judge
+abandoned commits from the outside, and that judgement is what a review is.
 
 A branch whose task was deleted outright is listed and left alone. Workspaces,
 prompts and merges are all addressed by task id, so there is nothing left to

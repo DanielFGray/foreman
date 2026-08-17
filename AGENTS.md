@@ -45,10 +45,14 @@ open, and nothing can tell foreman's own work from a claim made by hand.
 
 Every tick reads all of it back, so a restart re-adopts its live workspaces
 instead of orphaning them. Two things foreman cannot derive are kept in `Ref`s,
-because nothing in the world records them: whether the operator has paused
-dispatch (an intention), and how a dispatch attempt failed (an event of
-foreman's own doing). A paused tick observes and reports; settle, tidy, reclaim
-and fill wait for resume.
+because nothing in the world records them: how much work the operator has asked
+the fleet to take on (an intention), and how a dispatch attempt failed (an event
+of foreman's own doing). The intention is three states out of one value, never a
+boolean and a flag beside it. `paused` observes and reports, with settle, tidy,
+reclaim and fill all waiting. `draining` runs every one of those except the
+author pass, so reviews, landings and the sweep empty the pipeline while nothing
+new enters it — a plain pause cannot do that, because landing is called from
+settle and pausing therefore strands branches a reviewer already approved.
 
 A dispatch failure is observed by trying, and the trying is what must stop: the
 worktree that made `open` fail will still exist next tick, so a retry learns
@@ -399,9 +403,19 @@ next tick needs to tell work from nothing. `--delete` without `--force` is the
 backstop, since git refuses to drop commits the checkout does not have and
 refuses a branch a worktree still holds.
 
-What is left over — unmerged, not empty, unaccounted for by any task — is
-stranded. `s` sends the selected one back to `reviewing`. A branch whose task was
-deleted has no id to dispatch against, so it is listed and left alone.
+Everything unmerged that no reviewer is going to read is **unreviewed**, and
+`isUnread` is the whole rule. Two cases are already in hand: an author working
+or blocked right now hands its own diff to review when it stops, and a task in
+`reviewing` is in the pipeline's hands whether or not its reviewer has been
+dispatched yet. Everything else with commits on it is unread indefinitely — most
+importantly a task that went back to the queue with a branch behind it, which
+looks like ordinary queue work, because the author eventually sent to it resumes
+the work rather than reading it.
+
+`s` writes `reviewing` on the selected one and stops there. It does not spawn a
+reviewer: fill already puts reviews ahead of new work, so the operator names the
+branch and the ordinary order still decides when. A branch whose task was deleted
+has no id to dispatch against, so it is listed and left alone.
 
 ### Roles are panes
 
@@ -488,14 +502,16 @@ active work. At 120 columns extra width adds selected-row details; it never
 restores columns.
 
 Attention combines the exceptional states in urgency order: vanished-worker
-decisions, yours, stranded branches, then held projects. Each row keeps its source
+decisions, yours, unreviewed branches, then held projects. Each row keeps its source
 kind, so combining their display does not combine their actions. A view that
 empties under the cursor hands it to the nearest non-empty tab to its left.
 Attention opens when it changes from empty to non-empty, including at startup,
 and must clear before a later item can interrupt again.
 
 The status line remains when every view is empty, because an empty fleet still
-has to say whether it is paused or merely out of work. It also says how long ago
+has to say whether it is paused, draining, or merely out of work. `p` cycles the
+three, and its label names the state it moves to rather than the state it is in,
+because the operator is choosing where to stop. It also says how long ago
 the dispatcher last read the world — `FleetState.observedAt`, set by `observe`
 and aged by the view's own one-second clock, because a tick publishes its reading
 and *then* works. Seconds mean a fleet cycling on its poll interval; minutes mean
@@ -555,7 +571,7 @@ clickable; page keys move five rows at a time.
 
 Two divergences from the settled design:
 
-- **No cancel.** `Dispatcher` has pause, resume, focus, retry, release, close,
+- **No cancel.** `Dispatcher` has setDispatch, focus, retry, release, close,
   climb, descend, unassign and onboard. "Act on a task" means climb or descend; a
   cancel command belongs on the dispatcher.
 - **No focus scope.** The focus control jumps to a worker's pane. Making a

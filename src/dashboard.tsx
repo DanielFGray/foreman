@@ -2,7 +2,7 @@ import { createCliRenderer } from "@opentui/core";
 import { render } from "@opentui/solid";
 import { Deferred, Effect, Exit, Runtime, Stream, SubscriptionRef } from "effect";
 import { createSignal } from "solid-js";
-import { Dispatcher } from "./dispatcher.ts";
+import { Dispatcher, nextDispatch } from "./dispatcher.ts";
 import { type Controls, Pipeline } from "./pipeline.tsx";
 
 /**
@@ -44,8 +44,8 @@ export const dashboard = Effect.gen(function* () {
 
   const controls: Controls = {
     quit: () => Deferred.unsafeDone(quit, Exit.void),
-    togglePause: () =>
-      Runtime.runFork(runtime)(state().paused ? dispatcher.resume : dispatcher.pause),
+    cycleDispatch: () =>
+      Runtime.runFork(runtime)(dispatcher.setDispatch(nextDispatch(state().dispatch))),
     toggleConsole: showConsole,
     focus: (worker) => Runtime.runFork(runtime)(dispatcher.focus(worker)),
     retry: (task) => Runtime.runFork(runtime)(dispatcher.retry(task)),

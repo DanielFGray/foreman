@@ -198,12 +198,12 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /**
        * Puts a task back in front of a reviewer, whatever state it was in.
        *
-       * How a stranded branch rejoins the pipeline: the commits exist and
+       * How an unread branch rejoins the pipeline: the commits exist and
        * nobody can say whether they are any good, which is the question a
        * reviewer answers. From `reviewing` the ordinary loop takes over.
        *
-       * Claims it first because prog only reviews `in_progress` work, and a
-       * stranded branch's task is usually done or back in the queue.
+       * Claims it first because prog only reviews `in_progress` work, and an
+       * unread branch's task is usually back in the queue, or done, or gone.
        */
       submit: (task: string) =>
         removeLabels(task, [APPROVED]).pipe(

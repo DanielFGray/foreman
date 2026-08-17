@@ -6,6 +6,8 @@ import {
   failedTasks,
   handoffExpired,
   decisionsOf,
+  isUnread,
+  nextDispatch,
   nextFailure,
   readyToLand,
   reviewable,
@@ -377,5 +379,44 @@ describe("scoping the roster to this daemon's projects", () => {
 
     expect(workers).toEqual([]);
     expect(owned).toEqual([]);
+  });
+});
+
+describe("unread branches", () => {
+  const branch = (task: string, merged: boolean, status: string | undefined) => ({
+    task,
+    merged,
+    status,
+  });
+
+  test("shows commits nothing is going to read, whatever became of the task", () => {
+    const editing = new Set<string>();
+
+    // Back in the queue with a branch behind it: the author eventually sent to
+    // it resumes the work rather than reading it, so nobody ever reviews this.
+    expect(isUnread(branch("ts-1", false, "open"), editing)).toBe(true);
+    // A vanished author's claim. It is also a decision, and the two answers
+    // are different questions about the same task.
+    expect(isUnread(branch("ts-2", false, "in_progress"), editing)).toBe(true);
+    // The task was deleted outright, which is why git is asked and not prog.
+    expect(isUnread(branch("ts-3", false, undefined), editing)).toBe(true);
+  });
+
+  test("leaves alone what the pipeline already holds", () => {
+    // An author working right now hands its own diff to review when it stops.
+    expect(isUnread(branch("ts-1", false, "in_progress"), new Set(["ts-1"]))).toBe(false);
+    // Already in review, dispatched or not.
+    expect(isUnread(branch("ts-2", false, "reviewing"), new Set())).toBe(false);
+    // Merged, so the commits are in and the sweep takes the ref. An untouched
+    // branch is merged by definition, so nothing empty reaches the column.
+    expect(isUnread(branch("ts-3", true, "done"), new Set())).toBe(false);
+  });
+});
+
+describe("the operator's dispatch intention", () => {
+  test("cycles from widest to narrowest and back", () => {
+    expect(nextDispatch("running")).toBe("draining");
+    expect(nextDispatch("draining")).toBe("paused");
+    expect(nextDispatch("paused")).toBe("running");
   });
 });
