@@ -183,15 +183,18 @@ questions differently:
   onto the tip and abandoning the working copy left behind — always a merge
   foreman made and has finished with. The tick sweep excludes every workspace's
   working copy, so a proof in flight is never swept out from under itself.
-- **The bookmark is published before the working copy moves.** The merge the
-  ground built is addressable from the checkout, so landing is `bookmark set`
-  and then `jj new` onto it. Interrupt between the two and the landing is
-  already correct — the operator is one `jj new` behind a published bookmark,
-  not holding an unpublished merge. The sweep survives for the ground's own
-  litter: a failed proof leaves a merge nothing names, and the tick abandons
-  anonymous heads carrying foreman's landing signature — a clean merge of two
-  parents whose description is the one `merge` writes. Working copies are
-  excluded, because that is the one anonymous head a person may be standing on.
+- **The working copy moves onto the merge before the bookmark names it.** Both
+  steps only ever name the commit the ground proved. The order is the safety:
+  the trunk is the nearest bookmark behind `@`, so a working copy left behind a
+  bookmark that moved past it has **no trunk at all** — the project holds, every
+  later tick asks the same question and gets the same answer, and nothing in the
+  fleet can clear it. Publishing second cannot reach that state; an interruption
+  between the two leaves `@` on an unpublished merge whose ancestors still
+  include the trunk, so the next tick lands again and the sweep takes the merge
+  nobody named. The sweep is for exactly that, and for a failed proof's leftover
+  in the ground: anonymous heads carrying foreman's landing signature — a clean
+  merge of two parents whose description is the one `merge` writes. Working
+  copies are excluded, because that is the one such head a person may be on.
 - **The clean gate is re-asked immediately before the working copy moves.**
   `jj new` rewrites the operator's directory whatever is in it; their work
   survives as a commit but leaves their screen. A proof lasts as long as the
