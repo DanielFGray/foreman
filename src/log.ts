@@ -13,8 +13,9 @@ import { dirname, join } from "node:path";
  * object per line, so the answer is a jq query rather than a full read.
  *
  * The screen copy replaces Effect's default logger rather than joining it.
- * OpenTUI replaces globalThis.console when its renderer starts, so reading it
- * at log time sends dashboard records to the F12 overlay instead of stdout.
+ * OpenTUI replaces globalThis.console when its renderer starts, so reading the
+ * global at log time sends dashboard records to the F12 overlay instead of
+ * stdout.
  */
 export const logging = (path = defaultPath()): Layer.Layer<never> =>
   Logger.replace(
@@ -33,7 +34,7 @@ export const logging = (path = defaultPath()): Layer.Layer<never> =>
         path,
         `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
       );
-      console.log(`${logLevel.label} ${text}`);
+      globalThis.console.log(`${logLevel.label} ${text}`);
     }),
   ).pipe(Layer.tap(() => Effect.sync(() => mkdirSync(dirname(path), { recursive: true }))));
 
