@@ -1,6 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Data, Effect, Layer, Schema, Stream } from "effect";
+import { Either, Effect, Layer, Match, Schema, Stream } from "effect";
 import {
   AgentRole,
   type AttachOptions,
@@ -253,28 +253,16 @@ export const HerdrFleet = Layer.effect(
             yield* worktreesFor(options.repository),
             options,
           );
-          switch (resolution.kind) {
-            case "workspace":
-              // Adopting an existing workspace is what makes a restart safe:
-              // the label is the identity, so foreman recognises work it
-              // started in a previous life instead of opening a second
-              // workspace beside it.
-              return resolution.worker;
-
-            case "worktree":
-              // The workspace is gone — closing its last pane closed it — but
-              // the worktree git still has is where the interrupted agent's
-              // edits live. Adopting it is the difference between continuing
-              // that work and `worktree create` colliding with a directory
-              // that already exists forever.
-              yield* Effect.logInfo(
-                `adopting ${options.branch} at ${resolution.worktree.path}: its workspace closed but the worktree survives`,
-              );
-              return yield* adoptWorktree(options);
-
-            case "create":
-              return yield* createWorktree(options);
-          }
+          return yield* Match.value(resolution).pipe(
+            Match.when({ kind: "workspace" }, ({ worker }) => Effect.succeed(worker)),
+            Match.when({ kind: "worktree" }, ({ worktree }) =>
+              Effect.logInfo(
+                `adopting ${options.branch} at ${worktree.path}: its workspace closed but the worktree survives`,
+              ).pipe(Effect.andThen(adoptWorktree(options))),
+            ),
+            Match.when({ kind: "create" }, () => createWorktree(options)),
+            Match.exhaustive,
+          );
         }),
 
       attach: (options: AttachOptions) =>
@@ -473,26 +461,18 @@ export const HerdrFleet = Layer.effect(
               ? []
               : yield* worktreesFor(options.repository);
           const resolution = resolveClose(workers, worktrees, options.task);
-          switch (resolution.kind) {
-            case "workspace":
-              // Attached to a checkout that was already there, which belongs to
-              // the operator: only the workspace over it closes.
-              yield* herdr("close", "workspace", "close", resolution.worker.workspace);
-              return;
-
-            case "worktree":
-              // The worktree is the durable thing, and the branch survives
-              // either way. A live workspace is removed with it; one herdr has
-              // already dropped — its last pane closed by hand — leaves a
-              // worktree that must be adopted to be removed rather than
-              // orphaned in place.
-              if (resolution.worker) {
-                yield* herdr(
+          yield* Match.value(resolution).pipe(
+            Match.when({ kind: "workspace" }, ({ worker }) =>
+              herdr("close", "workspace", "close", worker.workspace),
+            ),
+            Match.when({ kind: "worktree" }, ({ worker }) => {
+              if (worker) {
+                return herdr(
                   "close",
                   "worktree",
                   "remove",
                   "--workspace",
-                  resolution.worker.workspace,
+                  worker.workspace,
                   "--force",
                 ).pipe(
                   Effect.orElse(() =>
@@ -501,14 +481,14 @@ export const HerdrFleet = Layer.effect(
                       : Effect.void,
                   ),
                 );
-              } else if (options.repository) {
-                yield* removeWorktreeByAdoption(options.repository, options.task);
               }
-              return;
-
-            case "nothing":
-              return;
-          }
+              return options.repository
+                ? removeWorktreeByAdoption(options.repository, options.task)
+                : Effect.void;
+            }),
+            Match.when({ kind: "nothing" }, () => Effect.void),
+            Match.exhaustive,
+          );
         }).pipe(Effect.asVoid, Effect.ignore),
 
       notify: (title: string, body: string) =>
@@ -523,7 +503,7 @@ export const HerdrFleet = Layer.effect(
 ).pipe(Layer.provide(BunContext.layer));
 
 /** herdr dropped the prompt because the agent was not listening yet. */
-class Stalled extends Data.TaggedError("Stalled") {}
+class Stalled extends Schema.TaggedError<Stalled>()("Stalled", {}) {}
 
 const STALLED = "agent_prompt_stalled";
 
@@ -558,17 +538,22 @@ const failureOf = (result: Output): string => {
 const errorOf = (result: Output): { code: string; message: string } | undefined =>
   envelopeError(result.stdout) ?? envelopeError(result.stderr);
 
+const ErrorEnvelope = Schema.Struct({
+  error: Schema.optional(
+    Schema.Struct({
+      code: Schema.String,
+      message: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
 const envelopeError = (text: string): { code: string; message: string } | undefined => {
-  try {
-    const parsed = JSON.parse(text) as { error?: { code?: unknown; message?: unknown } };
-    const error = parsed.error;
-    if (!error || typeof error.code !== "string") return undefined;
-    return { code: error.code, message: typeof error.message === "string" ? error.message : "" };
-  } catch {
-    // Not an envelope. herdr printed usage or something else, and `failureOf`
-    // falls back to the raw text rather than pretending this parsed.
-    return undefined;
-  }
+  const parsed = Schema.decodeUnknownEither(Schema.parseJson(ErrorEnvelope))(text);
+  if (Either.isLeft(parsed) || parsed.right.error === undefined) return undefined;
+  return {
+    code: parsed.right.error.code,
+    message: parsed.right.error.message ?? "",
+  };
 };
 
 /**

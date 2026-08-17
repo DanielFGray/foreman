@@ -1,6 +1,6 @@
 import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
-import { DateTime } from "effect";
+import { DateTime, Match } from "effect";
 import { createEffect, createSignal, For, onCleanup, Show, type Accessor } from "solid-js";
 import {
   nextDispatch,
@@ -239,38 +239,37 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
       ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
       : ACTIONS[column];
 
-  return actions.filter((action) => {
-    switch (action) {
-      case "takeOver":
-      case "focus":
-        return row.worker !== undefined;
-      case "descend":
-        return (
+  return actions.filter((action) =>
+    Match.value(action).pipe(
+      Match.when("takeOver", () => row.worker !== undefined),
+      Match.when("focus", () => row.worker !== undefined),
+      Match.when(
+        "descend",
+        () =>
           (row.task !== undefined && rungOf(row.task) !== undefined) ||
-          (row.ready !== undefined && rungOf(row.ready) !== undefined)
-        );
-      case "unassign":
-        return (
+          (row.ready !== undefined && rungOf(row.ready) !== undefined),
+      ),
+      Match.when(
+        "unassign",
+        () =>
           (row.task !== undefined && staleReview(row.task, row.worker)) ||
-          (row.ready !== undefined && staleReview(row.ready, undefined))
-        );
-      case "retry":
-      case "release":
-      case "close":
-        return row.task !== undefined;
-      case "complete":
-        return row.ready !== undefined;
-      case "intervene":
-        return (
+          (row.ready !== undefined && staleReview(row.ready, undefined)),
+      ),
+      Match.when("retry", () => row.task !== undefined),
+      Match.when("release", () => row.task !== undefined),
+      Match.when("close", () => row.task !== undefined),
+      Match.when("complete", () => row.ready !== undefined),
+      Match.when(
+        "intervene",
+        () =>
           row.ready !== undefined ||
-          (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled")
-        );
-      case "onboard":
-        return row.project !== undefined;
-      case "adopt":
-        return row.unreviewed !== undefined;
-    }
-  });
+          (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled"),
+      ),
+      Match.when("onboard", () => row.project !== undefined),
+      Match.when("adopt", () => row.unreviewed !== undefined),
+      Match.exhaustive,
+    ),
+  );
 };
 
 /**
@@ -440,49 +439,34 @@ export const Pipeline = (props: {
     const target = rows()[index];
     if (!target) return;
     if (!actionsFor(target.column, target).includes(action)) return;
-    switch (action) {
-      case "complete":
+    Match.value(action).pipe(
+      Match.when("complete", () => {
         if (target.ready) {
           // Do not let the key that opens the input become its first character.
           queueMicrotask(() => setCompletion(target.ready));
         }
-        break;
-      case "retry":
-        if (target.task) props.controls.retry(target.task);
-        break;
-      case "release":
-        if (target.task) props.controls.release(target.task);
-        break;
-      case "close":
-        if (target.task) props.controls.close(target.task);
-        break;
-      case "takeOver":
-        if (target.worker) props.controls.focus(target.worker);
-        break;
-      case "focus":
-        if (target.worker) props.controls.focus(target.worker);
-        break;
-      case "intervene":
-        setIntervention(target);
-        break;
-      case "descend":
+      }),
+      Match.when("retry", () => target.task && props.controls.retry(target.task)),
+      Match.when("release", () => target.task && props.controls.release(target.task)),
+      Match.when("close", () => target.task && props.controls.close(target.task)),
+      Match.when("takeOver", () => target.worker && props.controls.focus(target.worker)),
+      Match.when("focus", () => target.worker && props.controls.focus(target.worker)),
+      Match.when("intervene", () => setIntervention(target)),
+      Match.when("descend", () => {
         if (target.task && rungOf(target.task) !== undefined) props.controls.descend(target.task);
         else if (target.ready && rungOf(target.ready) !== undefined)
           props.controls.descend(target.ready);
-        break;
-      case "unassign":
+      }),
+      Match.when("unassign", () => {
         if (target.task && staleReview(target.task, target.worker))
           props.controls.unassign(target.task);
         else if (target.ready && staleReview(target.ready, undefined))
           props.controls.unassign(target.ready);
-        break;
-      case "onboard":
-        if (target.project) props.controls.onboard(target.project);
-        break;
-      case "adopt":
-        if (target.unreviewed) props.controls.adopt(target.unreviewed);
-        break;
-    }
+      }),
+      Match.when("onboard", () => target.project && props.controls.onboard(target.project)),
+      Match.when("adopt", () => target.unreviewed && props.controls.adopt(target.unreviewed)),
+      Match.exhaustive,
+    );
   };
 
   useKeyboard((key) => {
@@ -529,72 +513,33 @@ export const Pipeline = (props: {
       else if (key.name === "c") chooseRung("continue");
       return;
     }
-    switch (key.name) {
-      case "q":
-        props.controls.quit();
-        break;
-      case "p":
-        props.controls.cycleDispatch();
-        break;
-      case "f12":
-        props.controls.toggleConsole();
-        break;
-      case "up":
-      case "k":
-        step(-1);
-        break;
-      case "down":
-      case "j":
-        step(1);
-        break;
-      case "pageup":
-        step(-PAGE_STEP);
-        break;
-      case "pagedown":
-        step(PAGE_STEP);
-        break;
-      case "left":
-      case "h":
-        moveView(-1);
-        break;
-      case "right":
-      case "l":
-        moveView(1);
-        break;
-      case "r":
-        apply("retry");
-        break;
-      case "t":
-        apply("takeOver");
-        break;
-      case "f":
-        apply("focus");
-        break;
-      case "e":
-        apply("intervene");
-        break;
-      case "x":
-        apply("descend");
-        break;
-      case "u":
-        apply("unassign");
-        break;
-      case "d":
-        apply(key.shift ? "complete" : "release");
-        break;
-      case "D":
-        apply("complete");
-        break;
-      case "c":
-        apply("close");
-        break;
-      case "o":
-        apply("onboard");
-        break;
-      case "s":
-        apply("adopt");
-        break;
-    }
+    const keyboardActions: Record<string, () => void> = {
+      q: props.controls.quit,
+      p: props.controls.cycleDispatch,
+      f12: props.controls.toggleConsole,
+      up: () => step(-1),
+      k: () => step(-1),
+      down: () => step(1),
+      j: () => step(1),
+      pageup: () => step(-PAGE_STEP),
+      pagedown: () => step(PAGE_STEP),
+      left: () => moveView(-1),
+      h: () => moveView(-1),
+      right: () => moveView(1),
+      l: () => moveView(1),
+      r: () => apply("retry"),
+      t: () => apply("takeOver"),
+      f: () => apply("focus"),
+      e: () => apply("intervene"),
+      x: () => apply("descend"),
+      u: () => apply("unassign"),
+      d: () => apply(key.shift ? "complete" : "release"),
+      D: () => apply("complete"),
+      c: () => apply("close"),
+      o: () => apply("onboard"),
+      s: () => apply("adopt"),
+    };
+    keyboardActions[key.name]?.();
   });
 
   return (
@@ -922,24 +867,17 @@ const Status = (props: {
 };
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> => {
-  switch (column) {
-    case "queue":
-      return state.queue.map((task) => readyRow(task, "queue", state));
-    case "working":
-      return state.working.map((active) => activeRow(active, "working", state));
-    case "review":
-      return state.review.map((active) => activeRow(active, "review", state));
-    case "landed":
-      return state.landed.map((task) => landedRow(task, state));
-    case "decisions":
-      return state.decisions.map((active) => decisionRow(active, state));
-    case "yours":
-      return state.yours.map((task) => readyRow(task, "yours", state));
-    case "held":
-      return state.held.map(heldRow);
-    case "unreviewed":
-      return state.unreviewed.map(unreviewedRow);
-  }
+  return Match.value(column).pipe(
+    Match.when("queue", () => state.queue.map((task) => readyRow(task, "queue", state))),
+    Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
+    Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
+    Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
+    Match.when("decisions", () => state.decisions.map((active) => decisionRow(active, state))),
+    Match.when("yours", () => state.yours.map((task) => readyRow(task, "yours", state))),
+    Match.when("held", () => state.held.map(heldRow)),
+    Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
+    Match.exhaustive,
+  );
 };
 
 const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow> => {

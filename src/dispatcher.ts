@@ -1202,7 +1202,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const teardown = (task: { readonly id: string; readonly project: string }) =>
       fleet.close({ task: task.id, repository: repositoryFor(task) });
 
-    const eachProject = <A>(read: (project: Project) => Effect.Effect<ReadonlyArray<A>, unknown>) =>
+    const eachProject = <A>(read: (project: Project) => Effect.Effect<ReadonlyArray<A>, Error>) =>
       Effect.forEach(settings.projects, (project) =>
         read(project).pipe(
           // One unreadable project must not blind foreman to the other seven.

@@ -1,7 +1,7 @@
+import { mkdir } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { dirname } from "node:path";
 import { Cause, Effect, Layer, Logger } from "effect";
-import { appendFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
 
 /**
  * Every line foreman logs, written twice: once to a file, once to the screen.
@@ -18,30 +18,35 @@ import { dirname, join } from "node:path";
  * stdout.
  */
 export const logging = (path = defaultPath()): Layer.Layer<never> =>
-  Logger.replace(
-    Logger.defaultLogger,
-    Logger.make(({ date, logLevel, message, cause }) => {
-      const said = Array.isArray(message) ? message.map(String).join(" ") : String(message);
-      // A fiber that dies logs an empty message and puts everything in the
-      // cause. Reading only the message wrote a blank ERROR line for every
-      // crash foreman ever had — the one event the file exists to explain.
-      const text = [said, Cause.isEmpty(cause) ? "" : Cause.pretty(cause)]
-        .filter((part) => part !== "")
-        .join("\n");
-      // Synchronous on purpose: a crash must not lose the lines that explain
-      // it, and foreman writes a handful of lines per tick, not a stream.
-      appendFileSync(
-        path,
-        `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
-      );
-      globalThis.console.log(`${logLevel.label} ${text}`);
-    }),
-  ).pipe(Layer.tap(() => Effect.sync(() => mkdirSync(dirname(path), { recursive: true }))));
+  Layer.unwrapEffect(
+    Effect.gen(function* () {
+      const stream = yield* Effect.promise(async () => {
+        await mkdir(dirname(path), { recursive: true });
+        return createWriteStream(path, { flags: "a" });
+      });
 
-const defaultPath = (): string =>
-  process.env["FOREMAN_LOG"] ??
-  join(
-    process.env["XDG_STATE_HOME"] ?? join(process.env["HOME"] ?? "", ".local", "state"),
-    "foreman",
-    "foreman.jsonl",
+      return Logger.replace(
+        Logger.defaultLogger,
+        Logger.make(({ date, logLevel, message, cause }) => {
+          const said = Array.isArray(message) ? message.map(String).join(" ") : String(message);
+          // A fiber that dies logs an empty message and puts everything in the
+          // cause. Reading only the message wrote a blank ERROR line for every
+          // crash foreman ever had — the one event the file exists to explain.
+          const text = [said, Cause.isEmpty(cause) ? "" : Cause.pretty(cause)]
+            .filter((part) => part !== "")
+            .join("\n");
+          // Keep one stream so log records stay ordered without forking a fiber
+          // from the synchronous logger callback.
+          stream.write(
+            `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
+          );
+          globalThis.console.log(`${logLevel.label} ${text}`);
+        }),
+      );
+    }),
   );
+
+const defaultPath = (): string => {
+  const stateHome = process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"] ?? ""}/.local/state`;
+  return process.env["FOREMAN_LOG"] ?? `${stateHome}/foreman/foreman.jsonl`;
+};

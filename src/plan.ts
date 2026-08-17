@@ -1,6 +1,5 @@
-import { FileSystem } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import { Duration, Effect, Option, Schema } from "effect";
-import { tmpdir } from "node:os";
 import { Settings } from "./config.ts";
 import {
   type AgentRole,
@@ -44,72 +43,70 @@ import { Prompts } from "./prompt.ts";
  * the stage is re-derived from the epic's status, so a half-finished plan
  * continues rather than being orphaned.
  */
-export const runPlan = (input: PlanInput) =>
-  Effect.gen(function* () {
-    const settings = yield* Settings;
-    const fleet = yield* Fleet;
-    const prog = yield* Prog;
+export const runPlan = Effect.fnUntraced(function* (input: PlanInput) {
+  const settings = yield* Settings;
+  const fleet = yield* Fleet;
+  const prog = yield* Prog;
 
-    if (Option.isSome(input.epic) && Option.isSome(input.plan)) {
-      return yield* new PlanError({
-        detail:
-          "--file cannot be combined with --epic: a resumed plan already has its plan written.",
-      });
-    }
-
-    const epic = yield* Option.match(input.epic, {
-      onSome: (id) => adopt(settings.projects, input.project, id),
-      onNone: () =>
-        createEpic(
-          input,
-          settings.projects.map((p) => p.name),
-        ),
+  if (Option.isSome(input.epic) && Option.isSome(input.plan)) {
+    return yield* new PlanError({
+      detail: "--file cannot be combined with --epic: a resumed plan already has its plan written.",
     });
+  }
 
-    const project = settings.projects.find((p) => p.name === epic.project);
-    if (!project) {
-      return yield* new PlanError({
-        detail: `${epic.id} is in "${epic.project}", which is not configured.`,
-      });
-    }
-
-    const worker = yield* fleet.open({
-      task: epic.id,
-      repository: project.directory,
-      branch: labelFor(epic.id),
-      directory: directoryFor(project.name, epic.id),
-    });
-
-    const initial = epic.status;
-    let status = initial;
-    if (status === "draft") {
-      status = yield* runStage("planning", epic.id, worker, project.directory);
-    }
-    // The tasker files the children that move the epic out of draft, so the
-    // planner -> tasker handoff cannot key on the epic's status: a freshly
-    // planned epic is still "draft". It keys on the plan not being complete.
-    if (stageFor(status) !== "complete") {
-      status = yield* runStage("tasking", epic.id, worker, project.directory);
-    }
-
-    // Only a completed run takes the workspace down; a failed or interrupted
-    // one stays so `--epic` can resume it.
-    yield* fleet.close({ task: epic.id, repository: project.directory });
-
-    if (status === "done") {
-      const count = (yield* prog.children(epic.id)).length;
-      if (initial !== "done") {
-        yield* prog.log(epic.id, `foreman: plan complete — ${count} tasks filed.`);
-      }
-      yield* Effect.logInfo(`plan ${epic.id} complete: ${count} tasks under ${project.name}`);
-    } else {
-      // Only a canceled epic reaches this branch — a failed run throws before
-      // the close above, which is what keeps the workspace for `--epic`. Here
-      // the run completed without the tasker finishing, so nothing is left.
-      yield* Effect.logInfo(`plan ${epic.id} ended ${status}; nothing to resume`);
-    }
-    return epic.id;
+  const epic = yield* Option.match(input.epic, {
+    onSome: (id) => adopt(settings.projects, input.project, id),
+    onNone: () =>
+      createEpic(
+        input,
+        settings.projects.map((p) => p.name),
+      ),
   });
+
+  const project = settings.projects.find((p) => p.name === epic.project);
+  if (!project) {
+    return yield* new PlanError({
+      detail: `${epic.id} is in "${epic.project}", which is not configured.`,
+    });
+  }
+
+  const worker = yield* fleet.open({
+    task: epic.id,
+    repository: project.directory,
+    branch: labelFor(epic.id),
+    directory: directoryFor(project.name, epic.id),
+  });
+
+  const initial = epic.status;
+  let status = initial;
+  if (status === "draft") {
+    status = yield* runStage("planning", epic.id, worker, project.directory);
+  }
+  // The tasker files the children that move the epic out of draft, so the
+  // planner -> tasker handoff cannot key on the epic's status: a freshly
+  // planned epic is still "draft". It keys on the plan not being complete.
+  if (stageFor(status) !== "complete") {
+    status = yield* runStage("tasking", epic.id, worker, project.directory);
+  }
+
+  // Only a completed run takes the workspace down; a failed or interrupted
+  // one stays so `--epic` can resume it.
+  yield* fleet.close({ task: epic.id, repository: project.directory });
+
+  if (status === "done") {
+    const count = (yield* prog.children(epic.id)).length;
+    if (initial !== "done") {
+      yield* prog.log(epic.id, `foreman: plan complete — ${count} tasks filed.`);
+    }
+    yield* Effect.logInfo(`plan ${epic.id} complete: ${count} tasks under ${project.name}`);
+  } else {
+    // Only a canceled epic reaches this branch — a failed run throws before
+    // the close above, which is what keeps the workspace for `--epic`. Here
+    // the run completed without the tasker finishing, so nothing is left.
+    yield* Effect.logInfo(`plan ${epic.id} ended ${status}; nothing to resume`);
+  }
+  return epic.id;
+});
 
 /** What the CLI parses off the command line and hands to runPlan. */
 export interface PlanInput {
@@ -204,107 +201,112 @@ export const resolveProject = (
  * The rough plan becomes the epic's description; the planner later replaces it
  * with the full specification.
  */
-const createEpic = (input: PlanInput, configured: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const prog = yield* Prog;
+const createEpic = Effect.fnUntraced(function* (
+  input: PlanInput,
+  configured: ReadonlyArray<string>,
+) {
+  const prog = yield* Prog;
 
-    const project = resolveProject(input.project, configured);
-    if (Option.isNone(project)) {
-      const requested = Option.getOrElse(input.project, () => "");
-      const detail =
-        requested !== ""
-          ? `--project ${requested} is not configured (configured: ${configured.join(", ")})`
-          : `--project is required when more than one project is configured (configured: ${configured.join(", ")})`;
-      return yield* new PlanError({ detail });
-    }
+  const project = resolveProject(input.project, configured);
+  if (Option.isNone(project)) {
+    const requested = Option.getOrElse(input.project, () => "");
+    const detail =
+      requested !== ""
+        ? `--project ${requested} is not configured (configured: ${configured.join(", ")})`
+        : `--project is required when more than one project is configured (configured: ${configured.join(", ")})`;
+    return yield* new PlanError({ detail });
+  }
 
-    const text = yield* Option.match(input.plan, {
-      onSome: (plan) => Effect.succeed(Option.some(plan)),
-      onNone: () => draftPlan,
-    });
-    if (Option.isNone(text)) {
-      return yield* new PlanError({
-        detail: "no plan given — pass --file or write the plan in the editor.",
-      });
-    }
-
-    const plan = Option.getOrElse(text, () => "");
-    const title = Option.getOrElse(input.title, () => titleFor(plan));
-    const id = yield* prog.addEpic(
-      Option.getOrElse(project, () => ""),
-      title,
-      plan,
-      [PLAN],
-    );
-    return yield* prog.show(id);
+  const text = yield* Option.match(input.plan, {
+    onSome: (plan) => Effect.succeed(Option.some(plan)),
+    onNone: () => draftPlan,
   });
+  if (Option.isNone(text)) {
+    return yield* new PlanError({
+      detail: "no plan given — pass --file or write the plan in the editor.",
+    });
+  }
+
+  const plan = Option.getOrElse(text, () => "");
+  const title = Option.getOrElse(input.title, () => titleFor(plan));
+  const id = yield* prog.addEpic(
+    Option.getOrElse(project, () => ""),
+    title,
+    plan,
+    [PLAN],
+  );
+  return yield* prog.show(id);
+});
 
 /**
  * Adopts an interrupted plan so `--epic ep-...` resumes it. The workspace is
  * re-opened by its label later; here the epic is validated as a plan in a
  * configured project.
  */
-const adopt = (
+const adopt = Effect.fnUntraced(function* (
   projects: ReadonlyArray<{ readonly name: string }>,
   requested: Option.Option<string>,
   id: string,
-) =>
-  Effect.gen(function* () {
-    const prog = yield* Prog;
+) {
+  const prog = yield* Prog;
 
-    if (!/^ep-[0-9a-f]{6}$/.test(id)) {
-      return yield* new PlanError({ detail: `not a plan epic id: ${id}.` });
-    }
-    const item = yield* prog
-      .show(id)
-      .pipe(Effect.mapError(() => new PlanError({ detail: `no such item: ${id}.` })));
-    if (item.type !== "epic" || !isPlan(item)) {
-      return yield* new PlanError({
-        detail: `${id} is not a plan epic (it is ${item.type} and lacks the "${PLAN}" label).`,
-      });
-    }
-    if (Option.isSome(requested) && requested.value !== item.project) {
-      return yield* new PlanError({
-        detail: `--project ${requested.value} does not match ${id}'s project (${item.project}).`,
-      });
-    }
-    if (!projects.some((p) => p.name === item.project)) {
-      return yield* new PlanError({
-        detail: `${id} is in "${item.project}", which is not configured.`,
-      });
-    }
-    return item;
-  });
+  if (!/^ep-[0-9a-f]{6}$/.test(id)) {
+    return yield* new PlanError({ detail: `not a plan epic id: ${id}.` });
+  }
+  const item = yield* prog
+    .show(id)
+    .pipe(Effect.mapError(() => new PlanError({ detail: `no such item: ${id}.` })));
+  if (item.type !== "epic" || !isPlan(item)) {
+    return yield* new PlanError({
+      detail: `${id} is not a plan epic (it is ${item.type} and lacks the "${PLAN}" label).`,
+    });
+  }
+  if (Option.isSome(requested) && requested.value !== item.project) {
+    return yield* new PlanError({
+      detail: `--project ${requested.value} does not match ${id}'s project (${item.project}).`,
+    });
+  }
+  if (!projects.some((p) => p.name === item.project)) {
+    return yield* new PlanError({
+      detail: `${id} is in "${item.project}", which is not configured.`,
+    });
+  }
+  return item;
+});
 
 /** Runs one stage: spawns the agent, then waits for its verdict. */
-const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: string) =>
-  Effect.gen(function* () {
-    const settings = yield* Settings;
-    const fleet = yield* Fleet;
-    const prog = yield* Prog;
-    const prompts = yield* Prompts;
+const runStage = Effect.fnUntraced(function* (
+  stage: PlanStage,
+  epic: string,
+  worker: Worker,
+  repository: string,
+) {
+  const settings = yield* Settings;
+  const fleet = yield* Fleet;
+  const prog = yield* Prog;
+  const prompts = yield* Prompts;
 
-    const item = yield* prog.show(epic);
-    const rung = stage === "planning" ? settings.planner : settings.tasker;
-    const prompt =
-      stage === "planning"
-        ? yield* prompts.planner(item, worker.directory, repository)
-        : yield* prompts.tasker(item, worker.directory, repository);
+  const item = yield* prog.show(epic);
+  const rung = stage === "planning" ? settings.planner : settings.tasker;
+  const prompt =
+    stage === "planning"
+      ? yield* prompts.planner(item, worker.directory, repository)
+      : yield* prompts.tasker(item, worker.directory, repository);
 
-    // A stage is a role. The two stages run different models on different work
-    // — the planner writes the specification, the tasker files it — so the
-    // tasker is a second agent beside the planner rather than a second author
-    // in its pane, and the guard that keeps one agent per role never has to be
-    // talked out of a pane the previous stage is still sitting in.
-    yield* fleet.spawn(worker, {
-      kind: rung.harness,
-      model: rung.model,
-      prompt,
-      role: roleOf(stage),
-    });
-    yield* Effect.logInfo(`plan ${epic}: ${stage} by ${rung.name} in ${worker.workspace}`);
-    return yield* waitFor(stage, epic, item.description);
+  // A stage is a role. The two stages run different models on different work
+  // — the planner writes the specification, the tasker files it — so the
+  // tasker is a second agent beside the planner rather than a second author
+  // in its pane, and the guard that keeps one agent per role never has to be
+  // talked out of a pane the previous stage is still sitting in.
+  yield* fleet.spawn(worker, {
+    kind: rung.harness,
+    model: rung.model,
+    prompt,
+    role: roleOf(stage),
   });
+  yield* Effect.logInfo(`plan ${epic}: ${stage} by ${rung.name} in ${worker.workspace}`);
+  return yield* waitFor(stage, epic, item.description);
+});
 
 /**
  * Polls until the stage's agent reaches a verdict, read from the epic status.
@@ -319,51 +321,61 @@ const runStage = (stage: PlanStage, epic: string, worker: Worker, repository: st
  * planner replacing it with a specification is how planning signals done, since
  * an epic's derived status cannot move until its children exist.
  */
-const waitFor = (stage: PlanStage, epic: string, initialDescription: string | null) =>
-  Effect.gen(function* () {
-    const settings = yield* Settings;
-    const fleet = yield* Fleet;
-    const prog = yield* Prog;
+const waitFor = Effect.fnUntraced(function* (
+  stage: PlanStage,
+  epic: string,
+  initialDescription: string | null,
+) {
+  const settings = yield* Settings;
+  const fleet = yield* Fleet;
+  const prog = yield* Prog;
 
-    for (;;) {
-      yield* Effect.sleep(Duration.seconds(settings.pollInterval));
-      const worker = (yield* fleet.roster).find((candidate) => candidate.task === epic);
-      // This stage's own pane, not the workspace's aggregate: once the tasker
-      // has split off beside it, the finished planner is still sitting there
-      // idle, and the loudest pane in the workspace is the wrong one to read.
-      const state = worker?.roles.get(roleOf(stage)) ?? "gone";
-      const item = yield* prog.show(epic);
-      const specWritten = item.description !== initialDescription;
-      const result = decide(stage, state, item.status, specWritten);
-      if (result === "advance") return item.status;
-      if (result === "failed") {
-        const evidence =
-          stage === "planning"
-            ? "without writing a specification into the epic's description"
-            : `with the epic still ${item.status}`;
-        return yield* new PlanError({
-          detail: `the ${stage} agent stopped ${evidence} (its pane reads ${state}). Resume with \`foreman plan --epic ${epic}\`.`,
-        });
-      }
+  for (;;) {
+    yield* Effect.sleep(Duration.seconds(settings.pollInterval));
+    const worker = (yield* fleet.roster).find((candidate) => candidate.task === epic);
+    // This stage's own pane, not the workspace's aggregate: once the tasker
+    // has split off beside it, the finished planner is still sitting there
+    // idle, and the loudest pane in the workspace is the wrong one to read.
+    const state = worker?.roles.get(roleOf(stage)) ?? "gone";
+    const item = yield* prog.show(epic);
+    const specWritten = item.description !== initialDescription;
+    const result = decide(stage, state, item.status, specWritten);
+    if (result === "advance") return item.status;
+    if (result === "failed") {
+      const evidence =
+        stage === "planning"
+          ? "without writing a specification into the epic's description"
+          : `with the epic still ${item.status}`;
+      return yield* new PlanError({
+        detail: `the ${stage} agent stopped ${evidence} (its pane reads ${state}). Resume with \`foreman plan --epic ${epic}\`.`,
+      });
     }
-  });
+  }
+});
 
 /** Drafts the rough plan in `$EDITOR`, returning None when nothing was written. */
 const draftPlan = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
+  const executor = yield* CommandExecutor.CommandExecutor;
   const editor = process.env["EDITOR"] ?? process.env["VISUAL"] ?? "vi";
-  const file = `${tmpdir()}/foreman-plan-${Date.now()}.md`;
+  const file = yield* fs.makeTempFile({ prefix: "foreman-plan-", suffix: ".md" });
 
   yield* fs
     .writeFileString(file, "")
     .pipe(Effect.mapError(() => new PlanError({ detail: `could not write ${file}.` })));
-  const result = yield* Effect.sync(() =>
-    Bun.spawnSync([editor, file], { stdio: ["inherit", "inherit", "inherit"] }),
+  const result = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const process = yield* executor.start(
+        Command.make(editor, file).pipe(
+          Command.stdin("inherit"),
+          Command.stdout("inherit"),
+          Command.stderr("inherit"),
+        ),
+      );
+      return yield* process.exitCode;
+    }),
   );
-  if (result.exitCode !== 0) {
-    yield* fs.remove(file).pipe(Effect.ignore);
-    return Option.none();
-  }
+  if (Number(result) !== 0) return yield* fs.remove(file).pipe(Effect.as(Option.none()));
   const text = yield* fs
     .readFileString(file)
     .pipe(Effect.mapError(() => new PlanError({ detail: `could not read ${file}.` })));
