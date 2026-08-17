@@ -307,12 +307,16 @@ that is only a harness, running whatever that program defaults to. Two rungs may
 share a harness and differ only in model, which is the point: without the model,
 every rung would be the same rung.
 
-A task starts at the bottom. It climbs one rung — never a jump — when the rung it
-is on demonstrably failed it: the agent settled without finishing, a reviewer
-sent the work back, or the branch would not land. Foreman writes the new rung as
-a `rung-<name>` label, in the task store rather than in its own memory, because
-the evidence that a rung failed here is exactly what a dispatch days later, after
-a restart, needs to act on. Set the label by hand to pin a task to a rung.
+A task starts at the bottom. It climbs one rung — never a jump — on real evidence
+that the rung it is on failed it: a reviewer sent the work back, the branch would
+not land, or the rung has been spent by `attemptsPerRung` attempts that ended
+without finishing. An agent that merely stopped unfinished has said nothing about
+its model — a crash, a timeout and a usage wall all end the same way — so the
+task stays on the rung and is tried again. Foreman writes the new rung as a
+`rung-<name>` label, and the retry count as an `attempt-<rung>-<n>` label, in the
+task store rather than in its own memory, because the evidence that a rung failed
+here is exactly what a dispatch days later, after a restart, needs to act on. Set
+the label by hand to pin a task to a rung.
 
 The rung is a property of the task, never of which slot happened to be free.
 
@@ -427,6 +431,11 @@ strictly.
   ],
   "planner": "claude",      // turns a rough plan into a specification (default: the top rung)
   "tasker": "deepseek",     // turns the specification into tasks (default: the bottom rung)
+  // How many attempts one rung gets before an unfinished task climbs to the
+  // next. A crash, a timeout or a usage wall says nothing about the model, so
+  // the first attemptsPerRung - 1 retry in place; a reviewer rejection or a
+  // branch that will not land climbs at once and spends none of it.
+  "attemptsPerRung": 2,
   "pollSeconds": 20,
   "staleAfterHours": 24,
   "landedWindowDays": 7,

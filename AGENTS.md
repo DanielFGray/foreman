@@ -39,6 +39,7 @@ open, and nothing can tell foreman's own work from a claim made by hand.
 | Who authored this branch? | the task's `by-<rung>` label |
 | Is a reviewer assigned? | the task's `review-by-<rung>` label |
 | Which rung comes next? | the task's `rung-<name>` label |
+| How many tries has this rung had? | the task's `attempt-<rung>-<n>` label |
 | Is this one waiting on a person? | its rung names no configured model |
 | Is this task mine to review? | it has a `by-*` label |
 | Is this project free to work in? | `git status` in its checkout |
@@ -116,8 +117,12 @@ dashboard, and the task stays claimed until someone answers. After
 `staleAfterHours` of no activity the claim is released with a log line.
 
 Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
-an agent that settled without finishing, a reviewer sending work back, or a
-branch that would not land.
+a reviewer sending work back, a branch that would not land, or a rung spent by
+`attemptsPerRung` unfinished endings. An agent that merely stopped without
+finishing has said nothing about its model — a crash, a timeout and a usage wall
+all end the same way — so the task stays on the rung and is tried again. The
+count of those endings lives on the task as an `attempt-<rung>-<n>` label,
+because a dispatch days later is exactly what reads it.
 
 ### The operator's checkout is shared, so it is asked about
 
@@ -662,7 +667,7 @@ Two divergences from the settled design:
 - **Plan epics are drafts and must stay drafts.** The "daemon needs no plan
   awareness" property rests on the epic never being claimed or moved to
   `in_progress`; the settle loop would read a settled workspace on an
-  `in_progress` item as an unfinished agent and climb and release it. The
+  `in_progress` item as an unfinished agent and release it. The
   tasker's `prog done` is the only stored transition in a plan's life.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
   come back as a JSON envelope on stdout; failures come back as an envelope on

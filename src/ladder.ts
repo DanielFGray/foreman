@@ -52,6 +52,20 @@ export const above = (ladder: Ladder, rung: string | undefined): string => {
 };
 
 /**
+ * Whether a rung with this many unfinished attempts is spent, so the task
+ * climbs.
+ *
+ * An agent that stops without finishing says nothing about its model — a
+ * crash, a timeout and a usage wall all end the same way — so the first
+ * `attemptsPerRung - 1` failures retry the same rung and the one that reaches
+ * `attemptsPerRung` climbs. Judgements never count: a reviewer sending work
+ * back, or a branch that would not land, climbs on the strength of the verdict
+ * alone.
+ */
+export const rungSpent = (attempts: number, attemptsPerRung: number): boolean =>
+  attempts >= attemptsPerRung;
+
+/**
  * The rung one step down, and `undefined` where there is nothing to write.
  *
  * One step at a time, never a jump: lowering a task is the operator saying a
