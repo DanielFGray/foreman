@@ -39,6 +39,24 @@ describe("Prompts", () => {
     expect(prompt).not.toContain("prog done ts-123456");
   });
 
+  // A pre-existing failure is filed once per author that hits it, reworded each
+  // time, and each duplicate costs the fleet a full suite run. The whole dedup
+  // is this block: the search command renders the project, and the instruction
+  // is to append to an existing task rather than file a new one.
+  test("an author searches the backlog before filing a pre-existing failure", async () => {
+    const prompt = await Effect.runPromise(
+      Prompts.author(ready, "/tmp/worktree", "/tmp/repository").pipe(
+        Effect.provide(Prompts.Default),
+      ),
+    );
+
+    expect(prompt).toContain("prog list -p foreman");
+    expect(prompt).toContain("match on the test name, not on");
+    expect(prompt).toContain("do not file a new one");
+    expect(prompt).toContain('prog log <id> "<what failed>"');
+    expect(prompt).toContain("only when nothing in the backlog describes it");
+  });
+
   test("asks a successful reviewer for a verdict, not a merge", async () => {
     const prompt = await Effect.runPromise(
       Prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test").pipe(

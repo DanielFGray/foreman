@@ -39,7 +39,15 @@ test is wrong, log why and leave it failing.
 
 Before you finish, run the full verification — definition of done, tests, linter,
 build — and update whatever the change made stale. Failures in code you touched are
-yours. Failures already on the main branch are not: file them with `prog add`.
+yours. Failures already on the main branch are not: search the backlog before you
+file one.
+
+Search with `prog list -p {{ project }}` and read the titles for the same failing
+test or symptom. The same failure is filed many times, reworded each time, and each
+duplicate later costs an author a full suite run — so match on the test name, not on
+phrasing. If a task already describes it, do not file a new one: add what you saw to
+it with `prog log <id> "<what failed>"` and name that task in your own task's log.
+File with `prog add` only when nothing in the backlog describes it.
 
 Then read your work as an adversary would, once. Read `git diff HEAD...{{ branch }}`,
 not your memory of writing it — the memory produced any mistake in there. Walk the
