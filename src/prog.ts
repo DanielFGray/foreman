@@ -132,8 +132,19 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
           Effect.asVoid,
         ),
 
-      /** Rolls back reviewer ownership when the reviewer never started. */
-      clearReview: (task: string) => removeLabels(task, [REVIEW_BY]),
+      /**
+       * Ends a review, and the verdict that went with it.
+       *
+       * The verdict says a reviewer read a diff and found it sound, so it stops
+       * being true the moment the review ends without landing — whichever way
+       * that happens: the reviewer sent the work back, never started, or the
+       * operator cleared it as stale. Leaving `approved` behind is the exact
+       * failure `awaitingLanding` reads: a task back in the queue still
+       * labelled as approved is a pre-approved branch waiting for its next
+       * author, and a reviewer can approve and then return work in the same
+       * turn.
+       */
+      clearReview: (task: string) => removeLabels(task, [REVIEW_BY, APPROVED]),
 
       /**
        * Records which rung of the ladder a task's next dispatch must use.
