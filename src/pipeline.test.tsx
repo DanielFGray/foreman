@@ -11,14 +11,14 @@ import {
   staleReview,
   type Controls,
 } from "./pipeline.tsx";
-import { authoredBy, reviewedBy, type Item, type ReadyTask } from "./prog.ts";
+import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
 
 const RUNGS = ["flash", "pro", "sol"];
 const Pipeline = (props: { readonly state: Accessor<FleetState>; readonly controls: Controls }) => (
   <DashboardPipeline {...props} rungs={RUNGS} />
 );
 
-const task = (id: string, status: string, labels: ReadonlyArray<string>): Item => ({
+const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): Item => ({
   id,
   title: `task ${id}`,
   status,

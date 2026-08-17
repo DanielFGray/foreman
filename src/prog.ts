@@ -329,10 +329,21 @@ export const ReadyTask = Schema.Struct({
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
+/** Status values returned by prog for epics and tasks. */
+export const TaskStatus = Schema.Literal(
+  "draft",
+  "open",
+  "in_progress",
+  "reviewing",
+  "done",
+  "canceled",
+);
+export type TaskStatus = typeof TaskStatus.Type;
+
 export const Item = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  status: Schema.String,
+  status: TaskStatus,
   project: Schema.String,
   type: Schema.String,
   priority: Schema.Number,

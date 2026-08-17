@@ -1,4 +1,4 @@
-import { DateTime, Duration, Effect, Queue, Ref, SubscriptionRef } from "effect";
+import { DateTime, Duration, Effect, Match, Queue, Ref, SubscriptionRef } from "effect";
 import { Settings } from "./config.ts";
 import {
   type AgentRole,
@@ -12,6 +12,7 @@ import {
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
+import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError } from "./repository.ts";
 import {
   above,
@@ -462,143 +463,103 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ),
           ({ task, worker, kind }) =>
             Effect.gen(function* () {
-              if (task.status === "done" || task.status === "canceled") {
-                yield* fleet.notify(
-                  task.status === "done" ? "Task landed" : "Task canceled",
-                  `${task.id} ${task.title}`,
-                );
-                return yield* teardown(task);
-              }
-
               const reviewer = reviewedBy(task);
-              if (reviewer && task.status === "open") {
-                // Clearing the label is what ends the review, and it has to
-                // happen here. Everything else on this path stays as it is by
-                // design — the task is already open, and the workspace is kept
-                // so the next author continues from the same branch — so the
-                // label is the only thing that can record that the review is
-                // over. Leave it and every condition above is still true next
-                // tick: foreman climbs the task another rung every poll until
-                // it runs out of ladder and parks on the operator, having
-                // learned nothing about it.
-                yield* prog.clearReview(task.id);
-                yield* prog.log(
-                  task.id,
-                  `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
-                );
-                yield* climb(task);
-                yield* stopAgents(worker);
-                return yield* fleet.notify(
-                  "Review returned",
-                  `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
-                );
-              }
+              const holdsWork =
+                worker.state === "gone" && worker.worktree !== undefined
+                  ? yield* repository.holdsWork(worker.worktree)
+                  : false;
+              const phase = phaseOf({
+                status: task.status,
+                reviewer,
+                worker: worker.state,
+                worktree: worker.worktree !== undefined,
+                committed: current.committed.has(task.id),
+                holdsWork,
+                handoffExpired: handoffExpired(task, coachCutoff),
+              });
 
-              // A worker that vanished said nothing, but the directory it left
-              // behind did. Whether anything is in it decides everything here,
-              // and neither answer is a reason to climb: an agent killed by the
-              // machine it ran on is no evidence its model was too weak.
-              if (worker.state === "gone") {
-                // Except when the directory is not foreman's. A salvage run
-                // works in the checkout the operator also edits, so what is
-                // uncommitted there is theirs, and closing that workspace on
-                // the strength of it would delete a person's work.
-                if (!worker.worktree) return;
-
-                if (
-                  current.committed.has(task.id) ||
-                  (yield* repository.holdsWork(worker.worktree))
-                ) {
-                  // The claim goes back but the workspace stays. herdr adopts a
-                  // workspace by its label, so the next author foreman sends
-                  // opens in this same directory, on this same branch, with
-                  // these edits still in it — and picks up where the last one
-                  // stopped instead of writing them a second time.
-                  yield* prog.log(
-                    task.id,
-                    `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
-                  );
-                  return yield* prog.release(task.id);
-                }
-
-                yield* prog.log(
-                  task.id,
-                  `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
-                );
-                yield* prog.release(task.id);
-                return yield* teardown(task);
-              }
-
-              // Approvals stay with the operator, so a blocked worker is left
-              // exactly as it is — and is not announced. herdr raises its own
-              // alert the moment an agent blocks, and foreman knows nothing
-              // herdr does not. A second notification for one event is one the
-              // operator learns to dismiss, and because this path changes
-              // nothing, the condition is still true next tick: it would fire
-              // again every poll until they answered.
-              if (worker.state === "blocked") return;
-
-              if (task.status === "reviewing") {
-                // An author that handed off and stopped is an agent event, and
-                // herdr has already said so. Foreman's part is to dispatch the
-                // reviewer on the next fill, which needs no announcement — and
-                // announcing it here would repeat every poll until a slot came
-                // free, because waiting for review changes nothing to observe.
-                //
-                // Its pane stays open. The reviewer sends mechanical findings
-                // back to the session that wrote the code rather than paying a
-                // rung climb for a missed case, and that session only exists
-                // while its pane does. Ownership passes with it: the reviewer
-                // closes the author, and this is only the backstop for a task
-                // no reviewer reached inside the window. The handoff is the
-                // last activity on it, so the wait is derivable and foreman
-                // still counts nothing.
-                if (!reviewer) {
-                  return handoffExpired(task, coachCutoff) ? yield* stopAgents(worker) : undefined;
-                }
-
-                yield* unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`);
-                yield* stopAgents(worker);
-                return yield* fleet.notify(
-                  "Review returned",
-                  `${task.id} reviewer stopped without a verdict — back in the queue`,
-                );
-              }
-
-              // Residue: the task is neither claimed nor under review, so no
-              // agent is coming back to these panes. A role is what proves the
-              // claim happened and was given up, since dispatch opens the
-              // workspace before claiming and only labels the pane when it
-              // spawns — so a workspace carrying none may be a dispatch in
-              // flight and is left for `decisionsOf`. Panes only: the worktree
-              // and anything uncommitted in it survive for `Fleet.open`.
-              if (task.status !== "in_progress") {
-                return yield* Effect.forEach(
-                  [...worker.roles.keys()],
-                  (role) => fleet.stop(worker, role),
-                  { discard: true },
-                );
-              }
-
-              // Settled without a verdict on a task that is still open. The
-              // agent stopped of its own accord, so unlike a vanished worker
-              // this is evidence, and the task goes back to the queue with what
-              // it learned attached.
-              yield* unfinished(
-                task,
-                `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
-              );
-              // The workspace goes with the decision. A settled agent is still
-              // running idle, and herdr has no way to stop it without closing
-              // the pane it runs in — which, for an author, is the workspace's
-              // own pane. So closing the workspace is what dismissing the agent
-              // means now: the worktree is removed with it, and the next author
-              // continues from the branch tip rather than from uncommitted
-              // edits.
-              yield* teardown(task);
-              yield* fleet.notify(
-                "Task returned",
-                `${task.id} stopped unfinished — back in the queue`,
+              yield* Match.value(phase).pipe(
+                Match.when("Landed", () =>
+                  fleet
+                    .notify("Task landed", `${task.id} ${task.title}`)
+                    .pipe(Effect.andThen(teardown(task))),
+                ),
+                Match.when("Canceled", () =>
+                  fleet
+                    .notify("Task canceled", `${task.id} ${task.title}`)
+                    .pipe(Effect.andThen(teardown(task))),
+                ),
+                Match.when("ReviewReturned", () =>
+                  prog
+                    .clearReview(task.id)
+                    .pipe(
+                      Effect.andThen(
+                        prog.log(
+                          task.id,
+                          `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
+                        ),
+                      ),
+                      Effect.andThen(climb(task)),
+                      Effect.andThen(stopAgents(worker)),
+                      Effect.andThen(
+                        fleet.notify(
+                          "Review returned",
+                          `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
+                        ),
+                      ),
+                    ),
+                ),
+                Match.when("VanishedAttached", () => Effect.void),
+                Match.when("VanishedWithWork", () =>
+                  prog
+                    .log(
+                      task.id,
+                      `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
+                    )
+                    .pipe(Effect.andThen(prog.release(task.id))),
+                ),
+                Match.when("VanishedEmpty", () =>
+                  prog
+                    .log(
+                      task.id,
+                      `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
+                    )
+                    .pipe(Effect.andThen(prog.release(task.id)), Effect.andThen(teardown(task))),
+                ),
+                Match.when("Blocked", () => Effect.void),
+                Match.when("ReviewWaiting", () => Effect.void),
+                Match.when("ReviewExpired", () => stopAgents(worker)),
+                Match.when("ReviewStopped", () =>
+                  unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`).pipe(
+                    Effect.andThen(stopAgents(worker)),
+                    Effect.andThen(
+                      fleet.notify(
+                        "Review returned",
+                        `${task.id} reviewer stopped without a verdict — back in the queue`,
+                      ),
+                    ),
+                  ),
+                ),
+                Match.when("Residue", () =>
+                  Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
+                    discard: true,
+                  }),
+                ),
+                Match.when("Unfinished", () =>
+                  unfinished(
+                    task,
+                    `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
+                  ).pipe(
+                    Effect.andThen(teardown(task)),
+                    Effect.andThen(
+                      fleet.notify(
+                        "Task returned",
+                        `${task.id} stopped unfinished — back in the queue`,
+                      ),
+                    ),
+                  ),
+                ),
+                Match.exhaustive,
               );
             }).pipe(
               Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),

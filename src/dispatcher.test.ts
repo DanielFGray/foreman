@@ -16,13 +16,13 @@ import {
   scopeRoster,
   type Owned,
 } from "./dispatcher.ts";
-import { authoredBy, diagnosticIntent, reviewedBy, type Item } from "./prog.ts";
+import { authoredBy, diagnosticIntent, reviewedBy, type Item, type TaskStatus } from "./prog.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 
 const task = (
   id: string,
   labels: ReadonlyArray<string>,
-  status = "reviewing",
+  status: TaskStatus = "reviewing",
   priority = 1,
   project = "foreman",
 ): Item => ({
@@ -58,7 +58,7 @@ const active = (task: Item, worker: Worker | undefined) => ({
 
 const owned = (
   id: string,
-  status: string,
+  status: TaskStatus,
   labels: ReadonlyArray<string>,
   roles: ReadonlyArray<AgentRole> = [],
 ): Owned => {
