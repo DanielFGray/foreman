@@ -179,6 +179,143 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       );
 
     /**
+     * What proving a landing somewhere disposable concluded.
+     *
+     * `Proven` is the only outcome that reaches the operator's checkout, and it
+     * carries the one thing the proof learned that the merge itself cannot say:
+     * whether the project's own command passed on the merged tree. Every other
+     * outcome is a `Landing` verdict already and passes straight through.
+     */
+    type Proof =
+      | { readonly _tag: "Proven"; readonly verified: boolean }
+      | { readonly _tag: "Held"; readonly detail: string }
+      | { readonly _tag: "Rejected"; readonly detail: string }
+      | { readonly _tag: "Broke"; readonly output: string };
+
+    /**
+     * Installs a proving ground's dependencies, the same way a task worktree
+     * gets them.
+     *
+     * A checkout of source alone cannot run a test suite, and a verification
+     * that could not run must never read as green — that is the one gate the
+     * whole landing rests on. So a failed setup holds the project: it is the
+     * machine's fault or the project's, never the branch's.
+     */
+    const prepare = (proving: string) =>
+      Effect.gen(function* () {
+        const script = `${proving}/${SETUP_SCRIPT}`;
+        const present = yield* fs.exists(script).pipe(Effect.orElseSucceed(() => false));
+        if (!present) return undefined;
+        const result = yield* check(proving, `./${SETUP_SCRIPT}`);
+        return result.passed
+          ? undefined
+          : ({ _tag: "Held", detail: `proving ground setup failed:\n${result.output}` } as const);
+      });
+
+    /**
+     * A worktree of the project kept for proving landings in, held at `base`.
+     *
+     * It is re-derived, never remembered: a directory git has no worktree
+     * registered for is removed and remade, and one it does have is reset to
+     * the commit being proved against. What survives between landings is only
+     * what a package manager installed, which is the whole reason it is not a
+     * fresh directory each time.
+     */
+    const gitGround = (proving: string, directory: string, base: string) =>
+      Effect.gen(function* () {
+        const registered = yield* fs
+          .exists(`${proving}/.git`)
+          .pipe(Effect.orElseSucceed(() => false));
+        if (!registered) {
+          yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
+          // A worktree git still lists at a path that is gone would make `add`
+          // refuse; pruning is what makes remaking it the honest repair.
+          yield* git(directory, "worktree", "prune");
+          const added = yield* git(directory, "worktree", "add", "--detach", proving, base);
+          if (added.exitCode !== 0) {
+            return {
+              _tag: "Held",
+              detail: added.stderr.trim() || `git worktree add exited ${added.exitCode}`,
+            } as const;
+          }
+          return yield* prepare(proving);
+        }
+
+        const reset = yield* git(proving, "reset", "--hard", base);
+        if (reset.exitCode !== 0) {
+          return {
+            _tag: "Held",
+            detail: reset.stderr.trim() || `git reset exited ${reset.exitCode}`,
+          } as const;
+        }
+        return yield* prepare(proving);
+      });
+
+    /**
+     * Answers the whole landing question without writing to the shared
+     * checkout: would this branch merge, and does the project still work if it
+     * does.
+     *
+     * Everything that used to make the operator's checkout the proving ground
+     * follows from moving it here. Verification no longer runs in a directory a
+     * person is using, so the test suites that spawn their own processes there
+     * — and strand an `index.lock` that the landing's own git then trips over —
+     * have nothing of the operator's to touch. The undo disappears with it:
+     * backing a merge out was only ever needed because the merge had already
+     * been applied to prove it, and a `reset --hard` that fails in the shared
+     * checkout leaves an unverified merge sitting in it.
+     *
+     * The lazy baseline survives unchanged, and for the same reason: a merge
+     * that passes has already answered the only question the baseline exists to
+     * answer, so it is asked only after a failure. It is just half the price of
+     * a failure now, because resetting the ground costs nothing.
+     */
+    const gitProve = (
+      proving: string,
+      directory: string,
+      branch: string,
+      verify: string | undefined,
+      base: string,
+    ): Effect.Effect<Proof, RepositoryError> =>
+      Effect.gen(function* () {
+        const ready = yield* gitGround(proving, directory, base);
+        if (ready) return ready;
+
+        const merged = yield* git(proving, "merge", "--no-ff", branch);
+        if (merged.exitCode !== 0) {
+          // A conflict is asked about rather than inferred. git reports a lock
+          // it could not take through the same non-zero codes as content it
+          // will not reconcile, and only the diagnostic text separates them —
+          // but an unmerged index entry is a fact, written once per conflicting
+          // path and by nothing else. Unreadable means unknown, and unknown
+          // holds rather than climbs a rung.
+          const conflicts = yield* lines(proving, "ls-files", "--unmerged").pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+          );
+          const detail =
+            merged.stderr.trim() || merged.stdout.trim() || `git merge exited ${merged.exitCode}`;
+          return conflicts.length > 0
+            ? ({ _tag: "Rejected", detail } as const)
+            : ({ _tag: "Held", detail } as const);
+        }
+
+        if (!verify) return { _tag: "Proven", verified: false } as const;
+
+        const after = yield* check(proving, verify);
+        if (after.passed) return { _tag: "Proven", verified: true } as const;
+
+        const restored = yield* gitGround(proving, directory, base);
+        if (restored) return restored;
+        const before = yield* check(proving, verify);
+        // Red before the branch touched it, so the branch is not the cause.
+        // Gating on an absolute pass would freeze the fleet behind one broken
+        // test forever.
+        return before.passed
+          ? ({ _tag: "Broke", output: after.output } as const)
+          : ({ _tag: "Proven", verified: false } as const);
+      });
+
+    /**
      * Landing through git, in a checkout git alone is keeping.
      *
      * The branch to land on is whichever one HEAD names, which is why a
@@ -199,70 +336,43 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         directory: string,
         branch: string,
         verify: string | undefined,
+        proving: string,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
-          const restore = yield* gitOutput(directory, "rev-parse", "HEAD");
+          const base = yield* gitOutput(directory, "rev-parse", "HEAD");
 
-          /**
-           * Applies the merge, or says why not — and the two whys are not the
-           * same answer. A branch whose content will not reconcile is a fact
-           * about that branch, and the evidence a rung climb rests on. A merge
-           * that never got that far — an `index.lock` another git process in
-           * the operator's checkout is holding, a ref git could not read — is a
-           * fact about the machine, and climbing on it sends an approved branch
-           * back to the queue a rung more expensive because something touched
-           * the index for a moment.
-           *
-           * So the conflict is asked about rather than inferred, exactly as the
-           * jj path already does. git's exit status cannot carry the
-           * distinction: it reports a lock it could not take through the same
-           * non-zero codes as a merge it would not complete, and the diagnostic
-           * text is the only thing that separates them. An unmerged index entry
-           * is the durable fact instead — git writes one per conflicting path
-           * and nothing else does — so it is read before the abort that would
-           * erase it. Unreadable means unknown, and unknown holds rather than
-           * climbs.
-           */
-          const apply = Effect.gen(function* () {
-            const merged = yield* git(directory, "merge", "--no-ff", branch);
-            if (merged.exitCode === 0) return undefined;
+          const proof = yield* gitProve(proving, directory, branch, verify, base);
+          if (proof._tag !== "Proven") return proof;
 
-            const conflicts = yield* lines(directory, "ls-files", "--unmerged").pipe(
-              Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
-            );
+          // The proof took as long as the project's suite takes, and the
+          // operator shares this checkout. A merge proved against a tip that
+          // has since moved is not the merge that would go in, so the landing
+          // waits for a tick that can prove and apply the same one.
+          const tip = yield* gitOutput(directory, "rev-parse", "HEAD");
+          if (tip !== base) {
+            return {
+              _tag: "Held",
+              detail: `${directory} moved while ${branch} was being verified`,
+            } as const;
+          }
+
+          // The branch is proven mergeable against exactly this commit, so a
+          // refusal here cannot be about content: it is a lock, or a ref git
+          // could not read. That is what makes this one call the whole write —
+          // no undo, and no window in which the checkout holds a merge nobody
+          // has verified.
+          const applied = yield* git(directory, "merge", "--no-ff", branch);
+          if (applied.exitCode !== 0) {
             yield* git(directory, "merge", "--abort").pipe(Effect.ignore);
-
-            const detail =
-              merged.stderr.trim() || merged.stdout.trim() || `git merge exited ${merged.exitCode}`;
-            return conflicts.length > 0
-              ? ({ _tag: "Rejected", detail } as const)
-              : ({ _tag: "Held", detail } as const);
-          });
-
-          const rejected = yield* apply;
-          if (rejected) return rejected;
-
-          if (!verify) return { _tag: "Merged", verified: false } as const;
-
-          const after = yield* check(directory, verify);
-          if (after.passed) return { _tag: "Merged", verified: true } as const;
-
-          // The baseline is only worth its runtime once the merged checkout has
-          // failed. A landing that passes is the common case and needs no
-          // second opinion, so paying for the baseline first doubled the price
-          // of every good merge — and the tick is one fiber, so the whole fleet
-          // waited out both runs. Here the checkout is red and the question
-          // becomes live: is the branch to blame, or was it red already?
-          yield* gitOutput(directory, "reset", "--hard", restore);
-          const before = yield* check(directory, verify);
-          if (before.passed) return { _tag: "Broke", output: after.output } as const;
-
-          // Red before the branch touched it, so the branch is not the cause and
-          // the merge is put back. Gating on an absolute pass would freeze the
-          // fleet behind one broken test forever.
-          const refused = yield* apply;
-          if (refused) return refused;
-          return { _tag: "Merged", verified: false } as const;
+            return {
+              _tag: "Held",
+              detail:
+                applied.stderr.trim() ||
+                applied.stdout.trim() ||
+                `git merge exited ${applied.exitCode}`,
+            } as const;
+          }
+          return { _tag: "Merged", verified: proof.verified } as const;
         }),
 
       /**
@@ -272,6 +382,109 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
        */
       sweepUnpublishedMerges: (_directory: string) => Effect.succeed<ReadonlyArray<string>>([]),
     };
+
+    const messageFor = (branch: string) => `Merge branch '${branch}'`;
+
+    /**
+     * The name jj knows the proving ground's workspace by. A workspace is
+     * named in the repository, not by its path, so recreating one at a path
+     * that was removed means forgetting the old name first.
+     */
+    const GROUND = "foreman-verify";
+
+    /**
+     * A jj workspace of the project kept for proving landings in, sitting on
+     * `base`.
+     *
+     * Re-derived like the git one. Resetting is `jj new <base>` followed by
+     * abandoning the working copy it left, which is always a merge foreman
+     * itself made and has already finished with. The tick sweep leaves it
+     * alone in the meantime, because it excludes every workspace's working
+     * copy — including this one.
+     */
+    const jjGround = (proving: string, directory: string, base: string) =>
+      Effect.gen(function* () {
+        const registered = yield* fs
+          .exists(`${proving}/.jj`)
+          .pipe(Effect.orElseSucceed(() => false));
+        if (!registered) {
+          yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
+          yield* jj(directory, "workspace", "forget", GROUND).pipe(Effect.ignore);
+          const added = yield* jj(
+            directory,
+            "workspace",
+            "add",
+            "--name",
+            GROUND,
+            "--revision",
+            base,
+            proving,
+          );
+          if (added.exitCode !== 0) {
+            return {
+              _tag: "Held",
+              detail: added.stderr.trim() || `jj workspace add exited ${added.exitCode}`,
+            } as const;
+          }
+          return yield* prepare(proving);
+        }
+
+        const spent = yield* revision(proving, "@");
+        const moved = yield* jj(proving, "new", base);
+        if (moved.exitCode !== 0) {
+          return {
+            _tag: "Held",
+            detail: moved.stderr.trim() || `jj new exited ${moved.exitCode}`,
+          } as const;
+        }
+        yield* jj(proving, "abandon", spent).pipe(Effect.ignore);
+        return yield* prepare(proving);
+      });
+
+    /**
+     * The jj half of proving a landing, and the shape is the same as git's.
+     *
+     * The one difference is that jj never refuses a merge: it records the
+     * conflict and writes markers into the files, so asking `@` whether it is
+     * conflicted is the whole verdict, and a non-zero exit can only be the
+     * machine.
+     */
+    const jjProve = (
+      proving: string,
+      directory: string,
+      branch: string,
+      verify: string | undefined,
+      base: string,
+    ): Effect.Effect<Proof, RepositoryError> =>
+      Effect.gen(function* () {
+        const ready = yield* jjGround(proving, directory, base);
+        if (ready) return ready;
+
+        const merged = yield* jj(proving, "new", base, branch, "-m", messageFor(branch));
+        if (merged.exitCode !== 0) {
+          return { _tag: "Held", detail: merged.stderr.trim() || "jj new failed" } as const;
+        }
+
+        const conflicts = yield* jjOutput(proving, "log", "-r", "@", ...template("conflict"));
+        if (conflicts === "true") {
+          return {
+            _tag: "Rejected",
+            detail: `merging ${branch} into ${base} conflicts`,
+          } as const;
+        }
+
+        if (!verify) return { _tag: "Proven", verified: false } as const;
+
+        const after = yield* check(proving, verify);
+        if (after.passed) return { _tag: "Proven", verified: true } as const;
+
+        const restored = yield* jjGround(proving, directory, base);
+        if (restored) return restored;
+        const before = yield* check(proving, verify);
+        return before.passed
+          ? ({ _tag: "Broke", output: after.output } as const)
+          : ({ _tag: "Proven", verified: false } as const);
+      });
 
     /**
      * Landing through jj, in a checkout jj is colocated with git.
@@ -302,79 +515,37 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         directory: string,
         branch: string,
         verify: string | undefined,
+        proving: string,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           const trunk = yield* trunkOf(directory);
           if (!trunk) return { _tag: "Held", detail: undefined } as const;
 
-          const restore = yield* revision(directory, "@");
+          // The bookmark names a moving target; the proof is about one commit.
+          const base = yield* revision(directory, trunk);
 
-          /** Returns to `restore` and abandons whatever the merge left behind. */
-          const backOut = Effect.gen(function* () {
-            const merge = yield* revision(directory, "@");
-            yield* jjOutput(directory, "edit", restore);
-            yield* jjOutput(directory, "abandon", merge);
-          });
+          const proof = yield* jjProve(proving, directory, branch, verify, base);
+          if (proof._tag !== "Proven") return proof;
 
-          /** Applies the merge, or says why it cannot stand. */
-          const apply = Effect.gen(function* () {
-            const merged = yield* jj(
-              directory,
-              "new",
-              trunk,
-              branch,
-              "-m",
-              `Merge branch '${branch}'`,
-            );
-            // Never the branch's fault. jj records a conflict rather than
-            // refusing one, so the check below is the only thing that can say
-            // this branch will not merge; a non-zero exit here means jj could
-            // not run the command at all, and the project is held for it.
-            if (merged.exitCode !== 0) {
-              return { _tag: "Held", detail: merged.stderr.trim() || "jj new failed" } as const;
-            }
-
-            const conflicts = yield* jjOutput(directory, "log", "-r", "@", ...template("conflict"));
-            if (conflicts === "true") {
-              yield* backOut;
-              return {
-                _tag: "Rejected",
-                detail: merged.stderr.trim() || `merging ${branch} into ${trunk} conflicts`,
-              } as const;
-            }
-            return undefined;
-          });
-
-          const land = jjOutput(directory, "bookmark", "set", trunk, "-r", "@").pipe(
-            // A fresh empty child, so the operator's next edit amends their own
-            // working copy rather than the merge that was just published.
-            Effect.andThen(jjOutput(directory, "new")),
-          );
-
-          const rejected = yield* apply;
-          if (rejected) return rejected;
-
-          if (!verify) {
-            yield* land;
-            return { _tag: "Merged", verified: false } as const;
+          const tip = yield* revision(directory, trunk);
+          if (tip !== base) {
+            return {
+              _tag: "Held",
+              detail: `${trunk} moved while ${branch} was being verified`,
+            } as const;
           }
 
-          const after = yield* check(directory, verify);
-          if (after.passed) {
-            yield* land;
-            return { _tag: "Merged", verified: true } as const;
+          // Proved against exactly this commit, so nothing here can be about
+          // content. Only the machine can refuse now.
+          const applied = yield* jj(directory, "new", base, branch, "-m", messageFor(branch));
+          if (applied.exitCode !== 0) {
+            return { _tag: "Held", detail: applied.stderr.trim() || "jj new failed" } as const;
           }
-
-          // Same lazy baseline as the git path: only a failed merge makes the
-          // "was it red already?" question worth a second full run.
-          yield* backOut;
-          const before = yield* check(directory, verify);
-          if (before.passed) return { _tag: "Broke", output: after.output } as const;
-
-          const refused = yield* apply;
-          if (refused) return refused;
-          yield* land;
-          return { _tag: "Merged", verified: false } as const;
+          yield* jjOutput(directory, "bookmark", "set", trunk, "-r", "@");
+          // A fresh empty child, so the operator's next edit amends their own
+          // working copy rather than the merge that was just published.
+          yield* jjOutput(directory, "new");
+          return { _tag: "Merged", verified: proof.verified } as const;
         }),
 
       /**
@@ -610,22 +781,21 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
       /**
        * Lands a reviewed branch without trusting the reviewer with the shared
-       * checkout. A failed merge is always backed out before control returns.
+       * checkout, and without testing anything in it.
        *
-       * `verify` is the project's own command for deciding whether it works —
-       * its test suite, typically. It runs twice: once before the merge to
-       * learn what the checkout was already doing, and once after. A project
-       * that was green and is now red is a branch that broke it, and the merge
-       * is undone. A project that was already red stays landable, because a
-       * branch cannot be blamed for damage that predates it, and gating on an
-       * absolute pass would freeze the fleet behind one broken test forever.
+       * `proving` is a scratch checkout of the same project — see
+       * `verifyDirectoryFor`. The merge is made there and `verify`, the
+       * project's own command for deciding whether it works, is run there;
+       * only a clean answer is applied to `directory`, and only if its tip has
+       * not moved in the meantime. So the shared checkout is written exactly
+       * once per landing, by one command, and there is nothing to undo when a
+       * branch turns out to break the project.
        *
-       * The undo lives in here rather than beside it. Backing out is the one
-       * operation in foreman that discards commits, and it is only ever safe
-       * against a revision this function captured after proving the checkout
-       * clean — so it is never handed out as a capability of its own.
+       * A project that was already red stays landable, because a branch cannot
+       * be blamed for damage that predates it, and gating on an absolute pass
+       * would freeze the fleet behind one broken test forever.
        */
-      merge: (directory: string, branch: string, verify: string | undefined) =>
+      merge: (directory: string, branch: string, verify: string | undefined, proving: string) =>
         Effect.gen(function* () {
           // Asked before the clean gate, because a checkout that already has
           // the commits is not going to be written to and its cleanliness is
@@ -636,7 +806,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           const checkout = yield* checkoutAt(directory);
           if (!(yield* checkout.isClean(directory)))
             return { _tag: "Held", detail: undefined } as const;
-          return yield* checkout.merge(directory, branch, verify);
+          return yield* checkout.merge(directory, branch, verify, proving);
         }),
 
       /**

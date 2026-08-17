@@ -97,9 +97,9 @@ standing on — the nearest one behind your working copy — rather than merging
 into a branch, because jj has no checked-out branch to merge into. Two things
 follow. A working copy that is not empty holds the project, including files git
 would call untracked, since jj already counts them as yours. And a conflicting
-branch is backed out rather than left in your directory: jj records conflicts
-instead of refusing them, so foreman abandons the merge and returns the task to
-the queue.
+branch never reaches your directory at all: jj records conflicts instead of
+refusing them, so foreman finds them where it proves the merge and returns the
+task to the queue.
 
 ### Onboarding a held project
 
@@ -250,16 +250,24 @@ A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
 On approval the reviewer adds the durable `approved` verdict. Foreman then checks
-the shared checkout again, merges the branch, runs the project's `verify` command,
-and marks the task done. A dirty checkout leaves the approval waiting for a later
-tick; a conflicting merge is aborted and returned to the queue. The reviewer needs
-neither merge nor completion rights.
+the shared checkout again, proves the merge, applies it, and marks the task done.
+A dirty checkout leaves the approval waiting for a later tick; a conflicting
+merge is returned to the queue. The reviewer needs neither merge nor completion
+rights.
 
-`verify` runs twice, before the merge and after it. A branch that turns a green
-checkout red is reset away and the task goes back to the queue carrying the
-failure output — the next author's whole job is that output. A checkout that was
-already red still takes the merge, because one broken test would otherwise hold
-every task in the fleet. Name it per project:
+Proving happens somewhere disposable: a scratch checkout of the project under
+`$XDG_STATE_HOME/foreman/verify/`, reset to your current tip. The merge is made
+there and the project's `verify` command runs there, so no test suite ever runs
+in a directory you are working in, and nothing has to be undone in yours when
+one fails. Only a proof that comes back clean is applied to your checkout, and
+only if your tip has not moved meanwhile.
+
+A branch that turns a green project red never lands, and the task goes back to
+the queue carrying the failure output — the next author's whole job is that
+output. `verify` runs a second time on the pre-merge tree to establish that,
+and only after a failure, since that is the only time the question is live. A
+project that was already red still takes the merge, because one broken test
+would otherwise hold every task in the fleet. Name the command per project:
 
 ```jsonc
 "projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]

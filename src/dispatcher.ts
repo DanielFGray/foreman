@@ -7,6 +7,7 @@ import {
   labelFor,
   type SpawnOptions,
   taskOf,
+  verifyDirectoryFor,
   type Worker,
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
@@ -628,6 +629,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           project.directory,
           labelFor(task.id),
           project.verify,
+          verifyDirectoryFor(project.name),
         );
         // The verdict is a durable label, so a later tick lands from it with no
         // pane at all — and a project can stay dirty for hours.
@@ -657,16 +659,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           );
         }
 
-        // The branch broke the project. The merge is already undone; what the
-        // task needs is the output, because the next author's whole job is now
-        // the failure below.
+        // The branch broke the project. Nothing reached the checkout, so what
+        // the task needs is the output — the next author's whole job is the
+        // failure below.
         if (result._tag === "Broke") {
-          yield* Effect.logWarning(
-            `landing ${task.id} broke ${project.name}'s verification; merge undone`,
-          );
+          yield* Effect.logWarning(`landing ${task.id} broke ${project.name}'s verification`);
           yield* prog.log(
             task.id,
-            `foreman: finished branch failed ${project.name}'s verification after merging, so the merge was undone and the task returned to the queue.\n\n${result.output}`,
+            `foreman: merging this branch fails ${project.name}'s verification, so it was not landed and the task is back in the queue.\n\n${result.output}`,
           );
           yield* climb(task);
           yield* prog.release(task.id);

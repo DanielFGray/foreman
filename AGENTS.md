@@ -169,16 +169,25 @@ questions differently:
   file git would call untracked, because under jj it is already part of the
   working-copy commit and landing would carry it out of the operator's directory.
 - **jj never refuses a merge.** A conflict is a recorded state with markers
-  written into the files, so the conflict check is the ordinary path rather than
-  an error path, and backing out is `edit` then `abandon` rather than an abort.
+  written into the files, so asking `@` whether it is conflicted is the whole
+  verdict and a non-zero exit can only be the machine. The proving ground is
+  where that question is asked, and resetting it is what discards a conflict.
+- **The proving ground is a named workspace**, `foreman-verify`. A workspace is
+  named in the repository rather than by its path, so remaking one at a path
+  that was removed means forgetting the name first. Resetting it is `jj new`
+  onto the tip and abandoning the working copy left behind — always a merge
+  foreman made and has finished with. The tick sweep excludes every workspace's
+  working copy, so a proof in flight is never swept out from under itself.
 - **A landing interrupted before the bookmark moves leaves an anonymous head.**
   `jj new` writes the merged files into the working copy, which is what restarts
-  a daemon watching its own checkout; only `bookmark set` publishes. So the
-  tick sweeps anonymous heads that carry foreman's own landing signature — a
-  clean merge of two parents whose description is the one `merge` writes. The
-  branch still holds the work, so abandoning one re-does the landing honestly
-  instead of publishing an unverified merge, and only the working copy is never
-  touched, because that is the one anonymous head a person may be standing on.
+  a daemon watching its own checkout; only `bookmark set` publishes. Proving
+  elsewhere shrinks that window to the three commands of the apply, but does not
+  close it, so the tick still sweeps anonymous heads that carry foreman's own
+  landing signature — a clean merge of two parents whose description is the one
+  `merge` writes. The branch still holds the work, so abandoning one re-does the
+  landing honestly instead of publishing an unverified merge, and only the
+  working copy is never touched, because that is the one anonymous head a person
+  may be standing on.
 
 Everything else stays on git. The refs and worktrees in a colocated repository
 are real, and `git branch --delete` keeps the refusal that makes the sweep safe.
@@ -341,6 +350,31 @@ runs `prog done`. `awaitingLanding` reads that label with no other
 corroboration, so any transition handing the task back for its diff to change
 must clear it — `Prog.release`, `review` and `submit` all do.
 
+**A landing is proved somewhere disposable before it is applied.** The merge is
+made, and the project's `verify` is run, in a per-project proving ground —
+`verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree or a jj
+workspace reset to the checkout's current tip. Only when that answers cleanly is
+the same merge applied to the operator's checkout, in one command.
+
+Every property that makes this the design follows from the operator sharing that
+checkout. A test suite spawns its own processes, and running one in a directory
+somebody is using strands the `index.lock` that the landing's own git then trips
+over. And the undo disappears entirely: backing a merge out was only ever needed
+because the merge had to be applied to be tested, and a `reset --hard` that fails
+leaves an unverified merge sitting in the shared checkout with nothing to say so.
+The proving ground is reset from the checkout's tip on the next landing anyway,
+so nothing there ever needs undoing.
+
+The ground is per project, not per task — landings are serialised by the tick,
+and reusing it is what lets `scripts/worktree-setup.sh` keep its installed
+dependencies between landings instead of paying for a cold install every time. A
+ground whose setup fails holds the project: a verification that could not run
+must never read as green.
+
+The tip is read again after the proof and before the apply. A merge proved
+against a commit the operator has since moved past is not the merge that would go
+in, so the landing holds and a later tick proves and applies the same one.
+
 **A merge that did not happen and a merge that would not happen are different
 answers.** Only the second is about the branch, and only the second may climb a
 rung. So the conflict is **asked about, not inferred** — the same shape as the jj
@@ -354,25 +388,28 @@ holds rather than climbs. Everything not a conflict is `Held`, and `Held` carrie
 a `detail` so it is logged — an operator editing clears itself and is not worth a
 line every poll, a stale lock never clears and must not retry in silence.
 
+That distinction lives wholly in the proving ground. By the time the branch
+reaches the operator's checkout it is proved mergeable against exactly that
+commit, so a refusal there cannot be about content — it is `Held`, always.
+
 `Held` is also what keeps a verdict alive. It leaves the task in `reviewing` with
 its `approved` label, so a later tick lands the same reviewed branch; nothing
 about a lock invalidates a diff a reviewer already read.
 
-Landing also runs `verify`. Only a checkout that was green and went red is the
-branch's fault: that merge is undone, the output logged, and the task returned to
-the queue. A checkout already red still accepts the merge, because a branch
-cannot be blamed for damage that predates it and one broken test would otherwise
-freeze the whole fleet. A project naming no `verify` lands on git's exit code
-alone, and the task log says so.
+Landing also runs `verify`. Only a ground that was green and went red is the
+branch's fault: the output is logged and the task returns to the queue. A
+checkout already red still accepts the merge, because a branch cannot be blamed
+for damage that predates it and one broken test would otherwise freeze the whole
+fleet. A project naming no `verify` lands on the merge's success alone, and the
+task log says so.
 
-**The baseline is lazy, and that is not an optimisation.** The merge is applied
-first and the merged checkout verified; only if that fails is the pre-merge
-baseline worth running, because only then is "was it red already?" a live
-question. The tick is one fiber, so a verification run is time in which nothing
-else is dispatched, settled or landed, and an eager baseline made every good
-landing cost two full suite runs. A failure still costs two, plus re-applying the
-merge when the baseline proves the branch innocent. Never worse where it matters,
-and half the price in the common case.
+**The baseline is lazy, and that is not an optimisation.** The merged ground is
+verified first; only if that fails is the pre-merge baseline worth running,
+because only then is "was it red already?" a live question. The tick is one
+fiber, so a verification run is time in which nothing else is dispatched, settled
+or landed, and an eager baseline made every good landing cost two full suite
+runs. A failure still costs two. Never worse where it matters, and half the price
+in the common case.
 
 **A landing is several steps and only the merge is atomic.** Interrupt it after
 the merge — a stranded `index.lock` is enough — and the commits are in while the

@@ -219,4 +219,18 @@ export const taskOf = (label: string): string | undefined =>
  * repo than outside it.
  */
 export const directoryFor = (project: string, task: string): string =>
-  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman/worktrees/${project}/${task}`;
+  `${stateDirectory()}/worktrees/${project}/${task}`;
+
+/**
+ * Where a project's landings are proved before they are applied.
+ *
+ * One per project, not one per task: it is a scratch checkout, and landings
+ * are serialised by the tick anyway. Reusing it is what lets the project's
+ * installed dependencies survive between landings, which is the difference
+ * between a verification run and a full cold install every time.
+ */
+export const verifyDirectoryFor = (project: string): string =>
+  `${stateDirectory()}/verify/${project}`;
+
+const stateDirectory = () =>
+  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman`;

@@ -13,7 +13,9 @@ const holdsWork = (directory: string) =>
 
 const merge = (directory: string, branch: string, verify?: string) =>
   Effect.runPromise(
-    Repository.merge(directory, branch, verify).pipe(Effect.provide(Repository.Default)),
+    Repository.merge(directory, branch, verify, `${directory}.verify`).pipe(
+      Effect.provide(Repository.Default),
+    ),
   );
 
 const setup = (directory: string) =>
@@ -31,7 +33,11 @@ const sweep = (directory: string) =>
   );
 
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
-afterAll(() => rm(directory, { recursive: true, force: true }));
+afterAll(() =>
+  Promise.all(
+    [directory, `${directory}.verify`].map((path) => rm(path, { recursive: true, force: true })),
+  ),
+);
 
 const git = (...args: Array<string>) => Bun.$`git -C ${directory} ${args}`.quiet().nothrow();
 
@@ -87,7 +93,7 @@ describe("Repository", () => {
     expect(await Bun.file(join(directory, "reviewed.txt")).text()).toBe("approved\n");
   });
 
-  test("undoes a merge that turns a green checkout red", async () => {
+  test("never touches the checkout for a merge that turns the project red", async () => {
     const base = (await git("branch", "--show-current")).stdout.toString().trim();
     const before = (await git("rev-parse", "HEAD")).stdout.toString().trim();
 
@@ -99,13 +105,35 @@ describe("Repository", () => {
 
     // Green until the branch's file exists, red once it does — so the same
     // command answers differently either side of the merge, which is the whole
-    // signal the gate reads.
+    // signal the gate reads. It is answered in the proving ground, so the
+    // checkout below is untouched rather than restored.
     expect(await merge(directory, "breaks", "test ! -f broken.txt")).toMatchObject({
       _tag: "Broke",
     });
     expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(before);
     expect(await Bun.file(join(directory, "broken.txt")).exists()).toBe(false);
     expect(await isClean(directory)).toBe(true);
+  });
+
+  // The operator shares this checkout, and a suite spawning its own processes
+  // in it is what strands the index.lock the landing then trips over. So the
+  // command must observe the proving ground, never the directory it lands in.
+  test("runs verify somewhere other than the checkout it lands in", async () => {
+    const seen = join(tmpdir(), `foreman-where-${process.pid}.txt`);
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+
+    await git("checkout", "-qb", "elsewhere");
+    await writeFile(join(directory, "elsewhere.txt"), "work\n");
+    await git("add", "elsewhere.txt");
+    await git("commit", "-qm", "elsewhere");
+    await git("checkout", "-q", base);
+
+    expect(await merge(directory, "elsewhere", `pwd > ${seen}`)).toEqual({
+      _tag: "Merged",
+      verified: true,
+    });
+    expect((await Bun.file(seen).text()).trim()).not.toBe(directory);
+    await rm(seen, { force: true });
   });
 
   test("lands a branch that keeps the checkout green, and says it verified", async () => {
@@ -317,7 +345,11 @@ describe("Repository", () => {
 // records conflicts instead of refusing them, and keeps the working copy as a
 // commit rather than as loose edits.
 const colocated = await mkdtemp(join(tmpdir(), "foreman-jj-"));
-afterAll(() => rm(colocated, { recursive: true, force: true }));
+afterAll(() =>
+  Promise.all(
+    [colocated, `${colocated}.verify`].map((path) => rm(path, { recursive: true, force: true })),
+  ),
+);
 
 // jj's first commands in a fresh repo snapshot the working copy and build the
 // index, which intermittently runs past bun's 5s default — and a test that times
