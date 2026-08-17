@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Effect } from "effect";
+import { Prog } from "./prog.ts";
 import {
   agentLog,
   attemptsOf,
@@ -89,5 +94,46 @@ describe("unfinished attempts on a rung", () => {
   test("ignores a count that is not a plain number", () => {
     expect(attemptsOf(item(["attempt-deepseek-x"]), "deepseek")).toBe(0);
     expect(attemptsOf(item(["attempt-deepseek-2.5"]), "deepseek")).toBe(0);
+  });
+});
+
+describe("clearReview against a live store", () => {
+  let directory: string;
+
+  beforeAll(async () => {
+    directory = await mkdtemp(join(tmpdir(), "foreman-prog-"));
+    process.env.PROG_DB = join(directory, "prog.db");
+    await Bun.$`prog init`.quiet();
+  });
+
+  afterAll(async () => {
+    delete process.env.PROG_DB;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  // A reviewer can approve and then return the work in one turn, and the
+  // settle loop's ReviewReturned path clears the review through this method.
+  // The verdict must go with it, or the task returns to the queue pre-approved
+  // and the next author's handoff lands without anyone having read the new
+  // diff.
+  test("clears the verdict alongside reviewer ownership", async () => {
+    const id = (
+      await Bun.$`prog add "returned approval" -p foreman -l approved -l review-by-x`.text()
+    ).trim();
+
+    await Effect.runPromise(Prog.clearReview(id).pipe(Effect.provide(Prog.Default)));
+    const after = await Effect.runPromise(Prog.show(id).pipe(Effect.provide(Prog.Default)));
+
+    expect(after.labels).not.toContain("approved");
+    expect(after.labels).not.toContain("review-by-x");
+  });
+
+  test("leaves a task that never carried the labels untouched", async () => {
+    const id = (await Bun.$`prog add "plain return" -p foreman`.text()).trim();
+
+    await Effect.runPromise(Prog.clearReview(id).pipe(Effect.provide(Prog.Default)));
+    const after = await Effect.runPromise(Prog.show(id).pipe(Effect.provide(Prog.Default)));
+
+    expect(after.labels).toEqual([]);
   });
 });

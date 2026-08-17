@@ -1375,7 +1375,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * The world records whether a reviewer was dispatched, not whether that
        * reviewer is still alive, so only the operator can say the label is
        * stale — the dashboard offers this exactly where the workspace is gone
-       * and the task is open. Liveness is the view's call; the label is
+       * and the task is open. An `approved` label on an open task is as stale
+       * as the reviewer behind it: nothing is awaiting landing, and the task
+       * is going to change hands. Liveness is the view's call; the label is
        * re-checked here only so an already-cleared snapshot clears nothing,
        * and it is cleared through the same method the settle loop uses when a
        * review ends.

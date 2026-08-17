@@ -361,7 +361,10 @@ Approval is a durable `approved` label, not task completion. The reviewer writes
 that verdict and stops. Foreman re-checks the checkout, merges, and only then
 runs `prog done`. `awaitingLanding` reads that label with no other
 corroboration, so any transition handing the task back for its diff to change
-must clear it — `Prog.release`, `review` and `submit` all do.
+must clear it — `Prog.release`, `review` and `submit` all do, and so does
+`clearReview`, which is how the settle loop's `ReviewReturned` ends a review:
+a reviewer can approve and then return the work in one turn, and the verdict
+must not outlive the review that wrote it.
 
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
