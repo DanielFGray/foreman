@@ -523,11 +523,10 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      * the same reason it is under git.
      *
      * Landing publishes the commit the proving ground already built and
-     * verified, so the bookmark moves in one command and no unpublished merge
-     * ever exists in this checkout. Only afterwards does the working copy step
-     * onto it — the operator has to see the files land, and an interruption
-     * before that leaves them merely one `jj new` behind a bookmark that is
-     * already correct.
+     * verified: the working copy steps onto it, and then the bookmark names
+     * it. Never the other way round — a working copy stranded behind its own
+     * trunk has no trunk to find, and holds the project with nothing in the
+     * fleet able to clear it.
      */
     const jjCheckout = {
       isClean: (directory: string) =>
@@ -571,8 +570,25 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           }
 
           // The merge already exists, in the ground, and a jj workspace shares
-          // the repository — so publishing is one command that names it, and
-          // nothing unpublished ever exists in between.
+          // the repository — so both of these only ever name it.
+          //
+          // The working copy moves first, and that order is the whole safety of
+          // the step. `trunkOf` reads the nearest bookmark behind `@`, so a
+          // working copy left behind a bookmark that moved past it has no trunk
+          // at all: the project holds, every later tick asks the same question,
+          // and nothing in the fleet can undo it. Publishing second cannot
+          // reach that state. An interruption between the two leaves `@` on an
+          // unpublished merge whose ancestors still include the trunk, which
+          // holds nothing up — the next tick lands the branch again and the
+          // sweep takes the merge nobody named.
+          const moved = yield* jj(directory, "new", proof.commit);
+          if (moved.exitCode !== 0) {
+            return {
+              _tag: "Held",
+              detail: moved.stderr.trim() || `jj new exited ${moved.exitCode}`,
+            } as const;
+          }
+
           const applied = yield* jj(directory, "bookmark", "set", trunk, "-r", proof.commit);
           if (applied.exitCode !== 0) {
             return {
@@ -580,12 +596,6 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
               detail: applied.stderr.trim() || `jj bookmark set exited ${applied.exitCode}`,
             } as const;
           }
-
-          // The operator's working copy is behind the bookmark until this runs,
-          // which is the whole of what an interruption here costs: the landing
-          // is already published and correct, and one `jj new` is the repair.
-          // Its empty predecessor is left for the sweep.
-          yield* jj(directory, "new", proof.commit);
           return { _tag: "Merged", verified: proof.verified } as const;
         }),
 

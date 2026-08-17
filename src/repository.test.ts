@@ -405,6 +405,11 @@ describe("Repository over a jj-colocated checkout", () => {
       );
       expect(await Bun.file(join(colocated, "landed.txt")).text()).toBe("author work\n");
 
+      // A landing must never hold the project it just landed in. The trunk is
+      // the nearest bookmark behind `@`, so a working copy left behind the
+      // bookmark it moved has no trunk to find, and no later tick can recover.
+      expect(await isClean(colocated)).toBe(true);
+
       // A branch that landed must not read as a branch nobody committed to.
       expect(await branches(colocated)).toEqual([
         { branch: "foreman/ts-aaaaaa", merged: true, empty: false },
