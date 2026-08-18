@@ -7,6 +7,7 @@ import {
   type Active,
   type Climbing,
   type FleetState,
+  type Held,
   type InterventionTarget,
   type Unreviewed,
 } from "./dispatcher.ts";
@@ -144,6 +145,8 @@ interface ColumnRow {
   readonly ready: ReadyTask | undefined;
   readonly worker: Worker | undefined;
   readonly project: string | undefined;
+  /** The hold's reason, for rows whose actions depend on what is holding it. */
+  readonly reason: Held["reason"] | undefined;
   /** The branch behind an unreviewed row, whose commits nothing is reading. */
   readonly unreviewed: Unreviewed | undefined;
   /** The error behind a dispatch-failed decision row. */
@@ -265,7 +268,11 @@ const actionsFor = (column: ColumnName, row: ColumnRow | undefined): ReadonlyArr
           row.ready !== undefined ||
           (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled"),
       ),
-      Match.when("onboard", () => row.project !== undefined),
+      // Onboarding salvages uncommitted work, so it is only offered for a hold that
+      // is uncommitted work. A checkout with no branch has nothing to salvage: a
+      // hand-run command is the fix, and offering a top-rung run that finds an empty
+      // tree would spend it on nothing.
+      Match.when("onboard", () => row.project !== undefined && row.reason === "dirty"),
       Match.when("adopt", () => row.unreviewed !== undefined),
       Match.exhaustive,
     ),
@@ -907,6 +914,7 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   ready: task,
   worker: undefined,
   project: undefined,
+  reason: undefined,
   unreviewed: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
@@ -927,6 +935,7 @@ const activeRow = (
   ready: undefined,
   worker,
   project: undefined,
+  reason: undefined,
   unreviewed: undefined,
   failure: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
@@ -941,6 +950,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   ready: undefined,
   worker: undefined,
   project: undefined,
+  reason: undefined,
   unreviewed: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
@@ -966,20 +976,26 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   ready: undefined,
   worker,
   project: undefined,
+  reason: undefined,
   unreviewed: undefined,
   failure,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
 
-const heldRow = (project: string): ColumnRow => ({
+const heldRow = (held: Held): ColumnRow => ({
   column: "held",
-  key: project,
-  label: project,
+  key: held.project,
+  // The reason follows the name, so a narrow terminal that truncates the line
+  // still says which project is held. The reason is the part worth waiting
+  // out or fixing: a dirty tree clears itself, a missing landing target never
+  // does.
+  label: `${held.project}  ${held.detail}`,
   task: undefined,
   ready: undefined,
   worker: undefined,
-  project,
+  project: held.project,
+  reason: held.reason,
   unreviewed: undefined,
   failure: undefined,
   hasWork: false,
@@ -996,6 +1012,7 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   ready: undefined,
   worker: undefined,
   project: undefined,
+  reason: undefined,
   unreviewed: branch,
   failure: undefined,
   hasWork: true,

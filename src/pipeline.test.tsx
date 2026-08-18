@@ -46,6 +46,12 @@ const active = (task: Item, worker: Worker | undefined): Active => ({
   kind: reviewedBy(task) ?? authoredBy(task),
 });
 
+const held = (project: string) => ({
+  project,
+  reason: "dirty" as const,
+  detail: "uncommitted changes to tracked files",
+});
+
 const state: FleetState = {
   yours: [
     {
@@ -97,7 +103,7 @@ const state: FleetState = {
     // spawn left it behind while the by-* label stayed on the task.
     active(task("ts-ccc333", "open", ["by-opencode"]), worker("ts-ccc333", "gone")),
   ],
-  held: ["fibrae"],
+  held: [held("fibrae")],
   unreviewed: [
     {
       project: "fibrae",
@@ -326,6 +332,78 @@ describe("Pipeline", () => {
     }
   });
 
+  // The whole point of the held column: the same word must not cover a tree
+  // that clears itself and a checkout no command in the fleet can clear. The
+  // row names which of the four causes is holding the project.
+  test("says why each held project is held", async () => {
+    const { controls } = makeControls();
+    const heldState: FleetState = {
+      ...state,
+      decisions: [],
+      yours: [],
+      unreviewed: [],
+      held: [
+        held("fibrae"),
+        {
+          project: "amux",
+          reason: "noBranch",
+          detail: "2 bookmark candidates behind the working copy: develop, test-setup",
+        },
+        { project: "pty", reason: "unreadable", detail: "could not read the checkout" },
+      ],
+    };
+    const t = await testRender(() => <Pipeline state={() => heldState} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Attention 3"));
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("uncommitted changes to tracked files");
+      // The row truncates at the terminal edge, so the assertion reads the
+      // prefix that is on screen; the candidates are what the fix names.
+      expect(frame).toContain("2 bookmark candidates behind the working copy: develop,");
+      expect(frame).toContain("could not read the checkout");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  // Onboarding salvages uncommitted work, so a hold that is not uncommitted
+  // work has nothing for it: offering the top-rung run on a clean tree would
+  // spend it discovering there is nothing there.
+  test("offers onboarding only for a hold that is uncommitted work", async () => {
+    const { controls } = makeControls();
+    const heldState: FleetState = {
+      ...state,
+      decisions: [],
+      yours: [],
+      unreviewed: [],
+      held: [
+        held("fibrae"),
+        {
+          project: "amux",
+          reason: "noBranch",
+          detail: "no bookmark behind the working copy",
+        },
+      ],
+    };
+    const t = await testRender(() => <Pipeline state={() => heldState} controls={controls} />, {
+      width: 120,
+      height: 30,
+    });
+    try {
+      await t.waitForFrame((f) => f.includes("Attention 2"));
+      expect(t.captureCharFrame()).toContain("o onboard");
+
+      t.mockInput.pressKey("j");
+      await t.flush();
+      expect(t.captureCharFrame()).not.toContain("o onboard");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   // A tick that is landing runs a project's whole test suite before it reads
   // the world again, and a fleet doing that was indistinguishable from a wedged
   // one. The age of the last read is the only thing that tells them apart.
@@ -398,18 +476,18 @@ describe("Pipeline", () => {
     try {
       await t.waitForFrame((f) => f.includes("Queue 1/2"));
 
-      setCurrent({ ...quiet, held: ["fibrae"] });
+      setCurrent({ ...quiet, held: [held("fibrae")] });
       await t.waitForFrame((f) => f.includes("Attention 1/1"));
 
       t.mockInput.pressArrow("left");
       await t.waitForFrame((f) => f.includes("Queue 1/2"));
-      setCurrent({ ...quiet, held: ["fibrae", "amux"] });
+      setCurrent({ ...quiet, held: [held("fibrae"), held("amux")] });
       await t.flush();
       expect(t.captureCharFrame()).toContain("Queue 1/2");
 
       setCurrent(quiet);
       await t.flush();
-      setCurrent({ ...quiet, held: ["amux"] });
+      setCurrent({ ...quiet, held: [held("amux")] });
       await t.waitForFrame((f) => f.includes("Attention 1/1"));
     } finally {
       t.renderer.destroy();

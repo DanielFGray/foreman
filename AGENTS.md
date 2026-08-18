@@ -132,6 +132,15 @@ changes to tracked files is **held**, and `fill` passes over its tasks in both
 the review and the author pass. It is read every tick, so a project frees itself
 the moment the tree is clean.
 
+The held state carries the reason, not just the name. `isClean` returns a
+`Clean`/`Held` verdict whose `detail` names which of the causes holds the
+project — a dirty tree, a detached HEAD, a jj working copy with zero or several
+bookmark candidates behind it, or a checkout foreman cannot read (the
+dispatcher's catch, not the probe's) — and the landing gates return the same
+verdict, so the dispatch gate and the landing never disagree about why a
+checkout is busy. The dashboard row shows it, and it is what the operator reads
+to tell a hold that clears itself from one that never does.
+
 Tracked changes only. Untracked files are scratch notes and build output that
 live in a repository for months, and counting them would hold a project forever.
 
@@ -169,7 +178,8 @@ questions differently:
   branches from the trunk's tip, so until it commits its bookmark sits on the
   very commit being asked about, and counting it would hold the project for as
   long as anyone is working in it. Zero or more than one candidate holds the
-  project rather than guessing.
+  project rather than guessing, and the hold names the candidates, because they
+  are the fix: deleting the stray bookmark is what unholds the project.
 - **The working copy is a commit**, so clean means `@` is empty. That counts a
   file git would call untracked, because under jj it is already part of the
   working-copy commit and landing would carry it out of the operator's directory.
@@ -213,6 +223,11 @@ task in that project, calls `Fleet.attach` for a workspace on the checkout
 itself, and runs `prompts/onboard.md` at the top rung. Reading abandoned work and
 inferring what somebody meant is the judgement cheap models are worst at, and
 this runs once per project rather than once per task.
+
+The dashboard offers it only for a hold that is uncommitted work — the one cause
+salvage addresses. A checkout held for a missing landing target has a clean
+tree, so the offer would spend the run discovering nothing is there; the held
+row says what to fix instead.
 
 - **`Fleet.attach`, not `Fleet.open`.** The work exists only in that checkout. A
   worktree would hand the agent a copy of the last commit — the one state that
@@ -408,8 +423,10 @@ diagnostic text separates them. An unmerged index entry is the durable fact
 instead — git writes one per conflicting path and nothing else does — so it is
 read before the `merge --abort` that would erase it, and an unreadable index
 holds rather than climbs. Everything not a conflict is `Held`, and `Held` carries
-a `detail` so it is logged — an operator editing clears itself and is not worth a
-line every poll, a stale lock never clears and must not retry in silence.
+a `reason` and a `detail` — the same verdict the dispatch gate's `isClean`
+returns, so landing and gate never disagree about why a checkout is busy. A
+`dirty` hold clears itself and is not worth a line every poll; any other reason
+never clears and must not retry in silence.
 
 That distinction lives wholly in the proving ground. By the time the branch
 reaches the operator's checkout it is proved mergeable against exactly that
