@@ -22,7 +22,7 @@ const ready = {
   priority: 3,
   project: "foreman",
   labels: [],
-  last_activity_at: new Date(),
+  description: null,
   created_at: new Date(),
 } as const;
 

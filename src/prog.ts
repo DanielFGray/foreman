@@ -337,6 +337,15 @@ export const ReadyTask = Schema.Struct({
   project: Schema.String,
   labels: Schema.Array(Schema.String),
   created_at: Schema.DateFromString,
+
+  /**
+   * Read here so the queue stays one call per tick.
+   *
+   * The dashboard shows a queued task's description in the same pane as every
+   * other row's, and fetching it per selected row would be a `prog show` on
+   * each cursor movement against the store the dispatcher is already reading.
+   */
+  description: Schema.NullOr(Schema.String),
 });
 export type ReadyTask = typeof ReadyTask.Type;
 

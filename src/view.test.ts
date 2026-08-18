@@ -27,12 +27,17 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   created_at: new Date(),
 });
 
-const ready = (id: string, labels: ReadonlyArray<string> = []): ReadyTask => ({
+const ready = (
+  id: string,
+  labels: ReadonlyArray<string> = [],
+  description: string | null = null,
+): ReadyTask => ({
   id,
   title: `task ${id}`,
   priority: 2,
   project: "amux",
   labels,
+  description,
   created_at: new Date(),
 });
 
@@ -58,8 +63,17 @@ const held = (project: string, reason: Held["reason"], detail: string): Held => 
   detail,
 });
 
+// A real description is several paragraphs, and the pane wraps and scrolls
+// rather than truncating, so the assertion is that every line survives.
+const LONG_DESCRIPTION = [
+  "Carry description through ReadyTask and render it whole.",
+  "",
+  "The pane wraps and scrolls, so nothing here is cut to fit a width the",
+  "renderer cannot know.",
+].join("\n");
+
 const state: FleetState = {
-  queue: [ready("ts-q1"), ready("ts-q2", ["rung-pro"])],
+  queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["rung-pro"])],
   yours: [ready("ts-y1", ["rung-human"])],
   working: [
     active(task("ts-w1", "in_progress", ["by-flash", "rung-flash"]), worker("ts-w1", "working")),
@@ -246,5 +260,15 @@ describe("previewOf", () => {
     expect(previewOf(row("working", "ts-w1"))).toContain("worker    working");
     expect(previewOf(row("attention", "foreman/ts-u1"))).toContain("branch    foreman/ts-u1");
     expect(previewOf(row("attention", "fibrae"))).toContain("project   fibrae");
+  });
+
+  test("gives a queued task's description whole, the same as a claimed one's", () => {
+    const preview = previewOf(row("queue", "ts-q1"));
+    for (const line of LONG_DESCRIPTION.split("\n")) expect(preview).toContain(line);
+    expect(preview).toContain("status    ready");
+  });
+
+  test("says nothing where a task has no description", () => {
+    expect(previewOf(row("queue", "ts-q2"))).not.toContain("null");
   });
 });

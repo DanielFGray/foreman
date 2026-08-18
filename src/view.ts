@@ -381,6 +381,9 @@ export const keyLine = (actions: ReadonlyArray<Action>, state: FleetState): stri
  * free to say the whole of what a row is — including the task's description,
  * which the one-line label never had room for and which is the thing an
  * operator deciding what to do about a row actually wants to read.
+ *
+ * The description is emitted whole, never truncated: the pane wraps and
+ * scrolls, so cutting it here would lose text the terminal could have shown.
  */
 export const previewOf = (row: ColumnRow): string => {
   const task = row.task ?? row.ready;
@@ -410,7 +413,9 @@ export const previewOf = (row: ColumnRow): string => {
       `task      ${row.unreviewed.task} (${row.unreviewed.status ?? "deleted"})`,
     );
   }
-  if (row.task?.description) lines.push("", row.task.description);
+  // Whichever kind of task the row carries: a queued one is read in the same
+  // shape as a claimed one, so the pane says the same thing about both.
+  if (task?.description) lines.push("", task.description);
   return lines.join("\n");
 };
 

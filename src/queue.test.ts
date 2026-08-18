@@ -16,6 +16,7 @@ const task = (
   priority,
   title: id,
   labels,
+  description: null,
   created_at: createdAt,
 });
 
