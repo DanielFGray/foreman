@@ -90,6 +90,9 @@ A checkout with no branch is held as well, because a landing has nothing to
 move: under git that is a detached `HEAD`, and under jj it is a working copy
 with no bookmark behind it.
 
+The held row says which cause it is. An uncommitted change clears itself; a
+missing landing target never does, and needs a hand-run command instead.
+
 ### jj projects
 
 A project colocated with jj lands through jj. Foreman moves the bookmark you are
@@ -120,10 +123,12 @@ that project, so the fleet repairs it as ordinary work with review, rather than
 one unreviewed agent both salvaging and fixing. The project rejoins the queue as
 soon as the tree is clean.
 
-Onboarding runs when you ask, for any held project — foreman cannot tell a
-checkout you stepped away from a fortnight ago from one you are typing in this
-minute, and you can. The task carries an `onboard` label so the queue never
-starts one on its own.
+Onboarding runs when you ask, for a held project whose checkout holds
+uncommitted work — foreman cannot tell a checkout you stepped away from a
+fortnight ago from one you are typing in this minute, and you can. A checkout
+held for a missing branch has nothing to salvage, so the dashboard says what to
+fix instead of offering the run. The task carries an `onboard` label so the
+queue never starts one on its own.
 
 Agents themselves never enter your checkout, with that one exception. Each works in its own worktree
 under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off your current `HEAD`,

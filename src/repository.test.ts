@@ -8,6 +8,27 @@ import { Repository } from "./repository.ts";
 const isClean = (directory: string) =>
   Effect.runPromise(Repository.isClean(directory).pipe(Effect.provide(Repository.Default)));
 
+/** The clean answer every assertion below that is not a hold expects. */
+const clean = { _tag: "Clean" } as const;
+
+const dirty = {
+  _tag: "Held",
+  reason: "dirty",
+  detail: "uncommitted changes to tracked files",
+} as const;
+
+const detached = {
+  _tag: "Held",
+  reason: "noBranch",
+  detail: "no checked-out branch (detached HEAD)",
+} as const;
+
+const dirtyJJ = {
+  _tag: "Held",
+  reason: "dirty",
+  detail: "uncommitted changes in the working copy",
+} as const;
+
 const holdsWork = (directory: string) =>
   Effect.runPromise(Repository.holdsWork(directory).pipe(Effect.provide(Repository.Default)));
 
@@ -54,18 +75,18 @@ describe("Repository", () => {
     await git("add", "tracked.txt");
     await git("commit", "-qm", "initial");
 
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
 
     // Scratch files live in a repository for months. They are not somebody
     // mid-edit, and holding a project for one would hold it forever.
     await writeFile(join(directory, "scratch.md"), "notes\n");
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
 
     await writeFile(join(directory, "tracked.txt"), "being edited\n");
-    expect(await isClean(directory)).toBe(false);
+    expect(await isClean(directory)).toEqual(dirty);
 
     await git("checkout", "--", "tracked.txt");
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
   });
 
   test("does not refresh the index while checking cleanliness", async () => {
@@ -76,7 +97,7 @@ describe("Repository", () => {
     await utimes(tracked, new Date(Date.now() + 2_000), new Date(Date.now() + 2_000));
     const before = (await stat(index)).ino;
 
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
     expect((await stat(index)).ino).toBe(before);
   });
 
@@ -89,7 +110,7 @@ describe("Repository", () => {
     await git("checkout", "-q", base);
 
     await writeFile(join(directory, "tracked.txt"), "operator edit\n");
-    expect(await merge(directory, "reviewed")).toEqual({ _tag: "Held", detail: undefined });
+    expect(await merge(directory, "reviewed")).toEqual(dirty);
     expect((await git("branch", "--show-current")).stdout.toString().trim()).toBe(base);
 
     await git("checkout", "--", "tracked.txt");
@@ -116,7 +137,7 @@ describe("Repository", () => {
     });
     expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(before);
     expect(await Bun.file(join(directory, "broken.txt")).exists()).toBe(false);
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
   });
 
   // The operator shares this checkout, and a suite spawning its own processes
@@ -290,7 +311,7 @@ describe("Repository", () => {
     await git("commit", "-qam", "target conflict");
 
     expect(await merge(directory, "conflicting")).toMatchObject({ _tag: "Rejected" });
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
     expect((await git("rev-parse", "-q", "--verify", "MERGE_HEAD")).exitCode).not.toBe(0);
   });
 
@@ -313,7 +334,7 @@ describe("Repository", () => {
     // least about. isClean deliberately ignores it; here it is the whole point.
     await writeFile(join(worktree, "new-test.ts"), "expect(1).toBe(1)\n");
     expect(await holdsWork(worktree)).toBe(true);
-    expect(await isClean(worktree)).toBe(true);
+    expect(await isClean(worktree)).toEqual(clean);
 
     await rm(join(worktree, "new-test.ts"));
     await writeFile(join(worktree, "tracked.txt"), "half an edit\n");
@@ -327,13 +348,13 @@ describe("Repository", () => {
   // stays behind, and the sweep then deletes the only ref that reached them.
   test("holds a checkout whose HEAD is not on a branch", async () => {
     const base = (await git("branch", "--show-current")).stdout.toString().trim();
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
 
     await git("checkout", "-q", "--detach", "HEAD");
-    expect(await isClean(directory)).toBe(false);
+    expect(await isClean(directory)).toEqual(detached);
 
     await git("checkout", "-q", base);
-    expect(await isClean(directory)).toBe(true);
+    expect(await isClean(directory)).toEqual(clean);
   });
 
   // The litter sweep exists for jj's three-step landing, whose middle is
@@ -390,7 +411,7 @@ describe("Repository over a jj-colocated checkout", () => {
       await jj("git", "init");
 
       const before = await bookmark("develop");
-      expect(await isClean(colocated)).toBe(true);
+      expect(await isClean(colocated)).toEqual(clean);
 
       expect(await merge(colocated, "foreman/ts-aaaaaa", "true")).toEqual({
         _tag: "Merged",
@@ -408,7 +429,7 @@ describe("Repository over a jj-colocated checkout", () => {
       // A landing must never hold the project it just landed in. The trunk is
       // the nearest bookmark behind `@`, so a working copy left behind the
       // bookmark it moved has no trunk to find, and no later tick can recover.
-      expect(await isClean(colocated)).toBe(true);
+      expect(await isClean(colocated)).toEqual(clean);
 
       // A branch that landed must not read as a branch nobody committed to.
       expect(await branches(colocated)).toEqual([
@@ -445,7 +466,7 @@ describe("Repository over a jj-colocated checkout", () => {
       expect(rejected).toHaveProperty("detail", expect.stringContaining("conflict"));
       expect(await bookmark("develop")).toBe(before);
       expect(await Bun.file(join(colocated, "tracked.txt")).text()).toBe("ours\n");
-      expect(await isClean(colocated)).toBe(true);
+      expect(await isClean(colocated)).toEqual(clean);
     },
     slowly,
   );
@@ -457,10 +478,10 @@ describe("Repository over a jj-colocated checkout", () => {
     "holds a checkout whose working copy is not empty",
     async () => {
       await writeFile(join(colocated, "half-an-edit.ts"), "export const x = 1\n");
-      expect(await isClean(colocated)).toBe(false);
+      expect(await isClean(colocated)).toEqual(dirtyJJ);
 
       await rm(join(colocated, "half-an-edit.ts"));
-      expect(await isClean(colocated)).toBe(true);
+      expect(await isClean(colocated)).toEqual(clean);
     },
     slowly,
   );
@@ -483,7 +504,7 @@ describe("Repository over a jj-colocated checkout", () => {
       await Bun.$`git -C ${colocated} worktree remove ${side}`.quiet().nothrow();
 
       const before = await bookmark("develop");
-      expect(await isClean(colocated)).toBe(true);
+      expect(await isClean(colocated)).toEqual(clean);
 
       expect(await merge(colocated, "foreman/ts-eeeeee", undefined)).toEqual({
         _tag: "Merged",
@@ -583,6 +604,67 @@ describe("Repository over a jj-colocated checkout", () => {
 
       await jj("bookmark", "set", "develop", "-r", "@");
       await jj("new");
+    },
+    slowly,
+  );
+
+  // The reported incident: a stray bookmark left on the trunk's own commit
+  // puts two names behind the working copy. The project is held — correctly,
+  // a landing must not guess which name to advance — and the hold says which,
+  // so the operator sees the fix instead of a clean checkout that never
+  // clears.
+  test(
+    "names the candidate bookmarks when more than one sits behind the working copy",
+    async () => {
+      const isolated = await mkdtemp(join(tmpdir(), "foreman-ambiguous-"));
+      try {
+        const here = (...args: Array<string>) =>
+          Bun.$`git -C ${isolated} ${args}`.quiet().nothrow();
+        const jjHere = (...args: Array<string>) =>
+          Bun.$`jj ${args}`
+            .cwd(isolated)
+            .env({ ...process.env, JJ_USER: "foreman", JJ_EMAIL: "foreman@test" })
+            .quiet();
+
+        await here("init", "-q");
+        await here("config", "user.email", "foreman@test");
+        await here("config", "user.name", "foreman");
+        await writeFile(join(isolated, "tracked.txt"), "committed\n");
+        await here("add", "tracked.txt");
+        await here("commit", "-qm", "initial");
+        await here("branch", "-M", "develop");
+        await jjHere("git", "init");
+
+        // A branch holding work a landing could take, so the merge gate runs
+        // rather than answering "already merged" first.
+        const side = `${isolated}-side`;
+        await here("branch", "foreman/ts-merge", "develop");
+        await here("worktree", "add", "-q", side, "foreman/ts-merge");
+        await writeFile(join(side, "work.txt"), "work\n");
+        await Bun.$`git -C ${side} add work.txt`.quiet().nothrow();
+        await Bun.$`git -C ${side} commit -qm work`.quiet().nothrow();
+        await Bun.$`git -C ${isolated} worktree remove ${side}`.quiet().nothrow();
+
+        await here("branch", "test-setup", "develop");
+        expect(await isClean(isolated)).toEqual({
+          _tag: "Held",
+          reason: "noBranch",
+          detail: "2 bookmark candidates behind the working copy: develop, test-setup",
+        });
+
+        // The same verdict the landing carries, from the same probe: neither
+        // the gate nor a landing may guess which of two bookmarks to advance.
+        expect(await merge(isolated, "foreman/ts-merge")).toMatchObject({
+          _tag: "Held",
+          detail: expect.stringContaining("bookmark candidates"),
+        });
+
+        await here("branch", "-D", "test-setup");
+        expect(await isClean(isolated)).toEqual(clean);
+      } finally {
+        await rm(isolated, { recursive: true, force: true });
+        await rm(`${isolated}.grounds`, { recursive: true, force: true });
+      }
     },
     slowly,
   );

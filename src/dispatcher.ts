@@ -13,7 +13,7 @@ import {
 import { Prompts } from "./prompt.ts";
 import { interleave } from "./queue.ts";
 import { phaseOf } from "./task-phase.ts";
-import { Repository, RepositoryError } from "./repository.ts";
+import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
 import {
   above,
   authorFor,
@@ -198,17 +198,29 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       // Which checkouts the operator is presently working in. Read every tick
       // like everything else: you clean a tree up between two ticks and the
-      // project comes back on its own.
+      // project comes back on its own. The reason rides along, because a hold
+      // that clears itself and one that needs a hand-run command must not read
+      // the same on the dashboard.
       const held = yield* Effect.forEach(settings.projects, (project) =>
         repository.isClean(project.directory).pipe(
-          Effect.map((clean) => (clean ? [] : [project.name])),
+          Effect.map((result: Hold): ReadonlyArray<Held> =>
+            result._tag === "Clean"
+              ? []
+              : [{ project: project.name, reason: result.reason, detail: result.detail }],
+          ),
           // A checkout foreman cannot read is a checkout it must not merge
           // into either, so an unreadable repository is held rather than free.
-          Effect.catchAll((error) =>
-            Effect.logWarning(`holding ${project.name}: ${error}`).pipe(Effect.as([project.name])),
+          Effect.catchAll((error: RepositoryError) =>
+            Effect.logWarning(`holding ${project.name}: ${error}`).pipe(
+              Effect.as<ReadonlyArray<Held>>([
+                { project: project.name, reason: "unreadable", detail: error.detail },
+              ]),
+            ),
           ),
         ),
-      ).pipe(Effect.map((names) => names.flat()));
+      ).pipe(
+        Effect.map((rows) => rows.reduce<ReadonlyArray<Held>>((all, row) => [...all, ...row], [])),
+      );
 
       const claimed = yield* eachProject((project) => prog.claimed(project.name));
       const reviewing = yield* eachProject((project) => prog.awaitingReview(project.name));
@@ -590,9 +602,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // pane at all — and a project can stay dirty for hours.
         if (result._tag === "Held") {
           // An operator editing clears itself and is not worth a line every
-          // poll. A detail means git or jj could not run the merge at all,
-          // which never clears and must not retry in silence.
-          if (result.detail) {
+          // poll. Any other hold — a missing landing target, a machine foreman
+          // could not run — never clears and must not retry in silence.
+          if (result.reason !== "dirty" && result.detail) {
             yield* Effect.logWarning(`landing ${task.id} (${project.name}) held: ${result.detail}`);
           }
           return yield* stopAgents(worker);
@@ -828,7 +840,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         for (const { task, worker } of current.review) {
           if (free <= 0) return;
-          if (current.held.includes(task.project)) continue;
+          if (current.held.some((held) => held.project === task.project)) continue;
           if (reviewedBy(task) !== undefined) continue;
           if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
           if (failed.has(task.id)) continue;
@@ -845,7 +857,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (mode === "draining") return;
 
         const available = current.queue.filter(
-          (task) => !current.held.includes(task.project) && !failed.has(task.id),
+          (task) =>
+            !current.held.some((held) => held.project === task.project) && !failed.has(task.id),
         );
         for (const task of available.slice(0, free)) {
           yield* dispatchAuthor(task).pipe(
@@ -1766,13 +1779,14 @@ export interface FleetState {
   readonly unreviewed: ReadonlyArray<Unreviewed>;
 
   /**
-   * Projects whose checkout has uncommitted changes to tracked files.
+   * Projects whose checkout is not free to work against, and why.
    *
-   * The operator is working there, so their tasks stay in the queue until the
-   * tree is clean again. Naming them is the point: a queue that stops moving
-   * for a reason nobody can see reads as a broken dispatcher.
+   * The operator is working there, or the checkout has no branch a landing
+   * could move. Their tasks stay in the queue until the checkout is free
+   * again. Naming them and the reason is the point: a queue that stops moving
+   * for a cause nobody can see reads as a broken dispatcher.
    */
-  readonly held: ReadonlyArray<string>;
+  readonly held: ReadonlyArray<Held>;
   readonly dispatch: Dispatch;
 
   /**
@@ -1806,6 +1820,20 @@ export interface Unreviewed {
   readonly status: string | undefined;
   /** When its task last moved, which is the order these are recovered in. */
   readonly activity: Date | undefined;
+}
+
+/**
+ * A project held out of the queue, with the reason it is held.
+ *
+ * `reason` is what the dashboard gates actions on — only a `dirty` hold has
+ * uncommitted work for an onboarding agent to salvage. `detail` is what the
+ * operator reads; it comes from the same probe the landing verdict reads, so
+ * the two never disagree about why a checkout is busy.
+ */
+export interface Held {
+  readonly project: string;
+  readonly reason: HoldReason;
+  readonly detail: string;
 }
 
 /** A task and the workspace running it, if the multiplexer still has one. */

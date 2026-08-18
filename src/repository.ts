@@ -5,6 +5,27 @@ import { Effect, Schema, Stream } from "effect";
 /** The namespace `labelFor` puts every branch foreman authors under. */
 const ours = "foreman/";
 
+/** Why a checkout is not free to work against. */
+export type HoldReason = "dirty" | "noBranch" | "unreadable";
+
+/**
+ * Whether a checkout is free to work against, and if not, why.
+ *
+ * `detail` is what the dashboard shows for a held project, and it is the same
+ * verdict `Landing.Held` carries: both the dispatch gate and the landing gate
+ * ask the same question of the same probes, so neither needs a word of its own.
+ */
+export type Hold =
+  | { readonly _tag: "Clean" }
+  | { readonly _tag: "Held"; readonly reason: HoldReason; readonly detail: string };
+
+/** The dirty-tree holds, one per tool, because git and jj count different files. */
+const DIRTY = "uncommitted changes to tracked files";
+const DIRTY_JJ = "uncommitted changes in the working copy";
+
+/** A checkout with no branch for a landing to move, under git. */
+const DETACHED = "no checked-out branch (detached HEAD)";
+
 /**
  * The script a project may keep to make a fresh worktree usable. A path rather
  * than a config field: the project is what knows how to build itself, and
@@ -158,9 +179,12 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       jjOutput(directory, "log", "-r", revset, ...template("commit_id"));
 
     /**
-     * The bookmark foreman would land on, or undefined when there is not
-     * exactly one. Zero means the operator is standing somewhere no bookmark
-     * names; more than one means foreman would have to guess which.
+     * The bookmark foreman would land on, or why there is not exactly one.
+     *
+     * Zero means the operator is standing somewhere no bookmark names; more
+     * than one means foreman would have to guess which. The candidates are
+     * kept even when there is not exactly one, because they are the fix:
+     * deleting the stray bookmark is what unholds the project.
      */
     const trunkOf = (directory: string) =>
       jjOutput(directory, "log", "-r", "heads(::@ & bookmarks())", ...template("bookmarks")).pipe(
@@ -175,9 +199,16 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             // being asked about. It is never a landing target, and counting it
             // would hold the project for as long as anyone is working in it.
             .filter((name) => !name.startsWith(ours));
-          return names.length === 1 ? names[0] : undefined;
+          return names.length === 1
+            ? ({ _tag: "One", name: names[0] as string } as const)
+            : ({ _tag: "None", names } as const);
         }),
       );
+
+    const noTrunk = (names: ReadonlyArray<string>): string =>
+      names.length === 0
+        ? "no bookmark behind the working copy"
+        : `${names.length} bookmark candidates behind the working copy: ${names.join(", ")}`;
 
     /**
      * What proving a landing somewhere disposable concluded.
@@ -344,11 +375,19 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      * recovered from the reflog.
      */
     const gitCheckout = {
-      isClean: (directory: string) =>
+      isClean: (directory: string): Effect.Effect<Hold, RepositoryError> =>
         Effect.all([
           git(directory, "symbolic-ref", "--quiet", "HEAD"),
           status(directory, "no"),
-        ]).pipe(Effect.map(([head, changes]) => head.exitCode === 0 && changes === "")),
+        ]).pipe(
+          Effect.map(([head, changes]) =>
+            head.exitCode === 0
+              ? changes === ""
+                ? ({ _tag: "Clean" } as const)
+                : ({ _tag: "Held", reason: "dirty", detail: DIRTY } as const)
+              : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
+          ),
+        ),
 
       merge: (
         directory: string,
@@ -529,11 +568,19 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      * fleet able to clear it.
      */
     const jjCheckout = {
-      isClean: (directory: string) =>
+      isClean: (directory: string): Effect.Effect<Hold, RepositoryError> =>
         Effect.all([
           trunkOf(directory),
           jjOutput(directory, "log", "-r", "@", ...template("empty")),
-        ]).pipe(Effect.map(([trunk, empty]) => trunk !== undefined && empty === "true")),
+        ]).pipe(
+          Effect.map(([trunk, empty]) =>
+            trunk._tag === "None"
+              ? ({ _tag: "Held", reason: "noBranch", detail: noTrunk(trunk.names) } as const)
+              : empty === "true"
+                ? ({ _tag: "Clean" } as const)
+                : ({ _tag: "Held", reason: "dirty", detail: DIRTY_JJ } as const),
+          ),
+        ),
 
       merge: (
         directory: string,
@@ -543,19 +590,21 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           const trunk = yield* trunkOf(directory);
-          if (!trunk) return { _tag: "Held", detail: undefined } as const;
+          if (trunk._tag === "None") {
+            return { _tag: "Held", reason: "noBranch", detail: noTrunk(trunk.names) } as const;
+          }
 
           // The bookmark names a moving target; the proof is about one commit.
-          const base = yield* revision(directory, trunk);
+          const base = yield* revision(directory, trunk.name);
 
           const proof = yield* jjProve(proving, directory, branch, verify, base);
           if (proof._tag !== "Proven") return proof;
 
-          const tip = yield* revision(directory, trunk);
+          const tip = yield* revision(directory, trunk.name);
           if (tip !== base) {
             return {
               _tag: "Held",
-              detail: `${trunk} moved while ${branch} was being verified`,
+              detail: `${trunk.name} moved while ${branch} was being verified`,
             } as const;
           }
 
@@ -565,9 +614,8 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           // takes as long as the project's suite, which is long enough to start
           // typing in. The git path needs no such recheck: a fast-forward
           // refuses rather than overwrites.
-          if (!(yield* jjCheckout.isClean(directory))) {
-            return { _tag: "Held", detail: undefined } as const;
-          }
+          const gate = yield* jjCheckout.isClean(directory);
+          if (gate._tag !== "Clean") return gate;
 
           // The merge already exists, in the ground, and a jj workspace shares
           // the repository — so both of these only ever name it.
@@ -589,7 +637,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             } as const;
           }
 
-          const applied = yield* jj(directory, "bookmark", "set", trunk, "-r", proof.commit);
+          const applied = yield* jj(directory, "bookmark", "set", trunk.name, "-r", proof.commit);
           if (applied.exitCode !== 0) {
             return {
               _tag: "Held",
@@ -681,13 +729,15 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
 
     return {
       /**
-       * Whether the checkout is free for foreman to work against.
+       * Whether the checkout is free for foreman to work against, and if not,
+       * why.
        *
        * Two ways to be busy. The operator is mid-edit — under git a staged or
        * unstaged change to a tracked file, under jj a non-empty working-copy
        * commit — or the checkout has no branch for a landing to move, which
        * under git means a detached HEAD and under jj means no bookmark behind
-       * the working copy.
+       * the working copy. `detail` names which, so the operator can see whether
+       * the hold clears itself or needs a hand-run command.
        *
        * Under git, untracked files do not count. Scratch notes, build output
        * and editor leavings sit in a repository for months, and holding a
@@ -855,8 +905,8 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
           if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
 
           const checkout = yield* checkoutAt(directory);
-          if (!(yield* checkout.isClean(directory)))
-            return { _tag: "Held", detail: undefined } as const;
+          const gate = yield* checkout.isClean(directory);
+          if (gate._tag !== "Clean") return gate;
           return yield* checkout.merge(directory, branch, verify, proving);
         }),
 
@@ -881,10 +931,11 @@ export type Landing =
   /**
    * Not now. The checkout was not in a state to land into, which says nothing
    * about the branch — so the verdict stays on the task and a later tick tries
-   * again. `detail` names the obstacle when it was not simply the operator
-   * working there.
+   * again. `reason` is present when the cleanliness gate itself said no, and
+   * `detail` names the obstacle when it was not simply the operator working
+   * there.
    */
-  | { readonly _tag: "Held"; readonly detail: string | undefined }
+  | { readonly _tag: "Held"; readonly reason?: HoldReason; readonly detail: string | undefined }
   /**
    * The checkout already had the commits, so nothing was merged and nothing
    * was verified. Distinct from `Merged` because no write happened: foreman
