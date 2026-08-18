@@ -138,13 +138,19 @@ clean.
 Dispatching a task opens a herdr workspace labelled `foreman/<task-id>`, holding
 a git worktree on a branch of the same name. That durable label identifies the
 work; ephemeral agents use valid names derived from their pane because herdr
-agent names cannot contain `/` and old output panes remain visible.
+agent names cannot contain `/`.
 
 The author runs in the workspace's own pane, so one task is one pane and there
-is no blank shell beside the worker. Its output stays visible after it stops;
-the reviewer opens a fresh split in the same workspace, against the same
-worktree, beside the author's output. The workspace closes when the task leaves
-the fleet.
+is no blank shell beside the worker; the reviewer opens a fresh split in the
+same workspace, against the same worktree. A pane whose agent has settled is
+closed, not left standing: an idle opencode process keeps its model resident at
+around 0.7 GiB, so a fleet that never closed one would run out of memory long
+before it ran out of slots. The author's pane is the one exception, kept for a
+short window after it hands off so a reviewer can send one mechanical finding
+back to the session that wrote the code — it closes when that window expires,
+or when the review answers. The worktree and anything uncommitted in it outlive
+the pane, so the next role picks up where the last one stopped, and the
+workspace closes when its last pane does.
 
 A fresh worktree holds committed files only, so the project's dependencies are
 not installed in it and every test, typecheck and lint command fails until they
