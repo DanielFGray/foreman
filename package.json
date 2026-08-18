@@ -20,12 +20,9 @@
     "@effect/cli": "^0.77.0",
     "@effect/platform": "^0.97.1",
     "@effect/platform-bun": "^0.91.2",
-    "@opentui/core": "^0.5.3",
-    "@opentui/solid": "^0.5.3",
     "effect": "^3.22.1",
     "lodash": "^4.18.1",
-    "npm-run-all": "^4.1.5",
-    "solid-js": "^1.9.14"
+    "npm-run-all": "^4.1.5"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",

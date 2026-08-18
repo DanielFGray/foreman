@@ -4,20 +4,19 @@ import { dirname } from "node:path";
 import { Cause, Effect, Layer, Logger } from "effect";
 
 /**
- * Every line foreman logs, written twice: once to a file, once to the screen.
+ * Every line foreman logs, written to one file and nowhere else.
  *
- * The file is the durable copy. The pane a daemon runs in is not a log — it
- * scrolls, and it dies with the session — but the questions worth asking about
- * an unattended fleet are all asked long after the event: why did this task go
- * to that model, why was this claim released, what did it do at 3am. One JSON
- * object per line, so the answer is a jq query rather than a full read.
+ * The questions worth asking about an unattended fleet are all asked long
+ * after the event: why did this task go to that model, why was this claim
+ * released, what did it do at 3am. One JSON object per line, so the answer is
+ * a jq query rather than a full read.
  *
- * The screen copy replaces Effect's default logger rather than joining it.
- * OpenTUI replaces globalThis.console when its renderer starts, so reading the
- * global at log time sends dashboard records to the F12 overlay instead of
- * stdout.
+ * It replaces Effect's default logger rather than joining it, because the
+ * dashboard owns the terminal for as long as it runs and a second logger
+ * writing underneath it would tear the screen. The dashboard reads this file
+ * back to show the log instead.
  */
-export const logging = (path = defaultPath()): Layer.Layer<never> =>
+export const logging = (path = logPath()): Layer.Layer<never> =>
   Layer.unwrapEffect(
     Effect.gen(function* () {
       const stream = yield* Effect.promise(async () => {
@@ -40,13 +39,13 @@ export const logging = (path = defaultPath()): Layer.Layer<never> =>
           stream.write(
             `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
           );
-          globalThis.console.log(`${logLevel.label} ${text}`);
         }),
       );
     }),
   );
 
-const defaultPath = (): string => {
+/** Where the log is, for the dashboard that reads it back. */
+export const logPath = (): string => {
   const stateHome = process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"] ?? ""}/.local/state`;
   return process.env["FOREMAN_LOG"] ?? `${stateHome}/foreman/foreman.jsonl`;
 };

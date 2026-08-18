@@ -3,13 +3,15 @@ import { Command, Options } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer, Option, Schema } from "effect";
 import { type Overrides, settings } from "./config.ts";
-import { dashboard } from "./dashboard.tsx";
+import { dashboard } from "./dashboard.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { HerdrFleet } from "./herdr.ts";
 import { logging } from "./log.ts";
 import { runPlan } from "./plan.ts";
 import { Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
+import { BOUND_KEYS } from "./view.ts";
+import { fzfScreen } from "./screen.ts";
 
 /**
  * How many tasks may be in flight at once.
@@ -100,7 +102,7 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
 const live = (overrides: Overrides) =>
   Layer.provideMerge(
     Dispatcher.Default,
-    Layer.mergeAll(HerdrFleet, settings(overrides), logging()),
+    Layer.mergeAll(HerdrFleet, settings(overrides), logging(), fzfScreen(BOUND_KEYS)),
   );
 
 /** Plan mode needs the same world as the daemon minus the dispatcher. */

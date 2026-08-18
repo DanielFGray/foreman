@@ -511,7 +511,7 @@ see a different oldest. **Only `done` is recovered.** It says somebody meant to
 keep the work, so unmerged commits mean a landing that stopped part way — which
 is foreman's own doing and foreman's to correct. A `canceled` task is a decision
 a person made, and an automatic review spends a rung relitigating it; a deleted
-one has no id to dispatch against. Both are shown, and `s` submits one by hand.
+one has no id to dispatch against. Both are shown, and `adopt` submits one by hand.
 
 ### Roles are panes
 
@@ -569,20 +569,25 @@ builds a `prog` command line.
 `Repository` (`src/repository.ts`) answers what foreman needs to know about a
 project's git checkout. Nothing above that file runs `git`.
 
+`Screen` (`src/screen.ts`) is the whole terminal surface — a list of rows with a
+preview each, and the keys the operator pressed. fzf is one implementation.
+
 **prog itself is not ours.** It is Byron's. Keep edits there minimal and file
 in-house replacements in the backlog rather than patching it.
 
 ## The dashboard
 
-Built over `Dispatcher.state`, a `SubscriptionRef<FleetState>`. `src/pipeline.tsx`
-is the view; `src/dashboard.tsx` owns the renderer's lifetime and forks each
-`Controls` command into the dispatcher's runtime. The view is deliberately free
-of the dispatcher's imports — it reads types and prog helpers only — so its test
-renders it without dragging in the prompt chain.
+Built over `Dispatcher.state`, a `SubscriptionRef<FleetState>`, in three parts
+that share no state. `src/view.ts` is a total function from that reading to
+rows, previews and the keys each row takes — no terminal, which is why its test
+is plain assertions. `src/screen.ts` is the `Screen` port that puts a list on a
+terminal. `src/dashboard.ts` decides which view the operator is looking at, what
+a key means in it, and forks each command into the dispatcher's runtime so the
+screen never waits on a herdr or prog round trip.
 
-The renderer is created inside `Effect.acquireRelease`, and the program parks on
-a `Deferred`, because `render` from `@opentui/solid` resolves after mount, not on
-exit.
+Every redraw rebuilds the whole frame from the last reading and pushes it whole.
+There is no screen to keep in step with the world, and awaiting the screen's
+process is what parks the program.
 
 One cursor walks five views — queue | working | review | landed | attention — one
 full-width list at a time. The cursor stores the tracked row's id, never a
@@ -595,7 +600,9 @@ A task that leaves the followed views entirely gives the cursor to the nearest
 surviving row in the column it left. Only non-empty views become tabs, so landed
 history is a count until selected rather than a permanent column squeezing
 active work. At 120 columns extra width adds selected-row details; it never
-restores columns.
+restores columns. A row may be two lines: the exceptional states have a name
+and a reason, and a reason on its own line is one a narrow pane cannot truncate
+away.
 
 Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, unreviewed branches, then held projects. Each row keeps its source
@@ -605,7 +612,7 @@ Attention opens when it changes from empty to non-empty, including at startup,
 and must clear before a later item can interrupt again.
 
 The status line remains when every view is empty, because an empty fleet still
-has to say whether it is paused, draining, or merely out of work. `p` cycles the
+has to say whether it is paused, draining, or merely out of work. `dispatch` cycles the
 three, and its label names the state it moves to rather than the state it is in,
 because the operator is choosing where to stop. It also says how long ago
 the dispatcher last read the world — `FleetState.observedAt`, set by `observe`
@@ -630,16 +637,16 @@ cannot prove is spent. Panes, not the workspace: what is uncommitted in the
 worktree belongs to a returned reviewer or a vanished author, and closing a pane
 is the one teardown that cannot lose it.
 
-The two corrections follow the labels, not the views. `x` lowers a task one rung,
+The two corrections follow the labels, not the views. `descend` lowers a task one rung,
 because a rung is only ever as good as the evidence that wrote it and a bug, an
 OOM or a killed run all write one nothing earned; one step per press, writing the
 same `rung-*` label the ladder reads, and off the bottom rung the label is
-removed because the ladder reads no label as the bottom. `u` clears a
+removed because the ladder reads no label as the bottom. `unassign` clears a
 `review-by-*` label no reviewer is behind — the world records whether a reviewer
 was dispatched, not whether it is still alive, so only the operator can say the
 label is stale. Both keys write exactly what foreman itself would have written.
 
-`e` intervenes rather than silently editing a rung. Continue stops the live role,
+`intervene` acts rather than silently editing a rung. Continue stops the live role,
 preserves its worktree and uncommitted edits, asks which rung takes over, and
 dispatches it. Diagnose and Review are offered only where git or a surviving
 worktree proves an attempt left work. Committed Review uses the formal verdict
@@ -655,15 +662,58 @@ writes the decision into the task and removes its `rung-human` label. The two
 corrections do reach it, since a task parked at the operator is exactly the sort
 of rung that can turn out not to have been earned.
 
-The wheel moves the cursor, never the viewport. A scrollbox scrolls itself by
-default, and that is a second position beside the cursor: one notch carries the
-selected row off the screen, and the next keypress snaps the view back. The
-listener therefore sits on the scrollbox's *content*, not on the scrollbox. A
-mouse event runs a renderable's own listeners, then its built-in handler, then
-walks to its parent, so `stopPropagation` only stops the walk — from the content,
-the scrollbox is the parent that is never reached, while a listener on the
-scrollbox itself could never suppress its own scrolling. Tabs and rows are
-clickable; page keys move five rows at a time.
+### One table is the keymap
+
+Every key the dashboard interprets is one row of `KEYS` in `src/view.ts`, with
+the key, its footer label, and any unadvertised alias. Nothing below that file
+knows what a key means and nothing above it knows what a key is called: the
+screen is handed `BOUND_KEYS` to bind and reports each press back by name, and
+`commandFor` turns the name into the command. Adding a binding is adding a row,
+which is what the footer, the bind list and the dispatch all read.
+
+A question with a handful of answers is the list, not more keys. Choosing a
+rung was already that shape, and intervening became it — the three answers were
+keys that meant something in one mode only, which is exactly what a modified
+keymap cannot express twice.
+
+### The screen is fzf
+
+`Screen` (`src/screen.ts`) is the whole terminal surface, and fzf is one
+implementation of it. Nothing above that file knows, in the same way nothing
+above `Fleet` knows about herdr. Four channels, all boring: argv at spawn, a
+unix socket outbound, files for payload, and one appended file inbound. fzf's
+only child commands are `cat` and `printf`.
+
+- **`--track --id-nth 1` is what makes the cursor invariant fzf's problem rather
+  than foreman's.** It resolves against the original line, so the fields
+  carrying the preview and footer paths stay hidden behind `--with-nth` while
+  the identity is still what tracking reads.
+- **A reload discards whatever is chained behind it, and any request that
+  arrives while one is running.** So the cursor's position cannot be sent with
+  the frame that reorders the list. It is written to a file instead, and a
+  `load` binding applies it the moment the new list exists. Everything else goes
+  *ahead* of the reload in the same request, where chaining still works.
+- **A request body is read a line at a time**, so a header or footer allowed a
+  second line cannot be chained with anything and is sent alone.
+- **The footer belongs to a row, the header to the frame.** The cursor moves
+  without foreman — moving the cursor is a key the screen handles itself — so a footer foreman
+  had to be asked for would name the previous row's actions. Each row carries
+  its own, swapped in on the screen's `focus` and `result` events; `result` is
+  not spare, because a reload fires `focus` while the outgoing row is still
+  current.
+- **Search is always live, so every command carries a modifier.** The operator
+  reaches the row somebody named to them by typing its id, and only what is
+  displayed is what fzf matches — so the id leads each line, and no bare letter
+  can also be a command. Two modified keys still cannot be taken: `ctrl-c`,
+  which fzf aborts on, and `ctrl-n`/`ctrl-p`, which are how the cursor moves now
+  that `j` and `k` type. The one prompt that takes a sentence turns filtering
+  off; the query is still recorded, so the words arrive either way.
+- **Rows are NUL-separated**, which is what lets one be more than one line.
+- **The keypress channel is an appended file, watched.** A pipe is the obvious
+  shape and the wrong one: the platform's file handles seek, which a pipe
+  refuses, and a pipe ends whenever its last writer closes — which every
+  binding does.
+- **fzf draws on stderr**, so the spawn inherits all three streams.
 
 Two divergences from the settled design:
 
@@ -681,12 +731,10 @@ Two divergences from the settled design:
   `bun src/main.ts plan ...`, which spawns real planner and tasker agents — a
   smoke test must target a scratch project outside the config, or its opened
   children go straight into the live queue.
-- **`src/log.ts` must use `Logger.replace`, not `Logger.add`.** Creating an
-  opentui renderer assigns a *new* object to `globalThis.console` and routes it
-  to the F12 overlay. Effect resolved the old object when it loaded and keeps
-  that reference, so a default logger left in place writes to the real stdout
-  underneath a full-screen renderer. Replacing the default and reading
-  `globalThis.console` per line follows the swap, and needs no mode flag.
+- **`src/log.ts` must use `Logger.replace`, not `Logger.add`, and must not write
+  to a stream.** The dashboard owns the terminal for as long as it runs, so a
+  logger left writing underneath it tears the screen. The file is the only copy,
+  and `F12` shows its tail as rows — which is searchable, unlike an overlay.
 - **Plan epics are drafts and must stay drafts.** The "daemon needs no plan
   awareness" property rests on the epic never being claimed or moved to
   `in_progress`; the settle loop would read a settled workspace on an
