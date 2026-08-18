@@ -523,7 +523,7 @@ editing nothing and will never work another turn, but it still holds its model's
 resident memory — enough of it that a full fleet exhausts this machine. `slots`
 does not bound that: `busy` counts `working` and `blocked`, so a settled agent
 frees its slot and keeps its process. Each settle path that has already written
-its record to the store therefore ends with `stopActiveRole`: the author that
+its record to the store therefore ends with `stopAgents`: the author that
 handed off, the reviewer that returned work, the reviewer that stopped without a
 verdict, and the reviewer waiting out a held project. What the agent did is in
 the task's log, which is where the next one is told to read it.
