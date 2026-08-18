@@ -35,6 +35,7 @@ const task = (
   labels,
   description: null,
   last_activity_at: new Date(),
+  created_at: new Date(),
 });
 
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({

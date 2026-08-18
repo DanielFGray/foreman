@@ -13,6 +13,7 @@ const item: Item = {
   labels: ["onboard"],
   description: null,
   last_activity_at: new Date(),
+  created_at: new Date(),
 };
 
 const ready = {
@@ -22,6 +23,7 @@ const ready = {
   project: "foreman",
   labels: [],
   last_activity_at: new Date(),
+  created_at: new Date(),
 } as const;
 
 describe("Prompts", () => {

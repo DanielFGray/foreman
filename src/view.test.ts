@@ -24,6 +24,7 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   labels,
   description: null,
   last_activity_at: new Date(),
+  created_at: new Date(),
 });
 
 const ready = (id: string, labels: ReadonlyArray<string> = []): ReadyTask => ({
@@ -32,7 +33,7 @@ const ready = (id: string, labels: ReadonlyArray<string> = []): ReadyTask => ({
   priority: 2,
   project: "amux",
   labels,
-  last_activity_at: new Date(),
+  created_at: new Date(),
 });
 
 const worker = (task: string, state: WorkerState): Worker => ({

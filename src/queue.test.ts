@@ -8,7 +8,7 @@ const task = (
   id: string,
   project: string,
   priority: number,
-  lastActivityAt = now,
+  createdAt = now,
   labels: ReadonlyArray<string> = [],
 ): ReadyTask => ({
   id,
@@ -16,11 +16,11 @@ const task = (
   priority,
   title: id,
   labels,
-  last_activity_at: lastActivityAt,
+  created_at: createdAt,
 });
 
-const bug = (id: string, project: string, priority: number, lastActivityAt = now): ReadyTask =>
-  task(id, project, priority, lastActivityAt, ["bug"]);
+const bug = (id: string, project: string, priority: number, createdAt = now): ReadyTask =>
+  task(id, project, priority, createdAt, ["bug"]);
 
 const ancient = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
 

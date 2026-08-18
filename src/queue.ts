@@ -27,6 +27,14 @@ const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
  * amount. The cap prevents old low-priority work from permanently displacing
  * newly created urgent work.
  *
+ * Waiting is measured from when the task was filed, never from when it was last
+ * touched. A note written onto a task is somebody reading it and thinking about
+ * it — evidence the work is ripe — and aging from last activity reads that as
+ * the task starting over, sending the best-understood work to the back of the
+ * queue. It also makes the credit unreachable: an agent's own attempt, release
+ * and log all count as activity, so a task the fleet keeps picking up never
+ * ages at all.
+ *
  * A defect carries the full aging credit from the moment it is filed, so it
  * leads its priority band on arrival instead of earning its way up. That is a
  * band and a half of score, so a defect also outranks ordinary work one
@@ -35,7 +43,7 @@ const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
  */
 export const effectivePriority = (task: ReadyTask, now: Date): number => {
   const ageDays =
-    Math.max(0, now.getTime() - task.last_activity_at.getTime()) / DAYS_IN_MILLISECONDS;
+    Math.max(0, now.getTime() - task.created_at.getTime()) / DAYS_IN_MILLISECONDS;
   const credit = task.labels.includes(BUG) ? DEFECT_CREDIT : 0;
   return task.priority - AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS) - credit;
 };

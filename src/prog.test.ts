@@ -24,6 +24,7 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   labels,
   description: null,
   last_activity_at: new Date(),
+  created_at: new Date(),
 });
 
 describe("task attribution", () => {

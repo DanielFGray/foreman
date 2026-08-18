@@ -336,7 +336,7 @@ export const ReadyTask = Schema.Struct({
   priority: Schema.Number,
   project: Schema.String,
   labels: Schema.Array(Schema.String),
-  last_activity_at: Schema.DateFromString,
+  created_at: Schema.DateFromString,
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
@@ -377,6 +377,14 @@ export const Item = Schema.Struct({
    * stale as one that died immediately.
    */
   last_activity_at: Schema.DateFromString,
+
+  /**
+   * When the task was filed, which is what the queue ages against.
+   *
+   * An Item stands in for a ReadyTask wherever the dispatcher requeues one it
+   * has already read in full, so the two must agree about what the queue reads.
+   */
+  created_at: Schema.DateFromString,
 });
 export type Item = typeof Item.Type;
 
