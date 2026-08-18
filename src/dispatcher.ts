@@ -610,19 +610,26 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           return yield* stopAgents(worker);
         }
 
+        // A conflict is not evidence about the model, so it does not climb.
+        // Every author branches from the trunk's tip, so a branch whose tip
+        // has not moved fast-forwards and cannot conflict at all: a conflict
+        // therefore means the trunk moved after this branch was cut, which no
+        // model is stronger or weaker at avoiding. Spending a better one on
+        // the retry buys nothing, and it is the resolution — not the work —
+        // that is outstanding. A task that genuinely cannot get past it still
+        // ends unfinished, and `unfinished` is what bounds that.
         if (result._tag === "Rejected") {
           yield* Effect.logWarning(
             `landing ${task.id} (${project.name}) rejected: ${result.detail}`,
           );
           yield* prog.log(
             task.id,
-            `foreman: finished branch could not be merged: ${result.detail}. Returned to the queue.`,
+            `foreman: this branch no longer merges into ${project.name}'s checkout, because the trunk moved after the branch was cut:\n\n${result.detail}\n\nReturned to the queue at the same rung. Merge the current trunk into this branch and resolve those paths before anything else — the work already on the branch may have been overtaken, so read what the trunk did to those files before assuming the branch's version is the one to keep.`,
           );
-          yield* climb(task);
           yield* prog.release(task.id);
           return yield* fleet.notify(
             "Landing failed",
-            `${task.id} could not merge cleanly — back in the queue`,
+            `${task.id} is behind ${project.name} — back in the queue to rebase`,
           );
         }
 
@@ -1049,9 +1056,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * person.
      *
      * The paths that hand work back to the queue with a judgement about it come
-     * through here — a reviewer sending work back, a branch that would not land
-     * — so the evidence that a rung failed is written where the next dispatch
-     * reads it rather than being lost with the worker. An agent that merely
+     * through here — a reviewer sending work back, a branch that broke the
+     * project's verification — so the evidence that a rung failed is written
+     * where the next dispatch reads it rather than being lost with the worker.
+     * A branch that merely would not merge is not one of them: that is the
+     * trunk having moved, which says nothing about the model. An agent that merely
      * stopped unfinished does not climb until its rung is spent. The climb
      * rewrites the rung label, which clears any attempt count the old rung
      * earned. Climbing off the top rung parks the task in the operator's

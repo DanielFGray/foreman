@@ -117,8 +117,14 @@ dashboard, and the task stays claimed until someone answers. After
 `staleAfterHours` of no activity the claim is released with a log line.
 
 Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
-a reviewer sending work back, a branch that would not land, or a rung spent by
-`attemptsPerRung` unfinished endings. An agent that merely stopped without
+a reviewer sending work back, a branch that broke the project's verification, or
+a rung spent by `attemptsPerRung` unfinished endings. A branch that merely would
+not **merge** is none of them: every author cuts from the trunk's tip, so a
+branch whose tip has not moved fast-forwards and cannot conflict — a conflict
+therefore means the trunk moved afterwards, which no model is stronger at
+avoiding. It returns to the queue at the same rung, with the conflicting paths
+on its log, and the ordinary unfinished count still bounds a task that cannot
+get past it. An agent that merely stopped without
 finishing has said nothing about its model — a crash, a timeout and a usage wall
 all end the same way — so the task stays on the rung and is tried again. The
 count of those endings lives on the task as an `attempt-<rung>-<n>` label,
