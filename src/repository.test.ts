@@ -516,6 +516,81 @@ describe("Repository over a jj-colocated checkout", () => {
     slowly,
   );
 
+  // The incident behind the trunk filter: an author's branch sat ahead of
+  // develop and the operator's working copy came to rest on it. heads() dropped
+  // develop as already-merged, the filter removed the only name left, and a
+  // checkout jj reported as clean stayed held forever. The trunk is still
+  // nameable — it is the non-foreman bookmark that is the head behind the
+  // working copy — so the filter runs in the revset, ahead of heads.
+  test(
+    "frees a checkout parked on a foreman bookmark and lands past it",
+    async () => {
+      const parked = await mkdtemp(join(tmpdir(), "foreman-parked-"));
+      try {
+        const here = (...args: Array<string>) => Bun.$`git -C ${parked} ${args}`.quiet().nothrow();
+        const jjHere = (...args: Array<string>) =>
+          Bun.$`jj ${args}`
+            .cwd(parked)
+            .env({ ...process.env, JJ_USER: "foreman", JJ_EMAIL: "foreman@test" })
+            .quiet();
+        const bookmarkHere = async (name: string) =>
+          (await jjHere("log", "-r", name, "--no-graph", "-T", "commit_id")).stdout
+            .toString()
+            .trim();
+
+        await here("init", "-q");
+        await here("config", "user.email", "foreman@test");
+        await here("config", "user.name", "foreman");
+        await writeFile(join(parked, "tracked.txt"), "committed\n");
+        await here("add", "tracked.txt");
+        await here("commit", "-qm", "initial");
+        await here("branch", "-M", "develop");
+        await jjHere("git", "init");
+
+        // An author's branch twelve commits ahead of develop, cut from its tip.
+        await here("checkout", "-qb", "foreman/ts-cccccc", "develop");
+        for (let i = 0; i < 12; i++) {
+          await writeFile(join(parked, `step-${i}.txt`), `${i}\n`);
+          await here("add", "-A");
+          await here("commit", "-qm", `step ${i}`);
+        }
+        await here("checkout", "-q", "develop");
+
+        // A sibling branch to land, so the merge gate runs rather than
+        // answering "already merged" first.
+        const side = `${parked}-side`;
+        await here("branch", "foreman/ts-merge", "develop");
+        await here("worktree", "add", "-q", side, "foreman/ts-merge");
+        await writeFile(join(side, "landed.txt"), "approved\n");
+        await Bun.$`git -C ${side} add landed.txt`.quiet().nothrow();
+        await Bun.$`git -C ${side} commit -qm approved`.quiet().nothrow();
+        await Bun.$`git -C ${parked} worktree remove ${side}`.quiet().nothrow();
+
+        // The working copy comes to rest on the foreman bookmark: an empty
+        // commit whose parent carries it, the state jj reports as no changes.
+        await jjHere("new", "foreman/ts-cccccc");
+
+        expect(await isClean(parked)).toEqual(clean);
+
+        const before = await bookmarkHere("develop");
+        expect(await merge(parked, "foreman/ts-merge", undefined)).toEqual({
+          _tag: "Merged",
+          verified: false,
+        });
+        expect(await bookmarkHere("develop")).not.toBe(before);
+        expect(await Bun.file(join(parked, "landed.txt")).text()).toBe("approved\n");
+
+        // The landing moved the working copy off the parked bookmark; the
+        // project is clean again, with the landed merge as its trunk.
+        expect(await isClean(parked)).toEqual(clean);
+      } finally {
+        await rm(parked, { recursive: true, force: true });
+        await rm(`${parked}.grounds`, { recursive: true, force: true });
+      }
+    },
+    slowly,
+  );
+
   // A landing is three steps and only the last publishes. Killed between them —
   // which is exactly what `bun --watch` does when foreman lands into its own
   // checkout, because writing the merged files restarts the daemon — the merge
