@@ -25,7 +25,7 @@ export interface Controls {
   readonly adopt: (orphan: Orphan) => void;
 }
 
-/** The eight selectable stages, in the order the cursor moves through them. */
+/** The nine selectable stages, in the order the cursor moves through them. */
 const COLUMNS = [
   "focus",
   "queue",

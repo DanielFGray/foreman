@@ -200,6 +200,26 @@ describe("focused dispatch", () => {
     expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-focus"]);
   });
 
+  test("uses only the remaining slot for spillover", () => {
+    const focused = ready("ts-focus");
+    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        queue: [ready("ts-spill")],
+        focus: [focused],
+        focusScope: new Set([focused.id]),
+        review: [spilloverReview],
+      }),
+      2,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
+      "review:ts-review",
+      "author:ts-focus",
+    ]);
+  });
+
   test("reserves the only slot for the focused reviewer", () => {
     const focusedReview = active(task("ts-focus", ["by-cheap"]), undefined);
     const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
