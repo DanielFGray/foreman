@@ -861,15 +861,20 @@ export const dispatchesFor = (current: DispatchState, slots: number): ReadonlyAr
   );
   let reserved = current.focused && !focusedBusy ? 1 : 0;
 
-  // A review can continue the focused task only when it is the sole task in
-  // flight. This also prevents a newly-applied focus from deepening an already
-  // parallel scope.
+  // Applying focus cannot undo work already in flight. Wait for every scoped
+  // author to stop writing, then drain the resulting reviews one at a time.
+  const focusedAuthorBusy = current.working.some(
+    ({ task, worker }) => current.focusScope.has(task.id) && worker && isBusy(worker),
+  );
+  const focusedReviewAssigned = current.review.some(
+    ({ task }) => current.focusScope.has(task.id) && reviewedBy(task) !== undefined,
+  );
   const focusedReview = current.focused
     ? current.review.find(
         ({ task, worker }) =>
           current.focusScope.has(task.id) &&
-          inFlight.size === 1 &&
-          inFlight.has(task.id) &&
+          !focusedAuthorBusy &&
+          !focusedReviewAssigned &&
           reviewedBy(task) === undefined &&
           needsReview(task) &&
           !current.held.includes(task.project) &&

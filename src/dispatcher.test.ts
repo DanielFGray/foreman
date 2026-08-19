@@ -254,4 +254,19 @@ describe("focused dispatch", () => {
 
     expect(dispatches).toEqual([]);
   });
+
+  test("drains one review when several focused tasks are awaiting review", () => {
+    const first = active(task("ts-first", ["by-cheap"]), undefined);
+    const second = active(task("ts-second", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        focusScope: new Set([first.task.id, second.task.id]),
+        review: [first, second],
+      }),
+      2,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-first"]);
+  });
 });
