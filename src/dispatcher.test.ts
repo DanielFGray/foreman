@@ -2,18 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { DateTime } from "effect";
 import {
   awaitingLanding,
+  decisionsOf,
+  dispatchesFor,
   excludeFailedTasks,
   failedTasks,
   handoffExpired,
-  decisionsOf,
   isUnread,
   nextDispatch,
   nextFailure,
   recoverable,
-  waiting,
   readyToLand,
   reviewable,
   scopeRoster,
+  waiting,
   type Owned,
 } from "./dispatcher.ts";
 import { authoredBy, diagnosticIntent, reviewedBy, type Item, type TaskStatus } from "./prog.ts";
@@ -300,6 +301,116 @@ describe("work handed back for review", () => {
 
     expect(review).toEqual([]);
     expect(unbacked).toEqual([]);
+  });
+});
+
+describe("focused dispatch", () => {
+  const ready = (id: string, project = "foreman") => ({
+    id,
+    title: `Task ${id}`,
+    priority: 1,
+    project,
+    labels: [],
+  });
+
+  const dispatchState = (overrides: Record<string, unknown> = {}) => ({
+    workers: [],
+    queue: [],
+    focus: [],
+    focused: true,
+    focusScope: new Set<string>(),
+    touched: new Set(["foreman"]),
+    held: [],
+    working: [],
+    review: [],
+    ...overrides,
+  });
+
+  test("reserves the only slot for the focused author ahead of a spillover review", () => {
+    const focused = ready("ts-focus");
+    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        queue: [ready("ts-spill")],
+        focus: [focused],
+        focusScope: new Set([focused.id]),
+        review: [spilloverReview],
+      }),
+      1,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-focus"]);
+  });
+
+  test("uses only the remaining slot for spillover", () => {
+    const focused = ready("ts-focus");
+    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        queue: [ready("ts-spill")],
+        focus: [focused],
+        focusScope: new Set([focused.id]),
+        review: [spilloverReview],
+      }),
+      2,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
+      "review:ts-review",
+      "author:ts-focus",
+    ]);
+  });
+
+  test("reserves the only slot for the focused reviewer", () => {
+    const focusedReview = active(task("ts-focus", ["by-cheap"]), undefined);
+    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        focusScope: new Set([focusedReview.task.id]),
+        review: [spilloverReview, focusedReview],
+      }),
+      1,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-focus"]);
+  });
+
+  test("does not start a second focused task when several are already in flight", () => {
+    const writing = active(
+      task("ts-writing", ["by-cheap"], "in_progress"),
+      worker("working", "ts-writing"),
+    );
+    const awaitingReview = active(task("ts-review", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        focusScope: new Set([writing.task.id, awaitingReview.task.id]),
+        workers: [writing.worker],
+        working: [writing],
+        review: [awaitingReview],
+      }),
+      2,
+    );
+
+    expect(dispatches).toEqual([]);
+  });
+
+  test("drains one review when several focused tasks are awaiting review", () => {
+    const first = active(task("ts-first", ["by-cheap"]), undefined);
+    const second = active(task("ts-second", ["by-cheap"]), undefined);
+
+    const dispatches = dispatchesFor(
+      dispatchState({
+        focusScope: new Set([first.task.id, second.task.id]),
+        review: [first, second],
+      }),
+      2,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-first"]);
   });
 });
 

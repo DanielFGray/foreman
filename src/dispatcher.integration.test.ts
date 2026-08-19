@@ -45,6 +45,7 @@ class World {
   readonly stopped: Array<[string, string]> = [];
   readonly spawned: Array<[string, string]> = [];
   readonly removed: string[] = [];
+  readonly notifications: string[] = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
 
@@ -104,7 +105,7 @@ class World {
         this.closed.push(options.task);
         this.workers.delete(options.task);
       }),
-    notify: () => Effect.void,
+    notify: (title: string) => Effect.sync(() => void this.notifications.push(title)),
   };
 
   readonly prog = {
@@ -116,6 +117,8 @@ class World {
           (task) => task.status === "open",
         ) as ReadonlyArray<ReadyTask>,
       ),
+    focused: () =>
+      Effect.succeed([...this.tasks.values()].filter((task) => task.labels.includes("focus"))),
     awaitingReview: (project: string) =>
       Effect.succeed(
         [...this.tasks.values()].filter(
@@ -415,6 +418,27 @@ describe("Dispatcher tick", () => {
 
     expect(world.tasks.get(task.id)?.status).toBe("open");
     expect(world.spawned).toEqual([]);
+  });
+
+  test("reserves the only slot for the focused thread", async () => {
+    const focused = item("ts-focus", "open", ["focus"]);
+    const spillover = item("ts-spillover", "open", []);
+    const world = new World(focused, spillover);
+
+    await tick(world);
+
+    expect(world.spawned).toEqual([[focused.id, "author"]]);
+    expect(world.tasks.get(spillover.id)?.status).toBe("open");
+  });
+
+  test("does not complete while focused ready work waits for a person", async () => {
+    const focused = item("ts-focus", "open", ["focus", "rung-human"]);
+    const world = new World(focused);
+
+    await tick(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(world.notifications).not.toContain("Focus complete");
   });
 
   test("lands an approved task without a worker", async () => {

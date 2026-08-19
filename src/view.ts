@@ -346,7 +346,14 @@ export const tabs = (state: FleetState, current: ViewName): string =>
  * still has to say whether it is paused, draining, or simply out of work.
  */
 export const statusLine = (state: FleetState, now: number): string =>
-  `${state.dispatch}  ·  ${readAge(state, now)}  ·  ${attentionStatus(state)}`;
+  [
+    state.focused ? `focus: ${state.focus.length} ready` : undefined,
+    state.dispatch,
+    readAge(state, now),
+    attentionStatus(state),
+  ]
+    .filter((part) => part !== undefined)
+    .join("  ·  ");
 
 /**
  * The keys that do something here: what the selected row takes, and under it
@@ -469,7 +476,9 @@ const readAge = (state: FleetState, now: number): string => {
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    Match.when("queue", () => state.queue.map((task) => readyRow(task, "queue", state))),
+    Match.when("queue", () =>
+      [...state.focus, ...state.queue].map((task) => readyRow(task, "queue", state)),
+    ),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),

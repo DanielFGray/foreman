@@ -17,6 +17,11 @@ Proven live: the author → review → merge pipeline end to end, the dashboard
 against a real fleet, and plan mode at the tasker's worst model. The rig is in
 `e2e/` — read `e2e/README.md` before running it.
 
+- **Focus is built but never proven live.** The `focus` label scope —
+  serialized thread, spillover, pause-on-completion — is in `src/focus.ts` and
+  the dispatcher, proven only by unit tests. Prove it against a scratch project
+  before trusting a focused run unattended.
+
 Unproven: resuming a plan run that stopped mid-planning or mid-tasking. Only the
 closed state is proven, where `plan --epic` on a done epic reports complete.
 
@@ -580,6 +585,42 @@ Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
 aggregates pane statuses itself.
 
+### Focus is a scope filter, serialized
+
+A `focus` label is the scope. Put it on a task, an epic, or several items; the
+scope is every ready task at or under anything carrying it, computed by walking
+descendants in `src/focus.ts` (`scopeOf`). Two labelled epics are one larger
+scope.
+
+Focus changes two things and nothing else. Settle, reclaim and the review gate
+are untouched: focus reshapes what `observe` puts in the queue and how `fill`
+spends slots.
+
+- **Depth.** The scope gets exactly one slot. A focused task is "in flight"
+  from claim until landing, and while one is, no other focused task starts —
+  the thread authors, reviews and merges each task before the next, so each
+  branches off the previous one's landed `HEAD`. That is the whole point:
+  siblings in one epic touch the same files, and serializing them is what makes
+  branching off `HEAD` correct. It is correct exactly when the merge step
+  works, which is why focus sat blocked on the end-to-end proof.
+- **Spillover.** The remaining slots take ready work from the projects the
+  scope touches — one project for a single-project epic, several for a scope
+  spanning repos. The scope's slot counts against `--slots`: three slots with a
+  focus is one focused plus two spillover.
+- **Order.** The thread keeps prog's own priority-first order; deep mode takes
+  the head. `interleave`'s project rotation applies to spillover only.
+- **Completion.** When the scope has no ready work left and nothing is in
+  flight, foreman notifies and stops dispatching — spillover included. It does
+  not touch the `paused` Ref: the stop is derived from the same label every
+  tick, so clearing the focus label resumes automatically and the operator's
+  own pause state is never overwritten. The notification repeats each poll
+  while the scope is exhausted, the same way a blocked worker re-notifies.
+- **Storage.** The label itself, in prog. Focus is an operator intention like
+  pause, and it must survive the process because the TUI is the process —
+  closing the dashboard would otherwise drop it. Deriving it from a label keeps
+  foreman down to its one `Ref`. Whole-project focus is expressed by the config
+  allowlist: run foreman with one project in it.
+
 ## Ports
 
 `Fleet` (`src/fleet.ts`) is the whole multiplexer surface — eight methods. herdr
@@ -625,6 +666,11 @@ active work. At 120 columns extra width adds selected-row details; it never
 restores columns. A row may be two lines: the exceptional states have a name
 and a reason, and a reason on its own line is one a narrow pane cannot truncate
 away.
+
+When focus is active, its serialized thread leads the queue view and spillover
+follows it. The status line names focus and its ready count, so the same view
+shows both the reserved thread and the spare-slot work without adding another
+cursor mode.
 
 Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, unreviewed branches, then held projects. Each row keeps its source
@@ -742,8 +788,10 @@ Two divergences from the settled design:
 - **No cancel.** `Dispatcher` has setDispatch, focus, retry, release, close,
   climb, descend, unassign and onboard. "Act on a task" means climb or descend; a
   cancel command belongs on the dispatcher.
-- **No focus scope.** The focus control jumps to a worker's pane. Making a
-  focused scope read differently is a separate task.
+- **Focus is set by hand, not on this screen.** The `focus` label that defines
+  the scope is written into prog with `prog label`, the same way `rung-human`
+  is. The dashboard shows the resulting thread and its completion but never
+  edits labels, so removing a focus is a `prog unlabel` rather than a keypress.
 
 ## Traps
 

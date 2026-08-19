@@ -9,6 +9,7 @@ import {
   attemptsOf,
   authoredBy,
   isApproved,
+  isFocused,
   isPlan,
   reviewedBy,
   type Item,
@@ -62,6 +63,13 @@ describe("plan label", () => {
   test("recognises a plan epic", () => {
     expect(isPlan(item(["plan"]))).toBe(true);
     expect(isPlan(item(["onboard"]))).toBe(false);
+  });
+});
+
+describe("focus label", () => {
+  test("recognises a focused item", () => {
+    expect(isFocused(item(["focus"]))).toBe(true);
+    expect(isFocused(item(["plan"]))).toBe(false);
   });
 });
 

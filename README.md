@@ -398,6 +398,34 @@ almost entirely at one priority otherwise sorts by age alone, which dispatches
 defects in the order they were discovered, behind whatever feature batch was
 entered first.
 
+## Focus
+
+A `focus` label narrows the fleet to one serialized thread. Put it on a task, an
+epic, or several items:
+
+```bash
+prog label ep-0e6a7e focus    # the whole epic, one task at a time
+prog label ts-9f577b focus    # just this task
+```
+
+The scope is every ready task at or under anything carrying the label, so two
+labelled epics are one larger scope. While it lasts, foreman works the scope one
+task at a time — each authors, reviews and merges before the next starts, so
+each branches off the previous one's landed result instead of off a sibling's
+half-done work.
+
+The scope gets exactly one slot; the rest are spillover. Spillover takes ready
+work from the projects the scope touches, so a single-project epic leaves the
+fleet working that one project's backlog behind the thread, and a scope spanning
+repos shares the spare slots across them. The thread itself keeps prog's
+priority-first order, and the project rotation applies to spillover only.
+
+When the scope has no ready work left, foreman notifies you and stops
+dispatching — spillover included — until you clear the label. Nothing about
+focus lives in the process: the label is in prog, so the dashboard can be closed
+and reopened and the scope survives. Whole-project focus is just the allowlist:
+run foreman with one project in the config.
+
 ## Plan mode
 
 The queue drains a backlog; something has to fill it. `foreman plan` is that

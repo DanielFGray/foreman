@@ -12,6 +12,7 @@ import {
   previewOf,
   rowsForView,
   staleReview,
+  statusLine,
 } from "./view.ts";
 
 const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): Item => ({
@@ -74,6 +75,8 @@ const LONG_DESCRIPTION = [
 
 const state: FleetState = {
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["rung-pro"])],
+  focus: [],
+  focused: false,
   yours: [ready("ts-y1", ["rung-human"])],
   working: [
     active(task("ts-w1", "in_progress", ["by-flash", "rung-flash"]), worker("ts-w1", "working")),
@@ -108,6 +111,26 @@ const state: FleetState = {
   dispatch: "paused",
   observedAt: undefined,
 };
+
+describe("focused queue", () => {
+  const focused = {
+    ...state,
+    focus: [ready("ts-focus")],
+    focused: true,
+  };
+
+  test("leads the queue with the serialized thread", () => {
+    expect(rowsForView("queue", focused).map((row) => row.key)).toEqual([
+      "ts-focus",
+      "ts-q1",
+      "ts-q2",
+    ]);
+  });
+
+  test("names focus and its remaining ready work in the status line", () => {
+    expect(statusLine(focused, Date.now())).toStartWith("focus: 1 ready  ·  paused");
+  });
+});
 
 const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
   const found = rowsForView(view, state).find((candidate) => candidate.key === key);
