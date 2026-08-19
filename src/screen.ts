@@ -177,7 +177,10 @@ const running = (keys: ReadonlyArray<string>) =>
       });
     });
 
-    const fzf = yield* Command.make("fzf", ...args(keys, { rowsFile, socket, keysFile, placeFile })).pipe(
+    const fzf = yield* Command.make(
+      "fzf",
+      ...args(keys, { rowsFile, socket, keysFile, placeFile }),
+    ).pipe(
       Command.stdin("inherit"),
       Command.stdout("inherit"),
       Command.stderr("inherit"),
@@ -327,23 +330,16 @@ const args = (
   "--delimiter",
   "\t",
   "--read0",
-  "--with-nth",
-  "4..",
-  "--id-nth",
-  "1",
+  "--with-nth=4..",
+  "--id-nth=1",
   "--track",
   "--no-sort",
-  "--layout",
-  "reverse",
+  "--layout=reverse",
   "--header-first",
-  "--info",
-  "inline-right",
-  "--scheme",
-  "default",
-  "--listen",
-  paths.socket,
-  "--preview",
-  "cat {2} </dev/null",
+  "--info=inline-right",
+  "--scheme=default",
+  `--listen=${paths.socket}`,
+  "--preview=< {2}",
   // The row's own footer, swapped in by the screen as the cursor lands on it.
   // Both events are needed and neither is spare: `focus` covers the cursor
   // moving, and `result` covers the list being replaced under a cursor that
@@ -351,18 +347,14 @@ const args = (
   // current one, so focus alone leaves the previous row's keys advertised
   // until the operator moves. Backgrounded because this runs on every cursor
   // movement, and a synchronous transform makes holding `j` down stutter.
-  "--bind",
-  "focus:bg-transform-footer(cat {3} </dev/null)",
-  "--bind",
-  "result:bg-transform-footer(cat {3} </dev/null)",
+  "--bind=focus:bg-transform-footer(< {3})",
+  "--bind=result:bg-transform-footer(< {3})",
   // Applied by the screen the moment a reloaded list is ready, which is the
   // only moment a row number means anything.
-  "--bind",
-  `load:transform(cat ${paths.placeFile} </dev/null)`,
-  "--preview-window",
-  "right,45%,wrap,border-left",
-  "--footer-border",
-  "line",
+  `--bind=load:transform(< ${paths.placeFile})`,
+  "--wrap-sign=",
+  "--preview-window=right,45%,wrap-word,border-left",
+  "--footer-border=line",
   ...keys.flatMap((key) => [
     "--bind",
     `${key}:execute-silent(printf '%s\\t%s\\t%s\\n' ${shellQuote(key)} {1} {q} >> ${paths.keysFile})`,
