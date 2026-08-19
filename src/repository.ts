@@ -185,23 +185,61 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
      * than one means foreman would have to guess which. The candidates are
      * kept even when there is not exactly one, because they are the fix:
      * deleting the stray bookmark is what unholds the project.
+     *
+     * Foreman's own branches are cut from the trunk's tip, so an author that
+     * has not committed yet leaves its bookmark on the very commit being asked
+     * about. It is never a landing target, and counting it would hold the
+     * project for as long as anyone is working in it. The names must be
+     * filtered before `heads`: a working copy that comes to rest on a foreman
+     * bookmark makes `heads` drop the trunk behind it as already-merged, and a
+     * post-filter then removes the only name left. The trunk is still nameable:
+     * it is the non-foreman bookmark that is the head behind the working copy.
      */
-    const trunkOf = (directory: string) =>
-      jjOutput(directory, "log", "-r", "heads(::@ & bookmarks())", ...template("bookmarks")).pipe(
-        Effect.map((text) => {
-          const names = text
-            .split(/\s+/)
-            .filter((name) => name !== "")
-            // jj suffixes a bookmark whose git ref has drifted from it.
-            .map((name) => name.replace(/\*$/, ""))
-            // Foreman's own branches are cut from the trunk's tip, so an author
-            // that has not committed yet leaves its bookmark on the very commit
-            // being asked about. It is never a landing target, and counting it
-            // would hold the project for as long as anyone is working in it.
-            .filter((name) => !name.startsWith(ours));
-          return names.length === 1
-            ? ({ _tag: "One", name: names[0] as string } as const)
-            : ({ _tag: "None", names } as const);
+    type Trunk =
+      | { readonly _tag: "One"; readonly name: string }
+      | { readonly _tag: "None"; readonly names: ReadonlyArray<string> };
+
+    const trunkOf = (directory: string): Effect.Effect<Trunk, RepositoryError> =>
+      jjOutput(
+        directory,
+        "log",
+        "-r",
+        "::@ & bookmarks()",
+        ...template('commit_id ++ "|" ++ bookmarks'),
+      ).pipe(
+        Effect.flatMap((text): Effect.Effect<Trunk, RepositoryError> => {
+          const candidates = text.split("\n").flatMap((line) => {
+            const [commit, ...rawNames] = line.split("|");
+            const names = rawNames
+              .join("|")
+              .split(/\s+/)
+              .filter((name) => name !== "")
+              // jj suffixes a bookmark whose git ref has drifted from it.
+              .map((name) => name.replace(/\*$/, ""));
+            return commit && names.some((name) => !name.startsWith(ours)) ? [commit] : [];
+          });
+          if (candidates.length === 0) {
+            return Effect.succeed({ _tag: "None", names: [] } satisfies Trunk);
+          }
+
+          return jjOutput(
+            directory,
+            "log",
+            "-r",
+            `heads(${candidates.join(" | ")})`,
+            ...template("bookmarks"),
+          ).pipe(
+            Effect.map((heads) => {
+              const names = heads
+                .split(/\s+/)
+                .filter((name) => name !== "")
+                .map((name) => name.replace(/\*$/, ""))
+                .filter((name) => !name.startsWith(ours));
+              return names.length === 1
+                ? ({ _tag: "One", name: names[0] as string } as const)
+                : ({ _tag: "None", names } as const);
+            }),
+          );
         }),
       );
 
