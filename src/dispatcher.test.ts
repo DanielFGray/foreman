@@ -197,9 +197,7 @@ describe("focused dispatch", () => {
       1,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
-      "author:ts-focus",
-    ]);
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-focus"]);
   });
 
   test("reserves the only slot for the focused reviewer", () => {
@@ -214,9 +212,7 @@ describe("focused dispatch", () => {
       1,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
-      "review:ts-focus",
-    ]);
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-focus"]);
   });
 
   test("does not start a second focused task when several are already in flight", () => {

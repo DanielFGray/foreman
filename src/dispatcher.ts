@@ -849,10 +849,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 }) {}
 
 /** Selects work for the free slots without performing any dispatch side effects. */
-export const dispatchesFor = (
-  current: DispatchState,
-  slots: number,
-): ReadonlyArray<Dispatch> => {
+export const dispatchesFor = (current: DispatchState, slots: number): ReadonlyArray<Dispatch> => {
   const busy = current.workers.filter(isBusy).length;
   let free = slots - busy;
   if (free <= 0) return [];
