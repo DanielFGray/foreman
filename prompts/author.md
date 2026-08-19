@@ -8,6 +8,10 @@ Repository checkout: {{ repository }}
 
 That worktree is yours alone, on its own branch. Other agents hold worktrees of the
 same repository: do not touch the main checkout and do not switch branches.
+Run every command inside your worktree, and do not read another task's worktree. If
+you need to inspect current trunk, run `git worktree list --porcelain` here to find
+its commit, then use `git show` or `git diff` against that commit from here. Never
+enter {{ repository }} to inspect it.
 
 Foreman runs `scripts/worktree-setup.sh` here first, if the project keeps one — a
 worktree has none of the main checkout's installed dependencies. If you repair this

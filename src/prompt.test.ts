@@ -39,6 +39,9 @@ describe("Prompts", () => {
     expect(prompt).toContain("prog review ts-123456");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("prog done ts-123456");
+    expect(prompt).toContain("git worktree list --porcelain");
+    expect(prompt).toContain("Never\nenter /tmp/repository to inspect it");
+    expect(prompt).toContain("do not read another task's worktree");
   });
 
   // A pre-existing failure is filed once per author that hits it, reworded each
@@ -87,6 +90,7 @@ describe("Prompts", () => {
     expect(prompt).toContain("git -C /tmp/worktree diff abc1234 HEAD");
     expect(prompt).not.toContain("git -C /tmp/repository");
     expect(prompt).toContain("Never run git in /tmp/repository");
+    expect(prompt).toContain("Do not read another task's worktree");
   });
 
   // Both wordings are asserted because the sentence is the whole of what stops

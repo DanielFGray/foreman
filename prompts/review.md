@@ -16,6 +16,8 @@ passes here and fails the next dispatch.
 Run every command in {{ worktree }}. Never run git in {{ repository }}: a person works
 in that checkout and foreman merges into it, and a git command of yours landing there
 mid-merge fails the landing and charges it to this branch.
+Do not read another task's worktree either: it can contain uncommitted or unreviewed
+work that is not part of this branch.
 
 Read `prog show {{ task }}` first — description, definition of done, the author's
 logs. Then read the diff itself, every commit the author made and nothing that was
