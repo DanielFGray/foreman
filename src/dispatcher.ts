@@ -315,6 +315,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
       );
 
+      // A branch the trunk has overtaken, under a task still in review. The
+      // branch cannot land, so the review of it cannot be applied either — the
+      // review pass holds it out and the operator decides instead. Only the
+      // reviewing status surfaces: an open branch will reach this same row
+      // when its author hands off, and an in-progress one is being worked on
+      // in a column that already shows it. Oldest first, the order the fleet
+      // was about to spend on them.
+      const stale = yield* Effect.forEach(
+        branches.flatMap(({ stale, project, branch, task }) =>
+          stale === undefined ? [] : [{ stale, project, branch, task }],
+        ),
+        ({ stale, project, branch, task }) =>
+          prog.show(task).pipe(
+            Effect.map((item): StaleRow => ({
+              project,
+              branch,
+              task: item,
+              paths: stale.paths,
+              modifyDelete: stale.modifyDelete,
+            })),
+            Effect.orElseSucceed(() => undefined),
+          ),
+      ).pipe(
+        Effect.map((rows) =>
+          rows
+            .filter((row): row is StaleRow => row !== undefined && row.task.status === "reviewing")
+            .sort(
+              (first, second) =>
+                first.task.last_activity_at.getTime() - second.task.last_activity_at.getTime(),
+            ),
+        ),
+      );
+
       // What the sweep may delete: a merged ref for work nothing in the
       // pipeline is still pointing at. The branch is a task's only proof that
       // its author wrote anything, and a merge can arrive from outside foreman
@@ -391,6 +424,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         resumable,
         prunable,
         unreviewed,
+        stale,
         landed: landed.filter((item) =>
           DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
         ),
@@ -845,12 +879,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // repeat the second; the operator clears the cause and retries.
         const failed = new Set(failedTasks(yield* Ref.get(dispatchFailures)).map(([task]) => task));
 
+        // A branch the trunk has overtaken cannot land, so a review of it
+        // could never be applied — the operator decides its fate from the
+        // stale column instead, and no reviewer is paid for the reading.
+        const staleIds = new Set(current.stale.map((row) => row.task.id));
+
         for (const { task, worker } of current.review) {
           if (free <= 0) return;
           if (current.held.some((held) => held.project === task.project)) continue;
           if (reviewedBy(task) !== undefined) continue;
           if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
           if (failed.has(task.id)) continue;
+          if (staleIds.has(task.id)) continue;
           yield* dispatchReview(task, authoredBy(task)).pipe(
             Effect.tap(() => clearFailure(task.id)),
             Effect.catchAll((error) => recordFailure(task.id, error)),
@@ -1788,6 +1828,16 @@ export interface FleetState {
   readonly unreviewed: ReadonlyArray<Unreviewed>;
 
   /**
+   * Branches whose task is under review but that the trunk has moved past, so
+   * a review of them could never be applied.
+   *
+   * The review pass holds these tasks out — the branch is why — and the
+   * operator decides what to do with the work. So this column is where the
+   * fleet says "about to spend a review that cannot land", before it happens.
+   */
+  readonly stale: ReadonlyArray<StaleRow>;
+
+  /**
    * Projects whose checkout is not free to work against, and why.
    *
    * The operator is working there, or the checkout has no branch a landing
@@ -1829,6 +1879,22 @@ export interface Unreviewed {
   readonly status: string | undefined;
   /** When its task last moved, which is the order these are recovered in. */
   readonly activity: Date | undefined;
+}
+
+/**
+ * A branch the trunk has overtaken, under a task that is still in review.
+ *
+ * The task rides whole because the operator acts on it — releasing it is what
+ * sends the work back to the queue instead of paying for a review that could
+ * never land. `paths` and `modifyDelete` are the fact `Branch.stale` carries,
+ * so the row can say what a rebase would have to face.
+ */
+export interface StaleRow {
+  readonly project: string;
+  readonly branch: string;
+  readonly task: Item;
+  readonly paths: ReadonlyArray<string>;
+  readonly modifyDelete: boolean;
 }
 
 /**
@@ -1899,6 +1965,7 @@ const empty: FleetState = {
   committed: new Set(),
   resumable: new Set(),
   unreviewed: [],
+  stale: [],
   held: [],
   // Before the first tick has read anything, and the state foreman starts in
   // unless the command line said otherwise.
