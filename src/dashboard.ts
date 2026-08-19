@@ -149,9 +149,7 @@ export const dashboard = Effect.gen(function* () {
         Match.when("viewLeft", () => moveView(-1)),
         Match.when("viewRight", () => moveView(1)),
         Match.when("dispatch", () =>
-          run(dispatcher.setDispatch(nextDispatch(state.dispatch))).pipe(
-            Effect.andThen(redraw()),
-          ),
+          run(dispatcher.setDispatch(nextDispatch(state.dispatch))).pipe(Effect.andThen(redraw())),
         ),
         Match.exhaustive,
       );

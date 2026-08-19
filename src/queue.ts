@@ -42,8 +42,7 @@ const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
  * point of saying it in the score rather than in the backlog's priorities.
  */
 export const effectivePriority = (task: ReadyTask, now: Date): number => {
-  const ageDays =
-    Math.max(0, now.getTime() - task.created_at.getTime()) / DAYS_IN_MILLISECONDS;
+  const ageDays = Math.max(0, now.getTime() - task.created_at.getTime()) / DAYS_IN_MILLISECONDS;
   const credit = task.labels.includes(BUG) ? DEFECT_CREDIT : 0;
   return task.priority - AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS) - credit;
 };
