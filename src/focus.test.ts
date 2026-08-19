@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { scopeOf, splitQueue } from "./focus.ts";
+import { focusOf, scopeOf, splitQueue } from "./focus.ts";
 import type { Item, ReadyTask } from "./prog.ts";
 
 const item = (id: string, type: "task" | "epic", project = "foreman"): Item => ({
@@ -73,6 +73,38 @@ describe("scopeOf", () => {
     );
 
     expect([...scope.projects].sort()).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("focusOf", () => {
+  test("ignores focus roots outside the configured project allowlist", () => {
+    const focus = Effect.runSync(
+      focusOf(
+        [item("ep-other", "epic", "other")],
+        new Set(["foreman"]),
+        tree({ "ep-other": [item("ts-other", "task", "other")] }),
+      ),
+    );
+
+    expect(focus.focused).toBe(false);
+    expect([...focus.tasks]).toEqual([]);
+    expect([...focus.projects]).toEqual([]);
+  });
+
+  test("keeps configured descendants of a configured cross-project root", () => {
+    const focus = Effect.runSync(
+      focusOf(
+        [item("ep-root", "epic", "alpha")],
+        new Set(["alpha", "beta"]),
+        tree({
+          "ep-root": [item("ts-alpha", "task", "alpha"), item("ts-beta", "task", "beta")],
+        }),
+      ),
+    );
+
+    expect(focus.focused).toBe(true);
+    expect([...focus.tasks].sort()).toEqual(["ts-alpha", "ts-beta"]);
+    expect([...focus.projects].sort()).toEqual(["alpha", "beta"]);
   });
 });
 

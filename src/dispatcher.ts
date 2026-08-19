@@ -10,7 +10,7 @@ import {
   type Worker,
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
-import { splitQueue, scopeOf } from "./focus.ts";
+import { focusOf, splitQueue } from "./focus.ts";
 import { Repository } from "./repository.ts";
 import { above, authorFor, HUMAN, isYours, reviewerFor, type Rung, topOf } from "./ladder.ts";
 import {
@@ -146,9 +146,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // dashboard being the process means a restart must re-read the same
       // label rather than lose the intention. The scope is every task at or
       // under an item carrying the label.
-      const focusRoots = yield* prog.focused();
-      const focusScope = yield* scopeOf(focusRoots, (id) => prog.children(id));
-      const focused = focusRoots.length > 0;
+      const configured = new Set(settings.projects.map((project) => project.name));
+      const focusScope = yield* focusOf(yield* prog.focused(), configured, (id) =>
+        prog.children(id),
+      );
+      const focused = focusScope.focused;
 
       // prog list has no limit, so the landed column is bounded here instead
       // of in the query. Anything outside the window is history, not news.
@@ -207,7 +209,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const claimedActive = active(claimed);
       const reviewingActive = active(reviewing);
 
-      const configured = new Set(settings.projects.map((project) => project.name));
       const autoWork = dispatchable.filter((task) => !isOnboarding(task));
 
       // Under focus the queue splits: the focused thread, in prog's own
@@ -538,25 +539,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      */
     const fill = (current: Observation) =>
       Effect.gen(function* () {
-        const busy = current.workers.filter(
-          (worker) => worker.state === "working" || worker.state === "blocked",
-        ).length;
-        let free = settings.slots - busy;
-        if (free <= 0) return;
-
-        // A focused task is in flight from claim until landing. While one is,
-        // no other focused task starts: the thread authors, reviews and merges
-        // each task before the next, so each branches off the previous one's
-        // landed result.
-        const focusedInFlight =
-          current.focused &&
-          (current.working.some(({ task }) => current.focusScope.has(task.id)) ||
-            current.review.some(({ task }) => current.focusScope.has(task.id)));
-
         // The scope has nothing left to do. Foreman stops — spillover included
         // — and tells the operator, because a focused foreman that wandered on
         // into the backlog would be doing exactly what the label said not to.
-        if (current.focused && current.focus.length === 0 && !focusedInFlight) {
+        if (current.focused && current.focus.length === 0 && !hasFocusedInFlight(current)) {
           yield* fleet.notify(
             "Focus complete",
             "The focused scope has no ready work left — dispatch paused.",
@@ -564,70 +550,22 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           return;
         }
 
-        // Reviews first, the focused task's own review ahead of spillover: it
-        // is the thread continuing, and everything else waits behind it.
-        const focusedReview = current.focused
-          ? current.review.find(
-              ({ task }) =>
-                current.focusScope.has(task.id) &&
-                reviewedBy(task) === undefined &&
-                needsReview(task),
-            )
-          : undefined;
-        if (
-          focusedReview &&
-          !current.held.includes(focusedReview.task.project) &&
-          !(
-            focusedReview.worker &&
-            (focusedReview.worker.state === "working" || focusedReview.worker.state === "blocked")
-          )
-        ) {
-          yield* dispatchReview(focusedReview.task, authoredBy(focusedReview.task)).pipe(
-            Effect.catchAll((error) =>
-              Effect.logWarning(`review dispatch failed ${focusedReview.task.id}: ${error}`),
-            ),
-          );
-          free -= 1;
-        }
-
-        for (const { task, worker } of current.review) {
-          if (free <= 0) return;
-          if (current.focusScope.has(task.id)) continue;
-          if (current.focused && !current.touched.has(task.project)) continue;
-          if (current.held.includes(task.project)) continue;
-          if (reviewedBy(task) !== undefined) continue;
-          // Work small enough to skip the reviewer is waiting to land, not
-          // waiting to be read. Its project is held, or it would be gone.
-          if (!needsReview(task)) continue;
-          if (worker && (worker.state === "working" || worker.state === "blocked")) continue;
-          yield* dispatchReview(task, authoredBy(task)).pipe(
-            Effect.catchAll((error) =>
-              Effect.logWarning(`review dispatch failed ${task.id}: ${error}`),
-            ),
-          );
-          free -= 1;
-        }
-
-        // New work: the focused head first, then spillover. A held project
-        // passes over the focused thread the same as it passes over spillover —
-        // every branch merges into that checkout, so a dispatch would put its
-        // landing against the operator's own edits.
-        const head = current.focus[0];
-        const focusedHead =
-          current.focused && !focusedInFlight && head && !current.held.includes(head.project)
-            ? [head]
-            : [];
-        const available = current.queue.filter((task) => !current.held.includes(task.project));
-
-        for (const task of [...focusedHead, ...available]) {
-          if (free <= 0) return;
-          yield* dispatchAuthor(task).pipe(
-            Effect.catchAll((error) =>
-              Effect.logWarning(`dispatching ${task.id} failed: ${error}`),
-            ),
-          );
-          free -= 1;
-        }
+        yield* Effect.forEach(
+          dispatchesFor(current, settings.slots),
+          (dispatch) =>
+            dispatch.role === "review"
+              ? dispatchReview(dispatch.task, authoredBy(dispatch.task)).pipe(
+                  Effect.catchAll((error) =>
+                    Effect.logWarning(`review dispatch failed ${dispatch.task.id}: ${error}`),
+                  ),
+                )
+              : dispatchAuthor(dispatch.task).pipe(
+                  Effect.catchAll((error) =>
+                    Effect.logWarning(`dispatching ${dispatch.task.id} failed: ${error}`),
+                  ),
+                ),
+          { discard: true },
+        );
       });
 
     const dispatchAuthor = (task: ReadyTask) =>
@@ -909,6 +847,105 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     } as const;
   }),
 }) {}
+
+/** Selects work for the free slots without performing any dispatch side effects. */
+export const dispatchesFor = (
+  current: DispatchState,
+  slots: number,
+): ReadonlyArray<Dispatch> => {
+  const busy = current.workers.filter(isBusy).length;
+  let free = slots - busy;
+  if (free <= 0) return [];
+
+  const dispatches: Array<Dispatch> = [];
+  const inFlight = focusedInFlight(current);
+  const focusedBusy = current.workers.some(
+    (worker) => current.focusScope.has(worker.task) && isBusy(worker),
+  );
+  let reserved = current.focused && !focusedBusy ? 1 : 0;
+
+  // A review can continue the focused task only when it is the sole task in
+  // flight. This also prevents a newly-applied focus from deepening an already
+  // parallel scope.
+  const focusedReview = current.focused
+    ? current.review.find(
+        ({ task, worker }) =>
+          current.focusScope.has(task.id) &&
+          inFlight.size === 1 &&
+          inFlight.has(task.id) &&
+          reviewedBy(task) === undefined &&
+          needsReview(task) &&
+          !current.held.includes(task.project) &&
+          !(worker && isBusy(worker)),
+      )
+    : undefined;
+  if (focusedReview) {
+    dispatches.push({ role: "review", task: focusedReview.task });
+    free -= 1;
+    reserved = 0;
+  }
+
+  for (const { task, worker } of current.review) {
+    if (free <= reserved) break;
+    if (current.focusScope.has(task.id)) continue;
+    if (current.focused && !current.touched.has(task.project)) continue;
+    if (current.held.includes(task.project)) continue;
+    if (reviewedBy(task) !== undefined || !needsReview(task)) continue;
+    if (worker && isBusy(worker)) continue;
+    dispatches.push({ role: "review", task });
+    free -= 1;
+  }
+
+  const head = current.focus[0];
+  if (
+    free > 0 &&
+    current.focused &&
+    inFlight.size === 0 &&
+    head &&
+    !current.held.includes(head.project)
+  ) {
+    dispatches.push({ role: "author", task: head });
+    free -= 1;
+    reserved = 0;
+  }
+
+  for (const task of current.queue) {
+    if (free <= reserved) break;
+    if (current.held.includes(task.project)) continue;
+    dispatches.push({ role: "author", task });
+    free -= 1;
+  }
+
+  return dispatches;
+};
+
+const focusedInFlight = (current: DispatchState): ReadonlySet<string> =>
+  new Set(
+    [...current.working, ...current.review]
+      .filter(({ task }) => current.focused && current.focusScope.has(task.id))
+      .map(({ task }) => task.id),
+  );
+
+const hasFocusedInFlight = (current: DispatchState): boolean => focusedInFlight(current).size > 0;
+
+const isBusy = (worker: Worker): boolean =>
+  worker.state === "working" || worker.state === "blocked";
+
+interface DispatchState {
+  readonly workers: ReadonlyArray<Worker>;
+  readonly queue: ReadonlyArray<ReadyTask>;
+  readonly focus: ReadonlyArray<ReadyTask>;
+  readonly focused: boolean;
+  readonly focusScope: ReadonlySet<string>;
+  readonly touched: ReadonlySet<string>;
+  readonly held: ReadonlyArray<string>;
+  readonly working: ReadonlyArray<Active>;
+  readonly review: ReadonlyArray<Active>;
+}
+
+type Dispatch =
+  | { readonly role: "review"; readonly task: Item }
+  | { readonly role: "author"; readonly task: ReadyTask };
 
 /**
  * A finished branch whose fate is landing rather than the ordinary settle path,

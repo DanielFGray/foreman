@@ -51,6 +51,18 @@ export const scopeOf = <E>(
     return { tasks, projects };
   });
 
+/** Computes the focus owned by this dispatcher's configured projects. */
+export const focusOf = <E>(
+  roots: ReadonlyArray<Item>,
+  configured: ReadonlySet<string>,
+  children: (id: string) => Effect.Effect<ReadonlyArray<Item>, E>,
+): Effect.Effect<Scope & { readonly focused: boolean }, E> => {
+  const ownedRoots = roots.filter((root) => configured.has(root.project));
+  return scopeOf(ownedRoots, children).pipe(
+    Effect.map((scope) => ({ ...scope, focused: ownedRoots.length > 0 })),
+  );
+};
+
 /**
  * Splits ready work into the focused thread and the spillover.
  *
