@@ -52,7 +52,6 @@ import {
  * decides is therefore derivable by anyone else looking at the same world.
  */
 export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
-  dependencies: [Prog.Default, Prompts.Default, Repository.Default],
   accessors: true,
   effect: Effect.gen(function* () {
     const settings = yield* Settings;
@@ -1240,6 +1239,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       /** What the dashboard renders. Replaced whole on every tick. */
       state,
       rungs: settings.ladder.map((rung) => rung.name),
+
+      /** Reads and settles the world once. The daemon wraps this in `run`. */
+      tick,
 
       /** Runs until interrupted. */
       run: Effect.gen(function* () {

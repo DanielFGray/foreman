@@ -10,6 +10,7 @@ import { logging } from "./log.ts";
 import { runPlan } from "./plan.ts";
 import { Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
+import { Repository } from "./repository.ts";
 import { BOUND_KEYS } from "./view.ts";
 import { fzfScreen } from "./screen.ts";
 
@@ -95,14 +96,21 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
 
 /**
  * herdr is the only multiplexer foreman speaks to today. Swapping this one line
- * for another adapter is the whole of that migration. Dispatcher.Default brings
- * its own dependencies — Prog and Prompts — and sits on top of the base set,
- * which feeds it the Settings and Fleet it cannot build itself.
+ * for another adapter is the whole of that migration. The base set supplies
+ * Dispatcher with every port it cannot build itself.
  */
 const live = (overrides: Overrides) =>
   Layer.provideMerge(
     Dispatcher.Default,
-    Layer.mergeAll(HerdrFleet, settings(overrides), logging(), fzfScreen(BOUND_KEYS)),
+    Layer.mergeAll(
+      HerdrFleet,
+      settings(overrides),
+      Prog.Default,
+      Prompts.Default,
+      Repository.Default,
+      logging(),
+      fzfScreen(BOUND_KEYS),
+    ),
   );
 
 /** Plan mode needs the same world as the daemon minus the dispatcher. */
