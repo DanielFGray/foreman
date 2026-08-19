@@ -521,7 +521,7 @@ describe("Repository over a jj-colocated checkout", () => {
   // develop as already-merged, the filter removed the only name left, and a
   // checkout jj reported as clean stayed held forever. The trunk is still
   // nameable — it is the non-foreman bookmark that is the head behind the
-  // working copy — so the filter runs in the revset, ahead of heads.
+  // working copy — so filtering happens before heads computes candidates.
   test(
     "frees a checkout parked on a foreman bookmark and lands past it",
     async () => {
