@@ -283,10 +283,60 @@ describe("Repository", () => {
     // nothing: its commits are in the checkout, so it is not unmerged — and
     // reading that as an empty branch sent finished work back to the queue.
     expect(await branches(directory)).toEqual([
-      { branch: "foreman/ts-aaaaaa", merged: false, empty: false },
-      { branch: "foreman/ts-bbbbbb", merged: true, empty: true },
-      { branch: "foreman/ts-cccccc", merged: true, empty: false },
+      { branch: "foreman/ts-aaaaaa", merged: false, empty: false, stale: undefined },
+      { branch: "foreman/ts-bbbbbb", merged: true, empty: true, stale: undefined },
+      { branch: "foreman/ts-cccccc", merged: true, empty: false, stale: undefined },
     ]);
+  });
+
+  test("says which unmerged branches the trunk has overtaken", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+
+    // Two files the branches will diverge over: one the trunk deletes, one it
+    // edits too.
+    await writeFile(join(directory, "touched.txt"), "as committed\n");
+    await writeFile(join(directory, "shared.txt"), "as committed\n");
+    await git("add", "touched.txt", "shared.txt");
+    await git("commit", "-qm", "files the branches will diverge over");
+
+    // One branch patches a file the trunk will delete; the other edits a file
+    // the trunk will edit too.
+    await git("checkout", "-qb", "foreman/ts-stale-del", base);
+    await writeFile(join(directory, "touched.txt"), "branch patches\n");
+    await git("commit", "-qam", "branch patches a file");
+
+    await git("checkout", "-qb", "foreman/ts-stale-con", base);
+    await writeFile(join(directory, "shared.txt"), "branch version\n");
+    await git("commit", "-qam", "branch edits a file");
+
+    // The trunk moves: it deletes the file the first branch patches, and
+    // edits the file the second branch edits, into a different shape.
+    await git("checkout", "-q", base);
+    await git("rm", "-q", "touched.txt");
+    await writeFile(join(directory, "shared.txt"), "trunk version\n");
+    await git("commit", "-qam", "trunk deletes and edits");
+
+    const found = await branches(directory);
+    const byName = (name: string) => found.find((entry) => entry.branch === name);
+
+    // A branch patching what the trunk deleted is a modify/delete conflict,
+    // which is a different problem from a content conflict: the trunk's own
+    // refactor decided the file was gone.
+    expect(byName("foreman/ts-stale-del")).toEqual({
+      branch: "foreman/ts-stale-del",
+      merged: false,
+      empty: false,
+      stale: { paths: ["touched.txt"], modifyDelete: true },
+    });
+    expect(byName("foreman/ts-stale-con")).toEqual({
+      branch: "foreman/ts-stale-con",
+      merged: false,
+      empty: false,
+      stale: { paths: ["shared.txt"], modifyDelete: false },
+    });
+    // A branch the trunk has not moved past still merges, and so reads as
+    // not stale rather than as anything worse.
+    expect(byName("foreman/ts-aaaaaa")?.stale).toBeUndefined();
   });
 
   test("deletes a merged branch and refuses one holding the only copy", async () => {
@@ -433,7 +483,7 @@ describe("Repository over a jj-colocated checkout", () => {
 
       // A branch that landed must not read as a branch nobody committed to.
       expect(await branches(colocated)).toEqual([
-        { branch: "foreman/ts-aaaaaa", merged: true, empty: false },
+        { branch: "foreman/ts-aaaaaa", merged: true, empty: false, stale: undefined },
       ]);
     },
     slowly,

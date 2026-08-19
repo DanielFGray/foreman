@@ -828,8 +828,8 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
 
       /**
-       * Every branch foreman owns in this checkout, and the two facts git can
-       * prove about each one.
+       * Every branch foreman owns in this checkout, and the three facts git
+       * can prove about each one.
        *
        * The branches are the only record that survives everything else. A
        * workspace can be closed, a claim reclaimed, a task marked done or
@@ -845,6 +845,15 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
        * branch's tip arrives through a merge commit's second parent. Foreman
        * merges without fast-forwarding either way, so the first-parent line is
        * exactly the set of commits the checkout had before any branch landed.
+       *
+       * `stale` is the third: whether a branch the checkout has not taken
+       * would still merge into the current tip. Every author cuts from the
+       * trunk's tip, so a conflict means the trunk moved — the branch was
+       * overtaken, and a review of it could never be applied. Asked with
+       * `merge-tree`, which reads no index, takes no lock and cannot disturb
+       * the operator's checkout. Only the branches with commits of their own
+       * are asked: a merged one is already in, and an empty one still points
+       * at a trunk commit, so both merge trivially.
        */
       branches: (directory: string) =>
         Effect.gen(function* () {
@@ -864,10 +873,40 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
             ),
           );
           const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", "HEAD"));
+
+          const overtaken = yield* Effect.forEach(
+            refs.flatMap((ref) => {
+              const [tip, branch] = ref.split(" ");
+              return tip && branch && !merged.has(branch) && !trunk.has(tip) ? [branch] : [];
+            }),
+            (branch) =>
+              git(directory, "merge-tree", "--write-tree", "HEAD", branch).pipe(
+                // 0 is a clean merge and 1 is conflicts; anything else means
+                // merge-tree could not answer, which is not evidence the branch
+                // would merge — but it is not a conflict either, so it reads as
+                // clean, the same way an unreadable ref reads as absent.
+                Effect.map(
+                  (result) =>
+                    [
+                      branch,
+                      result.exitCode === 1 ? conflictsOf(result.stdout) : undefined,
+                    ] as const,
+                ),
+              ),
+          );
+          const staleByBranch = new Map(overtaken);
+
           return refs.flatMap((ref) => {
             const [tip, branch] = ref.split(" ");
             return tip && branch
-              ? [{ branch, merged: merged.has(branch), empty: trunk.has(tip) } satisfies Branch]
+              ? [
+                  {
+                    branch,
+                    merged: merged.has(branch),
+                    empty: trunk.has(tip),
+                    stale: staleByBranch.get(branch),
+                  } satisfies Branch,
+                ]
               : [];
           });
         }),
@@ -995,7 +1034,58 @@ export interface Branch {
 
   /** Nothing was ever committed here: the tip is still a trunk commit. */
   readonly empty: boolean;
+
+  /**
+   * Whether the branch would still merge into the checkout's tip.
+   *
+   * undefined means it would, so the fleet is free to spend a review on it.
+   * Present means the trunk moved and the branch cannot land, with the
+   * conflicting paths and whether trunk deleted what the branch patches — the
+   * fact the same sweep reads every tick, remembered nowhere.
+   */
+  readonly stale: Stale | undefined;
 }
+
+/** Why an unmerged branch would not land, and the problem that blocks it. */
+export interface Stale {
+  /** The paths both sides now claim, which is what a rebase would have to face. */
+  readonly paths: ReadonlyArray<string>;
+
+  /**
+   * Whether any conflict is trunk having deleted what the branch patches.
+   *
+   * A different problem from a content conflict, and it needs a different
+   * answer: the trunk's own refactor decided the file was gone, so the
+   * branch's work on it is either superseded or must be re-expressed against
+   * whatever replaced it.
+   */
+  readonly modifyDelete: boolean;
+}
+
+/**
+ * What a conflicted `merge-tree --write-tree` run actually said, read from the
+ * stable conflicted-file-info section rather than the human messages.
+ *
+ * Each conflicting file is one `<mode> <object> <stage> <path>` line per side
+ * that still exists. A content conflict records all three stages, while a
+ * modify/delete has the base and exactly one side — the other side deleted the
+ * file — which is the structural fact that names it. The first line of the
+ * output is the merged tree's object and is skipped.
+ */
+export const conflictsOf = (output: string): Stale => {
+  const stages = new Map<string, Set<string>>();
+  for (const line of output.split("\n").slice(1)) {
+    const entry = /^[0-7]{6} [0-9a-f]+ ([123])\t(.*)$/.exec(line);
+    if (!entry) continue;
+    const present = stages.get(entry[2]!) ?? new Set<string>();
+    present.add(entry[1]!);
+    stages.set(entry[2]!, present);
+  }
+  return {
+    paths: [...stages.keys()],
+    modifyDelete: [...stages.values()].some((present) => present.size === 2 && present.has("1")),
+  };
+};
 
 export class RepositoryError extends Schema.TaggedError<RepositoryError>()("RepositoryError", {
   directory: Schema.String,

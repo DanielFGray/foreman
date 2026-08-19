@@ -1,5 +1,5 @@
 import { DateTime, Match } from "effect";
-import type { Active, Climbing, FleetState, Held, Unreviewed } from "./dispatcher.ts";
+import type { Active, Climbing, FleetState, Held, StaleRow, Unreviewed } from "./dispatcher.ts";
 import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import { diagnosticIntent, reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
@@ -23,6 +23,7 @@ const COLUMNS = [
   "yours",
   "held",
   "unreviewed",
+  "stale",
 ] as const;
 export type ColumnName = (typeof COLUMNS)[number];
 
@@ -120,6 +121,8 @@ export interface ColumnRow {
   readonly reason: Held["reason"] | undefined;
   /** The branch behind an unreviewed row, whose commits nothing is reading. */
   readonly unreviewed: Unreviewed | undefined;
+  /** The overtaken branch behind a stale row, whose review could not land. */
+  readonly stale: StaleRow | undefined;
   /** The error behind a dispatch-failed decision row. */
   readonly failure: string | undefined;
   readonly hasWork: boolean;
@@ -181,6 +184,7 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   yours: ["intervene", "descend", "unassign"],
   held: ["onboard"],
   unreviewed: ["adopt"],
+  stale: ["intervene", "descend", "release"],
 };
 
 /**
@@ -413,6 +417,15 @@ export const previewOf = (row: ColumnRow): string => {
       `task      ${row.unreviewed.task} (${row.unreviewed.status ?? "deleted"})`,
     );
   }
+  if (row.stale) {
+    lines.push(
+      `branch    ${row.stale.branch}`,
+      `paths     ${row.stale.paths.join(", ")}`,
+      row.stale.modifyDelete
+        ? "cause     the trunk deleted what this branch patches"
+        : "cause     the trunk moved and the work conflicts",
+    );
+  }
   // Whichever kind of task the row carries: a queued one is read in the same
   // shape as a claimed one, so the pane says the same thing about both.
   if (task?.description) lines.push("", task.description);
@@ -423,7 +436,11 @@ export const viewLabel = (view: ViewName): string =>
   view === "attention" ? "Attention" : `${view[0]?.toUpperCase()}${view.slice(1)}`;
 
 export const sourceView = (column: ColumnName): ViewName =>
-  column === "decisions" || column === "yours" || column === "held" || column === "unreviewed"
+  column === "decisions" ||
+  column === "yours" ||
+  column === "held" ||
+  column === "unreviewed" ||
+  column === "stale"
     ? "attention"
     : column;
 
@@ -460,6 +477,7 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
     Match.when("yours", () => state.yours.map((task) => readyRow(task, "yours", state))),
     Match.when("held", () => state.held.map(heldRow)),
     Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
+    Match.when("stale", () => state.stale.map(staleRow)),
     Match.exhaustive,
   );
 
@@ -467,12 +485,17 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
  * Attention combines the exceptional states in urgency order, and each row
  * keeps the column it came from, so combining their display never combines
  * their actions.
+ *
+ * Stale sits above unreviewed: an overtaken branch under review is about to
+ * cost a review that could never land, while an unreviewed one costs nothing
+ * until the operator adopts it.
  */
 export const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow> => {
   if (view !== "attention") return rowsFor(view, state);
   return [
     ...rowsFor("decisions", state),
     ...rowsFor("yours", state).map(attentionRow("needs you")),
+    ...rowsFor("stale", state),
     ...rowsFor("unreviewed", state),
     ...rowsFor("held", state),
   ];
@@ -498,6 +521,7 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   project: undefined,
   reason: undefined,
   unreviewed: undefined,
+  stale: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -520,6 +544,7 @@ const activeRow = (
   project: undefined,
   reason: undefined,
   unreviewed: undefined,
+  stale: undefined,
   failure: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -536,6 +561,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   project: undefined,
   reason: undefined,
   unreviewed: undefined,
+  stale: undefined,
   failure: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -563,6 +589,7 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   project: undefined,
   reason: undefined,
   unreviewed: undefined,
+  stale: undefined,
   failure,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
@@ -581,6 +608,7 @@ const heldRow = (held: Held): ColumnRow => ({
   project: held.project,
   reason: held.reason,
   unreviewed: undefined,
+  stale: undefined,
   failure: undefined,
   hasWork: false,
   committed: false,
@@ -597,6 +625,29 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   project: undefined,
   reason: undefined,
   unreviewed: branch,
+  stale: undefined,
+  failure: undefined,
+  hasWork: true,
+  committed: true,
+});
+
+const staleRow = (branch: StaleRow): ColumnRow => ({
+  column: "stale",
+  key: branch.branch,
+  label: "stale",
+  // The cause is the part worth acting on: trunk having deleted what the
+  // branch patches is a different problem from a content conflict, and the
+  // paths name what a rebase would have to face.
+  detail: branch.modifyDelete
+    ? `cannot land: trunk deleted ${branch.paths.join(", ")}`
+    : `cannot land: conflicts on ${branch.paths.join(", ")}`,
+  task: branch.task,
+  ready: undefined,
+  worker: undefined,
+  project: branch.project,
+  reason: undefined,
+  unreviewed: undefined,
+  stale: branch,
   failure: undefined,
   hasWork: true,
   committed: true,

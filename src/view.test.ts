@@ -95,6 +95,15 @@ const state: FleetState = {
       activity: new Date(),
     },
   ],
+  stale: [
+    {
+      project: "fibrae",
+      branch: "foreman/ts-s1",
+      task: task("ts-s1", "reviewing", ["by-flash", "rung-flash", "review-by-pro"]),
+      paths: ["src/old.ts", "src/gone.ts"],
+      modifyDelete: true,
+    },
+  ],
   held: [held("fibrae", "dirty", "uncommitted changes to tracked files")],
   dispatch: "paused",
   observedAt: undefined,
@@ -134,14 +143,35 @@ describe("views", () => {
   test("draws only the views with something in them", () => {
     expect(drawn(state)).toEqual(["queue", "working", "review", "landed", "attention"]);
     expect(drawn({ ...state, landed: [], review: [] })).toEqual(["queue", "working", "attention"]);
-    expect(drawn({ ...state, decisions: [], yours: [], unreviewed: [], held: [] })).not.toContain(
-      "attention",
-    );
+    expect(
+      drawn({ ...state, decisions: [], yours: [], unreviewed: [], stale: [], held: [] }),
+    ).not.toContain("attention");
   });
 
   test("orders attention by urgency, and keeps each row's own column", () => {
     const rows = rowsForView("attention", state);
-    expect(rows.map((each) => each.column)).toEqual(["decisions", "yours", "unreviewed", "held"]);
+    expect(rows.map((each) => each.column)).toEqual([
+      "decisions",
+      "yours",
+      "stale",
+      "unreviewed",
+      "held",
+    ]);
+  });
+
+  // An overtaken branch under review is about to cost a review that could
+  // never land, which is why it outranks an unreviewed one — and the cause
+  // goes on the row's own second line, named so the two problems are told
+  // apart.
+  test("a stale row names its branch and the cause on the second line", () => {
+    expect(row("attention", "foreman/ts-s1").label).toBe("stale");
+    expect(row("attention", "foreman/ts-s1").detail).toBe(
+      "cannot land: trunk deleted src/old.ts, src/gone.ts",
+    );
+    expect(row("attention", "foreman/ts-s1").task?.status).toBe("reviewing");
+    expect(previewOf(row("attention", "foreman/ts-s1"))).toContain(
+      "cause     the trunk deleted what this branch patches",
+    );
   });
 
   // The reason is why the row exists. On its own line it survives a narrow
@@ -212,6 +242,17 @@ describe("actionsFor", () => {
     };
     const alone = rowsForView("working", gone).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("focus");
+  });
+
+  // A stale row's answers are the corrections and the release that sends the
+  // work back to the queue instead of paying for a review that cannot land.
+  // No focus or takeover: the row carries the task, not a worker.
+  test("a stale row can be released, descended or intervened on, but not focused", () => {
+    expect(actionsFor("stale", row("attention", "foreman/ts-s1"))).toEqual([
+      "intervene",
+      "descend",
+      "release",
+    ]);
   });
 });
 
