@@ -96,9 +96,8 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
 
 /**
  * herdr is the only multiplexer foreman speaks to today. Swapping this one line
- * for another adapter is the whole of that migration. Dispatcher.Default brings
- * its own dependencies — Prog and Prompts — and sits on top of the base set,
- * which feeds it the Settings and Fleet it cannot build itself.
+ * for another adapter is the whole of that migration. The base set supplies
+ * Dispatcher with every port it cannot build itself.
  */
 const live = (overrides: Overrides) =>
   Layer.provideMerge(
