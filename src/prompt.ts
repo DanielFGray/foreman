@@ -115,32 +115,6 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
               ? "Review the work as it exists, including uncommitted edits. Determine what is sound, what is incomplete, and what prevents it from being ready for formal review."
               : "Diagnose why this attempt appears stuck. Identify the concrete blocker, failed assumption, missing information, or wrong direction that the next author must handle.",
         }),
-
-      /**
-       * Turns the rough plan (the epic's description) into a specification.
-       * The agent works in a plan worktree and writes the spec back into the
-       * epic's description, where the tasker and the fleet read it.
-       */
-      planner: (item: Item, worktree: string, repository: string) =>
-        render("planner", {
-          task: item.id,
-          title: item.title,
-          project: item.project,
-          worktree,
-          branch: labelFor(item.id),
-          repository,
-        }),
-
-      /** Turns the specification into tasks filed under the plan epic. */
-      tasker: (item: Item, worktree: string, repository: string) =>
-        render("tasker", {
-          task: item.id,
-          title: item.title,
-          project: item.project,
-          worktree,
-          branch: labelFor(item.id),
-          repository,
-        }),
     } as const;
   }),
 }) {}

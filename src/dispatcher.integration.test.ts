@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
 import { Prog, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
+import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
 
 const now = new Date();
@@ -31,6 +32,7 @@ const worker = (task: string, role: "author" | "review", state: WorkerState): Wo
   task,
   workspace: `workspace-${task}`,
   pane: `pane-${task}`,
+  repository: "/home/dan/build/project",
   directory: `/worktree/${task}`,
   worktree: `/worktree/${task}`,
   state,
@@ -62,6 +64,7 @@ class World {
           task: options.task,
           workspace: `workspace-${options.task}`,
           pane: `pane-${options.task}`,
+          repository: options.repository,
           directory: options.directory,
           worktree: options.directory,
           state: "gone",
@@ -111,14 +114,22 @@ class World {
   readonly prog = {
     _tag: "Prog" as const,
     show: (id: string) => Effect.succeed(this.tasks.get(id) as Item),
+    lookup: (id: string) => Effect.succeed(Option.fromNullable(this.tasks.get(id))),
     ready: () =>
       Effect.succeed(
         [...this.tasks.values()].filter(
           (task) => task.status === "open",
         ) as ReadonlyArray<ReadyTask>,
       ),
-    focused: () =>
-      Effect.succeed([...this.tasks.values()].filter((task) => task.labels.includes("focus"))),
+    pinned: () =>
+      Effect.succeed([...this.tasks.values()].filter((task) => task.labels.includes("pin"))),
+    setPin: (task: string, pinned: boolean) =>
+      Effect.sync(() => {
+        const item = this.tasks.get(task);
+        if (!item) return;
+        const labels = item.labels.filter((label) => label !== "pin");
+        this.tasks.set(task, { ...item, labels: pinned ? [...labels, "pin"] : labels });
+      }),
     awaitingReview: (project: string) =>
       Effect.succeed(
         [...this.tasks.values()].filter(
@@ -225,7 +236,6 @@ class World {
     complete: (id: string) =>
       Effect.sync(() => this.update(id, (task) => ({ ...task, status: "done" }))),
     add: () => Effect.die("unused"),
-    addEpic: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
   };
 
@@ -262,8 +272,6 @@ const prompts = Layer.succeed(Prompts, {
   onboard: () => Effect.succeed("onboard"),
   review: () => Effect.succeed("review"),
   diagnose: () => Effect.succeed("diagnose"),
-  planner: () => Effect.succeed("planner"),
-  tasker: () => Effect.succeed("tasker"),
 });
 
 const layerFor = (world: World) =>
@@ -274,9 +282,8 @@ const layerFor = (world: World) =>
         projects: [{ name: "test", directory: "/repo", verify: undefined }],
         slots: 1,
         running: true,
-        ladder: [{ name: "cheap", harness: "test", model: undefined }],
-        planner: { name: "cheap", harness: "test", model: undefined },
-        tasker: { name: "cheap", harness: "test", model: undefined },
+        ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
+        otlpEndpoint: "http://localhost:4318",
         pollInterval: 60,
         staleAfter: 24,
         coachWindow: 60,
@@ -286,6 +293,10 @@ const layerFor = (world: World) =>
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Prog, world.prog),
       Layer.succeed(Repository, world.repository),
+      // Every rung in the test ladder names a bare harness, so no provider is
+      // derivable and the gate has nothing to ask about — which is the point:
+      // a ladder foreman cannot read quota for dispatches exactly as before.
+      Quota.Default,
       prompts,
     ),
   );
@@ -455,5 +466,93 @@ describe("Dispatcher tick", () => {
 
     expect(world.tasks.get(task.id)?.status).toBe("done");
     expect(world.closed).toContain(task.id);
+  });
+});
+
+describe("quota probing", () => {
+  /** A Quota that counts how many times each provider was actually asked. */
+  const countingQuota = () => {
+    let calls = 0;
+    const layer = Layer.succeed(Quota, {
+      _tag: "Quota" as const,
+      usage: (provider: string) =>
+        Effect.sync(() => {
+          calls += 1;
+          return { provider, plan: undefined, allowances: [] };
+        }),
+    } as unknown as Quota);
+    return { layer, calls: () => calls };
+  };
+
+  const layerWith = (quota: Layer.Layer<Quota>, running: boolean, world: World) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          projects: [{ name: "test", directory: "/repo", verify: undefined }],
+          slots: 1,
+          running,
+          // A rung whose model names its provider is one the gate can ask about.
+          ladder: [{ name: "cheap", harness: "test", model: "openai/gpt", provider: undefined }],
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Repository, world.repository),
+        quota,
+        prompts,
+      ),
+    );
+
+  /** Runs `ticks` ticks over one Dispatcher, so the startup probe counts once. */
+  const ticking = (
+    quota: Layer.Layer<Quota>,
+    running: boolean,
+    steps: ReadonlyArray<"tick" | "watch" | "unwatch">,
+  ) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        for (const step of steps) {
+          if (step === "tick") yield* Dispatcher.tick;
+          else yield* Dispatcher.watchQuota(step === "watch");
+        }
+      }).pipe(Effect.provide(layerWith(quota, running, new World()))),
+    );
+
+  test("the first tick asks whatever the fleet is doing", async () => {
+    // "Never read" and "nothing left" look the same on a dashboard, so a fleet
+    // that has just started says which one it is before it stops asking.
+    const quota = countingQuota();
+    await ticking(quota.layer, false, ["tick"]);
+    expect(quota.calls()).toBe(1);
+  });
+
+  test("a paused fleet stops asking after that first one", async () => {
+    const quota = countingQuota();
+    await ticking(quota.layer, false, ["tick", "tick", "tick"]);
+    expect(quota.calls()).toBe(1);
+  });
+
+  test("a running fleet asks every tick, because the gate reads it", async () => {
+    const quota = countingQuota();
+    await ticking(quota.layer, true, ["tick", "tick", "tick"]);
+    expect(quota.calls()).toBe(3);
+  });
+
+  test("a paused fleet asks again while the operator is on the quota view", async () => {
+    const quota = countingQuota();
+    await ticking(quota.layer, false, ["tick", "tick", "watch", "tick", "tick"]);
+    expect(quota.calls()).toBe(3);
+  });
+
+  test("leaving the view stops the asking again", async () => {
+    const quota = countingQuota();
+    await ticking(quota.layer, false, ["tick", "watch", "tick", "unwatch", "tick"]);
+    expect(quota.calls()).toBe(2);
   });
 });

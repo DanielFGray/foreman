@@ -148,6 +148,7 @@ export const HerdrFleet = Layer.effect(
               worktree: workspace.worktree?.is_linked_worktree
                 ? workspace.worktree.checkout_path
                 : undefined,
+              repository: workspace.worktree?.repo_root,
               // Workspace status is an attention aggregate where an unseen old
               // done pane outranks current work. Dispatch needs operational
               // state, so aggregate the panes with live work first instead.
@@ -196,6 +197,7 @@ export const HerdrFleet = Layer.effect(
               pane: opened.result.root_pane.pane_id,
               directory: opened.result.worktree.path,
               worktree: opened.result.worktree.path,
+              repository: options.repository,
               state: "gone",
               roles: new Map(),
             }) satisfies Worker,
@@ -229,6 +231,7 @@ export const HerdrFleet = Layer.effect(
               pane: created.result.root_pane.pane_id,
               directory: created.result.worktree.path,
               worktree: created.result.worktree.path,
+              repository: options.repository,
               state: "gone",
               roles: new Map(),
             }) satisfies Worker,
@@ -288,6 +291,7 @@ export const HerdrFleet = Layer.effect(
             pane: created.result.root_pane.pane_id,
             directory: options.repository,
             worktree: undefined,
+            repository: options.repository,
             state: "gone",
             roles: new Map(),
           } satisfies Worker;
@@ -333,8 +337,7 @@ export const HerdrFleet = Layer.effect(
           // The first agent takes the workspace's own pane, because splitting
           // one for it used to leave a blank shell beside every worker; the
           // next role splits off it, and its pane lands beside the output it
-          // was sent to read — which is the layout both a review and a plan's
-          // tasking stage are for.
+          // was sent to read — which is the layout a review is for.
           //
           // A pane that already carries this role is never reused, even by the
           // same role: the settled agent inside it can only be ended by closing
@@ -675,6 +678,7 @@ export const resolveClose = (
 const Worktree = Schema.Struct({
   checkout_path: Schema.String,
   is_linked_worktree: Schema.Boolean,
+  repo_root: Schema.String,
 });
 
 const Workspace = Schema.Struct({

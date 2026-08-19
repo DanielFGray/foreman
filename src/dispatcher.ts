@@ -1,7 +1,20 @@
-import { DateTime, Duration, Effect, Match, Queue, Ref, SubscriptionRef } from "effect";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  Fiber,
+  Match,
+  Metric,
+  MetricBoundaries,
+  Option,
+  Queue,
+  Ref,
+  SubscriptionRef,
+} from "effect";
 import { Settings } from "./config.ts";
 import {
   type AgentRole,
+  type CloseOptions,
   directoryFor,
   Fleet,
   labelFor,
@@ -11,18 +24,21 @@ import {
   type Worker,
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
-import { focusOf, splitQueue } from "./focus.ts";
+import { pinnedFirst, pinnedOf } from "./pin.ts";
 import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
+import { exhausted, Quota, type Usage } from "./quota.ts";
 import {
   above,
   authorFor,
   below,
   HUMAN,
   isYours,
+  providersOf,
   reviewerFor,
   type Rung,
   rungSpent,
+  rungsOn,
   topOf,
 } from "./ladder.ts";
 import {
@@ -32,8 +48,8 @@ import {
   diagnosticIntent,
   type DiagnosticIntent,
   isApproved,
+  isPinned,
   isOnboarding,
-  isPlan,
   isSatisfied,
   type Item,
   ONBOARD,
@@ -42,6 +58,17 @@ import {
   reviewedBy,
   rungOf,
 } from "./prog.ts";
+
+const runDuration = Metric.histogram(
+  "foreman.run.duration",
+  MetricBoundaries.exponential({ start: 1, factor: 2, count: 20 }),
+  "Time foreman spends dispatching one run, in milliseconds.",
+);
+
+const runOutcomes = Metric.counter("foreman.run.outcomes", {
+  description: "Settled agent runs by their closed task phase.",
+  incremental: true,
+});
 
 /**
  * The loop that replaces the human, and the commands a dashboard can give it.
@@ -60,6 +87,42 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const prog = yield* Prog;
     const prompts = yield* Prompts;
     const repository = yield* Repository;
+    const quota = yield* Quota;
+
+    const runAttributes = (
+      task: {
+        readonly id: string;
+        readonly project: string;
+        readonly labels: ReadonlyArray<string>;
+      },
+      rung: Rung,
+      role: AgentRole,
+    ) => ({
+      task: task.id,
+      project: task.project,
+      rung: rung.name,
+      model: rung.model ?? rung.harness,
+      role,
+      attempt: attemptsOf(task, rung.name) + 1,
+      labels: task.labels.join(","),
+    });
+
+    const instrumentRun = <A, E, R>(
+      task: {
+        readonly id: string;
+        readonly project: string;
+        readonly labels: ReadonlyArray<string>;
+      },
+      rung: Rung,
+      role: AgentRole,
+      effect: Effect.Effect<A, E, R>,
+    ) => {
+      const attributes = runAttributes(task, rung, role);
+      return effect.pipe(
+        Effect.tap(() => Effect.annotateCurrentSpan(attributes)),
+        Metric.trackDurationWith(Metric.tagged(runDuration, "rung", rung.name), Duration.toMillis),
+      );
+    };
 
     // The one piece of genuinely non-derivable state: how much work the
     // operator has asked foreman to take on. Nothing in the world records an
@@ -96,6 +159,23 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     // costs the daemon two attempts to relearn it; the tasks themselves stay
     // safe in the queue either way.
     const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
+
+    // Whether anyone is reading the accounts. Not a fact about the world and
+    // not an intention either — it is who is listening, which only the screen
+    // in front of the operator knows and nothing durable could record. A
+    // paused fleet with nobody on the quota view has no consumer for an
+    // allowance, and a reading nobody consults is a network request per poll
+    // spent on nothing. It resets to false on a restart, which is correct: no
+    // screen survives the process, so nobody is watching until one says it is.
+    const watchingQuota = yield* Ref.make(false);
+
+    // Whether the accounts have been read at all yet. A fleet that has just
+    // started has nothing to say about them, and "no reading" and "nothing
+    // left" are not distinguishable on a dashboard — so the first tick asks
+    // whatever the fleet is doing, and a paused one then stops. One probe per
+    // process, which is also what makes a restart show the accounts without
+    // the operator having to unpause to see them.
+    const everProbed = yield* Ref.make(false);
 
     // The poll interval is how long foreman waits to notice something nobody
     // told it about. An operator pressing a key told it, so that case has no
@@ -152,49 +232,151 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * queue grows a permanent tail of almost-done tasks.
      */
     const tick = Effect.gen(function* () {
-      const current = yield* observe;
+      // Read once and handed to both readings. A tick observes twice — before
+      // it acts, and again on fresh eyes before it fills — while an allowance
+      // moves on the order of hours, so asking each provider twice a poll
+      // would be a request every few seconds for a number that cannot have
+      // changed between them.
+      //
+      // Forked rather than awaited, because it is the slowest read in the tick
+      // and the last one any decision needs: a provider is asked over the
+      // network, while everything below is a local store or a git checkout.
+      // Waiting for it first is the tick standing still for as long as the
+      // slowest account takes to answer. It is still this tick's reading — the
+      // join is before anything interprets it — so nothing is decided from a
+      // probe that finished during an earlier tick.
+      //
+      // Asked at all only where the answer has a consumer. A paused fleet
+      // dispatches nothing, so no gate reads an allowance, and the spent
+      // accounts in attention are not what stopped it — the operator is, and
+      // the status line already says so. Probing on regardless is a network
+      // request every poll to explain a halt that has another cause. The
+      // operator looking at the quota view is the other consumer, and it says
+      // so through `quota` rather than by being guessed at here.
+      const mode = yield* Ref.get(dispatch);
+      const wanted =
+        mode !== "paused" || (yield* Ref.get(watchingQuota)) || !(yield* Ref.get(everProbed));
+      if (wanted) yield* Ref.set(everProbed, true);
+      const probing = yield* Effect.fork(
+        wanted ? readProviders : Effect.succeed<ReadonlyArray<Provider>>([]),
+      );
+      const observation = yield* observe;
+      // A tick that did not ask carries the last answer rather than publishing
+      // an empty set, because "not read" and "no accounts" look identical on a
+      // dashboard and only one of them is true. Carried for the view alone:
+      // the gate that reads an allowance runs only when the fleet is not
+      // paused, and a fleet that is not paused probes on every tick, so no
+      // dispatch is ever decided from a reading this line kept.
+      const previous = yield* SubscriptionRef.get(state);
+      const providers = wanted ? yield* Fiber.join(probing) : previous.providers;
+
+      const current = yield* interpret(observation, providers);
       yield* SubscriptionRef.set(state, current);
 
-      const mode = yield* Ref.get(dispatch);
       if (mode === "paused") return;
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
       yield* recover(current);
-      yield* fill(yield* observe, mode);
-    });
+      // The second reading is narrow, not stale. The passes above write to the
+      // store and to git, so what fill decides from has to be read after them —
+      // but a dispatch turns on ten fields, and the columns only a person reads
+      // cost a `prog show` per branch and a `git status` per worktree to build.
+      // Reading them again here would be work whose one consumer is the
+      // discard.
+      yield* fill(yield* readDispatch(providers), mode);
+    }).pipe(Effect.withSpan("foreman.tick"));
 
-    /** The world as it is right now, with no interpretation applied. */
+    /**
+     * What each account behind the ladder has left of its allowance.
+     *
+     * A provider foreman could not read is carried to the dashboard but never
+     * counted as spent: an unreachable usage endpoint is foreman's own network
+     * trouble, and stopping the fleet on it would be the opposite of what the
+     * gate is for. Its rungs stay dispatchable and an agent meets the wall
+     * itself, which is exactly where the fleet stood before any of this was
+     * read.
+     */
+    const readProviders = Effect.forEach(
+      providersOf(settings.ladder),
+      (provider) =>
+        quota.usage(provider).pipe(
+          Effect.map((usage): Provider => ({
+            provider,
+            plan: usage.plan,
+            allowances: usage.allowances,
+            rungs: rungsOn(settings.ladder, provider),
+            unreadable: undefined,
+          })),
+          Effect.catchAll((error) =>
+            (error.permanent
+              ? // A permanent failure — an account with no usage source, a
+                // missing credential, an expired token — repeats on every poll,
+                // so it is carried to the dashboard and never logged. Only a
+                // transient one, which may clear by itself, is worth a line.
+                Effect.void
+              : Effect.logWarning(`quota unreadable for ${provider}: ${error.detail}`)
+            ).pipe(
+              Effect.as<Provider>({
+                provider,
+                plan: undefined,
+                allowances: [],
+                rungs: rungsOn(settings.ladder, provider),
+                unreadable: error.detail,
+              }),
+            ),
+          ),
+        ),
+      { concurrency: "unbounded" },
+    );
+
+    /**
+     * One reading of the world, holding only what every consumer of it needs.
+     *
+     * The tick reads twice — the passes between the two write to the store and
+     * to git, so what fill decides from must be read after them — and this is
+     * the part both readings pay for. Everything here gates a dispatch: `held`
+     * passes a project over, `branches` says which reviews have a diff behind
+     * them, and the focus scope decides the reserved slot. The columns that
+     * only a person looks at are read in `interpret` instead, so the second
+     * reading does not pay for them.
+     */
     const observe = Effect.gen(function* () {
-      const roster = yield* fleet.roster;
+      // The roster is every daemon's: herdr lists every workspace labelled
+      // `foreman/*` whoever opened it, and a label records no ownership — two
+      // foremen against different configs are not competing for the same
+      // slots. The checkout a workspace's worktree belongs to is what the
+      // config's project set scopes, and herdr reports it, so ownership is
+      // settled before the store is asked anything. Scoping by the task's
+      // project instead means one `prog show` per workspace on the machine
+      // before knowing whether any of them is this daemon's — and it cannot
+      // classify a workspace whose task has been deleted at all.
+      const managed = new Set(settings.projects.map((project) => project.name));
+      const roster = ours(
+        yield* fleet.roster,
+        new Set(settings.projects.map((project) => project.directory)),
+      );
 
       // Every workspace's task, read once. The roster is joined to the store
       // rather than filtered through status queries, because a task leaves a
       // column's status at the exact moment it moves to another — the durable
       // join is what lets work that has reached a terminal state still be
       // settled.
-      const tasks = yield* Effect.forEach(roster, (worker) =>
-        prog.show(worker.task).pipe(
-          Effect.map((task) => [[worker.task, task]] as const),
+      //
+      // A store that would not answer is not an answer: the workspace is left
+      // out of this reading entirely and the next tick asks again. Only
+      // `lookup` returning nothing is a fact, and it makes the workspace an
+      // orphan below.
+      const readings = yield* Effect.forEach(roster, (worker) =>
+        prog.lookup(worker.task).pipe(
+          Effect.map((task) => [{ worker, task }] as const),
           Effect.catchAll((error) =>
             Effect.logWarning(`skipped workspace ${worker.workspace}: ${error}`).pipe(
-              Effect.as<ReadonlyArray<readonly [string, Item]>>([]),
+              Effect.as<ReadonlyArray<{ worker: Worker; task: Option.Option<Item> }>>([]),
             ),
           ),
         ),
-      ).pipe(Effect.map((entries) => new Map(entries.flat())));
-
-      // The roster is every daemon's: herdr lists every workspace labelled
-      // `foreman/*` whoever opened it, and a label records no ownership — two
-      // foremen against different configs are not competing for the same
-      // slots. The config's project set is the only ownership the world
-      // records, so it is what scopes everything read back. A foreign
-      // workspace is another daemon's live work: counted it would fill this
-      // daemon's slots, and settled or reclaimed it would move a task across
-      // the boundary the config draws.
-      const managed = new Set(settings.projects.map((project) => project.name));
-      const { owned, workers } = scopeRoster(roster, tasks, managed);
-      const ownedByTask = new Map(owned.map((entry) => [entry.task.id, entry]));
+      ).pipe(Effect.map((entries) => entries.flat()));
 
       // Which checkouts the operator is presently working in. Read every tick
       // like everything else: you clean a tree up between two ticks and the
@@ -229,23 +411,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // allowlist is applied afterwards, to prog's answer rather than to the
       // question, so a blocker outside the fleet still holds its dependents.
       const queue = yield* prog.ready();
-      const landed = yield* eachProject((project) => prog.landed(project.name));
 
-      // The focus scope, if one is set. Derived from the `focus` label rather
-      // than remembered: the operator writes it into prog by hand, and the
-      // dashboard being the process means a restart must re-read the same
-      // label rather than lose the intention. The scope is every task at or
-      // under an item carrying the label.
-      const configured = new Set(settings.projects.map((project) => project.name));
-      const focusScope = yield* focusOf(yield* prog.focused(), configured, (id) =>
-        prog.children(id),
-      );
-      const focused = focusScope.focused;
-
-      // prog list has no limit, so the landed column is bounded here instead
-      // of in the query. Anything outside the window is history, not news.
-      const now = yield* DateTime.now;
-      const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
+      // What the operator has pinned. Derived from the `pin` label rather than
+      // remembered: the dashboard writes it into prog, and the dashboard being
+      // the process means a restart must re-read the same label rather than
+      // lose the intention. The scope is every task at or under an item
+      // carrying the label.
+      const pinned = yield* pinnedOf(yield* prog.pinned(), managed, (id) => prog.children(id));
 
       // Foreman's branches, in every project. One read, three questions: which
       // branches nothing in the pipeline accounts for, whether a task handed
@@ -263,67 +435,59 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ),
         ),
       );
+
+      return {
+        managed,
+        readings,
+        roster,
+        held,
+        claimed,
+        reviewing,
+        queue,
+        pinned,
+        branches,
+      } as const;
+    });
+
+    type Observation = Effect.Effect.Success<typeof observe>;
+    type Dispatchable = ReturnType<typeof dispatchFrom>;
+
+    /**
+     * Everything one reading of the world implies, without asking it again.
+     *
+     * Pure, because that is what lets the narrow reading fill feeds on and the
+     * wide one the dashboard draws be the same answer by construction rather
+     * than by two code paths agreeing. Nothing here may reach for the store or
+     * git: a value that needs another read belongs in `interpret`.
+     */
+    const dispatchFrom = (
+      observation: Observation,
+      providers: ReadonlyArray<Provider>,
+      failed: ReadonlyArray<readonly [string, DispatchFailure]>,
+    ) => {
+      const { managed, readings, roster, held, claimed, reviewing, queue, pinned, branches } =
+        observation;
+
+      const tasks = new Map(
+        readings.flatMap(({ worker, task }) =>
+          Option.isSome(task) ? [[worker.task, task.value] as const] : [],
+        ),
+      );
+
+      // A workspace in a project foreman manages whose task the store denies.
+      // Nothing will ever be dispatched into it and no task records it, so it
+      // would otherwise sit open forever — the one residue foreman can name
+      // but not prove is spent, because the worktree may still hold work.
+      const orphans = readings.flatMap(({ worker, task }) => (Option.isNone(task) ? [worker] : []));
+
+      const { owned, workers } = scopeRoster(roster, tasks);
+      const ownedByTask = new Map(owned.map((entry) => [entry.task.id, entry]));
+
       // Authorship, not availability. A branch whose commits the checkout
       // already has still proves the author wrote something — and a task in
       // review whose branch was merged by hand needs landing, not requeueing.
       const committed = new Set(
         branches.filter((entry) => !entry.empty).map((entry) => entry.task),
-      );
-      const workCandidates = new Map(
-        [...queue, ...claimed, ...reviewing]
-          .filter(
-            (task) =>
-              authoredBy(task) !== undefined &&
-              !committed.has(task.id) &&
-              !ownedByTask.has(task.id),
-          )
-          .map((task) => [task.id, task]),
-      );
-      const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
-        repository.holdsWork(directoryFor(task.project, task.id)).pipe(
-          Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
-          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
-        ),
-      ).pipe(Effect.map((ids) => ids.flat()));
-      const resumable = new Set([...committed, ...unfinished]);
-
-      // Every branch, joined to whatever prog still says about its task. Read
-      // for all of them rather than for a pre-filtered few, so the one rule
-      // that decides which are unread sees the same rows the operator does.
-      // A branch whose task was deleted outright resolves to nothing at all,
-      // and it is the reason to read git rather than prog, so it is kept.
-      //
-      // Oldest first, which is the order they are recovered in.
-      const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
-        prog.show(task).pipe(
-          Effect.map((item) => ({
-            title: item.title as string | undefined,
-            status: item.status as string | undefined,
-            activity: item.last_activity_at as Date | undefined,
-          })),
-          Effect.orElseSucceed(() => ({
-            title: undefined,
-            status: undefined,
-            activity: undefined,
-          })),
-          Effect.map((item) => ({ project, branch, task, merged, ...item })),
-        ),
-      ).pipe(
-        Effect.map((rows) =>
-          rows
-            .filter(isUnread)
-            // `merged` is what the rule was decided from, and every surviving
-            // row has the same answer, so it is not carried into the column.
-            .map(({ project, branch, task, title, status, activity }): Unreviewed => ({
-              project,
-              branch,
-              task,
-              title,
-              status,
-              activity,
-            }))
-            .sort((first, second) => waiting(first) - waiting(second)),
-        ),
       );
 
       // A branch the trunk has overtaken, under a task still in review. The
@@ -333,31 +497,31 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // when its author hands off, and an in-progress one is being worked on
       // in a column that already shows it. Oldest first, the order the fleet
       // was about to spend on them.
-      const stale = yield* Effect.forEach(
-        branches.flatMap(({ stale, project, branch, task }) =>
-          stale === undefined ? [] : [{ stale, project, branch, task }],
-        ),
-        ({ stale, project, branch, task }) =>
-          prog.show(task).pipe(
-            Effect.map((item): StaleRow => ({
-              project,
-              branch,
-              task: item,
-              paths: stale.paths,
-              modifyDelete: stale.modifyDelete,
-            })),
-            Effect.orElseSucceed(() => undefined),
-          ),
-      ).pipe(
-        Effect.map((rows) =>
-          rows
-            .filter((row): row is StaleRow => row !== undefined && row.task.status === "reviewing")
-            .sort(
-              (first, second) =>
-                first.task.last_activity_at.getTime() - second.task.last_activity_at.getTime(),
-            ),
-        ),
-      );
+      //
+      // The task is joined off the review list rather than read back: only a
+      // reviewing task ever survived this filter, so every row's item is one
+      // the same reading already holds.
+      const underReview = new Map(reviewing.map((task) => [task.id, task]));
+      const stale = branches
+        .flatMap(({ stale, project, branch, task }) => {
+          if (stale === undefined) return [];
+          const item = underReview.get(task);
+          return item === undefined
+            ? []
+            : [
+                {
+                  project,
+                  branch,
+                  task: item,
+                  paths: stale.paths,
+                  modifyDelete: stale.modifyDelete,
+                } satisfies StaleRow,
+              ];
+        })
+        .sort(
+          (first, second) =>
+            first.task.last_activity_at.getTime() - second.task.last_activity_at.getTime(),
+        );
 
       // What the sweep may delete: a merged ref for work nothing in the
       // pipeline is still pointing at. The branch is a task's only proof that
@@ -377,7 +541,6 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // make. Split here rather than in fill, so the dashboard can say where it
       // went instead of leaving it to look like a queue that stopped moving.
       const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
-      const failed = failedTasks(yield* Ref.get(dispatchFailures));
       const failedIds = new Set(failed.map(([task]) => task));
 
       const active = (items: ReadonlyArray<Item>) =>
@@ -398,75 +561,179 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const autoWork = dispatchable.filter((task) => !isOnboarding(task));
 
-      // Under focus the queue splits: the focused thread, in prog's own
-      // priority-first order, and the spillover — ready work from the projects
-      // the scope touches, still rotated between projects. Without focus the
-      // whole queue is spillover and the focused thread is empty.
-      const split = splitQueue(
-        excludeFailedTasks(autoWork, failed),
-        focusScope.tasks,
-        focused ? new Set([...focusScope.projects].filter((p) => configured.has(p))) : configured,
-        focused,
-      );
-      const focusPending = queue.some(
-        (task) => focusScope.tasks.has(task.id) && configured.has(task.project),
-      );
+      // Pinned work leads, then everything else, each half ordered by the same
+      // rules the whole queue always used. A pin changes where work sits in
+      // one list; it reserves no slot and stops nothing, so the projects both
+      // halves rotate between stay every managed project.
+      const ordered = pinnedFirst(excludeFailedTasks(autoWork, failed), pinned, [...managed]);
 
-      // A task whose dispatch failed twice with the same error is a decision,
-      // not a queue entry to keep offering. The failure rides the row so the
-      // operator sees what to clear before retrying. The tally lives across
-      // ticks, so the decision outlasts the tick that recorded the failure.
-      const failedDecisions = yield* Effect.forEach(failed, ([task, failure]) =>
-        prog.show(task).pipe(
-          Effect.map((item): Active => ({
-            task: item,
-            worker: undefined,
-            kind: undefined,
-            failure: failure.detail,
-          })),
-          // The task may have been closed or deleted since it failed.
-          Effect.orElseSucceed(() => undefined),
-        ),
-      ).pipe(Effect.map((rows) => rows.filter((row): row is Active => row !== undefined)));
+      // Which rungs have no allowance left, and from that which tasks their
+      // next agent could not be paid for. A task's rung depends on the column
+      // it is in — an author's is the one its label names, a review's is the
+      // rung above whoever wrote it — and the columns are disjoint, so one set
+      // of task ids says it for both without ambiguity.
+      const walled = new Set(providers.filter(exhausted).flatMap((provider) => provider.rungs));
+      const reviews = reviewable(reviewingActive, committed);
+      const outOfQuota = new Set([
+        ...ordered
+          .filter((task) => {
+            const rung = authorFor(settings.ladder, rungOf(task));
+            return rung !== undefined && walled.has(rung.name);
+          })
+          .map((task) => task.id),
+        ...reviews.review
+          .filter(({ task }) => walled.has(reviewerFor(settings.ladder, authoredBy(task)).name))
+          .map(({ task }) => task.id),
+      ]);
 
       return {
         workers,
         owned,
         held,
+        orphans,
+        providers,
+        outOfQuota,
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
-        queue: split.spillover,
-        focus: split.focus,
-        focused,
+        queue: ordered,
         yours: queue.filter(
           (task) => isYours(settings.ladder, rungOf(task)) && managed.has(task.project),
         ),
         working: claimedActive,
-        ...reviewable(reviewingActive, committed),
+        ...reviews,
         committed,
-        resumable,
         prunable,
-        unreviewed,
         stale,
-        landed: landed.filter((item) =>
-          DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
+        // A task whose dispatch failed is that decision, not whatever its
+        // leftover workspace or label would name it — so it is filtered out
+        // of the ordinary kinds rather than shown twice. The failures that
+        // have no row here yet are read back in `interpret`.
+        decisions: decisionsOf(claimedActive, reviewingActive, owned).filter(
+          (decision) => !failedIds.has(decision.task.id),
         ),
-        decisions: [
-          // A task whose dispatch failed is that decision, not whatever its
-          // leftover workspace or label would name it — so it is filtered out
-          // of the ordinary kinds rather than shown twice.
-          ...decisionsOf(claimedActive, reviewingActive, owned).filter(
-            (decision) => !failedIds.has(decision.task.id),
+        pinned,
+      };
+    };
+
+    /** What fill decides from: one reading, narrowed to what a dispatch turns on. */
+    const readDispatch = (providers: ReadonlyArray<Provider>) =>
+      Effect.gen(function* () {
+        const failed = failedTasks(yield* Ref.get(dispatchFailures));
+        return dispatchFrom(yield* observe, providers, failed);
+      });
+
+    /**
+     * Everything one observation implies, including what only a person reads.
+     *
+     * `dispatchFrom` plus the columns a dashboard draws and nothing decides
+     * from — which cost a `prog show` per branch and a `git status` per
+     * worktree, and are why the tick's second reading calls `dispatchFrom`
+     * directly instead of coming back through here.
+     */
+    const interpret = (observation: Observation, providers: ReadonlyArray<Provider>) =>
+      Effect.gen(function* () {
+        const failed = failedTasks(yield* Ref.get(dispatchFailures));
+        const current = dispatchFrom(observation, providers, failed);
+        const { claimed, reviewing, queue, branches } = observation;
+        const { committed } = current;
+        const ownedByTask = new Set(current.owned.map((entry) => entry.task.id));
+
+        // Everything below is read for a person to look at rather than for a
+        // dispatch to turn on, which is why it is here and not in `dispatchFrom`:
+        // the tick's second reading skips all of it.
+        const landed = yield* eachProject((project) => prog.landed(project.name));
+
+        // prog list has no limit, so the landed column is bounded here instead
+        // of in the query. Anything outside the window is history, not news.
+        const now = yield* DateTime.now;
+        const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
+
+        const workCandidates = new Map(
+          [...queue, ...claimed, ...reviewing]
+            .filter(
+              (task) =>
+                authoredBy(task) !== undefined &&
+                !committed.has(task.id) &&
+                !ownedByTask.has(task.id),
+            )
+            .map((task) => [task.id, task]),
+        );
+        const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
+          repository.holdsWork(directoryFor(task.project, task.id)).pipe(
+            Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
+            Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           ),
-          ...failedDecisions,
-        ],
-        dispatch: yield* Ref.get(dispatch),
-        observedAt: yield* DateTime.now,
-        focusScope: focusScope.tasks,
-        touched: focusScope.projects,
-        focusPending,
-      } satisfies Observation;
-    });
+        ).pipe(Effect.map((ids) => ids.flat()));
+        const resumable = new Set([...committed, ...unfinished]);
+
+        // Every branch, joined to whatever prog still says about its task. Read
+        // for all of them rather than for a pre-filtered few, so the one rule
+        // that decides which are unread sees the same rows the operator does.
+        // A branch whose task was deleted outright resolves to nothing at all,
+        // and it is the reason to read git rather than prog, so it is kept.
+        //
+        // Oldest first, which is the order they are recovered in.
+        const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
+          prog.show(task).pipe(
+            Effect.map((item) => ({
+              title: item.title as string | undefined,
+              status: item.status as string | undefined,
+              activity: item.last_activity_at as Date | undefined,
+            })),
+            Effect.orElseSucceed(() => ({
+              title: undefined,
+              status: undefined,
+              activity: undefined,
+            })),
+            Effect.map((item) => ({ project, branch, task, merged, ...item })),
+          ),
+        ).pipe(
+          Effect.map((rows) =>
+            rows
+              .filter(isUnread)
+              // `merged` is what the rule was decided from, and every surviving
+              // row has the same answer, so it is not carried into the column.
+              .map(({ project, branch, task, title, status, activity }): Unreviewed => ({
+                project,
+                branch,
+                task,
+                title,
+                status,
+                activity,
+              }))
+              .sort((first, second) => waiting(first) - waiting(second)),
+          ),
+        );
+
+        // A task whose dispatch failed twice with the same error is a decision,
+        // not a queue entry to keep offering. The failure rides the row so the
+        // operator sees what to clear before retrying. The tally lives across
+        // ticks, so the decision outlasts the tick that recorded the failure.
+        const failedDecisions = yield* Effect.forEach(failed, ([task, failure]) =>
+          prog.show(task).pipe(
+            Effect.map((item): Active => ({
+              task: item,
+              worker: undefined,
+              kind: undefined,
+              failure: failure.detail,
+            })),
+            // The task may have been closed or deleted since it failed.
+            Effect.orElseSucceed(() => undefined),
+          ),
+        ).pipe(Effect.map((rows) => rows.filter((row): row is Active => row !== undefined)));
+
+        return {
+          ...current,
+          resumable,
+          unreviewed,
+          landed: landed.filter((item) =>
+            DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
+          ),
+          decisions: [...current.decisions, ...failedDecisions],
+          dispatch: yield* Ref.get(dispatch),
+          observedAt: now,
+        } satisfies Interpretation;
+      });
 
     /**
      * Resolves every worker that stopped, by re-reading its task rather than
@@ -475,170 +742,187 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * An author handing off to review is a success, not a completion: the task
      * stays alive and the review queue picks it up next tick.
      */
-    const settle = (current: Observation) =>
-      Effect.gen(function* () {
-        const coachCutoff = DateTime.subtract(yield* DateTime.now, {
-          minutes: settings.coachWindow,
-        });
+    const settle = Effect.fn("foreman.settle")(function* (current: Interpretation) {
+      const coachCutoff = DateTime.subtract(yield* DateTime.now, {
+        minutes: settings.coachWindow,
+      });
 
-        yield* Effect.forEach(
-          current.review.filter(({ task, worker }) => readyToLand(task, worker)),
-          ({ task, worker }) => land(task, worker),
-          { discard: true },
-        );
+      yield* Effect.forEach(
+        current.review.filter(({ task, worker }) => readyToLand(task, worker)),
+        ({ task, worker }) => land(task, worker),
+        { discard: true },
+      );
 
-        // An author that handed back an empty branch did not finish, whatever
-        // it said by moving the task. Sending a reviewer costs a second agent
-        // to read an empty diff. So the task goes back to the queue, which is
-        // where unfinished work belongs.
-        yield* Effect.forEach(
-          current.unbacked,
-          ({ task, kind }) =>
-            Effect.gen(function* () {
-              yield* unfinished(
-                task,
-                `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
-              );
-              yield* teardown(task);
-            }),
-          { discard: true },
-        );
+      // An author that handed back an empty branch did not finish, whatever
+      // it said by moving the task. Sending a reviewer costs a second agent
+      // to read an empty diff. So the task goes back to the queue, which is
+      // where unfinished work belongs.
+      yield* Effect.forEach(
+        current.unbacked,
+        ({ task, kind }) =>
+          Effect.gen(function* () {
+            yield* unfinished(
+              task,
+              `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
+            );
+            yield* teardown(task);
+          }),
+        { discard: true },
+      );
 
-        yield* Effect.forEach(
-          current.owned.filter(
-            ({ task, worker }) =>
-              diagnosticIntent(task) !== undefined &&
-              worker.state !== "working" &&
-              worker.state !== "blocked",
-          ),
+      yield* Effect.forEach(
+        current.owned.filter(
           ({ task, worker }) =>
-            Effect.gen(function* () {
-              yield* prog.release(task.id);
-              yield* fleet.stop(worker, "author");
-              yield* prog.clearDiagnostic(task.id);
-              yield* dispatchAuthor(task);
-              yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
-            }).pipe(
-              Effect.catchAll((error) =>
-                Effect.logWarning(`resuming ${task.id} after diagnosis failed: ${error}`),
-              ),
+            diagnosticIntent(task) !== undefined &&
+            worker.state !== "working" &&
+            worker.state !== "blocked",
+        ),
+        ({ task, worker }) =>
+          Effect.gen(function* () {
+            yield* prog.release(task.id);
+            yield* fleet.stop(worker, "author");
+            yield* prog.clearDiagnostic(task.id);
+            yield* dispatchAuthor(task);
+            yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
+          }).pipe(
+            Effect.catchAll((error) =>
+              Effect.logWarning(`resuming ${task.id} after diagnosis failed: ${error}`),
             ),
-          { discard: true },
-        );
-
-        yield* Effect.forEach(
-          current.owned.filter(
-            ({ task, worker }) =>
-              diagnosticIntent(task) === undefined &&
-              !awaitingLanding(task) &&
-              worker.state !== "working",
           ),
-          ({ task, worker, kind }) =>
-            Effect.gen(function* () {
-              const reviewer = reviewedBy(task);
-              const holdsWork =
-                worker.state === "gone" && worker.worktree !== undefined
-                  ? yield* repository.holdsWork(worker.worktree)
-                  : false;
-              const phase = phaseOf({
-                status: task.status,
-                reviewer,
-                worker: worker.state,
-                worktree: worker.worktree !== undefined,
-                committed: current.committed.has(task.id),
-                holdsWork,
-                handoffExpired: handoffExpired(task, coachCutoff),
-              });
+        { discard: true },
+      );
 
-              yield* Match.value(phase).pipe(
-                Match.when("Landed", () =>
-                  fleet
-                    .notify("Task landed", `${task.id} ${task.title}`)
-                    .pipe(Effect.andThen(teardown(task))),
+      yield* Effect.forEach(
+        current.owned.filter(
+          ({ task, worker }) =>
+            diagnosticIntent(task) === undefined &&
+            !awaitingLanding(task) &&
+            worker.state !== "working",
+        ),
+        ({ task, worker, kind }) =>
+          Effect.gen(function* () {
+            const reviewer = reviewedBy(task);
+            const holdsWork =
+              worker.state === "gone" && worker.worktree !== undefined
+                ? yield* repository.holdsWork(worker.worktree)
+                : false;
+            const phase = phaseOf({
+              status: task.status,
+              reviewer,
+              worker: worker.state,
+              worktree: worker.worktree !== undefined,
+              committed: current.committed.has(task.id),
+              holdsWork,
+              handoffExpired: handoffExpired(task, coachCutoff),
+            });
+
+            const rung = settings.ladder.find((candidate) => candidate.name === rungOf(task));
+            if (rung) {
+              const attributes = runAttributes(task, rung, reviewedBy(task) ? "review" : "author");
+              yield* Effect.annotateCurrentSpan({ ...attributes, outcome: phase });
+              yield* Metric.increment(
+                Metric.tagged(
+                  Metric.tagged(
+                    Metric.tagged(runOutcomes, "rung", rung.name),
+                    "project",
+                    task.project,
+                  ),
+                  "outcome",
+                  phase,
                 ),
-                Match.when("Canceled", () =>
-                  fleet
-                    .notify("Task canceled", `${task.id} ${task.title}`)
-                    .pipe(Effect.andThen(teardown(task))),
-                ),
-                Match.when("ReviewReturned", () =>
-                  prog
-                    .clearReview(task.id)
-                    .pipe(
-                      Effect.andThen(
-                        prog.log(
-                          task.id,
-                          `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
-                        ),
-                      ),
-                      Effect.andThen(climb(task)),
-                      Effect.andThen(stopAgents(worker)),
-                      Effect.andThen(
-                        fleet.notify(
-                          "Review returned",
-                          `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
-                        ),
+              );
+            }
+
+            yield* Match.value(phase).pipe(
+              Match.when("Landed", () =>
+                fleet
+                  .notify("Task landed", `${task.id} ${task.title}`)
+                  .pipe(Effect.andThen(teardown(task))),
+              ),
+              Match.when("Canceled", () =>
+                fleet
+                  .notify("Task canceled", `${task.id} ${task.title}`)
+                  .pipe(Effect.andThen(teardown(task))),
+              ),
+              Match.when("ReviewReturned", () =>
+                prog
+                  .clearReview(task.id)
+                  .pipe(
+                    Effect.andThen(
+                      prog.log(
+                        task.id,
+                        `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
                       ),
                     ),
-                ),
-                Match.when("VanishedAttached", () => Effect.void),
-                Match.when("VanishedWithWork", () =>
-                  prog
-                    .log(
-                      task.id,
-                      `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
-                    )
-                    .pipe(Effect.andThen(prog.release(task.id))),
-                ),
-                Match.when("VanishedEmpty", () =>
-                  prog
-                    .log(
-                      task.id,
-                      `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
-                    )
-                    .pipe(Effect.andThen(prog.release(task.id)), Effect.andThen(teardown(task))),
-                ),
-                Match.when("Blocked", () => Effect.void),
-                Match.when("ReviewWaiting", () => Effect.void),
-                Match.when("ReviewExpired", () => stopAgents(worker)),
-                Match.when("ReviewStopped", () =>
-                  unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`).pipe(
+                    Effect.andThen(climb(task)),
                     Effect.andThen(stopAgents(worker)),
                     Effect.andThen(
                       fleet.notify(
                         "Review returned",
-                        `${task.id} reviewer stopped without a verdict — back in the queue`,
+                        `${task.id} was sent back by ${reviewer} — one rung up for its next author`,
                       ),
                     ),
                   ),
-                ),
-                Match.when("Residue", () =>
-                  Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
-                    discard: true,
-                  }),
-                ),
-                Match.when("Unfinished", () =>
-                  unfinished(
-                    task,
-                    `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
-                  ).pipe(
-                    Effect.andThen(teardown(task)),
-                    Effect.andThen(
-                      fleet.notify(
-                        "Task returned",
-                        `${task.id} stopped unfinished — back in the queue`,
-                      ),
+              ),
+              Match.when("VanishedAttached", () => Effect.void),
+              Match.when("VanishedWithWork", () =>
+                prog
+                  .log(
+                    task.id,
+                    `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
+                  )
+                  .pipe(Effect.andThen(prog.release(task.id))),
+              ),
+              Match.when("VanishedEmpty", () =>
+                prog
+                  .log(
+                    task.id,
+                    `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
+                  )
+                  .pipe(Effect.andThen(prog.release(task.id)), Effect.andThen(teardown(task))),
+              ),
+              Match.when("Blocked", () => Effect.void),
+              Match.when("ReviewWaiting", () => Effect.void),
+              Match.when("ReviewExpired", () => stopAgents(worker)),
+              Match.when("ReviewStopped", () =>
+                unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`).pipe(
+                  Effect.andThen(stopAgents(worker)),
+                  Effect.andThen(
+                    fleet.notify(
+                      "Review returned",
+                      `${task.id} reviewer stopped without a verdict — back in the queue`,
                     ),
                   ),
                 ),
-                Match.exhaustive,
-              );
-            }).pipe(
-              Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
-            ),
-          { discard: true },
-        );
-      });
+              ),
+              Match.when("Residue", () =>
+                Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
+                  discard: true,
+                }),
+              ),
+              Match.when("Unfinished", () =>
+                unfinished(
+                  task,
+                  `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
+                ).pipe(
+                  Effect.andThen(teardown(task)),
+                  Effect.andThen(
+                    fleet.notify(
+                      "Task returned",
+                      `${task.id} stopped unfinished — back in the queue`,
+                    ),
+                  ),
+                ),
+              ),
+              Match.exhaustive,
+            );
+          }).pipe(
+            Effect.withSpan("foreman.settle.run"),
+            Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
+          ),
+        { discard: true },
+      );
+    });
 
     /**
      * Puts a finished branch into the operator's checkout.
@@ -647,8 +931,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * or author, so every branch passes the same clean-checkout and verification
      * gate.
      */
-    const land = (task: Item, worker: Worker | undefined) =>
-      Effect.gen(function* () {
+    const land = Effect.fn("foreman.land")(function* (task: Item, worker: Worker | undefined) {
+      yield* Effect.gen(function* () {
         const project = projectFor(task.project);
         if (!project) return;
 
@@ -697,6 +981,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // the task needs is the output — the next author's whole job is the
         // failure below.
         if (result._tag === "Broke") {
+          yield* Effect.annotateCurrentSpan("verification", "broken");
           yield* Effect.logWarning(`landing ${task.id} broke ${project.name}'s verification`);
           yield* prog.log(
             task.id,
@@ -748,6 +1033,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
       }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
+    });
 
     /**
      * Deletes the branches whose work the projects already have and no task
@@ -764,7 +1050,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * task with no branch, concludes nothing was written, and sends finished
      * work back to the queue.
      */
-    const tidy = (current: Observation) =>
+    const tidy = (current: Interpretation) =>
       Effect.gen(function* () {
         // A landing killed mid-merge leaves an unpublished merge commit in a
         // colocated checkout, and a restart is what kills it — landing into
@@ -819,7 +1105,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * who is still typing — and a claim awaiting an operator's decision is
      * left alone until it goes properly stale.
      */
-    const reclaim = (current: Observation) =>
+    const reclaim = (current: Interpretation) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const cutoff = DateTime.subtract(now, { hours: settings.staleAfter });
@@ -874,7 +1160,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * claim to jump that. It runs while draining for the same reason the review
      * pass does: this is the pipeline emptying itself, not taking work on.
      */
-    const recover = (current: Observation) =>
+    const recover = (current: Interpretation) =>
       Effect.gen(function* () {
         const oldest = current.unreviewed.find(recoverable);
         if (!oldest) return;
@@ -898,19 +1184,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Observation, mode: Dispatch) =>
+    const fill = (current: Dispatchable, mode: Dispatch) =>
       Effect.gen(function* () {
-        // The scope has nothing left to do. Foreman stops — spillover included
-        // — and tells the operator, because a focused foreman that wandered on
-        // into the backlog would be doing exactly what the label said not to.
-        if (current.focused && !current.focusPending && !hasFocusedInFlight(current)) {
-          yield* fleet.notify(
-            "Focus complete",
-            "The focused scope has no ready work left; dispatch is waiting for the label to clear.",
-          );
-          return;
-        }
-
         // A task whose dispatch has failed twice is held out of both passes.
         // Its failure is a fact about the world, so a third attempt would
         // repeat the second; the operator clears the cause and retries.
@@ -960,71 +1235,80 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         return worker;
       });
 
-    const dispatchAuthor = (task: ReadyTask) =>
-      Effect.gen(function* () {
-        const project = projectFor(task.project);
-        if (!project) return;
+    const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (task: ReadyTask) {
+      const project = projectFor(task.project);
+      if (!project) return;
 
-        // The bottom rung by default; higher only where the rungs below have
-        // already been tried and failed. The task carries that history in a
-        // label, so it survives restarts and you can pin it by hand.
-        const rung = authorFor(settings.ladder, rungOf(task));
-        if (!rung) return;
+      // The bottom rung by default; higher only where the rungs below have
+      // already been tried and failed. The task carries that history in a
+      // label, so it survives restarts and you can pin it by hand.
+      const rung = authorFor(settings.ladder, rungOf(task));
+      if (!rung) return;
 
-        // The workspace opens before the claim. If it opened after, a task
-        // would briefly be claimed with nothing to show for it, and that state
-        // is indistinguishable from an abandoned claim.
-        const worker = yield* workspaceFor(task, project);
+      // The workspace opens before the claim. If it opened after, a task
+      // would briefly be claimed with nothing to show for it, and that state
+      // is indistinguishable from an abandoned claim.
+      const worker = yield* workspaceFor(task, project);
 
-        const prompt = yield* prompts.author(task, worker.directory, project.directory);
-        yield* prog.claim(task.id);
-        yield* prog
-          .attribute(task.id, rung.name)
-          .pipe(Effect.tapError(() => prog.release(task.id)));
-        const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author")).pipe(
+      const prompt = yield* prompts.author(task, worker.directory, project.directory);
+      yield* prog.claim(task.id);
+      yield* prog.attribute(task.id, rung.name).pipe(Effect.tapError(() => prog.release(task.id)));
+      const agent = yield* instrumentRun(
+        task,
+        rung,
+        "author",
+        fleet.spawn(worker, spawnAs(rung, prompt, "author")).pipe(
           // The agent never started, so the claim would strand the task until
           // the stale sweep noticed. Hand it back immediately instead.
           Effect.tapError(() => prog.release(task.id)),
+        ),
+      );
+      yield* prog.log(task.id, agentLog("author", rung, agent));
+      yield* Effect.logInfo(
+        `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.workspace}`,
+      );
+    });
+
+    const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
+      task: Item,
+      author: string | undefined,
+    ) {
+      const project = projectFor(task.project);
+      if (!project) return;
+
+      // The fork point is how the reviewer names the author's work from
+      // inside its own worktree; without it the only diff it could read is in
+      // the operator's checkout. The status is untouched, so a later tick
+      // tries again.
+      const base = yield* repository.base(project.directory, labelFor(task.id));
+      if (!base) {
+        return yield* Effect.logWarning(
+          `review of ${task.id} deferred: no merge base for ${labelFor(task.id)} in ${project.directory}`,
         );
-        yield* prog.log(task.id, agentLog("author", rung, agent));
-        yield* Effect.logInfo(
-          `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.workspace}`,
-        );
-      });
+      }
 
-    const dispatchReview = (task: Item, author: string | undefined) =>
-      Effect.gen(function* () {
-        const project = projectFor(task.project);
-        if (!project) return;
+      const rung = reviewerFor(settings.ladder, author);
+      const worker = yield* workspaceFor(task, project);
 
-        // The fork point is how the reviewer names the author's work from
-        // inside its own worktree; without it the only diff it could read is in
-        // the operator's checkout. The status is untouched, so a later tick
-        // tries again.
-        const base = yield* repository.base(project.directory, labelFor(task.id));
-        if (!base) {
-          return yield* Effect.logWarning(
-            `review of ${task.id} deferred: no merge base for ${labelFor(task.id)} in ${project.directory}`,
-          );
-        }
-
-        const rung = reviewerFor(settings.ladder, author);
-        const worker = yield* workspaceFor(task, project);
-
-        const prompt = yield* prompts.review(
-          task,
-          worker.directory,
-          project.directory,
-          base,
-          project.verify,
-        );
-        yield* prog.assignReview(task.id, rung.name);
-        const agent = yield* fleet
+      const prompt = yield* prompts.review(
+        task,
+        worker.directory,
+        project.directory,
+        base,
+        project.verify,
+      );
+      yield* prog.assignReview(task.id, rung.name);
+      const agent = yield* instrumentRun(
+        task,
+        rung,
+        "review",
+        fleet
           .spawn(worker, spawnAs(rung, prompt, "review"))
-          .pipe(Effect.tapError(() => prog.clearReview(task.id)));
-        yield* prog.log(task.id, agentLog("review", rung, agent));
-        yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${rung.name}`);
-      });
+          .pipe(Effect.tapError(() => prog.clearReview(task.id))),
+      );
+      yield* prog.log(task.id, agentLog("review", rung, agent));
+      yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${rung.name}`);
+    });
 
     /**
      * Sends an agent into a project's own checkout to salvage what is there.
@@ -1052,25 +1336,30 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* dispatchOnboard(yield* prog.show(id), project);
       });
 
-    const dispatchOnboard = (task: Item, project: Project) =>
-      Effect.gen(function* () {
-        const rung = topOf(settings.ladder);
+    const dispatchOnboard = Effect.fn("foreman.dispatch.onboard")(function* (
+      task: Item,
+      project: Project,
+    ) {
+      const rung = topOf(settings.ladder);
 
-        // Attached, not a worktree: the work being rescued exists only in this
-        // checkout, so a copy of the last commit would show the agent nothing.
-        const worker = yield* fleet.attach({ task: task.id, repository: project.directory });
-        const prompt = yield* prompts.onboard(task, project.directory);
+      // Attached, not a worktree: the work being rescued exists only in this
+      // checkout, so a copy of the last commit would show the agent nothing.
+      const worker = yield* fleet.attach({ task: task.id, repository: project.directory });
+      const prompt = yield* prompts.onboard(task, project.directory);
 
-        yield* prog.claim(task.id);
-        yield* prog
-          .attribute(task.id, rung.name)
-          .pipe(Effect.tapError(() => prog.release(task.id)));
-        const agent = yield* fleet
+      yield* prog.claim(task.id);
+      yield* prog.attribute(task.id, rung.name).pipe(Effect.tapError(() => prog.release(task.id)));
+      const agent = yield* instrumentRun(
+        task,
+        rung,
+        "author",
+        fleet
           .spawn(worker, spawnAs(rung, prompt, "author"))
-          .pipe(Effect.tapError(() => prog.release(task.id)));
-        yield* prog.log(task.id, agentLog("author", rung, agent));
-        yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${rung.name}`);
-      });
+          .pipe(Effect.tapError(() => prog.release(task.id))),
+      );
+      yield* prog.log(task.id, agentLog("author", rung, agent));
+      yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${rung.name}`);
+    });
 
     /**
      * Routes an agent that stopped without finishing, which has said nothing
@@ -1130,6 +1419,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const next = above(settings.ladder, rungOf(task));
         yield* prog.setRung(task.id, next);
+        // A climb is the durable rung-label write, not an unfinished attempt.
+        // This annotation therefore records exactly the evidence the ladder acted on.
+        yield* Effect.annotateCurrentSpan({ escalation: "true", "rung.next": next });
         if (next === HUMAN) {
           yield* prog.log(
             task.id,
@@ -1230,7 +1522,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           const worker = yield* workspaceFor(task, project);
           const prompt = yield* prompts.diagnose(task, worker.directory, project.directory, intent);
           yield* prog.claim(task.id);
-          const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
+          const agent = yield* instrumentRun(
+            task,
+            rung,
+            "author",
+            fleet.spawn(worker, spawnAs(rung, prompt, "author")),
+          );
           yield* prog.log(
             task.id,
             `foreman: diagnostic ${intent} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`,
@@ -1323,6 +1620,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * interrupted by it; narrowing only stops the next dispatch.
        */
       setDispatch: (mode: Dispatch) => commanded(Ref.set(dispatch, mode)),
+
+      /**
+       * States whether the accounts are being read, so a paused fleet can stop
+       * asking about them.
+       *
+       * Turning it on nudges the loop, so opening the view fills it on the
+       * next tick rather than at the next poll. A dashboard that exits without
+       * turning it off costs one probe per poll until the process ends, which
+       * is the same process the screen was in.
+       */
+      watchQuota: (watching: boolean) => commanded(Ref.set(watchingQuota, watching)),
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
@@ -1419,8 +1727,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * the whole answer. Releasing instead would reopen a done or canceled
        * task, and the branch survives either way — the sweep prunes a merged
        * one and the stranded column shows the rest.
+       *
+       * Named by the workspace rather than the task, because a workspace whose
+       * task the store has deleted is closed the same way and has no task to
+       * name it by.
        */
-      close: (task: Item) => commanded(teardown(task)),
+      close: (workspace: CloseOptions) => commanded(fleet.close(workspace)),
 
       /** Closes a queued task without creating a workspace or landing code. */
       complete: (task: ReadyTask, reason: string) =>
@@ -1474,6 +1786,27 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         ),
 
       /**
+       * Pins a task to the front of the queue, or takes the pin off.
+       *
+       * The task is re-read before the label is flipped, because the view's
+       * reading is up to a poll interval old and a pin the operator already
+       * set from elsewhere would otherwise be cleared by a key meant to set
+       * it.
+       *
+       * A pin on a task, unlike one on an epic, names only itself — the
+       * descendant walk finds nothing under a task. The dashboard lists no
+       * epics, so pinning one is still a `prog label` by hand.
+       */
+      togglePin: (task: string) =>
+        commanded(
+          Effect.gen(function* () {
+            const current = yield* prog.show(task);
+            yield* prog.setPin(task, !isPinned(current));
+            yield* Effect.logInfo(`${isPinned(current) ? "unpinned" : "pinned"} ${task}`);
+          }),
+        ),
+
+      /**
        * Puts an unread branch in front of a reviewer.
        *
        * Nobody can say from the outside whether commits nothing is reading are
@@ -1520,69 +1853,34 @@ export const dispatchesFor = (
   if (free <= 0) return [];
 
   const dispatches: Array<PlannedDispatch> = [];
-  const inFlight = focusedInFlight(current);
-  const focusedBusy = current.workers.some(
-    (worker) => current.focusScope.has(worker.task) && isBusy(worker),
-  );
-  let reserved = current.focused && !focusedBusy ? 1 : 0;
 
-  // Applying focus cannot undo work already in flight. Wait for every scoped
-  // author to stop writing, then drain the resulting reviews one at a time.
-  const focusedAuthorBusy = current.working.some(
-    ({ task, worker }) => current.focusScope.has(task.id) && worker && isBusy(worker),
-  );
-  const focusedReviewAssigned = current.review.some(
-    ({ task }) => current.focusScope.has(task.id) && reviewedBy(task) !== undefined,
-  );
-  const focusedReview = current.focused
-    ? current.review.find(
-        ({ task, worker }) =>
-          current.focusScope.has(task.id) &&
-          !focusedAuthorBusy &&
-          !focusedReviewAssigned &&
-          reviewedBy(task) === undefined &&
-          !current.held.some((held) => held.project === task.project) &&
-          !failed.has(task.id) &&
-          !stale.has(task.id) &&
-          !(worker && isBusy(worker)),
-      )
-    : undefined;
-  if (focusedReview) {
-    dispatches.push({ role: "review", task: focusedReview.task });
-    free -= 1;
-    reserved = 0;
-  }
+  // A pin leads the review pass as well as the queue. Reviews are filled before
+  // authors either way, so without this a pinned task could sit behind three
+  // other reviews — which is the thing the operator pinned it to stop.
+  const reviews = [
+    ...current.review.filter(({ task }) => current.pinned.has(task.id)),
+    ...current.review.filter(({ task }) => !current.pinned.has(task.id)),
+  ];
 
-  for (const { task, worker } of current.review) {
-    if (free <= reserved) break;
-    if (current.focusScope.has(task.id)) continue;
-    if (current.focused && !current.touched.has(task.project)) continue;
+  for (const { task, worker } of reviews) {
+    if (free <= 0) break;
     if (current.held.some((held) => held.project === task.project)) continue;
     if (reviewedBy(task) !== undefined || failed.has(task.id) || stale.has(task.id)) continue;
+    if (current.outOfQuota.has(task.id)) continue;
     if (worker && isBusy(worker)) continue;
     dispatches.push({ role: "review", task });
     free -= 1;
   }
 
-  const head = current.focus[0];
-  if (
-    free > 0 &&
-    authors &&
-    current.focused &&
-    inFlight.size === 0 &&
-    head &&
-    !current.held.some((held) => held.project === head.project)
-  ) {
-    dispatches.push({ role: "author", task: head });
-    free -= 1;
-    reserved = 0;
-  }
-
+  // `queue` already leads with the pinned scope, so authoring needs no notion
+  // of a pin at all. Nothing is reserved and nothing is serialized: which
+  // pinned tasks may run together is what the plan's blockers already say, and
+  // `prog ready` has applied them before foreman sees the queue.
   for (const task of current.queue) {
     if (!authors) break;
-    if (free <= reserved) break;
+    if (free <= 0) break;
     if (current.held.some((held) => held.project === task.project)) continue;
-    if (failed.has(task.id)) continue;
+    if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
     dispatches.push({ role: "author", task });
     free -= 1;
   }
@@ -1590,27 +1888,15 @@ export const dispatchesFor = (
   return dispatches;
 };
 
-const focusedInFlight = (current: DispatchState): ReadonlySet<string> =>
-  new Set(
-    [...current.working, ...current.review]
-      .filter(({ task }) => current.focused && current.focusScope.has(task.id))
-      .map(({ task }) => task.id),
-  );
-
-const hasFocusedInFlight = (current: DispatchState): boolean => focusedInFlight(current).size > 0;
-
 const isBusy = (worker: Worker): boolean =>
   worker.state === "working" || worker.state === "blocked";
 
 interface DispatchState {
   readonly workers: ReadonlyArray<Worker>;
+  readonly outOfQuota: ReadonlySet<string>;
   readonly queue: ReadonlyArray<ReadyTask>;
-  readonly focus: ReadonlyArray<ReadyTask>;
-  readonly focused: boolean;
-  readonly focusScope: ReadonlySet<string>;
-  readonly touched: ReadonlySet<string>;
+  readonly pinned: ReadonlySet<string>;
   readonly held: ReadonlyArray<Held>;
-  readonly working: ReadonlyArray<Active>;
   readonly review: ReadonlyArray<Active>;
 }
 
@@ -1860,20 +2146,35 @@ export const reviewable = (
 };
 
 /**
+ * The workspaces this daemon owns, out of a roster that shows every daemon's.
+ *
+ * herdr lists every workspace labelled `foreman/*` whoever opened it, and the
+ * label records no ownership — two foremen against different configs are not
+ * competing for the same slots, and a workspace opened by hand in the same
+ * namespace belongs to neither. The checkout a workspace's worktree belongs to
+ * is what the config's project set scopes, and herdr reports it, so this is
+ * settled before the store is asked anything.
+ *
+ * The checkout rather than the task's project, because the checkout is what
+ * foreman acts on — worktree, branch, landing — and it is still there after
+ * the task is deleted, which is when ownership most needs an answer. A
+ * workspace with no worktree at all has no checkout to be scoped by and is
+ * therefore nobody's: foreman never opens one.
+ */
+export const ours = (
+  roster: ReadonlyArray<Worker>,
+  checkouts: ReadonlySet<string>,
+): ReadonlyArray<Worker> =>
+  roster.filter((worker) => worker.repository !== undefined && checkouts.has(worker.repository));
+
+/**
  * The workspaces this daemon may act on, split out of a roster that shows
  * every daemon's.
  *
- * herdr lists every workspace labelled `foreman/*` whoever opened it, and the
- * label carries no ownership — two foremen against different configs are not
- * competing for the same slots. The config's project set is the only ownership
- * the world records, so a workspace belongs to this daemon exactly when its
- * task lives in a project the config manages. A workspace whose task the store
- * no longer has a project to scope by: as residue it must not eat a slot
- * nothing will ever free, so it is dropped here too.
- *
- * Plan workspaces are also excluded by their durable task label. The workspace
- * exists before its planner or tasker role does, and plan mode is a separate
- * synchronous process that the daemon must neither count nor settle.
+ * The caller has already scoped the roster to the checkouts the config names,
+ * which is the ownership the world records. What is left here is the join to
+ * the store: a workspace whose task the store denies is an orphan the caller
+ * surfaces, and it must not eat a slot nothing will ever free.
  *
  * Both shapes come back from the same pass so they cannot disagree: `owned` is
  * what settle and the dashboard may touch, and `workers` is the roster shape
@@ -1882,13 +2183,12 @@ export const reviewable = (
 export const scopeRoster = (
   roster: ReadonlyArray<Worker>,
   tasks: ReadonlyMap<string, Item>,
-  managed: ReadonlySet<string>,
 ): { readonly owned: ReadonlyArray<Owned>; readonly workers: ReadonlyArray<Worker> } => {
   const owned: Array<Owned> = [];
   const kept = new Set<string>();
   for (const worker of roster) {
     const task = tasks.get(worker.task);
-    if (!task || !managed.has(task.project) || isPlan(task)) continue;
+    if (!task) continue;
     kept.add(worker.task);
     const state = reviewedBy(task) ? worker.roles.get("review") : worker.roles.get("author");
     owned.push({
@@ -1943,19 +2243,19 @@ export const nextDispatch = (mode: Dispatch): Dispatch =>
 
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
+  /** Ready work in dispatch order: the pinned scope first, then everything else. */
   readonly queue: ReadonlyArray<ReadyTask>;
 
   /**
-   * The focused thread, when a `focus` label is set.
+   * The task ids the operator has pinned, including those reached through a
+   * pinned epic.
    *
-   * In prog's own priority-first order; without focus it is empty and `queue`
-   * holds the whole interleaved ready set. The thread is serialized — fill
-   * starts the head and starts no sibling until it has landed.
+   * One set beside one queue rather than two lists, because everything a
+   * caller wants — which rows to mark, how many are ready, where the pinned
+   * run ends — is derivable from the two, and a second list is a second thing
+   * to keep in step.
    */
-  readonly focus: ReadonlyArray<ReadyTask>;
-
-  /** Whether a focus scope is set at all, however much of it is ready. */
-  readonly focused: boolean;
+  readonly pinned: ReadonlySet<string>;
 
   /**
    * Tasks parked at the operator's rung, above the last model in the ladder.
@@ -1991,6 +2291,19 @@ export interface FleetState {
   readonly stale: ReadonlyArray<StaleRow>;
 
   /**
+   * Workspaces in a project foreman manages whose task the store no longer
+   * has.
+   *
+   * A task can be deleted while its workspace is open, and after that nothing
+   * in the pipeline mentions the workspace: no column shows it, no slot counts
+   * it, and no tick will ever dispatch into it — so left alone it stays open
+   * forever holding a worktree. Asked about rather than swept, because the
+   * worktree may still hold uncommitted work and no task remains to record
+   * what it was.
+   */
+  readonly orphans: ReadonlyArray<Worker>;
+
+  /**
    * Projects whose checkout is not free to work against, and why.
    *
    * The operator is working there, or the checkout has no branch a landing
@@ -1999,6 +2312,21 @@ export interface FleetState {
    * for a cause nobody can see reads as a broken dispatcher.
    */
   readonly held: ReadonlyArray<Held>;
+
+  /**
+   * What each account behind the ladder has left of its allowance.
+   *
+   * Read from the providers themselves every tick, like everything else, and
+   * held nowhere: an allowance is the world's fact, not foreman's. A provider
+   * foreman could not reach is carried with `unreadable` set rather than
+   * reported as spent, so the dashboard can say why it is absent while the
+   * gate — and the empty `allowances` — treat it as neither spent nor a wall.
+   *
+   * On the state rather than derived in the view because it is what the gate
+   * decided from: a fleet that stops dispatching must be able to show the same
+   * numbers it stopped on.
+   */
+  readonly providers: ReadonlyArray<Provider>;
   readonly dispatch: Dispatch;
 
   /**
@@ -2064,6 +2392,21 @@ export interface Held {
   readonly detail: string;
 }
 
+/**
+ * One account behind the ladder, as the dashboard reads it.
+ *
+ * `Usage` is the probe's answer — what the provider says it has left. On top
+ * of it the dispatcher adds the two things the probe never says: which rungs
+ * draw on this account (read off the same ladder the gate reads), and why the
+ * account could not be read at all when it could not. An unreadable account
+ * carries empty `allowances`, so the gate's `exhausted` probe reads it as
+ * neither spent nor a wall.
+ */
+export interface Provider extends Usage {
+  readonly rungs: ReadonlyArray<string>;
+  readonly unreadable: string | undefined;
+}
+
 /** A task and the workspace running it, if the multiplexer still has one. */
 export interface Active {
   readonly task: Item;
@@ -2084,20 +2427,25 @@ export interface Owned {
   readonly kind: string | undefined;
 }
 
-interface Observation extends FleetState {
+/**
+ * Everything derived from one observation, for every consumer of it.
+ *
+ * An observation is what the sources said; this is what foreman makes of it.
+ * Nothing here is read back from anywhere — a field that would need another
+ * question asked belongs in the reading, not in what the reading implies.
+ */
+interface Interpretation extends FleetState {
   readonly workers: ReadonlyArray<Worker>;
   readonly owned: ReadonlyArray<Owned>;
 
   /**
-   * The task ids in the focus scope, and the projects it touches.
+   * Tasks whose next agent would run on an account with nothing left.
    *
-   * Not part of `FleetState`: fill reads membership off these, and the
-   * dashboard needs only the ready subset (`focus`) and the flag (`focused`).
+   * Not part of `FleetState`: the dashboard shows the accounts themselves,
+   * which is what an operator can act on, while this is the same reading
+   * folded onto the tasks fill would otherwise have started.
    */
-  readonly focusScope: ReadonlySet<string>;
-  readonly touched: ReadonlySet<string>;
-  /** Any ready scoped task, including one held for a person or a dispatch failure. */
-  readonly focusPending: boolean;
+  readonly outOfQuota: ReadonlySet<string>;
 
   /**
    * Tasks handed back for review whose branch holds no commits.
@@ -2121,8 +2469,7 @@ const plural = (count: number, noun: string): string => `${count} ${noun}${count
 
 const empty: FleetState = {
   queue: [],
-  focus: [],
-  focused: false,
+  pinned: new Set(),
   yours: [],
   working: [],
   review: [],
@@ -2132,7 +2479,9 @@ const empty: FleetState = {
   resumable: new Set(),
   unreviewed: [],
   stale: [],
+  orphans: [],
   held: [],
+  providers: [],
   // Before the first tick has read anything, and the state foreman starts in
   // unless the command line said otherwise.
   dispatch: "paused",

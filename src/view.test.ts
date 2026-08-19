@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Active, FleetState, Held } from "./dispatcher.ts";
+import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
+import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
 import {
@@ -46,6 +47,7 @@ const worker = (task: string, state: WorkerState): Worker => ({
   task,
   workspace: `ws-${task}`,
   pane: `pane-${task}`,
+  repository: "/home/dan/build/amux",
   directory: `/tmp/${task}`,
   worktree: `/tmp/wt-${task}`,
   state,
@@ -64,6 +66,12 @@ const held = (project: string, reason: Held["reason"], detail: string): Held => 
   detail,
 });
 
+const provider = (
+  usage: Usage,
+  rungs: ReadonlyArray<string> = [],
+  unreadable: string | undefined = undefined,
+): Provider => ({ ...usage, rungs, unreadable });
+
 // A real description is several paragraphs, and the pane wraps and scrolls
 // rather than truncating, so the assertion is that every line survives.
 const LONG_DESCRIPTION = [
@@ -74,9 +82,10 @@ const LONG_DESCRIPTION = [
 ].join("\n");
 
 const state: FleetState = {
+  providers: [],
+  orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["rung-pro"])],
-  focus: [],
-  focused: false,
+  pinned: new Set(),
   yours: [ready("ts-y1", ["rung-human"])],
   working: [
     active(task("ts-w1", "in_progress", ["by-flash", "rung-flash"]), worker("ts-w1", "working")),
@@ -112,23 +121,35 @@ const state: FleetState = {
   observedAt: undefined,
 };
 
-describe("focused queue", () => {
-  const focused = {
+describe("pinned queue", () => {
+  // The dispatcher hands the queue already ordered, so the view's whole job is
+  // marking which rows are pinned and counting what is left.
+  const pinned = {
     ...state,
-    focus: [ready("ts-focus")],
-    focused: true,
+    queue: [ready("ts-pin"), ready("ts-q1"), ready("ts-q2")],
+    pinned: new Set(["ts-pin"]),
   };
 
-  test("leads the queue with the serialized thread", () => {
-    expect(rowsForView("queue", focused).map((row) => row.key)).toEqual([
-      "ts-focus",
-      "ts-q1",
-      "ts-q2",
-    ]);
+  test("marks the pinned row and leaves the order the dispatcher gave", () => {
+    const rows = rowsForView("queue", pinned);
+
+    expect(rows.map((row) => row.key)).toEqual(["ts-pin", "ts-q1", "ts-q2"]);
+    expect(rows[0]?.label).toStartWith("📌 ");
+    expect(rows[1]?.label).not.toStartWith("📌 ");
   });
 
-  test("names focus and its remaining ready work in the status line", () => {
-    expect(statusLine(focused, Date.now())).toStartWith("focus: 1 ready  ·  paused");
+  test("counts remaining pinned work in the status line", () => {
+    expect(statusLine(pinned, Date.now())).toStartWith("pinned: 1 ready  ·  paused");
+  });
+
+  test("says nothing about pins when none are set", () => {
+    expect(statusLine(state, Date.now())).not.toInclude("pinned");
+  });
+
+  test("a pinned task that has left the queue stops being counted", () => {
+    const landed = { ...pinned, queue: [ready("ts-q1")] };
+
+    expect(statusLine(landed, Date.now())).toStartWith("pinned: 0 ready");
   });
 });
 
@@ -287,7 +308,7 @@ describe("the footer", () => {
       actionsFor("working", row("working", "ts-w1")),
       state,
     ).split("\n");
-    expect(actions).toBe("^f focus  ^e intervene  ^x descend  ^b release");
+    expect(actions).toBe("alt-p pin  ^f focus  ^e intervene  ^x descend  ^b release");
     expect(always).toContain("^q quit");
     expect(always.indexOf("^q quit")).toBeLessThan(always.indexOf("type to filter"));
     expect(always).toContain("^space running");
@@ -334,5 +355,154 @@ describe("previewOf", () => {
 
   test("says nothing where a task has no description", () => {
     expect(previewOf(row("queue", "ts-q2"))).not.toContain("null");
+  });
+});
+
+describe("quota view and accounts", () => {
+  const spent: Usage = {
+    provider: "opencode-go",
+    plan: undefined,
+    allowances: [
+      { window: "rolling", usedPercent: 0, resetsAt: new Date(Date.now() + 3_600_000) },
+      { window: "monthly", usedPercent: 100, resetsAt: new Date(Date.now() + 2 * 86_400_000) },
+    ],
+  };
+  const spare: Usage = {
+    provider: "openai",
+    plan: "plus",
+    allowances: [{ window: "primary (1w)", usedPercent: 29, resetsAt: undefined }],
+  };
+  const withQuota: FleetState = {
+    ...state,
+    providers: [provider(spent, ["pro", "sonnet"]), provider(spare, ["plus"])],
+  };
+
+  test("a spent account is the last thing in attention", () => {
+    // Every other row there is something a person can act on now. This one is
+    // a wait, so it goes under them rather than above the work.
+    const rows = rowsForView("attention", withQuota);
+    expect(rows[rows.length - 1]?.column).toBe("quota");
+  });
+
+  test("an account with room is not an attention row", () => {
+    expect(
+      rowsForView("attention", withQuota).some(
+        (each) => each.column === "quota" && each.key === "openai",
+      ),
+    ).toBe(false);
+  });
+
+  test("the row says which windows are spent, their resets, and the rungs they stop", () => {
+    // All three halves are what the operator decides on: whether to wait it
+    // out, or to move the work onto a rung spending a different account — and
+    // which rungs those are.
+    const row = rowsForView("attention", withQuota).find(
+      (each) => each.column === "quota" && each.key === "opencode-go",
+    );
+    expect(row?.label).toContain("out of quota");
+    expect(row?.label).toContain("opencode-go");
+    expect(row?.detail).toContain("monthly 100%");
+    expect(row?.detail).toContain("resets in 2d");
+    expect(row?.detail).toContain("stops: pro, sonnet");
+  });
+
+  test("the quota view lists every account, healthy and spent", () => {
+    const rows = rowsForView("quota", withQuota);
+    expect(rows.map((each) => each.key)).toEqual(["opencode-go", "openai"]);
+    expect(rows[0]?.label).toContain("out of quota");
+    // An account with room is just itself: the windows carry the story.
+    expect(rows[1]?.label).toBe("openai [plus]");
+    expect(rows[1]?.detail).toContain("primary (1w) 29%");
+  });
+
+  test("an unreadable account is a quota-view row that attention passes over", () => {
+    const broken = provider(
+      { provider: "claude", plan: undefined, allowances: [] },
+      ["claude"],
+      "oauth token expired — run claude once",
+    );
+    const rows = rowsForView("quota", { ...state, providers: [broken] });
+    expect(rows[0]?.label).toContain("unreadable");
+    expect(rows[0]?.detail).toContain("token expired");
+    expect(
+      rowsForView("attention", { ...state, providers: [broken] }).some(
+        (each) => each.column === "quota",
+      ),
+    ).toBe(false);
+  });
+
+  test("the preview shows each window on its own line", () => {
+    const preview = previewOf(rowsForView("quota", withQuota)[0]!);
+    expect(preview).toContain("rolling");
+    expect(preview).toContain("0%");
+    expect(preview).toContain("resets in 1h");
+    expect(preview).toContain("monthly");
+    expect(preview).toContain("100%");
+    expect(preview).toContain("resets in 2d");
+    expect(preview).toContain("stops: pro, sonnet");
+  });
+
+  test("takes no key, because nothing on this row is the fix", () => {
+    const row = rowsForView("attention", withQuota).find((each) => each.column === "quota");
+    expect(actionsFor("quota", row)).toEqual([]);
+  });
+
+  test("a spent account still opens attention on its own", () => {
+    // A fleet that has stopped dispatching must say so without being searched
+    // for, and a spent account is one of the few things that stops all of it —
+    // while the quota tab is where the account itself is read.
+    const quiet: FleetState = {
+      ...state,
+      queue: [],
+      yours: [],
+      working: [],
+      review: [],
+      landed: [],
+      decisions: [],
+      unreviewed: [],
+      stale: [],
+      held: [],
+      providers: [provider(spent, ["pro"])],
+    };
+    expect(drawn(quiet)).toEqual(["quota", "attention"]);
+  });
+});
+
+describe("orphaned workspaces", () => {
+  // A task can be deleted while its workspace is open. Nothing in the pipeline
+  // mentions it after that — no column, no slot, no dispatch — so without this
+  // row it stays open forever holding a worktree nobody can name.
+  const orphaned: FleetState = {
+    ...state,
+    orphans: [{ ...worker("ts-gone", "gone"), directory: "/tmp/worktrees/ts-gone" }],
+  };
+
+  test("sits between the unread branches and the held projects", () => {
+    expect(rowsForView("attention", orphaned).map((each) => each.column)).toEqual([
+      "decisions",
+      "yours",
+      "stale",
+      "unreviewed",
+      "orphans",
+      "held",
+    ]);
+  });
+
+  test("names the workspace and the directory to look in", () => {
+    const found = rowsForView("attention", orphaned).find((each) => each.key === "ts-gone");
+    expect(found?.label).toBe("no such task");
+    expect(found?.detail).toBe("/tmp/worktrees/ts-gone");
+  });
+
+  // Nothing remains to retry, release or lower: the store has forgotten the
+  // task, so closing the workspace is the only thing left that is true.
+  test("takes only the close key", () => {
+    const found = rowsForView("attention", orphaned).find((each) => each.key === "ts-gone");
+    expect(found && actionsFor(found.column, found)).toEqual(["close"]);
+  });
+
+  test("opens the attention tab on its own", () => {
+    const only = { ...orphaned, decisions: [], yours: [], unreviewed: [], stale: [], held: [] };
+    expect(drawn(only)).toContain("attention");
   });
 });

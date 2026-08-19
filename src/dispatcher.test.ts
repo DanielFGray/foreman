@@ -14,6 +14,7 @@ import {
   readyToLand,
   reviewable,
   scopeRoster,
+  ours,
   waiting,
   type Owned,
 } from "./dispatcher.ts";
@@ -44,6 +45,7 @@ const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   workspace: "w1",
   pane: "w1:p1",
   directory: "/tmp/worktree",
+  repository: "/home/dan/build/project",
   worktree: "/tmp/worktree",
   state,
   roles: new Map([
@@ -304,7 +306,7 @@ describe("work handed back for review", () => {
   });
 });
 
-describe("focused dispatch", () => {
+describe("pinned dispatch", () => {
   const ready = (id: string, project = "foreman") => ({
     id,
     title: `Task ${id}`,
@@ -316,146 +318,153 @@ describe("focused dispatch", () => {
   const dispatchState = (overrides: Record<string, unknown> = {}) => ({
     workers: [],
     queue: [],
-    focus: [],
-    focused: true,
-    focusScope: new Set<string>(),
-    touched: new Set(["foreman"]),
+    pinned: new Set<string>(),
     held: [],
-    working: [],
     review: [],
+    outOfQuota: new Set<string>(),
     ...overrides,
   });
 
-  test("reserves the only slot for the focused author ahead of a spillover review", () => {
-    const focused = ready("ts-focus");
-    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+  test("a pinned review is dispatched ahead of an unpinned one", () => {
+    const pinnedReview = active(task("ts-pin", ["by-cheap"]), undefined);
+    const otherReview = active(task("ts-other", ["by-cheap"]), undefined);
 
     const dispatches = dispatchesFor(
       dispatchState({
-        queue: [ready("ts-spill")],
-        focus: [focused],
-        focusScope: new Set([focused.id]),
-        review: [spilloverReview],
+        pinned: new Set([pinnedReview.task.id]),
+        // Deliberately last in prog's order, so only the pin can lift it.
+        review: [otherReview, pinnedReview],
       }),
       1,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-focus"]);
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-pin"]);
   });
 
-  test("uses only the remaining slot for spillover", () => {
-    const focused = ready("ts-focus");
-    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
+  test("reviews still lead authors, pinned or not", () => {
+    const pinnedTask = ready("ts-pin");
+    const review = active(task("ts-review", ["by-cheap"]), undefined);
 
     const dispatches = dispatchesFor(
       dispatchState({
-        queue: [ready("ts-spill")],
-        focus: [focused],
-        focusScope: new Set([focused.id]),
-        review: [spilloverReview],
+        queue: [pinnedTask],
+        pinned: new Set([pinnedTask.id]),
+        review: [review],
+      }),
+      1,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-review"]);
+  });
+
+  test("reserves no slot: every free slot fills, pinned or not", () => {
+    // The old focus reserved one slot for its serialized thread. Nothing does
+    // now — which pinned tasks may run together is what prog's blockers say,
+    // and prog.ready has already applied them.
+    const dispatches = dispatchesFor(
+      dispatchState({
+        queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
+        pinned: new Set(["ts-a", "ts-b"]),
+      }),
+      3,
+    );
+
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
+      "author:ts-a",
+      "author:ts-b",
+      "author:ts-c",
+    ]);
+  });
+
+  test("several pinned tasks start together rather than one at a time", () => {
+    const dispatches = dispatchesFor(
+      dispatchState({
+        queue: [ready("ts-one"), ready("ts-two")],
+        pinned: new Set(["ts-one", "ts-two"]),
       }),
       2,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
-      "review:ts-review",
-      "author:ts-focus",
-    ]);
+    expect(dispatches).toHaveLength(2);
   });
 
-  test("reserves the only slot for the focused reviewer", () => {
-    const focusedReview = active(task("ts-focus", ["by-cheap"]), undefined);
-    const spilloverReview = active(task("ts-review", ["by-cheap"]), undefined);
-
-    const dispatches = dispatchesFor(
-      dispatchState({
-        focusScope: new Set([focusedReview.task.id]),
-        review: [spilloverReview, focusedReview],
-      }),
-      1,
-    );
-
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-focus"]);
-  });
-
-  test("does not start a second focused task when several are already in flight", () => {
+  test("a pinned task in flight does not stop unpinned work starting", () => {
     const writing = active(
       task("ts-writing", ["by-cheap"], "in_progress"),
       worker("working", "ts-writing"),
     );
-    const awaitingReview = active(task("ts-review", ["by-cheap"]), undefined);
 
     const dispatches = dispatchesFor(
       dispatchState({
-        focusScope: new Set([writing.task.id, awaitingReview.task.id]),
+        queue: [ready("ts-other")],
+        pinned: new Set([writing.task.id]),
         workers: [writing.worker],
-        working: [writing],
-        review: [awaitingReview],
       }),
       2,
     );
 
-    expect(dispatches).toEqual([]);
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-other"]);
   });
 
-  test("drains one review when several focused tasks are awaiting review", () => {
-    const first = active(task("ts-first", ["by-cheap"]), undefined);
-    const second = active(task("ts-second", ["by-cheap"]), undefined);
-
+  test("with the scope exhausted the fleet carries on with ordinary work", () => {
+    // A pin is an ordering statement, not a stop. The old focus parked the
+    // whole fleet here and waited for the label to be cleared by hand.
     const dispatches = dispatchesFor(
       dispatchState({
-        focusScope: new Set([first.task.id, second.task.id]),
-        review: [first, second],
+        queue: [ready("ts-ordinary")],
+        pinned: new Set(["ts-landed-already"]),
       }),
-      2,
+      1,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-first"]);
+    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
+      "author:ts-ordinary",
+    ]);
   });
 });
 
-describe("scoping the roster to this daemon's projects", () => {
-  test("keeps only workspaces whose task lives in a managed project", () => {
-    const own = task("ts-111111", ["by-opencode"], "in_progress");
-    const foreign = task("ts-222222", ["by-opencode"], "in_progress", 1, "elsewhere");
+describe("scoping the roster to this daemon's checkouts", () => {
+  const CHECKOUTS = new Set(["/home/dan/build/foreman"]);
+  const inRepo = (id: string, repository: string | undefined): Worker => ({
+    ...worker("working", id),
+    repository,
+  });
 
-    const { owned, workers } = scopeRoster(
-      [worker("working", own.id), worker("working", foreign.id)],
-      new Map([
-        [own.id, own],
-        [foreign.id, foreign],
-      ]),
-      new Set(["foreman"]),
-    );
+  test("keeps only workspaces whose worktree is in a managed checkout", () => {
+    const own = inRepo("ts-111111", "/home/dan/build/foreman");
+    const foreign = inRepo("ts-222222", "/home/dan/build/elsewhere");
 
-    expect(workers.map(({ task }) => task)).toEqual([own.id]);
-    expect(owned.map(({ task }) => task.id)).toEqual([own.id]);
+    expect(ours([own, foreign], CHECKOUTS)).toEqual([own]);
   });
 
   test("a foreign daemon's live workspace fills none of this daemon's slots", () => {
     // Two foremen against different configs are not competing for the same
     // slots, so a foreign workspace must not appear in the roster slots are
     // counted from — at --slots 1 it fills the only one and nothing dispatches.
-    const foreign = task("ts-222222", ["by-opencode"], "in_progress", 1, "elsewhere");
-
-    const { owned, workers } = scopeRoster(
-      [worker("working", foreign.id)],
-      new Map([[foreign.id, foreign]]),
-      new Set(["foreman"]),
-    );
-
-    expect(workers).toEqual([]);
-    expect(owned).toEqual([]);
+    expect(ours([inRepo("ts-222222", "/home/dan/build/elsewhere")], CHECKOUTS)).toEqual([]);
   });
 
+  test("a workspace with no worktree belongs to nobody", () => {
+    // Foreman never opens one, so a workspace in its label namespace without a
+    // worktree was made by hand and has no checkout to be scoped by.
+    expect(ours([inRepo("ts-333333", undefined)], CHECKOUTS)).toEqual([]);
+  });
+
+  test("scopes before the store is asked, so a deleted task is still classifiable", () => {
+    // The task's project would answer this too, right up until the task is
+    // deleted — which is exactly when a workspace needs to be told from residue.
+    const own = inRepo("ts-444444", "/home/dan/build/foreman");
+    expect(ours([own], CHECKOUTS)).toEqual([own]);
+    expect(scopeRoster([own], new Map()).workers).toEqual([]);
+  });
+});
+
+describe("joining the scoped roster to the store", () => {
   test("drops a workspace whose task the store no longer has", () => {
-    // A workspace with no task has no project to scope by, and as residue it
-    // must not eat a slot nothing will ever free.
-    const { owned, workers } = scopeRoster(
-      [worker("blocked", "ts-333333")],
-      new Map(),
-      new Set(["foreman"]),
-    );
+    // It has no status to settle and no claim to release, and as residue it
+    // must not eat a slot nothing will ever free. observe surfaces it as an
+    // orphan instead.
+    const { owned, workers } = scopeRoster([worker("blocked", "ts-333333")], new Map());
 
     expect(owned).toEqual([]);
     expect(workers).toEqual([]);
@@ -467,43 +476,11 @@ describe("scoping the roster to this daemon's projects", () => {
     const { owned } = scopeRoster(
       [worker("working", reviewing.id)],
       new Map([[reviewing.id, reviewing]]),
-      new Set(["foreman"]),
     );
 
     expect(owned).toEqual([
       { task: reviewing, worker: worker("working", reviewing.id), kind: "claude" },
     ]);
-  });
-
-  test("ignores plan workspaces before and during their stages", () => {
-    const openingEpic = task("ep-444444", ["plan"], "draft");
-    const epic = task("ep-555555", ["plan"], "draft");
-    const taskerEpic = task("ep-666666", ["plan"], "open");
-    const opening = {
-      ...worker("gone", openingEpic.id),
-      roles: new Map(),
-    };
-    const planner = {
-      ...worker("working", epic.id),
-      roles: new Map([["planner", "working"] as const]),
-    };
-    const tasker = {
-      ...worker("working", taskerEpic.id),
-      roles: new Map([["tasker", "working"] as const]),
-    };
-
-    const { owned, workers } = scopeRoster(
-      [opening, planner, tasker],
-      new Map([
-        [openingEpic.id, openingEpic],
-        [epic.id, epic],
-        [taskerEpic.id, taskerEpic],
-      ]),
-      new Set(["foreman"]),
-    );
-
-    expect(workers).toEqual([]);
-    expect(owned).toEqual([]);
   });
 });
 
@@ -580,5 +557,79 @@ describe("the operator's dispatch intention", () => {
     expect(nextDispatch("running")).toBe("draining");
     expect(nextDispatch("draining")).toBe("paused");
     expect(nextDispatch("paused")).toBe("running");
+  });
+});
+
+describe("the quota gate", () => {
+  const ready = (id: string, project = "foreman") => ({
+    id,
+    title: `Task ${id}`,
+    priority: 1,
+    project,
+    labels: [],
+  });
+
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    workers: [],
+    queue: [],
+    pinned: new Set<string>(),
+    held: [],
+    review: [],
+    outOfQuota: new Set<string>(),
+    ...overrides,
+  });
+
+  test("passes over a queued task whose rung has no allowance left", () => {
+    const dispatches = dispatchesFor(
+      state({ queue: [ready("ts-walled"), ready("ts-open")], outOfQuota: new Set(["ts-walled"]) }),
+      3,
+    );
+
+    expect(dispatches.map((dispatch) => dispatch.task.id)).toEqual(["ts-open"]);
+  });
+
+  test("passes over a review whose reviewer's rung has no allowance left", () => {
+    // The reviewer's rung is the one above the author's, so a review can be
+    // stopped by an account the author never touched.
+    const dispatches = dispatchesFor(
+      state({
+        review: [active(task("ts-walled", ["by-cheap"]), undefined)],
+        outOfQuota: new Set(["ts-walled"]),
+      }),
+      3,
+    );
+
+    expect(dispatches).toEqual([]);
+  });
+
+  test("leaves the task in the queue rather than counting an attempt", () => {
+    // The whole point of the gate: an account with nothing left says nothing
+    // about the work or the model, so the task must stay exactly where it was
+    // and climb nothing. A pass-over is the only thing that happens.
+    const walled = ready("ts-walled");
+    const current = state({ queue: [walled], outOfQuota: new Set([walled.id]) });
+
+    expect(dispatchesFor(current, 3)).toEqual([]);
+    expect(current.queue).toHaveLength(1);
+  });
+
+  test("holds the focused thread's head rather than skipping to its sibling", () => {
+    // The thread is serialized so each task branches off the last one's landed
+    // HEAD. Starting the sibling because the head is walled would break the
+    // only property focus exists for.
+    const head = ready("ts-head");
+    const next = ready("ts-next");
+
+    const dispatches = dispatchesFor(
+      state({
+        focused: true,
+        focus: [head, next],
+        focusScope: new Set([head.id, next.id]),
+        outOfQuota: new Set([head.id]),
+      }),
+      3,
+    );
+
+    expect(dispatches).toEqual([]);
   });
 });

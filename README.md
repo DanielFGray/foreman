@@ -329,6 +329,15 @@ that is only a harness, running whatever that program defaults to. Two rungs may
 share a harness and differ only in model, which is the point: without the model,
 every rung would be the same rung.
 
+`provider` is optional and names the account a rung spends. It is read off the
+model's `<provider>/` prefix wherever there is one, so most ladders never state
+it; the claude harness always spends the claude.ai account, and any other rung
+that is only a harness has to be told, or foreman cannot tell whether that
+rung has any allowance left before it dispatches. `foreman quota` reports what
+each account has left and which rungs are stopped, and a rung whose account is
+spent is passed over — the task waits in the queue at the same rung rather than
+climbing, because an empty allowance says nothing about the work or the model.
+
 A task starts at the bottom. It climbs one rung — never a jump — on real evidence
 that the rung it is on failed it: a reviewer sent the work back, the branch would
 not land, or the rung has been spent by `attemptsPerRung` attempts that ended
@@ -398,68 +407,25 @@ almost entirely at one priority otherwise sorts by age alone, which dispatches
 defects in the order they were discovered, behind whatever feature batch was
 entered first.
 
-## Focus
+## Pinning
 
-A `focus` label narrows the fleet to one serialized thread. Put it on a task, an
-epic, or several items:
+Press `alt-p` on a queue, working or review row to pin its task. Pinned work
+leads the queue: the fleet takes it before anything the score would otherwise
+have chosen, and reviews of pinned tasks are dispatched first too.
 
-```bash
-prog label ep-0e6a7e focus    # the whole epic, one task at a time
-prog label ts-9f577b focus    # just this task
-```
+Pin an epic and you pin every ready task under it, however deep, so two pinned
+epics are one larger set. That is the way to drive an epic to completion without
+narrowing the config to its project.
 
-The scope is every ready task at or under anything carrying the label, so two
-labelled epics are one larger scope. While it lasts, foreman works the scope one
-task at a time — each authors, reviews and merges before the next starts, so
-each branches off the previous one's landed result instead of off a sibling's
-half-done work.
+Nothing is reserved and nothing is serialized. Every free slot fills from the
+head of the queue, so several pinned tasks run at once when they can — which
+ones can is what the plan already says, since `prog ready` only offers unblocked
+work. Order inside the pinned half is the ordinary score; unpinned work keeps
+running behind it, and when nothing pinned is ready the queue is simply the
+ordinary queue.
 
-The scope gets exactly one slot; the rest are spillover. Spillover takes ready
-work from the projects the scope touches, so a single-project epic leaves the
-fleet working that one project's backlog behind the thread, and a scope spanning
-repos shares the spare slots across them. The thread itself keeps prog's
-priority-first order, and the project rotation applies to spillover only.
-
-When the scope has no ready work left, foreman notifies you and stops
-dispatching — spillover included — until you clear the label. Nothing about
-focus lives in the process: the label is in prog, so the dashboard can be closed
-and reopened and the scope survives. Whole-project focus is just the allowlist:
-run foreman with one project in the config.
-
-## Plan mode
-
-The queue drains a backlog; something has to fill it. `foreman plan` is that
-front half: it turns a rough plan into tasks in the backlog, which the daemon
-then drains like any others.
-
-```
-  foreman plan                     # or --file plan.md
-  planner: research → specification  →  prog desc ep-…
-  tasker:  specification → tasks     →  prog add --parent ep-…
-```
-
-A plan is an epic in prog, labelled `plan`, created in draft. The planner agent
-researches the project in its own worktree, interviews you through its question
-tool when the plan genuinely cannot decide something, and writes the full
-specification into the epic's description. The tasker agent then files that
-specification as tasks under the epic — small, atomic, independently shippable,
-each referencing the epic — wires their dependencies with `prog blocks`, and only
-then opens them, so nothing reaches the queue with a missing blocker.
-
-The two agents run one after the other in the same plan workspace, and the
-command drives them to completion before it returns. The daemon is untouched by
-all of this: an epic is never claimed, never `in_progress`, and never ready, so
-the running dispatcher ignores the plan itself while picking up its opened
-children as ordinary reviewed work. Generated tasks carry `--priority 2`, so the
-fleet reviews them like any other real work.
-
-An epic is a draft in prog until it has child tasks, and its status is derived
-from them, so the plan's state machine follows what the agents leave in the
-store: `draft` while the planner works, no longer `draft` once the tasker has
-filed the first child, `done` once the tasker's `prog done` closes it. An
-interrupted run leaves its workspace in place, and `foreman plan --epic ep-…`
-adopts it and continues from wherever it stopped — an epic with no children
-replans, one with children re-tasks.
+The pin is a label in prog, so it survives closing the dashboard. Whole-project
+emphasis is still the allowlist: run foreman with one project in the config.
 
 ## Configuration
 
@@ -479,8 +445,6 @@ strictly.
     { "name": "sonnet", "harness": "opencode", "model": "opencode/claude-sonnet-5" },
     "claude",
   ],
-  "planner": "claude",      // turns a rough plan into a specification (default: the top rung)
-  "tasker": "deepseek",     // turns the specification into tasks (default: the bottom rung)
   // How many attempts one rung gets before an unfinished task climbs to the
   // next. A crash, a timeout or a usage wall says nothing about the model, so
   // the first attemptsPerRung - 1 retry in place; a reviewer rejection or a

@@ -78,6 +78,7 @@ const worker = (task: string, worktree: string | undefined): Worker => ({
   workspace: "w1",
   pane: "w1:p1",
   directory: worktree ?? "/home/dan/build/project",
+  repository: "/home/dan/build/project",
   worktree,
   state: "gone",
   roles: new Map(),

@@ -13,17 +13,16 @@ dates, no task ids as evidence, no counts, no proof-run narration.
 The tree is one `Dispatcher` service over `Fleet`, `Prog` and `Repository`, with
 `main.ts` as the only entry point.
 
-Proven live: the author → review → merge pipeline end to end, the dashboard
-against a real fleet, and plan mode at the tasker's worst model. The rig is in
-`e2e/` — read `e2e/README.md` before running it.
+Proven live: the author → review → merge pipeline end to end, and the dashboard
+against a real fleet. The rig is in `e2e/` — read `e2e/README.md` before running it.
 
-- **Focus is built but never proven live.** The `focus` label scope —
-  serialized thread, spillover, pause-on-completion — is in `src/focus.ts` and
-  the dispatcher, proven only by unit tests. Prove it against a scratch project
-  before trusting a focused run unattended.
-
-Unproven: resuming a plan run that stopped mid-planning or mid-tasking. Only the
-closed state is proven, where `plan --epic` on a done epic reports complete.
+- **Pinning is built but never proven live.** The `pin` label ordering is in
+  `src/pin.ts` and the dispatcher, proven only by unit tests. Watch one pinned
+  task reach the head of a real queue before trusting it unattended.
+- **The quota gate is unproven inside a tick.** Both probes are proven live
+  through `foreman quota`, and the pass-over is proven by unit tests, but no
+  daemon has yet declined to dispatch because of one. Watch a `--slots 1` run
+  against a spent account before trusting it to hold the fleet.
 
 The layer set in `main.ts` is `Layer.provideMerge(Dispatcher.Default, base)`.
 The base set feeds `Dispatcher` all of its ports, including `Settings`, `Fleet`,
@@ -46,6 +45,7 @@ open, and nothing can tell foreman's own work from a claim made by hand.
 | How many tries has this rung had? | the task's `attempt-<rung>-<n>` label |
 | Is this one waiting on a person? | its rung names no configured model |
 | Is this task mine to review? | it has a `by-*` label |
+| Is this workspace mine? | the checkout herdr says its worktree is in |
 | Is this project free to work in? | `git status` in its checkout |
 
 Every tick reads all of it back, so a restart re-adopts its live workspaces
@@ -97,9 +97,28 @@ a workspace carrying the label, else a worktree git still has registered for the
 branch, else creating both. Teardown reads the same order, so a worktree whose
 workspace already closed is removed rather than orphaned.
 
-The label records no ownership, and the roster is every daemon's. The config's
-project set is the only ownership the world records, so `scopeRoster` in
-`src/dispatcher.ts` scopes what each daemon may act on.
+The label records no ownership, and the roster is every daemon's — a second
+foreman's live work and a workspace somebody opened by hand carry the same
+`foreman/*` prefix. What the config scopes is **the checkout a workspace's
+worktree is in**, which herdr reports on every roster entry, so `ours` in
+`src/dispatcher.ts` settles ownership before the store is asked anything.
+
+The checkout, not the task's project. The task's project answers the same
+question right up until the task is deleted — which is exactly when ownership
+needs an answer — and asking it means one `prog show` per workspace on the
+machine before knowing whether any of them is this daemon's. A workspace with
+no worktree has no checkout to be scoped by and is nobody's: foreman never
+opens one.
+
+What survives that scope and the store then denies is an **orphan**: a
+workspace whose task was deleted under it. No column shows it, no slot counts
+it and no tick will dispatch into it, so it is surfaced in attention with one
+key — close. Not swept, because the worktree may hold uncommitted work and no
+task remains to say what it was. This is why `Prog.lookup` answers `Option`
+rather than failing: "there is no such task" is a fact about the world, while a
+store that would not answer says nothing at all and must leave the workspace
+alone. `Prog.show` is `lookup` with the absent case made an error, for the
+callers that already know the task exists.
 
 ### herdr owns the worktree
 
@@ -259,33 +278,6 @@ The prompt forbids `stash`, `reset`, `checkout -- <file>` and `clean` by name,
 and ends by returning the operator's branch to its previous tip. Read it before
 changing anything about this path.
 
-### Plan mode is the front half of the pipeline
-
-`foreman plan` turns a rough plan into tasks. A plan is an epic in prog labelled
-`plan`, created in draft; the planner writes the specification into the epic's
-description; the tasker files it as children, wires `prog blocks`, opens them
-once their deps are complete, and runs `prog done`.
-
-- **The spec lives in the task store, not the repository.** Authors read
-  `prog show ep-...` the same way they read a task's description. Nothing about a
-  plan dirties the operator's checkout, and the plan survives a restart.
-- **Plan runs are synchronous and self-contained.** `src/plan.ts` drives both
-  agents and closes the workspace. The daemon has zero plan awareness: an epic is
-  never claimed, never `in_progress`, and never in `prog ready`, so the dispatcher
-  ignores the plan while picking up its opened children as ordinary reviewed work.
-  If a plan needs the daemon, the design is wrong.
-- **Stages are sequenced by what agents leave in the store, never by watching
-  them.** `prog show` returns an epic's derived status, a draft until the first
-  child exists — so the planner's deliverable is the specification and the
-  tasker's children are the transition out of draft. `plan --epic` resumes where
-  a run stopped: no children replans, children re-tasks, closed stays done.
-- **The planner may interrupt the operator**, through its question tool, one
-  question at a time, only when the plan and codebase genuinely cannot decide
-  something. This is the one place an unattended foreman agent is told to ask.
-
-Generated tasks are ordinary work at `--priority 2`. The `plan` label stays on
-the epic only; it is what a resume validates against.
-
 ### Foreman does the deterministic part
 
 Where a step has one right answer, foreman runs it. Where it needs judgement, the
@@ -333,6 +325,57 @@ New rules belong in that score, not beside it. A second sort key ahead of it
 would have to restate what the score already says about priority and age, and the
 project rotation reads the score to decide which tasks are close enough to
 interleave.
+
+### An allowance belongs to an account, not to a rung
+
+`Quota` (`src/quota.ts`) reads how much of each provider's allowance is already
+spent. A rung with nothing left is passed over: the task stays in the queue at
+the same rung, no attempt is counted and nothing climbs.
+
+- **Keyed by provider, because that is what has the allowance.** Several rungs
+  naming one model share one, so climbing inside a spent account buys nothing —
+  it spends a rung to meet the same wall. `providerOf` in `src/ladder.ts`
+  derives the account from the model's `<provider>/` prefix, which every rung
+  that names a model already states; stating it twice would let the two drift.
+  The claude harness is the one default that is not in doubt — the `claude`
+  binary is always signed into the claude.ai account, however it picks its
+  model — so a rung on it spends `claude` even when it names no model. Any
+  other rung that names no model, or names one without a provider prefix, has
+  to be told; it is warned about at config load and dispatched blind, exactly
+  as before this was read at all.
+- **Unreadable is not spent.** A provider foreman could not reach is carried to
+  the quota view with `unreadable` set and empty `allowances`, so the operator
+  sees why the account is absent while the gate reads it as neither spent nor a
+  wall — treating silence as a wall would stop the fleet on foreman's own
+  network trouble, which is the opposite of what the gate is for. A read that
+  cannot succeed until the operator acts — no usage source, a missing key, an
+  expired token — is `permanent` and repeats on every poll, so it is never
+  logged; only a transient failure, which may clear by itself, is worth a line.
+- **Read once per tick and handed to both observations.** A tick observes twice
+  — before it acts and again before it fills — while an allowance moves on the
+  order of hours, so a probe per observation is a request every few seconds for
+  a number that cannot have changed between them.
+- **openai is asked through `codex app-server`.** There is no endpoint to call:
+  chatgpt.com refuses a plain request for a plan's remaining allowance, and the
+  app server is the signed-in client that will answer. It reads EOF on stdin as
+  a shutdown and answers asynchronously, so closing the pipe after writing loses
+  the reply — stdin stays open behind the requests and the scope's teardown
+  kills it once the reply has arrived.
+- **opencode go is one GET, opencode zen is nothing.** The go subscription
+  answers `/zen/go/v1/usage`, and the endpoint accepts any key of the account —
+  the allowance is the account's, not the key's — which is how a zen key reads
+  as go and the two get conflated. The zen account's quota is a pay-as-you-go
+  balance and per-model free tiers, and no path on the public host answers for
+  either (`/zen/v1/usage` is not served), so `opencode` is carried to the quota
+  view as `unreadable` and never gated: its rungs always dispatch, and an agent
+  meets a genuinely exhausted balance itself.
+- **The key is read where the harness keeps it.** A credential copied into
+  foreman's config is one more place for it to go stale, and the harness whose
+  key it is renews it.
+- **`foreman quota` and the dashboard quota view are two callers of one
+  reading.** The dashboard shows the accounts, which is what an operator can act
+  on; the command answers the same question before a daemon exists to ask it of.
+  The gate reads the same reading folded onto the tasks fill would have started.
 
 ### The review gate
 
@@ -542,16 +585,15 @@ one has no id to dispatch against. Both are shown, and `adopt` submits one by ha
 
 ### Roles are panes
 
-Four roles run agents: `author`, `review`, `planner`, `tasker`. A workspace
-carries a `roles` map keyed by that literal, each read back from a pane labelled
-`foreman-<role>` — herdr's record, not foreman's memory.
+Two roles run agents: `author` and `review`. A workspace carries a `roles` map
+keyed by that literal, each read back from a pane labelled `foreman-<role>` —
+herdr's record, not foreman's memory.
 
 Placement follows from the label: a role takes the workspace's own pane if it is
 unlabelled, otherwise it splits a new one. So the first author owns the workspace
-pane, a reviewer splits beside it, and plan mode's two stages take one pane each
-in sequence. One role per pane is also what makes a stage handoff possible —
-herdr cannot end an agent without closing its pane, so a planner and a tasker
-sharing one could never both run.
+pane and a reviewer splits beside it. One role per pane is also what makes a
+handoff possible — herdr cannot end an agent without closing its pane, so an
+author and a reviewer sharing one could never both run.
 
 **Only work in progress refuses a dispatch.** A role that is `working` or
 `blocked` rejects a second agent, because two agents in one worktree edit over
@@ -585,41 +627,41 @@ Workspace `agent_status` is an attention aggregate, not an operational one: an
 unseen old `done` pane outranks current `working` work. `HerdrFleet.roster`
 aggregates pane statuses itself.
 
-### Focus is a scope filter, serialized
+### A pin is an ordering, not a mode
 
-A `focus` label is the scope. Put it on a task, an epic, or several items; the
-scope is every ready task at or under anything carrying it, computed by walking
-descendants in `src/focus.ts` (`scopeOf`). Two labelled epics are one larger
-scope.
+A `pin` label says "take this next". Put it on a task, an epic, or several
+items; the pinned set is every ready task at or under anything carrying one,
+computed by walking descendants in `src/pin.ts` (`scopeOf`). Two pinned epics
+are one larger set.
 
-Focus changes two things and nothing else. Settle, reclaim and the review gate
-are untouched: focus reshapes what `observe` puts in the queue and how `fill`
-spends slots.
+A pin changes one thing: `pinnedFirst` partitions the ready queue into the
+pinned half and the rest, and orders each half by the ordinary rules. `fill`,
+settle, reclaim and the review gate are untouched — the pinned half simply
+reaches the head of the list they already read, and reviews are ordered pinned
+first for the same reason.
 
-- **Depth.** The scope gets exactly one slot. A focused task is "in flight"
-  from claim until landing, and while one is, no other focused task starts —
-  the thread authors, reviews and merges each task before the next, so each
-  branches off the previous one's landed `HEAD`. That is the whole point:
-  siblings in one epic touch the same files, and serializing them is what makes
-  branching off `HEAD` correct. It is correct exactly when the merge step
-  works, which is why focus sat blocked on the end-to-end proof.
-- **Spillover.** The remaining slots take ready work from the projects the
-  scope touches — one project for a single-project epic, several for a scope
-  spanning repos. The scope's slot counts against `--slots`: three slots with a
-  focus is one focused plus two spillover.
-- **Order.** The thread keeps prog's own priority-first order; deep mode takes
-  the head. `interleave`'s project rotation applies to spillover only.
-- **Completion.** When the scope has no ready work left and nothing is in
-  flight, foreman notifies and stops dispatching — spillover included. It does
-  not touch the `paused` Ref: the stop is derived from the same label every
-  tick, so clearing the focus label resumes automatically and the operator's
-  own pause state is never overwritten. The notification repeats each poll
-  while the scope is exhausted, the same way a blocked worker re-notifies.
-- **Storage.** The label itself, in prog. Focus is an operator intention like
-  pause, and it must survive the process because the TUI is the process —
-  closing the dashboard would otherwise drop it. Deriving it from a label keeps
-  foreman down to its one `Ref`. Whole-project focus is expressed by the config
-  allowlist: run foreman with one project in it.
+- **No reserved slot, and no serialization.** Every free slot fills from the
+  head of the queue, pinned or not. Which pinned tasks may run at once is
+  already stated in the plan: `prog ready` returns only unblocked work, so a
+  sibling that must wait for another is not offered. Re-deriving that here
+  would be a second, weaker copy of the dependency graph, and it would be
+  wrong wherever the plan says two subtasks are independent.
+- **Priority does not enter it.** A pin leads absolutely; the score orders each
+  half internally, and `interleave`'s project rotation applies within a half.
+  Folding the pin into the score instead would let a low-priority pin lose to
+  ordinary work, which is the one thing the operator pressed the key to
+  prevent.
+- **Exhaustion is not an event.** When nothing pinned is ready the pinned half
+  is empty and the queue is the ordinary queue. Nothing notifies and nothing
+  stops: a pin that has run out has already had its effect.
+- **Storage is the label, in prog.** A pin is an operator intention like pause,
+  and it must survive the process because the TUI is the process. Deriving it
+  from a label keeps foreman down to its one `Ref`. Whole-project emphasis is
+  still the config allowlist: run foreman with one project in it.
+- **The dashboard sets it.** `alt-p` on a queue, working or review row toggles
+  the label through `Dispatcher.togglePin`, and a pinned row is marked in the
+  queue. `ctrl-p` is fzf's cursor and `ctrl-f` already focuses a worker's pane,
+  which is why this one key is alt-modified.
 
 ## Ports
 
@@ -631,6 +673,9 @@ builds a `prog` command line.
 
 `Repository` (`src/repository.ts`) answers what foreman needs to know about a
 project's git checkout. Nothing above that file runs `git`.
+
+`Quota` (`src/quota.ts`) answers what a provider has left of its allowance.
+Nothing above that file knows which endpoint or which client says so.
 
 `Screen` (`src/screen.ts`) is the whole terminal surface — a list of rows with a
 preview each, and the keys the operator pressed. fzf is one implementation.
@@ -652,32 +697,43 @@ Every redraw rebuilds the whole frame from the last reading and pushes it whole.
 There is no screen to keep in step with the world, and awaiting the screen's
 process is what parks the program.
 
-One cursor walks five views — queue | working | review | landed | attention — one
-full-width list at a time. The cursor stores the tracked row's id, never a
-position, because a tick reorders rows and moves tasks between columns every
-twenty seconds: a positional highlight would hand the key about to be pressed to
-whatever reshuffle left at that spot. The highlight follows the tracked task
-through queue, working, review and attention, and stops at landing — chasing
-finished work into history would walk the operator out of the work still to do.
-A task that leaves the followed views entirely gives the cursor to the nearest
-surviving row in the column it left. Only non-empty views become tabs, so landed
-history is a count until selected rather than a permanent column squeezing
-active work. At 120 columns extra width adds selected-row details; it never
-restores columns. A row may be two lines: the exceptional states have a name
-and a reason, and a reason on its own line is one a narrow pane cannot truncate
-away.
+One cursor walks six views — queue | working | review | landed | quota |
+attention — one full-width list at a time. The cursor stores the tracked row's
+id, never a position, because a tick reorders rows and moves tasks between
+columns every twenty seconds: a positional highlight would hand the key about
+to be pressed to whatever reshuffle left at that spot. The highlight follows
+the tracked task through queue, working, review and attention, and stops at
+landing — chasing finished work into history would walk the operator out of the
+work still to do. A task that leaves the followed views entirely gives the
+cursor to the nearest surviving row in the column it left. Only non-empty views
+become tabs, so landed history is a count until selected rather than a permanent
+column squeezing active work. At 120 columns extra width adds selected-row
+details; it never restores columns. A row may be two lines: the exceptional
+states have a name and a reason, and a reason on its own line is one a narrow
+pane cannot truncate away.
 
-When focus is active, its serialized thread leads the queue view and spillover
-follows it. The status line names focus and its ready count, so the same view
-shows both the reserved thread and the spare-slot work without adding another
-cursor mode.
+The quota view is the accounting behind the fleet: every account the ladder
+draws on, spent or healthy or unreadable, each window with its own percent and
+reset. The label names the state when the state is news — `out of quota`,
+`unreadable` — and is otherwise just the account, because an account with room
+is the ordinary case. The spent ones also sit in attention as the last row: a
+fleet that has stopped dispatching must say so without being searched for, and
+the row there is the same one, carrying the rungs it stops — the answer to
+"what do I move off this account". Nothing on a quota row is a key, because the
+fix is moving a task onto another account's rung, and that key lives on the
+task in the queue.
+
+When anything is pinned, the pinned tasks lead the queue view — each marked —
+and the rest follow. The status line names how many pinned tasks are ready, so
+one view shows both without adding a cursor mode.
 
 Attention combines the exceptional states in urgency order: vanished-worker
-decisions, yours, unreviewed branches, then held projects. Each row keeps its source
-kind, so combining their display does not combine their actions. A view that
-empties under the cursor hands it to the nearest non-empty tab to its left.
-Attention opens when it changes from empty to non-empty, including at startup,
-and must clear before a later item can interrupt again.
+decisions, yours, unreviewed branches, orphaned workspaces, then held projects,
+and last the spent accounts. Each row keeps its source kind, so combining their display does not
+combine their actions. A view that empties under the cursor hands it to the
+nearest non-empty tab to its left. Attention opens when it changes from empty
+to non-empty, including at startup, and must clear before a later item can
+interrupt again.
 
 The status line remains when every view is empty, because an empty fleet still
 has to say whether it is paused, draining, or merely out of work. `dispatch` cycles the
@@ -783,33 +839,23 @@ only child commands are `cat` and `printf`.
   binding does.
 - **fzf draws on stderr**, so the spawn inherits all three streams.
 
-Two divergences from the settled design:
+One divergence from the settled design:
 
-- **No cancel.** `Dispatcher` has setDispatch, focus, retry, release, close,
-  climb, descend, unassign and onboard. "Act on a task" means climb or descend; a
-  cancel command belongs on the dispatcher.
-- **Focus is set by hand, not on this screen.** The `focus` label that defines
-  the scope is written into prog with `prog label`, the same way `rung-human`
-  is. The dashboard shows the resulting thread and its completion but never
-  edits labels, so removing a focus is a `prog unlabel` rather than a keypress.
+- **No cancel.** `Dispatcher` has setDispatch, togglePin, focus, retry,
+  release, close, climb, descend, unassign and onboard. "Act on a task" means
+  climb or descend; a cancel command belongs on the dispatcher.
 
 ## Traps
 
 - **Do not run `bun src/main.ts` to check that it starts.** It dispatches live
   agents against the real backlog within one tick. Typecheck instead; when you
-  need a live run, use `--slots 1` and watch it. The same covers
-  `bun src/main.ts plan ...`, which spawns real planner and tasker agents — a
-  smoke test must target a scratch project outside the config, or its opened
-  children go straight into the live queue.
+  need a live run, use `--slots 1` and watch it. A smoke test must target a
+  scratch project outside the config, or its opened children go straight into
+  the live queue.
 - **`src/log.ts` must use `Logger.replace`, not `Logger.add`, and must not write
   to a stream.** The dashboard owns the terminal for as long as it runs, so a
   logger left writing underneath it tears the screen. The file is the only copy,
   and `F12` shows its tail as rows — which is searchable, unlike an overlay.
-- **Plan epics are drafts and must stay drafts.** The "daemon needs no plan
-  awareness" property rests on the epic never being claimed or moved to
-  `in_progress`; the settle loop would read a settled workspace on an
-  `in_progress` item as an unfinished agent and release it. The
-  tasker's `prog done` is the only stored transition in a plan's life.
 - **herdr answers on two streams, and a reader of one sees silence.** Results
   come back as a JSON envelope on stdout; failures come back as an envelope on
   stderr with a non-zero exit. `CommandExecutor.string` reads stdout and ignores

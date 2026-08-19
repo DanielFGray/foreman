@@ -9,8 +9,7 @@ import {
   attemptsOf,
   authoredBy,
   isApproved,
-  isFocused,
-  isPlan,
+  isPinned,
   reviewedBy,
   type Item,
 } from "./prog.ts";
@@ -38,38 +37,41 @@ describe("task attribution", () => {
   });
 
   test("names the rung and the model the agent reported", () => {
-    const rung = { name: "sol", harness: "opencode", model: "opencode/gpt-5.6-sol" };
+    const rung = {
+      name: "sol",
+      harness: "opencode",
+      model: "opencode/gpt-5.6-sol",
+      provider: undefined,
+    };
     expect(agentLog("author", rung, { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
       "foreman: author assigned to sol (openai/gpt-5.6-sol)",
     );
   });
 
   test("falls back to the model foreman asked for when none is reported", () => {
-    const rung = { name: "sonnet", harness: "opencode", model: "opencode/claude-sonnet-5" };
+    const rung = {
+      name: "sonnet",
+      harness: "opencode",
+      model: "opencode/claude-sonnet-5",
+      provider: undefined,
+    };
     expect(agentLog("review", rung, { kind: "opencode", model: undefined })).toBe(
       "foreman: review assigned to sonnet (opencode/claude-sonnet-5)",
     );
   });
 
   test("names the harness for a rung that lets the harness choose", () => {
-    const rung = { name: "claude", harness: "claude", model: undefined };
+    const rung = { name: "claude", harness: "claude", model: undefined, provider: undefined };
     expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
       "foreman: author assigned to claude (claude)",
     );
   });
 });
 
-describe("plan label", () => {
-  test("recognises a plan epic", () => {
-    expect(isPlan(item(["plan"]))).toBe(true);
-    expect(isPlan(item(["onboard"]))).toBe(false);
-  });
-});
-
 describe("focus label", () => {
   test("recognises a focused item", () => {
-    expect(isFocused(item(["focus"]))).toBe(true);
-    expect(isFocused(item(["plan"]))).toBe(false);
+    expect(isPinned(item(["pin"]))).toBe(true);
+    expect(isPinned(item(["plan"]))).toBe(false);
   });
 });
 

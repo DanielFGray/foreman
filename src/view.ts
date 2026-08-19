@@ -1,5 +1,14 @@
 import { DateTime, Match } from "effect";
-import type { Active, Climbing, FleetState, Held, StaleRow, Unreviewed } from "./dispatcher.ts";
+import type {
+  Active,
+  Climbing,
+  FleetState,
+  Held,
+  Provider,
+  StaleRow,
+  Unreviewed,
+} from "./dispatcher.ts";
+import { exhausted, type Allowance } from "./quota.ts";
 import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import { diagnosticIntent, reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
@@ -24,10 +33,12 @@ const COLUMNS = [
   "held",
   "unreviewed",
   "stale",
+  "orphans",
+  "quota",
 ] as const;
 export type ColumnName = (typeof COLUMNS)[number];
 
-export const VIEWS = ["queue", "working", "review", "landed", "attention"] as const;
+export const VIEWS = ["queue", "working", "review", "landed", "quota", "attention"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /**
@@ -123,6 +134,8 @@ export interface ColumnRow {
   readonly unreviewed: Unreviewed | undefined;
   /** The overtaken branch behind a stale row, whose review could not land. */
   readonly stale: StaleRow | undefined;
+  /** The account behind a quota row, whose every window the preview reads. */
+  readonly provider: Provider | undefined;
   /** The error behind a dispatch-failed decision row. */
   readonly failure: string | undefined;
   readonly hasWork: boolean;
@@ -135,6 +148,7 @@ const ACTIONS_LIST = [
   "release",
   "close",
   "takeOver",
+  "pin",
   "focus",
   "intervene",
   "descend",
@@ -147,7 +161,7 @@ const ACTIONS_LIST = [
 export type Action = (typeof ACTIONS_LIST)[number];
 
 /** Something a key does to the screen, whatever row the cursor is on. */
-export type Global = "quit" | "dispatch" | "log" | "viewLeft" | "viewRight";
+export type Global = "quit" | "dispatch" | "log" | "stats" | "viewLeft" | "viewRight";
 
 export type Command = Action | Global;
 
@@ -176,15 +190,23 @@ export type Command = Action | Global;
  * it from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["complete", "intervene", "descend", "unassign"],
-  working: ["focus", "intervene", "descend", "release"],
-  review: ["focus", "intervene", "descend", "release"],
+  queue: ["pin", "complete", "intervene", "descend", "unassign"],
+  working: ["pin", "focus", "intervene", "descend", "release"],
+  review: ["pin", "focus", "intervene", "descend", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
   yours: ["intervene", "descend", "unassign"],
   held: ["onboard"],
   unreviewed: ["adopt"],
   stale: ["intervene", "descend", "release"],
+  // No task remains to retry, release, or lower — the store has forgotten it.
+  // Closing the workspace is the only thing left that is true.
+  orphans: ["close"],
+  // The quota view is a reading, not a set of commands: an account that is
+  // spent is spent until it resets, and the way past it is to move a task to a
+  // rung on another account — which is a key on that task, in the queue, not
+  // on the row naming the account.
+  quota: [],
 };
 
 /**
@@ -226,6 +248,9 @@ const KEYS: Record<Command, Binding> = {
   complete: { key: "ctrl-d", label: "done" },
   retry: { key: "ctrl-r", label: "retry" },
   takeOver: { key: "ctrl-t", label: "take over" },
+  // Not ctrl-p, which is how the cursor moves now that j and k type into the
+  // live filter, and not ctrl-f, which already focuses a worker's pane.
+  pin: { key: "alt-p", label: "pin" },
   focus: { key: "ctrl-f", label: "focus" },
   intervene: { key: "ctrl-e", label: "intervene" },
   descend: { key: "ctrl-x", label: "descend" },
@@ -238,6 +263,7 @@ const KEYS: Record<Command, Binding> = {
   quit: { key: "ctrl-q", label: "quit" },
   dispatch: { key: "ctrl-space", label: "dispatch" },
   log: { key: "f12", label: "log" },
+  stats: { key: "ctrl-g", label: "stats" },
   viewLeft: { key: "shift-tab", also: ["left"], label: "view" },
   viewRight: { key: "tab", also: ["right"], label: "view" },
 };
@@ -307,7 +333,9 @@ export const actionsFor = (
       ),
       Match.when("retry", () => row.task !== undefined),
       Match.when("release", () => row.task !== undefined),
-      Match.when("close", () => row.task !== undefined),
+      // Closing takes down a workspace, so the workspace is what it needs —
+      // an orphan's task has been deleted out of the store and there is none.
+      Match.when("close", () => row.worker !== undefined),
       Match.when("complete", () => row.ready !== undefined),
       Match.when(
         "intervene",
@@ -315,6 +343,10 @@ export const actionsFor = (
           row.ready !== undefined ||
           (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled"),
       ),
+      // Any row naming a task can be pinned, claimed or not: a pin says where
+      // the work sits in the queue if it ever returns there, and a rejected
+      // review puts it back.
+      Match.when("pin", () => row.ready !== undefined || row.task !== undefined),
       Match.when("onboard", () => row.project !== undefined && row.reason === "dirty"),
       Match.when("adopt", () => row.unreviewed !== undefined),
       Match.exhaustive,
@@ -346,12 +378,7 @@ export const tabs = (state: FleetState, current: ViewName): string =>
  * still has to say whether it is paused, draining, or simply out of work.
  */
 export const statusLine = (state: FleetState, now: number): string =>
-  [
-    state.focused ? `focus: ${state.focus.length} ready` : undefined,
-    state.dispatch,
-    readAge(state, now),
-    attentionStatus(state),
-  ]
+  [pinnedStatus(state), state.dispatch, readAge(state, now), attentionStatus(state)]
     .filter((part) => part !== undefined)
     .join("  ·  ");
 
@@ -433,6 +460,28 @@ export const previewOf = (row: ColumnRow): string => {
         : "cause     the trunk moved and the work conflicts",
     );
   }
+  // An account's windows read best one per line in the pane that wraps and
+  // scrolls, which is the whole reason they are not squeezed into the row.
+  if (row.provider !== undefined) {
+    lines.push(
+      ...(row.provider.unreadable !== undefined
+        ? [`unreadable  ${row.provider.unreadable}`]
+        : row.provider.allowances.map(
+            (allowance) =>
+              `  ${allowance.window.padEnd(16)} ${String(allowance.usedPercent).padStart(3)}%${
+                allowance.resetsAt === undefined
+                  ? ""
+                  : `  resets in ${resetLabel(allowance.resetsAt)}`
+              }`,
+          )),
+    );
+    if (
+      row.provider.unreadable === undefined &&
+      exhausted(row.provider) &&
+      row.provider.rungs.length > 0
+    )
+      lines.push(`stops: ${row.provider.rungs.join(", ")}`);
+  }
   // Whichever kind of task the row carries: a queued one is read in the same
   // shape as a claimed one, so the pane says the same thing about both.
   if (task?.description) lines.push("", task.description);
@@ -447,7 +496,8 @@ export const sourceView = (column: ColumnName): ViewName =>
   column === "yours" ||
   column === "held" ||
   column === "unreviewed" ||
-  column === "stale"
+  column === "stale" ||
+  column === "orphans"
     ? "attention"
     : column;
 
@@ -474,11 +524,23 @@ const readAge = (state: FleetState, now: number): string => {
   return `read ${Math.floor(seconds / 3600)}h ago`;
 };
 
+/**
+ * How much pinned work is left to do, when any is pinned.
+ *
+ * Counted off the queue rather than the label set: a pinned task that is
+ * claimed, under review or finished is not work the fleet still has to reach,
+ * and a count that included it would keep saying "3 pinned" while the last one
+ * landed.
+ */
+const pinnedStatus = (state: FleetState): string | undefined => {
+  if (state.pinned.size === 0) return undefined;
+  const ready = state.queue.filter((task) => state.pinned.has(task.id)).length;
+  return `pinned: ${ready} ready`;
+};
+
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    Match.when("queue", () =>
-      [...state.focus, ...state.queue].map((task) => readyRow(task, "queue", state)),
-    ),
+    Match.when("queue", () => state.queue.map((task) => readyRow(task, "queue", state))),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
@@ -487,6 +549,11 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
     Match.when("held", () => state.held.map(heldRow)),
     Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
     Match.when("stale", () => state.stale.map(staleRow)),
+    Match.when("orphans", () => state.orphans.map(orphanRow)),
+    // Only the spent accounts. One with room left is the ordinary case rather
+    // than news, and a permanent row per provider would push the work that
+    // needs a person down the column.
+    Match.when("quota", () => state.providers.filter(exhausted).map(quotaRow)),
     Match.exhaustive,
   );
 
@@ -500,13 +567,18 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
  * until the operator adopts it.
  */
 export const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow> => {
+  // The quota view is every account behind the ladder; the quota column inside
+  // attention is only the spent subset, which is the part that interrupts.
+  if (view === "quota") return state.providers.map(quotaRow);
   if (view !== "attention") return rowsFor(view, state);
   return [
     ...rowsFor("decisions", state),
     ...rowsFor("yours", state).map(attentionRow("needs you")),
     ...rowsFor("stale", state),
     ...rowsFor("unreviewed", state),
+    ...rowsFor("orphans", state),
     ...rowsFor("held", state),
+    ...rowsFor("quota", state),
   ];
 };
 
@@ -522,7 +594,7 @@ const attentionRow =
 const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState): ColumnRow => ({
   column,
   key: task.id,
-  label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
+  label: `${state.pinned.has(task.id) ? "📌 " : ""}${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
   detail: undefined,
   task: undefined,
   ready: task,
@@ -532,6 +604,7 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   unreviewed: undefined,
   stale: undefined,
   failure: undefined,
+  provider: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -555,6 +628,7 @@ const activeRow = (
   unreviewed: undefined,
   stale: undefined,
   failure: undefined,
+  provider: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -572,6 +646,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   failure: undefined,
+  provider: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -600,8 +675,35 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   unreviewed: undefined,
   stale: undefined,
   failure,
+  provider: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
+});
+
+/**
+ * A workspace in one of foreman's projects whose task the store has deleted.
+ *
+ * The label is all that is left to name it by, so it leads the row the way a
+ * task id leads every other one. The directory is the detail because it is
+ * what the operator has to look in to decide: nothing else records what the
+ * worktree still holds.
+ */
+const orphanRow = (worker: Worker): ColumnRow => ({
+  column: "orphans",
+  key: worker.task,
+  label: "no such task",
+  detail: worker.directory,
+  task: undefined,
+  ready: undefined,
+  worker,
+  project: undefined,
+  reason: undefined,
+  unreviewed: undefined,
+  stale: undefined,
+  failure: undefined,
+  provider: undefined,
+  hasWork: false,
+  committed: false,
 });
 
 const heldRow = (held: Held): ColumnRow => ({
@@ -619,9 +721,60 @@ const heldRow = (held: Held): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   failure: undefined,
+  provider: undefined,
   hasWork: false,
   committed: false,
 });
+
+/**
+ * One account and what it has left, spent or healthy or unreadable.
+ *
+ * The label names the state when the state is news — out of quota, unreadable —
+ * and is otherwise just the provider, because an account with room is the
+ * ordinary case rather than anything to say. The second line is the full
+ * accounting: every window with its own reset, and the rungs a spent account
+ * stops, which is the answer to "what do I move off this account".
+ */
+const quotaRow = (provider: Provider): ColumnRow => {
+  const name = `${provider.provider}${provider.plan === undefined ? "" : ` [${provider.plan}]`}`;
+  const news =
+    provider.unreadable !== undefined ? "unreadable" : exhausted(provider) ? "out of quota" : "";
+  const stopped =
+    exhausted(provider) && provider.rungs.length > 0
+      ? `  ·  stops: ${provider.rungs.join(", ")}`
+      : "";
+  return {
+    column: "quota",
+    key: provider.provider,
+    label: news.length > 0 ? `${news}  ${name}` : name,
+    detail:
+      provider.unreadable ?? `${provider.allowances.map(windowLabel).join("  ·  ")}${stopped}`,
+    task: undefined,
+    ready: undefined,
+    worker: undefined,
+    project: undefined,
+    reason: undefined,
+    unreviewed: undefined,
+    stale: undefined,
+    failure: undefined,
+    provider,
+    hasWork: false,
+    committed: false,
+  };
+};
+
+const windowLabel = (allowance: Allowance): string =>
+  `${allowance.window} ${allowance.usedPercent}%${
+    allowance.resetsAt === undefined ? "" : ` resets in ${resetLabel(allowance.resetsAt)}`
+  }`;
+
+/** How long until a window resets, in the coarsest unit that is still true. */
+const resetLabel = (at: Date): string => {
+  const minutes = Math.max(0, Math.round((at.getTime() - Date.now()) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
+};
 
 const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   column: "unreviewed",
@@ -636,6 +789,7 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   unreviewed: branch,
   stale: undefined,
   failure: undefined,
+  provider: undefined,
   hasWork: true,
   committed: true,
 });
@@ -658,6 +812,7 @@ const staleRow = (branch: StaleRow): ColumnRow => ({
   unreviewed: undefined,
   stale: branch,
   failure: undefined,
+  provider: undefined,
   hasWork: true,
   committed: true,
 });

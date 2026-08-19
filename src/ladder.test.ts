@@ -6,15 +6,18 @@ import {
   HUMAN,
   isYours,
   type Ladder,
+  providerOf,
+  providersOf,
   reviewerFor,
   rungSpent,
+  rungsOn,
   topOf,
 } from "./ladder.ts";
 
 const ladder: Ladder = [
-  { name: "cheap", harness: "opencode", model: "opencode/deepseek-v4-pro" },
-  { name: "middle", harness: "opencode", model: "opencode/claude-sonnet-5" },
-  { name: "top", harness: "claude", model: undefined },
+  { name: "cheap", harness: "opencode", model: "opencode/deepseek-v4-pro", provider: undefined },
+  { name: "middle", harness: "opencode", model: "opencode/claude-sonnet-5", provider: undefined },
+  { name: "top", harness: "claude", model: undefined, provider: undefined },
 ];
 
 describe("authorFor", () => {
@@ -110,9 +113,74 @@ describe("reviewerFor", () => {
   });
 
   test("reviews with the top of a one-rung ladder", () => {
-    const uniform: Ladder = [{ name: "only", harness: "opencode", model: undefined }];
+    const uniform: Ladder = [
+      { name: "only", harness: "opencode", model: undefined, provider: undefined },
+    ];
     expect(reviewerFor(uniform, "only").name).toBe("only");
     expect(topOf(uniform).name).toBe("only");
     expect(above(uniform, "only")).toBe(HUMAN);
+  });
+});
+
+describe("providerOf", () => {
+  test("reads the account off the model's provider prefix", () => {
+    expect(providerOf(ladder[0])).toBe("opencode");
+  });
+
+  test("prefers what the config states over what the model implies", () => {
+    // The two can legitimately disagree: a gateway serves another vendor's
+    // model under its own account, and it is the account that has the quota.
+    expect(
+      providerOf({
+        name: "gateway",
+        harness: "opencode",
+        model: "openrouter/gpt-5.6-luna",
+        provider: "openrouter-work",
+      }),
+    ).toBe("openrouter-work");
+  });
+
+  test("names no account for a rung that is only a generic harness", () => {
+    // `opencode` running whatever it defaults to could be signed in to
+    // anything, so nothing here can say whose allowance it spends.
+    expect(
+      providerOf({ name: "top", harness: "opencode", model: undefined, provider: undefined }),
+    ).toBeUndefined();
+  });
+
+  test("reads the claude account from the claude harness", () => {
+    // The claude binary is always signed into the claude.ai account, however
+    // it picks its model, so the harness names the account where the model
+    // does not.
+    expect(
+      providerOf({ name: "top", harness: "claude", model: undefined, provider: undefined }),
+    ).toBe("claude");
+    expect(
+      providerOf({ name: "sonnet", harness: "claude", model: "sonnet", provider: undefined }),
+    ).toBe("claude");
+  });
+
+  test("names no account for a model with no provider on the front", () => {
+    // A bare model id is the harness's own default provider, which the harness
+    // never tells us. Reading it as a provider called "gpt-5" would ask a
+    // question no probe can answer.
+    expect(
+      providerOf({ name: "bare", harness: "opencode", model: "gpt-5", provider: undefined }),
+    ).toBeUndefined();
+  });
+});
+
+describe("providersOf", () => {
+  test("names each account once, however many rungs draw on it", () => {
+    expect(providersOf(ladder)).toEqual(["opencode", "claude"]);
+  });
+});
+
+describe("rungsOn", () => {
+  test("names every rung a spent account stops", () => {
+    // The point of the whole reading: one exhausted account takes out every
+    // rung behind it, so climbing within it buys nothing.
+    expect(rungsOn(ladder, "opencode")).toEqual(["cheap", "middle"]);
+    expect(rungsOn(ladder, "claude")).toEqual(["top"]);
   });
 });

@@ -25,6 +25,15 @@ export interface Rung {
    * rather than a model wants.
    */
   readonly model: string | undefined;
+
+  /**
+   * The account whose allowance this rung spends, where the model does not say.
+   *
+   * Quota belongs to an account rather than to a rung, so this is what several
+   * rungs share when they draw on one plan. Usually derivable — see
+   * `providerOf` — and stated only where it is not.
+   */
+  readonly provider: string | undefined;
 }
 
 /**
@@ -116,3 +125,38 @@ export const HUMAN = "human";
 /** Whether a task at this rung is waiting for a person rather than an agent. */
 export const isYours = (ladder: Ladder, rung: string | undefined): boolean =>
   authorFor(ladder, rung) === undefined;
+
+/**
+ * The account a rung spends, which is what has an allowance.
+ *
+ * opencode names a model `<provider>/<model>`, so for every rung that names one
+ * the account is already written down and stating it again would let the two
+ * drift. The claude harness is the one default that is not in doubt — the
+ * `claude` binary is always signed into the claude.ai account, however it
+ * picks its model — so a rung on it spends `claude` even when it names no
+ * model. Any other rung that names no model, or names one without a provider
+ * on the front, has to be told; until it is, foreman cannot know whether that
+ * rung has room left.
+ */
+export const providerOf = (rung: Rung): string | undefined => {
+  if (rung.provider !== undefined) return rung.provider;
+  if (rung.model !== undefined) {
+    const [provider, ...rest] = rung.model.split("/");
+    if (rest.length > 0 && provider !== undefined && provider.length > 0) return provider;
+  }
+  return rung.harness === "claude" ? "claude" : undefined;
+};
+
+/** Every distinct account the ladder draws on, which is what to ask about. */
+export const providersOf = (ladder: Ladder): ReadonlyArray<string> => [
+  ...new Set(
+    ladder.flatMap((rung) => {
+      const provider = providerOf(rung);
+      return provider === undefined ? [] : [provider];
+    }),
+  ),
+];
+
+/** The rungs a spent account stops, which is every rung that draws on it. */
+export const rungsOn = (ladder: Ladder, provider: string): ReadonlyArray<string> =>
+  ladder.filter((rung) => providerOf(rung) === provider).map((rung) => rung.name);

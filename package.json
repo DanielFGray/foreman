@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@effect/cli": "^0.77.0",
+    "@effect/opentelemetry": "^0.64.0",
     "@effect/platform": "^0.97.1",
     "@effect/platform-bun": "^0.91.2",
     "effect": "^3.22.1",

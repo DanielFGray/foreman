@@ -147,12 +147,11 @@ export interface AgentIdentity {
  * What an agent is in a workspace for. One live agent per role, so a role is
  * also the name of the pane its agent runs in.
  *
- * The pipeline's two are `author` and `review`; a plan run's two are `planner`
- * and `tasker`. They are four roles rather than two because the second agent in
- * a workspace reads what the first one produced, and calling the tasker an
- * author would have it refuse the pane the planner is still sitting in.
+ * The two are `author` and `review`; a review is a second role rather than the
+ * author again because the reviewer reads what the author produced, and calling
+ * it an author would have it refuse the pane the author is still sitting in.
  */
-export const AgentRole = Schema.Literal("author", "review", "planner", "tasker");
+export const AgentRole = Schema.Literal("author", "review");
 export type AgentRole = Schema.Schema.Type<typeof AgentRole>;
 
 /**
@@ -176,6 +175,18 @@ export interface Worker {
    * from foreman's own memory is how you eventually delete somebody's work.
    */
   readonly worktree: string | undefined;
+
+  /**
+   * The checkout this workspace's worktree belongs to — the main repository,
+   * not the linked directory — and absent when the workspace has no worktree
+   * at all.
+   *
+   * This is the only ownership the world records that survives the task being
+   * deleted. Scoping by the task's project instead means asking the store
+   * about every workspace on the machine before knowing whether any of them is
+   * this daemon's, and leaves a workspace whose task is gone unclassifiable.
+   */
+  readonly repository: string | undefined;
   readonly state: WorkerState;
 
   /**
@@ -185,7 +196,7 @@ export interface Worker {
    * A worker carries every role at once so a task reads as its author while it
    * is written and as its reviewer once it is handed off; the caller picks the
    * one it is asking about — `workerFor` takes what the task store says is
-   * active, a plan run takes its current stage. No pane address is kept here: a
+   * active. No pane address is kept here: a
    * dispatch is refused from the pane list itself, and dismissing the author
    * means closing the workspace, which needs only the workspace id.
    */

@@ -1,6 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import type { Rung } from "./ladder.ts";
 
@@ -37,8 +37,55 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         ),
       );
 
-    /** Full detail for one task, including its current status. */
-    const show = (task: string) => runJson(Item, "show", task, "--json");
+    /**
+     * Full detail for one task, or nothing when the store has no such task.
+     *
+     * "There is no such task" is an answer about the world, not a failure to
+     * read it, and the two must not collapse: a workspace whose task was
+     * deleted is residue to surface, while a store that would not answer says
+     * nothing at all and must leave the workspace alone. prog separates them
+     * itself — a missing item exits non-zero with empty stdout — so this is the
+     * one command that reads the exit status rather than the output alone.
+     */
+    const lookup = (task: string) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const process = yield* executor.start(
+            Command.make("prog", "show", task, "--json").pipe(Command.stdout("pipe")),
+          );
+          const [exitCode, stdout] = yield* Effect.all(
+            [process.exitCode, Stream.decodeText(process.stdout).pipe(Stream.mkString)],
+            { concurrency: 2 },
+          );
+          return { exitCode: Number(exitCode), stdout };
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
+        ),
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Schema.decodeUnknown(Schema.parseJson(Item))(result.stdout).pipe(
+                Effect.mapError(
+                  (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
+                ),
+                Effect.map(Option.some),
+              )
+            : Effect.succeedNone,
+        ),
+      );
+
+    /** Full detail for one task, failing when the store has no such task. */
+    const show = (task: string) =>
+      lookup(task).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              new ProgError({ command: `show ${task}`, detail: "no such task in the store" }),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
 
     /**
      * One project's tasks in a given status.
@@ -98,6 +145,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
     return {
       show,
+      lookup,
 
       /** All unblocked, unclaimed tasks, highest priority first. */
       ready: () => runJson(Schema.Array(ReadyTask), "ready", "--json"),
@@ -110,7 +158,10 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * remembered, so the scope survives a restart the way the `by-*` and
        * `rung-*` labels do.
        */
-      focused: () => runJson(Schema.Array(Item), "list", "--label", FOCUS, "--json"),
+      pinned: () => runJson(Schema.Array(Item), "list", "--label", PIN, "--json"),
+
+      setPin: (task: string, pinned: boolean) =>
+        (pinned ? run("label", task, PIN) : run("unlabel", task, PIN)).pipe(Effect.asVoid),
 
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
@@ -296,43 +347,6 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
 
-      /**
-       * Creates a plan epic and returns its id.
-       *
-       * A plan is an epic so its generated tasks can hang off it as children,
-       * and it starts in draft so nothing the fleet reads considers it ready
-       * until the planner has written the specification and opened it. Same id
-       * validation as `add`: the workspace, branch and prompts are all named
-       * from the id, so a malformed one is caught here rather than discovered
-       * three calls later.
-       */
-      addEpic: (
-        project: string,
-        title: string,
-        description: string,
-        labels: ReadonlyArray<string>,
-      ) =>
-        run(
-          "add",
-          title,
-          "-p",
-          project,
-          "-e",
-          "--draft",
-          "-d",
-          description,
-          ...labels.flatMap((l) => ["-l", l]),
-        ).pipe(
-          Effect.flatMap((out) => {
-            const id = out.trim();
-            return /^ep-[0-9a-f]{6}$/.test(id)
-              ? Effect.succeed(id)
-              : Effect.fail(
-                  new ProgError({ command: `add -e ${title}`, detail: `unusable id: ${id}` }),
-                );
-          }),
-        ),
-
       /** The items that belong to one epic. */
       children: (epic: string) => runJson(Schema.Array(Item), "list", "--parent", epic, "--json"),
 
@@ -383,10 +397,7 @@ export const Item = Schema.Struct({
   labels: Schema.Array(Schema.String),
 
   /**
-   * The epic's body text. Plan mode reads it to know whether the planner has
-   * written a specification: the planner replaces the rough plan with the full
-   * spec, so a description that changed during planning is the planner's
-   * deliverable. Null only for items created without a description.
+   * The epic's body text. Null only for items created without a description.
    */
   description: Schema.NullOr(Schema.String),
 
@@ -466,20 +477,11 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
   item.labels.includes(ONBOARD);
 
 /**
- * A focused item. The label is the whole scope: put it on a task, an epic, or
- * several items, and every ready task at or under them becomes the serialized
- * thread the fleet works before anything else.
+ * A pinned item. The label is the whole scope: put it on a task, an epic, or
+ * several items, and every ready task at or under them leads the queue.
  */
-export const isFocused = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(FOCUS);
-
-/**
- * A plan epic: a rough plan that is being turned into a specification and then
- * into tasks. The label is what a resume validates against, and what a future
- * dashboard column groups on.
- */
-export const isPlan = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(PLAN);
+export const isPinned = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(PIN);
 
 /**
  * Which rung of the ladder a task's next dispatch must use, if it has moved off
@@ -523,10 +525,16 @@ export const BUG = "bug";
 export const RUNG = "rung-";
 export const DIAGNOSING = "diagnosing-";
 export const ONBOARD = "onboard";
-export const PLAN = "plan";
 
-/** Marks an item whose ready descendants form the focus scope. */
-export const FOCUS = "focus";
+/**
+ * Marks an item whose ready descendants lead the queue.
+ *
+ * A label and nothing else. Writing priority instead would overwrite a value
+ * that already means something, which then needs the old one stashed somewhere
+ * to restore on unpin — and the only place to stash it is prose in a log line,
+ * which is a database hidden in a comment field.
+ */
+export const PIN = "pin";
 
 /** Prefix of the label counting a rung's unfinished attempts. */
 export const ATTEMPT = "attempt-";

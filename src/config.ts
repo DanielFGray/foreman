@@ -1,7 +1,7 @@
 import { FileSystem, Path } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { authorFor, HUMAN, type Ladder, type Rung, topOf } from "./ladder.ts";
+import { HUMAN, type Ladder, providerOf, type Rung } from "./ladder.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
 export class Settings extends Context.Tag("Settings")<Settings, SettingsShape>() {}
@@ -83,8 +83,13 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // whichever model it defaults to. Everything else names its model.
       const rungOf = (entry: (typeof raw.ladder)[number]): Rung =>
         typeof entry === "string"
-          ? { name: entry, harness: entry, model: undefined }
-          : { name: entry.name, harness: entry.harness, model: entry.model };
+          ? { name: entry, harness: entry, model: undefined, provider: undefined }
+          : {
+              name: entry.name,
+              harness: entry.harness,
+              model: entry.model,
+              provider: entry.provider,
+            };
       const [bottom, ...rest] = raw.ladder;
       const ladder: Ladder = [rungOf(bottom), ...rest.map(rungOf)];
 
@@ -105,26 +110,33 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         });
       }
 
-      // Named by rung, so a plan run is not tied to whichever rung happens to
-      // be cheapest today. Planning is judgement-heavy and runs once per plan,
-      // so it defaults to the top; tasking is structured and runs at the bottom
-      // beside an ordinary author.
-      const namedRung = (named: string | undefined, fallback: Rung) => {
-        if (named === undefined) return Effect.succeed(fallback);
-        const rung = authorFor(ladder, named);
-        return rung
-          ? Effect.succeed(rung)
-          : new ConfigError({ detail: `${file} names a rung "${named}" the ladder does not have` });
-      };
+      // A rung whose account cannot be named is dispatched blind: foreman
+      // cannot ask whether it has room left, so the fleet learns it is out of
+      // quota by spending a run on it. Not an error — a ladder that works
+      // today keeps working — but the operator is the only one who can say
+      // which plan a bare harness is signed in to, so they are told which rung
+      // to write it on. The claude harness is never blind: it always spends
+      // the claude.ai account.
+      const blind = ladder.filter((rung) => providerOf(rung) === undefined);
+      if (blind.length > 0) {
+        yield* Effect.logWarning(
+          `no provider derivable for ${blind
+            .map((rung) => `"${rung.name}"`)
+            .join(
+              ", ",
+            )} in ${file} — add "provider" to each so foreman can read its remaining quota before dispatching`,
+        );
+      }
 
       return {
         projects,
         slots: Option.getOrElse(overrides.slots, () => raw.slots),
         running: overrides.running,
         ladder,
-        planner: yield* namedRung(raw.planner, topOf(ladder)),
-        tasker: yield* namedRung(raw.tasker, ladder[0]),
         pollInterval: raw.pollSeconds,
+        // The signal path is appended to this, so a trailing slash would send
+        // every span to a doubled path the collector does not serve.
+        otlpEndpoint: raw.otlpEndpoint.replace(/\/+$/, ""),
         staleAfter: raw.staleAfterHours,
         coachWindow: raw.coachWindowMinutes,
         landedWindow: raw.landedWindowDays,
@@ -158,10 +170,11 @@ interface SettingsShape {
   /** Whether this run starts dispatching, rather than paused. */
   readonly running: boolean;
   readonly ladder: Ladder;
-  readonly planner: Rung;
-  readonly tasker: Rung;
   readonly pollInterval: number;
   readonly staleAfter: number;
+
+  /** OTLP/HTTP collector base URL, without the signal path. */
+  readonly otlpEndpoint: string;
 
   /** Minutes an author's agent survives its handoff, for a reviewer to coach. */
   readonly coachWindow: number;
@@ -226,20 +239,31 @@ const ConfigFile = Schema.Struct({
         name: Schema.String,
         harness: Schema.String,
         model: Schema.optional(Schema.String),
+
+        /**
+         * The account this rung spends, for the rungs where the model does not
+         * already say. Quota is the account's, not the rung's, so several rungs
+         * naming one provider share one allowance.
+         */
+        provider: Schema.optional(Schema.String),
       }),
     ),
   ),
 
-  /**
-   * The rung that turns a rough plan into a specification, and the rung that
-   * turns that specification into tasks. Named by rung, and named separately
-   * because plan runs happen rarely and their cost is worth a deliberate
-   * choice. Planning defaults to the top of the ladder, tasking to the bottom.
-   */
-  planner: Schema.optional(Schema.String),
-  tasker: Schema.optional(Schema.String),
-
   pollSeconds: Schema.optionalWith(Schema.Positive, { default: () => 20 }),
+
+  /**
+   * Where spans and metrics go — an OTLP/HTTP collector, without the signal
+   * path.
+   *
+   * A local collector by default, and it should stay one: the collector is what
+   * holds the history when a gateway is down, and what forwards it when one
+   * comes back. Naming a remote host here instead moves both of those jobs into
+   * foreman, which remembers nothing and would drop the telemetry instead.
+   */
+  otlpEndpoint: Schema.optionalWith(Schema.String, {
+    default: () => "http://localhost:4318",
+  }),
 
   /**
    * How many times a task may end unfinished on one rung before it climbs.

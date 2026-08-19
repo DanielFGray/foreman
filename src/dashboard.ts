@@ -27,6 +27,7 @@ import {
   type ViewName,
 } from "./view.ts";
 import { rungOf } from "./prog.ts";
+import { stats } from "./stats.ts";
 
 /**
  * The dashboard: the dispatcher's reading of the world, projected onto a
@@ -47,7 +48,7 @@ export const dashboard = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const ui = yield* Ref.make<Ui>({ view: "queue", mode: BROWSE, attention: false });
 
-  const run = <E>(command: Effect.Effect<unknown, E>) =>
+  const run = <E, R>(command: Effect.Effect<unknown, E, R>) =>
     Effect.forkScoped(Effect.catchAllCause(command, Effect.logError));
 
   /**
@@ -73,6 +74,13 @@ export const dashboard = Effect.gen(function* () {
           ? place(before, state, tracked)
           : { ...before, view: moveTo, attention: rowsForView("attention", state).length > 0 };
       if (after !== before) yield* Ref.set(ui, after);
+      // The accounts are read from the network, and a paused fleet has no
+      // other reason to ask. Only the screen knows whether anyone is looking,
+      // so entering and leaving the view is what says so — on the change, not
+      // on every redraw, because the clock redraws once a second.
+      if (after.view !== before.view) {
+        yield* run(dispatcher.watchQuota(after.view === "quota"));
+      }
       const moved =
         moveTo !== undefined || after.view !== before.view || after.mode.kind !== before.mode.kind;
       yield* screen.show(yield* frame(after, state, tracked, dispatcher.rungs, fs, moved));
@@ -97,11 +105,23 @@ export const dashboard = Effect.gen(function* () {
         Match.when("intervene", () => enter({ kind: "intervene", row })),
         Match.when("retry", () => (task ? run(dispatcher.retry(task)) : screen.reject)),
         Match.when("release", () => (task ? run(dispatcher.release(task)) : screen.reject)),
-        Match.when("close", () => (task ? run(dispatcher.close(task)) : screen.reject)),
+        // Named by the workspace, not the task: an orphaned workspace is one
+        // whose task the store has deleted, and it is closed the same way.
+        Match.when("close", () =>
+          row.worker
+            ? run(dispatcher.close({ task: row.worker.task, repository: row.worker.repository }))
+            : screen.reject,
+        ),
         Match.when("takeOver", () =>
           row.worker ? run(dispatcher.focus(row.worker)) : screen.reject,
         ),
         Match.when("focus", () => (row.worker ? run(dispatcher.focus(row.worker)) : screen.reject)),
+        // A queue row carries its task as `ready` and a claimed one as `task`;
+        // the pin is on the id either way, which is the only part both have.
+        Match.when("pin", () => {
+          const id = row.ready?.id ?? row.task?.id;
+          return id ? run(dispatcher.togglePin(id)) : screen.reject;
+        }),
         Match.when("descend", () => (target ? run(dispatcher.descend(target)) : screen.reject)),
         Match.when("unassign", () => (target ? run(dispatcher.unassign(target)) : screen.reject)),
         Match.when("onboard", () =>
@@ -146,6 +166,7 @@ export const dashboard = Effect.gen(function* () {
       return yield* Match.value(command).pipe(
         Match.when("quit", () => screen.close),
         Match.when("log", () => enter({ kind: "log" })),
+        Match.when("stats", () => run(stats)),
         Match.when("viewLeft", () => moveView(-1)),
         Match.when("viewRight", () => moveView(1)),
         Match.when("dispatch", () =>
