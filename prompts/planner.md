@@ -46,10 +46,10 @@ Fix what they find, then re-read the description you are about to write.
 
 ## Finish
 
-Log what you decided with `prog log {{ task }}`, then run `prog open {{ task }}` — that
-is the signal that the specification is complete. Do not file tasks, do not write code,
-and do not commit anything: the next stage reads this specification and turns it into
-tasks itself.
+The specification written into the description of {{ task }} is the whole deliverable —
+the next stage reads it from there and turns it into tasks itself. Log what you decided
+with `prog log {{ task }}`, then stop. Do not file tasks, do not write code, and do not
+commit anything.
 
 If you get stuck — you cannot produce a specification the plan would recognize, or the
 plan describes code that does not exist — stop and leave the task in draft. Log why with

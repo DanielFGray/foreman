@@ -73,6 +73,29 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         Effect.asVoid,
       );
 
+    /**
+     * Removes the attempt labels naming one rung.
+     *
+     * Prefix matching alone would be wrong here: a rung whose name is a prefix
+     * of another's (`deepseek`, `deepseek-flash`) would clear the other's
+     * count. The count must follow the label, so only labels whose suffix is a
+     * plain number are that rung's.
+     */
+    const removeAttempts = (task: string, rung: string) =>
+      show(task).pipe(
+        Effect.flatMap((item) =>
+          Effect.forEach(
+            item.labels.filter((label) => {
+              const prefix = `${ATTEMPT}${rung}-`;
+              return label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length));
+            }),
+            (label) => run("unlabel", task, label),
+            { discard: true },
+          ),
+        ),
+        Effect.asVoid,
+      );
+
     return {
       show,
 
@@ -107,7 +130,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * more than once, and its next author starts a new lifecycle stage.
        */
       attribute: (task: string, kind: string) =>
-        removeLabels(task, [BY, REVIEW_BY, APPROVED]).pipe(
+        removeLabels(task, [BY, REVIEW_BY, APPROVED, SATISFIED]).pipe(
           Effect.andThen(run("label", task, `${BY}${kind}`)),
           Effect.asVoid,
         ),
@@ -119,8 +142,19 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
           Effect.asVoid,
         ),
 
-      /** Rolls back reviewer ownership when the reviewer never started. */
-      clearReview: (task: string) => removeLabels(task, [REVIEW_BY]),
+      /**
+       * Ends a review, and the verdict that went with it.
+       *
+       * The verdict says a reviewer read a diff and found it sound, so it stops
+       * being true the moment the review ends without landing — whichever way
+       * that happens: the reviewer sent the work back, never started, or the
+       * operator cleared it as stale. Leaving `approved` behind is the exact
+       * failure `awaitingLanding` reads: a task back in the queue still
+       * labelled as approved is a pre-approved branch waiting for its next
+       * author, and a reviewer can approve and then return work in the same
+       * turn.
+       */
+      clearReview: (task: string) => removeLabels(task, [REVIEW_BY, APPROVED, SATISFIED]),
 
       /**
        * Records which rung of the ladder a task's next dispatch must use.
@@ -131,12 +165,48 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * can also set the label by hand to pin a task straight to a rung,
        * including `rung-human` for one that needs a person before any agent
        * touches it.
+       *
+       * Any rung change is a fresh start, so the attempt labels are cleared
+       * with it: a count earned on one rung says nothing about the next, and a
+       * task that revisits a lower rung must not inherit the old count.
        */
       setRung: (task: string, rung: string) =>
-        removeLabels(task, [RUNG]).pipe(
+        removeLabels(task, [RUNG, ATTEMPT]).pipe(
           Effect.andThen(run("label", task, `${RUNG}${rung}`)),
           Effect.asVoid,
         ),
+
+      /**
+       * Writes how many times the named rung has ended the task unfinished.
+       *
+       * The rung is named in the label, so a count follows its rung: reading
+       * ignores what a rung the task left recorded, and pinning a task by hand
+       * starts the pinned rung fresh. The old count for the same rung is
+       * removed first, so a rung holds at most one attempt label.
+       */
+      markAttempt: (task: string, rung: string, count: number) =>
+        removeAttempts(task, rung).pipe(
+          Effect.andThen(run("label", task, `${ATTEMPT}${rung}-${count}`)),
+          Effect.asVoid,
+        ),
+
+      /**
+       * Removes the rung label, returning a task to the bottom-rung default.
+       *
+       * The operator lowering a task off the bottom rung, where the ladder
+       * reads no label as the bottom and a `rung-<bottom>` would be a
+       * redundant pin. Foreman itself never clears a rung — it only ever
+       * replaces one on the way up — so this is an operator's correction.
+       */
+      clearRung: (task: string) => removeLabels(task, [RUNG]),
+
+      markDiagnostic: (task: string, intent: DiagnosticIntent) =>
+        removeLabels(task, [DIAGNOSING]).pipe(
+          Effect.andThen(run("label", task, `${DIAGNOSING}${intent}`)),
+          Effect.asVoid,
+        ),
+
+      clearDiagnostic: (task: string) => removeLabels(task, [DIAGNOSING]),
 
       /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
       claimed: (project: string) => byStatus(project, "in_progress"),
@@ -172,21 +242,56 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Claims a task. After this the task is invisible to `ready`. */
       claim: (task: string) => run("start", task).pipe(Effect.asVoid),
 
-      /** Returns a claimed task to the queue. */
-      release: (task: string) => run("open", task).pipe(Effect.asVoid),
+      /**
+       * Returns a task to the queue, and with it everything the last review
+       * said about it.
+       *
+       * `approved` says a reviewer read a diff and found it sound, so it stops
+       * being true the moment the task is handed back for someone to change
+       * that diff — and `awaitingLanding` reads it with no other corroboration.
+       * `attribute` also clears it, which is what has kept a released approval
+       * from landing unreviewed so far, but that puts the invariant a caller
+       * away from the transition it belongs to. Here it holds for every path
+       * that requeues a task, including one that never reaches an author.
+       *
+       * `review-by-*` goes for a sharper reason: left behind, it is read as
+       * evidence of something that never happened. A reviewer that is over and
+       * a task that is open is exactly the shape a rejection leaves, so the
+       * settle loop takes it for one — climbing a second rung and logging that
+       * the reviewer sent work back, on a task whose reviewer approved it and
+       * whose landing failed on the machine. The label is the only record that
+       * a review was dispatched, so whatever ends the review must be what
+       * clears it.
+       */
+      release: (task: string) =>
+        removeLabels(task, [APPROVED, REVIEW_BY, SATISFIED]).pipe(
+          Effect.andThen(run("open", task)),
+          Effect.asVoid,
+        ),
 
       /**
        * Puts a task back in front of a reviewer, whatever state it was in.
        *
-       * How a stranded branch rejoins the pipeline: the commits exist and
+       * How an unread branch rejoins the pipeline: the commits exist and
        * nobody can say whether they are any good, which is the question a
        * reviewer answers. From `reviewing` the ordinary loop takes over.
        *
-       * Claims it first because prog only reviews `in_progress` work, and a
-       * stranded branch's task is usually done or back in the queue.
+       * Claims it first because prog only reviews `in_progress` work, and an
+       * unread branch's task is usually back in the queue, or done, or gone.
        */
       submit: (task: string) =>
-        run("start", task).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
+        removeLabels(task, [APPROVED, SATISFIED]).pipe(
+          Effect.andThen(run("start", task)),
+          Effect.andThen(run("review", task)),
+          Effect.asVoid,
+        ),
+
+      /** Moves already-claimed work to formal review, and with it any stale verdict. */
+      review: (task: string) =>
+        removeLabels(task, [APPROVED, SATISFIED]).pipe(
+          Effect.andThen(run("review", task)),
+          Effect.asVoid,
+        ),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
@@ -244,17 +349,46 @@ export const ReadyTask = Schema.Struct({
   priority: Schema.Number,
   project: Schema.String,
   labels: Schema.Array(Schema.String),
+  created_at: Schema.DateFromString,
+
+  /**
+   * Read here so the queue stays one call per tick.
+   *
+   * The dashboard shows a queued task's description in the same pane as every
+   * other row's, and fetching it per selected row would be a `prog show` on
+   * each cursor movement against the store the dispatcher is already reading.
+   */
+  description: Schema.NullOr(Schema.String),
 });
 export type ReadyTask = typeof ReadyTask.Type;
+
+/** Status values returned by prog for epics and tasks. */
+export const TaskStatus = Schema.Literal(
+  "draft",
+  "open",
+  "in_progress",
+  "reviewing",
+  "done",
+  "canceled",
+);
+export type TaskStatus = typeof TaskStatus.Type;
 
 export const Item = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  status: Schema.String,
+  status: TaskStatus,
   project: Schema.String,
   type: Schema.String,
   priority: Schema.Number,
   labels: Schema.Array(Schema.String),
+
+  /**
+   * The epic's body text. Plan mode reads it to know whether the planner has
+   * written a specification: the planner replaces the rough plan with the full
+   * spec, so a description that changed during planning is the planner's
+   * deliverable. Null only for items created without a description.
+   */
+  description: Schema.NullOr(Schema.String),
 
   /**
    * Later of the task's own update time and its newest log entry.
@@ -265,26 +399,23 @@ export const Item = Schema.Struct({
    * stale as one that died immediately.
    */
   last_activity_at: Schema.DateFromString,
+
+  /**
+   * When the task was filed, which is what the queue ages against.
+   *
+   * An Item stands in for a ReadyTask wherever the dispatcher requeues one it
+   * has already read in full, so the two must agree about what the queue reads.
+   */
+  created_at: Schema.DateFromString,
 });
 export type Item = typeof Item.Type;
 
-/**
- * Work substantial enough to be worth a second agent's time.
- *
- * Priority 3 is the backlog's own statement that a task is minor, and the
- * `trivial` label is the escape hatch for the ones priority does not capture.
- */
-export const needsReview = (item: {
-  readonly priority: number;
-  readonly labels: ReadonlyArray<string>;
-}): boolean => item.priority < 3 && !item.labels.includes(TRIVIAL);
-
 /** Which kind of agent authored the work, if foreman recorded it. */
-export const authoredBy = (item: Item): string | undefined =>
+export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(BY))?.slice(BY.length);
 
 /** Which reviewer currently owns a reviewing task, if one was dispatched. */
-export const reviewedBy = (item: Item): string | undefined =>
+export const reviewedBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
 
 /**
@@ -302,6 +433,26 @@ export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): str
 /** Whether the reviewer accepted the branch for mechanical landing. */
 export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
   item.labels.includes(APPROVED);
+
+/**
+ * The author's claim that the trunk already does what the task asks.
+ *
+ * A backlog outlives the code it describes: work gets done under another
+ * task's branch, or by hand, and the entry for it stays open. An author sent
+ * to one of those has nothing to write, and every ending it can reach says
+ * something false. Committing anything at all fabricates work; stopping is
+ * read as a crash, which costs a rung and dispatches the same discovery again
+ * at a more expensive model, forever.
+ *
+ * So the finding is a claim the author records, and the branch it hands over
+ * is legitimately empty. It is a claim and not a verdict: "it is already done"
+ * is exactly what a model too weak for the task would say to escape it, so a
+ * reviewer confirms it against the trunk like any other diff, and only its
+ * `approved` closes the task. It is cleared wherever `approved` is, for the
+ * same reason — both describe a diff that a requeue has invalidated.
+ */
+export const isSatisfied = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(SATISFIED);
 
 /**
  * Salvage work in a project's own checkout, which only the operator starts.
@@ -336,25 +487,64 @@ export const isPlan = (item: { readonly labels: ReadonlyArray<string> }): boolea
  *
  * Not derivable from `by-*`. A task pinned by hand has never been authored and
  * has no `by-*` label to read at all, and who authored last does not say who
- * authors next: a reviewer's rejection climbs, while an agent that merely
- * stopped stays where it is.
+ * authors next: a reviewer's rejection climbs, while an agent that stopped
+ * without finishing stays on the rung until its attempts run out.
  */
 export const rungOf = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   item.labels.find((label) => label.startsWith(RUNG))?.slice(RUNG.length);
 
+/**
+ * How many times the named rung has ended the task unfinished.
+ *
+ * `0` when the rung has never been tried, or was climbed away from — the label
+ * names its rung, so a stale count from a rung the task left is ignored and a
+ * task pinned by hand starts fresh. The count is what the escalation reads on
+ * a dispatch days later.
+ */
+export const attemptsOf = (
+  item: { readonly labels: ReadonlyArray<string> },
+  rung: string,
+): number => {
+  const prefix = `${ATTEMPT}${rung}-`;
+  const counts = item.labels
+    .filter((label) => label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length)))
+    .map((label) => Number(label.slice(prefix.length)));
+  return counts.length === 0 ? 0 : Math.max(...counts);
+};
+
 /** Prefix of the label naming the kind that authored a task's current branch. */
 export const BY = "by-";
 export const REVIEW_BY = "review-by-";
-export const TRIVIAL = "trivial";
+
+/** The label that marks a task as a defect in shipped code rather than new work. */
+export const BUG = "bug";
 
 /** Prefix of the label naming the rung a task's next dispatch must use. */
 export const RUNG = "rung-";
+export const DIAGNOSING = "diagnosing-";
 export const ONBOARD = "onboard";
 export const PLAN = "plan";
 
 /** Marks an item whose ready descendants form the focus scope. */
 export const FOCUS = "focus";
+
+/** Prefix of the label counting a rung's unfinished attempts. */
+export const ATTEMPT = "attempt-";
 export const APPROVED = "approved";
+
+/** The label carrying an author's claim that the trunk already satisfies a task. */
+export const SATISFIED = "satisfied";
+
+export type DiagnosticIntent = "diagnose" | "review";
+
+export const diagnosticIntent = (item: {
+  readonly labels: ReadonlyArray<string>;
+}): DiagnosticIntent | undefined => {
+  const intent = item.labels
+    .find((label) => label.startsWith(DIAGNOSING))
+    ?.slice(DIAGNOSING.length);
+  return intent === "diagnose" || intent === "review" ? intent : undefined;
+};
 
 export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
   command: Schema.String,

@@ -17,9 +17,17 @@ export class Fleet extends Effect.Tag("Fleet")<
   Fleet,
   {
     /**
-     * Opens the workspace for a task, creating its worktree and branch from
-     * the repository's HEAD. Returns the existing one if it is already open,
-     * so a restart adopts its workspaces instead of duplicating them.
+     * Opens the workspace for a task, resolving in order: a workspace already
+     * carrying this task's label, else a worktree git still has registered for
+     * this task's branch — attaching a fresh workspace to it — else creating
+     * both from the repository's HEAD.
+     *
+     * The worktree is the durable identity and the workspace a view onto it.
+     * A workspace dies when its last pane closes, but the worktree and branch
+     * survive, so resolution reads the durable record second. Without that
+     * step, a task whose workspace a keypress destroyed fell through to
+     * `worktree create`, which fails on a directory that already exists — and
+     * retried that same collision forever instead of re-adopting the work.
      */
     readonly open: (options: OpenOptions) => Effect.Effect<Worker, FleetError>;
 
@@ -36,28 +44,57 @@ export class Fleet extends Effect.Tag("Fleet")<
      */
     readonly attach: (options: AttachOptions) => Effect.Effect<Worker, FleetError>;
 
-    /** Starts an agent on a fresh pane inside a task's workspace. */
+    /** Starts an agent on the workspace's own pane, or a fresh split for a reviewer. */
     readonly spawn: (
       worker: Worker,
       options: SpawnOptions,
     ) => Effect.Effect<AgentIdentity, FleetError>;
 
-    /** Every workspace foreman owns, with what the multiplexer sees in it. */
+    /**
+     * Every workspace labelled `foreman/*`, whatever daemon opened it.
+     *
+     * A label records no ownership, and two daemons against different configs
+     * are not competing for the same slots — so the adapter reports everything
+     * and the dispatcher scopes it to the config's project set, which is the
+     * only ownership the world records.
+     */
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
 
     /** Brings a task's workspace to the front so a human can take over. */
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;
 
+    /** Stops one live role while leaving its workspace and worktree available. */
+    readonly stop: (worker: Worker, role: AgentRole) => Effect.Effect<void, FleetError>;
+
     /**
-     * Closes the workspace, removing the worktree when foreman made one. The
-     * branch survives either way.
+     * Closes a task's workspace, removing the worktree when foreman made one.
+     * The branch survives either way.
+     *
+     * Resolution mirrors `open`: the workspace carrying the task's label, else
+     * a worktree git still has for its branch. The workspace half only needs
+     * the multiplexer; the worktree half re-adopts the worktree to get a
+     * workspace to remove it with — so a worktree whose workspace already
+     * closed, its last pane closed by hand, is removed rather than orphaned.
      */
-    readonly close: (worker: Worker) => Effect.Effect<void, FleetError>;
+    readonly close: (options: CloseOptions) => Effect.Effect<void, FleetError>;
 
     /**
      * Notifies the operator, but only when foreman's own workspace is not the
      * focused one. Telling someone about a thing already on their screen
      * trains them to dismiss notifications without reading them.
+     *
+     * Two rules decide what may come through here, and both exist because they
+     * were broken at once and the fleet dinged on every poll.
+     *
+     * **Only what foreman itself did.** An agent that blocked, stopped or
+     * handed off is herdr's event: herdr sees it first and already alerts.
+     * Foreman announces what herdr cannot know — a branch that landed, a task
+     * that climbed onto the operator, a merge that was undone.
+     *
+     * **Only on a transition, never on a condition.** A tick reads the whole
+     * world back, so a notification on a path that writes nothing fires again
+     * on the next tick, and every tick after. If the code reaching this call
+     * has not written to the task store or the checkout, it must not call it.
      */
     readonly notify: (title: string, body: string) => Effect.Effect<void, FleetError>;
   }
@@ -68,6 +105,16 @@ export interface OpenOptions {
   readonly repository: string;
   readonly branch: string;
   readonly directory: string;
+}
+
+export interface CloseOptions {
+  readonly task: string;
+
+  /**
+   * The project's main checkout, needed only when the workspace is gone and
+   * the worktree must be adopted to be removed.
+   */
+  readonly repository: string | undefined;
 }
 
 export interface AttachOptions {
@@ -96,7 +143,17 @@ export interface AgentIdentity {
   readonly model: string | undefined;
 }
 
-export type AgentRole = "author" | "review";
+/**
+ * What an agent is in a workspace for. One live agent per role, so a role is
+ * also the name of the pane its agent runs in.
+ *
+ * The pipeline's two are `author` and `review`; a plan run's two are `planner`
+ * and `tasker`. They are four roles rather than two because the second agent in
+ * a workspace reads what the first one produced, and calling the tasker an
+ * author would have it refuse the pane the planner is still sitting in.
+ */
+export const AgentRole = Schema.Literal("author", "review", "planner", "tasker");
+export type AgentRole = Schema.Schema.Type<typeof AgentRole>;
 
 /**
  * A task's workspace, as the multiplexer currently sees it.
@@ -120,8 +177,19 @@ export interface Worker {
    */
   readonly worktree: string | undefined;
   readonly state: WorkerState;
-  readonly authorState: WorkerState | undefined;
-  readonly reviewState: WorkerState | undefined;
+
+  /**
+   * What the multiplexer sees in the pane each role runs in, for the roles
+   * that have one.
+   *
+   * A worker carries every role at once so a task reads as its author while it
+   * is written and as its reviewer once it is handed off; the caller picks the
+   * one it is asking about — `workerFor` takes what the task store says is
+   * active, a plan run takes its current stage. No pane address is kept here: a
+   * dispatch is refused from the pane list itself, and dismissing the author
+   * means closing the workspace, which needs only the workspace id.
+   */
+  readonly roles: ReadonlyMap<AgentRole, WorkerState>;
 }
 
 /**
@@ -151,4 +219,18 @@ export const taskOf = (label: string): string | undefined =>
  * repo than outside it.
  */
 export const directoryFor = (project: string, task: string): string =>
-  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman/worktrees/${project}/${task}`;
+  `${stateDirectory()}/worktrees/${project}/${task}`;
+
+/**
+ * Where a project's landings are proved before they are applied.
+ *
+ * One per project, not one per task: it is a scratch checkout, and landings
+ * are serialised by the tick anyway. Reusing it is what lets the project's
+ * installed dependencies survive between landings, which is the difference
+ * between a verification run and a full cold install every time.
+ */
+export const verifyDirectoryFor = (project: string): string =>
+  `${stateDirectory()}/verify/${project}`;
+
+const stateDirectory = () =>
+  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman`;

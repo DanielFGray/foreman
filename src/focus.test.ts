@@ -11,7 +11,9 @@ const item = (id: string, type: "task" | "epic", project = "foreman"): Item => (
   type,
   priority: 1,
   labels: [],
+  description: null,
   last_activity_at: new Date(),
+  created_at: new Date(),
 });
 
 const tree = (children: Record<string, ReadonlyArray<Item>>) => (id: string) =>
@@ -23,6 +25,8 @@ const ready = (id: string, project: string, priority = 1): ReadyTask => ({
   priority,
   project,
   labels: [],
+  description: null,
+  created_at: new Date(),
 });
 
 describe("scopeOf", () => {

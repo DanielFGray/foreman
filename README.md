@@ -36,25 +36,44 @@ and `prog list` together tell you everything foreman knows.
    change nothing — approvals stay human.
 2. **Tidy.** Foreman's merged branches are deleted from every project. `-d`
    refuses anything the checkout does not already have, so only redundant refs
-   go.
+   go. In a jj checkout it also abandons the unpublished merge commits a landing
+   interrupted by a restart leaves behind, which is what landing into foreman's
+   own checkout under `bun --watch` does.
 3. **Reclaim.** A claim with no live worker and no activity for a day goes back
    to the queue. Ownership decides this, not age: a task with a live workspace
    is never touched.
 4. **Fill.** Reviews first, then new work. A task awaiting review is nearly
    finished and is blocking whatever depends on it; an unclaimed task has not
-   started costing anything yet. This is the only step pausing stops, so a
-   paused foreman still lands, tidies and reports.
+   started costing anything yet.
+
+`p` cycles how much work the fleet takes on: **running** → **draining** →
+**paused**, and its label names the state it moves to.
+
+Pausing stops all tick mutations. A paused foreman observes and reports, but
+does not settle, tidy, reclaim, or fill. Draining is the state in between: it
+skips only the new-work half of fill, so reviews, landings and the branch sweep
+keep running and the pipeline empties itself instead of freezing with approved
+branches unlanded. Drain when you want to aim the fleet by hand.
 
 Foreman starts paused. Opening the dashboard to drain the fleet is the common
 case, and it should not be a race against the first tick. Press `p` when you
-want it dispatching.
+want it dispatching, or start it with `--running` to skip the keypress. Nothing
+else survives a restart: the command line is the only thing that carries over,
+so a daemon restarted mid-drain comes back paused.
+
+Use `--running` for anything that restarts by itself. `bun --watch` restarts the
+daemon whenever foreman's own source changes — which is what landing a task into
+foreman's own checkout does — and the command line is the only thing a restart
+carries over.
 
 The poll interval is how long foreman waits to notice something nobody told it
-about. Anything you do in the dashboard — start, pause, retry, release, adopt —
+about. Anything you do in the dashboard — drain, pause, retry, release, adopt —
 ticks at once, so keys never sit waiting out the clock.
 
-A fresh agent pane per attempt and review, rather than long-lived workers fed
-task after task: no context bleeds between stages or unrelated projects.
+A fresh agent per attempt and review, rather than long-lived workers fed task
+after task: no context bleeds between stages or unrelated projects. The author
+runs in the task workspace's own pane; only a reviewer splits a second pane
+beside it.
 
 ## Projects you are working in
 
@@ -66,6 +85,24 @@ branch under you while you edit.
 
 Untracked files do not hold a project. Scratch notes and build output sit in a
 repository for months; counting them would hold it forever.
+
+A checkout with no branch is held as well, because a landing has nothing to
+move: under git that is a detached `HEAD`, and under jj it is a working copy
+with no bookmark behind it.
+
+The held row says which cause it is. An uncommitted change clears itself; a
+missing landing target never does, and needs a hand-run command instead.
+
+### jj projects
+
+A project colocated with jj lands through jj. Foreman moves the bookmark you are
+standing on — the nearest one behind your working copy — rather than merging
+into a branch, because jj has no checked-out branch to merge into. Two things
+follow. A working copy that is not empty holds the project, including files git
+would call untracked, since jj already counts them as yours. And a conflicting
+branch never reaches your directory at all: jj records conflicts instead of
+refusing them, so foreman finds them where it proves the merge and returns the
+task to the queue.
 
 ### Onboarding a held project
 
@@ -86,10 +123,12 @@ that project, so the fleet repairs it as ordinary work with review, rather than
 one unreviewed agent both salvaging and fixing. The project rejoins the queue as
 soon as the tree is clean.
 
-Onboarding runs when you ask, for any held project — foreman cannot tell a
-checkout you stepped away from a fortnight ago from one you are typing in this
-minute, and you can. The task carries an `onboard` label so the queue never
-starts one on its own.
+Onboarding runs when you ask, for a held project whose checkout holds
+uncommitted work — foreman cannot tell a checkout you stepped away from a
+fortnight ago from one you are typing in this minute, and you can. A checkout
+held for a missing branch has nothing to salvage, so the dashboard says what to
+fix instead of offering the run. The task carries an `onboard` label so the
+queue never starts one on its own.
 
 Agents themselves never enter your checkout, with that one exception. Each works in its own worktree
 under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off your current `HEAD`,
@@ -104,12 +143,19 @@ clean.
 Dispatching a task opens a herdr workspace labelled `foreman/<task-id>`, holding
 a git worktree on a branch of the same name. That durable label identifies the
 work; ephemeral agents use valid names derived from their pane because herdr
-agent names cannot contain `/` and old output panes remain visible.
+agent names cannot contain `/`.
 
-The workspace outlives the agents inside it. The author finishes and its pane
-closes; the reviewer opens a fresh pane in the same workspace, against the same
-worktree, beside the author's output. The workspace closes when the task leaves
-the fleet.
+The author runs in the workspace's own pane, so one task is one pane and there
+is no blank shell beside the worker; the reviewer opens a fresh split in the
+same workspace, against the same worktree. A pane whose agent has settled is
+closed, not left standing: an idle opencode process keeps its model resident at
+around 0.7 GiB, so a fleet that never closed one would run out of memory long
+before it ran out of slots. The author's pane is the one exception, kept for a
+short window after it hands off so a reviewer can send one mechanical finding
+back to the session that wrote the code — it closes when that window expires,
+or when the review answers. The worktree and anything uncommitted in it outlive
+the pane, so the next role picks up where the last one stopped, and the
+workspace closes when its last pane does.
 
 A fresh worktree holds committed files only, so the project's dependencies are
 not installed in it and every test, typecheck and lint command fails until they
@@ -126,20 +172,36 @@ already records it. A rejected or abandoned branch stays, because `git branch
 from memory: it is read off the refs each time, so a branch you merge by hand is
 cleaned up the same way.
 
-## Stranded branches
+## Unreviewed branches
 
-A task can be closed, reclaimed or deleted while its branch still holds commits
-the project never took. Every column in the dashboard reads from prog, which
-stops mentioning that branch the moment its task moves on — so the commits go
-quiet rather than missing, which is worse.
+Work can end up sitting on a branch with nobody on the way to read it. A task
+gets reclaimed, or climbs a rung and goes back to the queue, or is closed or
+deleted outright — and its commits stay exactly where the author left them.
+Every column in the dashboard reads from prog, which stops mentioning that
+branch the moment its task moves on, so the commits go quiet rather than
+missing, which is worse. The worst case is the quietest: a task back in the
+queue with seven commits behind it looks like ordinary unstarted work, and the
+author eventually sent to it resumes the work rather than reading it.
 
-Foreman therefore asks git directly for its own branches that `develop` has not
-taken, and drops the ones the queue, the claims or the review list already
-account for. What is left appears in the dashboard's **stranded** column, and `s`
-sends the selected branch back to `reviewing`. A reviewer reads the diff and
-either approves it, landing it through the same gate as anything else, or
-returns it with findings. Nobody can judge abandoned commits from the outside, and that judgement
-is what a review is.
+Foreman therefore asks git directly for its own branches the checkout has not
+taken, and sets aside every task that still reaches an agent on its own. A task
+in the queue with commits behind it is not abandoned — it is next in line, and
+the queue already works oldest first; its row says `resume` so you can see the
+branch is there. The same goes for a claim and for anything in `reviewing`.
+
+What is left has fallen out of every mechanism foreman has: a task marked done
+whose branch never landed, one canceled with commits still on it, one deleted
+outright. Foreman works that list off itself, one per tick, oldest first, with
+no keypress — but only the **done** ones. Those say somebody meant to keep the
+work, so unmerged commits mean a landing that stopped part way, which is
+foreman's own doing to correct. A cancellation is a decision a person made, and
+an automatic review would spend a rung relitigating it; a deleted task has no id
+to dispatch against. Both are shown under **Attention**, and `s` submits one by
+hand.
+
+A reviewer then reads the diff and either approves it, landing it through the
+same gate as anything else, or returns it with findings. Nobody can judge
+abandoned commits from the outside, and that judgement is what a review is.
 
 A branch whose task was deleted outright is listed and left alone. Workspaces,
 prompts and merges are all addressed by task id, so there is nothing left to
@@ -156,6 +218,13 @@ A workspace whose task is neither claimed nor under review is residue — a
 dispatch that failed after opening it — and the dashboard offers `c` to close
 it. The task itself is left alone: a done or canceled task must not be
 reopened, and a queued one is dispatched again into a fresh workspace.
+
+A task whose dispatch fails twice with the same error stops being offered and
+appears under **Attention** as a dispatch failure, with the error on the row.
+The failure is a fact about the world — the worktree or workspace that refused
+it is still there next tick — so waiting changes nothing. Clear the cause and
+press `r` to retry; the log records the failure once with a count rather than a
+line every poll.
 
 Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
@@ -177,26 +246,51 @@ have, and a handoff missing from that list goes straight back to the queue with
 a log line saying so. Nothing committed is unfinished work, whatever the status
 says.
 
+One empty branch is worth a reviewer: the one whose author found that the trunk
+already does what the task asks. A backlog outlives the code it describes, and
+an author sent to an entry like that has nothing it can honestly write —
+committing anything invents work, and stopping reads as a crash, which costs a
+rung and buys the same discovery again at a dearer model. So it records the
+finding as a `satisfied` label and hands off. That is a claim, not a verdict:
+the reviewer confirms it against the trunk part by part, and only its `approved`
+closes the task — with nothing merged and nothing verified, because there is
+nothing to merge. A claim the reviewer cannot confirm is returned like any other
+work.
+
 When a reviewer starts, foreman also writes `review-by-<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
 already running; the label makes that role survive restarts and vanished panes.
-The matching agent pane is labelled `foreman-author` or `foreman-review`, so old
-settled output cannot mask the current role's state.
+The matching agent pane is labelled `foreman-<role>`, so old settled output
+cannot mask the current role's state.
+
+The world records that a reviewer was dispatched, not whether it is still alive.
+A task that is open in the queue with a `review-by-*` label and no live reviewer
+behind it has a stale label, and only you can say so: the dashboard's `u` clears
+it — the same `prog unlabel` foreman runs when a review ends.
 
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
 On approval the reviewer adds the durable `approved` verdict. Foreman then checks
-the shared checkout again, merges the branch, runs the project's `verify` command,
-and marks the task done. A dirty checkout leaves the approval waiting for a later
-tick; a conflicting merge is aborted and returned to the queue. The reviewer needs
-neither merge nor completion rights.
+the shared checkout again, proves the merge, applies it, and marks the task done.
+A dirty checkout leaves the approval waiting for a later tick; a conflicting
+merge is returned to the queue. The reviewer needs neither merge nor completion
+rights.
 
-`verify` runs twice, before the merge and after it. A branch that turns a green
-checkout red is reset away and the task goes back to the queue carrying the
-failure output — the next author's whole job is that output. A checkout that was
-already red still takes the merge, because one broken test would otherwise hold
-every task in the fleet. Name it per project:
+Proving happens somewhere disposable: a scratch checkout of the project under
+`$XDG_STATE_HOME/foreman/verify/`, reset to your current tip. The merge is made
+there and the project's `verify` command runs there, so no test suite ever runs
+in a directory you are working in, and nothing has to be undone in yours when
+one fails. What then lands in your checkout is that same commit — git
+fast-forwards onto it, jj moves the bookmark to it — so you get the exact tree
+that was verified, and only if your tip has not moved meanwhile.
+
+A branch that turns a green project red never lands, and the task goes back to
+the queue carrying the failure output — the next author's whole job is that
+output. `verify` runs a second time on the pre-merge tree to establish that,
+and only after a failure, since that is the only time the question is live. A
+project that was already red still takes the merge, because one broken test
+would otherwise hold every task in the fleet. Name the command per project:
 
 ```jsonc
 "projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]
@@ -205,10 +299,9 @@ every task in the fleet. Name it per project:
 Who reviews whom is derived, not configured: the reviewer is the rung above the
 one that wrote the code. Cheap work gets expensive eyes; the top rung reviews
 itself, which still helps — fresh eyes on the same model read the diff as a
-stranger would. Priority
-3 and anything labelled `trivial` skips the reviewing agent. It does not skip
-landing: that work goes from `prog review` straight into the merge and verify
-gate, so every branch reaches your checkout the same way.
+stranger would. Every branch is reviewed: no priority and no label routes work
+around the reviewer, because a task's own estimate of how small it is arrives
+before anybody has read the diff.
 
 A re-dispatch replaces the `by-` label rather than adding to it: the question the
 reviewer asks is who wrote the code on this branch now, not who has ever touched
@@ -236,14 +329,30 @@ that is only a harness, running whatever that program defaults to. Two rungs may
 share a harness and differ only in model, which is the point: without the model,
 every rung would be the same rung.
 
-A task starts at the bottom. It climbs one rung — never a jump — when the rung it
-is on demonstrably failed it: the agent settled without finishing, a reviewer
-sent the work back, or the branch would not land. Foreman writes the new rung as
-a `rung-<name>` label, in the task store rather than in its own memory, because
-the evidence that a rung failed here is exactly what a dispatch days later, after
-a restart, needs to act on. Set the label by hand to pin a task to a rung.
+A task starts at the bottom. It climbs one rung — never a jump — on real evidence
+that the rung it is on failed it: a reviewer sent the work back, the branch would
+not land, or the rung has been spent by `attemptsPerRung` attempts that ended
+without finishing. An agent that merely stopped unfinished has said nothing about
+its model — a crash, a timeout and a usage wall all end the same way — so the
+task stays on the rung and is tried again. Foreman writes the new rung as a
+`rung-<name>` label, and the retry count as an `attempt-<rung>-<n>` label, in the
+task store rather than in its own memory, because the evidence that a rung failed
+here is exactly what a dispatch days later, after a restart, needs to act on. Set
+the label by hand to pin a task to a rung.
 
 The rung is a property of the task, never of which slot happened to be free.
+
+### Intervening in stuck work
+
+`e` opens an intervention menu for the selected task. Continue stops any live
+role, preserves its worktree and uncommitted edits, asks which configured rung
+should take over, and dispatches it immediately. Diagnose and Review appear only
+when a branch or surviving worktree proves there is work to inspect. A committed
+branch enters formal review; uncommitted Review and Diagnose run a chosen agent
+that may fix trivia and logs findings before Foreman resumes the original rung.
+
+The diagnostic lifecycle is durable. Its `diagnosing-*` task label and labelled
+agent pane survive a Foreman restart; no intervention depends on process memory.
 
 ### The top of the ladder is you
 
@@ -257,12 +366,18 @@ could finish it — a task the best model could not do should stop, not cycle. O
 you pin it there with `prog label <task> rung-human`, which is what work that was
 never specified needs: dispatching it once to discover that wastes a run.
 
-It waits in the dashboard's **yours** column, and foreman notifies you, the same
+It waits under dashboard **Attention**, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
-column takes no key at all. That is the design: a key to put the task back would
+column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
 task with `prog append`, then `prog unlabel <task> rung-human`, in that order.
 The next author reads the answer in the description.
+
+The one exception is `x`, which lowers the task one rung — including down from
+`rung-human` to the strongest model. A rung is only ever as good as the evidence
+that wrote it, and a bug or a killed run can write one that was never earned, so
+the operator correcting the climb is the same sort of correction `prog unlabel`
+used to be. `x` writes exactly the `rung-*` label foreman would have written.
 
 A rung label naming a model the config no longer has is yours too. The claim
 "this task needs at least this much" cannot be read once the model is gone, and
@@ -274,6 +389,14 @@ One global `prog ready`, restricted to the allowlisted projects after prog has
 applied dependency gates. Tasks are highest priority first, with ties broken by
 rotating between projects — otherwise one project holding a hundred priority-1
 tasks would own the entire fleet until it ran dry.
+
+Two things bend that order. Waiting earns a task a bounded amount of urgency, so
+low-priority work is not starved forever but cannot displace new urgent work
+either. And anything labelled `bug` enters holding more credit than waiting can
+ever earn, so defects lead their priority band on arrival: a backlog filed
+almost entirely at one priority otherwise sorts by age alone, which dispatches
+defects in the order they were discovered, behind whatever feature batch was
+entered first.
 
 ## Focus
 
@@ -330,10 +453,13 @@ the running dispatcher ignores the plan itself while picking up its opened
 children as ordinary reviewed work. Generated tasks carry `--priority 2`, so the
 fleet reviews them like any other real work.
 
-The epic's stored status is the plan's state machine: `draft` while the planner
-works, `open` once the specification is written, `done` once the tasker has
-finished. An interrupted run leaves its workspace in place, and
-`foreman plan --epic ep-…` adopts it and continues from wherever it stopped.
+An epic is a draft in prog until it has child tasks, and its status is derived
+from them, so the plan's state machine follows what the agents leave in the
+store: `draft` while the planner works, no longer `draft` once the tasker has
+filed the first child, `done` once the tasker's `prog done` closes it. An
+interrupted run leaves its workspace in place, and `foreman plan --epic ep-…`
+adopts it and continues from wherever it stopped — an epic with no children
+replans, one with children re-tasks.
 
 ## Configuration
 
@@ -355,6 +481,11 @@ strictly.
   ],
   "planner": "claude",      // turns a rough plan into a specification (default: the top rung)
   "tasker": "deepseek",     // turns the specification into tasks (default: the bottom rung)
+  // How many attempts one rung gets before an unfinished task climbs to the
+  // next. A crash, a timeout or a usage wall says nothing about the model, so
+  // the first attemptsPerRung - 1 retry in place; a reviewer rejection or a
+  // branch that will not land climbs at once and spends none of it.
+  "attemptsPerRung": 2,
   "pollSeconds": 20,
   "staleAfterHours": 24,
   "landedWindowDays": 7,
@@ -394,8 +525,8 @@ bun src/main.ts               # from a pane inside the multiplexer
 bun src/main.ts --slots 1     # one at a time, to watch a change land
 ```
 
-It comes up paused: it lands what is finished and tidies what died, and waits
-for `p` before it starts anything new.
+It comes up paused: it observes and reports, and waits for `p` before it changes
+anything.
 
 `--slots` (`-n`) is the one setting available on the command line, because it is
 the one an operator changes per run. Everything else describes the fleet and

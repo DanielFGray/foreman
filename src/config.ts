@@ -25,13 +25,19 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       const path = yield* Path.Path;
       const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
 
+      // A FOREMAN_CONFIG that is relative must be resolved against the working
+      // directory here: it is handed to a dynamic import() below, which treats
+      // a relative string as a module specifier and looks for it beside this
+      // file instead. Absolute paths pass through resolve unchanged.
+      const configured = process.env["FOREMAN_CONFIG"];
       const file =
-        process.env["FOREMAN_CONFIG"] ??
-        path.join(
-          process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
-          "foreman",
-          "config.jsonc",
-        );
+        configured === undefined
+          ? path.join(
+              process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
+              "foreman",
+              "config.jsonc",
+            )
+          : path.resolve(configured);
 
       // Imported rather than read and parsed: Bun's loader accepts comments and
       // trailing commas in .jsonc, so the config can explain itself without
@@ -114,19 +120,32 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       return {
         projects,
         slots: Option.getOrElse(overrides.slots, () => raw.slots),
+        running: overrides.running,
         ladder,
         planner: yield* namedRung(raw.planner, topOf(ladder)),
         tasker: yield* namedRung(raw.tasker, ladder[0]),
         pollInterval: raw.pollSeconds,
         staleAfter: raw.staleAfterHours,
+        coachWindow: raw.coachWindowMinutes,
         landedWindow: raw.landedWindowDays,
+        attemptsPerRung: raw.attemptsPerRung,
       } as const;
     }),
   ).pipe(Layer.provide(BunContext.layer));
 
-/** What the command line may say instead of the config file. */
+/**
+ * What the command line says: values that stand in for the config file, and
+ * values only a single run can have.
+ *
+ * `running` is the second kind. Whether dispatch is paused is an intention, not
+ * a description of the fleet, so it has no place in a file that outlives the
+ * run — but it does have to survive a restart, because `bun --watch` restarts
+ * the daemon whenever foreman's own source changes and the command line is the
+ * only thing a restart inherits.
+ */
 export interface Overrides {
   readonly slots: Option.Option<number>;
+  readonly running: boolean;
 }
 
 interface SettingsShape {
@@ -136,12 +155,28 @@ interface SettingsShape {
     readonly verify: string | undefined;
   }>;
   readonly slots: number;
+  /** Whether this run starts dispatching, rather than paused. */
+  readonly running: boolean;
   readonly ladder: Ladder;
   readonly planner: Rung;
   readonly tasker: Rung;
   readonly pollInterval: number;
   readonly staleAfter: number;
+
+  /** Minutes an author's agent survives its handoff, for a reviewer to coach. */
+  readonly coachWindow: number;
   readonly landedWindow: number;
+
+  /**
+   * How many attempts one rung of the ladder gets before a task climbs.
+   *
+   * An agent that stops without finishing — a crash, a timeout, a usage wall —
+   * has said nothing about its model, so the task retries the same rung rather
+   * than paying for a stronger one. Only repeated failure exhausts the rung.
+   * A reviewer that sends work back is a judgement about the work and climbs
+   * immediately, so it spends none of this budget.
+   */
+  readonly attemptsPerRung: number;
 }
 
 const ConfigFile = Schema.Struct({
@@ -177,11 +212,12 @@ const ConfigFile = Schema.Struct({
    * ladder has nothing to dispatch, and a default here would silently pick
    * somebody's models for them.
    *
-   * A task starts at the bottom and climbs one rung each time the rung it is on
-   * demonstrably fails it. `name` is what tasks record and the dashboard shows,
-   * `harness` is a herdr agent kind, and `model` is passed to that harness as
-   * `--model`. A bare string is a rung that is only a harness, running whatever
-   * that program defaults to.
+   * A task starts at the bottom and climbs one rung on real evidence that the
+   * rung it is on failed it — a reviewer sending work back, a branch that
+   * would not land, or `attemptsPerRung` attempts ending unfinished. `name` is
+   * what tasks record and the dashboard shows, `harness` is a herdr agent
+   * kind, and `model` is passed to that harness as `--model`. A bare string is
+   * a rung that is only a harness, running whatever that program defaults to.
    */
   ladder: Schema.NonEmptyArray(
     Schema.Union(
@@ -206,11 +242,35 @@ const ConfigFile = Schema.Struct({
   pollSeconds: Schema.optionalWith(Schema.Positive, { default: () => 20 }),
 
   /**
+   * How many times a task may end unfinished on one rung before it climbs.
+   *
+   * An agent that stops without finishing says nothing about its model — a
+   * crash, a timeout and a usage wall all end the same way — so the task stays
+   * on the rung and is tried again. The attempt that reaches this limit is the
+   * one that climbs; a reviewer rejecting the work climbs at once and spends
+   * none of it. Both are written to the task as labels, so the count survives
+   * a dispatch days later.
+   */
+  attemptsPerRung: Schema.optionalWith(Schema.Positive, { default: () => 2 }),
+
+  /**
    * How long a claimed task may go without activity before the queue takes it
    * back. Long enough that a human working slowly on their own claim is not
    * interrupted.
    */
   staleAfterHours: Schema.optionalWith(Schema.Positive, { default: () => 24 }),
+
+  /**
+   * How long an author's agent is kept alive after it hands off, so the
+   * reviewer can send mechanical findings back to the session that wrote the
+   * code instead of paying a rung climb to re-derive its context.
+   *
+   * The cost is a second resident model per task in review, so this bounds it:
+   * past the window foreman closes the pane itself and the reviewer simply
+   * loses the option. Reviews are filled before new work, so the window only
+   * matters when reviews are queued behind a held project.
+   */
+  coachWindowMinutes: Schema.optionalWith(Schema.Positive, { default: () => 30 }),
 
   /**
    * How far back the dashboard's landed column reaches. prog list has no

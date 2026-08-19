@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { above, authorFor, HUMAN, isYours, type Ladder, reviewerFor, topOf } from "./ladder.ts";
+import {
+  above,
+  authorFor,
+  below,
+  HUMAN,
+  isYours,
+  type Ladder,
+  reviewerFor,
+  rungSpent,
+  topOf,
+} from "./ladder.ts";
 
 const ladder: Ladder = [
   { name: "cheap", harness: "opencode", model: "opencode/deepseek-v4-pro" },
@@ -36,6 +46,51 @@ describe("above", () => {
   test("stops at the operator rather than cycling", () => {
     expect(above(ladder, "top")).toBe(HUMAN);
     expect(above(ladder, HUMAN)).toBe(HUMAN);
+  });
+});
+
+describe("below", () => {
+  test("lowers one rung at a time", () => {
+    expect(below(ladder, "middle")).toBe("cheap");
+    expect(below(ladder, "top")).toBe("middle");
+  });
+
+  test("has nothing to write below the bottom rung", () => {
+    // The ladder reads no label as the bottom, so descending off it removes
+    // the label rather than pinning a redundant rung-<bottom>.
+    expect(below(ladder, undefined)).toBeUndefined();
+    expect(below(ladder, "cheap")).toBeUndefined();
+  });
+
+  test("brings a task back down from the operator", () => {
+    // A person was never a model, so the first step down from HUMAN is the
+    // strongest model, not a jump to the bottom.
+    expect(below(ladder, HUMAN)).toBe("top");
+  });
+
+  test("reads a rung the config no longer has as sitting above the top", () => {
+    // Like above(): an unreadable claim cannot be positioned, so it is treated
+    // as though it sits just above the top rung.
+    expect(below(ladder, "retired")).toBe("top");
+  });
+});
+
+describe("rungSpent", () => {
+  test("retries in place until the rung's attempts run out", () => {
+    // A crash, a timeout and a usage wall say nothing about the model, so the
+    // first attemptsPerRung - 1 failures stay on the rung.
+    expect(rungSpent(1, 2)).toBe(false);
+    expect(rungSpent(2, 3)).toBe(false);
+  });
+
+  test("climbs on the attempt that reaches the limit", () => {
+    expect(rungSpent(2, 2)).toBe(true);
+    expect(rungSpent(3, 3)).toBe(true);
+    expect(rungSpent(4, 2)).toBe(true);
+  });
+
+  test("with attemptsPerRung 1, every failure climbs", () => {
+    expect(rungSpent(1, 1)).toBe(true);
   });
 });
 

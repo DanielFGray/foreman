@@ -1,8 +1,10 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Data, Effect, Layer, Schema, Stream } from "effect";
+import { Either, Effect, Layer, Match, Schema, Stream } from "effect";
 import {
+  AgentRole,
   type AttachOptions,
+  type CloseOptions,
   Fleet,
   FleetError,
   labelFor,
@@ -130,73 +132,137 @@ export const HerdrFleet = Layer.effect(
           const workspacePanes = panes.result.panes.filter(
             (candidate) => candidate.workspace_id === workspace.workspace_id,
           );
-          // Split from the workspace's shell when possible. Agent panes remain
-          // visible after settlement and may still host an idle process.
-          const pane =
-            workspacePanes.find(
-              (candidate) => candidate.agent === undefined && candidate.label === undefined,
-            ) ?? workspacePanes[0];
+          const pane = paneFor(workspacePanes);
           if (!pane) return [];
-          const author = workspacePanes.find((candidate) => candidate.label === AUTHOR_PANE);
-          const review = workspacePanes.find((candidate) => candidate.label === REVIEW_PANE);
           return [
             {
               task,
               workspace: workspace.workspace_id,
               pane: pane.pane_id,
               directory: workspace.worktree?.checkout_path ?? pane.cwd,
-              worktree: workspace.worktree?.checkout_path,
+              // A linked worktree is one foreman made; a workspace attached to
+              // a checkout that was already there reports a worktree that is
+              // not linked. The field says which directory teardown may
+              // delete, so it keys on that distinction rather than on the mere
+              // presence of a checkout path.
+              worktree: workspace.worktree?.is_linked_worktree
+                ? workspace.worktree.checkout_path
+                : undefined,
               // Workspace status is an attention aggregate where an unseen old
               // done pane outranks current work. Dispatch needs operational
               // state, so aggregate the panes with live work first instead.
               state: workerStateOf(workspacePanes.map((candidate) => candidate.agent_status)),
-              authorState: author ? workerStateOf([author.agent_status]) : undefined,
-              reviewState: review ? workerStateOf([review.agent_status]) : undefined,
+              roles: rolesOf(workspacePanes),
             } satisfies Worker,
           ];
         }),
       ),
     );
 
+    /** Every worktree git has registered in a project's checkout. */
+    const worktreesFor = (repository: string) =>
+      herdrJson(WorktreeList, "open", "worktree", "list", "--cwd", repository).pipe(
+        Effect.map((list) => list.result.worktrees),
+      );
+
+    /**
+     * Attaches a fresh workspace to a worktree git already has, returning it
+     * like a created one. This is the durable half of open and close: a
+     * worktree survives its workspace, so reaching the work does not.
+     */
+    const adoptWorktree = (options: {
+      readonly task: string;
+      readonly repository: string;
+      readonly branch: string;
+    }) =>
+      herdrJson(
+        WorktreeResolved,
+        "open",
+        "worktree",
+        "open",
+        "--cwd",
+        options.repository,
+        "--branch",
+        options.branch,
+        "--label",
+        labelFor(options.task),
+        "--no-focus",
+      ).pipe(
+        Effect.map(
+          (opened) =>
+            ({
+              task: options.task,
+              workspace: opened.result.workspace.workspace_id,
+              pane: opened.result.root_pane.pane_id,
+              directory: opened.result.worktree.path,
+              worktree: opened.result.worktree.path,
+              state: "gone",
+              roles: new Map(),
+            }) satisfies Worker,
+        ),
+      );
+
+    /** Creates the worktree and the workspace over it in one call. */
+    const createWorktree = (options: OpenOptions) =>
+      herdrJson(
+        WorktreeResolved,
+        "open",
+        "worktree",
+        "create",
+        "--cwd",
+        options.repository,
+        "--branch",
+        options.branch,
+        "--base",
+        "HEAD",
+        "--path",
+        options.directory,
+        "--label",
+        labelFor(options.task),
+        "--no-focus",
+      ).pipe(
+        Effect.map(
+          (created) =>
+            ({
+              task: options.task,
+              workspace: created.result.workspace.workspace_id,
+              pane: created.result.root_pane.pane_id,
+              directory: created.result.worktree.path,
+              worktree: created.result.worktree.path,
+              state: "gone",
+              roles: new Map(),
+            }) satisfies Worker,
+        ),
+      );
+
+    /** Removes a worktree whose workspace herdr has already dropped. */
+    const removeWorktreeByAdoption = (repository: string, task: string) =>
+      adoptWorktree({ task, repository, branch: labelFor(task) }).pipe(
+        Effect.flatMap((adopted) =>
+          herdr("close", "worktree", "remove", "--workspace", adopted.workspace, "--force"),
+        ),
+      );
+
     return {
       roster,
 
       open: (options: OpenOptions) =>
         Effect.gen(function* () {
-          // Adopting an existing workspace is what makes a restart safe: the
-          // label is the identity, so foreman recognises work it started in a
-          // previous life instead of opening a second workspace beside it.
-          const existing = (yield* roster).find((worker) => worker.task === options.task);
-          if (existing) return existing;
-
-          const created = yield* herdrJson(
-            WorktreeCreated,
-            "open",
-            "worktree",
-            "create",
-            "--cwd",
-            options.repository,
-            "--branch",
-            options.branch,
-            "--base",
-            "HEAD",
-            "--path",
-            options.directory,
-            "--label",
-            labelFor(options.task),
-            "--no-focus",
+          const resolution = resolveOpen(
+            yield* roster,
+            yield* worktreesFor(options.repository),
+            options,
           );
-
-          return {
-            task: options.task,
-            workspace: created.result.workspace.workspace_id,
-            pane: created.result.root_pane.pane_id,
-            directory: created.result.worktree.path,
-            worktree: created.result.worktree.path,
-            state: "gone",
-            authorState: undefined,
-            reviewState: undefined,
-          } satisfies Worker;
+          return yield* Match.value(resolution).pipe(
+            Match.when({ kind: "workspace" }, ({ worker }) => Effect.succeed(worker)),
+            Match.when({ kind: "worktree" }, ({ worktree }) =>
+              Effect.logInfo(
+                `adopting ${options.branch} at ${worktree.path}: its workspace closed but the worktree survives`,
+              ).pipe(Effect.andThen(adoptWorktree(options))),
+            ),
+            Match.when({ kind: "create" }, () => createWorktree(options)),
+            Match.exhaustive,
+          );
         }),
 
       attach: (options: AttachOptions) =>
@@ -223,52 +289,98 @@ export const HerdrFleet = Layer.effect(
             directory: options.repository,
             worktree: undefined,
             state: "gone",
-            authorState: undefined,
-            reviewState: undefined,
+            roles: new Map(),
           } satisfies Worker;
         }),
 
       spawn: (worker: Worker, options: SpawnOptions) =>
         Effect.gen(function* () {
-          const role = options.role === "author" ? AUTHOR_PANE : REVIEW_PANE;
-          const previous = yield* herdrJson(PaneList, "spawn", "pane", "list").pipe(
-            Effect.map((panes) =>
-              panes.result.panes.filter(
-                (pane) => pane.workspace_id === worker.workspace && pane.label === role,
-              ),
-            ),
-          );
+          const role = paneLabelFor(options.role);
 
-          // A fresh pane for every agent, including the first. The workspace's
-          // own pane stays a shell you can type in, and a reviewer arrives
-          // beside the author's output rather than on top of it.
-          const split = yield* herdrJson(
-            PaneSplit,
+          // One *running* agent per role per workspace, checked against the
+          // multiplexer rather than against anything foreman remembers. Two
+          // agents working one worktree edit over each other, so a role still
+          // working or blocked refuses the dispatch — and refusing is right,
+          // because the caller hands the claim back and the slot goes to
+          // somebody else.
+          //
+          // A settled agent is not that. It has stopped, it is editing nothing,
+          // and nothing will ever end it on its own: herdr cannot stop an agent
+          // without closing the pane it runs in, and the paths that keep a
+          // workspace across dispatches — a reviewer returning work, a vanished
+          // author's edits — keep its role panes too. Reading settled as live
+          // made those the permanent stall: the task returns to the queue, the
+          // queue offers it back, and the same refusal repeats every poll
+          // forever. Settled panes are spent, and are closed below.
+          const workspacePanes = (yield* herdrJson(
+            PaneList,
             "spawn",
             "pane",
-            "split",
-            "--pane",
-            worker.pane,
-            // Required by herdr, and side by side is the useful one: a reviewer
-            // reads the diff next to the author's output rather than under it.
-            "--direction",
-            "right",
-            "--cwd",
-            worker.directory,
-            "--no-focus",
-          );
-          const pane = split.result.pane.pane_id;
+            "list",
+            "--workspace",
+            worker.workspace,
+          )).result.panes;
+          const held = workspacePanes.filter((pane) => pane.label === role);
+          const live = held.find((pane) => stillRunning(workerStateOf([pane.agent_status])));
+          if (live) {
+            return yield* new FleetError({
+              operation: "spawn",
+              detail: `${worker.workspace} already runs a ${role} in ${live.pane_id}${live.agent_session?.value ? ` (${live.agent_session.value})` : ""}`,
+            });
+          }
+
+          // Placement is read off the workspace rather than declared per role.
+          // The first agent takes the workspace's own pane, because splitting
+          // one for it used to leave a blank shell beside every worker; the
+          // next role splits off it, and its pane lands beside the output it
+          // was sent to read — which is the layout both a review and a plan's
+          // tasking stage are for.
+          //
+          // A pane that already carries this role is never reused, even by the
+          // same role: the settled agent inside it can only be ended by closing
+          // it, so the replacement has to be split before the spent one goes.
+          // Splitting first is also what keeps the workspace alive when the
+          // spent pane is its only one.
+          const own = workspacePanes.find((pane) => pane.pane_id === worker.pane);
+          const split =
+            own?.label !== undefined
+              ? yield* herdrJson(
+                  PaneSplit,
+                  "spawn",
+                  "pane",
+                  "split",
+                  "--pane",
+                  worker.pane,
+                  // Required by herdr, and side by side is the useful one: a
+                  // reviewer reads the diff next to the author's output rather
+                  // than under it.
+                  "--direction",
+                  "right",
+                  "--cwd",
+                  worker.directory,
+                  "--no-focus",
+                )
+              : undefined;
+          const pane = split?.result.pane.pane_id ?? worker.pane;
           const agent = agentNameFor(pane);
 
-          // The pane exists from here on, so every later failure has to take it
-          // back down. Without this an agent that fails to start leaves an
-          // empty pane behind on every retry, and retrying is what the
-          // dispatcher does for a living.
+          // A failure takes back the pane this dispatch made, and nothing else.
+          // The first role in a workspace takes the workspace's own pane, which
+          // pre-dates the dispatch: closing it would close the workspace and
+          // orphan its worktree. So that failure is left as residue for the
+          // operator, exactly like a spawn that failed before any pane existed.
           return yield* Effect.gen(function* () {
             yield* herdr("spawn", "pane", "rename", pane, role);
+
+            // The spent panes go, rather than losing their label. None of them
+            // is running — a working or blocked one refused the dispatch above
+            // — and closing the pane is the only way to end the settled agent
+            // still sitting in it. Clearing the label instead left a pane
+            // nothing could name, which is how an agent stayed alive in a
+            // workspace foreman believed was empty.
             yield* Effect.forEach(
-              previous,
-              (pane) => herdr("spawn", "pane", "rename", pane.pane_id, "--clear"),
+              held.filter((spent) => spent.pane_id !== pane),
+              (spent) => herdr("spawn", "pane", "close", spent.pane_id).pipe(Effect.ignore),
               { discard: true },
             );
             const started = yield* herdrJson(
@@ -308,27 +420,76 @@ export const HerdrFleet = Layer.effect(
             );
 
             return { kind: options.kind, model };
-          }).pipe(Effect.onError(() => herdr("spawn", "pane", "close", pane).pipe(Effect.ignore)));
+          }).pipe(
+            Effect.onError(() =>
+              split ? herdr("spawn", "pane", "close", pane).pipe(Effect.ignore) : Effect.void,
+            ),
+          );
         }),
+
+      stop: (worker: Worker, role: AgentRole) =>
+        Effect.gen(function* () {
+          const panes = (yield* herdrJson(
+            PaneList,
+            "stop role",
+            "pane",
+            "list",
+            "--workspace",
+            worker.workspace,
+          )).result.panes;
+          // Closing the last pane evaporates the workspace, and that is the
+          // intended end: the worktree and its uncommitted edits outlive it,
+          // and whatever runs next re-adopts them through `open`. Keeping the
+          // view alive with an unlabelled shell leaves a blank pane and a
+          // workspace the roster reads as residue.
+          const held = panes.filter((pane) => pane.label === paneLabelFor(role));
+
+          yield* Effect.forEach(held, (pane) => herdr("stop role", "pane", "close", pane.pane_id), {
+            discard: true,
+          });
+        }).pipe(Effect.asVoid),
 
       focus: (worker: Worker) =>
         herdr("focus", "workspace", "focus", worker.workspace).pipe(Effect.asVoid),
 
-      close: (worker: Worker) =>
-        // Two different teardowns, chosen by who owns the directory. A worktree
-        // foreman created is removed with it; a checkout that was already there
-        // belongs to the operator, and only the workspace over it is closed.
-        // `workspace close` alone would leave the worktree on disk and
-        // registered with git, and `worktree remove` refuses on an attached
-        // workspace and would leave the workspace open.
-        //
-        // The branch is deliberately left behind. If the work merged the branch
-        // is redundant and harmless; if it was rejected the branch is the only
-        // copy of what the agent did.
-        (worker.worktree === undefined
-          ? herdr("close", "workspace", "close", worker.workspace)
-          : herdr("close", "worktree", "remove", "--workspace", worker.workspace, "--force")
-        ).pipe(Effect.asVoid, Effect.ignore),
+      close: (options: CloseOptions) =>
+        Effect.gen(function* () {
+          const workers = yield* roster;
+          const worker = workers.find((candidate) => candidate.task === options.task);
+          const worktrees =
+            worker !== undefined || options.repository === undefined
+              ? []
+              : yield* worktreesFor(options.repository);
+          const resolution = resolveClose(workers, worktrees, options.task);
+          yield* Match.value(resolution).pipe(
+            Match.when({ kind: "workspace" }, ({ worker }) =>
+              herdr("close", "workspace", "close", worker.workspace),
+            ),
+            Match.when({ kind: "worktree" }, ({ worker }) => {
+              if (worker) {
+                return herdr(
+                  "close",
+                  "worktree",
+                  "remove",
+                  "--workspace",
+                  worker.workspace,
+                  "--force",
+                ).pipe(
+                  Effect.orElse(() =>
+                    options.repository
+                      ? removeWorktreeByAdoption(options.repository, options.task)
+                      : Effect.void,
+                  ),
+                );
+              }
+              return options.repository
+                ? removeWorktreeByAdoption(options.repository, options.task)
+                : Effect.void;
+            }),
+            Match.when({ kind: "nothing" }, () => Effect.void),
+            Match.exhaustive,
+          );
+        }).pipe(Effect.asVoid, Effect.ignore),
 
       notify: (title: string, body: string) =>
         Effect.gen(function* () {
@@ -342,7 +503,7 @@ export const HerdrFleet = Layer.effect(
 ).pipe(Layer.provide(BunContext.layer));
 
 /** herdr dropped the prompt because the agent was not listening yet. */
-class Stalled extends Data.TaggedError("Stalled") {}
+class Stalled extends Schema.TaggedError<Stalled>()("Stalled", {}) {}
 
 const STALLED = "agent_prompt_stalled";
 
@@ -377,17 +538,22 @@ const failureOf = (result: Output): string => {
 const errorOf = (result: Output): { code: string; message: string } | undefined =>
   envelopeError(result.stdout) ?? envelopeError(result.stderr);
 
+const ErrorEnvelope = Schema.Struct({
+  error: Schema.optional(
+    Schema.Struct({
+      code: Schema.String,
+      message: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
 const envelopeError = (text: string): { code: string; message: string } | undefined => {
-  try {
-    const parsed = JSON.parse(text) as { error?: { code?: unknown; message?: unknown } };
-    const error = parsed.error;
-    if (!error || typeof error.code !== "string") return undefined;
-    return { code: error.code, message: typeof error.message === "string" ? error.message : "" };
-  } catch {
-    // Not an envelope. herdr printed usage or something else, and `failureOf`
-    // falls back to the raw text rather than pretending this parsed.
-    return undefined;
-  }
+  const parsed = Schema.decodeUnknownEither(Schema.parseJson(ErrorEnvelope))(text);
+  if (Either.isLeft(parsed) || parsed.right.error === undefined) return undefined;
+  return {
+    code: parsed.right.error.code,
+    message: parsed.right.error.message ?? "",
+  };
 };
 
 /**
@@ -403,8 +569,20 @@ export const agentNameFor = (pane: string): string =>
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(-24)}`;
 
-const AUTHOR_PANE = "foreman-author";
-const REVIEW_PANE = "foreman-review";
+/**
+ * A pane label naming the role its agent runs, and the role read back off it.
+ *
+ * Namespaced so a pane a person labelled is never mistaken for foreman's, and
+ * parsed rather than matched against a table: the roles are whatever the port
+ * declares, and a label outside that set belongs to somebody else.
+ */
+const paneLabelFor = (role: AgentRole): string => `foreman-${role}`;
+
+const roleOf = (label: string | undefined): AgentRole | undefined => {
+  if (!label?.startsWith("foreman-")) return undefined;
+  const role = label.slice("foreman-".length);
+  return Schema.is(AgentRole)(role) ? role : undefined;
+};
 
 /**
  * herdr distinguishes idle from done by whether the operator has seen the tab.
@@ -417,6 +595,17 @@ const REVIEW_PANE = "foreman-review";
  * from the task store, and if the task store says nothing happened, the
  * question goes to the operator rather than to a guess.
  */
+/**
+ * Whether an agent in this state must finish before its role is dispatched
+ * again.
+ *
+ * Only work in progress can collide. A settled agent has stopped and is
+ * editing nothing, and nothing will end it on its own — so treating it as a
+ * reason to refuse is a stall with no exit, not caution.
+ */
+export const stillRunning = (state: WorkerState): boolean =>
+  state === "working" || state === "blocked";
+
 export const workerStateOf = (statuses: ReadonlyArray<string>): WorkerState => {
   if (statuses.includes("blocked")) return "blocked";
   if (statuses.some((status) => !["idle", "done", "unknown"].includes(status))) return "working";
@@ -424,7 +613,69 @@ export const workerStateOf = (statuses: ReadonlyArray<string>): WorkerState => {
   return "gone";
 };
 
-const Worktree = Schema.Struct({ checkout_path: Schema.String });
+/**
+ * Which record a task's open resolves to: a workspace carrying its label, else
+ * a worktree git still has for its branch, else neither.
+ *
+ * The order is the point. A workspace is the live view and dies with its last
+ * pane, while the worktree and branch are durable — so the workspace is tried
+ * first for a restart's sake, and the worktree is what keeps a task whose
+ * workspace a keypress destroyed reachable instead of colliding with a
+ * `worktree create` on a directory that already exists.
+ */
+export type OpenResolution =
+  | { readonly kind: "workspace"; readonly worker: Worker }
+  | { readonly kind: "worktree"; readonly worktree: WorktreeRecord }
+  | { readonly kind: "create" };
+
+export const resolveOpen = (
+  workers: ReadonlyArray<Worker>,
+  worktrees: ReadonlyArray<WorktreeRecord>,
+  options: OpenOptions,
+): OpenResolution => {
+  const worker = workers.find((candidate) => candidate.task === options.task);
+  if (worker) return { kind: "workspace", worker };
+  const worktree = worktrees.find(
+    (candidate) => candidate.branch === options.branch && !candidate.is_prunable,
+  );
+  return worktree ? { kind: "worktree", worktree } : { kind: "create" };
+};
+
+/**
+ * Which teardown a task's close resolves to, the same order as open.
+ *
+ * A workspace over a checkout that was already there is only closed; a worktree
+ * foreman made is removed whether or not its workspace survives — when it does,
+ * the remove takes both, and when it does not the worktree is adopted first so
+ * it can be removed at all rather than orphaned in place.
+ */
+export type CloseResolution =
+  | { readonly kind: "workspace"; readonly worker: Worker }
+  | { readonly kind: "worktree"; readonly worker: Worker | undefined }
+  | { readonly kind: "nothing" };
+
+export const resolveClose = (
+  workers: ReadonlyArray<Worker>,
+  worktrees: ReadonlyArray<WorktreeRecord>,
+  task: string,
+): CloseResolution => {
+  const worker = workers.find((candidate) => candidate.task === task);
+  if (worker) {
+    return worker.worktree === undefined
+      ? { kind: "workspace", worker }
+      : { kind: "worktree", worker };
+  }
+  return worktrees.some(
+    (candidate) => candidate.branch === labelFor(task) && !candidate.is_prunable,
+  )
+    ? { kind: "worktree", worker: undefined }
+    : { kind: "nothing" };
+};
+
+const Worktree = Schema.Struct({
+  checkout_path: Schema.String,
+  is_linked_worktree: Schema.Boolean,
+});
 
 const Workspace = Schema.Struct({
   workspace_id: Schema.String,
@@ -445,7 +696,42 @@ const Pane = Schema.Struct({
   label: Schema.optional(Schema.String),
   agent: Schema.optional(Schema.String),
   agent_status: Schema.String,
+  // herdr detects the harness's own session id and reports it here. Optional
+  // because a plain shell has none, and because a pane whose agent has died
+  // may not keep one — which is why foreman must not depend on it alone.
+  agent_session: Schema.optional(Schema.Struct({ value: Schema.optional(Schema.String) })),
 });
+
+type PaneRecord = Schema.Schema.Type<typeof Pane>;
+
+/**
+ * The workspace's own pane: what the author takes and a reviewer splits from.
+ *
+ * Panes come back root-first, so the first is the workspace's own. The
+ * preference exists for the one pane that is not yet the author's — a fresh
+ * workspace's shell — and the fallback keeps the author's pane once it has
+ * taken the root and labelled it, which is what a restart re-reads.
+ */
+export const paneFor = (panes: ReadonlyArray<PaneRecord>): PaneRecord | undefined =>
+  panes.find((candidate) => candidate.agent === undefined && candidate.label === undefined) ??
+  panes[0];
+
+/**
+ * Which role each of a workspace's labelled panes is running, and how that
+ * pane is doing.
+ *
+ * The label is the record. herdr keeps it across dispatches, so a role a
+ * workspace has never run is simply absent, and a role whose agent died is
+ * present and `gone` — which is the difference between a task that was never
+ * reviewed and one whose reviewer vanished.
+ */
+const rolesOf = (panes: ReadonlyArray<PaneRecord>): ReadonlyMap<AgentRole, WorkerState> =>
+  new Map(
+    panes.flatMap((pane) => {
+      const role = roleOf(pane.label);
+      return role ? [[role, workerStateOf([pane.agent_status])] as const] : [];
+    }),
+  );
 
 const PaneList = Schema.Struct({
   result: Schema.Struct({ panes: Schema.Array(Pane) }),
@@ -470,10 +756,27 @@ const WorkspaceCreated = Schema.Struct({
   }),
 });
 
-const WorktreeCreated = Schema.Struct({
+/** A workspace over a worktree, whether the worktree was just made or adopted. */
+const WorktreeResolved = Schema.Struct({
   result: Schema.Struct({
     workspace: Schema.Struct({ workspace_id: Schema.String }),
     root_pane: Schema.Struct({ pane_id: Schema.String }),
     worktree: Schema.Struct({ path: Schema.String }),
   }),
+});
+
+/**
+ * One worktree git has registered, as herdr reports it. `is_prunable` excludes
+ * a registration whose directory is gone — such a worktree has nothing to
+ * adopt and nothing to remove.
+ */
+const WorktreeRecord = Schema.Struct({
+  branch: Schema.optional(Schema.String),
+  path: Schema.String,
+  is_prunable: Schema.Boolean,
+});
+export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecord>;
+
+const WorktreeList = Schema.Struct({
+  result: Schema.Struct({ worktrees: Schema.Array(WorktreeRecord) }),
 });
