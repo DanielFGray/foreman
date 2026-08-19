@@ -21,9 +21,8 @@ Unproven: resuming a plan run that stopped mid-planning or mid-tasking. Only the
 closed state is proven, where `plan --epic` on a done epic reports complete.
 
 The layer set in `main.ts` is `Layer.provideMerge(Dispatcher.Default, base)`.
-`Dispatcher.Default` pulls in `Prog` and `Prompts` itself, and the base set feeds
-it `Settings` and `Fleet`; `mergeAll` builds them in parallel and cannot satisfy
-that.
+The base set feeds `Dispatcher` all of its ports, including `Settings`, `Fleet`,
+`Prog`, `Prompts` and `Repository`; `mergeAll` builds them in parallel.
 
 ## The design, and why
 

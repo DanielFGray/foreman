@@ -10,6 +10,7 @@ import { logging } from "./log.ts";
 import { runPlan } from "./plan.ts";
 import { Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
+import { Repository } from "./repository.ts";
 import { BOUND_KEYS } from "./view.ts";
 import { fzfScreen } from "./screen.ts";
 
@@ -102,7 +103,15 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
 const live = (overrides: Overrides) =>
   Layer.provideMerge(
     Dispatcher.Default,
-    Layer.mergeAll(HerdrFleet, settings(overrides), logging(), fzfScreen(BOUND_KEYS)),
+    Layer.mergeAll(
+      HerdrFleet,
+      settings(overrides),
+      Prog.Default,
+      Prompts.Default,
+      Repository.Default,
+      logging(),
+      fzfScreen(BOUND_KEYS),
+    ),
   );
 
 /** Plan mode needs the same world as the daemon minus the dispatcher. */
