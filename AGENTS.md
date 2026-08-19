@@ -344,6 +344,23 @@ the author's completed handoff and the whole review run. `review-by-*` records
 the latter, so a vanished worker under that label is a question for the dashboard
 rather than grounds for silently launching another reviewer.
 
+**An empty branch is unfinished work, except when it is a finding.** A backlog
+outlives the code it describes: work goes in under another task's branch or by
+hand, and the entry stays open. Every ending an author can reach there says
+something false — committing invents work, and stopping is indistinguishable
+from a crash, so the task climbs a rung and buys the same discovery again at a
+dearer model until the ladder runs out at the operator. So the author records a
+`satisfied` label, and `reviewable` sends that one empty branch to a reviewer.
+
+It is a claim, never a verdict. "It is already done" is exactly what a model too
+weak for a task would say to escape it, so the reviewer confirms it against the
+trunk part by part and its `approved` is what closes the task; a rejection sends
+it back like any other. Landing needs no special case — an empty branch is
+contained by any checkout, so `merge` answers `Present` and completes the task
+without merging or verifying. The label is what tells the two causes of `Present`
+apart in the log, and it is cleared wherever `approved` is: both describe a diff
+that a requeue has invalidated.
+
 Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is

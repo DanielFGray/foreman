@@ -246,6 +246,17 @@ have, and a handoff missing from that list goes straight back to the queue with
 a log line saying so. Nothing committed is unfinished work, whatever the status
 says.
 
+One empty branch is worth a reviewer: the one whose author found that the trunk
+already does what the task asks. A backlog outlives the code it describes, and
+an author sent to an entry like that has nothing it can honestly write —
+committing anything invents work, and stopping reads as a crash, which costs a
+rung and buys the same discovery again at a dearer model. So it records the
+finding as a `satisfied` label and hands off. That is a claim, not a verdict:
+the reviewer confirms it against the trunk part by part, and only its `approved`
+closes the task — with nothing merged and nothing verified, because there is
+nothing to merge. A claim the reviewer cannot confirm is returned like any other
+work.
+
 When a reviewer starts, foreman also writes `review-by-<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
 already running; the label makes that role survive restarts and vanished panes.

@@ -141,7 +141,10 @@ class World {
           labels: [
             ...task.labels.filter(
               (label) =>
-                !label.startsWith("by-") && !label.startsWith("review-by-") && label !== "approved",
+                !label.startsWith("by-") &&
+                !label.startsWith("review-by-") &&
+                label !== "approved" &&
+                label !== "satisfied",
             ),
             `by-${kind}`,
           ],
@@ -162,7 +165,8 @@ class World {
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter(
-            (label) => !label.startsWith("review-by-") && label !== "approved",
+            (label) =>
+              !label.startsWith("review-by-") && label !== "approved" && label !== "satisfied",
           ),
         })),
       ),
@@ -203,7 +207,8 @@ class World {
           ...task,
           status: "open",
           labels: task.labels.filter(
-            (label) => !label.startsWith("review-by-") && label !== "approved",
+            (label) =>
+              !label.startsWith("review-by-") && label !== "approved" && label !== "satisfied",
           ),
         })),
       ),
@@ -294,6 +299,7 @@ describe("Dispatcher tick", () => {
       branch: `foreman/${task.id}`,
       merged: false,
       empty: false,
+      stale: undefined,
     });
 
     await tick(world);
@@ -310,6 +316,7 @@ describe("Dispatcher tick", () => {
       branch: `foreman/${task.id}`,
       merged: false,
       empty: false,
+      stale: undefined,
     });
 
     await tick(world);
@@ -325,11 +332,13 @@ describe("Dispatcher tick", () => {
       branch: "foreman/ts-swept",
       merged: true,
       empty: false,
+      stale: undefined,
     });
     world.branches.set("foreman/ts-kept", {
       branch: "foreman/ts-kept",
       merged: true,
       empty: false,
+      stale: undefined,
     });
 
     await tick(world);
@@ -347,12 +356,54 @@ describe("Dispatcher tick", () => {
       branch: `foreman/${task.id}`,
       merged: false,
       empty: true,
+      stale: undefined,
     });
 
     await tick(world);
 
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
     expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("reviews an empty branch whose author found the trunk already satisfies it", async () => {
+    const task = item("ts-satisfied", "reviewing", ["by-cheap", "satisfied"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "author", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: true,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+  });
+
+  test("closes a satisfied task the reviewer approved, merging nothing", async () => {
+    const task = item("ts-confirmed", "reviewing", [
+      "by-cheap",
+      "review-by-cheap",
+      "satisfied",
+      "approved",
+    ]);
+    const world = new World(task);
+    // The trunk contains an empty branch by definition, which is the verdict a
+    // confirmed claim lands on: nothing merged and nothing verified.
+    world.landing = { _tag: "Present" };
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: true,
+      empty: true,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+    expect(world.closed).toContain(task.id);
   });
 
   test("holds a project out of both fill passes", async () => {
@@ -373,6 +424,7 @@ describe("Dispatcher tick", () => {
       branch: `foreman/${task.id}`,
       merged: false,
       empty: false,
+      stale: undefined,
     });
 
     await tick(world);

@@ -34,6 +34,7 @@ import {
   isApproved,
   isOnboarding,
   isPlan,
+  isSatisfied,
   type Item,
   ONBOARD,
   Prog,
@@ -685,15 +686,21 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
         // Both remaining verdicts end the task, and differ only in what foreman
         // may honestly say it did. `Present` wrote nothing and ran nothing, so
-        // it claims neither a merge nor a verification; it exists to close the
-        // task an interrupted landing left open after its merge had gone in.
+        // it claims neither a merge nor a verification. Two things reach it:
+        // an interrupted landing whose merge had already gone in, and a branch
+        // whose author found the trunk already satisfied the task and whose
+        // reviewer confirmed it. The verdict cannot tell them apart — an empty
+        // branch is contained by any checkout — so the label the author left
+        // is what names the one in the log.
         if (result._tag === "Present") {
           yield* Effect.logInfo(
             `${task.id} (${project.name}) was already in the checkout; completing`,
           );
           yield* prog.log(
             task.id,
-            `foreman: ${project.name}'s checkout already contained this branch, so there was nothing to merge. An earlier landing put the commits in without reaching this step.`,
+            isSatisfied(task)
+              ? `foreman: ${project.name}'s trunk already does what this task asked, and the reviewer confirmed it. Nothing was merged and nothing was verified — the backlog had outlived the work.`
+              : `foreman: ${project.name}'s checkout already contained this branch, so there was nothing to merge. An earlier landing put the commits in without reaching this step.`,
           );
         } else {
           if (!result.verified) {
@@ -1708,15 +1715,24 @@ export const recoverable = (branch: { readonly status: string | undefined }): bo
  * the checkout lacks: a branch already merged — by foreman on an earlier tick,
  * or by hand — proves its author wrote something just as well, and reading that
  * as an empty branch sends finished work back to the queue.
+ *
+ * The one empty branch worth a reviewer is the one whose author says the trunk
+ * already does what the task asks. That is a finding about the codebase rather
+ * than an absence of work, and it is the only ending that closes a task the
+ * backlog has outlived: read as unfinished instead, it returns to the queue
+ * and buys the same discovery again at a dearer model on every rung. It is
+ * still only a claim — the reviewer confirms it against the trunk, and the
+ * ordinary rejection sends a false one back.
  */
 export const reviewable = (
   reviewing: ReadonlyArray<Active>,
   committed: ReadonlySet<string>,
 ): { readonly review: ReadonlyArray<Active>; readonly unbacked: ReadonlyArray<Active> } => {
   const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
+  const readable = ({ task }: Active) => committed.has(task.id) || isSatisfied(task);
   return {
-    review: authored.filter(({ task }) => committed.has(task.id)),
-    unbacked: authored.filter(({ task }) => !committed.has(task.id)),
+    review: authored.filter(readable),
+    unbacked: authored.filter((active) => !readable(active)),
   };
 };
 

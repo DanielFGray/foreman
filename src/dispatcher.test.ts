@@ -281,6 +281,17 @@ describe("work handed back for review", () => {
     expect(unbacked.map(({ task }) => task.id)).toEqual(["ts-222222"]);
   });
 
+  test("reviews an empty branch whose author claims the trunk already satisfies it", () => {
+    // The one ending that closes a task the backlog outlived. Read as
+    // unfinished, it returns to the queue and buys the same discovery again a
+    // rung up, forever.
+    const claimed = active(task("ts-444444", ["by-opencode", "satisfied"]), undefined);
+    const { review, unbacked } = reviewable([claimed], new Set());
+
+    expect(review.map(({ task }) => task.id)).toEqual(["ts-444444"]);
+    expect(unbacked).toEqual([]);
+  });
+
   test("leaves work foreman did not author alone, committed or not", () => {
     // `reviewing` is a status anyone can set by hand. Without a by-* label the
     // branch is not foreman's to review, land or return to its queue.

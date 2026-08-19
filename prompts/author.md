@@ -57,6 +57,17 @@ file, a test that passes without exercising the new path. Fix what you find; log
 leave the task unfinished if you cannot. One pass, not a loop, and not a review — do
 not reopen decisions you already recorded.
 
+Sometimes the trunk already does what the task asks: the work went in under another
+task's branch, or by hand, and the backlog entry outlived it. That is a finding, not a
+failure, and it is the one ending where you finish having written nothing. Prove it
+first — walk the definition of done and name, in `prog log {{ task }}`, the code, the
+tests and the commits in the trunk that satisfy each part. Then run
+`prog label {{ task }} satisfied` and `prog review {{ task }}`. A reviewer checks the
+claim against the trunk and foreman closes the task without merging anything. Do not
+reach for this because the task is hard, vague or half-covered: partly done is not
+done, and a claim you cannot point at line by line is rejected and costs the task a
+rung.
+
 When the work is committed, run `prog review {{ task }}`. Your job ends there. Your
 session stays open a while, so a reviewer may send you one mechanical defect: fix
 exactly what it names, commit, stop again. Foreman lands the branch into

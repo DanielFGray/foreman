@@ -30,6 +30,16 @@ Approval means every change worth landing is committed: if the author left valid
 uncommitted work, commit it; if it is substantive and not ready, return the task.
 Never approve work that landing would omit.
 
+An empty diff means the author ran `prog label {{ task }} satisfied`: its claim is
+that the trunk already does what the task asks, and nothing else reaches you with no
+commits on the branch. Check that claim the way you would check code — walk the
+definition of done and find, in the trunk, the code and the tests covering each part.
+Approve only when every part is there and exercised. Partly satisfied is a rejection:
+log which parts are missing, in enough detail for the next author to start from your
+list, and run `prog open {{ task }}`. Approving here closes the task with nothing
+merged, so an approval you cannot point at line by line deletes the work instead of
+doing it.
+
 Judge three things, in order. Does it do what the task asked? Does the verification
 actually verify it — run the definition of done's command and the tests covering the
 code the diff touched, and ask of each new test whether it would fail without the new

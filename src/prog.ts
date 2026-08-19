@@ -120,7 +120,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * more than once, and its next author starts a new lifecycle stage.
        */
       attribute: (task: string, kind: string) =>
-        removeLabels(task, [BY, REVIEW_BY, APPROVED]).pipe(
+        removeLabels(task, [BY, REVIEW_BY, APPROVED, SATISFIED]).pipe(
           Effect.andThen(run("label", task, `${BY}${kind}`)),
           Effect.asVoid,
         ),
@@ -144,7 +144,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * author, and a reviewer can approve and then return work in the same
        * turn.
        */
-      clearReview: (task: string) => removeLabels(task, [REVIEW_BY, APPROVED]),
+      clearReview: (task: string) => removeLabels(task, [REVIEW_BY, APPROVED, SATISFIED]),
 
       /**
        * Records which rung of the ladder a task's next dispatch must use.
@@ -254,7 +254,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * clears it.
        */
       release: (task: string) =>
-        removeLabels(task, [APPROVED, REVIEW_BY]).pipe(
+        removeLabels(task, [APPROVED, REVIEW_BY, SATISFIED]).pipe(
           Effect.andThen(run("open", task)),
           Effect.asVoid,
         ),
@@ -270,7 +270,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * unread branch's task is usually back in the queue, or done, or gone.
        */
       submit: (task: string) =>
-        removeLabels(task, [APPROVED]).pipe(
+        removeLabels(task, [APPROVED, SATISFIED]).pipe(
           Effect.andThen(run("start", task)),
           Effect.andThen(run("review", task)),
           Effect.asVoid,
@@ -278,7 +278,10 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
       /** Moves already-claimed work to formal review, and with it any stale verdict. */
       review: (task: string) =>
-        removeLabels(task, [APPROVED]).pipe(Effect.andThen(run("review", task)), Effect.asVoid),
+        removeLabels(task, [APPROVED, SATISFIED]).pipe(
+          Effect.andThen(run("review", task)),
+          Effect.asVoid,
+        ),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
@@ -422,6 +425,26 @@ export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): bo
   item.labels.includes(APPROVED);
 
 /**
+ * The author's claim that the trunk already does what the task asks.
+ *
+ * A backlog outlives the code it describes: work gets done under another
+ * task's branch, or by hand, and the entry for it stays open. An author sent
+ * to one of those has nothing to write, and every ending it can reach says
+ * something false. Committing anything at all fabricates work; stopping is
+ * read as a crash, which costs a rung and dispatches the same discovery again
+ * at a more expensive model, forever.
+ *
+ * So the finding is a claim the author records, and the branch it hands over
+ * is legitimately empty. It is a claim and not a verdict: "it is already done"
+ * is exactly what a model too weak for the task would say to escape it, so a
+ * reviewer confirms it against the trunk like any other diff, and only its
+ * `approved` closes the task. It is cleared wherever `approved` is, for the
+ * same reason — both describe a diff that a requeue has invalidated.
+ */
+export const isSatisfied = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(SATISFIED);
+
+/**
  * Salvage work in a project's own checkout, which only the operator starts.
  *
  * The queue holds work the fleet may pick up by itself. An onboarding run is
@@ -488,6 +511,9 @@ export const PLAN = "plan";
 export const ATTEMPT = "attempt-";
 
 export const APPROVED = "approved";
+
+/** The label carrying an author's claim that the trunk already satisfies a task. */
+export const SATISFIED = "satisfied";
 
 export type DiagnosticIntent = "diagnose" | "review";
 
