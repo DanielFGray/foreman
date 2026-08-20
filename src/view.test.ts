@@ -290,6 +290,11 @@ describe("actionsFor", () => {
 
   test("offers kill only for a live worker", () => {
     expect(actionsFor("working", row("working", "ts-w1"))).toContain("kill");
+    const blocked = {
+      ...row("working", "ts-w1"),
+      worker: worker("ts-w2", "blocked"),
+    };
+    expect(actionsFor("review", blocked)).toContain("kill");
     const settled = {
       ...state,
       working: [active(task("ts-w2", "in_progress", ["by-flash"]), worker("ts-w2", "settled"))],
