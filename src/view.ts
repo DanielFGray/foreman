@@ -248,8 +248,6 @@ const KEYS: Record<Command, Binding> = {
   complete: { key: "ctrl-d", label: "done" },
   retry: { key: "ctrl-r", label: "retry" },
   takeOver: { key: "ctrl-t", label: "take over" },
-  // Not ctrl-p, which is how the cursor moves now that j and k type into the
-  // live filter, and not ctrl-f, which already focuses a worker's pane.
   pin: { key: "alt-p", label: "pin" },
   focus: { key: "ctrl-f", label: "focus" },
   intervene: { key: "ctrl-e", label: "intervene" },

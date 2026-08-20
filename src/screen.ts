@@ -1,5 +1,5 @@
 import { Command, FetchHttpClient, FileSystem, Path } from "@effect/platform";
-import { Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { Effect, Layer, Match, Option, Ref, Schedule, Schema, Stream } from "effect";
 
 /**
  * The terminal, as the dashboard needs it: a list of rows with a preview each,
@@ -130,174 +130,168 @@ export const fzfScreen = (keys: ReadonlyArray<string>) =>
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, globalThis.fetch)),
   );
 
-const running = (keys: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const fetch = yield* FetchHttpClient.Fetch;
+const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const fetch = yield* FetchHttpClient.Fetch;
 
-    // Everything the screen and its child commands read lives here, and it
-    // goes when the dashboard does. fzf's own children are only ever `cat` and
-    // `printf`, so a directory of files is the whole data channel.
-    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "foreman-screen-" });
-    const rowsFile = path.join(dir, "rows");
-    const previews = path.join(dir, "previews");
-    const socket = path.join(dir, "fzf.sock");
-    const keysFile = path.join(dir, "keys");
-    const placeFile = path.join(dir, "place");
-    yield* fs.makeDirectory(previews);
-    yield* fs.writeFileString(rowsFile, "");
-    yield* fs.writeFileString(keysFile, "");
-    yield* fs.writeFileString(placeFile, "");
+  // Everything the screen and its child commands read lives here, and it
+  // goes when the dashboard does. fzf's own children are only ever `cat` and
+  // `printf`, so a directory of files is the whole data channel.
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "foreman-screen-" });
+  const rowsFile = path.join(dir, "rows");
+  const previews = path.join(dir, "previews");
+  const socket = path.join(dir, "fzf.sock");
+  const keysFile = path.join(dir, "keys");
+  const placeFile = path.join(dir, "place");
+  yield* fs.makeDirectory(previews);
+  yield* fs.writeFileString(rowsFile, "");
+  yield* fs.writeFileString(keysFile, "");
+  yield* fs.writeFileString(placeFile, "");
 
-    /**
-     * The keypress channel: a file every binding appends one line to, watched.
-     *
-     * A pipe is the obvious shape and the wrong one — reading it needs a
-     * positionless read, which the platform's file handles do not do, and it
-     * ends whenever its last writer closes, which every binding does. An
-     * append-only file has neither problem: the handle keeps its own position,
-     * so each read continues where the last one stopped, and a write that
-     * arrives between two reads is still there to be found.
-     */
-    const keyHandle = yield* fs.open(keysFile, { flag: "r" });
-    const partial = yield* Ref.make("");
-    const drain = Effect.gen(function* () {
-      let text = "";
-      while (true) {
-        const chunk = yield* keyHandle.readAlloc(8192);
-        if (Option.isNone(chunk)) break;
-        text += decoder.decode(chunk.value);
-      }
-      // A line is only a keypress once it is whole. Nothing guarantees a read
-      // lands on the end of one, and half a key name is not a key.
-      return yield* Ref.modify(partial, (held) => {
-        const lines = (held + text).split("\n");
-        return [lines.slice(0, -1), lines.at(-1) ?? ""];
-      });
-    });
-
-    const fzf = yield* Command.make(
-      "fzf",
-      ...args(keys, { rowsFile, socket, keysFile, placeFile }),
-    ).pipe(
-      Command.stdin("inherit"),
-      Command.stdout("inherit"),
-      Command.stderr("inherit"),
-      Command.start,
-      Effect.mapError((cause) => new ScreenError({ action: "spawn", cause: String(cause) })),
-    );
-
-    // The socket appears when fzf is ready for it, which is a moment after the
-    // process exists. Waiting for the file is the readiness signal; there is
-    // no other, and posting before it exists is the one failure that would
-    // leave a blank screen with a live fleet behind it.
-    yield* fs.exists(socket).pipe(
-      Effect.filterOrFail(
-        (ready) => ready,
-        () => new ScreenError({ action: "start", cause: "fzf never opened its socket" }),
-      ),
-      Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.upTo("10 seconds"))),
-      Effect.mapError((cause) =>
-        cause instanceof ScreenError
-          ? cause
-          : new ScreenError({ action: "start", cause: String(cause) }),
-      ),
-    );
-
-    const post = (body: string) =>
-      Effect.promise(() =>
-        fetch("http://localhost/", { method: "POST", body, unix: socket } as RequestInit),
-      ).pipe(Effect.asVoid);
-
-    const current = Effect.promise(() =>
-      fetch("http://localhost/", { unix: socket } as RequestInit).then((r) => r.json()),
-    ).pipe(Effect.map(currentKey));
-
-    return Screen.of({
-      show: (frame) =>
-        Effect.gen(function* () {
-          yield* Effect.forEach(
-            frame.rows,
-            (row) =>
-              Effect.all([
-                fs.writeFileString(
-                  path.join(previews, `${fileName(row.key)}.preview`),
-                  row.preview,
-                ),
-                fs.writeFileString(path.join(previews, `${fileName(row.key)}.footer`), row.footer),
-              ]),
-            { concurrency: 8, discard: true },
-          );
-          // NUL-separated, which is what lets a row be more than one line:
-          // the exceptional states have a name and a reason, and a reason is
-          // the half a narrow pane would truncate away.
-          yield* fs.writeFileString(
-            rowsFile,
-            frame.rows
-              .map((row) =>
-                [
-                  row.key,
-                  path.join(previews, `${fileName(row.key)}.preview`),
-                  path.join(previews, `${fileName(row.key)}.footer`),
-                  row.line.replace(/\t/g, "  "),
-                ].join("\t"),
-              )
-              .join("\0"),
-          );
-          const at =
-            frame.cursor === undefined
-              ? -1
-              : frame.rows.findIndex((row) => row.key === frame.cursor);
-          // Where the cursor goes is left for the screen to apply once the new
-          // list is in, and that is not a preference. A reload discards
-          // whatever is chained behind it, and a request that arrives while
-          // one is running is discarded too — so a position sent with the
-          // frame is a position that lands sometimes. The screen reads it back
-          // itself on its `load` event, which is exactly the moment the list a
-          // row number indexes into exists. Empty means leave the cursor
-          // alone, which is the ordinary tick: tracking already keeps it on
-          // the row it was on however the list was reordered.
-          yield* fs.writeFileString(placeFile, at === -1 ? "" : `pos(${at + 1})`);
-          // The header is allowed a second line, and a request body is read a
-          // line at a time, so it cannot be chained with anything. Everything
-          // else goes ahead of the reload, where chaining still works.
-          //
-          // The footer is not sent at all: it belongs to whichever row the
-          // reload leaves the cursor on, and the screen sets it from that row.
-          yield* post(`change-header(${safe(frame.header)})`);
-          yield* post(`change-prompt(${safe(frame.prompt)})+reload-sync(cat ${rowsFile})`);
-        }).pipe(
-          Effect.catchTags({
-            BadArgument: (cause) =>
-              Effect.fail(new ScreenError({ action: "show", cause: String(cause) })),
-            SystemError: (cause) =>
-              Effect.fail(new ScreenError({ action: "show", cause: String(cause) })),
-          }),
-        ),
-
-      header: (text) => post(`change-header(${safe(text)})`),
-
-      cursor: current,
-
-      keys: fs.watch(keysFile).pipe(
-        Stream.mapEffect(() => drain),
-        Stream.flattenIterables,
-        Stream.filter((line) => line.length > 0),
-        Stream.map(parseKey),
-        Stream.mapError((cause) => new ScreenError({ action: "read", cause: String(cause) })),
-      ),
-
-      mode: (mode) =>
-        post(mode === "search" ? "enable-search+clear-query" : "disable-search+clear-query"),
-
-      reject: post("bell"),
-
-      closed: fzf.exitCode.pipe(Effect.ignore),
-
-      close: post("abort"),
+  /**
+   * The keypress channel: a file every binding appends one line to, watched.
+   *
+   * A pipe is the obvious shape and the wrong one — reading it needs a
+   * positionless read, which the platform's file handles do not do, and it
+   * ends whenever its last writer closes, which every binding does. An
+   * append-only file has neither problem: the handle keeps its own position,
+   * so each read continues where the last one stopped, and a write that
+   * arrives between two reads is still there to be found.
+   */
+  const keyHandle = yield* fs.open(keysFile, { flag: "r" });
+  const partial = yield* Ref.make("");
+  const drain = Effect.gen(function* () {
+    let text = "";
+    while (true) {
+      const chunk = yield* keyHandle.readAlloc(8192);
+      if (Option.isNone(chunk)) break;
+      text += decoder.decode(chunk.value);
+    }
+    // A line is only a keypress once it is whole. Nothing guarantees a read
+    // lands on the end of one, and half a key name is not a key.
+    return yield* Ref.modify(partial, (held) => {
+      const lines = (held + text).split("\n");
+      return [lines.slice(0, -1), lines.at(-1) ?? ""];
     });
   });
+
+  const fzf = yield* Command.make(
+    "fzf",
+    ...args(keys, { rowsFile, socket, keysFile, placeFile }),
+  ).pipe(
+    Command.stdin("inherit"),
+    Command.stdout("inherit"),
+    Command.stderr("inherit"),
+    Command.start,
+    Effect.mapError((cause) => new ScreenError({ action: "spawn", cause: String(cause) })),
+  );
+
+  // The socket appears when fzf is ready for it, which is a moment after the
+  // process exists. Waiting for the file is the readiness signal; there is
+  // no other, and posting before it exists is the one failure that would
+  // leave a blank screen with a live fleet behind it.
+  yield* fs.exists(socket).pipe(
+    Effect.filterOrFail(
+      (ready) => ready,
+      () => new ScreenError({ action: "start", cause: "fzf never opened its socket" }),
+    ),
+    Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.upTo("10 seconds"))),
+    Effect.mapError((cause) =>
+      cause instanceof ScreenError
+        ? cause
+        : new ScreenError({ action: "start", cause: String(cause) }),
+    ),
+  );
+
+  const post = (body: string) =>
+    Effect.promise(() =>
+      fetch("http://localhost/", { method: "POST", body, unix: socket } as RequestInit),
+    ).pipe(Effect.asVoid);
+
+  const current = Effect.promise(() =>
+    fetch("http://localhost/", { unix: socket } as RequestInit).then((r) => r.json()),
+  ).pipe(Effect.map(currentKey));
+
+  return Screen.of({
+    show: (frame) =>
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          frame.rows,
+          (row) =>
+            Effect.all([
+              fs.writeFileString(path.join(previews, `${fileName(row.key)}.preview`), row.preview),
+              fs.writeFileString(path.join(previews, `${fileName(row.key)}.footer`), row.footer),
+            ]),
+          { concurrency: 8, discard: true },
+        );
+        // NUL-separated, which is what lets a row be more than one line:
+        // the exceptional states have a name and a reason, and a reason is
+        // the half a narrow pane would truncate away.
+        yield* fs.writeFileString(
+          rowsFile,
+          frame.rows
+            .map((row) =>
+              [
+                row.key,
+                path.join(previews, `${fileName(row.key)}.preview`),
+                path.join(previews, `${fileName(row.key)}.footer`),
+                row.line.replace(/\t/g, "  "),
+              ].join("\t"),
+            )
+            .join("\0"),
+        );
+        const at =
+          frame.cursor === undefined ? -1 : frame.rows.findIndex((row) => row.key === frame.cursor);
+        // Where the cursor goes is left for the screen to apply once the new
+        // list is in, and that is not a preference. A reload discards
+        // whatever is chained behind it, and a request that arrives while
+        // one is running is discarded too — so a position sent with the
+        // frame is a position that lands sometimes. The screen reads it back
+        // itself on its `load` event, which is exactly the moment the list a
+        // row number indexes into exists. Empty means leave the cursor
+        // alone, which is the ordinary tick: tracking already keeps it on
+        // the row it was on however the list was reordered.
+        yield* fs.writeFileString(placeFile, at === -1 ? "" : `pos(${at + 1})`);
+        // The header is allowed a second line, and a request body is read a
+        // line at a time, so it cannot be chained with anything. Everything
+        // else goes ahead of the reload, where chaining still works.
+        //
+        // The footer is not sent at all: it belongs to whichever row the
+        // reload leaves the cursor on, and the screen sets it from that row.
+        yield* post(`change-header(${safe(frame.header)})`);
+        yield* post(`change-prompt(${safe(frame.prompt)})+reload-sync(cat ${rowsFile})`);
+      }).pipe(
+        Effect.mapError(
+          Match.valueTags({
+            BadArgument: (cause) => new ScreenError({ action: "show", cause: String(cause) }),
+            SystemError: (cause) => new ScreenError({ action: "show", cause: String(cause) }),
+          }),
+        ),
+      ),
+
+    header: (text) => post(`change-header(${safe(text)})`),
+
+    cursor: current,
+
+    keys: fs.watch(keysFile).pipe(
+      Stream.mapEffect(() => drain),
+      Stream.flattenIterables,
+      Stream.filter((line) => line.length > 0),
+      Stream.map(parseKey),
+      Stream.mapError((cause) => new ScreenError({ action: "read", cause: String(cause) })),
+    ),
+
+    mode: (mode) =>
+      post(mode === "search" ? "enable-search+clear-query" : "disable-search+clear-query"),
+
+    reject: post("bell"),
+
+    closed: fzf.exitCode.pipe(Effect.ignore),
+
+    close: post("abort"),
+  });
+});
 
 /**
  * fzf's whole configuration, and the three that carry the design.
@@ -355,10 +349,10 @@ const args = (
   "--wrap-sign=",
   "--preview-window=right,45%,wrap-word,border-left",
   "--footer-border=line",
-  ...keys.flatMap((key) => [
-    "--bind",
-    `${key}:execute-silent(printf '%s\\t%s\\t%s\\n' ${shellQuote(key)} {1} {q} >> ${paths.keysFile})`,
-  ]),
+  ...keys.map(
+    (key) =>
+      `--bind=${key}:execute-silent(printf '%s\\t%s\\t%s\\n' ${shellQuote(key)} {1} {q} >> ${paths.keysFile})`,
+  ),
   // A click on the tab strip is a keypress like any other: the word under the
   // pointer is the whole address of the tab, and it rides in the row field.
   "--bind",
