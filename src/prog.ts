@@ -18,13 +18,36 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
     const executor = yield* CommandExecutor.CommandExecutor;
 
     const run = (...args: Array<string>) =>
-      executor
-        .string(Command.make("prog", ...args))
-        .pipe(
-          Effect.mapError(
-            (cause) => new ProgError({ command: args.join(" "), detail: String(cause) }),
-          ),
-        );
+      Effect.scoped(
+        Effect.gen(function* () {
+          const process = yield* executor.start(
+            Command.make("prog", ...args).pipe(Command.stdout("pipe"), Command.stderr("pipe")),
+          );
+          const [exitCode, stdout, stderr] = yield* Effect.all(
+            [
+              process.exitCode,
+              Stream.decodeText(process.stdout).pipe(Stream.mkString),
+              Stream.decodeText(process.stderr).pipe(Stream.mkString),
+            ],
+            { concurrency: 3 },
+          );
+          return { exitCode: Number(exitCode), stdout, stderr };
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) => new ProgError({ command: args.join(" "), detail: String(cause) }),
+        ),
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.succeed(result.stdout)
+            : Effect.fail(
+                new ProgError({
+                  command: args.join(" "),
+                  detail: result.stderr || result.stdout || `exit code ${result.exitCode}`,
+                }),
+              ),
+        ),
+      );
 
     const runJson = <A, I>(schema: Schema.Schema<A, I>, ...args: Array<string>) =>
       run(...args).pipe(

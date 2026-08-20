@@ -148,3 +148,11 @@ describe("clearReview against a live store", () => {
     expect(after.labels).toEqual([]);
   });
 });
+
+describe("command failures", () => {
+  test("reports a non-zero prog exit status", async () => {
+    await expect(
+      Effect.runPromise(Prog.complete("ts-does-not-exist").pipe(Effect.provide(Prog.Default))),
+    ).rejects.toThrow("done ts-does-not-exist");
+  });
+});
