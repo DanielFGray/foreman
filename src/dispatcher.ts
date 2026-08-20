@@ -1635,6 +1635,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
 
+      /** Stops a live attempt, records why, and returns the task unchanged to the queue. */
+      kill: (target: InterventionTarget, reason: string) =>
+        commanded(
+          Effect.gen(function* () {
+            const task = yield* prog.show(target.task.id);
+            if (task.status === "done" || task.status === "canceled" || !target.worker) return;
+            const note = reason.trim() || "operator killed this attempt";
+            yield* stopAgents(target.worker);
+            yield* prog.release(task.id);
+            yield* prog.log(task.id, `foreman: operator killed this attempt: ${note}`);
+            yield* teardown(task);
+          }),
+        ),
+
       /**
        * Salvages the uncommitted work in one project, so it can be dispatched
        * to again. Offered for any held project, including one being edited

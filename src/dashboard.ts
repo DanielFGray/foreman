@@ -102,6 +102,7 @@ export const dashboard = Effect.gen(function* () {
         // Both of these ask the operator a question before anything happens,
         // so they open a prompt rather than issuing a command.
         Match.when("complete", () => enter({ kind: "reason", row })),
+        Match.when("kill", () => enter({ kind: "kill", row })),
         Match.when("intervene", () => enter({ kind: "intervene", row })),
         Match.when("retry", () => (task ? run(dispatcher.retry(task)) : screen.reject)),
         Match.when("release", () => (task ? run(dispatcher.release(task)) : screen.reject)),
@@ -237,6 +238,14 @@ export const dashboard = Effect.gen(function* () {
           if (mode.row.ready) yield* run(dispatcher.complete(mode.row.ready, reason));
           return yield* enter(BROWSE);
         }
+        case "kill": {
+          if (press.key === "esc") return yield* enter(BROWSE);
+          if (press.key !== "enter") return;
+          const target = targetOf(mode.row);
+          const reason = press.query.trim() || "operator killed this attempt";
+          if (target?.worker) yield* run(dispatcher.kill(target, reason));
+          return yield* enter(BROWSE);
+        }
         case "log":
           if (press.key === "esc" || press.key === "f12") return yield* enter(BROWSE);
           return;
@@ -281,6 +290,7 @@ type Mode =
   | { readonly kind: "log" }
   | { readonly kind: "intervene"; readonly row: ColumnRow }
   | { readonly kind: "reason"; readonly row: ColumnRow }
+  | { readonly kind: "kill"; readonly row: ColumnRow }
   | {
       readonly kind: "rung";
       readonly row: ColumnRow;
@@ -306,7 +316,8 @@ const BROWSE: Mode = { kind: "browse" };
  * they were told about. The exception is the reason prompt, where the typing
  * is a sentence and narrowing would throw the list away a word in.
  */
-const inputFor = (mode: Mode) => (mode.kind === "reason" ? "answer" : "search");
+const inputFor = (mode: Mode) =>
+  mode.kind === "reason" || mode.kind === "kill" ? "answer" : "search";
 
 const targetOf = (row: ColumnRow): InterventionTarget | undefined => {
   const task = row.task ?? row.ready;
@@ -418,6 +429,14 @@ const frame = (
         rows: withFooter(() => "Enter confirm  ·  Esc cancel"),
         header,
         prompt: `reason for ${ui.mode.row.key}> `,
+        cursor: ui.mode.row.key,
+      };
+
+    if (ui.mode.kind === "kill")
+      return {
+        rows: withFooter(() => "Enter confirm  ·  Esc cancel"),
+        header,
+        prompt: `why kill ${ui.mode.row.key}> `,
         cursor: ui.mode.row.key,
       };
 
