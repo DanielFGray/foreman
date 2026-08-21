@@ -94,7 +94,7 @@ export const below = (ladder: Ladder, rung: string | undefined): string | undefi
 };
 
 /**
- * Who reads the work of a given rung.
+ * Who reads the work of a given rung, or nothing when no account can pay.
  *
  * The next rung up, so cheap work gets expensive eyes — which is where most of
  * review's value is. The top rung reviews itself: fresh eyes on the same model
@@ -102,14 +102,36 @@ export const below = (ladder: Ladder, rung: string | undefined): string | undefi
  * implementation. Work with no author recorded gets the top rung, since nothing
  * says how much judgement it needs.
  *
+ * `walled` names the rungs whose account is spent, and the search steps past
+ * them to the next rung that can be paid for. An allowance is evidence about a
+ * wallet, not about a model, so a spent rung must not stop a diff being read
+ * while another account higher up the ladder still has room — that would idle
+ * the fleet on money rather than on judgement.
+ *
+ * **Upward only.** A rung records what a task has already earned, and resolving
+ * a walled rung downward would silently hand finished work to a model that
+ * failed it. Better to leave the review unstarted, which is what `undefined`
+ * says: every rung that could read this diff is spent, and the tick passes the
+ * task over until an allowance resets.
+ *
+ * This is a substitution, never a climb. The caller writes no `rung-*` label
+ * and counts no attempt from it: the task keeps its own rung, and once the
+ * account has room again the ordinary reviewer is chosen.
+ *
  * Model rungs only. A person intervening in a review takes the pane over; they
  * are never dispatched into one.
  */
-export const reviewerFor = (ladder: Ladder, author: string | undefined): Rung => {
-  const top = ladder[ladder.length - 1] ?? ladder[0];
+export const reviewerFor = (
+  ladder: Ladder,
+  author: string | undefined,
+  walled: ReadonlySet<string> = new Set(),
+): Rung | undefined => {
   const current = ladder.findIndex((candidate) => candidate.name === author);
-  if (current < 0) return top;
-  return ladder[current + 1] ?? top;
+  // An unrecognised author and the top rung both fall back to the top, which
+  // reviews itself; `slice(-1)` is empty for an empty ladder rather than a hole.
+  const above = current < 0 ? [] : ladder.slice(current + 1);
+  const candidates = above.length > 0 ? above : ladder.slice(-1);
+  return candidates.find((rung) => !walled.has(rung.name));
 };
 
 /** Reading a hundred files of abandoned work is what cheap models are worst at. */

@@ -556,3 +556,103 @@ describe("quota probing", () => {
     expect(quota.calls()).toBe(2);
   });
 });
+
+describe("a spent account and the reviewer above it", () => {
+  /** A Quota where each named provider is spent and every other has room. */
+  const quotaSpending = (spent: ReadonlyArray<string>) =>
+    Layer.succeed(Quota, {
+      _tag: "Quota" as const,
+      usage: (provider: string) =>
+        Effect.succeed({
+          provider,
+          plan: undefined,
+          allowances: spent.includes(provider)
+            ? [{ window: "monthly", usedPercent: 100, resetsAt: undefined }]
+            : [],
+        }),
+    } as unknown as Quota);
+
+  /** Two rungs on two accounts, so a wall on one leaves the other spendable. */
+  const layerFor = (world: World, spent: ReadonlyArray<string>) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          projects: [{ name: "test", directory: "/repo", verify: undefined }],
+          slots: 1,
+          running: true,
+          ladder: [
+            { name: "cheap", harness: "test", model: "openai/gpt", provider: undefined },
+            { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+          ],
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Repository, world.repository),
+        quotaSpending(spent),
+        prompts,
+      ),
+    );
+
+  /** A task whose author finished, waiting to be read. */
+  const awaiting = (id: string) => {
+    const task = item(id, "reviewing", ["by-cheap"]);
+    const world = new World(task);
+    world.workers.set(id, worker(id, "author", "settled"));
+    world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    return world;
+  };
+
+  const tickWith = (world: World, spent: ReadonlyArray<string>) =>
+    Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world, spent))));
+
+  test("reviews with the rung above the wall rather than waiting on money", async () => {
+    // "cheap" wrote it, so "dear" reads it — and "dear" is on another account,
+    // which the wall on openai says nothing about.
+    const world = awaiting("ts-skips");
+    await tickWith(world, ["openai"]);
+
+    expect(world.spawned).toEqual([["ts-skips", "review"]]);
+    expect(world.tasks.get("ts-skips")?.labels).toEqual(["by-cheap", "review-by-dear"]);
+  });
+
+  test("leaves the task alone when every account above is spent", async () => {
+    const world = awaiting("ts-walled");
+    await tickWith(world, ["openai", "anthropic"]);
+
+    // No reviewer, and nothing written: the rung is untouched and no attempt is
+    // counted, so the task is read again unchanged once an allowance resets.
+    expect(world.spawned).toEqual([]);
+    expect(world.tasks.get("ts-walled")?.labels).toEqual(["by-cheap"]);
+    expect(world.tasks.get("ts-walled")?.status).toBe("reviewing");
+  });
+
+  test("substitutes a reviewer without climbing the task's own rung", async () => {
+    // A dearer reviewer is what the wallet forced, not what the work earned, so
+    // the task keeps the rung it had and its next author is unchanged.
+    const task = item("ts-rung", "reviewing", ["by-cheap", "rung-cheap"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "author", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+
+    await tickWith(world, ["openai"]);
+
+    expect(world.tasks.get(task.id)?.labels).toEqual(["by-cheap", "rung-cheap", "review-by-dear"]);
+  });
+});

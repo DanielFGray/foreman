@@ -81,6 +81,18 @@ export interface Usage {
 export const exhausted = (usage: Usage): boolean =>
   usage.allowances.some((allowance) => allowance.usedPercent >= 100);
 
+/**
+ * Every rung a spent account stops paying for.
+ *
+ * The one derivation of "unaffordable" in the tree. Both the gate that passes
+ * a task over and the dispatch that picks its agent read this, so they cannot
+ * come to different answers about the same reading.
+ */
+export const walledRungs = (
+  providers: ReadonlyArray<Usage & { readonly rungs: ReadonlyArray<string> }>,
+): ReadonlySet<string> =>
+  new Set(providers.filter(exhausted).flatMap((provider) => provider.rungs));
+
 /** A reading that cannot change again until the instant the provider named. */
 export interface Spent {
   readonly usage: Usage;

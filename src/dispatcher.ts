@@ -27,7 +27,7 @@ import { Prompts } from "./prompt.ts";
 import { pinnedFirst, pinnedOf } from "./pin.ts";
 import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
-import { exhausted, Quota, type Usage } from "./quota.ts";
+import { Quota, type Usage, walledRungs } from "./quota.ts";
 import {
   above,
   authorFor,
@@ -572,7 +572,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // it is in — an author's is the one its label names, a review's is the
       // rung above whoever wrote it — and the columns are disjoint, so one set
       // of task ids says it for both without ambiguity.
-      const walled = new Set(providers.filter(exhausted).flatMap((provider) => provider.rungs));
+      const walled = walledRungs(providers);
       const reviews = reviewable(reviewingActive, committed);
       const outOfQuota = new Set([
         ...ordered
@@ -581,8 +581,15 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             return rung !== undefined && walled.has(rung.name);
           })
           .map((task) => task.id),
+        // A review is gated only when no rung at or above the reviewer's can be
+        // paid for. `reviewerFor` answers that by returning nothing, and the
+        // dispatch resolves the rung the same way from the same reading, so the
+        // gate cannot pass over a task the dispatch would have found an agent
+        // for, nor the reverse.
         ...reviews.review
-          .filter(({ task }) => walled.has(reviewerFor(settings.ladder, authoredBy(task)).name))
+          .filter(
+            ({ task }) => reviewerFor(settings.ladder, authoredBy(task), walled) === undefined,
+          )
           .map(({ task }) => task.id),
       ]);
 
@@ -1287,7 +1294,24 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         );
       }
 
-      const rung = reviewerFor(settings.ladder, author);
+      // Resolved here rather than by each caller, so fill, the settle handoff,
+      // a retry and an intervention all pick a reviewer the same way. The
+      // reading is the tick's own: `state` is published before any pass runs,
+      // and for an operator-triggered dispatch it is the same reading the quota
+      // view was showing when they pressed the key.
+      const rung = reviewerFor(
+        settings.ladder,
+        author,
+        walledRungs((yield* SubscriptionRef.get(state)).providers),
+      );
+      if (!rung) {
+        // Every rung that could read this diff is spent. The status is
+        // untouched, so the task keeps its place and a later tick — or an
+        // allowance reset — tries again.
+        return yield* Effect.logInfo(
+          `review of ${task.id} deferred: no account with room at or above ${author ?? "the top rung"}`,
+        );
+      }
       const worker = yield* workspaceFor(task, project);
 
       const prompt = yield* prompts.review(
