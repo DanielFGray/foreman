@@ -1,80 +1,119 @@
 import { describe, expect, test } from "bun:test";
 import {
-  above,
   authorFor,
-  below,
-  HUMAN,
-  isYours,
+  dispatchable,
+  floorFor,
+  highestFailure,
   type Ladder,
   providerOf,
   providersOf,
+  rankOf,
   reviewerFor,
   rungSpent,
   rungsOn,
   topOf,
 } from "./ladder.ts";
 
-const ladder: Ladder = [
-  { name: "cheap", harness: "opencode", model: "opencode/deepseek-v4-pro", provider: undefined },
-  { name: "middle", harness: "opencode", model: "opencode/claude-sonnet-5", provider: undefined },
-  { name: "top", harness: "claude", model: undefined, provider: undefined },
-];
+const rung = (name: string, extra: Partial<Ladder[number]> = {}): Ladder[number] => ({
+  name,
+  harness: "opencode",
+  model: undefined,
+  provider: undefined,
+
+  ...extra,
+});
+
+const cheap = rung("cheap", { model: "opencode/deepseek-v4-pro" });
+const middle = rung("middle", { model: "opencode/claude-sonnet-5" });
+const top = rung("top", { harness: "claude" });
+const ladder: Ladder = [cheap, middle, top];
 
 describe("authorFor", () => {
-  test("starts an unmarked task at the bottom", () => {
-    expect(authorFor(ladder, undefined)?.name).toBe("cheap");
+  test("starts a task nothing has failed at the bottom", () => {
+    const choice = authorFor(ladder, []);
+    expect(choice).toEqual({ _tag: "Dispatch", rung: cheap });
   });
 
-  test("sends a marked task to the rung it names", () => {
-    expect(authorFor(ladder, "middle")?.model).toBe("opencode/claude-sonnet-5");
+  test("takes the cheapest rung above every rung that failed it", () => {
+    expect(authorFor(ladder, ["cheap"])).toEqual({ _tag: "Dispatch", rung: middle });
+    // Order in the label set says nothing; the highest-ranked failure is the floor.
+    expect(authorFor(ladder, ["middle", "cheap"])).toEqual({ _tag: "Dispatch", rung: top });
   });
 
-  test("gives a task at an unknown rung to the operator", () => {
-    // The config no longer has the rung this task earned. Guessing at what it
-    // meant would silently downgrade work that had already climbed.
-    expect(authorFor(ladder, "retired")).toBeUndefined();
-    expect(authorFor(ladder, HUMAN)).toBeUndefined();
-    expect(isYours(ladder, "retired")).toBe(true);
-    expect(isYours(ladder, undefined)).toBe(false);
+  test("hands a task every rung has failed to the operator", () => {
+    expect(authorFor(ladder, ["cheap", "middle", "top"])).toEqual({ _tag: "Yours" });
+  });
+
+  test("ignores a failure naming a rung the config has dropped", () => {
+    // Deleting the entry outright says the model is no longer part of the
+    // rating, so what it recorded cannot position anything.
+    expect(authorFor(ladder, ["retired"])).toEqual({ _tag: "Dispatch", rung: cheap });
+  });
+
+  test("keeps the floor a retired rung earned while it holds its rank", () => {
+    // The whole point of `enabled: false`: the rung is never dispatched, but
+    // work that outgrew it must not drop back below it.
+    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    expect(authorFor(retired, ["middle"])).toEqual({ _tag: "Dispatch", rung: top });
+    expect(authorFor(retired, ["cheap"])).toEqual({ _tag: "Dispatch", rung: top });
+  });
+
+  test("steps over a spent account to a rung that can pay", () => {
+    // An allowance is evidence about a wallet, never about a model, so nothing
+    // is recorded and the task simply runs dearer this tick.
+    expect(authorFor(ladder, [], new Set(["cheap"]))).toEqual({
+      _tag: "Dispatch",
+      rung: middle,
+    });
+  });
+
+  test("waits, rather than parking on the operator, when only money is missing", () => {
+    // The two must not collapse: this one clears itself when the account
+    // resets, and no decision the operator can write changes it.
+    expect(authorFor(ladder, [], new Set(["cheap", "middle", "top"]))).toEqual({
+      _tag: "Waiting",
+      walled: ["cheap", "middle", "top"],
+    });
+    expect(authorFor(ladder, ["cheap", "middle"], new Set(["top"]))).toEqual({
+      _tag: "Waiting",
+      walled: ["top"],
+    });
   });
 });
 
-describe("above", () => {
-  test("climbs one rung at a time", () => {
-    expect(above(ladder, undefined)).toBe("middle");
-    expect(above(ladder, "cheap")).toBe("middle");
-    expect(above(ladder, "middle")).toBe("top");
-  });
-
-  test("stops at the operator rather than cycling", () => {
-    expect(above(ladder, "top")).toBe(HUMAN);
-    expect(above(ladder, HUMAN)).toBe(HUMAN);
+describe("floorFor", () => {
+  test("is the rank above the highest-ranked failure", () => {
+    expect(floorFor(ladder, [])).toBe(0);
+    expect(floorFor(ladder, ["cheap"])).toBe(1);
+    expect(floorFor(ladder, ["cheap", "middle"])).toBe(2);
+    expect(floorFor(ladder, ["unknown"])).toBe(0);
   });
 });
 
-describe("below", () => {
-  test("lowers one rung at a time", () => {
-    expect(below(ladder, "middle")).toBe("cheap");
-    expect(below(ladder, "top")).toBe("middle");
+describe("rankOf", () => {
+  test("places a configured rung and nothing else", () => {
+    expect(rankOf(ladder, "middle")).toBe(1);
+    expect(rankOf(ladder, "retired")).toBeUndefined();
+  });
+});
+
+describe("highestFailure", () => {
+  test("names the failure an operator's correction takes back", () => {
+    expect(highestFailure(ladder, ["cheap", "middle"])).toBe("middle");
+    expect(highestFailure(ladder, [])).toBeUndefined();
   });
 
-  test("has nothing to write below the bottom rung", () => {
-    // The ladder reads no label as the bottom, so descending off it removes
-    // the label rather than pinning a redundant rung-<bottom>.
-    expect(below(ladder, undefined)).toBeUndefined();
-    expect(below(ladder, "cheap")).toBeUndefined();
+  test("skips a failure that cannot be positioned", () => {
+    // It is holding the task nowhere, so removing it would correct nothing.
+    expect(highestFailure(ladder, ["cheap", "retired"])).toBe("cheap");
+    expect(highestFailure(ladder, ["retired"])).toBeUndefined();
   });
+});
 
-  test("brings a task back down from the operator", () => {
-    // A person was never a model, so the first step down from HUMAN is the
-    // strongest model, not a jump to the bottom.
-    expect(below(ladder, HUMAN)).toBe("top");
-  });
-
-  test("reads a rung the config no longer has as sitting above the top", () => {
-    // Like above(): an unreadable claim cannot be positioned, so it is treated
-    // as though it sits just above the top rung.
-    expect(below(ladder, "retired")).toBe("top");
+describe("dispatchable", () => {
+  test("offers only the rungs that can run", () => {
+    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    expect(dispatchable(retired).map((entry) => entry.name)).toEqual(["cheap", "top"]);
   });
 });
 
@@ -86,13 +125,13 @@ describe("rungSpent", () => {
     expect(rungSpent(2, 3)).toBe(false);
   });
 
-  test("climbs on the attempt that reaches the limit", () => {
+  test("fails the rung on the attempt that reaches the limit", () => {
     expect(rungSpent(2, 2)).toBe(true);
     expect(rungSpent(3, 3)).toBe(true);
     expect(rungSpent(4, 2)).toBe(true);
   });
 
-  test("with attemptsPerRung 1, every failure climbs", () => {
+  test("with attemptsPerRung 1, every unfinished run fails the rung", () => {
     expect(rungSpent(1, 1)).toBe(true);
   });
 });
@@ -112,13 +151,16 @@ describe("reviewerFor", () => {
     expect(reviewerFor(ladder, undefined)?.name).toBe("top");
   });
 
+  test("never dispatches a retired rung", () => {
+    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    expect(reviewerFor(retired, "cheap")?.name).toBe("top");
+    expect(topOf(retired).name).toBe("top");
+  });
+
   test("reviews with the top of a one-rung ladder", () => {
-    const uniform: Ladder = [
-      { name: "only", harness: "opencode", model: undefined, provider: undefined },
-    ];
+    const uniform: Ladder = [rung("only")];
     expect(reviewerFor(uniform, "only")?.name).toBe("only");
     expect(topOf(uniform).name).toBe("only");
-    expect(above(uniform, "only")).toBe(HUMAN);
   });
 
   test("steps past a spent account to the next rung that can be paid for", () => {
@@ -149,55 +191,51 @@ describe("reviewerFor", () => {
 
 describe("providerOf", () => {
   test("reads the account off the model's provider prefix", () => {
-    expect(providerOf(ladder[0])).toBe("opencode");
+    expect(providerOf(cheap)).toBe("opencode");
   });
 
   test("prefers what the config states over what the model implies", () => {
     // The two can legitimately disagree: a gateway serves another vendor's
     // model under its own account, and it is the account that has the quota.
     expect(
-      providerOf({
-        name: "gateway",
-        harness: "opencode",
-        model: "openrouter/gpt-5.6-luna",
-        provider: "openrouter-work",
-      }),
+      providerOf(
+        rung("gateway", { model: "openrouter/gpt-5.6-luna", provider: "openrouter-work" }),
+      ),
     ).toBe("openrouter-work");
   });
 
   test("names no account for a rung that is only a generic harness", () => {
     // `opencode` running whatever it defaults to could be signed in to
     // anything, so nothing here can say whose allowance it spends.
-    expect(
-      providerOf({ name: "top", harness: "opencode", model: undefined, provider: undefined }),
-    ).toBeUndefined();
+    expect(providerOf(rung("top"))).toBeUndefined();
   });
 
   test("reads the claude account from the claude harness", () => {
     // The claude binary is always signed into the claude.ai account, however
     // it picks its model, so the harness names the account where the model
     // does not.
-    expect(
-      providerOf({ name: "top", harness: "claude", model: undefined, provider: undefined }),
-    ).toBe("claude");
-    expect(
-      providerOf({ name: "sonnet", harness: "claude", model: "sonnet", provider: undefined }),
-    ).toBe("claude");
+    expect(providerOf(rung("top", { harness: "claude" }))).toBe("claude");
+    expect(providerOf(rung("sonnet", { harness: "claude", model: "sonnet" }))).toBe("claude");
   });
 
   test("names no account for a model with no provider on the front", () => {
     // A bare model id is the harness's own default provider, which the harness
     // never tells us. Reading it as a provider called "gpt-5" would ask a
     // question no probe can answer.
-    expect(
-      providerOf({ name: "bare", harness: "opencode", model: "gpt-5", provider: undefined }),
-    ).toBeUndefined();
+    expect(providerOf(rung("bare", { model: "gpt-5" }))).toBeUndefined();
   });
 });
 
 describe("providersOf", () => {
   test("names each account once, however many rungs draw on it", () => {
     expect(providersOf(ladder)).toEqual(["opencode", "claude"]);
+  });
+
+  test("leaves out an account only a retired rung spends", () => {
+    // Nothing will spend it again, and an allowance nothing can spend is not
+    // news the operator has to read every tick.
+    const retired: Ladder = [cheap, middle, rung("top", { harness: "claude", enabled: false })];
+    expect(providersOf(retired)).toEqual(["opencode"]);
   });
 });
 

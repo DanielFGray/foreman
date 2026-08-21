@@ -1,7 +1,7 @@
 import { FileSystem, Path } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { HUMAN, type Ladder, providerOf, type Rung } from "./ladder.ts";
+import { dispatchable, type Ladder, providerOf, type Rung } from "./ladder.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
 export class Settings extends Context.Tag("Settings")<Settings, SettingsShape>() {}
@@ -83,30 +83,35 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // whichever model it defaults to. Everything else names its model.
       const rungOf = (entry: (typeof raw.ladder)[number]): Rung =>
         typeof entry === "string"
-          ? { name: entry, harness: entry, model: undefined, provider: undefined }
+          ? { name: entry, harness: entry, model: undefined, provider: undefined, enabled: true }
           : {
               name: entry.name,
               harness: entry.harness,
               model: entry.model,
               provider: entry.provider,
+              enabled: entry.enabled,
             };
       const [bottom, ...rest] = raw.ladder;
       const ladder: Ladder = [rungOf(bottom), ...rest.map(rungOf)];
 
-      // Both would produce a ladder nobody can reason about: a duplicate name
-      // makes "the next rung up" ambiguous, and a rung called `human` makes a
-      // task waiting for a person indistinguishable from a dispatchable one.
+      // A duplicate name makes both "the next rung up" and "which rung failed
+      // this task" ambiguous, and the second is durable: tasks record rung
+      // names, so a name that means two things corrupts work already filed.
       const duplicate = ladder.find(
         (rung, index) => ladder.findIndex((other) => other.name === rung.name) !== index,
       );
       if (duplicate) {
         return yield* new ConfigError({
-          detail: `two rungs in ${file} are named "${duplicate.name}" — rung names are how tasks record where they are, so they must be unique`,
+          detail: `two rungs in ${file} are named "${duplicate.name}" — rung names are how tasks record which models have failed them, so they must be unique`,
         });
       }
-      if (ladder.some((rung) => rung.name === HUMAN)) {
+      // A ladder of nothing but retired rungs has ranks and no models. Every
+      // task in the queue would resolve to the operator, which reads as a
+      // backlog that needs a hundred decisions rather than a config with a
+      // line commented out.
+      if (dispatchable(ladder).length === 0) {
         return yield* new ConfigError({
-          detail: `"${HUMAN}" in ${file} is reserved for the operator, who sits above the last rung — rename that rung`,
+          detail: `every rung in ${file} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
         });
       }
 
@@ -117,7 +122,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // which plan a bare harness is signed in to, so they are told which rung
       // to write it on. The claude harness is never blind: it always spends
       // the claude.ai account.
-      const blind = ladder.filter((rung) => providerOf(rung) === undefined);
+      const blind = dispatchable(ladder).filter((rung) => providerOf(rung) === undefined);
       if (blind.length > 0) {
         yield* Effect.logWarning(
           `no provider derivable for ${blind
@@ -246,6 +251,15 @@ const ConfigFile = Schema.Struct({
          * naming one provider share one allowance.
          */
         provider: Schema.optional(Schema.String),
+
+        /**
+         * Whether foreman may dispatch this rung. A retired model stays listed
+         * and disabled so it keeps its rank: the tasks it failed still record
+         * that failure, and the rank is what turns the name into "cheaper than
+         * the rung above was not enough". Deleting the entry says the model is
+         * no longer part of the rating at all.
+         */
+        enabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
       }),
     ),
   ),

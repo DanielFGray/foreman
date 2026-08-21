@@ -3,12 +3,17 @@
  *
  * Order is the rating. There are no price or power numbers to drift out of step
  * with the list, and no map from author to reviewer: the reviewer is the next
- * rung up, and a task that fails climbs one step. Both fall out of the order.
+ * rung up, and a task that fails a rung records that failure. Both fall out of
+ * the order.
  *
- * Above the last configured rung is the operator. They are not an entry in the
- * array, because a rung with no harness and no model is a different kind of
- * thing, and an explicit entry invites putting a person in the middle — where
- * every task below them would stall behind a human who is asleep.
+ * A task never names the model that runs next. It records which models have
+ * already failed it, and the rung is chosen here from what is available now —
+ * so retiring a model, or spending its allowance, moves work onto the next one
+ * that can take it instead of stranding it. Above the last rung is the
+ * operator, who is not an entry in the array: a rung with no harness and no
+ * model is a different kind of thing, and an explicit entry invites putting a
+ * person in the middle, where every task below them would stall behind
+ * somebody asleep.
  */
 export type Ladder = readonly [Rung, ...ReadonlyArray<Rung>];
 
@@ -34,64 +39,117 @@ export interface Rung {
    * `providerOf` — and stated only where it is not.
    */
   readonly provider: string | undefined;
+
+  /**
+   * Whether foreman may dispatch this rung. Absent means yes.
+   *
+   * A retired model stays in the ladder, disabled, so it keeps its rank: the
+   * failures it recorded still say "cheaper than the rung above was not
+   * enough", which is the whole of what a rung means. Deleting the entry
+   * instead says the model is no longer part of the rating at all, and the
+   * failures naming it stop positioning anything.
+   *
+   * Optional because retiring a rung is the exception. A rung is written to be
+   * used, so only the config that takes one out of service says anything about
+   * this at all.
+   */
+  readonly enabled?: boolean | undefined;
 }
 
-/**
- * The rung that writes the code next, or undefined when that is the operator.
- *
- * A task with no rung label has not failed anywhere, so it starts at the
- * bottom. A label naming a rung that the config no longer has is the operator's
- * too: the claim "this task needs at least this model" cannot be read once the
- * model is gone, and guessing at it would silently downgrade work that had
- * already earned something better.
- */
-export const authorFor = (ladder: Ladder, rung: string | undefined): Rung | undefined =>
-  rung === undefined ? ladder[0] : ladder.find((candidate) => candidate.name === rung);
+/** Whether foreman may dispatch a rung: everything but an explicit retirement. */
+export const isEnabled = (rung: Rung): boolean => rung.enabled !== false;
 
 /**
- * The rung one step up, which is `HUMAN` at the top and stays there.
+ * Which rung authors next, and why there is none when there is none.
  *
- * One step at a time, never a jump: a task that a cheap model could not finish
- * has shown that cheap is not enough, and nothing more.
+ * `Waiting` and `Yours` are different answers and must not be collapsed. A
+ * rung nobody can pay for is a fact about a wallet that an allowance reset
+ * clears by itself, so the task waits in the queue; a ladder whose every rung
+ * has already failed the task is a fact about the work, and only a person can
+ * answer it.
  */
-export const above = (ladder: Ladder, rung: string | undefined): string => {
-  const current = rung === undefined ? 0 : ladder.findIndex((candidate) => candidate.name === rung);
-  if (current < 0) return HUMAN;
-  return ladder[current + 1]?.name ?? HUMAN;
+export type Choice =
+  | { readonly _tag: "Dispatch"; readonly rung: Rung }
+  | { readonly _tag: "Waiting"; readonly walled: ReadonlyArray<string> }
+  | { readonly _tag: "Yours" };
+
+/**
+ * The rung that writes the code next: the cheapest available rung above every
+ * rung that has already failed this task.
+ *
+ * `failures` is what the task durably records. A failure naming a rung the
+ * config no longer has cannot be positioned and so constrains nothing — the
+ * config having dropped that model is the operator saying it is not part of
+ * the rating any more.
+ *
+ * `walled` names the rungs whose account is spent. They are unavailable rather
+ * than failed: nothing about an allowance is evidence about a model, so the
+ * search steps over them without the task recording anything, and the ordinary
+ * rung is chosen again once the account has room.
+ */
+export const authorFor = (
+  ladder: Ladder,
+  failures: ReadonlyArray<string>,
+  walled: ReadonlySet<string> = new Set(),
+): Choice => {
+  const candidates = ladder.slice(floorFor(ladder, failures)).filter(isEnabled);
+  const rung = candidates.find((candidate) => !walled.has(candidate.name));
+  if (rung !== undefined) return { _tag: "Dispatch", rung };
+  return candidates.length === 0
+    ? { _tag: "Yours" }
+    : { _tag: "Waiting", walled: candidates.map((candidate) => candidate.name) };
 };
 
 /**
+ * The lowest rank an author may take: one above the highest-ranked rung that
+ * has failed this task.
+ *
+ * Ranks, not names, so a failure on a rung since retired still holds the work
+ * above it as long as that rung keeps its place in the config.
+ */
+export const floorFor = (ladder: Ladder, failures: ReadonlyArray<string>): number =>
+  failures.reduce((floor, failure) => {
+    const rank = rankOf(ladder, failure);
+    return rank === undefined ? floor : Math.max(floor, rank + 1);
+  }, 0);
+
+/** Where a rung sits in the rating, or nothing for one the config has dropped. */
+export const rankOf = (ladder: Ladder, name: string): number | undefined => {
+  const rank = ladder.findIndex((rung) => rung.name === name);
+  return rank < 0 ? undefined : rank;
+};
+
+/**
+ * The highest-ranked rung a task records as having failed it, which is the one
+ * the operator's correction takes back.
+ *
+ * Unrecognised names are skipped rather than guessed at: a failure that cannot
+ * be positioned is not holding the task anywhere, so removing it would correct
+ * nothing.
+ */
+export const highestFailure = (
+  ladder: Ladder,
+  failures: ReadonlyArray<string>,
+): string | undefined =>
+  failures.reduce<{ name: string; rank: number } | undefined>((highest, failure) => {
+    const rank = rankOf(ladder, failure);
+    if (rank === undefined) return highest;
+    return highest === undefined || rank > highest.rank ? { name: failure, rank } : highest;
+  }, undefined)?.name;
+
+/**
  * Whether a rung with this many unfinished attempts is spent, so the task
- * climbs.
+ * records the failure and moves up.
  *
  * An agent that stops without finishing says nothing about its model — a
  * crash, a timeout and a usage wall all end the same way — so the first
  * `attemptsPerRung - 1` failures retry the same rung and the one that reaches
- * `attemptsPerRung` climbs. Judgements never count: a reviewer sending work
- * back, or a branch that would not land, climbs on the strength of the verdict
- * alone.
+ * `attemptsPerRung` fails it. Judgements never count: a reviewer sending work
+ * back, or a branch that broke verification, fails the rung on the strength of
+ * the verdict alone.
  */
 export const rungSpent = (attempts: number, attemptsPerRung: number): boolean =>
   attempts >= attemptsPerRung;
-
-/**
- * The rung one step down, and `undefined` where there is nothing to write.
- *
- * One step at a time, never a jump: lowering a task is the operator saying a
- * climb was not earned, and a rung is only ever as good as the evidence that
- * wrote it. A task on the operator's own rung comes down to the top rung — a
- * person was never a model, and correcting the climb puts the strongest model
- * next rather than dropping to the bottom. Below the bottom rung the ladder
- * reads no label as the default, so there is nothing to write; a rung the
- * config no longer has cannot be positioned, so like `above` it is read as
- * sitting above the top rung.
- */
-export const below = (ladder: Ladder, rung: string | undefined): string | undefined => {
-  const current = rung === undefined ? 0 : ladder.findIndex((candidate) => candidate.name === rung);
-  if (current < 0) return ladder[ladder.length - 1]?.name;
-  if (current <= 0) return undefined;
-  return ladder[current - 1]?.name;
-};
 
 /**
  * Who reads the work of a given rung, or nothing when no account can pay.
@@ -108,15 +166,11 @@ export const below = (ladder: Ladder, rung: string | undefined): string | undefi
  * while another account higher up the ladder still has room — that would idle
  * the fleet on money rather than on judgement.
  *
- * **Upward only.** A rung records what a task has already earned, and resolving
- * a walled rung downward would silently hand finished work to a model that
- * failed it. Better to leave the review unstarted, which is what `undefined`
- * says: every rung that could read this diff is spent, and the tick passes the
- * task over until an allowance resets.
- *
- * This is a substitution, never a climb. The caller writes no `rung-*` label
- * and counts no attempt from it: the task keeps its own rung, and once the
- * account has room again the ordinary reviewer is chosen.
+ * **Upward only.** The author's rank records what the work has already earned,
+ * and resolving a walled rung downward would silently hand finished work to a
+ * model that failed it. Better to leave the review unstarted, which is what
+ * `undefined` says: every rung that could read this diff is spent, and the tick
+ * passes the task over until an allowance resets.
  *
  * Model rungs only. A person intervening in a review takes the pane over; they
  * are never dispatched into one.
@@ -126,27 +180,22 @@ export const reviewerFor = (
   author: string | undefined,
   walled: ReadonlySet<string> = new Set(),
 ): Rung | undefined => {
-  const current = ladder.findIndex((candidate) => candidate.name === author);
+  const rank = author === undefined ? undefined : rankOf(ladder, author);
   // An unrecognised author and the top rung both fall back to the top, which
-  // reviews itself; `slice(-1)` is empty for an empty ladder rather than a hole.
-  const above = current < 0 ? [] : ladder.slice(current + 1);
-  const candidates = above.length > 0 ? above : ladder.slice(-1);
+  // reviews itself.
+  const above = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
+  const candidates = above.length > 0 ? above : [topOf(ladder)];
   return candidates.find((rung) => !walled.has(rung.name));
 };
 
 /** Reading a hundred files of abandoned work is what cheap models are worst at. */
-export const topOf = (ladder: Ladder): Rung => ladder[ladder.length - 1] ?? ladder[0];
+export const topOf = (ladder: Ladder): Rung => {
+  const enabled = ladder.filter(isEnabled);
+  return enabled[enabled.length - 1] ?? ladder[0];
+};
 
-/**
- * The rung name reserved for the operator, so it can be written on a climb from
- * the top. Rejected as a rung name in the config: a model called `human` would
- * make a waiting task indistinguishable from a dispatchable one.
- */
-export const HUMAN = "human";
-
-/** Whether a task at this rung is waiting for a person rather than an agent. */
-export const isYours = (ladder: Ladder, rung: string | undefined): boolean =>
-  authorFor(ladder, rung) === undefined;
+/** The rungs foreman may dispatch, in rating order — what a chooser offers. */
+export const dispatchable = (ladder: Ladder): ReadonlyArray<Rung> => ladder.filter(isEnabled);
 
 /**
  * The account a rung spends, which is what has an allowance.
@@ -169,16 +218,24 @@ export const providerOf = (rung: Rung): string | undefined => {
   return rung.harness === "claude" ? "claude" : undefined;
 };
 
-/** Every distinct account the ladder draws on, which is what to ask about. */
+/**
+ * Every distinct account the ladder draws on, which is what to ask about.
+ *
+ * Dispatchable rungs only: a retired rung keeps its rank so old failures still
+ * position, but nothing will ever spend its account again, and an allowance
+ * nothing can spend is not news.
+ */
 export const providersOf = (ladder: Ladder): ReadonlyArray<string> => [
   ...new Set(
-    ladder.flatMap((rung) => {
+    dispatchable(ladder).flatMap((rung) => {
       const provider = providerOf(rung);
       return provider === undefined ? [] : [provider];
     }),
   ),
 ];
 
-/** The rungs a spent account stops, which is every rung that draws on it. */
+/** The rungs a spent account stops, which is every dispatchable rung on it. */
 export const rungsOn = (ladder: Ladder, provider: string): ReadonlyArray<string> =>
-  ladder.filter((rung) => providerOf(rung) === provider).map((rung) => rung.name);
+  dispatchable(ladder)
+    .filter((rung) => providerOf(rung) === provider)
+    .map((rung) => rung.name);

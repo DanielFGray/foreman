@@ -29,7 +29,7 @@ const item = (labels: ReadonlyArray<string>): Item => ({
 
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
-    const task = item(["by-opencode", "review-by-claude", "approved"]);
+    const task = item(["by:opencode", "review-by:claude", "approved"]);
 
     expect(authoredBy(task)).toBe("opencode");
     expect(reviewedBy(task)).toBe("claude");
@@ -78,33 +78,33 @@ describe("focus label", () => {
 describe("unfinished attempts on a rung", () => {
   test("reads zero for a rung that was never tried", () => {
     expect(attemptsOf(item([]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["by-opencode"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["by:opencode"]), "deepseek")).toBe(0);
   });
 
   test("reads the count recorded for the named rung", () => {
-    expect(attemptsOf(item(["attempt-deepseek-1"]), "deepseek")).toBe(1);
-    expect(attemptsOf(item(["attempt-deepseek-2"]), "deepseek")).toBe(2);
+    expect(attemptsOf(item(["attempt:deepseek:1"]), "deepseek")).toBe(1);
+    expect(attemptsOf(item(["attempt:deepseek:2"]), "deepseek")).toBe(2);
   });
 
   test("ignores a count a rung the task left recorded", () => {
     // The count follows its rung, so a task pinned elsewhere starts fresh and
     // a climb-away clears nothing it might meet again.
-    expect(attemptsOf(item(["attempt-deepseek-2"]), "sol")).toBe(0);
-    expect(attemptsOf(item(["attempt-deepseek-2", "attempt-sol-1"]), "sol")).toBe(1);
+    expect(attemptsOf(item(["attempt:deepseek:2"]), "sol")).toBe(0);
+    expect(attemptsOf(item(["attempt:deepseek:2", "attempt:sol:1"]), "sol")).toBe(1);
   });
 
   test("reads the newest count when more than one was written", () => {
-    expect(attemptsOf(item(["attempt-deepseek-1", "attempt-deepseek-3"]), "deepseek")).toBe(3);
+    expect(attemptsOf(item(["attempt:deepseek:1", "attempt:deepseek:3"]), "deepseek")).toBe(3);
   });
 
   test("keeps two rungs whose names share a prefix apart", () => {
-    expect(attemptsOf(item(["attempt-deepseek-flash-2"]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["attempt-deepseek-flash-2"]), "deepseek-flash")).toBe(2);
+    expect(attemptsOf(item(["attempt:deepseek-flash:2"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["attempt:deepseek-flash:2"]), "deepseek-flash")).toBe(2);
   });
 
   test("ignores a count that is not a plain number", () => {
-    expect(attemptsOf(item(["attempt-deepseek-x"]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["attempt-deepseek-2.5"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["attempt:deepseek:x"]), "deepseek")).toBe(0);
+    expect(attemptsOf(item(["attempt:deepseek:2.5"]), "deepseek")).toBe(0);
   });
 });
 
@@ -136,7 +136,7 @@ describe("clearReview against a live store", () => {
     const after = await Effect.runPromise(Prog.show(id).pipe(Effect.provide(Prog.Default)));
 
     expect(after.labels).not.toContain("approved");
-    expect(after.labels).not.toContain("review-by-x");
+    expect(after.labels).not.toContain("review-by:x");
   });
 
   test("leaves a task that never carried the labels untouched", async () => {

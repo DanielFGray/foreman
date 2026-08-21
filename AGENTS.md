@@ -39,12 +39,12 @@ open, and nothing can tell foreman's own work from a claim made by hand.
 | Question | Answered by |
 | --- | --- |
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
-| Who authored this branch? | the task's `by-<rung>` label |
-| Is a reviewer assigned? | the task's `review-by-<rung>` label |
-| Which rung comes next? | the task's `rung-<name>` label |
-| How many tries has this rung had? | the task's `attempt-<rung>-<n>` label |
-| Is this one waiting on a person? | its rung names no configured model |
-| Is this task mine to review? | it has a `by-*` label |
+| Who authored this branch? | the task's `by:<rung>` label |
+| Is a reviewer assigned? | the task's `review-by:<rung>` label |
+| Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label |
+| How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
+| Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
+| Is this task mine to review? | it has a `by:*` label |
 | Is this workspace mine? | the checkout herdr says its worktree is in |
 | Is this project free to work in? | `git status` in its checkout |
 
@@ -150,7 +150,7 @@ on its log, and the ordinary unfinished count still bounds a task that cannot
 get past it. An agent that merely stopped without
 finishing has said nothing about its model — a crash, a timeout and a usage wall
 all end the same way — so the task stays on the rung and is tried again. The
-count of those endings lives on the task as an `attempt-<rung>-<n>` label,
+count of those endings lives on the task as an `attempt:<rung>:<n>` label,
 because a dispatch days later is exactly what reads it.
 
 ### The operator's checkout is shared, so it is asked about
@@ -326,11 +326,44 @@ would have to restate what the score already says about priority and age, and th
 project rotation reads the score to decide which tasks are close enough to
 interleave.
 
+### A task records what failed it, never what runs next
+
+The rung is chosen at the moment of dispatch, from what is configured, enabled
+and funded then — `authorFor` in `src/ladder.ts`. What the task durably carries
+is evidence: one `failed-by:<rung>` label per rung that was tried and was not
+enough. The author is the cheapest available rung above all of them.
+
+A task that named its next model would be a pointer into the config, and the
+config outlives no task: comment a model out and every task holding its name
+becomes work no rung can take, which reads as a backlog full of decisions
+waiting on a person. Evidence cannot rot that way — it describes what happened,
+which stays true however the ladder is edited afterwards.
+
+- **A retired rung stays listed with `enabled: false`.** It keeps its rank, so
+  the failures naming it still position the work above it, and nothing
+  dispatches it. Deleting the entry outright is the other statement — the model
+  is no longer part of the rating — and its failures then position nothing.
+- **`Waiting` and `Yours` are different answers.** No rung with room is a fact
+  about a wallet that an allowance reset clears by itself, so the task stays in
+  the queue, marked; every configured rung having failed it is a fact about the
+  work, and only a person can answer that. Collapsing them asks the operator to
+  decide something no decision changes.
+- **`needs-you` is the one durable way into the operator's column.** Everything
+  else there is derived, so it clears itself when a rung is added or an account
+  resets. `descend` takes back the park first and then the failures, one press
+  at a time, which is how the operator's column is left without an answer key.
+- **Every label is `<kind>:<value>`.** Rung names contain hyphens, so the older
+  `attempt-<rung>-<n>` could only be read by guessing where the model's name
+  ended — and durable labels make that guess again on every dispatch, forever.
+  `kindOf` and `valueOf` in `src/prog.ts` are the whole parser.
+
 ### An allowance belongs to an account, not to a rung
 
 `Quota` (`src/quota.ts`) reads how much of each provider's allowance is already
-spent. A rung with nothing left is passed over: the task stays in the queue at
-the same rung, no attempt is counted and nothing climbs.
+spent. A rung with nothing left is not chosen: the author search steps up to the
+next rung that can pay, exactly as the reviewer search does. Nothing is recorded
+and no attempt is counted — an allowance is evidence about a wallet, never about
+a model — so the ordinary rung is chosen again once the account resets.
 
 - **Keyed by provider, because that is what has the allowance.** Several rungs
   naming one model share one, so climbing inside a spent account buys nothing —
@@ -383,12 +416,12 @@ the same rung, no attempt is counted and nothing climbs.
 and have no branch behind them. Dispatching a reviewer to one gives it no diff to
 read and nothing to merge; it will invent something.
 
-A task is foreman's to review only if it carries a `by-*` label, which foreman
+A task is foreman's to review only if it carries a `by:*` label, which foreman
 writes when an agent actually starts. **Do not weaken this into "has a
 workspace"** — the workspace can legitimately be absent while the label is not.
 
 `reviewing` also does not say whether a reviewer was dispatched: it covers both
-the author's completed handoff and the whole review run. `review-by-*` records
+the author's completed handoff and the whole review run. `review-by:*` records
 the latter, so a vanished worker under that label is a question for the dashboard
 rather than grounds for silently launching another reviewer.
 
@@ -434,7 +467,7 @@ tests and runs only those covering the code it touched. `Prompts.review` renders
 the project's `verify` into the prompt; a project naming none has no landing
 gate, and there the full run is the reviewer's after all.
 
-**Whatever ends a review clears `review-by-*`.** A label left behind is read as
+**Whatever ends a review clears `review-by:*`.** A label left behind is read as
 evidence of something that never happened: a reviewer that is over on a task
 that is open is exactly the shape a rejection leaves, so the settle loop takes
 it for one — climbing a second rung and logging that the reviewer sent work
@@ -548,7 +581,7 @@ off one read per project:
   was ever committed on this branch.
 - Neither — the branch holds work the checkout has not taken.
 
-**`merged` cannot stand in for `empty`.** A `by-*` label proves foreman authored
+**`merged` cannot stand in for `empty`.** A `by:*` label proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run
 `prog review` having committed nothing. Asking only "is this branch unmerged" and
 reading "no" as "nothing was committed" hands finished, merged work back to the
@@ -757,7 +790,7 @@ become so: it describes this process, not the world.
 
 Each source kind allows only the actions that make sense there, and a key the
 selected row cannot take is ignored. Decisions are named from the task's status,
-not its labels: a failed spawn leaves the `by-*` label on a task that sits back in
+not its labels: a failed spawn leaves the `by:*` label on a task that sits back in
 the queue, and only the status — neither claimed nor under review — marks its
 workspace as residue.
 
@@ -770,12 +803,12 @@ cannot prove is spent. Panes, not the workspace: what is uncommitted in the
 worktree belongs to a returned reviewer or a vanished author, and closing a pane
 is the one teardown that cannot lose it.
 
-The two corrections follow the labels, not the views. `descend` lowers a task one rung,
-because a rung is only ever as good as the evidence that wrote it and a bug, an
-OOM or a killed run all write one nothing earned; one step per press, writing the
-same `rung-*` label the ladder reads, and off the bottom rung the label is
-removed because the ladder reads no label as the bottom. `unassign` clears a
-`review-by-*` label no reviewer is behind — the world records whether a reviewer
+The two corrections follow the labels, not the views. `descend` takes back one
+recorded failure, because a rung is only ever as good as the evidence that wrote
+it and a bug, an OOM or a killed run all write one nothing earned; one step per
+press, unwriting exactly the `failed-by:*` label foreman itself would have
+written, and with nothing recorded there is nothing to take back. `unassign` clears a
+`review-by:*` label no reviewer is behind — the world records whether a reviewer
 was dispatched, not whether it is still alive, so only the operator can say the
 label is stale. Both keys write exactly what foreman itself would have written.
 
@@ -785,15 +818,17 @@ dispatches it. Diagnose and Review are offered only where git or a surviving
 worktree proves an attempt left work. Committed Review uses the formal verdict
 pipeline; uncommitted Review and Diagnose run a chosen diagnostic agent, which
 may fix trivia and logs findings before foreman resumes the original rung.
-`diagnosing-*` is the durable marker that makes this survive a restart; no
+`diagnosing:*` is the durable marker that makes this survive a restart; no
 in-process intervention state exists.
 
 `yours` takes no answer key. A task waits there because a question about it is
 unanswered, and one key to requeue it would hand the next agent that same
-question — the failure the column exists to prevent. It leaves when the operator
-writes the decision into the task and removes its `rung-human` label. The two
-corrections do reach it, since a task parked at the operator is exactly the sort
-of rung that can turn out not to have been earned.
+question — the failure the column exists to prevent. A task there for the
+durable reason leaves when the operator writes the decision into it and removes
+its `needs-you` label; one there because evidence exhausted the ladder leaves
+when a rung is added or a failure is taken back. The two corrections do reach it,
+since a task parked at the operator is exactly the sort of rung that can turn out
+not to have been earned.
 
 ### One table is the keymap
 

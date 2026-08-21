@@ -26,7 +26,7 @@ import {
   type ColumnRow,
   type ViewName,
 } from "./view.ts";
-import { rungOf } from "./prog.ts";
+import { failuresOf } from "./prog.ts";
 import { stats } from "./stats.ts";
 
 /**
@@ -395,18 +395,22 @@ const frame = (
 
     if (ui.mode.kind === "rung") {
       const { row, action } = ui.mode;
-      const at = rungOf(climbing(row) ?? { labels: [] });
+      // A task records which rungs failed it, so the list says which have been
+      // spent here and lands the cursor on the one that would run next — the
+      // question the operator is answering is whether to take a different one.
+      const tried = new Set(failuresOf(climbing(row) ?? { labels: [] }));
+      const next = rungs.find((rung) => !tried.has(rung));
       const footer = "Enter confirm  ·  Esc cancel";
       return {
         rows: rungs.map((rung) => ({
           key: rung,
-          line: rung === at ? `${rung}  (current)` : rung,
+          line: tried.has(rung) ? `${rung}  (tried)` : rung === next ? `${rung}  (next)` : rung,
           preview: `${action} at ${rung}\n\n${previewOf(row)}`,
           footer,
         })),
         header,
         prompt: `${action} rung> `,
-        cursor: at ?? rungs[0],
+        cursor: next ?? rungs[0],
       };
     }
 

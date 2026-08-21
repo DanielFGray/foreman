@@ -108,37 +108,20 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         "--json",
       );
 
-    const removeLabels = (task: string, prefixes: ReadonlyArray<string>) =>
-      show(task).pipe(
-        Effect.flatMap((item) =>
-          Effect.forEach(
-            item.labels.filter((label) => prefixes.some((prefix) => label.startsWith(prefix))),
-            (label) => run("unlabel", task, label),
-            { discard: true },
-          ),
-        ),
-        Effect.asVoid,
-      );
+    /** Drops every label of the named kinds, whatever value each carries. */
+    const removeKinds = (task: string, kinds: ReadonlyArray<string>) =>
+      removeWhere(task, (label) => kinds.includes(kindOf(label)));
 
-    /**
-     * Removes the attempt labels naming one rung.
-     *
-     * Prefix matching alone would be wrong here: a rung whose name is a prefix
-     * of another's (`deepseek`, `deepseek-flash`) would clear the other's
-     * count. The count must follow the label, so only labels whose suffix is a
-     * plain number are that rung's.
-     */
+    /** Drops the attempt count of one rung, leaving every other rung's alone. */
     const removeAttempts = (task: string, rung: string) =>
+      removeWhere(task, (label) => attemptFor(label, rung) !== undefined);
+
+    const removeWhere = (task: string, doomed: (label: string) => boolean) =>
       show(task).pipe(
         Effect.flatMap((item) =>
-          Effect.forEach(
-            item.labels.filter((label) => {
-              const prefix = `${ATTEMPT}${rung}-`;
-              return label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length));
-            }),
-            (label) => run("unlabel", task, label),
-            { discard: true },
-          ),
+          Effect.forEach(item.labels.filter(doomed), (label) => run("unlabel", task, label), {
+            discard: true,
+          }),
         ),
         Effect.asVoid,
       );
@@ -155,8 +138,8 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        *
        * The scope a focus defines is derived from these roots each tick: every
        * ready task at or under any of them. Read from the store rather than
-       * remembered, so the scope survives a restart the way the `by-*` and
-       * `rung-*` labels do.
+       * remembered, so the scope survives a restart the way the `by:*` and
+       * `failed-by:*` labels do.
        */
       pinned: () => runJson(Schema.Array(Item), "list", "--label", PIN, "--json"),
 
@@ -195,15 +178,15 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * more than once, and its next author starts a new lifecycle stage.
        */
       attribute: (task: string, kind: string) =>
-        removeLabels(task, [BY, REVIEW_BY, APPROVED, SATISFIED]).pipe(
-          Effect.andThen(run("label", task, `${BY}${kind}`)),
+        removeKinds(task, [BY, REVIEW_BY, APPROVED, SATISFIED]).pipe(
+          Effect.andThen(run("label", task, `${BY}:${kind}`)),
           Effect.asVoid,
         ),
 
       /** Records that a reviewer, rather than the author, owns the live pane. */
       assignReview: (task: string, kind: string) =>
-        removeLabels(task, [REVIEW_BY]).pipe(
-          Effect.andThen(run("label", task, `${REVIEW_BY}${kind}`)),
+        removeKinds(task, [REVIEW_BY]).pipe(
+          Effect.andThen(run("label", task, `${REVIEW_BY}:${kind}`)),
           Effect.asVoid,
         ),
 
@@ -219,25 +202,27 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * author, and a reviewer can approve and then return work in the same
        * turn.
        */
-      clearReview: (task: string) => removeLabels(task, [REVIEW_BY, APPROVED, SATISFIED]),
+      clearReview: (task: string) => removeKinds(task, [REVIEW_BY, APPROVED, SATISFIED]),
 
       /**
-       * Records which rung of the ladder a task's next dispatch must use.
+       * Records that a rung was tried on this task and was not enough.
        *
-       * Durable in the task store rather than in foreman's memory, because the
-       * evidence that a rung failed here is exactly what the next dispatch —
-       * possibly days later, possibly after a restart — needs to act on. You
-       * can also set the label by hand to pin a task straight to a rung,
-       * including `rung-human` for one that needs a person before any agent
-       * touches it.
+       * Durable in the task store rather than in foreman's memory, because this
+       * is exactly what the next dispatch — possibly days later, possibly after
+       * a restart — reads to decide which model gets the work. It names the
+       * rung that failed, never the one that runs next: what runs next depends
+       * on which rungs are configured and paid for at the moment of dispatch,
+       * and a task that stated that in advance would be stranded by a config
+       * edit or a spent account.
        *
-       * Any rung change is a fresh start, so the attempt labels are cleared
-       * with it: a count earned on one rung says nothing about the next, and a
-       * task that revisits a lower rung must not inherit the old count.
+       * The rung's attempt count goes with it. The count exists to decide when
+       * the rung is spent; once it is spent, the count has been read for the
+       * last time, and leaving it behind would let a task lowered back onto
+       * that rung inherit a verdict it has not earned again.
        */
-      setRung: (task: string, rung: string) =>
-        removeLabels(task, [RUNG, ATTEMPT]).pipe(
-          Effect.andThen(run("label", task, `${RUNG}${rung}`)),
+      markFailure: (task: string, rung: string) =>
+        removeAttempts(task, rung).pipe(
+          Effect.andThen(run("label", task, `${FAILED_BY}:${rung}`)),
           Effect.asVoid,
         ),
 
@@ -251,27 +236,32 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        */
       markAttempt: (task: string, rung: string, count: number) =>
         removeAttempts(task, rung).pipe(
-          Effect.andThen(run("label", task, `${ATTEMPT}${rung}-${count}`)),
+          Effect.andThen(run("label", task, `${ATTEMPT}:${rung}:${count}`)),
           Effect.asVoid,
         ),
 
       /**
-       * Removes the rung label, returning a task to the bottom-rung default.
+       * Takes back the record that one rung failed this task.
        *
-       * The operator lowering a task off the bottom rung, where the ladder
-       * reads no label as the bottom and a `rung-<bottom>` would be a
-       * redundant pin. Foreman itself never clears a rung — it only ever
-       * replaces one on the way up — so this is an operator's correction.
+       * The operator's correction, and only ever theirs: foreman writes failure
+       * evidence and never unwrites it. A rung is only as good as what wrote
+       * it, and a crash, an OOM or a killed run all write one that nothing
+       * earned — so removing the highest failure is exactly "that climb was not
+       * deserved", and the work drops back to the model below.
        */
-      clearRung: (task: string) => removeLabels(task, [RUNG]),
+      clearFailure: (task: string, rung: string) =>
+        removeWhere(task, (label) => valueOf(label, FAILED_BY) === rung),
+
+      /** Puts a task a person parked back in the queue at the rung it had earned. */
+      clearNeedsYou: (task: string) => run("unlabel", task, NEEDS_YOU).pipe(Effect.asVoid),
 
       markDiagnostic: (task: string, intent: DiagnosticIntent) =>
-        removeLabels(task, [DIAGNOSING]).pipe(
-          Effect.andThen(run("label", task, `${DIAGNOSING}${intent}`)),
+        removeKinds(task, [DIAGNOSING]).pipe(
+          Effect.andThen(run("label", task, `${DIAGNOSING}:${intent}`)),
           Effect.asVoid,
         ),
 
-      clearDiagnostic: (task: string) => removeLabels(task, [DIAGNOSING]),
+      clearDiagnostic: (task: string) => removeKinds(task, [DIAGNOSING]),
 
       /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
       claimed: (project: string) => byStatus(project, "in_progress"),
@@ -319,7 +309,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * away from the transition it belongs to. Here it holds for every path
        * that requeues a task, including one that never reaches an author.
        *
-       * `review-by-*` goes for a sharper reason: left behind, it is read as
+       * `review-by:*` goes for a sharper reason: left behind, it is read as
        * evidence of something that never happened. A reviewer that is over and
        * a task that is open is exactly the shape a rejection leaves, so the
        * settle loop takes it for one — climbing a second rung and logging that
@@ -329,7 +319,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * clears it.
        */
       release: (task: string) =>
-        removeLabels(task, [APPROVED, REVIEW_BY, SATISFIED]).pipe(
+        removeKinds(task, [APPROVED, REVIEW_BY, SATISFIED]).pipe(
           Effect.andThen(run("open", task)),
           Effect.asVoid,
         ),
@@ -345,7 +335,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * unread branch's task is usually back in the queue, or done, or gone.
        */
       submit: (task: string) =>
-        removeLabels(task, [APPROVED, SATISFIED]).pipe(
+        removeKinds(task, [APPROVED, SATISFIED]).pipe(
           Effect.andThen(run("start", task)),
           Effect.andThen(run("review", task)),
           Effect.asVoid,
@@ -353,7 +343,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 
       /** Moves already-claimed work to formal review, and with it any stale verdict. */
       review: (task: string) =>
-        removeLabels(task, [APPROVED, SATISFIED]).pipe(
+        removeKinds(task, [APPROVED, SATISFIED]).pipe(
           Effect.andThen(run("review", task)),
           Effect.asVoid,
         ),
@@ -437,11 +427,11 @@ export type Item = typeof Item.Type;
 
 /** Which kind of agent authored the work, if foreman recorded it. */
 export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
-  item.labels.find((label) => label.startsWith(BY))?.slice(BY.length);
+  valuesOfKind(item.labels, BY)[0];
 
 /** Which reviewer currently owns a reviewing task, if one was dispatched. */
 export const reviewedBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
-  item.labels.find((label) => label.startsWith(REVIEW_BY))?.slice(REVIEW_BY.length);
+  valuesOfKind(item.labels, REVIEW_BY)[0];
 
 /**
  * Stable audit entry for one agent attempt on a task.
@@ -498,47 +488,104 @@ export const isPinned = (item: { readonly labels: ReadonlyArray<string> }): bool
   item.labels.includes(PIN);
 
 /**
- * Which rung of the ladder a task's next dispatch must use, if it has moved off
- * the bottom.
+ * Which rungs have already failed this task.
  *
- * Not derivable from `by-*`. A task pinned by hand has never been authored and
- * has no `by-*` label to read at all, and who authored last does not say who
- * authors next: a reviewer's rejection climbs, while an agent that stopped
- * without finishing stays on the rung until its attempts run out.
+ * The durable half of choosing an author: the ladder reads these as a floor and
+ * picks the cheapest rung above them that is available now. Evidence rather
+ * than a pointer, so retiring a model or spending its allowance moves the work
+ * on instead of naming a rung nothing can dispatch.
+ *
+ * Not derivable from `by:*`. A task pinned by hand has never been authored and
+ * has no `by:*` label to read at all, and who authored last does not say who
+ * authors next: a reviewer's rejection fails the rung, while an agent that
+ * stopped without finishing leaves it standing until its attempts run out.
  */
-export const rungOf = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
-  item.labels.find((label) => label.startsWith(RUNG))?.slice(RUNG.length);
+export const failuresOf = (item: {
+  readonly labels: ReadonlyArray<string>;
+}): ReadonlyArray<string> => valuesOfKind(item.labels, FAILED_BY);
+
+/**
+ * Whether a person has parked this task, whatever the ladder would say.
+ *
+ * The one durable way into the operator's column. Everything else there is
+ * derived from the failures and the config, so it clears itself when a rung is
+ * added or an allowance resets; this one is a decision and only a decision
+ * removes it.
+ */
+export const needsYou = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(NEEDS_YOU);
 
 /**
  * How many times the named rung has ended the task unfinished.
  *
- * `0` when the rung has never been tried, or was climbed away from — the label
- * names its rung, so a stale count from a rung the task left is ignored and a
- * task pinned by hand starts fresh. The count is what the escalation reads on
- * a dispatch days later.
+ * `0` when the rung has never been tried, or when the failure it earned was
+ * recorded and its count cleared with it. The label names its rung, so one
+ * rung's count is never read as another's, and the count is what the
+ * escalation reads on a dispatch days later.
  */
 export const attemptsOf = (
   item: { readonly labels: ReadonlyArray<string> },
   rung: string,
 ): number => {
-  const prefix = `${ATTEMPT}${rung}-`;
-  const counts = item.labels
-    .filter((label) => label.startsWith(prefix) && /^[0-9]+$/.test(label.slice(prefix.length)))
-    .map((label) => Number(label.slice(prefix.length)));
+  const counts = item.labels.flatMap((label) => {
+    const count = attemptFor(label, rung);
+    return count === undefined ? [] : [count];
+  });
   return counts.length === 0 ? 0 : Math.max(...counts);
 };
 
-/** Prefix of the label naming the kind that authored a task's current branch. */
-export const BY = "by-";
-export const REVIEW_BY = "review-by-";
+/**
+ * Every label foreman writes is `<kind>:<value>`, so reading one is a split.
+ *
+ * The separator is not decoration. Rung names contain hyphens, so under the
+ * older `attempt-<rung>-<n>` a label could only be read by guessing where the
+ * model's name ended — and labels are durable, so the guess was made again on
+ * every dispatch for the whole life of the task. Splitting on a character that
+ * appears in no name asks nothing and cannot be fooled by a rung named after
+ * another rung's prefix.
+ */
+export const kindOf = (label: string): string => label.split(":")[0] ?? label;
+
+/** What a label of this kind says, or nothing if it is not one. */
+export const valueOf = (label: string, kind: string): string | undefined => {
+  const [head, ...rest] = label.split(":");
+  return head === kind && rest.length > 0 ? rest.join(":") : undefined;
+};
+
+const valuesOfKind = (labels: ReadonlyArray<string>, kind: string): ReadonlyArray<string> =>
+  labels.flatMap((label) => {
+    const value = valueOf(label, kind);
+    return value === undefined ? [] : [value];
+  });
+
+/**
+ * The count an `attempt:<rung>:<n>` label carries for one rung.
+ *
+ * Both halves are checked, so a rung reads only its own counts and a label
+ * whose tail is not a number is somebody else's convention rather than a zero.
+ */
+const attemptFor = (label: string, rung: string): number | undefined => {
+  const [kind, named, count, ...rest] = label.split(":");
+  if (kind !== ATTEMPT || named !== rung || count === undefined || rest.length > 0)
+    return undefined;
+  return /^[0-9]+$/.test(count) ? Number(count) : undefined;
+};
+
+/** Kind of the label naming the rung that authored a task's current branch. */
+export const BY = "by";
+export const REVIEW_BY = "review-by";
+
+/** Kind of the label recording that a rung was tried here and was not enough. */
+export const FAILED_BY = "failed-by";
 
 /** The label that marks a task as a defect in shipped code rather than new work. */
 export const BUG = "bug";
 
-/** Prefix of the label naming the rung a task's next dispatch must use. */
-export const RUNG = "rung-";
-export const DIAGNOSING = "diagnosing-";
+export const DIAGNOSING = "diagnosing";
 export const ONBOARD = "onboard";
+
+/** The label with which a person parks a task in their own column. */
+export const NEEDS_YOU = "needs-you";
 
 /**
  * Marks an item whose ready descendants lead the queue.
@@ -550,8 +597,8 @@ export const ONBOARD = "onboard";
  */
 export const PIN = "pin";
 
-/** Prefix of the label counting a rung's unfinished attempts. */
-export const ATTEMPT = "attempt-";
+/** Prefix of the label counting a rung's unfinished attempts: `attempt:<rung>:<n>`. */
+export const ATTEMPT = "attempt";
 export const APPROVED = "approved";
 
 /** The label carrying an author's claim that the trunk already satisfies a task. */
@@ -562,9 +609,7 @@ export type DiagnosticIntent = "diagnose" | "review";
 export const diagnosticIntent = (item: {
   readonly labels: ReadonlyArray<string>;
 }): DiagnosticIntent | undefined => {
-  const intent = item.labels
-    .find((label) => label.startsWith(DIAGNOSING))
-    ?.slice(DIAGNOSING.length);
+  const intent = valuesOfKind(item.labels, DIAGNOSING)[0];
   return intent === "diagnose" || intent === "review" ? intent : undefined;
 };
 

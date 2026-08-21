@@ -11,7 +11,14 @@ import type {
 import { exhausted, type Allowance } from "./quota.ts";
 import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import { diagnosticIntent, reviewedBy, rungOf, type Item, type ReadyTask } from "./prog.ts";
+import {
+  diagnosticIntent,
+  failuresOf,
+  needsYou,
+  reviewedBy,
+  type Item,
+  type ReadyTask,
+} from "./prog.ts";
 
 /**
  * The dashboard as data: every line, every legal action, no renderer.
@@ -89,11 +96,11 @@ export const decisionKind = (task: Item, failure: string | undefined = undefined
         : "orphaned workspace";
 
 /**
- * Whether a review-by-* label has no live reviewer behind it, so it is stale.
+ * Whether a review-by:* label has no live reviewer behind it, so it is stale.
  *
  * The world records whether a reviewer was dispatched, not whether that
  * reviewer is still alive. A task that is open — waiting in the queue — with a
- * review-by-* label is stale by definition, because a real review keeps the
+ * review-by:* label is stale by definition, because a real review keeps the
  * task in `reviewing` with its reviewer beside it; the label only survives on
  * an open task when the review is already over. A workspace that is gone, or a
  * reviewer that settled, is nobody behind the label. Only the operator can say
@@ -175,20 +182,20 @@ export type Command = Action | Global;
  *
  * The two corrections — `descend` and `unassign` — are offered wherever their
  * labels could have been written, and a row without the label ignores the key
- * rather than doing nothing to a claim. `descend` only reaches a row that
- * carries a `rung-*` label: a task without one is already at the bottom, and
- * there is nothing to lower. `unassign` only reaches a row whose review-by-*
- * label has no live reviewer behind it.
+ * rather than doing nothing to a claim. `descend` only reaches a row carrying
+ * a `needs-you` label or a recorded failure: with nothing written against the
+ * task there is nothing to take back. `unassign` only reaches a row whose
+ * review-by:* label has no live reviewer behind it.
  *
  * `yours` takes no answer key, and that is the design rather than an omission.
  * A task waits there because a question about it is unanswered, and a single
  * key to put it back would hand the next agent the same unanswered question —
  * the exact failure the column exists to prevent. It leaves when the operator
- * writes the decision into the task and removes its `rung-human` label, in
+ * writes the decision into the task and removes its `needs-you` label, in
  * that order, with prog. The two corrections do reach it: a task parked at the
- * operator is exactly the sort of rung that can turn out to have been written
- * without being earned, and no other column shows a `rung-human` task to lower
- * it from.
+ * operator is exactly the sort of judgement that can turn out to have been
+ * written without being earned, and no other column shows a `needs-you` task
+ * to take it back from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   queue: ["pin", "complete", "intervene", "descend", "unassign"],
@@ -215,7 +222,7 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  *
  * A vanished author or reviewer can be retried, taken over, or released. An
  * orphaned workspace has no claim to undo — releasing would reopen a done or
- * canceled task — so it is only ever closed, or, when it carries a review-by-*
+ * canceled task — so it is only ever closed, or, when it carries a review-by:*
  * label no reviewer is behind, unassigned.
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
@@ -326,12 +333,12 @@ export const actionsFor = (
           row.worker !== undefined &&
           (row.worker.state === "working" || row.worker.state === "blocked"),
       ),
-      Match.when(
-        "descend",
-        () =>
-          (row.task !== undefined && rungOf(row.task) !== undefined) ||
-          (row.ready !== undefined && rungOf(row.ready) !== undefined),
-      ),
+      // There is something to take back where a rung was failed, and where a
+      // person parked the task above the ladder entirely.
+      Match.when("descend", () => {
+        const item = row.task ?? row.ready;
+        return item !== undefined && (needsYou(item) || failuresOf(item).length > 0);
+      }),
       Match.when(
         "unassign",
         () =>

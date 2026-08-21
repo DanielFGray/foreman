@@ -107,13 +107,36 @@ const statsCommand = Command.make("stats", {}, () => stats).pipe(
   Command.withDescription("Render collected fleet metrics as a self-contained HTML report"),
 );
 
+/**
+ * Waits for SIGINT or SIGTERM, so a stopped daemon says so in its log instead
+ * of leaving a gap that reads as a crash. Winning this race ends the program
+ * the way an operator closing the screen does: the scope closes, the screen is
+ * torn down and the loop is interrupted.
+ */
+const signals = Effect.async<NodeJS.Signals>((resume) => {
+  const handlers: ReadonlyArray<[NodeJS.Signals, NodeJS.SignalsListener]> = [
+    ["SIGINT", () => resume(Effect.succeed("SIGINT"))],
+    ["SIGTERM", () => resume(Effect.succeed("SIGTERM"))],
+  ];
+  handlers.forEach(([signal, handler]) => process.on(signal, handler));
+  return Effect.forEach(
+    handlers,
+    ([signal, handler]) => Effect.sync(() => process.off(signal, handler)),
+    { discard: true },
+  );
+}).pipe(
+  Effect.tap((signal) => Effect.logWarning(`received ${signal}, stopping`)),
+  Effect.asVoid,
+);
+
 const foreman = Command.make("foreman", { slots, running }, ({ slots, running }) =>
   Effect.gen(function* () {
     // The loop is forked and the dashboard is parked on, so closing the
     // dashboard ends the process: an operator who quits the screen means to
     // stop the fleet, not to leave it dispatching where they cannot see it.
+    // A signal ends it through the same race.
     yield* Effect.forkScoped(Dispatcher.run);
-    yield* dashboard;
+    yield* Effect.raceFirst(dashboard, signals);
   }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
 ).pipe(Command.withSubcommands([quotaCommand, statsCommand]));
 

@@ -85,17 +85,20 @@ const state: FleetState = {
   providers: [],
   epics: [],
   orphans: [],
-  queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["rung-pro"])],
+  queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["failed-by:pro"])],
   pinned: new Set(),
-  yours: [ready("ts-y1", ["rung-human"])],
+  yours: [ready("ts-y1", ["needs-you"])],
   working: [
-    active(task("ts-w1", "in_progress", ["by-flash", "rung-flash"]), worker("ts-w1", "working")),
+    active(
+      task("ts-w1", "in_progress", ["by:flash", "failed-by:flash"]),
+      worker("ts-w1", "working"),
+    ),
   ],
   review: [
-    active(task("ts-r1", "reviewing", ["by-flash", "review-by-pro"]), worker("ts-r1", "working")),
+    active(task("ts-r1", "reviewing", ["by:flash", "review-by:pro"]), worker("ts-r1", "working")),
   ],
   landed: [task("ts-l1", "done", [])],
-  decisions: [active(task("ts-d1", "in_progress", ["by-flash"]), undefined)],
+  decisions: [active(task("ts-d1", "in_progress", ["by:flash"]), undefined)],
   committed: new Set<string>(),
   resumable: new Set<string>(),
   unreviewed: [
@@ -112,7 +115,7 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: task("ts-s1", "reviewing", ["by-flash", "rung-flash", "review-by-pro"]),
+      task: task("ts-s1", "reviewing", ["by:flash", "failed-by:flash", "review-by:pro"]),
       paths: ["src/old.ts", "src/gone.ts"],
       modifyDelete: true,
     },
@@ -194,18 +197,18 @@ const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
 
 describe("decisionKind", () => {
   test("names the kind from the status, and a failure over any of them", () => {
-    expect(decisionKind(task("ts-1", "in_progress", ["by-flash"]))).toBe("author vanished");
-    expect(decisionKind(task("ts-1", "reviewing", ["by-flash"]))).toBe("reviewer vanished");
-    expect(decisionKind(task("ts-1", "done", ["by-flash"]))).toBe("orphaned workspace");
+    expect(decisionKind(task("ts-1", "in_progress", ["by:flash"]))).toBe("author vanished");
+    expect(decisionKind(task("ts-1", "reviewing", ["by:flash"]))).toBe("reviewer vanished");
+    expect(decisionKind(task("ts-1", "done", ["by:flash"]))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
-    expect(decisionKind(task("ts-1", "open", ["by-flash"]), "no worktree")).toBe("dispatch failed");
+    expect(decisionKind(task("ts-1", "open", ["by:flash"]), "no worktree")).toBe("dispatch failed");
   });
 });
 
 describe("staleReview", () => {
   test("is a review-by label on an open task with nobody behind it", () => {
-    const label = ["review-by-pro"];
+    const label = ["review-by:pro"];
     expect(staleReview({ labels: label, status: "open" }, undefined)).toBe(true);
     expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "settled"))).toBe(true);
     expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "gone"))).toBe(true);
@@ -296,7 +299,7 @@ describe("actionsFor", () => {
     ]);
     const orphan = {
       ...state,
-      decisions: [active(task("ts-o1", "done", ["by-flash"]), worker("ts-o1", "settled"))],
+      decisions: [active(task("ts-o1", "done", ["by:flash"]), worker("ts-o1", "settled"))],
     };
     const left = rowsForView("attention", orphan).find((each) => each.key === "ts-o1");
     // Nothing to intervene in either: the task is finished, and the workspace
@@ -315,7 +318,7 @@ describe("actionsFor", () => {
     expect(actionsFor("working", row("working", "ts-w1"))).toContain("focus");
     const gone = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by-flash"]), undefined)],
+      working: [active(task("ts-w2", "in_progress", ["by:flash"]), undefined)],
     };
     const alone = rowsForView("working", gone).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("focus");
@@ -330,7 +333,7 @@ describe("actionsFor", () => {
     expect(actionsFor("review", blocked)).toContain("kill");
     const settled = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by-flash"]), worker("ts-w2", "settled"))],
+      working: [active(task("ts-w2", "in_progress", ["by:flash"]), worker("ts-w2", "settled"))],
     };
     const alone = rowsForView("working", settled).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("kill");
@@ -389,7 +392,7 @@ describe("the footer", () => {
 
 describe("previewOf", () => {
   test("says what the row is, and what a hold or a branch is behind it", () => {
-    expect(previewOf(row("working", "ts-w1"))).toContain("labels    by-flash, rung-flash");
+    expect(previewOf(row("working", "ts-w1"))).toContain("labels    by:flash, failed-by:flash");
     expect(previewOf(row("working", "ts-w1"))).toContain("worker    working");
     expect(previewOf(row("attention", "foreman/ts-u1"))).toContain("branch    foreman/ts-u1");
     expect(previewOf(row("attention", "fibrae"))).toContain("project   fibrae");

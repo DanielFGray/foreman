@@ -236,7 +236,7 @@ the review queue.
 Only tasks foreman authored are reviewed. `reviewing` is a status anything can
 set, and a task put there by a person or an earlier orchestrator has no branch
 behind it — no diff to read, and nothing to merge. Foreman labels each task
-`by-<kind>` when an agent actually starts, and that label is what marks the task
+`by:<kind>` when an agent actually starts, and that label is what marks the task
 as its own.
 
 The branch must also hold a commit. An agent can run `prog review` having
@@ -257,14 +257,14 @@ closes the task — with nothing merged and nothing verified, because there is
 nothing to merge. A claim the reviewer cannot confirm is returned like any other
 work.
 
-When a reviewer starts, foreman also writes `review-by-<kind>`. Status
+When a reviewer starts, foreman also writes `review-by:<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
 already running; the label makes that role survive restarts and vanished panes.
 The matching agent pane is labelled `foreman-<role>`, so old settled output
 cannot mask the current role's state.
 
 The world records that a reviewer was dispatched, not whether it is still alive.
-A task that is open in the queue with a `review-by-*` label and no live reviewer
+A task that is open in the queue with a `review-by:*` label and no live reviewer
 behind it has a stale label, and only you can say so: the dashboard's `u` clears
 it — the same `prog unlabel` foreman runs when a review ends.
 
@@ -303,7 +303,7 @@ stranger would. Every branch is reviewed: no priority and no label routes work
 around the reviewer, because a task's own estimate of how small it is arrives
 before anybody has read the diff.
 
-A re-dispatch replaces the `by-` label rather than adding to it: the question the
+A re-dispatch replaces the `by:` label rather than adding to it: the question the
 reviewer asks is who wrote the code on this branch now, not who has ever touched
 the task.
 
@@ -335,21 +335,32 @@ it; the claude harness always spends the claude.ai account, and any other rung
 that is only a harness has to be told, or foreman cannot tell whether that
 rung has any allowance left before it dispatches. `foreman quota` reports what
 each account has left and which rungs are stopped, and a rung whose account is
-spent is passed over — the task waits in the queue at the same rung rather than
-climbing, because an empty allowance says nothing about the work or the model.
+spent is stepped over — the next rung that can pay takes the work, and if none
+can the task waits in the queue with nothing recorded against it, because an
+empty allowance says nothing about the work or the model.
 
-A task starts at the bottom. It climbs one rung — never a jump — on real evidence
-that the rung it is on failed it: a reviewer sent the work back, the branch would
-not land, or the rung has been spent by `attemptsPerRung` attempts that ended
-without finishing. An agent that merely stopped unfinished has said nothing about
-its model — a crash, a timeout and a usage wall all end the same way — so the
-task stays on the rung and is tried again. Foreman writes the new rung as a
-`rung-<name>` label, and the retry count as an `attempt-<rung>-<n>` label, in the
-task store rather than in its own memory, because the evidence that a rung failed
-here is exactly what a dispatch days later, after a restart, needs to act on. Set
-the label by hand to pin a task to a rung.
+`enabled` is optional and defaults to true. Setting it false retires a rung
+without deleting it, which keeps its rank: the failures already recorded against
+it still position every task that earned its way past it.
 
-The rung is a property of the task, never of which slot happened to be free.
+A task names no rung. What it records is evidence: a `failed-by:<rung>` label for
+each rung that was tried and was not enough, and the retry count as an
+`attempt:<rung>:<n>` label. Foreman picks the author at dispatch — the cheapest
+rung that is configured, enabled, funded, and above every rung recorded as having
+failed this task. So a rung commented out of the config, or an account with
+nothing left, moves work along instead of stranding it.
+
+A failure is written on real evidence only: a reviewer sent the work back, the
+branch would not land, or the rung has been spent by `attemptsPerRung` attempts
+that ended without finishing. An agent that merely stopped unfinished has said
+nothing about its model — a crash, a timeout and a usage wall all end the same
+way — so nothing is recorded and the same rung is tried again. The evidence lives
+in the task store rather than in foreman's memory, because a dispatch days later,
+after a restart, is exactly what reads it. Label a task `failed-by:<rung>` by
+hand to hold it above a rung you know is not enough.
+
+Which rung runs is derived at dispatch, never inherited from which slot happened
+to be free.
 
 ### Intervening in stuck work
 
@@ -360,7 +371,7 @@ when a branch or surviving worktree proves there is work to inspect. A committed
 branch enters formal review; uncommitted Review and Diagnose run a chosen agent
 that may fix trivia and logs findings before Foreman resumes the original rung.
 
-The diagnostic lifecycle is durable. Its `diagnosing-*` task label and labelled
+The diagnostic lifecycle is durable. Its `diagnosing:*` task label and labelled
 agent pane survive a Foreman restart; no intervention depends on process memory.
 
 ### The top of the ladder is you
@@ -370,27 +381,25 @@ array: a rung with no harness and no model is a different kind of thing, and an
 explicit entry would invite putting a person in the middle, where every task
 below them would stall.
 
-A task reaches you two ways. It climbs off the top, meaning nothing configured
-could finish it — a task the best model could not do should stop, not cycle. Or
-you pin it there with `prog label <task> rung-human`, which is what work that was
-never specified needs: dispatching it once to discover that wastes a run.
+A task reaches you two ways. Its recorded failures leave no rung above them,
+meaning nothing configured could finish it — a task the best model could not do
+should stop, not cycle. Or you park it with `prog label <task> needs-you`, which
+is what work that was never specified needs: dispatching it once to discover that
+wastes a run.
 
 It waits under dashboard **Attention**, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
 column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
-task with `prog append`, then `prog unlabel <task> rung-human`, in that order.
+task with `prog append`, then `prog unlabel <task> needs-you`, in that order.
 The next author reads the answer in the description.
 
-The one exception is `x`, which lowers the task one rung — including down from
-`rung-human` to the strongest model. A rung is only ever as good as the evidence
-that wrote it, and a bug or a killed run can write one that was never earned, so
-the operator correcting the climb is the same sort of correction `prog unlabel`
-used to be. `x` writes exactly the `rung-*` label foreman would have written.
-
-A rung label naming a model the config no longer has is yours too. The claim
-"this task needs at least this much" cannot be read once the model is gone, and
-guessing would silently downgrade work that had already earned better.
+The one exception is `x`, which takes back one thing that put the task here: the
+`needs-you` label if you set it, otherwise the highest recorded failure. Evidence
+is only ever as good as the run that wrote it, and a bug or a killed run can
+write a failure that was never earned, so the operator taking one back is the
+same sort of correction `prog unlabel` used to be. `x` unwrites exactly the label
+foreman itself would have written.
 
 ## The queue
 

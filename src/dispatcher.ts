@@ -29,11 +29,11 @@ import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
 import { Quota, type Usage, walledRungs } from "./quota.ts";
 import {
-  above,
   authorFor,
-  below,
-  HUMAN,
-  isYours,
+  dispatchable as dispatchableRungs,
+  rankOf,
+  type Choice,
+  highestFailure,
   providersOf,
   reviewerFor,
   type Rung,
@@ -52,11 +52,12 @@ import {
   isOnboarding,
   isSatisfied,
   type Item,
+  failuresOf,
+  needsYou,
   ONBOARD,
   Prog,
   type ReadyTask,
   reviewedBy,
-  rungOf,
 } from "./prog.ts";
 
 const runDuration = Metric.histogram(
@@ -558,11 +559,27 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         (entry) => entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
       );
 
-      // Work at the operator's rung is ready by every measure prog knows and
+      // Which rungs have no allowance left. An author's rung is chosen from
+      // what the task records as having failed it, so this is read before the
+      // queue is split: a spent account changes which rung a task gets, and at
+      // the top of the ladder whether it can be dispatched at all.
+      const walled = walledRungs(providers);
+      const choiceFor = (task: { readonly labels: ReadonlyArray<string> }): Choice =>
+        authorFor(settings.ladder, failuresOf(task), walled);
+
+      // Work waiting on the operator is ready by every measure prog knows and
       // still must not be dispatched: it is waiting on a decision no agent can
       // make. Split here rather than in fill, so the dashboard can say where it
       // went instead of leaving it to look like a queue that stopped moving.
-      const dispatchable = queue.filter((task) => !isYours(settings.ladder, rungOf(task)));
+      //
+      // A task waiting on an allowance is not one of these. That is a fact
+      // about a wallet, it clears itself when the account resets, and handing
+      // it to the operator would ask them to decide something no decision
+      // changes — so it stays in the queue, marked, and `outOfQuota` holds it
+      // back from a dispatch.
+      const parked = (task: { readonly labels: ReadonlyArray<string> }) =>
+        needsYou(task) || choiceFor(task)._tag === "Yours";
+      const dispatchable = queue.filter((task) => !parked(task));
       const failedIds = new Set(failed.map(([task]) => task));
 
       const active = (items: ReadonlyArray<Item>) =>
@@ -589,20 +606,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // halves rotate between stay every managed project.
       const ordered = pinnedFirst(excludeFailedTasks(autoWork, failed), pinned, [...managed]);
 
-      // Which rungs have no allowance left, and from that which tasks their
-      // next agent could not be paid for. A task's rung depends on the column
-      // it is in — an author's is the one its label names, a review's is the
-      // rung above whoever wrote it — and the columns are disjoint, so one set
-      // of task ids says it for both without ambiguity.
-      const walled = walledRungs(providers);
+      // Which tasks their next agent could not be paid for. A task's rung
+      // depends on the column it is in — an author's is the cheapest available
+      // rung above its failures, a review's is the rung above whoever wrote it
+      // — and the columns are disjoint, so one set of task ids says it for both
+      // without ambiguity.
       const reviews = reviewable(reviewingActive, committed);
       const outOfQuota = new Set([
-        ...ordered
-          .filter((task) => {
-            const rung = authorFor(settings.ladder, rungOf(task));
-            return rung !== undefined && walled.has(rung.name);
-          })
-          .map((task) => task.id),
+        ...ordered.filter((task) => choiceFor(task)._tag === "Waiting").map((task) => task.id),
         // A review is gated only when no rung at or above the reviewer's can be
         // paid for. `reviewerFor` answers that by returning nothing, and the
         // dispatch resolves the rung the same way from the same reading, so the
@@ -626,9 +637,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // when that person asks and never because a slot came free.
         queue: ordered,
         epics,
-        yours: queue.filter(
-          (task) => isYours(settings.ladder, rungOf(task)) && managed.has(task.project),
-        ),
+        yours: queue.filter((task) => parked(task) && managed.has(task.project)),
         working: claimedActive,
         ...reviews,
         committed,
@@ -673,10 +682,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // the tick's second reading skips all of it.
         const landed = yield* eachProject((project) => prog.landed(project.name));
 
-        // prog list has no limit, so the landed column is bounded here instead
-        // of in the query. Anything outside the window is history, not news.
         const now = yield* DateTime.now;
-        const landedWindow = DateTime.subtract(now, { days: settings.landedWindow });
 
         const workCandidates = new Map(
           [...queue, ...claimed, ...reviewing]
@@ -756,9 +762,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ...current,
           resumable,
           unreviewed,
-          landed: landed.filter((item) =>
-            DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), landedWindow),
-          ),
+          // Newest landing first: the column is history, and prog returns it
+          // grouped by project in config order rather than by when work landed.
+          landed: landedColumn(landed, now, settings.landedWindow),
           decisions: [...current.decisions, ...failedDecisions],
           dispatch: yield* Ref.get(dispatch),
           observedAt: now,
@@ -846,7 +852,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               handoffExpired: handoffExpired(task, coachCutoff),
             });
 
-            const rung = settings.ladder.find((candidate) => candidate.name === rungOf(task));
+            // The rung that actually ran, which is what an outcome is about —
+            // the reviewer where one owns the pane, else the author.
+            const ran = reviewedBy(task) ?? authoredBy(task);
+            const rung = settings.ladder.find((candidate) => candidate.name === ran);
             if (rung) {
               const attributes = runAttributes(task, rung, reviewedBy(task) ? "review" : "author");
               yield* Effect.annotateCurrentSpan({ ...attributes, outcome: phase });
@@ -1265,14 +1274,39 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         return worker;
       });
 
+    /**
+     * The rung that authors a task now, or nothing when none can.
+     *
+     * The author's mirror of the reviewer resolution below, and it reads the
+     * same tick's allowances for the same reason: every dispatch and the gate
+     * that offered the task must agree, or the gate passes over work a dispatch
+     * would have found an agent for. `undefined` is not an error — the queue
+     * keeps the task and a later tick, or an allowance reset, asks again.
+     */
+    const rungNow = Effect.fnUntraced(function* (task: {
+      readonly id: string;
+      readonly labels: ReadonlyArray<string>;
+    }) {
+      const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
+      const choice = authorFor(settings.ladder, failuresOf(task), walled);
+      if (choice._tag === "Dispatch") return choice.rung;
+      yield* Effect.logInfo(
+        choice._tag === "Waiting"
+          ? `${task.id} deferred: no account with room on ${choice.walled.join(", ")}`
+          : `${task.id} deferred: every rung of the ladder has already failed it`,
+      );
+      return undefined;
+    });
+
     const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (task: ReadyTask) {
       const project = projectFor(task.project);
       if (!project) return;
 
       // The bottom rung by default; higher only where the rungs below have
-      // already been tried and failed. The task carries that history in a
-      // label, so it survives restarts and you can pin it by hand.
-      const rung = authorFor(settings.ladder, rungOf(task));
+      // already been tried and failed, or cannot be paid for. The task carries
+      // the failures in its labels, so the choice survives a restart, and the
+      // allowances are this tick's reading.
+      const rung = yield* rungNow(task);
       if (!rung) return;
 
       // The workspace opens before the claim. If it opened after, a task
@@ -1428,7 +1462,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const unfinished = (task: Climbing, detail: string) =>
       Effect.gen(function* () {
         yield* prog.release(task.id);
-        const rung = rungOf(task) ?? settings.ladder[0].name;
+        const rung = ranAt(task);
         const attempts = attemptsOf(task, rung) + 1;
         if (rungSpent(attempts, settings.attemptsPerRung)) {
           yield* prog.log(
@@ -1446,55 +1480,87 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * Moves a task one rung up the ladder, and says so when that rung is a
-     * person.
+     * The rung whose run has just ended, which is the one a verdict is about.
+     *
+     * Read from the task rather than recomputed: `by:*` says which model
+     * actually ran, while the ladder would answer with whichever rung is
+     * available now — and the two differ exactly when an account went spent
+     * mid-run, which is when charging the wrong model would be worst. A task
+     * with no author recorded has never been dispatched, so the rung it would
+     * get next is the honest answer.
+     */
+    const ranAt = (task: Climbing): string =>
+      authoredBy(task) ?? nextRung(task)?.name ?? settings.ladder[0].name;
+
+    const nextRung = (task: { readonly labels: ReadonlyArray<string> }): Rung | undefined => {
+      const choice = authorFor(settings.ladder, failuresOf(task));
+      return choice._tag === "Dispatch" ? choice.rung : undefined;
+    };
+
+    /**
+     * Records that the rung which just ran was not enough, and says so when
+     * nothing is left above it.
      *
      * The paths that hand work back to the queue with a judgement about it come
      * through here — a reviewer sending work back, a branch that broke the
      * project's verification — so the evidence that a rung failed is written
      * where the next dispatch reads it rather than being lost with the worker.
      * A branch that merely would not merge is not one of them: that is the
-     * trunk having moved, which says nothing about the model. An agent that merely
-     * stopped unfinished does not climb until its rung is spent. The climb
-     * rewrites the rung label, which clears any attempt count the old rung
-     * earned. Climbing off the top rung parks the task in the operator's
-     * column: a task the best model could not finish should stop, not cycle.
-     * Silence there would mean waiting forever, so it is announced like any
-     * other worker that needs somebody.
+     * trunk having moved, which says nothing about the model. An agent that
+     * merely stopped unfinished does not fail its rung until the rung is spent.
+     *
+     * What is written is the failure, never the model that comes next: which
+     * rung takes it depends on what is configured and paid for at the moment of
+     * dispatch, and a task that named its next model would be stranded by a
+     * config edit or a spent account. With every configured rung failed the
+     * task is the operator's: one the best model could not finish should stop,
+     * not cycle. Silence there would mean waiting forever, so it is announced
+     * like any other worker that needs somebody. A rung that is merely walled
+     * is not exhaustion — the account resets and the fleet carries on — so the
+     * account is left out of this reading.
      */
     const climb = (task: Climbing) =>
       Effect.gen(function* () {
-        const next = above(settings.ladder, rungOf(task));
-        yield* prog.setRung(task.id, next);
-        // A climb is the durable rung-label write, not an unfinished attempt.
-        // This annotation therefore records exactly the evidence the ladder acted on.
-        yield* Effect.annotateCurrentSpan({ escalation: "true", "rung.next": next });
-        if (next === HUMAN) {
+        const failed = ranAt(task);
+        yield* prog.markFailure(task.id, failed);
+        const next = authorFor(settings.ladder, [...failuresOf(task), failed]);
+        // The durable write, not an unfinished attempt: this annotation records
+        // exactly the evidence the ladder acted on.
+        yield* Effect.annotateCurrentSpan({
+          escalation: "true",
+          "rung.failed": failed,
+          "rung.next": next._tag === "Dispatch" ? next.rung.name : next._tag,
+        });
+        if (next._tag === "Yours") {
           yield* prog.log(
             task.id,
-            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then remove the \`rung-${HUMAN}\` label to put it back in the queue.`,
+            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then remove the failures it recorded to put it back in the queue.`,
           );
           yield* fleet.notify("Needs a decision", `${task.id} ${task.title}`);
         }
       });
 
     /**
-     * Moves a task one rung down the ladder, at the operator's word.
+     * Takes back the highest failure recorded against a task, at the operator's
+     * word.
      *
      * The mirror of `climb`, and the correction for every way a rung gets
-     * written without being earned — a bug, an OOM, an operator killing a run.
-     * One step per press, writing the same `rung-*` label the ladder reads, so
-     * the result is exactly what foreman itself would have written — and the
-     * rung change clears any attempt count, so the lowered rung starts fresh.
-     * Off the bottom rung the label is removed: the ladder reads no label as
-     * the bottom, so a redundant `rung-<bottom>` would never be written by
-     * hand.
+     * failed without deserving it — a bug, an OOM, an operator killing a run.
+     * One step per press, unwriting exactly the label foreman itself would have
+     * written, so the work drops back to the model below. With nothing recorded
+     * there is nothing to take back: the task is already at the bottom of the
+     * ladder.
      */
     const descend = (task: Climbing) =>
       Effect.gen(function* () {
-        const next = below(settings.ladder, rungOf(task));
-        if (next === undefined) return yield* prog.clearRung(task.id);
-        yield* prog.setRung(task.id, next);
+        // A parked task stands above the top rung, so the step down from it is
+        // out of the operator's column and onto the strongest model — which is
+        // where the failures it already carries put it. Removing the park is
+        // that step; the failures are the next one.
+        if (needsYou(task)) return yield* prog.clearNeedsYou(task.id);
+        const highest = highestFailure(settings.ladder, failuresOf(task));
+        if (highest === undefined) return;
+        yield* prog.clearFailure(task.id, highest);
       });
 
     const projectFor = (name: string) =>
@@ -1600,6 +1666,25 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* dispatchReview(task, authoredBy(task));
       });
 
+    /**
+     * Records every rung below a chosen one as having failed, which is what the
+     * operator saying "carry on from here" means.
+     *
+     * The only way to start a task at a rung, because a task never names the
+     * rung that runs next — and it stays true if the choice cannot be paid for:
+     * the floor holds and the dispatch steps up to an account with room,
+     * exactly as it would have done for a failure foreman recorded itself.
+     */
+    const raiseFloor = (task: Item, rung: Rung) => {
+      const already = new Set(failuresOf(task));
+      const beneath = settings.ladder
+        .slice(0, rankOf(settings.ladder, rung.name) ?? 0)
+        .filter((lower) => !already.has(lower.name));
+      return Effect.forEach(beneath, (lower) => prog.markFailure(task.id, lower.name), {
+        discard: true,
+      });
+    };
+
     const dispatchContinuation = (target: InterventionTarget, rungName: string) =>
       Effect.gen(function* () {
         const task = yield* prog.show(target.task.id);
@@ -1610,7 +1695,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
         yield* prog.clearDiagnostic(task.id);
         if (task.status !== "open") yield* prog.release(task.id);
-        yield* prog.setRung(task.id, rung.name);
+        yield* raiseFloor(task, rung);
         yield* dispatchAuthor(yield* prog.show(task.id));
       });
 
@@ -1641,15 +1726,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     return {
       /** What the dashboard renders. Replaced whole on every tick. */
       state,
-      rungs: settings.ladder.map((rung) => rung.name),
+      // Only rungs foreman can dispatch: a retired one keeps its rank so old
+      // failures still position, but offering it would spawn nothing.
+      rungs: dispatchableRungs(settings.ladder).map((rung) => rung.name),
 
       /** Reads and settles the world once. The daemon wraps this in `run`. */
       tick,
 
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
+        const mode = yield* Ref.get(dispatch);
         yield* Effect.logInfo(
-          `foreman up: ${plural(settings.slots, "slot")} over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s`,
+          `foreman up: ${plural(settings.slots, "slot")} over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s, starting ${mode}`,
         );
         return yield* tick.pipe(
           Effect.andThen(
@@ -1666,7 +1754,14 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
        * States how much work the fleet may take on. Live workers are never
        * interrupted by it; narrowing only stops the next dispatch.
        */
-      setDispatch: (mode: Dispatch) => commanded(Ref.set(dispatch, mode)),
+      setDispatch: (mode: Dispatch) =>
+        commanded(
+          Effect.gen(function* () {
+            const was = yield* Ref.getAndSet(dispatch, mode);
+            // The key cycles even against no change; only a real move is news.
+            if (was !== mode) yield* Effect.logInfo(`dispatch: ${was} -> ${mode}`);
+          }),
+        ),
 
       /**
        * States whether the accounts are being read, so a paused fleet can stop
@@ -1757,7 +1852,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
             const project = projectFor(task.project);
             if (!project) return;
-            const rung = authorFor(settings.ladder, rungOf(task));
+            const rung = yield* rungNow(task);
             if (!rung) return;
             // The workspace may be gone — the pane that was its only one closed
             // by hand. `fleet.open` resolves to the worktree git still has, so
@@ -1825,7 +1920,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       descend: (task: Climbing) => commanded(descend(task)),
 
       /**
-       * Clears a review-by-* label no reviewer is behind, at the operator's
+       * Clears a review-by:* label no reviewer is behind, at the operator's
        * word.
        *
        * The world records whether a reviewer was dispatched, not whether that
@@ -2011,7 +2106,7 @@ export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
  *
  * Three kinds, and each answers differently. A claimed task with a by-* label
  * and an empty workspace is an author that vanished and can be retried; a
- * reviewing task with a review-by-* label and an empty workspace is a reviewer
+ * reviewing task with a review-by:* label and an empty workspace is a reviewer
  * that vanished mid-verdict; a workspace whose task is neither claimed nor
  * under review is residue — the task is unclaimed, so nobody owns the
  * workspace — and the only answer is to close it.
@@ -2170,6 +2265,25 @@ export const waiting = (branch: { readonly activity: Date | undefined }): number
  */
 export const recoverable = (branch: { readonly status: string | undefined }): boolean =>
   branch.status === "done";
+
+/**
+ * Shapes the dashboard's landed column out of every done task prog returns.
+ *
+ * prog list has no limit and no order foreman can rely on — it comes back
+ * grouped by project in config order — so the window is applied here and the
+ * survivors are put in landing order. `last_activity_at` is when a done task
+ * was last touched, which for a done task is when it landed.
+ */
+export const landedColumn = (
+  landed: ReadonlyArray<Item>,
+  now: DateTime.DateTime,
+  windowDays: number,
+): ReadonlyArray<Item> => {
+  const cutoff = DateTime.subtract(now, { days: windowDays });
+  return landed
+    .filter((item) => DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), cutoff))
+    .sort((first, second) => second.last_activity_at.getTime() - first.last_activity_at.getTime());
+};
 
 /**
  * Splits work handed back for review by whether there is any work in it.
