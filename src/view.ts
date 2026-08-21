@@ -310,6 +310,7 @@ export const actionsFor = (
   row: ColumnRow | undefined,
 ): ReadonlyArray<Action> => {
   if (!row) return [];
+  if (row.task?.type === "epic") return row.column === "queue" ? ["pin"] : [];
   const actions =
     column === "decisions" && row.task
       ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
@@ -546,7 +547,10 @@ const pinnedStatus = (state: FleetState): string | undefined => {
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    Match.when("queue", () => state.queue.map((task) => readyRow(task, "queue", state))),
+    Match.when("queue", () => [
+      ...state.epics.map(epicRow),
+      ...state.queue.map((task) => readyRow(task, "queue", state)),
+    ]),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
@@ -614,6 +618,29 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
+
+const epicRow = ({ epic, children }: FleetState["epics"][number]): ColumnRow => {
+  const complete = children.filter((child) => child.status === "done").length;
+  return {
+    column: "queue",
+    key: epic.id,
+    label: `${epic.labels.includes("pin") ? "📌 " : ""}${epic.project}  ${complete}/${children.length}  ${epic.title}`,
+    // No second line: the count is already on the label, and a row costing two
+    // lines to say one thing twice pushes the ready work off a short pane.
+    detail: undefined,
+    task: epic,
+    ready: undefined,
+    worker: undefined,
+    project: undefined,
+    reason: undefined,
+    unreviewed: undefined,
+    stale: undefined,
+    failure: undefined,
+    provider: undefined,
+    hasWork: false,
+    committed: false,
+  };
+};
 
 // The kind is shown rather than the project: in the middle columns the question
 // is which model is on the work, and the project is already visible upstream.

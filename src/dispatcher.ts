@@ -406,6 +406,17 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const claimed = yield* eachProject((project) => prog.claimed(project.name));
       const reviewing = yield* eachProject((project) => prog.awaitingReview(project.name));
+      const epics = yield* eachProject((project) =>
+        prog
+          .inProgressEpics(project.name)
+          .pipe(
+            Effect.flatMap((items) =>
+              Effect.forEach(items, (epic) =>
+                prog.children(epic.id).pipe(Effect.map((children) => ({ epic, children }))),
+              ),
+            ),
+          ),
+      );
       // One query, gated by prog: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
       // allowlist is applied afterwards, to prog's answer rather than to the
@@ -443,6 +454,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         held,
         claimed,
         reviewing,
+        epics,
         queue,
         pinned,
         branches,
@@ -465,8 +477,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       providers: ReadonlyArray<Provider>,
       failed: ReadonlyArray<readonly [string, DispatchFailure]>,
     ) => {
-      const { managed, readings, roster, held, claimed, reviewing, queue, pinned, branches } =
-        observation;
+      const {
+        managed,
+        readings,
+        roster,
+        held,
+        claimed,
+        reviewing,
+        epics,
+        queue,
+        pinned,
+        branches,
+      } = observation;
 
       const tasks = new Map(
         readings.flatMap(({ worker, task }) =>
@@ -603,6 +625,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         // Salvage runs stand in a directory a person is using, so they start
         // when that person asks and never because a slot came free.
         queue: ordered,
+        epics,
         yours: queue.filter(
           (task) => isYours(settings.ladder, rungOf(task)) && managed.has(task.project),
         ),
@@ -2281,6 +2304,8 @@ export const nextDispatch = (mode: Dispatch): Dispatch =>
 
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
+  /** In-progress epics and their direct-child progress, shown above queue tasks. */
+  readonly epics: ReadonlyArray<EpicProgress>;
   /** Ready work in dispatch order: the pinned scope first, then everything else. */
   readonly queue: ReadonlyArray<ReadyTask>;
 
@@ -2454,6 +2479,11 @@ export interface Active {
   readonly failure?: string;
 }
 
+export interface EpicProgress {
+  readonly epic: Item;
+  readonly children: ReadonlyArray<Item>;
+}
+
 export interface InterventionTarget {
   readonly task: Item | ReadyTask;
   readonly worker: Worker | undefined;
@@ -2506,6 +2536,7 @@ interface Interpretation extends FleetState {
 const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 const empty: FleetState = {
+  epics: [],
   queue: [],
   pinned: new Set(),
   yours: [],

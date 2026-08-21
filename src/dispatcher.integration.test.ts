@@ -122,6 +122,7 @@ class World {
           (task) => task.status === "open",
         ) as ReadonlyArray<ReadyTask>,
       ),
+    inProgressEpics: () => Effect.succeed([]),
     pinned: () =>
       Effect.succeed([...this.tasks.values()].filter((task) => task.labels.includes("pin"))),
     setPin: (task: string, pinned: boolean) =>
