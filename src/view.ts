@@ -617,7 +617,9 @@ const epicRow = ({ epic, children }: FleetState["epics"][number]): ColumnRow => 
     column: "queue",
     key: epic.id,
     label: `${epic.labels.includes("pin") ? "📌 " : ""}${epic.project}  ${complete}/${children.length}  ${epic.title}`,
-    detail: `${complete}/${children.length} children complete`,
+    // No second line: the count is already on the label, and a row costing two
+    // lines to say one thing twice pushes the ready work off a short pane.
+    detail: undefined,
     task: epic,
     ready: undefined,
     worker: undefined,

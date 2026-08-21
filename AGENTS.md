@@ -727,6 +727,15 @@ When anything is pinned, the pinned tasks lead the queue view — each marked �
 and the rest follow. The status line names how many pinned tasks are ready, so
 one view shows both without adding a cursor mode.
 
+The managed projects' in-progress epics lead that same view, above the ready
+tasks — not a seventh view, because an epic is read to decide what the queue
+under it should do next, and a tab of its own makes that two places to look.
+The row is its project, its done/total direct children and its title, and the
+only key it takes is `pin`: an epic has no branch and no worker, so every other
+action is meaningless on it. Its marker is read from **its own `pin` label**,
+never from `FleetState.pinned` — `scopeOf` resolves a pin to the ready tasks
+under it, so the epic the operator pressed the key on is never in that set.
+
 Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, unreviewed branches, orphaned workspaces, then held projects,
 and last the spent accounts. Each row keeps its source kind, so combining their display does not
