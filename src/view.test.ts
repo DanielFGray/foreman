@@ -83,6 +83,7 @@ const LONG_DESCRIPTION = [
 
 const state: FleetState = {
   providers: [],
+  epics: [],
   orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["rung-pro"])],
   pinned: new Set(),
@@ -150,6 +151,38 @@ describe("pinned queue", () => {
     const landed = { ...pinned, queue: [ready("ts-q1")] };
 
     expect(statusLine(landed, Date.now())).toStartWith("pinned: 0 ready");
+  });
+});
+
+describe("in-progress epics", () => {
+  const epic = task("ep-drive", "in_progress", []);
+  const progress = {
+    epic: { ...epic, type: "epic", title: "Drive the release" },
+    children: [task("ts-done", "done", []), task("ts-open", "open", [])],
+  };
+
+  test("shows epic progress above ready tasks and only allows pinning", () => {
+    const rows = rowsForView("queue", { ...state, epics: [progress] });
+    expect(rows.map((row) => row.key).slice(0, 2)).toEqual(["ep-drive", "ts-q1"]);
+    expect(rows[0]?.label).toContain("1/2");
+    expect(actionsFor("queue", rows[0])).toEqual(["pin"]);
+  });
+
+  test("marks the epic from its own persisted pin label", () => {
+    const rows = rowsForView("queue", {
+      ...state,
+      epics: [{ ...progress, epic: { ...progress.epic, labels: ["pin"] } }],
+      pinned: new Set(["ts-open"]),
+    });
+    expect(rows[0]?.label).toStartWith("📌 ");
+  });
+
+  test("renders the epic description in its preview", () => {
+    const row = rowsForView("queue", {
+      ...state,
+      epics: [{ ...progress, epic: { ...progress.epic, description: "Release safely." } }],
+    })[0];
+    expect(row && previewOf(row)).toContain("Release safely.");
   });
 });
 

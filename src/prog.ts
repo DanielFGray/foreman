@@ -166,6 +166,20 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
 
+      /** Epics currently being driven, with their progress read separately by the caller. */
+      inProgressEpics: (project: string) =>
+        runJson(
+          Schema.Array(Item),
+          "list",
+          "-p",
+          project,
+          "--status",
+          "in_progress",
+          "--type",
+          "epic",
+          "--json",
+        ),
+
       /**
        * Every completed task in one project.
        *
