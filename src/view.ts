@@ -150,6 +150,7 @@ const ACTIONS_LIST = [
   "takeOver",
   "pin",
   "focus",
+  "kill",
   "intervene",
   "descend",
   "unassign",
@@ -191,8 +192,8 @@ export type Command = Action | Global;
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   queue: ["pin", "complete", "intervene", "descend", "unassign"],
-  working: ["pin", "focus", "intervene", "descend", "release"],
-  review: ["pin", "focus", "intervene", "descend", "release"],
+  working: ["pin", "focus", "kill", "intervene", "descend", "release"],
+  review: ["pin", "focus", "kill", "intervene", "descend", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
   yours: ["intervene", "descend", "unassign"],
@@ -250,6 +251,7 @@ const KEYS: Record<Command, Binding> = {
   takeOver: { key: "ctrl-t", label: "take over" },
   pin: { key: "alt-p", label: "pin" },
   focus: { key: "ctrl-f", label: "focus" },
+  kill: { key: "ctrl-k", label: "kill" },
   intervene: { key: "ctrl-e", label: "intervene" },
   descend: { key: "ctrl-x", label: "descend" },
   unassign: { key: "ctrl-a", label: "unassign" },
@@ -317,6 +319,12 @@ export const actionsFor = (
     Match.value(action).pipe(
       Match.when("takeOver", () => row.worker !== undefined),
       Match.when("focus", () => row.worker !== undefined),
+      Match.when(
+        "kill",
+        () =>
+          row.worker !== undefined &&
+          (row.worker.state === "working" || row.worker.state === "blocked"),
+      ),
       Match.when(
         "descend",
         () =>

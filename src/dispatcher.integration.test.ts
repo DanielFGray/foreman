@@ -48,6 +48,7 @@ class World {
   readonly spawned: Array<[string, string]> = [];
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
+  readonly logs: Array<[string, string]> = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
 
@@ -232,7 +233,7 @@ class World {
       Effect.sync(() => this.update(id, (task) => ({ ...task, status: "reviewing" }))),
     claim: (id: string) =>
       Effect.sync(() => this.update(id, (task) => ({ ...task, status: "in_progress" }))),
-    log: () => Effect.void,
+    log: (id: string, message: string) => Effect.sync(() => void this.logs.push([id, message])),
     complete: (id: string) =>
       Effect.sync(() => this.update(id, (task) => ({ ...task, status: "done" }))),
     add: () => Effect.die("unused"),
@@ -305,6 +306,47 @@ const tick = (world: World) =>
   Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world))));
 
 describe("Dispatcher tick", () => {
+  test("kills a live attempt, logs the reason, and requeues without climbing", async () => {
+    const task = item("ts-kill", "in_progress", ["by-cheap", "rung-cheap"]);
+    const world = new World(task);
+    const live = worker(task.id, "author", "working");
+    world.workers.set(task.id, live);
+
+    await Effect.runPromiseExit(
+      Dispatcher.kill({ task, worker: live }, "tests caught the wrong path").pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+
+    expect(world.stopped).toEqual([[task.id, "author"]]);
+    expect(world.closed).toEqual([task.id]);
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(world.tasks.get(task.id)?.labels).toEqual(["by-cheap", "rung-cheap"]);
+    expect(world.logs).toEqual([
+      [task.id, "foreman: operator killed this attempt: tests caught the wrong path"],
+    ]);
+  });
+
+  test("uses the default kill note and refills the freed slot", async () => {
+    const task = item("ts-kill-default", "reviewing", ["by-cheap", "rung-cheap"]);
+    const world = new World(task);
+    const live = worker(task.id, "review", "blocked");
+    world.workers.set(task.id, live);
+
+    await Effect.runPromiseExit(
+      Dispatcher.kill({ task, worker: live }, "").pipe(Effect.provide(layerFor(world))),
+    );
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("in_progress");
+    expect(world.tasks.get(task.id)?.labels).toEqual(["rung-cheap", "by-cheap"]);
+    expect(world.logs).toContainEqual([
+      task.id,
+      "foreman: operator killed this attempt: operator killed this attempt",
+    ]);
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
   test("settles an author handoff without climbing", async () => {
     const task = item("ts-author", "reviewing", ["by-cheap"]);
     const world = new World(task);

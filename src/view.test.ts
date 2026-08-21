@@ -288,6 +288,21 @@ describe("actionsFor", () => {
     expect(actionsFor("working", alone)).not.toContain("focus");
   });
 
+  test("offers kill only for a live worker", () => {
+    expect(actionsFor("working", row("working", "ts-w1"))).toContain("kill");
+    const blocked = {
+      ...row("working", "ts-w1"),
+      worker: worker("ts-w2", "blocked"),
+    };
+    expect(actionsFor("review", blocked)).toContain("kill");
+    const settled = {
+      ...state,
+      working: [active(task("ts-w2", "in_progress", ["by-flash"]), worker("ts-w2", "settled"))],
+    };
+    const alone = rowsForView("working", settled).find((each) => each.key === "ts-w2");
+    expect(actionsFor("working", alone)).not.toContain("kill");
+  });
+
   // A stale row's answers are the corrections and the release that sends the
   // work back to the queue instead of paying for a review that cannot land.
   // No focus or takeover: the row carries the task, not a worker.
@@ -308,7 +323,7 @@ describe("the footer", () => {
       actionsFor("working", row("working", "ts-w1")),
       state,
     ).split("\n");
-    expect(actions).toBe("alt-p pin  ^f focus  ^e intervene  ^x descend  ^b release");
+    expect(actions).toBe("alt-p pin  ^f focus  ^k kill  ^e intervene  ^x descend  ^b release");
     expect(always).toContain("^q quit");
     expect(always.indexOf("^q quit")).toBeLessThan(always.indexOf("type to filter"));
     expect(always).toContain("^space running");
