@@ -23,6 +23,26 @@ const ROTATION_SCORE_WINDOW = 0.5;
 const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
 
 /**
+ * What finishing an epic is worth at 100% done: the same ceiling as a defect,
+ * so a task that would close out its epic competes exactly like a fresh bug
+ * report rather than needing a second constant to justify against the first.
+ */
+const EPIC_CLOSE_CREDIT = DEFECT_CREDIT;
+
+/**
+ * The credit for a task whose epic is `fraction` of the way done.
+ *
+ * Squared rather than linear: most of an epic's life this contributes nothing,
+ * so ordinary priority and age still decide it, and the credit only becomes
+ * material once an epic is genuinely close to closed — a 50% epic earns a
+ * quarter of the ceiling, a 90% epic nine tenths of it. Linear growth would
+ * let a freshly-half-finished epic already out-rank unrelated priority-1 work,
+ * which is not "push it over the line", it is "any epic wins".
+ */
+export const epicCompletionCredit = (fraction: number): number =>
+  EPIC_CLOSE_CREDIT * fraction * fraction;
+
+/**
  * A ready task becomes more urgent while it waits, but only by a bounded
  * amount. The cap prevents old low-priority work from permanently displacing
  * newly created urgent work.
@@ -41,10 +61,15 @@ const DEFECT_CREDIT = AGING_RATE_PER_DAY * (AGING_CAP_DAYS + 1);
  * priority above it — a broken thing beats an unbuilt one, which is the whole
  * point of saying it in the score rather than in the backlog's priorities.
  */
-export const effectivePriority = (task: ReadyTask, now: Date): number => {
+export const effectivePriority = (task: ReadyTask, now: Date, epicFraction = 0): number => {
   const ageDays = Math.max(0, now.getTime() - task.created_at.getTime()) / DAYS_IN_MILLISECONDS;
   const credit = task.labels.includes(BUG) ? DEFECT_CREDIT : 0;
-  return task.priority - AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS) - credit;
+  return (
+    task.priority -
+    AGING_RATE_PER_DAY * Math.min(ageDays, AGING_CAP_DAYS) -
+    credit -
+    epicCompletionCredit(epicFraction)
+  );
 };
 
 /**
@@ -59,11 +84,12 @@ export const interleave = (
   tasks: ReadonlyArray<ReadyTask>,
   projects: ReadonlyArray<string>,
   now = new Date(),
+  epicFractionOf: (task: ReadyTask) => number = () => 0,
 ): ReadonlyArray<ReadyTask> => {
   const configured = new Set(projects);
   const eligible = tasks.filter((task) => configured.has(task.project));
   const ranked = eligible
-    .map((task) => ({ task, score: effectivePriority(task, now) }))
+    .map((task) => ({ task, score: effectivePriority(task, now, epicFractionOf(task)) }))
     .sort((left, right) => left.score - right.score);
   const picked: Array<ReadyTask> = [];
 

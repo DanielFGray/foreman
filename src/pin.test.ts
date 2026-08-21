@@ -161,4 +161,25 @@ describe("pinnedFirst", () => {
 
     expect(queue.map((task) => task.id)).toEqual(["p1"]);
   });
+
+  test("the epic completion credit reaches both halves", () => {
+    const queue = pinnedFirst(
+      [
+        ready("pin-lo", "p", 3),
+        ready("pin-closer", "p", 3),
+        ready("rest-lo", "p", 3),
+        ready("rest-closer", "p", 3),
+      ],
+      new Set(["pin-lo", "pin-closer"]),
+      ["p"],
+      (task) => (task.id === "pin-closer" || task.id === "rest-closer" ? 0.99 : 0),
+    );
+
+    expect(queue.map((task) => task.id)).toEqual([
+      "pin-closer",
+      "pin-lo",
+      "rest-closer",
+      "rest-lo",
+    ]);
+  });
 });

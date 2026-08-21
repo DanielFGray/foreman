@@ -315,16 +315,32 @@ new work while reviews pile up grows a permanent tail of almost-done tasks.
 ### The queue is one score, not a sort key per rule
 
 `src/queue.ts` ranks ready work by a single continuous score: priority, minus a
-bounded credit for waiting, minus a fixed credit for carrying the `bug` label.
-Both credits are derived from the aging cap rather than tuned, and the defect
-credit deliberately exceeds it — a backlog states priority in three coarse bands,
-so nearly everything lands in one band where age alone decides, and age is the
+bounded credit for waiting, minus a fixed credit for carrying the `bug` label,
+minus a credit for how close the task's own epic is to done. All three credits
+are derived from the aging cap rather than tuned, and the defect credit
+deliberately exceeds it — a backlog states priority in three coarse bands, so
+nearly everything lands in one band where age alone decides, and age is the
 order work was filed, not what it is.
 
 New rules belong in that score, not beside it. A second sort key ahead of it
 would have to restate what the score already says about priority and age, and the
 project rotation reads the score to decide which tasks are close enough to
 interleave.
+
+**The epic-completion credit is squared, not linear**, in the fraction of the
+epic's direct children that are done: `epicCompletionCredit` in `src/queue.ts`
+is negligible for most of an epic's life and only becomes material once it is
+genuinely close to closed, ceilinged at the same value as the defect credit so
+finishing an epic's last task competes exactly like a fresh bug report rather
+than needing a constant tuned against nothing. Linear growth would let a
+freshly-half-finished epic already outrank unrelated priority-1 work, which is
+"any epic wins" rather than "push the close one over the line".
+
+It never reaches a task under a **pinned** epic. The dispatcher computes the
+fraction per task from `state.epics` and skips every epic carrying its own
+`pin` label before building the map, because pin already gives those children
+an absolute lead — stacking a completion credit on a group that already
+outranks everything else would be a no-op wearing an extra constant.
 
 ### A task records what failed it, never what runs next
 
@@ -768,6 +784,12 @@ only key it takes is `pin`: an epic has no branch and no worker, so every other
 action is meaningless on it. Its marker is read from **its own `pin` label**,
 never from `FleetState.pinned` — `scopeOf` resolves a pin to the ready tasks
 under it, so the epic the operator pressed the key on is never in that set.
+
+An unpinned epic is context for reading the queue beneath it, and a pin still
+leads absolutely over that context: the epic block splits on its own `pin`
+label, so a pinned epic and pinned tasks lead together, then unpinned epics,
+then the rest. An epic's position is never read off `FleetState.pinned` for
+the same reason its marker isn't — only its own label moves it.
 
 Attention combines the exceptional states in urgency order: vanished-worker
 decisions, yours, unreviewed branches, orphaned workspaces, then held projects,

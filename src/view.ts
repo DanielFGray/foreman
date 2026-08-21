@@ -554,10 +554,25 @@ const pinnedStatus = (state: FleetState): string | undefined => {
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    Match.when("queue", () => [
-      ...state.epics.map(epicRow),
-      ...state.queue.map((task) => readyRow(task, "queue", state)),
-    ]),
+    // A pin leads absolutely, over an epic as much as over ordinary work: an
+    // unpinned epic is context for reading the queue beneath it, and that
+    // context must not outrank the work the operator singled out. So the
+    // epic block splits on its own `pin` label, pinned tasks are pulled out
+    // of `state.queue` (the dispatcher already orders pinned work first
+    // within it), and the four groups stack pinned-epics, pinned-tasks,
+    // unpinned-epics, unpinned-tasks.
+    Match.when("queue", () => {
+      const pinnedEpics = state.epics.filter(({ epic }) => epic.labels.includes("pin"));
+      const unpinnedEpics = state.epics.filter(({ epic }) => !epic.labels.includes("pin"));
+      const pinnedTasks = state.queue.filter((task) => state.pinned.has(task.id));
+      const unpinnedTasks = state.queue.filter((task) => !state.pinned.has(task.id));
+      return [
+        ...pinnedEpics.map(epicRow),
+        ...pinnedTasks.map((task) => readyRow(task, "queue", state)),
+        ...unpinnedEpics.map(epicRow),
+        ...unpinnedTasks.map((task) => readyRow(task, "queue", state)),
+      ];
+    }),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),

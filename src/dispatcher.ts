@@ -600,11 +600,28 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const autoWork = dispatchable.filter((task) => !isOnboarding(task));
 
+      // How close each task's own epic is to done, for the ones whose epic is
+      // not itself pinned. A pinned epic's children already lead absolutely;
+      // stacking a completion credit on top of that would only reorder a group
+      // that outranks everything else regardless.
+      const epicCompletion = new Map<string, number>();
+      for (const { epic, children } of epics) {
+        if (epic.labels.includes("pin") || children.length === 0) continue;
+        const fraction = children.filter((child) => child.status === "done").length / children.length;
+        for (const child of children) epicCompletion.set(child.id, fraction);
+      }
+      const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
+
       // Pinned work leads, then everything else, each half ordered by the same
       // rules the whole queue always used. A pin changes where work sits in
       // one list; it reserves no slot and stops nothing, so the projects both
       // halves rotate between stay every managed project.
-      const ordered = pinnedFirst(excludeFailedTasks(autoWork, failed), pinned, [...managed]);
+      const ordered = pinnedFirst(
+        excludeFailedTasks(autoWork, failed),
+        pinned,
+        [...managed],
+        epicFractionOf,
+      );
 
       // Which tasks their next agent could not be paid for. A task's rung
       // depends on the column it is in — an author's is the cheapest available

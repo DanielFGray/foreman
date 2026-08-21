@@ -73,21 +73,30 @@ export const pinnedOf = <E>(
  * blocks the other. Re-deriving that from the shape of an epic would guess at
  * what the dependency graph already says, and guess wrong for every epic whose
  * tasks are genuinely independent.
+ *
+ * `epicFractionOf` carries each task's unpinned parent epic's completion
+ * fraction into both halves' ordinary rules. A pinned epic's children never
+ * appear in it — pin already gives them an absolute lead, so a completion
+ * credit on top would only reorder within a group that outranks everything
+ * else regardless.
  */
 export const pinnedFirst = (
   ready: ReadonlyArray<ReadyTask>,
   pinned: ReadonlySet<string>,
   projects: ReadonlyArray<string>,
+  epicFractionOf: (task: ReadyTask) => number = () => 0,
   now = new Date(),
 ): ReadonlyArray<ReadyTask> => [
   ...interleave(
     ready.filter((task) => pinned.has(task.id)),
     projects,
     now,
+    epicFractionOf,
   ),
   ...interleave(
     ready.filter((task) => !pinned.has(task.id)),
     projects,
     now,
+    epicFractionOf,
   ),
 ];

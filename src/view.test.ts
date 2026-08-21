@@ -180,6 +180,25 @@ describe("in-progress epics", () => {
     expect(rows[0]?.label).toStartWith("📌 ");
   });
 
+  test("a pinned task leads an unpinned epic", () => {
+    const rows = rowsForView("queue", {
+      ...state,
+      epics: [progress],
+      queue: [ready("ts-pin"), ready("ts-q1")],
+      pinned: new Set(["ts-pin"]),
+    });
+    expect(rows.map((row) => row.key)).toEqual(["ts-pin", "ep-drive", "ts-q1"]);
+  });
+
+  test("a pinned epic still leads an unpinned task", () => {
+    const rows = rowsForView("queue", {
+      ...state,
+      epics: [{ ...progress, epic: { ...progress.epic, labels: ["pin"] } }],
+      queue: [ready("ts-q1")],
+    });
+    expect(rows.map((row) => row.key)).toEqual(["ep-drive", "ts-q1"]);
+  });
+
   test("renders the epic description in its preview", () => {
     const row = rowsForView("queue", {
       ...state,

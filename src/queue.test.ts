@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { interleave } from "./queue.ts";
+import { epicCompletionCredit, interleave } from "./queue.ts";
 import type { ReadyTask } from "./prog.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
@@ -109,5 +109,38 @@ describe("interleave", () => {
     const result = interleave([bug("low", "a", 3), bug("high", "a", 1)], ["a"], now);
 
     expect(result.map(({ id }) => id)).toEqual(["high", "low"]);
+  });
+
+  test("a task closing out its epic outranks unrelated same-priority work", () => {
+    const result = interleave(
+      [task("feature", "a", 1), task("closer", "a", 1)],
+      ["a"],
+      now,
+      (t) => (t.id === "closer" ? 0.99 : 0),
+    );
+
+    expect(result.map(({ id }) => id)).toEqual(["closer", "feature"]);
+  });
+
+  test("early epic progress barely moves the score", () => {
+    // Half done earns only a quarter of the ceiling — nowhere near enough to
+    // beat a full priority band's worth of ordinary priority.
+    const result = interleave(
+      [task("urgent", "a", 1), task("half-done-epic", "a", 2)],
+      ["a"],
+      now,
+      (t) => (t.id === "half-done-epic" ? 0.5 : 0),
+    );
+
+    expect(result.map(({ id }) => id)).toEqual(["urgent", "half-done-epic"]);
+  });
+});
+
+describe("epicCompletionCredit", () => {
+  test("grows quadratically, so it stays small until an epic is nearly done", () => {
+    expect(epicCompletionCredit(0)).toBe(0);
+    expect(epicCompletionCredit(0.5)).toBeCloseTo(0.5, 5);
+    expect(epicCompletionCredit(0.99)).toBeCloseTo(1.9602, 3);
+    expect(epicCompletionCredit(1)).toBeCloseTo(2, 5);
   });
 });
