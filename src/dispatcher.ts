@@ -923,20 +923,16 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               ),
               Match.when("VanishedAttached", () => Effect.void),
               Match.when("VanishedWithWork", () =>
-                prog
-                  .log(
-                    task.id,
-                    `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Returned to the queue with the worktree intact — read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
-                  )
-                  .pipe(Effect.andThen(prog.release(task.id))),
+                unfinished(
+                  task,
+                  `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.worktree}. Read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
+                ),
               ),
               Match.when("VanishedEmpty", () =>
-                prog
-                  .log(
-                    task.id,
-                    `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree. Returned to the queue for a fresh start.`,
-                  )
-                  .pipe(Effect.andThen(prog.release(task.id)), Effect.andThen(teardown(task))),
+                unfinished(
+                  task,
+                  `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree.`,
+                ).pipe(Effect.andThen(teardown(task))),
               ),
               Match.when("Blocked", () => Effect.void),
               Match.when("ReviewWaiting", () => Effect.void),
