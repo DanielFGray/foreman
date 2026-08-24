@@ -386,6 +386,35 @@ describe("Dispatcher tick", () => {
     expect(world.spawned).toContainEqual([task.id, "review"]);
   });
 
+  test("counts vanished authors toward their rung limit", async () => {
+    for (const [id, branch] of [
+      ["ts-vanished-empty", undefined],
+      [
+        "ts-vanished-with-work",
+        {
+          branch: "foreman/ts-vanished-with-work",
+          merged: false,
+          empty: false,
+          stale: undefined,
+        },
+      ],
+    ] as const) {
+      const task = item(id, "in_progress", ["by:cheap"]);
+      const world = new World(task);
+      const vanished = { ...worker(task.id, "author", "gone"), repository: "/repo" };
+      world.workers.set(task.id, vanished);
+      if (branch) world.branches.set(branch.branch, branch);
+
+      await tick(world);
+      expect(world.tasks.get(task.id)?.labels).toContain("attempt:cheap:1");
+
+      world.workers.set(task.id, vanished);
+      await tick(world);
+
+      expect(world.tasks.get(task.id)?.labels).toContain("failed-by:cheap");
+    }
+  });
+
   test("sweeps a merged branch only after its task leaves the pipeline", async () => {
     const swept = item("ts-swept", "canceled", []);
     const kept = item("ts-kept", "reviewing", ["by:cheap"]);

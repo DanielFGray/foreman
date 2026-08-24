@@ -112,11 +112,8 @@ describe("interleave", () => {
   });
 
   test("a task closing out its epic outranks unrelated same-priority work", () => {
-    const result = interleave(
-      [task("feature", "a", 1), task("closer", "a", 1)],
-      ["a"],
-      now,
-      (t) => (t.id === "closer" ? 0.99 : 0),
+    const result = interleave([task("feature", "a", 1), task("closer", "a", 1)], ["a"], now, (t) =>
+      t.id === "closer" ? 0.99 : 0,
     );
 
     expect(result.map(({ id }) => id)).toEqual(["closer", "feature"]);
