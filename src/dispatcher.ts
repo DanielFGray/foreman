@@ -607,7 +607,8 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const epicCompletion = new Map<string, number>();
       for (const { epic, children } of epics) {
         if (epic.labels.includes("pin") || children.length === 0) continue;
-        const fraction = children.filter((child) => child.status === "done").length / children.length;
+        const fraction =
+          children.filter((child) => child.status === "done").length / children.length;
         for (const child of children) epicCompletion.set(child.id, fraction);
       }
       const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
