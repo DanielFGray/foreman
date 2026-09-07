@@ -64,8 +64,10 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // a verification command.
       const projects = yield* Effect.forEach(raw.projects, (entry) =>
         Effect.gen(function* () {
-          const { name, verify } =
-            typeof entry === "string" ? { name: entry, verify: undefined } : entry;
+          const { name, verify, verificationSkill } =
+            typeof entry === "string"
+              ? { name: entry, verify: undefined, verificationSkill: undefined }
+              : entry;
           const directory = path.join(home, "build", name);
           const exists = yield* fs
             .exists(directory)
@@ -75,7 +77,23 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
               detail: `project "${name}" has no directory at ${directory} — rename the project to match its directory, or drop it from ${file}`,
             });
           }
-          return { name, directory, verify } as const;
+          const skill =
+            verificationSkill === undefined
+              ? undefined
+              : verificationSkill.startsWith("/")
+                ? verificationSkill
+                : path.join(directory, verificationSkill);
+          if (skill !== undefined) {
+            const exists = yield* fs.exists(skill).pipe(
+              Effect.mapError((cause) => new ConfigError({ detail: String(cause) })),
+            );
+            if (!exists) {
+              return yield* new ConfigError({
+                detail: `project "${name}" names verification skill ${skill}, but that file does not exist`,
+              });
+            }
+          }
+          return { name, directory, verify, verificationSkill: skill } as const;
         }),
       );
 
@@ -169,6 +187,7 @@ interface SettingsShape {
   readonly projects: ReadonlyArray<{
     readonly name: string;
     readonly directory: string;
+    readonly verificationSkill?: string;
     readonly verify: string | undefined;
   }>;
   readonly slots: number;
@@ -218,6 +237,13 @@ const ConfigFile = Schema.Struct({
          * whatever about whether the code still runs.
          */
         verify: Schema.optional(Schema.String),
+
+        /**
+         * Project-local instructions for driving user-visible behavior.
+         * Relative paths start at the project root. Foreman gives this pointer
+         * to authors and reviewers; the skill owns the drive and evidence recipe.
+         */
+        verificationSkill: Schema.optional(Schema.String),
       }),
     ),
   ),

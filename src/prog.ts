@@ -1,6 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Effect, Option, Schema, Stream } from "effect";
+import { Effect, Option, Schema as S, Stream } from "effect";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import type { Rung } from "./ladder.ts";
 
@@ -49,10 +49,10 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         ),
       );
 
-    const runJson = <A, I>(schema: Schema.Schema<A, I>, ...args: Array<string>) =>
+    const runJson = <A, I>(schema: S.Schema<A, I>, ...args: Array<string>) =>
       run(...args).pipe(
         Effect.flatMap((out) =>
-          Schema.decodeUnknown(Schema.parseJson(schema))(out).pipe(
+          S.decodeUnknown(S.parseJson(schema))(out).pipe(
             Effect.mapError(
               (cause) => new ProgError({ command: args.join(" "), detail: String(cause) }),
             ),
@@ -88,7 +88,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         ),
         Effect.flatMap((result) =>
           result.exitCode === 0
-            ? Schema.decodeUnknown(Schema.parseJson(Item))(result.stdout).pipe(
+            ? S.decodeUnknown(S.parseJson(Item))(result.stdout).pipe(
                 Effect.mapError(
                   (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
                 ),
@@ -119,17 +119,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
      * dutifully hands them all back.
      */
     const byStatus = (project: string, status: string) =>
-      runJson(
-        Schema.Array(Item),
-        "list",
-        "-p",
-        project,
-        "--status",
-        status,
-        "--type",
-        "task",
-        "--json",
-      );
+      runJson(S.Array(Item), "list", "-p", project, "--status", status, "--type", "task", "--json");
 
     /** Drops every label of the named kinds, whatever value each carries. */
     const removeKinds = (task: string, kinds: ReadonlyArray<string>) =>
@@ -154,7 +144,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       lookup,
 
       /** All unblocked, unclaimed tasks, highest priority first. */
-      ready: () => runJson(Schema.Array(ReadyTask), "ready", "--json"),
+      ready: () => runJson(S.Array(ReadyTask), "ready", "--json"),
 
       /**
        * Every item carrying the focus label — tasks, epics, or a mix.
@@ -164,7 +154,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * remembered, so the scope survives a restart the way the `by:*` and
        * `failed-by:*` labels do.
        */
-      pinned: () => runJson(Schema.Array(Item), "list", "--label", PIN, "--json"),
+      pinned: () => runJson(S.Array(Item), "list", "--label", PIN, "--json"),
 
       setPin: (task: string, pinned: boolean) =>
         (pinned ? run("label", task, PIN) : run("unlabel", task, PIN)).pipe(Effect.asVoid),
@@ -175,7 +165,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       /** Epics currently being driven, with their progress read separately by the caller. */
       inProgressEpics: (project: string) =>
         runJson(
-          Schema.Array(Item),
+          S.Array(Item),
           "list",
           "-p",
           project,
@@ -375,7 +365,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
 
       /** The items that belong to one epic. */
-      children: (epic: string) => runJson(Schema.Array(Item), "list", "--parent", epic, "--json"),
+      children: (epic: string) => runJson(S.Array(Item), "list", "--parent", epic, "--json"),
 
       /** Marks work complete after foreman has landed its branch. */
       complete: (task: string) => run("done", task).pipe(Effect.asVoid),
@@ -384,13 +374,13 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
 }) {}
 
 /** A task the queue may hand out. Epics are never ready; only tasks are. */
-export const ReadyTask = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  priority: Schema.Number,
-  project: Schema.String,
-  labels: Schema.Array(Schema.String),
-  created_at: Schema.DateFromString,
+export const ReadyTask = S.Struct({
+  id: S.String,
+  title: S.String,
+  priority: S.Number,
+  project: S.String,
+  labels: S.Array(S.String),
+  created_at: S.DateFromString,
 
   /**
    * Read here so the queue stays one call per tick.
@@ -399,12 +389,12 @@ export const ReadyTask = Schema.Struct({
    * other row's, and fetching it per selected row would be a `prog show` on
    * each cursor movement against the store the dispatcher is already reading.
    */
-  description: Schema.NullOr(Schema.String),
+  description: S.NullOr(S.String),
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
 /** Status values returned by prog for epics and tasks. */
-export const TaskStatus = Schema.Literal(
+export const TaskStatus = S.Literal(
   "draft",
   "open",
   "in_progress",
@@ -414,19 +404,19 @@ export const TaskStatus = Schema.Literal(
 );
 export type TaskStatus = typeof TaskStatus.Type;
 
-export const Item = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
+export const Item = S.Struct({
+  id: S.String,
+  title: S.String,
   status: TaskStatus,
-  project: Schema.String,
-  type: Schema.String,
-  priority: Schema.Number,
-  labels: Schema.Array(Schema.String),
+  project: S.String,
+  type: S.String,
+  priority: S.Number,
+  labels: S.Array(S.String),
 
   /**
    * The epic's body text. Null only for items created without a description.
    */
-  description: Schema.NullOr(Schema.String),
+  description: S.NullOr(S.String),
 
   /**
    * Later of the task's own update time and its newest log entry.
@@ -436,7 +426,7 @@ export const Item = Schema.Struct({
    * and a worker that has been logging steadily for six hours would look as
    * stale as one that died immediately.
    */
-  last_activity_at: Schema.DateFromString,
+  last_activity_at: S.DateFromString,
 
   /**
    * When the task was filed, which is what the queue ages against.
@@ -444,7 +434,7 @@ export const Item = Schema.Struct({
    * An Item stands in for a ReadyTask wherever the dispatcher requeues one it
    * has already read in full, so the two must agree about what the queue reads.
    */
-  created_at: Schema.DateFromString,
+  created_at: S.DateFromString,
 });
 export type Item = typeof Item.Type;
 
@@ -636,7 +626,7 @@ export const diagnosticIntent = (item: {
   return intent === "diagnose" || intent === "review" ? intent : undefined;
 };
 
-export class ProgError extends Schema.TaggedError<ProgError>()("ProgError", {
-  command: Schema.String,
-  detail: Schema.String,
+export class ProgError extends S.TaggedError<ProgError>()("ProgError", {
+  command: S.String,
+  detail: S.String,
 }) {}

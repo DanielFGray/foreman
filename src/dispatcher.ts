@@ -1328,7 +1328,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       // is indistinguishable from an abandoned claim.
       const worker = yield* workspaceFor(task, project);
 
-      const prompt = yield* prompts.author(task, worker.directory, project.directory);
+      const prompt = yield* prompts.author(
+        task,
+        worker.directory,
+        project.directory,
+        project.verificationSkill,
+      );
       yield* prog.claim(task.id);
       yield* prog.attribute(task.id, rung.name).pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
@@ -1391,6 +1396,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         project.directory,
         base,
         project.verify,
+        project.verificationSkill,
       );
       yield* prog.assignReview(task.id, rung.name);
       const agent = yield* instrumentRun(
@@ -1873,7 +1879,12 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             // a retry re-adopts the same directory with its edits instead of
             // losing them.
             const worker = yield* workspaceFor(task, project);
-            const prompt = yield* prompts.author(task, worker.directory, project.directory);
+            const prompt = yield* prompts.author(
+              task,
+              worker.directory,
+              project.directory,
+              project.verificationSkill,
+            );
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             yield* prog.attribute(task.id, rung.name);
             yield* prog.log(task.id, agentLog("author", rung, agent));
@@ -2688,4 +2699,5 @@ const empty: FleetState = {
 interface Project {
   readonly name: string;
   readonly directory: string;
+  readonly verificationSkill?: string;
 }

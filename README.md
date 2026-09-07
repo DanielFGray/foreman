@@ -445,8 +445,13 @@ strictly.
 
 ```jsonc
 {
-  // A name is both the prog project and its directory under ~/build.
-  "projects": ["fibrae", "pg-sourcerer", "tsdoctor"],
+  // An object can add a project verification command and a user-facing
+  // verification skill. Relative skill paths start at the project root.
+  "projects": [
+    "fibrae",
+    { "name": "pg-sourcerer", "verify": "bun test", "verificationSkill": ".cursor/skills/verify-pg-sourcerer/SKILL.md" },
+    "tsdoctor",
+  ],
   "slots": 3,
   // Cheapest first. Order is the rating; the reviewer is the rung above.
   "ladder": [
@@ -469,6 +474,10 @@ There is no path override: a name that does not match its directory is a naming
 mistake, and `prog projects rename` is the fix. Startup fails loudly on a project
 that does not resolve, because a queue that silently drops half its work looks
 exactly like a queue that is empty.
+
+`verificationSkill` points to a project-local skill that explains how to drive
+user-visible behavior and capture evidence. Foreman gives the path to authors and
+reviewers. Foreman still runs `verify` as the mechanical landing gate.
 
 ## The log
 

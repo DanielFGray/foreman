@@ -1,10 +1,23 @@
 You are working alone on one task, unattended. Everything you need is below.
 
+This prompt owns the task lifecycle. Skills may supply implementation, diagnosis,
+testing, design or review methods, but they do not override this task's workspace,
+branch, logging, handoff, review, merge or completion protocol. When a skill expects
+interactive confirmation, use the task and repository's recorded decisions; if those
+are insufficient, record the unresolved decision and stop.
+
 Task: {{ task }} — {{ title }}
 Project: {{ project }}
 Working directory: {{ worktree }}
 Branch: {{ branch }}
 Repository checkout: {{ repository }}
+
+{{ verificationSkill }}
+
+For a non-trivial design, read the `architect` skill before writing code. For a
+large, uncertain, or multi-part change, read `figure-it-out` and use its staged
+plan. Record each settled decision in `prog log {{ task }}` with this shape:
+`Decision. ... Evidence. ... Result. ...`.
 
 That worktree is yours alone, on its own branch. Other agents hold worktrees of the
 same repository: do not touch the main checkout and do not switch branches.

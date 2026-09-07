@@ -1,4 +1,4 @@
-import { Either, Schema } from "effect";
+import { Either, Schema as S } from "effect";
 
 export interface Run {
   readonly name: string;
@@ -44,7 +44,7 @@ export const runsFromOtlp = (payloads: ReadonlyArray<string>): ReadonlyArray<Run
       .split("\n")
       .filter((line) => line.trim() !== "")
       .flatMap((line) =>
-        Either.match(Schema.decodeUnknownEither(Schema.parseJson())(line), {
+        Either.match(S.decodeUnknownEither(S.parseJson())(line), {
           onLeft: () => [],
           onRight: (decoded) => spansOf(decoded as OtlpExport),
         }),

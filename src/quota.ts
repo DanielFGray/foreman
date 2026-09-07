@@ -7,7 +7,7 @@ import {
   HttpClientRequest,
 } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Chunk, Clock, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Chunk, Clock, Effect, Match, Option, Ref, Schema as S, Stream } from "effect";
 
 /**
  * How much of a provider's allowance is already spent.
@@ -25,32 +25,34 @@ export class Quota extends Effect.Service<Quota>()("Quota", {
   dependencies: [BunContext.layer, FetchHttpClient.layer],
   accessors: true,
   effect: Effect.gen(function* () {
-    const go = yield* goProbe;
-    const codex = yield* codexProbe;
-    const claude = yield* claudeProbe;
+    const [go, codex, claude] = yield* Effect.all([goProbe, codexProbe, claudeProbe]);
 
     const probe = (provider: string): Effect.Effect<Usage, QuotaError> =>
-      provider === "opencode-go"
-        ? go(provider)
-        : provider === "openai"
-          ? codex(provider)
-          : provider === "claude"
-            ? claude(provider)
-            : provider.startsWith("opencode")
-              ? Effect.fail(
-                  new QuotaError({
-                    provider,
-                    detail: "no zen usage endpoint — the pay-as-you-go balance is not exposed",
-                    permanent: true,
-                  }),
-                )
-              : Effect.fail(
-                  new QuotaError({
-                    provider,
-                    detail: "no quota probe knows this provider",
-                    permanent: true,
-                  }),
-                );
+      Match.value(provider).pipe(
+        Match.when("claude", () => claude(provider)),
+        Match.when("openai", () => codex(provider)),
+        Match.when("opencode-go", () => go(provider)),
+        Match.when(
+          () => provider.startsWith("opencode"),
+          () =>
+            Effect.fail(
+              new QuotaError({
+                provider,
+                detail: "no zen usage endpoint — the pay-as-you-go balance is not exposed",
+                permanent: true,
+              }),
+            ),
+        ),
+        Match.orElse(() =>
+          Effect.fail(
+            new QuotaError({
+              provider,
+              detail: "no quota probe knows this provider",
+              permanent: true,
+            }),
+          ),
+        ),
+      );
 
     const usage = heldWhileSpent(probe, yield* Ref.make(new Map<string, Spent>()));
 
@@ -152,28 +154,28 @@ export const freeAt = (usage: Usage): Date | undefined => {
   return resets.length === 0 ? undefined : new Date(Math.max(...resets));
 };
 
-export class QuotaError extends Schema.TaggedError<QuotaError>()("QuotaError", {
-  provider: Schema.String,
-  detail: Schema.String,
+export class QuotaError extends S.TaggedError<QuotaError>()("QuotaError", {
+  provider: S.String,
+  detail: S.String,
   /**
    * The read cannot succeed until the operator changes something. A permanent
    * failure repeats on every poll, so it is carried to the dashboard and never
    * logged as a warning; a transient one (an outage, a changed reply shape) is
    * worth a line every time it happens.
    */
-  permanent: Schema.Boolean,
+  permanent: S.Boolean,
 }) {}
 
 // ------------------------------------------------------------- opencode go
 
-const GoAllowance = Schema.Struct({
-  status: Schema.String,
-  percent: Schema.Number,
-  resetsAt: Schema.DateFromString,
+const GoAllowance = S.Struct({
+  status: S.String,
+  percent: S.Number,
+  resetsAt: S.DateFromString,
 });
 
-const GoUsage = Schema.Struct({
-  usage: Schema.Record({ key: Schema.String, value: GoAllowance }),
+const GoUsage = S.Struct({
+  usage: S.Record({ key: S.String, value: GoAllowance }),
 });
 
 /**
@@ -198,7 +200,7 @@ const goProbe = Effect.gen(function* () {
           HttpClientRequest.bearerToken(key),
         ),
       );
-      const decoded = yield* Schema.decodeUnknown(GoUsage)(yield* response.json);
+      const decoded = yield* S.decodeUnknown(GoUsage)(yield* response.json);
       return {
         provider,
         plan: undefined,
@@ -211,9 +213,9 @@ const goProbe = Effect.gen(function* () {
     }).pipe(Effect.mapError((cause) => asQuotaError(provider, cause)));
 });
 
-const OpencodeAuth = Schema.Record({
-  key: Schema.String,
-  value: Schema.Struct({ key: Schema.optional(Schema.String) }),
+const OpencodeAuth = S.Record({
+  key: S.String,
+  value: S.Struct({ key: S.optional(S.String) }),
 });
 
 /**
@@ -230,7 +232,7 @@ const apiKey = (fs: FileSystem.FileSystem, provider: string): Effect.Effect<stri
     if (configured !== undefined && configured.length > 0) return configured;
 
     const file = `${process.env["HOME"] ?? ""}/.local/share/opencode/auth.json`;
-    const decoded = yield* Schema.decodeUnknown(OpencodeAuth)(
+    const decoded = yield* S.decodeUnknown(OpencodeAuth)(
       JSON.parse(yield* fs.readFileString(file)),
     );
     return yield* Option.match(Option.fromNullable(decoded[provider]?.key), {
@@ -246,19 +248,19 @@ const apiKey = (fs: FileSystem.FileSystem, provider: string): Effect.Effect<stri
 
 // -------------------------------------------------------------- openai (codex)
 
-const RateLimitWindow = Schema.Struct({
-  usedPercent: Schema.Number,
-  resetsAt: Schema.optional(Schema.NullOr(Schema.Number)),
-  windowDurationMins: Schema.optional(Schema.NullOr(Schema.Number)),
+const RateLimitWindow = S.Struct({
+  usedPercent: S.Number,
+  resetsAt: S.optional(S.NullOr(S.Number)),
+  windowDurationMins: S.optional(S.NullOr(S.Number)),
 });
 
-const RateLimitsReply = Schema.Struct({
-  id: Schema.Number,
-  result: Schema.Struct({
-    rateLimits: Schema.Struct({
-      planType: Schema.optional(Schema.NullOr(Schema.String)),
-      primary: Schema.optional(Schema.NullOr(RateLimitWindow)),
-      secondary: Schema.optional(Schema.NullOr(RateLimitWindow)),
+const RateLimitsReply = S.Struct({
+  id: S.Number,
+  result: S.Struct({
+    rateLimits: S.Struct({
+      planType: S.optional(S.NullOr(S.String)),
+      primary: S.optional(S.NullOr(RateLimitWindow)),
+      secondary: S.optional(S.NullOr(RateLimitWindow)),
     }),
   }),
 });
@@ -314,7 +316,7 @@ const codexProbe = Effect.gen(function* () {
         const reply = yield* Stream.decodeText(process.stdout).pipe(
           Stream.splitLines,
           Stream.filterMap((line) =>
-            Schema.decodeUnknownOption(RateLimitsReply)(parsed(line)).pipe(
+            S.decodeUnknownOption(S.parseJson(RateLimitsReply))(line).pipe(
               Option.filter((message) => message.id === LIMITS_ID),
             ),
           ),
@@ -351,22 +353,22 @@ const codexProbe = Effect.gen(function* () {
 
 // ----------------------------------------------------------- claude (anthropic)
 
-const ClaudeOAuth = Schema.Struct({
-  claudeAiOauth: Schema.Struct({
-    accessToken: Schema.String,
-    subscriptionType: Schema.optional(Schema.NullOr(Schema.String)),
+const ClaudeOAuth = S.Struct({
+  claudeAiOauth: S.Struct({
+    accessToken: S.String,
+    subscriptionType: S.optional(S.NullOr(S.String)),
   }),
 });
 
-const ClaudeWindow = Schema.Struct({
-  utilization: Schema.optional(Schema.NullOr(Schema.Number)),
-  resets_at: Schema.optional(Schema.NullOr(Schema.String)),
+const ClaudeWindow = S.Struct({
+  utilization: S.optional(S.NullOr(S.Number)),
+  resets_at: S.optional(S.NullOr(S.String)),
 });
 
-const ClaudeUsage = Schema.Struct({
-  five_hour: Schema.optional(Schema.NullOr(ClaudeWindow)),
-  seven_day: Schema.optional(Schema.NullOr(ClaudeWindow)),
-  extra_usage: Schema.optional(Schema.NullOr(ClaudeWindow)),
+const ClaudeUsage = S.Struct({
+  five_hour: S.optional(S.NullOr(ClaudeWindow)),
+  seven_day: S.optional(S.NullOr(ClaudeWindow)),
+  extra_usage: S.optional(S.NullOr(ClaudeWindow)),
 });
 
 /**
@@ -388,7 +390,7 @@ const claudeProbe = Effect.gen(function* () {
 
   const allowanceOf = (
     window: string,
-    limit: Schema.Schema.Type<typeof ClaudeWindow> | null | undefined,
+    limit: S.Schema.Type<typeof ClaudeWindow> | null | undefined,
   ): ReadonlyArray<Allowance> =>
     limit === undefined || limit === null || typeof limit.utilization !== "number"
       ? []
@@ -406,7 +408,7 @@ const claudeProbe = Effect.gen(function* () {
   return (provider: string): Effect.Effect<Usage, QuotaError> =>
     Effect.gen(function* () {
       const home = process.env["HOME"] ?? "";
-      const decoded = yield* Schema.decodeUnknown(ClaudeOAuth)(
+      const decoded = yield* S.decodeUnknown(ClaudeOAuth)(
         JSON.parse(yield* fs.readFileString(`${home}/.claude/.credentials.json`)),
       );
       const response = yield* client.execute(
@@ -421,7 +423,7 @@ const claudeProbe = Effect.gen(function* () {
           permanent: true,
         });
       }
-      const usage = yield* Schema.decodeUnknown(ClaudeUsage)(yield* response.json);
+      const usage = yield* S.decodeUnknown(ClaudeUsage)(yield* response.json);
       return {
         provider,
         plan: decoded.claudeAiOauth.subscriptionType ?? undefined,
@@ -447,14 +449,6 @@ export const windowName = (rank: string, durationMins: number | undefined): stri
       : durationMins >= 1440
         ? `${rank} (${Math.round(durationMins / 1440)}d)`
         : `${rank} (${Math.round(durationMins / 60)}h)`;
-
-const parsed = (line: string): unknown => {
-  try {
-    return JSON.parse(line);
-  } catch {
-    return undefined;
-  }
-};
 
 const asQuotaError = (provider: string, cause: unknown): QuotaError =>
   cause instanceof QuotaError
