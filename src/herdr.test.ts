@@ -43,24 +43,48 @@ describe("opencodeCommand", () => {
     return JSON.parse(match?.[1] ?? "");
   };
 
+  const permissionOf = (command: string): Record<string, unknown> =>
+    configIn(command)["permission"] as Record<string, unknown>;
+
   test("carries the model in the config and runs opencode on a private server", () => {
-    const config = configIn(opencodeCommand("opencode-go/terra", "/home/dan/build/quill"));
+    const config = configIn(
+      opencodeCommand({
+        model: "opencode-go/terra",
+        workspace: "/state/foreman/worktrees/quill/ts-1",
+        checkouts: "/home/dan/build",
+      }),
+    );
 
     expect(config["model"]).toBe("opencode-go/terra");
-    expect(config["permission"]).toEqual({
-      bash: { "git push*": "deny" },
-      external_directory: {
-        "/home/dan/build/quill": "deny",
-        "/home/dan/build/quill/**": "deny",
-      },
-    });
   });
 
-  test("denies pushing and the operator's checkout, and omits an unchosen model", () => {
-    const config = configIn(opencodeCommand(undefined, undefined));
+  test("reads outside the worktree freely and writes nowhere but its own", () => {
+    // Reads are allowed wholesale so a measurement task can read what it
+    // measures; `edit` is the write gate, so the checkout deny lands there and
+    // this workspace's own directory is last, which wins over it.
+    const permission = permissionOf(
+      opencodeCommand({
+        model: undefined,
+        workspace: "/home/dan/build/quill",
+        checkouts: "/home/dan/build",
+      }),
+    );
+
+    expect(permission["external_directory"]).toEqual({ "*": "allow" });
+    expect(permission["edit"]).toEqual({
+      "*": "allow",
+      "/home/dan/build/**": "deny",
+      "/home/dan/build/quill/**": "allow",
+    });
+    expect(permission["bash"]).toEqual({ "git push*": "deny" });
+  });
+
+  test("denies a push and states no model the harness is to choose", () => {
+    const config = configIn(
+      opencodeCommand({ model: undefined, workspace: "/wt/ts-1", checkouts: "/home/dan/build" }),
+    );
 
     expect("model" in config).toBe(false);
-    expect(config["permission"]).toEqual({ bash: { "git push*": "deny" } });
   });
 });
 

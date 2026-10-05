@@ -123,17 +123,22 @@ export const HerdrFleet = Layer.effect(
      * adopt it under foreman's agent name.
      *
      * `--auto` approves every permission no rule denies, so an unattended agent
-     * does not stall on a prompt. The config denies the two acts that stay
-     * foreman's: pushing, and writing to the operator's own checkout.
+     * does not stall on a prompt. The rules themselves are in `opencodeCommand`.
      */
     const startOpencode = (
       pane: string,
       agent: string,
+      workspace: string,
       model: string | undefined,
-      repository: string | undefined,
     ) =>
       Effect.gen(function* () {
-        yield* herdr("spawn", "pane", "run", pane, opencodeCommand(model, repository));
+        yield* herdr(
+          "spawn",
+          "pane",
+          "run",
+          pane,
+          opencodeCommand({ model, workspace, checkouts: checkoutRoot() }),
+        );
         // The footer's command hint is the TUI's own signal that it is
         // accepting input; herdr's screen detection is not ready before it.
         yield* herdr(
@@ -439,7 +444,7 @@ export const HerdrFleet = Layer.effect(
                     ...(options.model ? ["--", "--model", options.model] : []),
                   );
             if (options.kind === "opencode") {
-              yield* startOpencode(pane, agent, options.model, worker.repository);
+              yield* startOpencode(pane, agent, worker.directory, options.model);
             }
 
             yield* prompt(agent, options.prompt);
@@ -615,31 +620,52 @@ export const agentNameFor = (pane: string): string =>
 const OPENCODE_READY = "ctrl+p";
 
 /**
+ * Where the operators' project checkouts live, which opencode may not write to.
+ *
+ * The same `~/build/<name>` the settings derive a project's directory from, so
+ * one place states where a checkout is and both readers agree.
+ */
+const checkoutRoot = (): string => `${process.env["HOME"] ?? ""}/build`;
+
+/**
  * The single command `pane run` types into the pane's shell to start opencode.
  *
  * One shell word, because the shell is what turns the environment assignment
  * into a variable opencode reads. `--standalone` keeps the model this process
  * was given: without it the TUI joins the shared server and runs the last model
- * loaded there. `--auto` approves every permission no rule denies; the config
- * denies the two acts an agent must never take — pushing, and writing to the
- * operator's checkout — while leaving unrelated work outside the worktree, such
- * as reading a skill, free to proceed.
+ * loaded there.
+ *
+ * `--auto` approves every permission no rule denies, so an unattended agent does
+ * not stall on a prompt — which makes the deny list the whole safety story. It
+ * separates reading from writing, because opencode gates those separately:
+ * `external_directory` covers any tool touching a path outside the working
+ * directory and is allowed wholesale, so a measurement task reads the filesystem
+ * it is measuring, while `edit` — every `edit`, `write` and `patch` — is denied
+ * across the operators' checkouts. Rules are last-match-wins, so the catch-all
+ * comes first and each exception after it.
+ *
+ * Two denials and one exception. The exception is this workspace, because
+ * onboarding is dispatched into a checkout and must be able to salvage what it
+ * finds; its own directory is last, so it wins over the checkout rule above it.
+ *
+ * What this cannot reach is `bash`, where any command can write anywhere. The
+ * denials that matter there are the ones a command *names*, and only pushing is
+ * named. The prompts carry the rest, and that gap is deliberate rather than
+ * hidden: a deny list over arbitrary shell would have to enumerate every way to
+ * write a file.
  */
-export const opencodeCommand = (
-  model: string | undefined,
-  repository: string | undefined,
-): string => {
-  const permission: Record<string, unknown> = {
-    bash: { "git push*": "deny" },
-  };
-  if (repository !== undefined) {
-    permission["external_directory"] = {
-      [repository]: "deny",
-      [`${repository}/**`]: "deny",
-    };
-  }
+export const opencodeCommand = (options: {
+  readonly model: string | undefined;
+  readonly workspace: string;
+  readonly checkouts: string;
+}): string => {
+  const { model, workspace, checkouts } = options;
   const config: Record<string, unknown> = {
-    permission,
+    permission: {
+      bash: { "git push*": "deny" },
+      external_directory: { "*": "allow" },
+      edit: { "*": "allow", [`${checkouts}/**`]: "deny", [`${workspace}/**`]: "allow" },
+    },
     ...(model === undefined ? {} : { model }),
   };
   return `OPENCODE_CONFIG_CONTENT=${shellQuote(JSON.stringify(config))} opencode --standalone --auto`;
