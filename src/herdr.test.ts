@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentNameFor,
+  opencodeCommand,
   paneFor,
   resolveClose,
   resolveOpen,
@@ -32,6 +33,34 @@ describe("agentNameFor", () => {
 
     expect(first).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
     expect(first).not.toBe(second);
+  });
+});
+
+describe("opencodeCommand", () => {
+  const configIn = (command: string): Record<string, unknown> => {
+    const match = /^OPENCODE_CONFIG_CONTENT='([^']*)' opencode --standalone --auto$/.exec(command);
+    expect(match).not.toBeNull();
+    return JSON.parse(match?.[1] ?? "");
+  };
+
+  test("carries the model in the config and runs opencode on a private server", () => {
+    const config = configIn(opencodeCommand("opencode-go/terra", "/home/dan/build/quill"));
+
+    expect(config["model"]).toBe("opencode-go/terra");
+    expect(config["permission"]).toEqual({
+      bash: { "git push*": "deny" },
+      external_directory: {
+        "/home/dan/build/quill": "deny",
+        "/home/dan/build/quill/**": "deny",
+      },
+    });
+  });
+
+  test("denies pushing and the operator's checkout, and omits an unchosen model", () => {
+    const config = configIn(opencodeCommand(undefined, undefined));
+
+    expect("model" in config).toBe(false);
+    expect(config["permission"]).toEqual({ bash: { "git push*": "deny" } });
   });
 });
 

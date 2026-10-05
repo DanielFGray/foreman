@@ -322,12 +322,12 @@ next" fall out of the order.
 ]
 ```
 
-`harness` is a herdr agent kind — the program that runs. `model` is handed to it
-as `--model`, which is the flag both opencode and claude take; herdr forwards
-everything after `--` to the agent's own command line. A bare string is a rung
-that is only a harness, running whatever that program defaults to. Two rungs may
-share a harness and differ only in model, which is the point: without the model,
-every rung would be the same rung.
+`harness` is a herdr agent kind — the program that runs. `model` is the model
+that harness must run; the multiplexer adapter knows how each one is told, which
+is mostly `--model` but not uniformly. A bare string is a rung that is only a
+harness, running whatever that program defaults to. Two rungs may share a
+harness and differ only in model, which is the point: without the model, every
+rung would be the same rung.
 
 `provider` is optional and names the account a rung spends. It is read off the
 model's `<provider>/` prefix wherever there is one, so most ladders never state

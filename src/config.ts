@@ -84,9 +84,9 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
                 ? verificationSkill
                 : path.join(directory, verificationSkill);
           if (skill !== undefined) {
-            const exists = yield* fs.exists(skill).pipe(
-              Effect.mapError((cause) => new ConfigError({ detail: String(cause) })),
-            );
+            const exists = yield* fs
+              .exists(skill)
+              .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
             if (!exists) {
               return yield* new ConfigError({
                 detail: `project "${name}" names verification skill ${skill}, but that file does not exist`,
@@ -260,8 +260,9 @@ const ConfigFile = Schema.Struct({
    * rung it is on failed it — a reviewer sending work back, a branch that
    * would not land, or `attemptsPerRung` attempts ending unfinished. `name` is
    * what tasks record and the dashboard shows, `harness` is a herdr agent
-   * kind, and `model` is passed to that harness as `--model`. A bare string is
-   * a rung that is only a harness, running whatever that program defaults to.
+   * kind, and `model` is the model that harness runs — the adapter knows how
+   * each harness is told. A bare string is a rung that is only a harness,
+   * running whatever that program defaults to.
    */
   ladder: Schema.NonEmptyArray(
     Schema.Union(

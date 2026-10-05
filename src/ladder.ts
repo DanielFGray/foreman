@@ -25,9 +25,11 @@ export interface Rung {
   readonly harness: string;
 
   /**
-   * Passed to the harness as `--model`, which opencode and claude both accept.
-   * Absent means the harness picks, which is what a rung named after a harness
-   * rather than a model wants.
+   * The model this rung runs. Each harness is told in the way it accepts one —
+   * `--model` for claude and codex, a private-server config for opencode — and
+   * that mapping lives in the multiplexer adapter, not here. Absent means the
+   * harness picks, which is what a rung named after a harness rather than a
+   * model wants.
    */
   readonly model: string | undefined;
 

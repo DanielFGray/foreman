@@ -111,6 +111,45 @@ export const HerdrFleet = Layer.effect(
       );
 
     /**
+     * Starts opencode on a chosen model, by the recipe its v2 CLI made
+     * necessary.
+     *
+     * `agent start` appends its arguments to the executable, so it can express
+     * flags but not the environment assignment that carries opencode's model.
+     * opencode's TUI has no `--model` flag, and without `--standalone` it joins
+     * the shared background server and runs whichever model that server last
+     * loaded — so a `--model` passthrough fails the launch outright. Instead:
+     * run the configured TUI in the pane, wait for it to accept input, then
+     * adopt it under foreman's agent name.
+     *
+     * `--auto` approves every permission no rule denies, so an unattended agent
+     * does not stall on a prompt. The config denies the two acts that stay
+     * foreman's: pushing, and writing to the operator's own checkout.
+     */
+    const startOpencode = (
+      pane: string,
+      agent: string,
+      model: string | undefined,
+      repository: string | undefined,
+    ) =>
+      Effect.gen(function* () {
+        yield* herdr("spawn", "pane", "run", pane, opencodeCommand(model, repository));
+        // The footer's command hint is the TUI's own signal that it is
+        // accepting input; herdr's screen detection is not ready before it.
+        yield* herdr(
+          "spawn",
+          "pane",
+          "wait-output",
+          pane,
+          "--match",
+          OPENCODE_READY,
+          "--timeout",
+          "30000",
+        );
+        yield* herdr("spawn", "agent", "rename", pane, agent);
+      });
+
+    /**
      * Foreman's workspaces, joined to a pane inside each one.
      *
      * Two calls rather than one per workspace: herdr lists every pane at once
@@ -382,41 +421,45 @@ export const HerdrFleet = Layer.effect(
               (spent) => herdr("spawn", "pane", "close", spent.pane_id).pipe(Effect.ignore),
               { discard: true },
             );
-            const started = yield* herdrJson(
-              AgentEnvelope,
-              "spawn",
-              "agent",
-              "start",
-              agent,
-              "--kind",
-              options.kind,
-              "--pane",
-              pane,
-              // Everything after `--` is herdr's passthrough to the agent's own
-              // command line. `--model` is the flag opencode and claude both
-              // take; a harness that does not know it must be configured as a
-              // rung with no model.
-              ...(options.model ? ["--", "--model", options.model] : []),
-            );
+            // Most harnesses take their model as `--model`, which herdr's
+            // managed start forwards. opencode does not: see `startOpencode`.
+            const native =
+              options.kind === "opencode"
+                ? undefined
+                : yield* herdrJson(
+                    AgentEnvelope,
+                    "spawn",
+                    "agent",
+                    "start",
+                    agent,
+                    "--kind",
+                    options.kind,
+                    "--pane",
+                    pane,
+                    ...(options.model ? ["--", "--model", options.model] : []),
+                  );
+            if (options.kind === "opencode") {
+              yield* startOpencode(pane, agent, options.model, worker.repository);
+            }
 
             yield* prompt(agent, options.prompt);
 
             // Integrations can add metadata tokens after the first prompt. The
             // task still started if this optional observation is unavailable.
-            const model = yield* herdrJson(
-              AgentEnvelope,
-              "spawn metadata",
-              "agent",
-              "get",
-              agent,
-            ).pipe(
-              Effect.map((info) => info.result.agent.tokens?.["model"]),
-              Effect.catchAll((error) =>
-                Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
-                  Effect.as(started.result.agent.tokens?.["model"]),
-                ),
-              ),
-            );
+            // An opencode launch names its model in the config it built, so
+            // there is nothing to read back — and herdr reports no tokens for a
+            // pane it only recognised by screen.
+            const model =
+              native === undefined
+                ? options.model
+                : yield* herdrJson(AgentEnvelope, "spawn metadata", "agent", "get", agent).pipe(
+                    Effect.map((info) => info.result.agent.tokens?.["model"]),
+                    Effect.catchAll((error) =>
+                      Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
+                        Effect.as(native.result.agent.tokens?.["model"]),
+                      ),
+                    ),
+                  );
 
             return { kind: options.kind, model };
           }).pipe(
@@ -567,6 +610,43 @@ export const agentNameFor = (pane: string): string =>
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(-24)}`;
+
+/** The TUI's own hint that its input box is ready, matched before adoption. */
+const OPENCODE_READY = "ctrl+p";
+
+/**
+ * The single command `pane run` types into the pane's shell to start opencode.
+ *
+ * One shell word, because the shell is what turns the environment assignment
+ * into a variable opencode reads. `--standalone` keeps the model this process
+ * was given: without it the TUI joins the shared server and runs the last model
+ * loaded there. `--auto` approves every permission no rule denies; the config
+ * denies the two acts an agent must never take — pushing, and writing to the
+ * operator's checkout — while leaving unrelated work outside the worktree, such
+ * as reading a skill, free to proceed.
+ */
+export const opencodeCommand = (
+  model: string | undefined,
+  repository: string | undefined,
+): string => {
+  const permission: Record<string, unknown> = {
+    bash: { "git push*": "deny" },
+  };
+  if (repository !== undefined) {
+    permission["external_directory"] = {
+      [repository]: "deny",
+      [`${repository}/**`]: "deny",
+    };
+  }
+  const config: Record<string, unknown> = {
+    permission,
+    ...(model === undefined ? {} : { model }),
+  };
+  return `OPENCODE_CONFIG_CONTENT=${shellQuote(JSON.stringify(config))} opencode --standalone --auto`;
+};
+
+/** Wraps a value as one single-quoted shell word, escaping embedded quotes. */
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 /**
  * A pane label naming the role its agent runs, and the role read back off it.
