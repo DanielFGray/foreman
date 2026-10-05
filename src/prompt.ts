@@ -44,12 +44,7 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
       );
 
     return {
-      author: (
-        task: ReadyTask,
-        worktree: string,
-        repository: string,
-        verificationSkill?: string,
-      ) =>
+      author: (task: ReadyTask, worktree: string, repository: string, verificationSkill?: string) =>
         render("author", {
           task: task.id,
           title: task.title,
