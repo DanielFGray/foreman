@@ -947,6 +947,7 @@ One divergence from the settled design:
   deleting a concept, not adding one. Report a blocker instead.
 - Use `prog` for task tracking. The epic is `ep-0e6a7e`.
 - Bun, not node. Effect-TS throughout.
+- Edit only foreman, `~/build/server-ansible` and this machine's `~/.config/foreman/`. When a sweep reaches another project, list those files and file the work with `prog -p <project> add`.
 - **A gap in herdr is a task in `amux`, not a workaround here.** Foreman is
   herdr's heaviest user, so it finds the missing capabilities first, and the cost
   of each is a shim here encoding what herdr should have told us. File it with
