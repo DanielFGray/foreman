@@ -497,6 +497,45 @@ describe("Dispatcher tick", () => {
     expect(world.closed).toContain(task.id);
   });
 
+  test("reviews an empty branch whose task's deliverable is a research report", async () => {
+    const task = item("ts-research", "reviewing", ["by:cheap", "research"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "author", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: true,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+  });
+
+  test("closes a research task the reviewer approved, merging nothing", async () => {
+    const task = item("ts-research-confirmed", "reviewing", [
+      "by:cheap",
+      "review-by:cheap",
+      "research",
+      "approved",
+    ]);
+    const world = new World(task);
+    world.landing = { _tag: "Present" };
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: true,
+      empty: true,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+    expect(world.closed).toContain(task.id);
+  });
+
   test("holds a project out of both fill passes", async () => {
     const task = item("ts-held", "open", []);
     const world = new World(task);

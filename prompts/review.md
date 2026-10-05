@@ -55,6 +55,18 @@ list, and run `prog open {{ task }}`. Approving here closes the task with nothin
 merged, so an approval you cannot point at line by line deletes the work instead of
 doing it.
 
+The author's report is a claim, not evidence. Verify each claim it makes against
+the diff or by running a command — what a function now does, what a test proves,
+what a benchmark measures. A claim you cannot verify is a finding: log what you
+could not confirm and return the task, whether or not the code around it looks
+right. A report that disagrees with the diff is itself the defect.
+
+An empty diff on a task labelled `research` means the deliverable is a report in
+the task log. Read it and verify its evidence — the commands it claims to have
+run and what they showed — against the definition of done. Approve only when the
+report answers every part; a claim you cannot verify is a finding, and a partly
+answered report is a rejection.
+
 Judge three things, in order. Does it do what the task asked? Does the verification
 actually verify it — run the definition of done's command and the tests covering the
 code the diff touched, and ask of each new test whether it would fail without the new

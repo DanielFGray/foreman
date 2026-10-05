@@ -50,6 +50,7 @@ import {
   isApproved,
   isPinned,
   isOnboarding,
+  isResearch,
   isSatisfied,
   type Item,
   failuresOf,
@@ -1064,7 +1065,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             task.id,
             isSatisfied(task)
               ? `foreman: ${project.name}'s trunk already does what this task asked, and the reviewer confirmed it. Nothing was merged and nothing was verified — the backlog had outlived the work.`
-              : `foreman: ${project.name}'s checkout already contained this branch, so there was nothing to merge. An earlier landing put the commits in without reaching this step.`,
+              : isResearch(task)
+                ? `foreman: this task's deliverable was a report, and the reviewer confirmed it against its evidence in the log. Nothing was merged and nothing was verified — there was no code to land.`
+                : `foreman: ${project.name}'s checkout already contained this branch, so there was nothing to merge. An earlier landing put the commits in without reaching this step.`,
           );
         } else {
           if (!result.verified) {
@@ -2325,20 +2328,21 @@ export const landedColumn = (
  * or by hand — proves its author wrote something just as well, and reading that
  * as an empty branch sends finished work back to the queue.
  *
- * The one empty branch worth a reviewer is the one whose author says the trunk
- * already does what the task asks. That is a finding about the codebase rather
- * than an absence of work, and it is the only ending that closes a task the
- * backlog has outlived: read as unfinished instead, it returns to the queue
- * and buys the same discovery again at a dearer model on every rung. It is
- * still only a claim — the reviewer confirms it against the trunk, and the
- * ordinary rejection sends a false one back.
+ * Two empty branches are worth a reviewer. One is the author's claim that the
+ * trunk already does what the task asks — a finding about the codebase rather
+ * than an absence of work, and the only ending that closes a task the backlog
+ * has outlived. The other is a task labelled `research`, whose deliverable is a
+ * report in the task log rather than commits. Both are claims, not verdicts:
+ * the reviewer confirms the satisfied one against the trunk and the research
+ * one against its evidence, and an ordinary rejection sends a false one back.
  */
 export const reviewable = (
   reviewing: ReadonlyArray<Active>,
   committed: ReadonlySet<string>,
 ): { readonly review: ReadonlyArray<Active>; readonly unbacked: ReadonlyArray<Active> } => {
   const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
-  const readable = ({ task }: Active) => committed.has(task.id) || isSatisfied(task);
+  const readable = ({ task }: Active) =>
+    committed.has(task.id) || isSatisfied(task) || isResearch(task);
   return {
     review: authored.filter(readable),
     unbacked: authored.filter((active) => !readable(active)),

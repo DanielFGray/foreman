@@ -296,6 +296,16 @@ describe("work handed back for review", () => {
     expect(unbacked).toEqual([]);
   });
 
+  test("reviews an empty branch whose task's deliverable is a research report", () => {
+    // A research task's product is in its log, so its branch is legitimately
+    // empty; read as unbacked it would be returned for having no commits.
+    const report = active(task("ts-555555", ["by:opencode", "research"]), undefined);
+    const { review, unbacked } = reviewable([report], new Set());
+
+    expect(review.map(({ task }) => task.id)).toEqual(["ts-555555"]);
+    expect(unbacked).toEqual([]);
+  });
+
   test("leaves work foreman did not author alone, committed or not", () => {
     // `reviewing` is a status anyone can set by hand. Without a by-* label the
     // branch is not foreman's to review, land or return to its queue.

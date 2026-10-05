@@ -85,6 +85,13 @@ reach for this because the task is hard, vague or half-covered: partly done is n
 done, and a claim you cannot point at line by line is rejected and costs the task a
 rung.
 
+A task labelled `research` asks for a report, not code — a measurement, an
+investigation, a comparison. Write the report and its evidence to
+`prog log {{ task }}`: the commands you ran and what they showed, so a reviewer
+can check every claim. Then run `prog review {{ task }}`. The branch stays empty
+and nothing merges; a report that does not answer the definition of done is
+rejected and costs the task a rung, so do not reach for this to escape work.
+
 When the work is committed, run `prog review {{ task }}`. Your job ends there. Your
 session stays open a while, so a reviewer may send you one mechanical defect: fix
 exactly what it names, commit, stop again. Foreman lands the branch into

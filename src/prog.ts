@@ -483,6 +483,17 @@ export const isSatisfied = (item: { readonly labels: ReadonlyArray<string> }): b
   item.labels.includes(SATISFIED);
 
 /**
+ * Whether a task's deliverable is a report rather than code.
+ *
+ * The report lives in the task's own log, so the branch is legitimately empty
+ * and the reviewer reads evidence instead of a diff. `research` is set when the
+ * task is filed and survives every attempt, unlike `satisfied`, which is the
+ * author's claim about one attempt.
+ */
+export const isResearch = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
+  item.labels.includes(RESEARCH);
+
+/**
  * Salvage work in a project's own checkout, which only the operator starts.
  *
  * The queue holds work the fleet may pick up by itself. An onboarding run is
@@ -616,6 +627,15 @@ export const APPROVED = "approved";
 
 /** The label carrying an author's claim that the trunk already satisfies a task. */
 export const SATISFIED = "satisfied";
+
+/**
+ * The label marking a task whose deliverable is a report, not code.
+ *
+ * Set when the task is filed and never cleared: it says what kind of work this
+ * is, so an empty branch that reaches review is a report to read rather than an
+ * author that wrote nothing.
+ */
+export const RESEARCH = "research";
 
 export type DiagnosticIntent = "diagnose" | "review";
 
