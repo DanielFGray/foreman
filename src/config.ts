@@ -90,6 +90,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
               model: entry.model,
               provider: entry.provider,
               enabled: entry.enabled,
+              unmetered: entry.unmetered,
             };
       const [bottom, ...rest] = raw.ladder;
       const ladder: Ladder = [rungOf(bottom), ...rest.map(rungOf)];
@@ -260,6 +261,15 @@ const ConfigFile = Schema.Struct({
          * no longer part of the rating at all.
          */
         enabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
+
+        /**
+         * Whether the account's allowance describes this rung's room at all.
+         * Set it on a model the provider is serving on promotional access,
+         * where the account's percentage measures a different pool: foreman
+         * then never stops the rung on that reading. Absent means the
+         * allowance governs it, which is the ordinary case.
+         */
+        unmetered: Schema.optional(Schema.Boolean),
       }),
     ),
   ),

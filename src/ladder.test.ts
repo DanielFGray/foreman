@@ -237,6 +237,24 @@ describe("providersOf", () => {
     const retired: Ladder = [cheap, middle, rung("top", { harness: "claude", enabled: false })];
     expect(providersOf(retired)).toEqual(["opencode"]);
   });
+
+  test("leaves out an account whose every rung is fed by a promotional pool", () => {
+    // No reading of it could stop a dispatch, and it is probed once a tick.
+    const promo: Ladder = [
+      rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
+      rung("sponsored", { model: "opencode-go/kimi-free", unmetered: true }),
+    ];
+    expect(providersOf(promo)).toEqual([]);
+  });
+
+  test("still names an account that also has a metered rung", () => {
+    // The metered rung is what makes the reading worth having.
+    const mixed: Ladder = [
+      rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
+      rung("metered", { model: "opencode-go/kimi-k2.5" }),
+    ];
+    expect(providersOf(mixed)).toEqual(["opencode-go"]);
+  });
 });
 
 describe("rungsOn", () => {
@@ -245,5 +263,25 @@ describe("rungsOn", () => {
     // rung behind it, so climbing within it buys nothing.
     expect(rungsOn(ladder, "opencode")).toEqual(["cheap", "middle"]);
     expect(rungsOn(ladder, "claude")).toEqual(["top"]);
+  });
+
+  test("leaves out a rung the account's percentage does not describe", () => {
+    // The one false wall there is. A promotional model draws on another pool,
+    // so walling it on the metered percentage passes over work the account can
+    // still pay for, and the task waits for a reset that was never relevant.
+    const promo: Ladder = [
+      rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
+      rung("metered", { model: "opencode-go/kimi-k2.5" }),
+    ];
+    expect(rungsOn(promo, "opencode-go")).toEqual(["metered"]);
+  });
+
+  test("stops nothing on an account whose rungs are all unmetered", () => {
+    expect(
+      rungsOn(
+        [rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true })],
+        "opencode-go",
+      ),
+    ).toEqual([]);
   });
 });

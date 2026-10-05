@@ -421,6 +421,18 @@ a model — so the ordinary rung is chosen again once the account resets.
 - **The key is read where the harness keeps it.** A credential copied into
   foreman's config is one more place for it to go stale, and the harness whose
   key it is renews it.
+- **A rung the allowance does not describe is marked `unmetered`.** A model on
+  promotional access draws on a pool the account's percentage does not measure,
+  so walling it on that percentage is the one false wall there is: work the
+  account can still pay for gets passed over, and the task waits for a reset that
+  was never going to matter. `rungsOn` leaves those rungs off the wall and
+  `providersOf` stops asking about an account whose every rung is such a one,
+  which is a request saved per tick. Stated rather than derived, because only
+  the operator knows what a provider is currently sponsoring — and getting it
+  wrong that way is the safe direction, since a metered rung left out meets the
+  wall itself, which is where the fleet stood before any of this was read.
+  A config field the schema does not name is dropped in silence, so the flag is
+  covered by a test that decodes a config and reads the rung back.
 - **`foreman quota` and the dashboard quota view are two callers of one
   reading.** The dashboard shows the accounts, which is what an operator can act
   on; the command answers the same question before a daemon exists to ask it of.

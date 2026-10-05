@@ -54,10 +54,31 @@ export interface Rung {
    * this at all.
    */
   readonly enabled?: boolean | undefined;
+
+  /**
+   * Whether the account's allowance says nothing about this rung's room.
+   * Absent means the allowance describes it.
+   *
+   * A model served on promotional access — a launch give-away, a partner's
+   * sponsored endpoint — draws on a pool that is not the one the account's
+   * percentage measures. Walling such a rung on that percentage is the one false
+   * wall there is: it passes over work the account can still pay for, and the
+   * task then waits for a reset that was never going to matter.
+   *
+   * Stated rather than derived, because only the operator knows which models a
+   * provider is currently sponsoring. Getting it wrong in this direction is the
+   * safe one: a metered rung left out is dispatched on an empty account and
+   * meets the wall itself, which is where the fleet stood before any of this was
+   * read at all.
+   */
+  readonly unmetered?: boolean | undefined;
 }
 
 /** Whether foreman may dispatch a rung: everything but an explicit retirement. */
 export const isEnabled = (rung: Rung): boolean => rung.enabled !== false;
+
+/** Whether this rung's room is described by the allowance of its account. */
+export const isMetered = (rung: Rung): boolean => rung.unmetered !== true;
 
 /**
  * Which rung authors next, and why there is none when there is none.
@@ -224,18 +245,33 @@ export const providerOf = (rung: Rung): string | undefined => {
  * Dispatchable rungs only: a retired rung keeps its rank so old failures still
  * position, but nothing will ever spend its account again, and an allowance
  * nothing can spend is not news.
+ *
+ * Metered rungs only, for the same reason and the same way: an account whose
+ * every rung is fed by a promotional pool is asked nothing, because no reading
+ * of it could stop a dispatch. It is probed once per tick, so this saves a
+ * request per tick rather than tidying a list.
  */
 export const providersOf = (ladder: Ladder): ReadonlyArray<string> => [
   ...new Set(
-    dispatchable(ladder).flatMap((rung) => {
-      const provider = providerOf(rung);
-      return provider === undefined ? [] : [provider];
-    }),
+    dispatchable(ladder)
+      .filter(isMetered)
+      .flatMap((rung) => {
+        const provider = providerOf(rung);
+        return provider === undefined ? [] : [provider];
+      }),
   ),
 ];
 
-/** The rungs a spent account stops, which is every dispatchable rung on it. */
+/**
+ * The rungs a spent account stops: the dispatchable ones on it whose room that
+ * allowance describes.
+ *
+ * An unmetered rung is left out even though it draws on the same account. The
+ * reading is about the metered pool, and a rung fed by a promotional one has
+ * room whatever the pool says — so including it would stop work the account can
+ * still do.
+ */
 export const rungsOn = (ladder: Ladder, provider: string): ReadonlyArray<string> =>
   dispatchable(ladder)
-    .filter((rung) => providerOf(rung) === provider)
+    .filter((rung) => providerOf(rung) === provider && isMetered(rung))
     .map((rung) => rung.name);
