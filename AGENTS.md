@@ -461,14 +461,20 @@ from a crash, so the task climbs a rung and buys the same discovery again at a
 dearer model until the ladder runs out at the operator. So the author records a
 `satisfied` label, and `reviewable` sends that one empty branch to a reviewer.
 
-It is a claim, never a verdict. "It is already done" is exactly what a model too
-weak for a task would say to escape it, so the reviewer confirms it against the
-trunk part by part and its `approved` is what closes the task; a rejection sends
-it back like any other. Landing needs no special case — an empty branch is
-contained by any checkout, so `merge` answers `Present` and completes the task
-without merging or verifying. The label is what tells the two causes of `Present`
-apart in the log, and it is cleared wherever `approved` is: both describe a diff
-that a requeue has invalidated.
+A task labelled `research` is the second such branch: its deliverable is a report
+in its own log, so it never has a diff to commit. That label is set when the task
+is filed and survives a requeue, because it names the kind of work rather than
+one attempt.
+
+Both are claims, never verdicts. "It is already done" is exactly what a model too
+weak for a task would say to escape it, so the reviewer confirms a `satisfied`
+claim against the trunk and a `research` report against its cited evidence, each
+part by part, and its `approved` is what closes the task; a rejection sends it
+back like any other. Landing needs no special case — an empty branch is contained
+by any checkout, so `merge` answers `Present` and completes the task without
+merging or verifying. The labels are what tell the causes of `Present` apart in
+the log; `satisfied` is cleared wherever `approved` is, since both describe a
+diff that a requeue has invalidated, while `research` names the work and stays.
 
 Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
@@ -567,20 +573,24 @@ commit, so a refusal there cannot be about content — it is `Held`, always.
 its `approved` label, so a later tick lands the same reviewed branch; nothing
 about a lock invalidates a diff a reviewer already read.
 
-Landing also runs `verify`. Only a ground that was green and went red is the
-branch's fault: the output is logged and the task returns to the queue. A
-checkout already red still accepts the merge, because a branch cannot be blamed
-for damage that predates it and one broken test would otherwise freeze the whole
-fleet. A project naming no `verify` lands on the merge's success alone, and the
-task log says so.
+Landing also runs `verify`. Only a ground that was green and reproducibly went red
+is the branch's fault: the output is logged and the task returns to the queue.
+A checkout already red still accepts the merge, because a branch cannot be
+blamed for damage that predates it and one broken test would otherwise freeze the
+whole fleet. A project naming no `verify` lands on the merge's success alone, and
+the task log says so.
 
 **The baseline is lazy, and that is not an optimisation.** The merged ground is
 verified first; only if that fails is the pre-merge baseline worth running,
-because only then is "was it red already?" a live question. The tick is one
-fiber, so a verification run is time in which nothing else is dispatched, settled
-or landed, and an eager baseline made every good landing cost two full suite
-runs. A failure still costs two. Never worse where it matters, and half the price
-in the common case.
+because only then is "was it red already?" a live question. A failure is also
+repeated once on the same merged tree before the baseline, because a suite that
+fails and then passes found nothing: a pass on the retry is a flake, the branch
+lands verified, and the failure is logged for the operator to file. So a flake
+costs two runs, a confirmed break costs three, and the question asked of the
+baseline is a confirmed failure. The tick is one fiber, so a verification run is
+time in which nothing else is dispatched, settled or landed, and an eager
+baseline made every good landing cost two full suite runs. Never worse where it
+matters, and half the price in the common case.
 
 **A landing is several steps and only the merge is atomic.** Interrupt it after
 the merge — a stranded `index.lock` is enough — and the commits are in while the
@@ -959,6 +969,7 @@ One divergence from the settled design:
   deleting a concept, not adding one. Report a blocker instead.
 - Use `prog` for task tracking. The epic is `ep-0e6a7e`.
 - Bun, not node. Effect-TS throughout.
+- Edit only foreman, `~/build/server-ansible` and this machine's `~/.config/foreman/`. When a sweep reaches another project, list those files and file the work with `prog -p <project> add`.
 - **A gap in herdr is a task in `amux`, not a workaround here.** Foreman is
   herdr's heaviest user, so it finds the missing capabilities first, and the cost
   of each is a shim here encoding what herdr should have told us. File it with

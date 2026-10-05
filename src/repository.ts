@@ -172,6 +172,20 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         }),
       ).pipe(Effect.orElseSucceed(() => ({ passed: false, output: `could not run: ${command}` })));
 
+    /**
+     * A verification failure's output when it reproduces, or nothing when the
+     * first failure flaked.
+     *
+     * A suite that fails and then passes on the same tree did not find a defect;
+     * it flaked. Returning a correct branch for that charges the task for the
+     * project's own test, so the retry is what separates a break from a flake —
+     * and only a reproducible failure is the branch's to answer for. The
+     * re-run happens before the pre-merge baseline, so a branch that did break
+     * the suite still costs the baseline its usual single run.
+     */
+    const reproduced = (directory: string, command: string, output: string) =>
+      check(directory, command).pipe(Effect.map((retry) => (retry.passed ? undefined : output)));
+
     /** One value per revision, on its own line and nothing else. */
     const template = (expression: string) => ["--no-graph", "-T", `${expression} ++ "\\n"`];
 
@@ -391,6 +405,14 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         const after = yield* check(proving, verify);
         if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
 
+        const broke = yield* reproduced(proving, verify, after.output);
+        if (broke === undefined) {
+          yield* Effect.logWarning(
+            `${verify} failed then passed in ${proving}; a flaky verification is green`,
+          );
+          return { _tag: "Proven", commit, verified: true } as const;
+        }
+
         const restored = yield* gitGround(proving, directory, base);
         if (restored) return restored;
         const before = yield* check(proving, verify);
@@ -398,7 +420,7 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         // Gating on an absolute pass would freeze the fleet behind one broken
         // test forever.
         return before.passed
-          ? ({ _tag: "Broke", output: after.output } as const)
+          ? ({ _tag: "Broke", output: broke } as const)
           : ({ _tag: "Proven", commit, verified: false } as const);
       });
 
@@ -577,11 +599,19 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         const after = yield* check(proving, verify);
         if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
 
+        const broke = yield* reproduced(proving, verify, after.output);
+        if (broke === undefined) {
+          yield* Effect.logWarning(
+            `${verify} failed then passed in ${proving}; a flaky verification is green`,
+          );
+          return { _tag: "Proven", commit, verified: true } as const;
+        }
+
         const restored = yield* jjGround(proving, directory, base);
         if (restored) return restored;
         const before = yield* check(proving, verify);
         return before.passed
-          ? ({ _tag: "Broke", output: after.output } as const)
+          ? ({ _tag: "Broke", output: broke } as const)
           : ({ _tag: "Proven", commit, verified: false } as const);
       });
 

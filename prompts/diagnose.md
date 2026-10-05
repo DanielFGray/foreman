@@ -7,6 +7,10 @@ Branch: {{ branch }}
 Repository: {{ repository }}
 Intent: {{ intent }}
 
+Use `prog log {{ task }}` for durable findings. Record each one as
+`Decision. ... Evidence. ... Result. ...` so the next author can act without
+repeating the investigation.
+
 Read `prog show {{ task }}` first, including its description and logs. Inspect the
 worktree's status, its commits, and its diff against the repository checkout. The
 worktree can contain uncommitted edits left by the stopped agent; preserve them.

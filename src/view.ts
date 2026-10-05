@@ -9,6 +9,7 @@ import type {
   Unreviewed,
 } from "./dispatcher.ts";
 import { exhausted, type Allowance } from "./quota.ts";
+import { resetsLabel } from "./format.ts";
 import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import {
@@ -485,7 +486,7 @@ export const previewOf = (row: ColumnRow): string => {
               `  ${allowance.window.padEnd(16)} ${String(allowance.usedPercent).padStart(3)}%${
                 allowance.resetsAt === undefined
                   ? ""
-                  : `  resets in ${resetLabel(allowance.resetsAt)}`
+                  : `  resets ${resetsLabel(allowance.resetsAt)}`
               }`,
           )),
     );
@@ -820,16 +821,8 @@ const quotaRow = (provider: Provider): ColumnRow => {
 
 const windowLabel = (allowance: Allowance): string =>
   `${allowance.window} ${allowance.usedPercent}%${
-    allowance.resetsAt === undefined ? "" : ` resets in ${resetLabel(allowance.resetsAt)}`
+    allowance.resetsAt === undefined ? "" : ` resets ${resetsLabel(allowance.resetsAt)}`
   }`;
-
-/** How long until a window resets, in the coarsest unit that is still true. */
-const resetLabel = (at: Date): string => {
-  const minutes = Math.max(0, Math.round((at.getTime() - Date.now()) / 60000));
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
-  return `${Math.floor(minutes / 1440)}d`;
-};
 
 const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   column: "unreviewed",

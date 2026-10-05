@@ -60,80 +60,77 @@ export const dashboard = Effect.gen(function* () {
    * here only to decide whether the task being watched has moved to another
    * view, which is the one case where foreman moves the cursor deliberately.
    */
-  const redraw = (moveTo?: ViewName) =>
-    Effect.gen(function* () {
-      const state = yield* SubscriptionRef.get(dispatcher.state);
-      const before = yield* Ref.get(ui);
-      const tracked = yield* screen.cursor;
-      // A view the operator asked for is not a view to be followed out of.
-      // The follow exists to chase a task that moved by itself; letting it run
-      // here would read the cursor still sitting in the view just left and
-      // drag the operator straight back to it.
-      const after =
-        moveTo === undefined
-          ? place(before, state, tracked)
-          : { ...before, view: moveTo, attention: rowsForView("attention", state).length > 0 };
-      if (after !== before) yield* Ref.set(ui, after);
-      // The accounts are read from the network, and a paused fleet has no
-      // other reason to ask. Only the screen knows whether anyone is looking,
-      // so entering and leaving the view is what says so — on the change, not
-      // on every redraw, because the clock redraws once a second.
-      if (after.view !== before.view) {
-        yield* run(dispatcher.watchQuota(after.view === "quota"));
-      }
-      const moved =
-        moveTo !== undefined || after.view !== before.view || after.mode.kind !== before.mode.kind;
-      yield* screen.show(yield* frame(after, state, tracked, dispatcher.rungs, fs, moved));
-    });
+  const redraw = Effect.fnUntraced(function* (moveTo?: ViewName) {
+    const state = yield* SubscriptionRef.get(dispatcher.state);
+    const before = yield* Ref.get(ui);
+    const tracked = yield* screen.cursor;
+    // A view the operator asked for is not a view to be followed out of.
+    // The follow exists to chase a task that moved by itself; letting it run
+    // here would read the cursor still sitting in the view just left and
+    // drag the operator straight back to it.
+    const after =
+      moveTo === undefined
+        ? place(before, state, tracked)
+        : { ...before, view: moveTo, attention: rowsForView("attention", state).length > 0 };
+    if (after !== before) yield* Ref.set(ui, after);
+    // The accounts are read from the network, and a paused fleet has no
+    // other reason to ask. Only the screen knows whether anyone is looking,
+    // so entering and leaving the view is what says so — on the change, not
+    // on every redraw, because the clock redraws once a second.
+    if (after.view !== before.view) {
+      yield* run(dispatcher.watchQuota(after.view === "quota"));
+    }
+    const moved =
+      moveTo !== undefined || after.view !== before.view || after.mode.kind !== before.mode.kind;
+    yield* screen.show(yield* frame(after, state, tracked, dispatcher.rungs, fs, moved));
+  });
 
-  const enter = (mode: Mode) =>
-    Effect.gen(function* () {
-      yield* Ref.update(ui, (current) => ({ ...current, mode }));
-      yield* screen.mode(inputFor(mode));
-      yield* redraw();
-    });
+  const enter = Effect.fnUntraced(function* (mode: Mode) {
+    yield* Ref.update(ui, (current) => ({ ...current, mode }));
+    yield* screen.mode(inputFor(mode));
+    yield* redraw();
+  });
 
-  const act = (action: Action, row: ColumnRow) =>
-    Effect.gen(function* () {
-      if (!actionsFor(row.column, row).includes(action)) return yield* screen.reject;
-      const task = row.task;
-      const target = climbing(row);
-      return yield* Match.value(action).pipe(
-        // Both of these ask the operator a question before anything happens,
-        // so they open a prompt rather than issuing a command.
-        Match.when("complete", () => enter({ kind: "reason", row })),
-        Match.when("kill", () => enter({ kind: "kill", row })),
-        Match.when("intervene", () => enter({ kind: "intervene", row })),
-        Match.when("retry", () => (task ? run(dispatcher.retry(task)) : screen.reject)),
-        Match.when("release", () => (task ? run(dispatcher.release(task)) : screen.reject)),
-        // Named by the workspace, not the task: an orphaned workspace is one
-        // whose task the store has deleted, and it is closed the same way.
-        Match.when("close", () =>
-          row.worker
-            ? run(dispatcher.close({ task: row.worker.task, repository: row.worker.repository }))
-            : screen.reject,
-        ),
-        Match.when("takeOver", () =>
-          row.worker ? run(dispatcher.focus(row.worker)) : screen.reject,
-        ),
-        Match.when("focus", () => (row.worker ? run(dispatcher.focus(row.worker)) : screen.reject)),
-        // A queue row carries its task as `ready` and a claimed one as `task`;
-        // the pin is on the id either way, which is the only part both have.
-        Match.when("pin", () => {
-          const id = row.ready?.id ?? row.task?.id;
-          return id ? run(dispatcher.togglePin(id)) : screen.reject;
-        }),
-        Match.when("descend", () => (target ? run(dispatcher.descend(target)) : screen.reject)),
-        Match.when("unassign", () => (target ? run(dispatcher.unassign(target)) : screen.reject)),
-        Match.when("onboard", () =>
-          row.project ? run(dispatcher.onboard(row.project)) : screen.reject,
-        ),
-        Match.when("adopt", () =>
-          row.unreviewed ? run(dispatcher.adopt(row.unreviewed)) : screen.reject,
-        ),
-        Match.exhaustive,
-      );
-    });
+  const act = Effect.fnUntraced(function* (action: Action, row: ColumnRow) {
+    if (!actionsFor(row.column, row).includes(action)) return yield* screen.reject;
+    const task = row.task;
+    const target = climbing(row);
+    return yield* Match.value(action).pipe(
+      // Both of these ask the operator a question before anything happens,
+      // so they open a prompt rather than issuing a command.
+      Match.when("complete", () => enter({ kind: "reason", row })),
+      Match.when("kill", () => enter({ kind: "kill", row })),
+      Match.when("intervene", () => enter({ kind: "intervene", row })),
+      Match.when("retry", () => (task ? run(dispatcher.retry(task)) : screen.reject)),
+      Match.when("release", () => (task ? run(dispatcher.release(task)) : screen.reject)),
+      // Named by the workspace, not the task: an orphaned workspace is one
+      // whose task the store has deleted, and it is closed the same way.
+      Match.when("close", () =>
+        row.worker
+          ? run(dispatcher.close({ task: row.worker.task, repository: row.worker.repository }))
+          : screen.reject,
+      ),
+      Match.when("takeOver", () =>
+        row.worker ? run(dispatcher.focus(row.worker)) : screen.reject,
+      ),
+      Match.when("focus", () => (row.worker ? run(dispatcher.focus(row.worker)) : screen.reject)),
+      // A queue row carries its task as `ready` and a claimed one as `task`;
+      // the pin is on the id either way, which is the only part both have.
+      Match.when("pin", () => {
+        const id = row.ready?.id ?? row.task?.id;
+        return id ? run(dispatcher.togglePin(id)) : screen.reject;
+      }),
+      Match.when("descend", () => (target ? run(dispatcher.descend(target)) : screen.reject)),
+      Match.when("unassign", () => (target ? run(dispatcher.unassign(target)) : screen.reject)),
+      Match.when("onboard", () =>
+        row.project ? run(dispatcher.onboard(row.project)) : screen.reject,
+      ),
+      Match.when("adopt", () =>
+        row.unreviewed ? run(dispatcher.adopt(row.unreviewed)) : screen.reject,
+      ),
+      Match.exhaustive,
+    );
+  });
 
   const moveView = (delta: number) =>
     Effect.gen(function* () {
@@ -188,69 +185,68 @@ export const dashboard = Effect.gen(function* () {
    * out of the keymap, where they would have had to be modified keys that mean
    * something in one mode only.
    */
-  const intervene = (press: Keypress, row: ColumnRow) =>
-    Effect.gen(function* () {
-      if (press.key === "esc") return yield* enter(BROWSE);
-      if (press.key !== "enter") return;
-      // A committed attempt has a diff, so it goes through the formal verdict
-      // pipeline. An uncommitted one has only a worktree, and reading that is
-      // a diagnostic agent's job at a rung the operator picks.
-      if (press.row === "review" && row.committed) {
-        const target = targetOf(row);
-        if (target) yield* run(dispatcher.reviewIntervention(target, undefined));
+  const intervene = Effect.fnUntraced(function* (press: Keypress, row: ColumnRow) {
+    if (press.key === "esc") return yield* enter(BROWSE);
+    if (press.key !== "enter") return;
+    // A committed attempt has a diff, so it goes through the formal verdict
+    // pipeline. An uncommitted one has only a worktree, and reading that is
+    // a diagnostic agent's job at a rung the operator picks.
+    if (press.row === "review" && row.committed) {
+      const target = targetOf(row);
+      if (target) yield* run(dispatcher.reviewIntervention(target, undefined));
+      return yield* enter(BROWSE);
+    }
+    const action = INTERVENTIONS.find((name) => name === press.row);
+    if (action === undefined) return yield* screen.reject;
+    return yield* enter({ kind: "rung", row, action });
+  });
+
+  const handle = Effect.fnUntraced(function* (press: Keypress) {
+    const { mode } = yield* Ref.get(ui);
+
+    switch (mode.kind) {
+      case "browse":
+        return yield* browse(press);
+      case "intervene":
+        return yield* intervene(press, mode.row);
+      case "rung": {
+        if (press.key === "esc") return yield* enter(BROWSE);
+        if (press.key !== "enter") return;
+        const target = targetOf(mode.row);
+        const rung = press.row;
+        if (target && rung !== undefined)
+          yield* run(
+            mode.action === "continue"
+              ? dispatcher.continueAt(target, rung)
+              : mode.action === "diagnose"
+                ? dispatcher.diagnose(target, "diagnose", rung)
+                : dispatcher.reviewIntervention(target, rung),
+          );
         return yield* enter(BROWSE);
       }
-      const action = INTERVENTIONS.find((name) => name === press.row);
-      if (action === undefined) return yield* screen.reject;
-      return yield* enter({ kind: "rung", row, action });
-    });
-
-  const handle = (press: Keypress) =>
-    Effect.gen(function* () {
-      const { mode } = yield* Ref.get(ui);
-      switch (mode.kind) {
-        case "browse":
-          return yield* browse(press);
-        case "intervene":
-          return yield* intervene(press, mode.row);
-        case "rung": {
-          if (press.key === "esc") return yield* enter(BROWSE);
-          if (press.key !== "enter") return;
-          const target = targetOf(mode.row);
-          const rung = press.row;
-          if (target && rung !== undefined)
-            yield* run(
-              mode.action === "continue"
-                ? dispatcher.continueAt(target, rung)
-                : mode.action === "diagnose"
-                  ? dispatcher.diagnose(target, "diagnose", rung)
-                  : dispatcher.reviewIntervention(target, rung),
-            );
-          return yield* enter(BROWSE);
-        }
-        case "reason": {
-          if (press.key === "esc") return yield* enter(BROWSE);
-          if (press.key !== "enter") return;
-          const reason = press.query.trim();
-          // The reason is the whole point of completing a task by hand: it is
-          // what the log will say instead of a review's verdict.
-          if (reason.length === 0) return yield* screen.reject;
-          if (mode.row.ready) yield* run(dispatcher.complete(mode.row.ready, reason));
-          return yield* enter(BROWSE);
-        }
-        case "kill": {
-          if (press.key === "esc") return yield* enter(BROWSE);
-          if (press.key !== "enter") return;
-          const target = targetOf(mode.row);
-          const reason = press.query.trim() || "operator killed this attempt";
-          if (target?.worker) yield* run(dispatcher.kill(target, reason));
-          return yield* enter(BROWSE);
-        }
-        case "log":
-          if (press.key === "esc" || press.key === "f12") return yield* enter(BROWSE);
-          return;
+      case "reason": {
+        if (press.key === "esc") return yield* enter(BROWSE);
+        if (press.key !== "enter") return;
+        const reason = press.query.trim();
+        // The reason is the whole point of completing a task by hand: it is
+        // what the log will say instead of a review's verdict.
+        if (reason.length === 0) return yield* screen.reject;
+        if (mode.row.ready) yield* run(dispatcher.complete(mode.row.ready, reason));
+        return yield* enter(BROWSE);
       }
-    });
+      case "kill": {
+        if (press.key === "esc") return yield* enter(BROWSE);
+        if (press.key !== "enter") return;
+        const target = targetOf(mode.row);
+        const reason = press.query.trim() || "operator killed this attempt";
+        if (target?.worker) yield* run(dispatcher.kill(target, reason));
+        return yield* enter(BROWSE);
+      }
+      case "log":
+        if (press.key === "esc" || press.key === "f12") return yield* enter(BROWSE);
+        return;
+    }
+  });
 
   yield* Effect.forkScoped(Stream.runForEach(dispatcher.state.changes, () => redraw()));
   yield* Effect.forkScoped(Stream.runForEach(screen.keys, handle));

@@ -1,6 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
-import { Either, Effect, Layer, Match, Schema, Stream } from "effect";
+import { Either, Effect, Layer, Match, Schema as S, Stream } from "effect";
 import {
   AgentRole,
   type AttachOptions,
@@ -64,14 +64,10 @@ export const HerdrFleet = Layer.effect(
         ),
       );
 
-    const herdrJson = <A, I>(
-      schema: Schema.Schema<A, I>,
-      operation: string,
-      ...args: Array<string>
-    ) =>
+    const herdrJson = <A, I>(schema: S.Schema<A, I>, operation: string, ...args: Array<string>) =>
       herdr(operation, ...args).pipe(
         Effect.flatMap((out) =>
-          Schema.decodeUnknown(Schema.parseJson(schema))(out).pipe(
+          S.decodeUnknown(S.parseJson(schema))(out).pipe(
             Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })),
           ),
         ),
@@ -113,6 +109,45 @@ export const HerdrFleet = Layer.effect(
           ),
         ),
       );
+
+    /**
+     * Starts opencode on a chosen model, by the recipe its v2 CLI made
+     * necessary.
+     *
+     * `agent start` appends its arguments to the executable, so it can express
+     * flags but not the environment assignment that carries opencode's model.
+     * opencode's TUI has no `--model` flag, and without `--standalone` it joins
+     * the shared background server and runs whichever model that server last
+     * loaded — so a `--model` passthrough fails the launch outright. Instead:
+     * run the configured TUI in the pane, wait for it to accept input, then
+     * adopt it under foreman's agent name.
+     *
+     * `--auto` approves every permission no rule denies, so an unattended agent
+     * does not stall on a prompt. The config denies the two acts that stay
+     * foreman's: pushing, and writing to the operator's own checkout.
+     */
+    const startOpencode = (
+      pane: string,
+      agent: string,
+      model: string | undefined,
+      repository: string | undefined,
+    ) =>
+      Effect.gen(function* () {
+        yield* herdr("spawn", "pane", "run", pane, opencodeCommand(model, repository));
+        // The footer's command hint is the TUI's own signal that it is
+        // accepting input; herdr's screen detection is not ready before it.
+        yield* herdr(
+          "spawn",
+          "pane",
+          "wait-output",
+          pane,
+          "--match",
+          OPENCODE_READY,
+          "--timeout",
+          "30000",
+        );
+        yield* herdr("spawn", "agent", "rename", pane, agent);
+      });
 
     /**
      * Foreman's workspaces, joined to a pane inside each one.
@@ -386,41 +421,45 @@ export const HerdrFleet = Layer.effect(
               (spent) => herdr("spawn", "pane", "close", spent.pane_id).pipe(Effect.ignore),
               { discard: true },
             );
-            const started = yield* herdrJson(
-              AgentEnvelope,
-              "spawn",
-              "agent",
-              "start",
-              agent,
-              "--kind",
-              options.kind,
-              "--pane",
-              pane,
-              // Everything after `--` is herdr's passthrough to the agent's own
-              // command line. `--model` is the flag opencode and claude both
-              // take; a harness that does not know it must be configured as a
-              // rung with no model.
-              ...(options.model ? ["--", "--model", options.model] : []),
-            );
+            // Most harnesses take their model as `--model`, which herdr's
+            // managed start forwards. opencode does not: see `startOpencode`.
+            const native =
+              options.kind === "opencode"
+                ? undefined
+                : yield* herdrJson(
+                    AgentEnvelope,
+                    "spawn",
+                    "agent",
+                    "start",
+                    agent,
+                    "--kind",
+                    options.kind,
+                    "--pane",
+                    pane,
+                    ...(options.model ? ["--", "--model", options.model] : []),
+                  );
+            if (options.kind === "opencode") {
+              yield* startOpencode(pane, agent, options.model, worker.repository);
+            }
 
             yield* prompt(agent, options.prompt);
 
             // Integrations can add metadata tokens after the first prompt. The
             // task still started if this optional observation is unavailable.
-            const model = yield* herdrJson(
-              AgentEnvelope,
-              "spawn metadata",
-              "agent",
-              "get",
-              agent,
-            ).pipe(
-              Effect.map((info) => info.result.agent.tokens?.["model"]),
-              Effect.catchAll((error) =>
-                Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
-                  Effect.as(started.result.agent.tokens?.["model"]),
-                ),
-              ),
-            );
+            // An opencode launch names its model in the config it built, so
+            // there is nothing to read back — and herdr reports no tokens for a
+            // pane it only recognised by screen.
+            const model =
+              native === undefined
+                ? options.model
+                : yield* herdrJson(AgentEnvelope, "spawn metadata", "agent", "get", agent).pipe(
+                    Effect.map((info) => info.result.agent.tokens?.["model"]),
+                    Effect.catchAll((error) =>
+                      Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
+                        Effect.as(native.result.agent.tokens?.["model"]),
+                      ),
+                    ),
+                  );
 
             return { kind: options.kind, model };
           }).pipe(
@@ -506,7 +545,7 @@ export const HerdrFleet = Layer.effect(
 ).pipe(Layer.provide(BunContext.layer));
 
 /** herdr dropped the prompt because the agent was not listening yet. */
-class Stalled extends Schema.TaggedError<Stalled>()("Stalled", {}) {}
+class Stalled extends S.TaggedError<Stalled>()("Stalled", {}) {}
 
 const STALLED = "agent_prompt_stalled";
 
@@ -541,17 +580,17 @@ const failureOf = (result: Output): string => {
 const errorOf = (result: Output): { code: string; message: string } | undefined =>
   envelopeError(result.stdout) ?? envelopeError(result.stderr);
 
-const ErrorEnvelope = Schema.Struct({
-  error: Schema.optional(
-    Schema.Struct({
-      code: Schema.String,
-      message: Schema.optional(Schema.String),
+const ErrorEnvelope = S.Struct({
+  error: S.optional(
+    S.Struct({
+      code: S.String,
+      message: S.optional(S.String),
     }),
   ),
 });
 
 const envelopeError = (text: string): { code: string; message: string } | undefined => {
-  const parsed = Schema.decodeUnknownEither(Schema.parseJson(ErrorEnvelope))(text);
+  const parsed = S.decodeUnknownEither(S.parseJson(ErrorEnvelope))(text);
   if (Either.isLeft(parsed) || parsed.right.error === undefined) return undefined;
   return {
     code: parsed.right.error.code,
@@ -572,6 +611,43 @@ export const agentNameFor = (pane: string): string =>
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(-24)}`;
 
+/** The TUI's own hint that its input box is ready, matched before adoption. */
+const OPENCODE_READY = "ctrl+p";
+
+/**
+ * The single command `pane run` types into the pane's shell to start opencode.
+ *
+ * One shell word, because the shell is what turns the environment assignment
+ * into a variable opencode reads. `--standalone` keeps the model this process
+ * was given: without it the TUI joins the shared server and runs the last model
+ * loaded there. `--auto` approves every permission no rule denies; the config
+ * denies the two acts an agent must never take — pushing, and writing to the
+ * operator's checkout — while leaving unrelated work outside the worktree, such
+ * as reading a skill, free to proceed.
+ */
+export const opencodeCommand = (
+  model: string | undefined,
+  repository: string | undefined,
+): string => {
+  const permission: Record<string, unknown> = {
+    bash: { "git push*": "deny" },
+  };
+  if (repository !== undefined) {
+    permission["external_directory"] = {
+      [repository]: "deny",
+      [`${repository}/**`]: "deny",
+    };
+  }
+  const config: Record<string, unknown> = {
+    permission,
+    ...(model === undefined ? {} : { model }),
+  };
+  return `OPENCODE_CONFIG_CONTENT=${shellQuote(JSON.stringify(config))} opencode --standalone --auto`;
+};
+
+/** Wraps a value as one single-quoted shell word, escaping embedded quotes. */
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+
 /**
  * A pane label naming the role its agent runs, and the role read back off it.
  *
@@ -584,7 +660,7 @@ const paneLabelFor = (role: AgentRole): string => `foreman-${role}`;
 const roleOf = (label: string | undefined): AgentRole | undefined => {
   if (!label?.startsWith("foreman-")) return undefined;
   const role = label.slice("foreman-".length);
-  return Schema.is(AgentRole)(role) ? role : undefined;
+  return S.is(AgentRole)(role) ? role : undefined;
 };
 
 /**
@@ -675,38 +751,38 @@ export const resolveClose = (
     : { kind: "nothing" };
 };
 
-const Worktree = Schema.Struct({
-  checkout_path: Schema.String,
-  is_linked_worktree: Schema.Boolean,
-  repo_root: Schema.String,
+const Worktree = S.Struct({
+  checkout_path: S.String,
+  is_linked_worktree: S.Boolean,
+  repo_root: S.String,
 });
 
-const Workspace = Schema.Struct({
-  workspace_id: Schema.String,
-  label: Schema.String,
-  agent_status: Schema.String,
-  focused: Schema.Boolean,
-  worktree: Schema.optional(Worktree),
+const Workspace = S.Struct({
+  workspace_id: S.String,
+  label: S.String,
+  agent_status: S.String,
+  focused: S.Boolean,
+  worktree: S.optional(Worktree),
 });
 
-const WorkspaceList = Schema.Struct({
-  result: Schema.Struct({ workspaces: Schema.Array(Workspace) }),
+const WorkspaceList = S.Struct({
+  result: S.Struct({ workspaces: S.Array(Workspace) }),
 });
 
-const Pane = Schema.Struct({
-  pane_id: Schema.String,
-  workspace_id: Schema.String,
-  cwd: Schema.String,
-  label: Schema.optional(Schema.String),
-  agent: Schema.optional(Schema.String),
-  agent_status: Schema.String,
+const Pane = S.Struct({
+  pane_id: S.String,
+  workspace_id: S.String,
+  cwd: S.String,
+  label: S.optional(S.String),
+  agent: S.optional(S.String),
+  agent_status: S.String,
   // herdr detects the harness's own session id and reports it here. Optional
   // because a plain shell has none, and because a pane whose agent has died
   // may not keep one — which is why foreman must not depend on it alone.
-  agent_session: Schema.optional(Schema.Struct({ value: Schema.optional(Schema.String) })),
+  agent_session: S.optional(S.Struct({ value: S.optional(S.String) })),
 });
 
-type PaneRecord = Schema.Schema.Type<typeof Pane>;
+type PaneRecord = S.Schema.Type<typeof Pane>;
 
 /**
  * The workspace's own pane: what the author takes and a reviewer splits from.
@@ -737,35 +813,35 @@ const rolesOf = (panes: ReadonlyArray<PaneRecord>): ReadonlyMap<AgentRole, Worke
     }),
   );
 
-const PaneList = Schema.Struct({
-  result: Schema.Struct({ panes: Schema.Array(Pane) }),
+const PaneList = S.Struct({
+  result: S.Struct({ panes: S.Array(Pane) }),
 });
 
-const PaneSplit = Schema.Struct({
-  result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
+const PaneSplit = S.Struct({
+  result: S.Struct({ pane: S.Struct({ pane_id: S.String }) }),
 });
 
-const AgentEnvelope = Schema.Struct({
-  result: Schema.Struct({
-    agent: Schema.Struct({
-      tokens: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+const AgentEnvelope = S.Struct({
+  result: S.Struct({
+    agent: S.Struct({
+      tokens: S.optional(S.Record({ key: S.String, value: S.String })),
     }),
   }),
 });
 
-const WorkspaceCreated = Schema.Struct({
-  result: Schema.Struct({
-    workspace: Schema.Struct({ workspace_id: Schema.String }),
-    root_pane: Schema.Struct({ pane_id: Schema.String }),
+const WorkspaceCreated = S.Struct({
+  result: S.Struct({
+    workspace: S.Struct({ workspace_id: S.String }),
+    root_pane: S.Struct({ pane_id: S.String }),
   }),
 });
 
 /** A workspace over a worktree, whether the worktree was just made or adopted. */
-const WorktreeResolved = Schema.Struct({
-  result: Schema.Struct({
-    workspace: Schema.Struct({ workspace_id: Schema.String }),
-    root_pane: Schema.Struct({ pane_id: Schema.String }),
-    worktree: Schema.Struct({ path: Schema.String }),
+const WorktreeResolved = S.Struct({
+  result: S.Struct({
+    workspace: S.Struct({ workspace_id: S.String }),
+    root_pane: S.Struct({ pane_id: S.String }),
+    worktree: S.Struct({ path: S.String }),
   }),
 });
 
@@ -774,13 +850,13 @@ const WorktreeResolved = Schema.Struct({
  * a registration whose directory is gone — such a worktree has nothing to
  * adopt and nothing to remove.
  */
-const WorktreeRecord = Schema.Struct({
-  branch: Schema.optional(Schema.String),
-  path: Schema.String,
-  is_prunable: Schema.Boolean,
+const WorktreeRecord = S.Struct({
+  branch: S.optional(S.String),
+  path: S.String,
+  is_prunable: S.Boolean,
 });
-export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecord>;
+export type WorktreeRecord = S.Schema.Type<typeof WorktreeRecord>;
 
-const WorktreeList = Schema.Struct({
-  result: Schema.Struct({ worktrees: Schema.Array(WorktreeRecord) }),
+const WorktreeList = S.Struct({
+  result: S.Struct({ worktrees: S.Array(WorktreeRecord) }),
 });

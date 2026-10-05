@@ -3,7 +3,10 @@ import { Command, Options } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Console, Effect, Layer, Option, Schema } from "effect";
 import { type Overrides, settings, Settings } from "./config.ts";
-import { providerOf, providersOf, rungsOn } from "./ladder.ts";
+import { resetsLabel, quotaJson } from "./format.ts";
+import { authorFor, providerOf, providersOf, rungsOn } from "./ladder.ts";
+import { pinnedFirst, pinnedOf } from "./pin.ts";
+import { failuresOf, isOnboarding, needsYou } from "./prog.ts";
 import { dashboard } from "./dashboard.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { HerdrFleet } from "./herdr.ts";
@@ -57,41 +60,61 @@ const running = Options.boolean("running").pipe(
  * One `Quota` behind both — the dashboard row and this are two callers, not two
  * readings.
  */
-const quotaCommand = Command.make("quota", {}, () =>
+const json = Options.boolean("json").pipe(
+  Options.withDescription("Emit the report as JSON, every reset an absolute ISO instant"),
+);
+
+const quotaCommand = Command.make("quota", { json }, ({ json }) =>
   Effect.gen(function* () {
     const config = yield* Settings;
     const quota = yield* Quota;
 
-    const blind = config.ladder.filter((rung) => providerOf(rung) === undefined);
-    if (blind.length > 0) {
-      yield* Console.log(
-        `no provider derivable for ${blind.map((rung) => rung.name).join(", ")} — add "provider" to each rung to have its quota read`,
-      );
-    }
+    const blind = config.ladder
+      .filter((rung) => providerOf(rung) === undefined)
+      .map((rung) => rung.name);
+    const rungsOf = (provider: string) => rungsOn(config.ladder, provider);
 
-    yield* Effect.forEach(
+    const readings = yield* Effect.forEach(
       providersOf(config.ladder),
       (provider) =>
         quota.usage(provider).pipe(
-          Effect.flatMap((usage) =>
-            Console.log(
-              [
-                `${usage.provider}${usage.plan === undefined ? "" : ` [${usage.plan}]`}  rungs ${rungsOn(config.ladder, provider).join(", ")}  ${exhausted(usage) ? `OUT OF QUOTA until ${freeAt(usage)?.toLocaleString() ?? "unknown"}` : "ok"}`,
-                ...usage.allowances.map(
-                  (allowance) =>
-                    `    ${allowance.window.padEnd(18)} ${String(allowance.usedPercent).padStart(3)}% used   resets ${allowance.resetsAt?.toLocaleString() ?? "unknown"}`,
-                ),
-              ].join("\n"),
-            ),
-          ),
-          // Unreadable is not spent. The daemon dispatches such a rung anyway,
-          // so this must say the same thing rather than read as a wall.
+          Effect.map((usage) => ({ _tag: "usage", provider, usage }) as const),
           Effect.catchTag("QuotaError", (error) =>
-            Console.log(`${provider}  unreadable: ${error.detail}`),
+            Effect.succeed({ _tag: "unreadable", provider, detail: error.detail } as const),
           ),
         ),
-      { concurrency: "unbounded", discard: true },
+      { concurrency: "unbounded" },
     );
+
+    if (json) {
+      yield* Console.log(quotaJson(blind, readings, rungsOf));
+      return;
+    }
+
+    if (blind.length > 0) {
+      yield* Console.log(
+        `no provider derivable for ${blind.join(", ")} — add "provider" to each rung to have its quota read`,
+      );
+    }
+
+    for (const reading of readings) {
+      if (reading._tag === "usage") {
+        const resets = freeAt(reading.usage);
+        yield* Console.log(
+          [
+            `${reading.provider}${reading.usage.plan === undefined ? "" : ` [${reading.usage.plan}]`}  rungs ${rungsOf(reading.provider).join(", ")}  ${exhausted(reading.usage) ? `OUT OF QUOTA — resets ${resets === undefined ? "unknown" : resetsLabel(resets)}` : "ok"}`,
+            ...reading.usage.allowances.map(
+              (allowance) =>
+                `    ${allowance.window.padEnd(18)} ${String(allowance.usedPercent).padStart(3)}% used   resets ${allowance.resetsAt === undefined ? "unknown" : resetsLabel(allowance.resetsAt)}`,
+            ),
+          ].join("\n"),
+        );
+      } else {
+        // Unreadable is not spent. The daemon dispatches such a rung anyway,
+        // so this must say the same thing rather than read as a wall.
+        yield* Console.log(`${reading.provider}  unreadable: ${reading.detail}`);
+      }
+    }
   }).pipe(
     Effect.provide(
       Layer.mergeAll(Quota.Default, settings({ slots: Option.none(), running: false })),
@@ -105,6 +128,66 @@ const quotaCommand = Command.make("quota", {}, () =>
 
 const statsCommand = Command.make("stats", {}, () => stats).pipe(
   Command.withDescription("Render collected fleet metrics as a self-contained HTML report"),
+);
+
+/**
+ * The queue as the next tick would dispatch it, without starting anything.
+ *
+ * The dashboard shows the same order, but only while a daemon is up and only
+ * inside a terminal it owns. This is the question asked before that: what
+ * would the fleet do next. One reading of `prog ready`, ordered by the same
+ * rules the dispatcher uses — pinned first, then the ordinary score with its
+ * project rotation — so the two never disagree about what is next.
+ */
+const queueCommand = Command.make("queue", {}, () =>
+  Effect.gen(function* () {
+    const config = yield* Settings;
+    const prog = yield* Prog;
+
+    const managed = new Set(config.projects.map((project) => project.name));
+    const queue = yield* prog.ready();
+    const pinned = yield* pinnedOf(yield* prog.pinned(), managed, (id) => prog.children(id));
+
+    // How close each task's own epic is to done, for the ones whose epic is
+    // not itself pinned — the same map the dispatcher builds, because a pinned
+    // epic's children already lead absolutely.
+    const epicCompletion = new Map<string, number>();
+    for (const project of config.projects) {
+      for (const epic of yield* prog.inProgressEpics(project.name)) {
+        if (epic.labels.includes("pin")) continue;
+        const children = yield* prog.children(epic.id);
+        if (children.length === 0) continue;
+        const fraction =
+          children.filter((child) => child.status === "done").length / children.length;
+        for (const child of children) epicCompletion.set(child.id, fraction);
+      }
+    }
+    const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
+
+    // Work waiting on the operator is ready by every measure prog knows and
+    // still must not be dispatched, so it is not queue. Salvage runs stand in
+    // a directory a person is using and start only when asked, never from here.
+    const parked = (task: { readonly labels: ReadonlyArray<string> }) =>
+      needsYou(task) || authorFor(config.ladder, failuresOf(task))._tag === "Yours";
+    const dispatchable = queue.filter((task) => !isOnboarding(task) && !parked(task));
+    const ordered = pinnedFirst(dispatchable, pinned, [...managed], epicFractionOf);
+
+    if (ordered.length === 0) {
+      yield* Console.log("queue empty");
+      return;
+    }
+    for (const task of ordered) {
+      yield* Console.log(
+        `${task.id} [${task.project}] p${task.priority}${pinned.has(task.id) ? " 📌" : ""} ${task.title}`,
+      );
+    }
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Prog.Default, settings({ slots: Option.none(), running: false })),
+    ),
+  ),
+).pipe(
+  Command.withDescription("Print the ready queue in the order the next tick would dispatch it"),
 );
 
 /**
@@ -138,7 +221,7 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
     yield* Effect.forkScoped(Dispatcher.run);
     yield* Effect.raceFirst(dashboard, signals);
   }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
-).pipe(Command.withSubcommands([quotaCommand, statsCommand]));
+).pipe(Command.withSubcommands([quotaCommand, statsCommand, queueCommand]));
 
 /**
  * herdr is the only multiplexer foreman speaks to today. Swapping this one line

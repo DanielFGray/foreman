@@ -219,12 +219,36 @@ describe("Repository", () => {
     await git("commit", "-qm", "breaks the build");
     await git("checkout", "-q", base);
 
-    // Red after the merge and green before it: the second run is the branch's
-    // accusation being tested, and it is only ever spent on a failure.
+    // Red after the merge and green before it: the failure is confirmed once
+    // before it becomes the branch's accusation, and the baseline is only ever
+    // spent on a confirmed failure.
     expect(
       await merge(directory, "counted-breaks", count("test ! -f counted-broken.txt")),
     ).toMatchObject({ _tag: "Broke" });
-    expect(await runs()).toBe(3);
+    expect(await runs()).toBe(4);
+
+    await rm(counter, { force: true });
+  });
+
+  // A suite that fails and then passes on the same tree found nothing. Without
+  // the retry a correct branch is returned to the queue, and the task climbs a
+  // rung on evidence the project's own flaky test wrote.
+  test("lands a branch whose verification failed once and then passed", async () => {
+    const counter = join(tmpdir(), `foreman-flake-${process.pid}.count`);
+    const runs = async () =>
+      (await Bun.file(counter).exists()) ? (await Bun.file(counter).text()).length : 0;
+    const flaky = `printf x >> ${counter}; test $(wc -c < ${counter}) -gt 1`;
+
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "flaky");
+    await writeFile(join(directory, "flaky.txt"), "fine\n");
+    await git("add", "flaky.txt");
+    await git("commit", "-qm", "flaky work");
+    await git("checkout", "-q", base);
+
+    expect(await merge(directory, "flaky", flaky)).toEqual({ _tag: "Merged", verified: true });
+    expect(await runs()).toBe(2);
+    expect(await Bun.file(join(directory, "flaky.txt")).text()).toBe("fine\n");
 
     await rm(counter, { force: true });
   });
