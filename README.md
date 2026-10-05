@@ -246,16 +246,18 @@ have, and a handoff missing from that list goes straight back to the queue with
 a log line saying so. Nothing committed is unfinished work, whatever the status
 says.
 
-One empty branch is worth a reviewer: the one whose author found that the trunk
-already does what the task asks. A backlog outlives the code it describes, and
-an author sent to an entry like that has nothing it can honestly write —
+Two empty branches are worth a reviewer. The first is the author that found the
+trunk already does what the task asks. A backlog outlives the code it describes,
+and an author sent to an entry like that has nothing it can honestly write —
 committing anything invents work, and stopping reads as a crash, which costs a
 rung and buys the same discovery again at a dearer model. So it records the
-finding as a `satisfied` label and hands off. That is a claim, not a verdict:
-the reviewer confirms it against the trunk part by part, and only its `approved`
-closes the task — with nothing merged and nothing verified, because there is
-nothing to merge. A claim the reviewer cannot confirm is returned like any other
-work.
+finding as a `satisfied` label and hands off. The second is a task labelled
+`research`, whose deliverable is a report in its own log — a measurement or an
+investigation — and never a diff. Neither is a verdict: the reviewer confirms a
+`satisfied` claim against the trunk and a `research` report against its cited
+evidence, part by part, and only its `approved` closes the task — with nothing
+merged and nothing verified, because there is nothing to merge. A claim the
+reviewer cannot confirm is returned like any other work.
 
 When a reviewer starts, foreman also writes `review-by:<kind>`. Status
 `reviewing` alone cannot say whether the author just handed off or a reviewer is
@@ -287,10 +289,13 @@ that was verified, and only if your tip has not moved meanwhile.
 
 A branch that turns a green project red never lands, and the task goes back to
 the queue carrying the failure output — the next author's whole job is that
-output. `verify` runs a second time on the pre-merge tree to establish that,
-and only after a failure, since that is the only time the question is live. A
-project that was already red still takes the merge, because one broken test
-would otherwise hold every task in the fleet. Name the command per project:
+output. A failed run is repeated once on the same merged tree first: a pass on
+the retry is a flake, not a defect, and the branch lands verified. A failure
+that reproduces is the branch's, and `verify` then runs a second time on the
+pre-merge tree to establish whether it was red already — only after a confirmed
+failure, since that is the only time the question is live. A project that was
+already red still takes the merge, because one broken test would otherwise hold
+every task in the fleet. Name the command per project:
 
 ```jsonc
 "projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]
