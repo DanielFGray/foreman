@@ -689,13 +689,13 @@ describe("a spent account and the reviewer above it", () => {
     } as unknown as Quota);
 
   /** Two rungs on two accounts, so a wall on one leaves the other spendable. */
-  const layerFor = (world: World, spent: ReadonlyArray<string>) =>
+  const layerFor = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
           projects: [{ name: "test", directory: "/repo", verify: undefined }],
-          slots: 1,
+          slots,
           running: true,
           ladder: [
             { name: "cheap", harness: "test", model: "openai/gpt", provider: undefined },
@@ -730,8 +730,22 @@ describe("a spent account and the reviewer above it", () => {
     return world;
   };
 
-  const tickWith = (world: World, spent: ReadonlyArray<string>) =>
-    Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world, spent))));
+  const tickWith = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
+    Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world, spent, slots))));
+
+  test("spreads one tick's slots across accounts rather than stacking them", async () => {
+    // Every free slot reads the same allowances, so without spreading the whole
+    // burst takes the cheapest rung — and spends one account until it dies.
+    const world = new World(item("ts-one", "open", []), item("ts-two", "open", []));
+    await tickWith(world, [], 2);
+
+    expect(world.spawned).toEqual([
+      ["ts-one", "author"],
+      ["ts-two", "author"],
+    ]);
+    const rungs = world.tasks.values().flatMap((task) => task.labels);
+    expect(new Set(rungs)).toEqual(new Set(["by:cheap", "by:dear"]));
+  });
 
   test("reviews with the rung above the wall rather than waiting on money", async () => {
     // "cheap" wrote it, so "dear" reads it — and "dear" is on another account,

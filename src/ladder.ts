@@ -109,14 +109,29 @@ export type Choice =
  * than failed: nothing about an allowance is evidence about a model, so the
  * search steps over them without the task recording anything, and the ordinary
  * rung is chosen again once the account has room.
+ *
+ * `drawn` names the accounts this same tick has already dispatched an author
+ * on, and is a preference rather than a wall. Every free slot in one tick reads
+ * the same allowances, so without it a tick's whole burst draws on the cheapest
+ * funded account until that account dies mid-round — which is a fact about the
+ * wallet, answered by the next reading, not by which model happened to be first
+ * in the list.
+ *
+ * It can never turn a `Dispatch` into a `Waiting`: when every affordable rung
+ * draws on an account already spent this tick, the cheapest affordable rung is
+ * taken anyway. An account that has room is never called spent, and a rung
+ * whose account cannot be named is never treated as drawn on.
  */
 export const authorFor = (
   ladder: Ladder,
   failures: ReadonlyArray<string>,
   walled: ReadonlySet<string> = new Set(),
+  drawn: ReadonlySet<string> = new Set(),
 ): Choice => {
   const candidates = ladder.slice(floorFor(ladder, failures)).filter(isEnabled);
-  const rung = candidates.find((candidate) => !walled.has(candidate.name));
+  const affordable = candidates.filter((candidate) => !walled.has(candidate.name));
+  const rung =
+    affordable.find((candidate) => !drawn.has(providerOf(candidate) ?? "")) ?? affordable[0];
   if (rung !== undefined) return { _tag: "Dispatch", rung };
   return candidates.length === 0
     ? { _tag: "Yours" }

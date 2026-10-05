@@ -44,6 +44,25 @@ describe("authorFor", () => {
     expect(authorFor(ladder, ["cheap", "middle", "top"])).toEqual({ _tag: "Yours" });
   });
 
+  test("steps over an account this same tick is already spending", () => {
+    // The two cheapest rungs share one account and the third does not, so a burst
+    // that took the cheapest again would run the whole tick off one wallet.
+    expect(authorFor(ladder, [], new Set(), new Set(["opencode"]))).toEqual({
+      _tag: "Dispatch",
+      rung: top,
+    });
+  });
+
+  test("takes the ordinary rung when every account is already being spent", () => {
+    // A preference and never a wall: an account with room is not spent, and a
+    // task must not wait for a reset that nothing is waiting on.
+    const oneAccount: Ladder = [cheap, middle];
+    expect(authorFor(oneAccount, [], new Set(), new Set(["opencode"]))).toEqual({
+      _tag: "Dispatch",
+      rung: cheap,
+    });
+  });
+
   test("ignores a failure naming a rung the config has dropped", () => {
     // Deleting the entry outright says the model is no longer part of the
     // rating, so what it recorded cannot position anything.

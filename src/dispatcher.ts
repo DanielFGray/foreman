@@ -35,6 +35,7 @@ import {
   type Choice,
   highestFailure,
   providersOf,
+  providerOf,
   reviewerFor,
   type Rung,
   rungSpent,
@@ -1248,6 +1249,10 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         const failed = new Set(failedTasks(yield* Ref.get(dispatchFailures)).map(([task]) => task));
 
         const stale = new Set(current.stale.map((row) => row.task.id));
+        // This tick's burst, not a memory: one set per fill pass, read by the
+        // author pass only, and discarded with it. Its whole job is to stop every
+        // slot in this pass drawing on the one account the reading calls healthy.
+        const drawn = new Set<string>();
         yield* Effect.forEach(
           dispatchesFor(current, settings.slots, mode === "running", failed, stale),
           (dispatch) =>
@@ -1256,7 +1261,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   Effect.tap(() => clearFailure(dispatch.task.id)),
                   Effect.catchAll((error) => recordFailure(dispatch.task.id, error)),
                 )
-              : dispatchAuthor(dispatch.task).pipe(
+              : dispatchAuthor(dispatch.task, drawn).pipe(
                   Effect.tap(() => clearFailure(dispatch.task.id)),
                   Effect.catchAll((error) => recordFailure(dispatch.task.id, error)),
                 ),
@@ -1300,13 +1305,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
      * would have found an agent for. `undefined` is not an error — the queue
      * keeps the task and a later tick, or an allowance reset, asks again.
      */
-    const rungNow = Effect.fnUntraced(function* (task: {
-      readonly id: string;
-      readonly labels: ReadonlyArray<string>;
-    }) {
+    const rungNow = Effect.fnUntraced(function* (
+      task: {
+        readonly id: string;
+        readonly labels: ReadonlyArray<string>;
+      },
+      drawn?: Set<string>,
+    ) {
       const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
-      const choice = authorFor(settings.ladder, failuresOf(task), walled);
-      if (choice._tag === "Dispatch") return choice.rung;
+      const choice = authorFor(settings.ladder, failuresOf(task), walled, drawn ?? new Set());
+      if (choice._tag === "Dispatch") {
+        const provider = providerOf(choice.rung);
+        if (provider !== undefined) drawn?.add(provider);
+        return choice.rung;
+      }
       yield* Effect.logInfo(
         choice._tag === "Waiting"
           ? `${task.id} deferred: no account with room on ${choice.walled.join(", ")}`
@@ -1315,15 +1327,19 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       return undefined;
     });
 
-    const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (task: ReadyTask) {
+    const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (
+      task: ReadyTask,
+      drawn?: Set<string>,
+    ) {
       const project = projectFor(task.project);
       if (!project) return;
 
       // The bottom rung by default; higher only where the rungs below have
       // already been tried and failed, or cannot be paid for. The task carries
       // the failures in its labels, so the choice survives a restart, and the
-      // allowances are this tick's reading.
-      const rung = yield* rungNow(task);
+      // allowances are this tick's reading. `drawn` is this tick's burst, not the
+      // task's history: only `fill` has one, so only it spreads.
+      const rung = yield* rungNow(task, drawn);
       if (!rung) return;
 
       // The workspace opens before the claim. If it opened after, a task
