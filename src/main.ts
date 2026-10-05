@@ -16,6 +16,7 @@ import { Prompts } from "./prompt.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
 import { Repository } from "./repository.ts";
 import { telemetry, VERSION } from "./telemetry.ts";
+import { Trials } from "./trials.ts";
 import { BOUND_KEYS } from "./view.ts";
 import { fzfScreen } from "./screen.ts";
 import { stats } from "./stats.ts";
@@ -246,6 +247,7 @@ const live = (overrides: Overrides) => {
       Prompts.Default,
       Quota.Default,
       Repository.Default,
+      Trials.Default,
       logging(),
       fzfScreen(BOUND_KEYS),
       telemetry.pipe(Layer.provide(config)),

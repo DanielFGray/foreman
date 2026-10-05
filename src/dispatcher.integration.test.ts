@@ -7,6 +7,7 @@ import { kindOf, Prog, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
+import { Trials, type Trial } from "./trials.ts";
 
 const now = new Date();
 
@@ -49,6 +50,8 @@ class World {
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
+  /** Trial rows the settle pass appended, in the order it wrote them. */
+  readonly trials: Trial[] = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
 
@@ -273,6 +276,13 @@ class World {
   }
 }
 
+/** The trials table, held in memory so a test can read what a tick appended. */
+const trialsFor = (world: World) =>
+  Layer.succeed(Trials, {
+    _tag: "Trials",
+    record: (trial: Trial) => Effect.sync(() => void world.trials.push(trial)),
+  });
+
 const prompts = Layer.succeed(Prompts, {
   _tag: "Prompts",
   author: () => Effect.succeed("author"),
@@ -300,6 +310,7 @@ const layerFor = (world: World) =>
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Prog, world.prog),
       Layer.succeed(Repository, world.repository),
+      trialsFor(world),
       // Every rung in the test ladder names a bare harness, so no provider is
       // derivable and the gate has nothing to ask about — which is the point:
       // a ladder foreman cannot read quota for dispatches exactly as before.
@@ -437,6 +448,48 @@ describe("Dispatcher tick", () => {
     expect(world.branches.has("foreman/ts-swept")).toBe(false);
     expect(world.branches.has("foreman/ts-kept")).toBe(true);
     expect(world.removed).toEqual(["foreman/ts-swept"]);
+  });
+
+  test("appends a trial row for the run that just ended", async () => {
+    // The coordinator reads this table by hand at every slice close; foreman
+    // writes the row at the settle instead, so the two cannot describe different
+    // runs.
+    const task = item("ts-empty", "reviewing", ["by:cheap"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "author", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: true,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.trials).toHaveLength(1);
+    expect(world.trials[0]).toMatchObject({
+      task: "ts-empty",
+      kind: "test",
+      work: "build",
+      outcome: "handed-off",
+      source: "live",
+    });
+  });
+
+  test("writes no trial row for a run that is still going", async () => {
+    const task = item("ts-live", "in_progress", ["by:cheap"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "author", "working"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.trials).toEqual([]);
   });
 
   test("returns a review handoff with no commit to the queue", async () => {
@@ -620,6 +673,7 @@ describe("quota probing", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
+        trialsFor(world),
         quota,
         prompts,
       ),
@@ -711,6 +765,7 @@ describe("a spent account and the reviewer above it", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
+        trialsFor(world),
         quotaSpending(spent),
         prompts,
       ),

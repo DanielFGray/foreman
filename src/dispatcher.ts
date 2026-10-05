@@ -25,7 +25,7 @@ import {
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
 import { pinnedFirst, pinnedOf } from "./pin.ts";
-import { phaseOf } from "./task-phase.ts";
+import { phaseOf, type TaskPhase } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
 import { Quota, type Usage, walledRungs } from "./quota.ts";
 import {
@@ -61,6 +61,7 @@ import {
   type ReadyTask,
   reviewedBy,
 } from "./prog.ts";
+import { Trials, trialFor } from "./trials.ts";
 
 const runDuration = Metric.histogram(
   "foreman.run.duration",
@@ -91,6 +92,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
     const prompts = yield* Prompts;
     const repository = yield* Repository;
     const quota = yield* Quota;
+    const trials = yield* Trials;
 
     const runAttributes = (
       task: {
@@ -792,6 +794,38 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
+     * The trials row for a run that has just ended, written where the ending is
+     * decided rather than once at the end of the tick.
+     *
+     * Two endings sit outside the settle loop's own pass — a handoff with
+     * nothing committed, and a task whose workspace is residue — so a row
+     * written only from the phase pass would silently omit them. The rung is
+     * read off the task rather than passed in, because the model that ran is
+     * what the row is about and `by:*` is the only record of it.
+     *
+     * Nothing happens for a phase that has not ended, or a run whose rung the
+     * config no longer names: a row with no model would be a fact about
+     * nothing.
+     */
+    const recordTrial = (task: Item, phase: TaskPhase): Effect.Effect<void> => {
+      const ran = reviewedBy(task) ?? authoredBy(task);
+      const rung = settings.ladder.find((candidate) => candidate.name === ran);
+      const row =
+        rung === undefined
+          ? undefined
+          : trialFor({
+              task,
+              branch: labelFor(task.id),
+              harness: rung.harness,
+              model: rung.model,
+              provider: providerOf(rung),
+              role: reviewedBy(task) ? "review" : "author",
+              phase,
+            });
+      return row === undefined ? Effect.void : trials.record(row);
+    };
+
+    /**
      * Resolves every worker that stopped, by re-reading its task rather than
      * by interpreting anything the agent printed.
      *
@@ -821,6 +855,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               task,
               `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
             );
+            // Unfinished for the same reason `unfinished` says it is: the run
+            // ended having produced nothing a reviewer could read.
+            yield* recordTrial(task, "Unfinished");
             yield* teardown(task);
           }),
         { discard: true },
@@ -876,8 +913,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             // the reviewer where one owns the pane, else the author.
             const ran = reviewedBy(task) ?? authoredBy(task);
             const rung = settings.ladder.find((candidate) => candidate.name === ran);
+            const role = reviewedBy(task) ? "review" : "author";
             if (rung) {
-              const attributes = runAttributes(task, rung, reviewedBy(task) ? "review" : "author");
+              const attributes = runAttributes(task, rung, role);
               yield* Effect.annotateCurrentSpan({ ...attributes, outcome: phase });
               yield* Metric.increment(
                 Metric.tagged(
@@ -890,6 +928,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   phase,
                 ),
               );
+
+              // The same fact the run telemetry carries, appended to the trials
+              // table the coordinator reads by hand at every slice close. Both
+              // are written here, once, so they cannot describe different runs.
+              yield* recordTrial(task, phase);
             }
 
             yield* Match.value(phase).pipe(
