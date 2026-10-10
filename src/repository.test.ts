@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { Repository } from "./repository.ts";
 
-const isClean = (directory: string) =>
-  Effect.runPromise(Repository.isClean(directory).pipe(Effect.provide(Repository.Default)));
+const run = <A, E>(f: (repository: Repository["Service"]) => Effect.Effect<A, E>) =>
+  Effect.runPromise(Repository.use(f).pipe(Effect.provide(Repository.Default)));
 
+const isClean = (directory: string) => run((repository) => repository.isClean(directory));
 /** The clean answer every assertion below that is not a hold expects. */
 const clean = { _tag: "Clean" } as const;
 
@@ -29,33 +30,24 @@ const dirtyJJ = {
   detail: "uncommitted changes in the working copy",
 } as const;
 
-const holdsWork = (directory: string) =>
-  Effect.runPromise(Repository.holdsWork(directory).pipe(Effect.provide(Repository.Default)));
+const holdsWork = (directory: string) => run((repository) => repository.holdsWork(directory));
 
 // Nested under a directory that does not exist, because the real ground lives
 // at $XDG_STATE_HOME/foreman/verify/<project> and nothing makes that first.
 const groundFor = (directory: string) => `${directory}.grounds/verify`;
 
 const merge = (directory: string, branch: string, verify?: string) =>
-  Effect.runPromise(
-    Repository.merge(directory, branch, verify, groundFor(directory)).pipe(
-      Effect.provide(Repository.Default),
-    ),
-  );
+  run((repository) => repository.merge(directory, branch, verify, groundFor(directory)));
 
-const setup = (directory: string) =>
-  Effect.runPromise(Repository.setup(directory).pipe(Effect.provide(Repository.Default)));
+const setup = (directory: string) => run((repository) => repository.setup(directory));
 
-const branches = (directory: string) =>
-  Effect.runPromise(Repository.branches(directory).pipe(Effect.provide(Repository.Default)));
+const branches = (directory: string) => run((repository) => repository.branches(directory));
 
 const remove = (directory: string, branch: string) =>
-  Effect.runPromise(Repository.remove(directory, branch).pipe(Effect.provide(Repository.Default)));
+  run((repository) => repository.remove(directory, branch));
 
 const sweep = (directory: string) =>
-  Effect.runPromise(
-    Repository.sweepUnpublishedMerges(directory).pipe(Effect.provide(Repository.Default)),
-  );
+  run((repository) => repository.sweepUnpublishedMerges(directory));
 
 const directory = await mkdtemp(join(tmpdir(), "foreman-repository-"));
 afterAll(() =>

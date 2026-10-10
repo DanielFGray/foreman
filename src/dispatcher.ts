@@ -1,15 +1,17 @@
 import {
+  Clock,
+  Context,
   DateTime,
   Duration,
   Effect,
   Fiber,
   Match,
   Metric,
-  MetricBoundaries,
   Option,
   Queue,
   Ref,
   SubscriptionRef,
+  Layer,
 } from "effect";
 import { Settings } from "./config.ts";
 import {
@@ -63,11 +65,10 @@ import {
 } from "./prog.ts";
 import { Trials, trialFor } from "./trials.ts";
 
-const runDuration = Metric.histogram(
-  "foreman.run.duration",
-  MetricBoundaries.exponential({ start: 1, factor: 2, count: 20 }),
-  "Time foreman spends dispatching one run, in milliseconds.",
-);
+const runDuration = Metric.timer("foreman.run.duration", {
+  description: "Time foreman spends dispatching one run, in milliseconds.",
+  boundaries: Metric.exponentialBoundaries({ start: 1, factor: 2, count: 20 }),
+});
 
 const runOutcomes = Metric.counter("foreman.run.outcomes", {
   description: "Settled agent runs by their closed task phase.",
@@ -83,9 +84,8 @@ const runOutcomes = Metric.counter("foreman.run.outcomes", {
  * and this one restarts whenever its dashboard is closed. Everything the loop
  * decides is therefore derivable by anyone else looking at the same world.
  */
-export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
-  accessors: true,
-  effect: Effect.gen(function* () {
+export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
+  make: Effect.gen(function* () {
     const settings = yield* Settings;
     const fleet = yield* Fleet;
     const prog = yield* Prog;
@@ -123,10 +123,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       effect: Effect.Effect<A, E, R>,
     ) => {
       const attributes = runAttributes(task, rung, role);
-      return effect.pipe(
-        Effect.tap(() => Effect.annotateCurrentSpan(attributes)),
-        Metric.trackDurationWith(Metric.tagged(runDuration, "rung", rung.name), Duration.toMillis),
-      );
+      const duration = Metric.withAttributes(runDuration, { rung: rung.name });
+      return Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis;
+        return yield* effect.pipe(
+          Effect.tap(() => Effect.annotateCurrentSpan(attributes)),
+          Effect.ensuring(
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((ended) => Metric.update(duration, Duration.millis(ended - started))),
+            ),
+          ),
+        );
+      });
     };
 
     // The one piece of genuinely non-derivable state: how much work the
@@ -228,15 +236,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * Reads the whole world and works out what to do about it.
+     * Reads the world once and publishes it, acting on nothing.
      *
-     * Order matters. Reviews are dispatched before new work because a task
-     * waiting to be reviewed is nearly finished and is blocking whatever
-     * depends on it, whereas an unclaimed task has not started costing
-     * anything yet. Filling slots with new work while reviews pile up is how a
-     * queue grows a permanent tail of almost-done tasks.
+     * The first half of every tick, and the whole of what a one-shot command
+     * needs before it acts on a row: the command line holds no dashboard, so
+     * this is how it learns which rows exist.
      */
-    const tick = Effect.gen(function* () {
+    const read = Effect.gen(function* () {
       // Read once and handed to both readings. A tick observes twice — before
       // it acts, and again on fresh eyes before it fills — while an allowance
       // moves on the order of hours, so asking each provider twice a poll
@@ -262,7 +268,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const wanted =
         mode !== "paused" || (yield* Ref.get(watchingQuota)) || !(yield* Ref.get(everProbed));
       if (wanted) yield* Ref.set(everProbed, true);
-      const probing = yield* Effect.fork(
+      const probing = yield* Effect.forkChild(
         wanted ? readProviders : Effect.succeed<ReadonlyArray<Provider>>([]),
       );
       const observation = yield* observe;
@@ -277,7 +283,20 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       const current = yield* interpret(observation, providers);
       yield* SubscriptionRef.set(state, current);
+      return { mode, current, providers };
+    });
 
+    /**
+     * Reads the whole world and works out what to do about it.
+     *
+     * Order matters. Reviews are dispatched before new work because a task
+     * waiting to be reviewed is nearly finished and is blocking whatever
+     * depends on it, whereas an unclaimed task has not started costing
+     * anything yet. Filling slots with new work while reviews pile up is how a
+     * queue grows a permanent tail of almost-done tasks.
+     */
+    const tick = Effect.gen(function* () {
+      const { mode, current, providers } = yield* read;
       if (mode === "paused") return;
       yield* settle(current);
       yield* tidy(current);
@@ -313,7 +332,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             rungs: rungsOn(settings.ladder, provider),
             unreadable: undefined,
           })),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             (error.permanent
               ? // A permanent failure — an account with no usage source, a
                 // missing credential, an expired token — repeats on every poll,
@@ -375,7 +394,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       const readings = yield* Effect.forEach(roster, (worker) =>
         prog.lookup(worker.task).pipe(
           Effect.map((task) => [{ worker, task }] as const),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(`skipped workspace ${worker.workspace}: ${error}`).pipe(
               Effect.as<ReadonlyArray<{ worker: Worker; task: Option.Option<Item> }>>([]),
             ),
@@ -397,7 +416,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ),
           // A checkout foreman cannot read is a checkout it must not merge
           // into either, so an unreadable repository is held rather than free.
-          Effect.catchAll((error: RepositoryError) =>
+          Effect.catch((error: RepositoryError) =>
             Effect.logWarning(`holding ${project.name}: ${error}`).pipe(
               Effect.as<ReadonlyArray<Held>>([
                 { project: project.name, reason: "unreadable", detail: error.detail },
@@ -466,7 +485,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       } as const;
     });
 
-    type Observation = Effect.Effect.Success<typeof observe>;
+    type Observation = Effect.Success<typeof observe>;
     type Dispatchable = ReturnType<typeof dispatchFrom>;
 
     /**
@@ -878,7 +897,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             yield* dispatchAuthor(task);
             yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
           }).pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.logWarning(`resuming ${task.id} after diagnosis failed: ${error}`),
             ),
           ),
@@ -917,16 +936,13 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             if (rung) {
               const attributes = runAttributes(task, rung, role);
               yield* Effect.annotateCurrentSpan({ ...attributes, outcome: phase });
-              yield* Metric.increment(
-                Metric.tagged(
-                  Metric.tagged(
-                    Metric.tagged(runOutcomes, "rung", rung.name),
-                    "project",
-                    task.project,
-                  ),
-                  "outcome",
-                  phase,
-                ),
+              yield* Metric.update(
+                Metric.withAttributes(runOutcomes, {
+                  rung: rung.name,
+                  project: task.project,
+                  outcome: phase,
+                }),
+                1,
               );
 
               // The same fact the run telemetry carries, appended to the trials
@@ -1016,7 +1032,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             );
           }).pipe(
             Effect.withSpan("foreman.settle.run"),
-            Effect.catchAll((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
+            Effect.catch((error) => Effect.logWarning(`settling ${task.id} failed: ${error}`)),
           ),
         { discard: true },
       );
@@ -1132,7 +1148,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
         yield* prog.complete(task.id);
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
-      }).pipe(Effect.catchAll((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
+      }).pipe(Effect.catch((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
     });
 
     /**
@@ -1169,7 +1185,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                   { discard: true },
                 ),
               ),
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.logWarning(`sweeping landing litter in ${project.name} failed: ${error}`),
               ),
             ),
@@ -1188,7 +1204,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                     Effect.logInfo(`pruned ${entry.branch} in ${entry.project}`)
                   : Effect.void,
               ),
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.logWarning(`pruning ${entry.branch} in ${entry.project} failed: ${error}`),
               ),
             ),
@@ -1217,7 +1233,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           ].filter(
             ({ task, worker }) =>
               (worker === undefined || worker.state === "gone") &&
-              DateTime.lessThan(DateTime.unsafeFromDate(task.last_activity_at), cutoff),
+              DateTime.isLessThan(DateTime.fromDateUnsafe(task.last_activity_at), cutoff),
           ),
           ({ task, worker }) =>
             Effect.gen(function* () {
@@ -1233,9 +1249,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
               if (worker) yield* teardown(task);
               yield* Effect.logInfo(`reclaimed ${task.id} (${task.project})`);
             }).pipe(
-              Effect.catchAll((error) =>
-                Effect.logWarning(`reclaiming ${task.id} failed: ${error}`),
-              ),
+              Effect.catch((error) => Effect.logWarning(`reclaiming ${task.id} failed: ${error}`)),
             ),
           { discard: true },
         );
@@ -1270,9 +1284,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           `foreman: ${oldest.task} is done, but ${oldest.branch} still holds commits ${oldest.project} never took, so the landing never completed. Nothing in the pipeline reaches a done task, so it is back in review to decide whether the work is worth landing.`,
         );
         yield* Effect.logInfo(`recovered ${oldest.task} (${oldest.project}) for review`);
-      }).pipe(
-        Effect.catchAll((error) => Effect.logWarning(`recovering a branch failed: ${error}`)),
-      );
+      }).pipe(Effect.catch((error) => Effect.logWarning(`recovering a branch failed: ${error}`)));
 
     /**
      * Claims work for every free slot, review first.
@@ -1302,11 +1314,11 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
             dispatch.role === "review"
               ? dispatchReview(dispatch.task, authoredBy(dispatch.task)).pipe(
                   Effect.tap(() => clearFailure(dispatch.task.id)),
-                  Effect.catchAll((error) => recordFailure(dispatch.task.id, error)),
+                  Effect.catch((error) => recordFailure(dispatch.task.id, error)),
                 )
               : dispatchAuthor(dispatch.task, drawn).pipe(
                   Effect.tap(() => clearFailure(dispatch.task.id)),
-                  Effect.catchAll((error) => recordFailure(dispatch.task.id, error)),
+                  Effect.catch((error) => recordFailure(dispatch.task.id, error)),
                 ),
           { discard: true },
         );
@@ -1374,16 +1386,22 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       task: ReadyTask,
       drawn?: Set<string>,
     ) {
-      const project = projectFor(task.project);
-      if (!project) return;
-
       // The bottom rung by default; higher only where the rungs below have
       // already been tried and failed, or cannot be paid for. The task carries
       // the failures in its labels, so the choice survives a restart, and the
       // allowances are this tick's reading. `drawn` is this tick's burst, not the
       // task's history: only `fill` has one, so only it spreads.
       const rung = yield* rungNow(task, drawn);
-      if (!rung) return;
+      if (rung) yield* authorAt(task, rung);
+    });
+
+    /** Opens the task's workspace, claims it and starts its author on this rung. */
+    const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (
+      task: ReadyTask,
+      rung: Rung,
+    ) {
+      const project = projectFor(task.project);
+      if (!project) return;
 
       // The workspace opens before the claim. If it opened after, a task
       // would briefly be claimed with nothing to show for it, and that state
@@ -1797,7 +1815,7 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
       Effect.forEach(settings.projects, (project) =>
         read(project).pipe(
           // One unreadable project must not blind foreman to the other seven.
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(`skipped ${project.name}: ${error}`).pipe(
               Effect.as<ReadonlyArray<A>>([]),
             ),
@@ -1814,6 +1832,9 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
 
       /** Reads and settles the world once. The daemon wraps this in `run`. */
       tick,
+
+      /** Reads the world once without acting on it. */
+      read: Effect.asVoid(read),
 
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
@@ -1886,6 +1907,53 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
           }),
         ),
 
+      /**
+       * Starts a queued task's author now, on the rung the tick would choose or
+       * on the one named. A named rung is the operator's choice for this one
+       * dispatch and writes no label, so the task's evidence is unchanged.
+       */
+      author: (task: ReadyTask, rungName: string | undefined) =>
+        commanded(
+          Effect.gen(function* () {
+            const rung =
+              rungName === undefined
+                ? yield* rungNow(task)
+                : settings.ladder.find((candidate) => candidate.name === rungName);
+            if (rung) yield* authorAt(task, rung);
+          }),
+        ),
+
+      /**
+       * The prompt a role would be sent on this task, rendered against the
+       * worktree a fresh dispatch opens. `undefined` when the task is in no
+       * managed project, or when a review has no branch to diff yet.
+       */
+      prompt: (role: AgentRole, id: string) =>
+        Effect.gen(function* () {
+          const task = yield* prog.show(id);
+          const project = projectFor(task.project);
+          if (!project) return undefined;
+          const worktree = directoryFor(task.project, task.id);
+          if (role === "author") {
+            return yield* prompts.author(
+              task,
+              worktree,
+              project.directory,
+              project.verificationSkill,
+            );
+          }
+          const base = yield* repository.base(project.directory, labelFor(task.id));
+          if (!base) return undefined;
+          return yield* prompts.review(
+            task,
+            worktree,
+            project.directory,
+            base,
+            project.verify,
+            project.verificationSkill,
+          );
+        }),
+
       /** Starts a fresh agent on a task whose worker vanished. */
       retry: (task: Item) =>
         commanded(
@@ -1904,18 +1972,18 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                 const project = projectFor(task.project);
                 if (project) {
                   yield* dispatchOnboard(task, project).pipe(
-                    Effect.catchAll((error) => recordFailure(task.id, error)),
+                    Effect.catch((error) => recordFailure(task.id, error)),
                   );
                 }
                 return;
               }
               if (task.status === "reviewing") {
                 return yield* dispatchReview(task, authoredBy(task)).pipe(
-                  Effect.catchAll((error) => recordFailure(task.id, error)),
+                  Effect.catch((error) => recordFailure(task.id, error)),
                 );
               }
               return yield* dispatchAuthor(task).pipe(
-                Effect.catchAll((error) => recordFailure(task.id, error)),
+                Effect.catch((error) => recordFailure(task.id, error)),
               );
             }
 
@@ -2074,14 +2142,16 @@ export class Dispatcher extends Effect.Service<Dispatcher>()("Dispatcher", {
                     `foreman: ${branch.branch} holds commits ${branch.project} never took, and nothing was going to read them. Sent for review to decide whether they are worth landing.`,
                   ),
                 ),
-                Effect.catchAll((error) =>
+                Effect.catch((error) =>
                   Effect.logWarning(`adopting ${branch.task} failed: ${error}`),
                 ),
               ),
         ),
     } as const;
   }),
-}) {}
+}) {
+  static readonly Default = Layer.effect(this, this.make);
+}
 
 /** Selects work for the free slots without performing any dispatch side effects. */
 export const dispatchesFor = (
@@ -2172,7 +2242,7 @@ export const awaitingLanding = (task: Item): boolean =>
  * from the store and foreman still counts nothing of its own.
  */
 export const handoffExpired = (task: Item, cutoff: DateTime.Utc): boolean =>
-  DateTime.lessThan(DateTime.unsafeFromDate(task.last_activity_at), cutoff);
+  DateTime.isLessThan(DateTime.fromDateUnsafe(task.last_activity_at), cutoff);
 
 /**
  * A finished branch foreman may merge on this tick.
@@ -2368,7 +2438,9 @@ export const landedColumn = (
 ): ReadonlyArray<Item> => {
   const cutoff = DateTime.subtract(now, { days: windowDays });
   return landed
-    .filter((item) => DateTime.greaterThan(DateTime.unsafeFromDate(item.last_activity_at), cutoff))
+    .filter((item) =>
+      DateTime.isGreaterThan(DateTime.fromDateUnsafe(item.last_activity_at), cutoff),
+    )
     .sort((first, second) => second.last_activity_at.getTime() - first.last_activity_at.getTime());
 };
 
@@ -2479,6 +2551,7 @@ export interface Climbing {
 const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => ({
   kind: rung.harness,
   model: rung.model,
+  thinking: rung.thinking,
   prompt,
   role,
 });

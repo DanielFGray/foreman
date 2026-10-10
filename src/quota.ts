@@ -1,13 +1,19 @@
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { BunServices } from "@effect/platform-bun";
 import {
-  Command,
-  CommandExecutor,
-  FetchHttpClient,
+  Clock,
+  Context,
+  Effect,
   FileSystem,
-  HttpClient,
-  HttpClientRequest,
-} from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Chunk, Clock, Effect, Match, Option, Ref, Schema as S, Stream } from "effect";
+  Layer,
+  Match,
+  Option,
+  Ref,
+  Result,
+  Schema as S,
+  Stream,
+} from "effect";
 
 /**
  * How much of a provider's allowance is already spent.
@@ -21,15 +27,20 @@ import { Chunk, Clock, Effect, Match, Option, Ref, Schema as S, Stream } from "e
  * number every provider agrees to state. A provider reports several windows —
  * a rolling hour, a week, a month — and any one of them at 100% stops the rung.
  */
-export class Quota extends Effect.Service<Quota>()("Quota", {
-  dependencies: [BunContext.layer, FetchHttpClient.layer],
-  accessors: true,
-  effect: Effect.gen(function* () {
-    const [go, codex, claude] = yield* Effect.all([goProbe, codexProbe, claudeProbe]);
+export class Quota extends Context.Service<Quota>()("Quota", {
+  make: Effect.gen(function* () {
+    const [go, codex, claude, cursor] = yield* Effect.all([
+      goProbe,
+      codexProbe,
+      claudeProbe,
+      cursorProbe,
+    ]);
 
     const probe = (provider: string): Effect.Effect<Usage, QuotaError> =>
       Match.value(provider).pipe(
         Match.when("claude", () => claude(provider)),
+        Match.when("anthropic", () => claude(provider)),
+        Match.when("cursor", () => cursor(provider)),
         Match.when("openai", () => codex(provider)),
         Match.when("opencode-go", () => go(provider)),
         Match.when(
@@ -58,7 +69,11 @@ export class Quota extends Effect.Service<Quota>()("Quota", {
 
     return { usage } as const;
   }),
-}) {}
+}) {
+  static readonly Default = Layer.effect(this, this.make).pipe(
+    Layer.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer)),
+  );
+}
 
 export interface Allowance {
   /** The window this allowance covers, in the provider's own words. */
@@ -164,7 +179,11 @@ export class QuotaError extends S.TaggedError<QuotaError>()("QuotaError", {
    * worth a line every time it happens.
    */
   permanent: S.Boolean,
-}) {}
+}) {
+  override get message() {
+    return `${this.provider}: ${this.detail}`;
+  }
+}
 
 // ------------------------------------------------------------- opencode go
 
@@ -175,8 +194,10 @@ const GoAllowance = S.Struct({
 });
 
 const GoUsage = S.Struct({
-  usage: S.Record({ key: S.String, value: GoAllowance }),
+  usage: S.Record(S.String, GoAllowance),
 });
+
+const GoRefusal = S.Struct({ error: S.Struct({ message: S.String }) });
 
 /**
  * Go states a subscription's usage on the host that serves its models.
@@ -200,7 +221,23 @@ const goProbe = Effect.gen(function* () {
           HttpClientRequest.bearerToken(key),
         ),
       );
-      const decoded = yield* S.decodeUnknown(GoUsage)(yield* response.json);
+      // opencode does not renew an expired key on sign-in, so the error body's
+      // own message is the instruction worth showing.
+      if (response.status === 401) {
+        const body = yield* response.json.pipe(
+          Effect.flatMap(S.decodeUnknownEffect(GoRefusal)),
+          Effect.option,
+        );
+        return yield* new QuotaError({
+          provider,
+          detail: Option.match(body, {
+            onNone: () => `${provider} key refused — replace it in opencode`,
+            onSome: (refusal) => refusal.error.message,
+          }),
+          permanent: true,
+        });
+      }
+      const decoded = yield* S.decodeUnknownEffect(GoUsage)(yield* response.json);
       return {
         provider,
         plan: undefined,
@@ -213,10 +250,7 @@ const goProbe = Effect.gen(function* () {
     }).pipe(Effect.mapError((cause) => asQuotaError(provider, cause)));
 });
 
-const OpencodeAuth = S.Record({
-  key: S.String,
-  value: S.Struct({ key: S.optional(S.String) }),
-});
+const OpencodeAuth = S.Record(S.String, S.Struct({ key: S.optional(S.String) }));
 
 /**
  * The key opencode already holds, read where opencode keeps it.
@@ -232,10 +266,10 @@ const apiKey = (fs: FileSystem.FileSystem, provider: string): Effect.Effect<stri
     if (configured !== undefined && configured.length > 0) return configured;
 
     const file = `${process.env["HOME"] ?? ""}/.local/share/opencode/auth.json`;
-    const decoded = yield* S.decodeUnknown(OpencodeAuth)(
+    const decoded = yield* S.decodeUnknownEffect(OpencodeAuth)(
       JSON.parse(yield* fs.readFileString(file)),
     );
-    return yield* Option.match(Option.fromNullable(decoded[provider]?.key), {
+    return yield* Option.match(Option.fromNullishOr(decoded[provider]?.key), {
       onNone: () =>
         new QuotaError({
           provider,
@@ -293,17 +327,17 @@ const REQUESTS: ReadonlyArray<unknown> = [
  * reply has arrived.
  */
 const codexProbe = Effect.gen(function* () {
-  const executor = yield* CommandExecutor.CommandExecutor;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   return (provider: string): Effect.Effect<Usage, QuotaError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const process = yield* executor.start(
-          Command.make("codex", "app-server").pipe(
-            Command.stdin("pipe"),
-            Command.stdout("pipe"),
-            Command.stderr("pipe"),
-          ),
+        const process = yield* spawner.spawn(
+          ChildProcess.make("codex", ["app-server"], {
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+          }),
         );
         yield* Stream.fromIterable(REQUESTS).pipe(
           Stream.map((request) => `${JSON.stringify(request)}\n`),
@@ -316,13 +350,16 @@ const codexProbe = Effect.gen(function* () {
         const reply = yield* Stream.decodeText(process.stdout).pipe(
           Stream.splitLines,
           Stream.filterMap((line) =>
-            S.decodeUnknownOption(S.parseJson(RateLimitsReply))(line).pipe(
-              Option.filter((message) => message.id === LIMITS_ID),
+            Result.fromOption(
+              S.decodeUnknownOption(S.fromJsonString(RateLimitsReply))(line).pipe(
+                Option.filter((message) => message.id === LIMITS_ID),
+              ),
+              () => line,
             ),
           ),
           Stream.take(1),
-          Stream.runCollect,
-          Effect.flatMap(Chunk.head),
+          Stream.runHead,
+          Effect.flatMap(Effect.fromOption),
         );
 
         const limits = reply.result.rateLimits;
@@ -375,7 +412,7 @@ const ClaudeUsage = S.Struct({
  * Claude states a plan's remaining allowance only to a signed-in client, and
  * the signed-in client is `claude` itself.
  *
- * `GET https://claude.ai/api/oauth/usage` answers the five-hour and seven-day
+ * `GET https://api.anthropic.com/api/oauth/usage` answers the five-hour and seven-day
  * windows plus the spend-based `extra_usage` credits in one call, using the
  * OAuth access token claude keeps in `~/.claude/.credentials.json` — the same
  * token and endpoint the binary's own fetch reads. The endpoint sits behind a
@@ -408,12 +445,14 @@ const claudeProbe = Effect.gen(function* () {
   return (provider: string): Effect.Effect<Usage, QuotaError> =>
     Effect.gen(function* () {
       const home = process.env["HOME"] ?? "";
-      const decoded = yield* S.decodeUnknown(ClaudeOAuth)(
+      const decoded = yield* S.decodeUnknownEffect(ClaudeOAuth)(
         JSON.parse(yield* fs.readFileString(`${home}/.claude/.credentials.json`)),
       );
       const response = yield* client.execute(
-        HttpClientRequest.get("https://claude.ai/api/oauth/usage").pipe(
+        HttpClientRequest.get("https://api.anthropic.com/api/oauth/usage").pipe(
           HttpClientRequest.bearerToken(decoded.claudeAiOauth.accessToken),
+          HttpClientRequest.setHeader("anthropic-beta", "oauth-2025-04-20"),
+          HttpClientRequest.setHeader("User-Agent", "claude-cli/2.1.0 (external, cli)"),
         ),
       );
       if (response.status === 401) {
@@ -423,7 +462,7 @@ const claudeProbe = Effect.gen(function* () {
           permanent: true,
         });
       }
-      const usage = yield* S.decodeUnknown(ClaudeUsage)(yield* response.json);
+      const usage = yield* S.decodeUnknownEffect(ClaudeUsage)(yield* response.json);
       return {
         provider,
         plan: decoded.claudeAiOauth.subscriptionType ?? undefined,
@@ -441,6 +480,170 @@ const claudeProbe = Effect.gen(function* () {
  * back: "primary" says nothing an operator can plan around, and the same rank
  * means a week on one plan and a day on another.
  */
+
+// ----------------------------------------------------------- cursor
+/**
+ * Cursor states a personal plan's usage on its dashboard host, read with the
+ * session cookie its login leaves in `~/.config/cursor/auth.json`.
+ *
+ * `https://cursor.com/api/usage-summary` answers the billing cycle, the model
+ * family splits (`auto` vs `api`) and the on-demand meter in one call. The
+ * JWT's `sub` names the user for the session cookie; the same token is the
+ * bearer for the legacy request-count endpoint, which is only a fallback.
+ */
+const cursorProbe = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient;
+  const fs = yield* FileSystem.FileSystem;
+
+  const userIdOf = (token: string): string | undefined => {
+    try {
+      const parts = token.split(".");
+      if (parts.length !== 3 || parts[1] === undefined) return undefined;
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as unknown;
+      if (typeof payload !== "object" || payload === null) return undefined;
+      const sub = (payload as Record<string, unknown>).sub;
+      if (typeof sub !== "string") return undefined;
+      const pieces = sub.split("|");
+      const userId = pieces.length > 1 ? pieces[1] : sub;
+      return userId !== undefined && userId.length > 0 ? userId : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const allowanceOf = (
+    window: string,
+    usedPercent: number,
+    resetsAt: Date | undefined,
+  ): Allowance => ({
+    window,
+    usedPercent,
+    resetsAt,
+  });
+
+  return (provider: string): Effect.Effect<Usage, QuotaError> =>
+    Effect.gen(function* () {
+      const home = process.env["HOME"] ?? "";
+      const file = `${home}/.config/cursor/auth.json`;
+      const raw = yield* fs.readFileString(file);
+      let decoded: { accessToken?: string };
+      try {
+        decoded = JSON.parse(raw) as { accessToken?: string };
+      } catch {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor auth.json is not JSON",
+          permanent: true,
+        });
+      }
+      const token = decoded.accessToken;
+      if (token === undefined || token.length === 0) {
+        return yield* new QuotaError({
+          provider,
+          detail: `no access token in ${file}`,
+          permanent: true,
+        });
+      }
+      const userId = userIdOf(token);
+      if (userId === undefined) {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor token names no user",
+          permanent: true,
+        });
+      }
+
+      const cookie = encodeURIComponent(`${userId}::${token}`);
+      const response = yield* client.execute(
+        HttpClientRequest.get("https://cursor.com/api/usage-summary").pipe(
+          HttpClientRequest.setHeader("Accept", "application/json"),
+          HttpClientRequest.setHeader("Cookie", `WorkosCursorSessionToken=${cookie}`),
+        ),
+      );
+      if (response.status === 401 || response.status === 403) {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor session expired — run `cursor-agent login` to refresh it",
+          permanent: true,
+        });
+      }
+      const body = (yield* response.json) as Record<string, unknown>;
+      const individual = body.individualUsage;
+      if (typeof individual !== "object" || individual === null) {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor usage response had no individualUsage",
+          permanent: false,
+        });
+      }
+      const plan = (individual as Record<string, unknown>).plan;
+      if (typeof plan !== "object" || plan === null) {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor usage response had no plan bucket",
+          permanent: false,
+        });
+      }
+      const planRecord = plan as Record<string, unknown>;
+      const billingCycleEnd =
+        typeof body.billingCycleEnd === "string" ? new Date(body.billingCycleEnd) : undefined;
+      const allowances: Allowance[] = [];
+      const autoPct = planRecord.autoPercentUsed;
+      if (typeof autoPct === "number") {
+        allowances.push(allowanceOf("cursor_models (cycle)", autoPct, billingCycleEnd));
+      }
+      const apiPct = planRecord.apiPercentUsed;
+      if (typeof apiPct === "number") {
+        allowances.push(allowanceOf("other_models (cycle)", apiPct, billingCycleEnd));
+      }
+      if (allowances.length === 0) {
+        const totalPct = planRecord.totalPercentUsed;
+        if (typeof totalPct === "number") {
+          allowances.push(allowanceOf("included (cycle)", totalPct, billingCycleEnd));
+        }
+      }
+      // On-demand meter, if enabled and capped.
+      const onDemand = (individual as Record<string, unknown>).onDemand;
+      if (typeof onDemand === "object" && onDemand !== null) {
+        const onDemandRecord = onDemand as Record<string, unknown>;
+        const enabled = onDemandRecord.enabled;
+        const used = onDemandRecord.used;
+        const limit = onDemandRecord.limit;
+        if (
+          enabled === true &&
+          typeof used === "number" &&
+          typeof limit === "number" &&
+          limit > 0
+        ) {
+          // Expose it as a percent of the on-demand cap.
+          allowances.push({
+            window: "on_demand (cycle)",
+            usedPercent: (used / limit) * 100,
+            resetsAt: billingCycleEnd,
+          });
+        }
+      }
+
+      if (allowances.length === 0) {
+        return yield* new QuotaError({
+          provider,
+          detail: "cursor usage response carried no metered window",
+          permanent: false,
+        });
+      }
+
+      return {
+        provider,
+        plan: typeof body.membershipType === "string" ? body.membershipType : undefined,
+        allowances,
+      } satisfies Usage;
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof QuotaError ? cause : asQuotaError(provider, cause),
+      ),
+    );
+});
+
 export const windowName = (rank: string, durationMins: number | undefined): string =>
   durationMins === undefined
     ? rank

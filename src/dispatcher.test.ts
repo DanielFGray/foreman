@@ -118,7 +118,7 @@ describe("landing a reviewed branch", () => {
 
 describe("the author's pane after a handoff", () => {
   const at = (item: Item, when: Date): Item => ({ ...item, last_activity_at: when });
-  const cutoff = DateTime.unsafeFromDate(new Date("2026-08-15T12:00:00Z"));
+  const cutoff = DateTime.fromDateUnsafe(new Date("2026-08-15T12:00:00Z"));
 
   test("keeps a fresh handoff alive for a reviewer to coach", () => {
     // The author's session is the only place its context exists, and a
@@ -647,7 +647,7 @@ describe("the quota gate", () => {
 
 describe("the landed column", () => {
   const at = (item: Item, when: Date): Item => ({ ...item, last_activity_at: when });
-  const now = DateTime.unsafeFromDate(new Date("2026-08-21T12:00:00Z"));
+  const now = DateTime.fromDateUnsafe(new Date("2026-08-21T12:00:00Z"));
 
   test("orders by when each task landed, newest first", () => {
     // prog returns done tasks grouped by project in config order; the column

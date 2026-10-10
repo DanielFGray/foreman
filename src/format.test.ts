@@ -1,19 +1,33 @@
 import { describe, expect, test } from "bun:test";
-import { quotaJson, resetsLabel, type QuotaReading } from "./format.ts";
+import { quotaJson, resetsLabel, usedLabel, type QuotaReading } from "./format.ts";
 import type { Usage } from "./quota.ts";
 
 describe("resetsLabel", () => {
+  // A fixed local noon, so an offset of hours never crosses midnight by chance.
+  const noon = new Date(2026, 9, 10, 12, 0);
+  const after = (minutes: number) => new Date(noon.getTime() + minutes * 60000);
+
   test("the relative duration, plus the local hour it happens", () => {
-    expect(resetsLabel(new Date(Date.now() + 37 * 60000))).toMatch(
-      /^in 37m at \d{1,2}:\d{2} [AP]M/,
-    );
-    expect(resetsLabel(new Date(Date.now() + 125 * 60000))).toMatch(/^in 2h 5m at /);
-    expect(resetsLabel(new Date(Date.now() + 6 * 86_400_000))).toMatch(/^in 6d at /);
+    expect(resetsLabel(after(37), noon)).toMatch(/^in 37m at 12:37\sPM$/);
+    expect(resetsLabel(after(125), noon)).toMatch(/^in 2h 5m at /);
+    expect(resetsLabel(after(6 * 1440), noon)).toMatch(/^in 6d at /);
+  });
+
+  test("names the day when the reset is not today", () => {
+    expect(resetsLabel(after(13 * 60), noon)).toMatch(/^in 13h at Oct 11, 1:00\sAM$/);
   });
 
   test("a reset that has passed still reads as now, never negative", () => {
-    expect(resetsLabel(new Date(Date.now() - 60_000))).toMatch(/^in 1m at /);
-    expect(resetsLabel(new Date(Date.now() + 90_000))).toMatch(/^in 2m at /);
+    expect(resetsLabel(after(-1), noon)).toMatch(/^in 1m at /);
+    expect(resetsLabel(after(1.5), noon)).toMatch(/^in 2m at /);
+  });
+});
+
+describe("usedLabel", () => {
+  test("a fractional share reads as a whole percent that never reaches 100 early", () => {
+    expect(usedLabel(28.704166666666666)).toBe("28%");
+    expect(usedLabel(99.6)).toBe("99%");
+    expect(usedLabel(100)).toBe("100%");
   });
 });
 

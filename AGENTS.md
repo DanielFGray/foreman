@@ -501,6 +501,21 @@ tests and runs only those covering the code it touched. `Prompts.review` renders
 the project's `verify` into the prompt; a project naming none has no landing
 gate, and there the full run is the reviewer's after all.
 
+**The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
+`models` tables of the herd skill's trials database; `config.jsonc` has no
+ladder. A missing database is a startup error, not a fallback, because a
+fallback is a second ladder that can drift. The model row carries the harness
+and the thinking level, and `launchArguments` in `src/herdr.ts` turns the level
+into the harness's flag. `foreman ladder edit` is the one way to change the
+order: it validates the whole edit and writes it in one transaction.
+
+**Two correction rounds, counted.** A reviewer sends mechanical findings to the
+live author with `foreman correct`, which refuses a third round and writes
+`rounds:<n>`. The trial row reads that label, and `attribute` clears it, because
+it counts one author's rounds, not the task's. The council review the prompt
+asks for before approving is not enforced: whether a finding is real is
+judgement, so foreman asks for it in prose and records nothing about it.
+
 **Whatever ends a review clears `review-by:*`.** A label left behind is read as
 evidence of something that never happened: a reviewer that is over on a task
 that is open is exactly the shape a rejection leaves, so the settle loop takes
@@ -736,7 +751,7 @@ first for the same reason.
 
 ## Ports
 
-`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — eight methods. herdr
+`Fleet` (`src/fleet.ts`) is the whole multiplexer surface — nine methods. herdr
 is one implementation; an amux plugin would be a second, not a rewrite.
 
 `Prog` (`src/prog.ts`) is the whole task-store surface. Nothing above that file
@@ -887,6 +902,28 @@ A question with a handful of answers is the list, not more keys. Choosing a
 rung was already that shape, and intervening became it — the three answers were
 keys that meant something in one mode only, which is exactly what a modified
 keymap cannot express twice.
+
+### Commands are the dashboard's keys, one shot
+
+`src/actions.ts` turns an action on a row into a dispatcher command, and both
+front ends call it: the dashboard after its prompt, and `src/commands.ts` with
+the answer as an option. A key and a subcommand therefore cannot mean
+different things. A new action is a row in `KEYS`, a case in `perform`, and a
+line in `ACTION_HELP`.
+
+A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
+nothing — then finds the row its id keys. It needs no daemon and does not talk
+to one: the world is the only channel, so what it changes the daemon reads on
+its next tick. Two things follow:
+
+- **Pause and drain have no command.** They are the daemon's intention, held in
+  its process on purpose, and a second process cannot reach it.
+- **Settle, land and tick have no command.** Landings are serialised by the
+  daemon's one fiber over one proving ground per project; a second process
+  landing races it.
+
+`foreman --skill` prints `src/skill.md`, read at runtime like the prompts, so
+the usage an agent reads ships with the binary it describes.
 
 ### The screen is fzf
 

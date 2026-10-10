@@ -1,11 +1,5 @@
-import { FileSystem } from "@effect/platform";
-import { Effect, Match, Ref, Stream, SubscriptionRef } from "effect";
-import {
-  Dispatcher,
-  nextDispatch,
-  type FleetState,
-  type InterventionTarget,
-} from "./dispatcher.ts";
+import { Effect, FileSystem, Match, Ref, Stream, SubscriptionRef } from "effect";
+import { Dispatcher, nextDispatch, type FleetState } from "./dispatcher.ts";
 import { logPath } from "./log.ts";
 import { Screen, type Frame, type Keypress } from "./screen.ts";
 import {
@@ -27,6 +21,7 @@ import {
   type ViewName,
 } from "./view.ts";
 import { failuresOf } from "./prog.ts";
+import { INTERVENTIONS, KILL_REASON, perform, type Intervention, type Request } from "./actions.ts";
 import { stats } from "./stats.ts";
 
 /**
@@ -49,7 +44,7 @@ export const dashboard = Effect.gen(function* () {
   const ui = yield* Ref.make<Ui>({ view: "queue", mode: BROWSE, attention: false });
 
   const run = <E, R>(command: Effect.Effect<unknown, E, R>) =>
-    Effect.forkScoped(Effect.catchAllCause(command, Effect.logError));
+    Effect.forkScoped(Effect.catchCause(command, Effect.logError));
 
   /**
    * Rebuilds the frame from the dispatcher's last reading.
@@ -91,45 +86,20 @@ export const dashboard = Effect.gen(function* () {
     yield* redraw();
   });
 
+  /** Runs a fully answered request, or rejects the key when the row cannot take it. */
+  const request = (row: ColumnRow, answered: Request) => {
+    const command = perform(dispatcher, row, answered);
+    return command ? run(command) : screen.reject;
+  };
+
   const act = Effect.fnUntraced(function* (action: Action, row: ColumnRow) {
     if (!actionsFor(row.column, row).includes(action)) return yield* screen.reject;
-    const task = row.task;
-    const target = climbing(row);
-    return yield* Match.value(action).pipe(
-      // Both of these ask the operator a question before anything happens,
-      // so they open a prompt rather than issuing a command.
-      Match.when("complete", () => enter({ kind: "reason", row })),
-      Match.when("kill", () => enter({ kind: "kill", row })),
-      Match.when("intervene", () => enter({ kind: "intervene", row })),
-      Match.when("retry", () => (task ? run(dispatcher.retry(task)) : screen.reject)),
-      Match.when("release", () => (task ? run(dispatcher.release(task)) : screen.reject)),
-      // Named by the workspace, not the task: an orphaned workspace is one
-      // whose task the store has deleted, and it is closed the same way.
-      Match.when("close", () =>
-        row.worker
-          ? run(dispatcher.close({ task: row.worker.task, repository: row.worker.repository }))
-          : screen.reject,
-      ),
-      Match.when("takeOver", () =>
-        row.worker ? run(dispatcher.focus(row.worker)) : screen.reject,
-      ),
-      Match.when("focus", () => (row.worker ? run(dispatcher.focus(row.worker)) : screen.reject)),
-      // A queue row carries its task as `ready` and a claimed one as `task`;
-      // the pin is on the id either way, which is the only part both have.
-      Match.when("pin", () => {
-        const id = row.ready?.id ?? row.task?.id;
-        return id ? run(dispatcher.togglePin(id)) : screen.reject;
-      }),
-      Match.when("descend", () => (target ? run(dispatcher.descend(target)) : screen.reject)),
-      Match.when("unassign", () => (target ? run(dispatcher.unassign(target)) : screen.reject)),
-      Match.when("onboard", () =>
-        row.project ? run(dispatcher.onboard(row.project)) : screen.reject,
-      ),
-      Match.when("adopt", () =>
-        row.unreviewed ? run(dispatcher.adopt(row.unreviewed)) : screen.reject,
-      ),
-      Match.exhaustive,
-    );
+    // These ask the operator a question before anything happens, so they open
+    // a prompt rather than issuing a command.
+    if (action === "complete") return yield* enter({ kind: "reason", row });
+    if (action === "kill") return yield* enter({ kind: "kill", row });
+    if (action === "intervene") return yield* enter({ kind: "intervene", row });
+    return yield* request(row, { action });
   });
 
   const moveView = (delta: number) =>
@@ -192,8 +162,7 @@ export const dashboard = Effect.gen(function* () {
     // pipeline. An uncommitted one has only a worktree, and reading that is
     // a diagnostic agent's job at a rung the operator picks.
     if (press.row === "review" && row.committed) {
-      const target = targetOf(row);
-      if (target) yield* run(dispatcher.reviewIntervention(target, undefined));
+      yield* request(row, { action: "intervene", how: "review", rung: undefined });
       return yield* enter(BROWSE);
     }
     const action = INTERVENTIONS.find((name) => name === press.row);
@@ -212,16 +181,8 @@ export const dashboard = Effect.gen(function* () {
       case "rung": {
         if (press.key === "esc") return yield* enter(BROWSE);
         if (press.key !== "enter") return;
-        const target = targetOf(mode.row);
-        const rung = press.row;
-        if (target && rung !== undefined)
-          yield* run(
-            mode.action === "continue"
-              ? dispatcher.continueAt(target, rung)
-              : mode.action === "diagnose"
-                ? dispatcher.diagnose(target, "diagnose", rung)
-                : dispatcher.reviewIntervention(target, rung),
-          );
+        if (press.row !== undefined)
+          yield* request(mode.row, { action: "intervene", how: mode.action, rung: press.row });
         return yield* enter(BROWSE);
       }
       case "reason": {
@@ -231,15 +192,13 @@ export const dashboard = Effect.gen(function* () {
         // The reason is the whole point of completing a task by hand: it is
         // what the log will say instead of a review's verdict.
         if (reason.length === 0) return yield* screen.reject;
-        if (mode.row.ready) yield* run(dispatcher.complete(mode.row.ready, reason));
+        yield* request(mode.row, { action: "complete", reason });
         return yield* enter(BROWSE);
       }
       case "kill": {
         if (press.key === "esc") return yield* enter(BROWSE);
         if (press.key !== "enter") return;
-        const target = targetOf(mode.row);
-        const reason = press.query.trim() || "operator killed this attempt";
-        if (target?.worker) yield* run(dispatcher.kill(target, reason));
+        yield* request(mode.row, { action: "kill", reason: press.query.trim() || KILL_REASON });
         return yield* enter(BROWSE);
       }
       case "log":
@@ -248,7 +207,9 @@ export const dashboard = Effect.gen(function* () {
     }
   });
 
-  yield* Effect.forkScoped(Stream.runForEach(dispatcher.state.changes, () => redraw()));
+  yield* Effect.forkScoped(
+    Stream.runForEach(SubscriptionRef.changes(dispatcher.state), () => redraw()),
+  );
   yield* Effect.forkScoped(Stream.runForEach(screen.keys, handle));
 
   // The age has to advance on its own clock: a tick publishes its reading and
@@ -293,10 +254,6 @@ type Mode =
       readonly action: Intervention;
     };
 
-/** The ways an intervention can resume a task, in the order they are offered. */
-const INTERVENTIONS = ["continue", "diagnose", "review"] as const;
-type Intervention = (typeof INTERVENTIONS)[number];
-
 const INTERVENTION_LABELS: Record<Intervention, string> = {
   continue: "resume the task at a rung you pick, keeping the worktree",
   diagnose: "send a diagnostic agent at what the last attempt left",
@@ -314,11 +271,6 @@ const BROWSE: Mode = { kind: "browse" };
  */
 const inputFor = (mode: Mode) =>
   mode.kind === "reason" || mode.kind === "kill" ? "answer" : "search";
-
-const targetOf = (row: ColumnRow): InterventionTarget | undefined => {
-  const task = row.task ?? row.ready;
-  return task ? { task, worker: row.worker } : undefined;
-};
 
 /**
  * Which view the operator ends up looking at, and whether attention just took

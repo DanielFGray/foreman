@@ -96,6 +96,7 @@ class World {
       }),
     roster: Effect.sync(() => [...this.workers.values()]),
     focus: () => Effect.void,
+    say: () => Effect.void,
     stop: (target: Worker, role: AgentRole) =>
       Effect.sync(() => {
         this.stopped.push([target.task, role]);
@@ -116,9 +117,8 @@ class World {
   };
 
   readonly prog = {
-    _tag: "Prog" as const,
     show: (id: string) => Effect.succeed(this.tasks.get(id) as Item),
-    lookup: (id: string) => Effect.succeed(Option.fromNullable(this.tasks.get(id))),
+    lookup: (id: string) => Effect.succeed(Option.fromNullishOr(this.tasks.get(id))),
     ready: () =>
       Effect.succeed(
         [...this.tasks.values()].filter(
@@ -247,10 +247,10 @@ class World {
       Effect.sync(() => this.update(id, (task) => ({ ...task, status: "done" }))),
     add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
+    countRound: () => Effect.succeed(1),
   };
 
   readonly repository = {
-    _tag: "Repository" as const,
     isClean: () =>
       Effect.succeed(
         this.clean === "clean"
@@ -265,6 +265,7 @@ class World {
         this.removed.push(branch);
         return this.branches.delete(branch);
       }),
+    // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
     setup: () => Effect.succeed(undefined),
     merge: () => Effect.succeed(this.landing),
     sweepUnpublishedMerges: () => Effect.succeed([]),
@@ -279,12 +280,10 @@ class World {
 /** The trials table, held in memory so a test can read what a tick appended. */
 const trialsFor = (world: World) =>
   Layer.succeed(Trials, {
-    _tag: "Trials",
     record: (trial: Trial) => Effect.sync(() => void world.trials.push(trial)),
   });
 
 const prompts = Layer.succeed(Prompts, {
-  _tag: "Prompts",
   author: () => Effect.succeed("author"),
   onboard: () => Effect.succeed("onboard"),
   review: () => Effect.succeed("review"),
@@ -320,7 +319,9 @@ const layerFor = (world: World) =>
   );
 
 const tick = (world: World) =>
-  Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world))));
+  Effect.runPromise(
+    Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+  );
 
 describe("Dispatcher tick", () => {
   test("kills a live attempt, logs the reason, and requeues without climbing", async () => {
@@ -330,9 +331,9 @@ describe("Dispatcher tick", () => {
     world.workers.set(task.id, live);
 
     await Effect.runPromiseExit(
-      Dispatcher.kill({ task, worker: live }, "tests caught the wrong path").pipe(
-        Effect.provide(layerFor(world)),
-      ),
+      Dispatcher.use((dispatcher) =>
+        dispatcher.kill({ task, worker: live }, "tests caught the wrong path"),
+      ).pipe(Effect.provide(layerFor(world))),
     );
 
     expect(world.stopped).toEqual([[task.id, "author"]]);
@@ -351,7 +352,9 @@ describe("Dispatcher tick", () => {
     world.workers.set(task.id, live);
 
     await Effect.runPromiseExit(
-      Dispatcher.kill({ task, worker: live }, "").pipe(Effect.provide(layerFor(world))),
+      Dispatcher.use((dispatcher) => dispatcher.kill({ task, worker: live }, "")).pipe(
+        Effect.provide(layerFor(world)),
+      ),
     );
     await tick(world);
 
@@ -643,13 +646,12 @@ describe("quota probing", () => {
   const countingQuota = () => {
     let calls = 0;
     const layer = Layer.succeed(Quota, {
-      _tag: "Quota" as const,
       usage: (provider: string) =>
         Effect.sync(() => {
           calls += 1;
           return { provider, plan: undefined, allowances: [] };
         }),
-    } as unknown as Quota);
+    });
     return { layer, calls: () => calls };
   };
 
@@ -688,8 +690,8 @@ describe("quota probing", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         for (const step of steps) {
-          if (step === "tick") yield* Dispatcher.tick;
-          else yield* Dispatcher.watchQuota(step === "watch");
+          if (step === "tick") yield* (yield* Dispatcher).tick;
+          else yield* (yield* Dispatcher).watchQuota(step === "watch");
         }
       }).pipe(Effect.provide(layerWith(quota, running, new World()))),
     );
@@ -731,7 +733,6 @@ describe("a spent account and the reviewer above it", () => {
   /** A Quota where each named provider is spent and every other has room. */
   const quotaSpending = (spent: ReadonlyArray<string>) =>
     Layer.succeed(Quota, {
-      _tag: "Quota" as const,
       usage: (provider: string) =>
         Effect.succeed({
           provider,
@@ -740,7 +741,7 @@ describe("a spent account and the reviewer above it", () => {
             ? [{ window: "monthly", usedPercent: 100, resetsAt: undefined }]
             : [],
         }),
-    } as unknown as Quota);
+    });
 
   /** Two rungs on two accounts, so a wall on one leaves the other spendable. */
   const layerFor = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
@@ -786,7 +787,11 @@ describe("a spent account and the reviewer above it", () => {
   };
 
   const tickWith = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
-    Effect.runPromise(Dispatcher.tick.pipe(Effect.provide(layerFor(world, spent, slots))));
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+        Effect.provide(layerFor(world, spent, slots)),
+      ),
+    );
 
   test("spreads one tick's slots across accounts rather than stacking them", async () => {
     // Every free slot reads the same allowances, so without spreading the whole

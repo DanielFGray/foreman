@@ -75,6 +75,14 @@ after task: no context bleeds between stages or unrelated projects. The author
 runs in the task workspace's own pane; only a reviewer splits a second pane
 beside it.
 
+## Driving it by hand
+
+Every dashboard key is also a subcommand, and so are the steps an agent
+coordinator needs: `foreman status`, `foreman dispatch <id>`, `foreman wait
+<id>`, `foreman prompt author|review <id>`. Each one reads the world once,
+does one thing and exits, so it works with or without a daemon running.
+`foreman --skill` prints how to use them.
+
 ## Projects you are working in
 
 A project whose checkout has uncommitted changes to tracked files is **held**:
@@ -319,40 +327,67 @@ rating — there are no price or power numbers to drift out of step with the lis
 and no map from author to reviewer, because both "who reads this" and "who tries
 next" fall out of the order.
 
-```jsonc
-"ladder": [
-  { "name": "deepseek", "harness": "opencode", "model": "opencode/deepseek-v4-pro" },
-  { "name": "sonnet",   "harness": "opencode", "model": "opencode/claude-sonnet-5" },
-  { "name": "claude",   "harness": "claude" },
-]
+The ladder is the `ladder` table of the model registry — the trials database the
+herd skill keeps at `~/.agents/model-trials.db` (`$FOREMAN_REGISTRY` points
+elsewhere). Foreman reads it at start and refuses to run without it: a second
+copy of the order in a config file would be a copy that can disagree. Each rung
+is a name, a model, and flags; the model's row in the `models` table says which
+harness runs it and at what thinking level, and foreman passes that level at
+launch (`--effort` for claude, `-c model_reasoning_effort=` for codex,
+`--thinking` for pi; opencode and cursor choose their own).
+
+```
+foreman ladder                 # print the ladder: state, trial record, launch arguments
+foreman ladder size            # landed slices and cost per success, by model and size
+foreman ladder drift           # rungs opencode no longer lists; free models no rung names
+foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
+                               # [--context-tokens N] [--input-tokens N]
+                               # [--cache-read-tokens N] [--cache-write-tokens N]
+                               # [--output-tokens N]
+                               # advise an economical enabled rung from models.dev
+                               # list prices and current subscription quotas (no dispatch)
+foreman ladder edit            # edit it in $EDITOR
+foreman ladder disable <rung>  # stop dispatching a rung, keeping its rank
+foreman ladder enable <rung>
 ```
 
-`harness` is a herdr agent kind — the program that runs. `model` is the model
-that harness must run; the multiplexer adapter knows how each one is told, which
-is mostly `--model` but not uniformly. A bare string is a rung that is only a
-harness, running whatever that program defaults to. Two rungs may share a
-harness and differ only in model, which is the point: without the model, every
-rung would be the same rung.
+`suggest` is advisory only. It does not change rung order or dispatch anyone:
+`authorFor` and failure evidence stay authoritative. It prices a four-part token
+budget (uncached input, cache read, cache write, output) from the median of
+recorded trials (optionally filtered with `--size`), or from the token flags when
+you pass them, against exact `models.models_dev` identities in the models.dev
+catalog (`--catalog` for a local `api.json`). Subscription remaining percentages
+and reset times are shown as observed facts, never as dollars or predicted runs.
+Unknown price, quota or billing stays visibly unknown. An `unmetered` rung is not
+walled by a spent account allowance.
 
-`provider` is optional and names the account a rung spends. It is read off the
-model's `<provider>/` prefix wherever there is one, so most ladders never state
-it; the claude harness always spends the claude.ai account, and any other rung
-that is only a harness has to be told, or foreman cannot tell whether that
-rung has any allowance left before it dispatches. `foreman quota` reports what
-each account has left and which rungs are stopped, and a rung whose account is
-spent is stepped over — the next rung that can pay takes the work, and if none
-can the task waits in the queue with nothing recorded against it, because an
-empty allowance says nothing about the work or the model.
+`edit` opens one JSON object per rung, cheapest first. Reordering is moving a
+block; the result is validated (known models, unique names, at least one rung on)
+and written in one transaction, so a typo changes nothing. A rung may carry
+`provider`, `unmetered` and `note`.
 
-`enabled` is optional and defaults to true. Setting it false retires a rung
-without deleting it, which keeps its rank: the failures already recorded against
-it still position every task that earned its way past it.
+A rung's `model` must already have a row in `models`; add that row with the herd
+skill's `schema-registry.sql`.
+
+`provider` names the account a rung spends. It is read off the model's
+`<provider>/` prefix wherever there is one, so most rungs never state it; the
+claude harness always spends the claude.ai account, and any other rung that is
+only a harness has to be told, or foreman cannot tell whether that rung has any
+allowance left before it dispatches. `foreman quota` reports what each account has
+left and which rungs are stopped, and a rung whose account is spent is stepped
+over — the next rung that can pay takes the work, and if none can the task waits
+in the queue with nothing recorded against it, because an empty allowance says
+nothing about the work or the model.
+
+`enabled` defaults to true. Disabling a rung retires it without deleting it,
+which keeps its rank: the failures already recorded against it still position
+every task that earned its way past it.
 
 A task names no rung. What it records is evidence: a `failed-by:<rung>` label for
 each rung that was tried and was not enough, and the retry count as an
 `attempt:<rung>:<n>` label. Foreman picks the author at dispatch — the cheapest
-rung that is configured, enabled, funded, and above every rung recorded as having
-failed this task. So a rung commented out of the config, or an account with
+rung that is in the ladder, enabled, funded, and above every rung recorded as having
+failed this task. So a rung disabled in the registry, or an account with
 nothing left, moves work along instead of stranding it.
 
 A failure is written on real evidence only: a reviewer sent the work back, the
@@ -458,12 +493,6 @@ strictly.
     "tsdoctor",
   ],
   "slots": 3,
-  // Cheapest first. Order is the rating; the reviewer is the rung above.
-  "ladder": [
-    { "name": "deepseek", "harness": "opencode", "model": "opencode/deepseek-v4-pro" },
-    { "name": "sonnet", "harness": "opencode", "model": "opencode/claude-sonnet-5" },
-    "claude",
-  ],
   // How many attempts one rung gets before an unfinished task climbs to the
   // next. A crash, a timeout or a usage wall says nothing about the model, so
   // the first attemptsPerRung - 1 retry in place; a reviewer rejection or a

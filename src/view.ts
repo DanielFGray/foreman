@@ -9,7 +9,7 @@ import type {
   Unreviewed,
 } from "./dispatcher.ts";
 import { exhausted, type Allowance } from "./quota.ts";
-import { resetsLabel } from "./format.ts";
+import { resetsLabel, usedLabel } from "./format.ts";
 import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import {
@@ -150,7 +150,7 @@ export interface ColumnRow {
   readonly committed: boolean;
 }
 
-const ACTIONS_LIST = [
+export const ACTIONS_LIST = [
   "complete",
   "retry",
   "release",
@@ -482,8 +482,8 @@ export const previewOf = (row: ColumnRow): string => {
       ...(row.provider.unreadable !== undefined
         ? [`unreadable  ${row.provider.unreadable}`]
         : row.provider.allowances.map(
-            (allowance) =>
-              `  ${allowance.window.padEnd(16)} ${String(allowance.usedPercent).padStart(3)}%${
+            (allowance, _, all) =>
+              `  ${allowance.window.padEnd(Math.max(...all.map((a) => a.window.length)))}  ${usedLabel(allowance.usedPercent).padStart(4)}${
                 allowance.resetsAt === undefined
                   ? ""
                   : `  resets ${resetsLabel(allowance.resetsAt)}`
@@ -820,7 +820,7 @@ const quotaRow = (provider: Provider): ColumnRow => {
 };
 
 const windowLabel = (allowance: Allowance): string =>
-  `${allowance.window} ${allowance.usedPercent}%${
+  `${allowance.window} ${usedLabel(allowance.usedPercent)}${
     allowance.resetsAt === undefined ? "" : ` resets ${resetsLabel(allowance.resetsAt)}`
   }`;
 

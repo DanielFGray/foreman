@@ -24,8 +24,8 @@
  *   bun scripts/relabel.ts            # print what would change
  *   bun scripts/relabel.ts --apply    # do it
  */
-import { Command, CommandExecutor } from "@effect/platform";
-import { BunContext, BunRuntime } from "@effect/platform-bun";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Effect, Layer, Option, Schema } from "effect";
 import { settings, Settings } from "../src/config.ts";
 import { type Ladder, rankOf } from "../src/ladder.ts";
@@ -45,13 +45,13 @@ const RENAMED: ReadonlyArray<readonly [string, string]> = [
 
 const program = Effect.gen(function* () {
   const apply = process.argv.includes("--apply");
-  const executor = yield* CommandExecutor.CommandExecutor;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { ladder } = yield* Settings;
 
-  const run = (...args: ReadonlyArray<string>) => executor.string(Command.make("prog", ...args));
+  const run = (...args: ReadonlyArray<string>) => spawner.string(ChildProcess.make("prog", args));
 
   const tasks = yield* run("list", "--json").pipe(
-    Effect.flatMap(Schema.decodeUnknown(Schema.parseJson(Schema.Array(Task)))),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Task)))),
   );
 
   for (const task of tasks) {
@@ -125,7 +125,9 @@ const rewrite = (
 BunRuntime.runMain(
   program.pipe(
     Effect.provide(
-      settings({ slots: Option.none(), running: false }).pipe(Layer.provideMerge(BunContext.layer)),
+      settings({ slots: Option.none(), running: false }).pipe(
+        Layer.provideMerge(BunServices.layer),
+      ),
     ),
   ),
 );

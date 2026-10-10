@@ -1,6 +1,6 @@
-import { Command, CommandExecutor } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Effect, Option, Schema as S, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { BunServices } from "@effect/platform-bun";
+import { Context, Effect, Layer, Option, Schema as S, Stream } from "effect";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import type { Rung } from "./ladder.ts";
 
@@ -11,18 +11,14 @@ import type { Rung } from "./ladder.ts";
  * prog with an in-house store is a matter of writing another implementation of
  * this service. Nothing above this file constructs a prog command.
  */
-export class Prog extends Effect.Service<Prog>()("Prog", {
-  dependencies: [BunContext.layer],
-  accessors: true,
-  effect: Effect.gen(function* () {
-    const executor = yield* CommandExecutor.CommandExecutor;
+export class Prog extends Context.Service<Prog>()("Prog", {
+  make: Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const run = (...args: Array<string>) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const process = yield* executor.start(
-            Command.make("prog", ...args).pipe(Command.stdout("pipe"), Command.stderr("pipe")),
-          );
+          const process = yield* spawner.spawn(ChildProcess.make("prog", args));
           const [exitCode, stdout, stderr] = yield* Effect.all(
             [
               process.exitCode,
@@ -49,10 +45,10 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         ),
       );
 
-    const runJson = <A, I>(schema: S.Schema<A, I>, ...args: Array<string>) =>
+    const runJson = <A, I>(schema: S.Codec<A, I>, ...args: Array<string>) =>
       run(...args).pipe(
         Effect.flatMap((out) =>
-          S.decodeUnknown(S.parseJson(schema))(out).pipe(
+          S.decodeUnknownEffect(S.fromJsonString(schema))(out).pipe(
             Effect.mapError(
               (cause) => new ProgError({ command: args.join(" "), detail: String(cause) }),
             ),
@@ -73,9 +69,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
     const lookup = (task: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const process = yield* executor.start(
-            Command.make("prog", "show", task, "--json").pipe(Command.stdout("pipe")),
-          );
+          const process = yield* spawner.spawn(ChildProcess.make("prog", ["show", task, "--json"]));
           const [exitCode, stdout] = yield* Effect.all(
             [process.exitCode, Stream.decodeText(process.stdout).pipe(Stream.mkString)],
             { concurrency: 2 },
@@ -88,7 +82,7 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
         ),
         Effect.flatMap((result) =>
           result.exitCode === 0
-            ? S.decodeUnknown(S.parseJson(Item))(result.stdout).pipe(
+            ? S.decodeUnknownEffect(S.fromJsonString(Item))(result.stdout).pipe(
                 Effect.mapError(
                   (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
                 ),
@@ -188,13 +182,26 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
        * Records which rung of the ladder did the work, so review can pick the next.
        *
        * Replaces earlier author and reviewer ownership. A task can be attempted
-       * more than once, and its next author starts a new lifecycle stage.
+       * more than once, and its next author starts a new lifecycle stage. The
+       * correction count goes too: it counts this author's rounds, not the task's.
        */
       attribute: (task: string, kind: string) =>
-        removeKinds(task, [BY, REVIEW_BY, APPROVED, SATISFIED]).pipe(
+        removeKinds(task, [BY, REVIEW_BY, APPROVED, SATISFIED, ROUNDS]).pipe(
           Effect.andThen(run("label", task, `${BY}:${kind}`)),
           Effect.asVoid,
         ),
+
+      /**
+       * Counts one more correction round sent to the current author, and
+       * answers the new count.
+       */
+      countRound: (task: string) =>
+        Effect.gen(function* () {
+          const next = (countOf(yield* show(task), ROUNDS) ?? 0) + 1;
+          yield* removeKinds(task, [ROUNDS]);
+          yield* run("label", task, `${ROUNDS}:${next}`);
+          return next;
+        }),
 
       /** Records that a reviewer, rather than the author, owns the live pane. */
       assignReview: (task: string, kind: string) =>
@@ -371,7 +378,9 @@ export class Prog extends Effect.Service<Prog>()("Prog", {
       complete: (task: string) => run("done", task).pipe(Effect.asVoid),
     } as const;
   }),
-}) {}
+}) {
+  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
+}
 
 /** A task the queue may hand out. Epics are never ready; only tasks are. */
 export const ReadyTask = S.Struct({
@@ -393,15 +402,21 @@ export const ReadyTask = S.Struct({
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
-/** Status values returned by prog for epics and tasks. */
-export const TaskStatus = S.Literal(
+/**
+ * Status values returned by prog for epics and tasks. Every one prog can
+ * write, including those foreman never sets: one unknown status fails the
+ * decode of the whole list it arrives in.
+ */
+export const TaskStatus = S.Literals([
+  "proposed",
   "draft",
   "open",
   "in_progress",
+  "blocked",
   "reviewing",
   "done",
   "canceled",
-);
+]);
 export type TaskStatus = typeof TaskStatus.Type;
 
 export const Item = S.Struct({
@@ -599,6 +614,27 @@ const attemptFor = (label: string, rung: string): number | undefined => {
 export const BY = "by";
 export const REVIEW_BY = "review-by";
 
+/**
+ * How big a slice is, as the coordinator judged it when filing: `size:1` one
+ * file or rule, `size:2` one package, `size:3` crosses packages. Larger is
+ * allowed. An integer, so the trials record can compare sizes by order.
+ */
+export const SIZE = "size";
+
+/** How many correction rounds the current author has been sent. */
+export const ROUNDS = "rounds";
+
+/** The positive integer a label of this kind carries, or nothing. */
+export const countOf = (
+  item: { readonly labels: ReadonlyArray<string> },
+  kind: string,
+): number | undefined => {
+  const values = valuesOfKind(item.labels, kind)
+    .map(Number)
+    .filter((value) => Number.isInteger(value) && value >= 0);
+  return values.length === 0 ? undefined : Math.max(...values);
+};
+
 /** Kind of the label recording that a rung was tried here and was not enough. */
 export const FAILED_BY = "failed-by";
 
@@ -649,4 +685,8 @@ export const diagnosticIntent = (item: {
 export class ProgError extends S.TaggedError<ProgError>()("ProgError", {
   command: S.String,
   detail: S.String,
-}) {}
+}) {
+  override get message() {
+    return `${this.command}: ${this.detail}`;
+  }
+}

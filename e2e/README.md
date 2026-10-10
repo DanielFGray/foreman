@@ -6,8 +6,12 @@ two earlier verification runs claimed real tasks that had to be unwound by
 hand.
 
 ```
-foreman --config e2e/config.jsonc --slots 1
+sqlite3 /tmp/foreman-e2e.db < e2e/registry.sql
+FOREMAN_REGISTRY=/tmp/foreman-e2e.db foreman --config e2e/config.jsonc --slots 1
 ```
+
+`registry.sql` is a three-rung scratch ladder, so the rig climbs without
+touching the real registry.
 
 The project is `~/build/foreman-e2e-probe`, a git repository with a green
 `bun test`. File a task in the prog project of the same name at priority 2 —

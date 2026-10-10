@@ -14,6 +14,9 @@ import {
   type Item,
 } from "./prog.ts";
 
+const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
+  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default)));
+
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
   title: "Test task",
@@ -132,18 +135,44 @@ describe("clearReview against a live store", () => {
       await Bun.$`prog add "returned approval" -p foreman -l approved -l review-by-x`.text()
     ).trim();
 
-    await Effect.runPromise(Prog.clearReview(id).pipe(Effect.provide(Prog.Default)));
-    const after = await Effect.runPromise(Prog.show(id).pipe(Effect.provide(Prog.Default)));
+    await run((prog) => prog.clearReview(id));
+    const after = await run((prog) => prog.show(id));
 
     expect(after.labels).not.toContain("approved");
     expect(after.labels).not.toContain("review-by:x");
   });
 
+  // One status the schema does not name fails the decode of the whole list,
+  // which drops every epic's progress for that project.
+  test("reads an epic's children whatever status prog filed them at", async () => {
+    const epic = (await Bun.$`prog add "epic" -p foreman -e`.text()).trim().split("\n")[0]!;
+    for (const status of ["proposed", "draft", "blocked"]) {
+      await Bun.$`prog add ${status} -p foreman --parent ${epic} --status ${status}`.quiet();
+    }
+
+    const children = await run((prog) => prog.children(epic));
+
+    expect(children.map((child) => child.status).sort()).toEqual(["blocked", "draft", "proposed"]);
+  });
+
+  // A correction round counts against the author who received it, so the next
+  // author's trial row must not inherit it.
+  test("counts correction rounds and resets them for a new author", async () => {
+    const id = (await Bun.$`prog add "corrected" -p foreman`.text()).trim().split("\n")[0]!;
+
+    expect(await run((prog) => prog.countRound(id))).toBe(1);
+    expect(await run((prog) => prog.countRound(id))).toBe(2);
+    await run((prog) => prog.attribute(id, "cheap"));
+
+    const after = await run((prog) => prog.show(id));
+    expect(after.labels).toEqual(["by:cheap"]);
+  });
+
   test("leaves a task that never carried the labels untouched", async () => {
     const id = (await Bun.$`prog add "plain return" -p foreman`.text()).trim();
 
-    await Effect.runPromise(Prog.clearReview(id).pipe(Effect.provide(Prog.Default)));
-    const after = await Effect.runPromise(Prog.show(id).pipe(Effect.provide(Prog.Default)));
+    await run((prog) => prog.clearReview(id));
+    const after = await run((prog) => prog.show(id));
 
     expect(after.labels).toEqual([]);
   });
@@ -151,8 +180,8 @@ describe("clearReview against a live store", () => {
 
 describe("command failures", () => {
   test("reports a non-zero prog exit status", async () => {
-    await expect(
-      Effect.runPromise(Prog.complete("ts-does-not-exist").pipe(Effect.provide(Prog.Default))),
-    ).rejects.toThrow("done ts-does-not-exist");
+    const error = await run((prog) => Effect.flip(prog.complete("ts-does-not-exist")));
+
+    expect(error.command).toContain("done ts-does-not-exist");
   });
 });

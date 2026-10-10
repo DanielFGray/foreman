@@ -9,15 +9,14 @@ import { exhausted, freeAt, type Usage } from "./quota.ts";
  * The date appears only when the reset is not today, because a reset a day
  * out is ambiguous without it while one this evening is not.
  */
-export const resetsLabel = (at: Date): string => {
-  const now = new Date();
+export const resetsLabel = (at: Date, now: Date = new Date()): string => {
   const minutes = Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 60000));
   const sameDay =
     at.getFullYear() === now.getFullYear() &&
     at.getMonth() === now.getMonth() &&
     at.getDate() === now.getDate();
   return `in ${Duration.format(Duration.minutes(minutes))} at ${DateTime.formatLocal(
-    DateTime.unsafeMake(at),
+    DateTime.makeUnsafe(at),
     {
       ...(sameDay ? {} : { month: "short", day: "numeric" }),
       hour: "numeric",
@@ -25,6 +24,16 @@ export const resetsLabel = (at: Date): string => {
     },
   )}`;
 };
+
+/**
+ * A window's spent share as a whole percent, "28%".
+ *
+ * Providers report fractions — cursor derives its figure from a ratio — and a
+ * column of fourteen-digit decimals is unreadable. Rounded down, because the
+ * gate walls a window at 100: a display that rounds 99.6 up would show a spent
+ * account the fleet is still dispatching to.
+ */
+export const usedLabel = (usedPercent: number): string => `${Math.floor(usedPercent)}%`;
 
 /** One provider's quota reading, read or unreadable. */
 export type QuotaReading =

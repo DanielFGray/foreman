@@ -1,5 +1,17 @@
-import { Command, FetchHttpClient, FileSystem, Path } from "@effect/platform";
-import { Effect, Layer, Match, Option, Ref, Schedule, Schema, Stream } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Ref,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 
 /**
  * The terminal, as the dashboard needs it: a list of rows with a preview each,
@@ -15,7 +27,7 @@ import { Effect, Layer, Match, Option, Ref, Schedule, Schema, Stream } from "eff
  * reading and pushed here whole, so the screen is a projection rather than a
  * thing to keep in step.
  */
-export class Screen extends Effect.Tag("Screen")<
+export class Screen extends Context.Service<
   Screen,
   {
     /** Replaces everything on screen with this frame. */
@@ -56,7 +68,7 @@ export class Screen extends Effect.Tag("Screen")<
     /** Closes the screen, ending `closed`. */
     readonly close: Effect.Effect<void, ScreenError>;
   }
->() {}
+>()("Screen") {}
 
 /** One selectable line, its identity, and everything behind it. */
 export interface ScreenRow {
@@ -125,10 +137,7 @@ export type InputMode =
  * something is foreman's rule, not the terminal's: `view.ts` owns the map and
  * this owns the terminal. A second implementation would take the same list.
  */
-export const fzfScreen = (keys: ReadonlyArray<string>) =>
-  Layer.scoped(Screen, running(keys)).pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, globalThis.fetch)),
-  );
+export const fzfScreen = (keys: ReadonlyArray<string>) => Layer.effect(Screen, running(keys));
 
 const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
@@ -176,16 +185,16 @@ const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
     });
   });
 
-  const fzf = yield* Command.make(
-    "fzf",
-    ...args(keys, { rowsFile, socket, keysFile, placeFile }),
-  ).pipe(
-    Command.stdin("inherit"),
-    Command.stdout("inherit"),
-    Command.stderr("inherit"),
-    Command.start,
-    Effect.mapError((cause) => new ScreenError({ action: "spawn", cause: String(cause) })),
-  );
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const fzf = yield* spawner
+    .spawn(
+      ChildProcess.make("fzf", args(keys, { rowsFile, socket, keysFile, placeFile }), {
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      }),
+    )
+    .pipe(Effect.mapError((cause) => new ScreenError({ action: "spawn", cause: String(cause) })));
 
   // The socket appears when fzf is ready for it, which is a moment after the
   // process exists. Waiting for the file is the readiness signal; there is
@@ -196,7 +205,7 @@ const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
       (ready) => ready,
       () => new ScreenError({ action: "start", cause: "fzf never opened its socket" }),
     ),
-    Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.upTo("10 seconds"))),
+    Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.upTo({ duration: "10 seconds" }))),
     Effect.mapError((cause) =>
       cause instanceof ScreenError
         ? cause
@@ -262,12 +271,7 @@ const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
         yield* post(`change-header(${safe(frame.header)})`);
         yield* post(`change-prompt(${safe(frame.prompt)})+reload-sync(cat ${rowsFile})`);
       }).pipe(
-        Effect.mapError(
-          Match.valueTags({
-            BadArgument: (cause) => new ScreenError({ action: "show", cause: String(cause) }),
-            SystemError: (cause) => new ScreenError({ action: "show", cause: String(cause) }),
-          }),
-        ),
+        Effect.mapError((cause) => new ScreenError({ action: "show", cause: String(cause) })),
       ),
 
     header: (text) => post(`change-header(${safe(text)})`),
@@ -276,7 +280,7 @@ const running = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
 
     keys: fs.watch(keysFile).pipe(
       Stream.mapEffect(() => drain),
-      Stream.flattenIterables,
+      Stream.flattenIterable,
       Stream.filter((line) => line.length > 0),
       Stream.map(parseKey),
       Stream.mapError((cause) => new ScreenError({ action: "read", cause: String(cause) })),

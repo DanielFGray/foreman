@@ -3,15 +3,6 @@
   // backlog (foreman, prog, ...) is invisible to a daemon started with this.
   "projects": [{ "name": "foreman-e2e-probe", "verify": "bun test" }],
   "slots": 3,
-  // Two rungs, so a probe run exercises a climb rather than retrying the same
-  // model under a different name.
-  "ladder": [
-    { "name": "cheap", "harness": "opencode", "model": "opencode/deepseek-v4-pro" },
-    { "name": "strong", "harness": "opencode", "model": "opencode/claude-sonnet-5" },
-    // A rung the account's percentage does not describe, so the config decode
-    // has a field carrying the flag to prove it survives the round trip.
-    { "name": "promo", "harness": "opencode", "model": "opencode-go/ox-alpha-free", "unmetered": true },
-  ],
   "pollSeconds": 5,
   "staleAfterHours": 24,
   "landedWindowDays": 7,

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { Effect } from "effect";
-import { isResearch, type Item } from "./prog.ts";
+import { Context, Effect, Layer } from "effect";
+import { countOf, isResearch, ROUNDS, SIZE, type Item } from "./prog.ts";
 import type { TaskPhase } from "./task-phase.ts";
 
 /**
@@ -8,11 +8,11 @@ import type { TaskPhase } from "./task-phase.ts";
  * database keeps.
  *
  * The rows foreman can state are the ones it already derives: which model ran,
- * on which account, at what kind of work, and how the run ended. Two columns
- * stay null — `rounds`, which counts a review's correction rounds, and
- * `report_accurate`, which is a judgement about the author's report. Both are
- * the coordinator's to record; writing a number foreman cannot derive would put
- * a false fact in the table the operator chooses models from.
+ * on which account, at what kind of work, and how the run ended. `size` and
+ * `rounds` come from the task's `size:<n>` and `rounds:<n>` labels, and are null
+ * where the label is absent. `report_accurate` stays null: it is a judgement
+ * about the author's report, and writing a value foreman cannot derive would
+ * put a false fact in the table the operator chooses models from.
  *
  * The `defects` table is left alone for the same reason: a defect is a review
  * finding, and foreman reads findings as prose in a task log rather than as
@@ -30,6 +30,9 @@ export interface Trial {
   readonly source: "live";
   readonly evidence: string;
   readonly notes: string;
+  readonly size: number | null;
+  /** Correction rounds this author was sent; an author row only. */
+  readonly rounds: number | null;
 }
 
 export type Work = "build" | "research" | "review";
@@ -141,6 +144,9 @@ export const trialFor = (input: {
     source: "live",
     evidence: input.branch,
     notes: input.phase,
+    // `||`, not `??`: the table starts sizes at 1, so a `size:0` label reads as none.
+    size: countOf(input.task, SIZE) || null,
+    rounds: input.role === "author" ? (countOf(input.task, ROUNDS) ?? null) : null,
   };
 };
 
@@ -187,9 +193,8 @@ export const appendTo =
         const wanted: Record<string, string | number | null> = {
           ...trial,
           closed_at: new Date().toISOString(),
-          // The two judgements foreman cannot make, stated as absent rather than
-          // guessed: the column is nullable precisely for a row written without them.
-          rounds: null,
+          // The judgement foreman cannot make, stated as absent rather than
+          // guessed: the column is nullable precisely for a row written without it.
           report_accurate: null,
         };
         const columns = Object.keys(wanted).filter((name) => declared.includes(name));
@@ -207,9 +212,11 @@ export const appendTo =
       // The cause, not the error: opening a file that is not there *throws*, which
       // makes it a defect, and `Effect.ignore` would let it through to take the
       // tick down. A skipped row is the promised outcome, so the defect is caught.
-      Effect.catchAllDefect((defect) => Effect.logDebug(`trials row skipped: ${defect}`)),
+      Effect.catchDefect((defect) => Effect.logDebug(`trials row skipped: ${defect}`)),
     );
 
-export class Trials extends Effect.Service<Trials>()("Trials", {
-  effect: Effect.succeed({ record: appendTo(databasePath()) }),
-}) {}
+export class Trials extends Context.Service<Trials>()("Trials", {
+  make: Effect.succeed({ record: appendTo(databasePath()) }),
+}) {
+  static readonly Default = Layer.effect(this, this.make);
+}

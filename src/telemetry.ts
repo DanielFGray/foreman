@@ -1,5 +1,5 @@
-import { FetchHttpClient } from "@effect/platform";
-import { OtlpMetrics, OtlpSerialization, OtlpTracer } from "@effect/opentelemetry";
+import { FetchHttpClient } from "effect/http";
+import { OtlpMetrics, OtlpSerialization, OtlpTracer } from "effect/observability";
 import { hostname } from "node:os";
 import { Effect, Layer } from "effect";
 import { Settings } from "./config.ts";
@@ -36,11 +36,11 @@ export const VERSION = "0.1.0";
  * Effect's logger, which foreman has replaced with a file. A telemetry layer
  * writing to the terminal would tear the dashboard, which owns it.
  *
- * Traces and metrics only. `@effect/opentelemetry` will also ship logs, but
+ * Traces and metrics only. `effect/observability` also ships `OtlpLogger`, but
  * foreman's log is one file that the dashboard reads back, and a second
  * destination for it is a separate decision from measuring the ladder.
  */
-export const telemetry: Layer.Layer<never, never, Settings> = Layer.unwrapEffect(
+export const telemetry: Layer.Layer<never, never, Settings> = Layer.unwrap(
   Settings.pipe(
     Effect.map((config) => {
       // Identity, not decoration: several daemons can report to one gateway,

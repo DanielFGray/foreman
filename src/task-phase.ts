@@ -14,7 +14,7 @@ export interface TaskPhaseInput {
 }
 
 /** One settled task's next handling, derived from the current world. */
-export const TaskPhase = Schema.Literal(
+export const TaskPhase = Schema.Literals([
   "Landed",
   "Canceled",
   "ReviewReturned",
@@ -27,7 +27,7 @@ export const TaskPhase = Schema.Literal(
   "ReviewStopped",
   "Residue",
   "Unfinished",
-);
+]);
 export type TaskPhase = typeof TaskPhase.Type;
 
 /** Classifies one non-working owned task before settle performs its effects. */

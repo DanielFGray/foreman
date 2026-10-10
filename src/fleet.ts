@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 
 /**
  * The multiplexer, as foreman needs it.
@@ -13,7 +13,7 @@ import { Effect, Schema } from "effect";
  * workspace showing it are one idea, and splitting them across two owners is
  * what put every worker in whichever window happened to be focused.
  */
-export class Fleet extends Effect.Tag("Fleet")<
+export class Fleet extends Context.Service<
   Fleet,
   {
     /**
@@ -60,6 +60,17 @@ export class Fleet extends Effect.Tag("Fleet")<
      */
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
 
+    /**
+     * Sends a message to one live role's agent, returning once it is working
+     * on it. How an agent is steered or sent a correction without anyone
+     * looking its pane up by hand.
+     */
+    readonly say: (
+      worker: Worker,
+      role: AgentRole,
+      text: string,
+    ) => Effect.Effect<void, FleetError>;
+
     /** Brings a task's workspace to the front so a human can take over. */
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;
 
@@ -98,7 +109,7 @@ export class Fleet extends Effect.Tag("Fleet")<
      */
     readonly notify: (title: string, body: string) => Effect.Effect<void, FleetError>;
   }
->() {}
+>()("Fleet") {}
 
 export interface OpenOptions {
   readonly task: string;
@@ -133,6 +144,9 @@ export interface SpawnOptions {
    * program defaults to — so every rung would be the same rung.
    */
   readonly model: string | undefined;
+
+  /** The rung's thinking level; the adapter maps it to the harness's flag. */
+  readonly thinking?: string | undefined;
   readonly prompt: string;
   readonly role: AgentRole;
 }
@@ -151,7 +165,7 @@ export interface AgentIdentity {
  * author again because the reviewer reads what the author produced, and calling
  * it an author would have it refuse the pane the author is still sitting in.
  */
-export const AgentRole = Schema.Literal("author", "review");
+export const AgentRole = Schema.Literals(["author", "review"]);
 export type AgentRole = Schema.Schema.Type<typeof AgentRole>;
 
 /**
@@ -214,7 +228,11 @@ export type WorkerState = "working" | "settled" | "blocked" | "gone";
 export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
   operation: Schema.String,
   detail: Schema.String,
-}) {}
+}) {
+  override get message() {
+    return `${this.operation}: ${this.detail}`;
+  }
+}
 
 /** Namespaced so foreman's workspaces and branches are obvious at a glance. */
 export const labelFor = (task: string): string => `foreman/${task}`;

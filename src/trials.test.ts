@@ -73,8 +73,20 @@ describe("trialFor", () => {
       // a crash from an agent that lost track, and neither can the table.
       outcome: "handed-off",
       source: "live",
+      size: null,
+      rounds: null,
       evidence: "foreman/ts-1",
       notes: "Unfinished",
+    });
+  });
+
+  test("reads size and the author's correction rounds from their labels", () => {
+    const labelled = task({ labels: ["size:2", "rounds:1"] });
+    expect(trialFor(run({ task: labelled }))).toMatchObject({ size: 2, rounds: 1 });
+    // The rounds were the author's; a reviewer's row does not inherit them.
+    expect(trialFor(run({ task: labelled, role: "review" }))).toMatchObject({
+      size: 2,
+      rounds: null,
     });
   });
 

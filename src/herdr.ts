@@ -1,6 +1,6 @@
-import { Command, CommandExecutor } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Either, Effect, Layer, Match, Schema as S, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { BunServices } from "@effect/platform-bun";
+import { Result, Effect, Layer, Match, Schema as S, Stream } from "effect";
 import {
   AgentRole,
   type AttachOptions,
@@ -25,7 +25,7 @@ import {
 export const HerdrFleet = Layer.effect(
   Fleet,
   Effect.gen(function* () {
-    const executor = yield* CommandExecutor.CommandExecutor;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     /**
      * Runs herdr and reports what it actually did.
@@ -40,9 +40,7 @@ export const HerdrFleet = Layer.effect(
     const exec = (operation: string, args: ReadonlyArray<string>) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const process = yield* executor.start(
-            Command.make("herdr", ...args).pipe(Command.stdout("pipe"), Command.stderr("pipe")),
-          );
+          const process = yield* spawner.spawn(ChildProcess.make("herdr", args));
           const [exitCode, stdout, stderr] = yield* Effect.all(
             [
               process.exitCode,
@@ -64,10 +62,10 @@ export const HerdrFleet = Layer.effect(
         ),
       );
 
-    const herdrJson = <A, I>(schema: S.Schema<A, I>, operation: string, ...args: Array<string>) =>
+    const herdrJson = <A, I>(schema: S.Codec<A, I>, operation: string, ...args: Array<string>) =>
       herdr(operation, ...args).pipe(
         Effect.flatMap((out) =>
-          S.decodeUnknown(S.parseJson(schema))(out).pipe(
+          S.decodeUnknownEffect(S.fromJsonString(schema))(out).pipe(
             Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })),
           ),
         ),
@@ -441,7 +439,7 @@ export const HerdrFleet = Layer.effect(
                     options.kind,
                     "--pane",
                     pane,
-                    ...(options.model ? ["--", "--model", options.model] : []),
+                    ...launchArguments(options),
                   );
             if (options.kind === "opencode") {
               yield* startOpencode(pane, agent, worker.directory, options.model);
@@ -459,7 +457,7 @@ export const HerdrFleet = Layer.effect(
                 ? options.model
                 : yield* herdrJson(AgentEnvelope, "spawn metadata", "agent", "get", agent).pipe(
                     Effect.map((info) => info.result.agent.tokens?.["model"]),
-                    Effect.catchAll((error) =>
+                    Effect.catch((error) =>
                       Effect.logWarning(`agent metadata unavailable for ${agent}: ${error}`).pipe(
                         Effect.as(native.result.agent.tokens?.["model"]),
                       ),
@@ -472,6 +470,26 @@ export const HerdrFleet = Layer.effect(
               split ? herdr("spawn", "pane", "close", pane).pipe(Effect.ignore) : Effect.void,
             ),
           );
+        }),
+
+      say: (worker: Worker, role: AgentRole, text: string) =>
+        Effect.gen(function* () {
+          const panes = (yield* herdrJson(
+            PaneList,
+            "say",
+            "pane",
+            "list",
+            "--workspace",
+            worker.workspace,
+          )).result.panes;
+          const pane = panes.find((candidate) => candidate.label === paneLabelFor(role));
+          if (!pane) {
+            return yield* new FleetError({
+              operation: "say",
+              detail: `${worker.task} has no ${role} pane`,
+            });
+          }
+          yield* prompt(agentNameFor(pane.pane_id), text);
         }),
 
       stop: (worker: Worker, role: AgentRole) =>
@@ -522,7 +540,7 @@ export const HerdrFleet = Layer.effect(
                   worker.workspace,
                   "--force",
                 ).pipe(
-                  Effect.orElse(() =>
+                  Effect.catch(() =>
                     options.repository
                       ? removeWorktreeByAdoption(options.repository, options.task)
                       : Effect.void,
@@ -547,7 +565,7 @@ export const HerdrFleet = Layer.effect(
         }),
     };
   }),
-).pipe(Layer.provide(BunContext.layer));
+).pipe(Layer.provide(BunServices.layer));
 
 /** herdr dropped the prompt because the agent was not listening yet. */
 class Stalled extends S.TaggedError<Stalled>()("Stalled", {}) {}
@@ -595,11 +613,11 @@ const ErrorEnvelope = S.Struct({
 });
 
 const envelopeError = (text: string): { code: string; message: string } | undefined => {
-  const parsed = S.decodeUnknownEither(S.parseJson(ErrorEnvelope))(text);
-  if (Either.isLeft(parsed) || parsed.right.error === undefined) return undefined;
+  const parsed = S.decodeUnknownResult(S.fromJsonString(ErrorEnvelope))(text);
+  if (Result.isFailure(parsed) || parsed.success.error === undefined) return undefined;
   return {
-    code: parsed.right.error.code,
-    message: parsed.right.error.message ?? "",
+    code: parsed.success.error.code,
+    message: parsed.success.error.message ?? "",
   };
 };
 
@@ -850,7 +868,7 @@ const PaneSplit = S.Struct({
 const AgentEnvelope = S.Struct({
   result: S.Struct({
     agent: S.Struct({
-      tokens: S.optional(S.Record({ key: S.String, value: S.String })),
+      tokens: S.optional(S.Record(S.String, S.String)),
     }),
   }),
 });
@@ -886,3 +904,29 @@ export type WorktreeRecord = S.Schema.Type<typeof WorktreeRecord>;
 const WorktreeList = S.Struct({
   result: S.Struct({ worktrees: S.Array(WorktreeRecord) }),
 });
+
+/**
+ * The arguments after `--` that start a harness on a rung's model and thinking
+ * level. Each harness spells the level its own way; one with no such flag, or
+ * a rung whose level the harness picks (`auto`), gets none.
+ */
+export const launchArguments = (options: {
+  readonly kind: string;
+  readonly model: string | undefined;
+  readonly thinking?: string | undefined;
+}): ReadonlyArray<string> => {
+  const level =
+    options.thinking === undefined || options.thinking === "auto" ? undefined : options.thinking;
+  const effort =
+    level === undefined
+      ? []
+      : options.kind === "claude"
+        ? ["--effort", level]
+        : options.kind === "codex"
+          ? ["-c", `model_reasoning_effort=${level}`]
+          : options.kind === "pi"
+            ? ["--thinking", level]
+            : [];
+  const flags = [...(options.model ? ["--model", options.model] : []), ...effort];
+  return flags.length === 0 ? [] : ["--", ...flags];
+};

@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-import { Command, Options } from "@effect/cli";
-import { BunContext, BunRuntime } from "@effect/platform-bun";
-import { Console, Effect, Layer, Option, Schema } from "effect";
+import { Command, Flag } from "effect/cli";
+import { BunRuntime, BunServices } from "@effect/platform-bun";
+import { Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { type Overrides, settings, Settings } from "./config.ts";
-import { resetsLabel, quotaJson } from "./format.ts";
-import { authorFor, providerOf, providersOf, rungsOn } from "./ladder.ts";
+import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
+import { authorFor, dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { pinnedFirst, pinnedOf } from "./pin.ts";
 import { failuresOf, isOnboarding, needsYou } from "./prog.ts";
 import { dashboard } from "./dashboard.ts";
@@ -16,10 +16,12 @@ import { Prompts } from "./prompt.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
 import { Repository } from "./repository.ts";
 import { telemetry, VERSION } from "./telemetry.ts";
+import { ladderCommand } from "./ladder-command.ts";
 import { Trials } from "./trials.ts";
 import { BOUND_KEYS } from "./view.ts";
 import { fzfScreen } from "./screen.ts";
 import { stats } from "./stats.ts";
+import { subcommands } from "./commands.ts";
 
 /**
  * How many tasks may be in flight at once.
@@ -29,13 +31,13 @@ import { stats } from "./stats.ts";
  * more once it is trusted. Everything else describes the fleet itself and
  * belongs only in the file.
  */
-const slots = Options.integer("slots").pipe(
-  Options.withAlias("n"),
-  Options.withDescription("Concurrent workers, overriding the config file"),
+const slots = Flag.Int("slots").pipe(
+  Flag.withAlias("n"),
+  Flag.withDescription("Concurrent workers, overriding the config file"),
   // Same constraint the config file carries. A fleet of zero is a stopped
   // daemon written the long way round, and a negative one is a typo.
-  Options.withSchema(Schema.Positive),
-  Options.optional,
+  Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
+  Flag.optional,
 );
 
 /**
@@ -48,8 +50,9 @@ const slots = Options.integer("slots").pipe(
  * The command line is the only thing a restart inherits, so it is where the
  * answer belongs.
  */
-const running = Options.boolean("running").pipe(
-  Options.withDescription("Start dispatching immediately, rather than paused"),
+const running = Flag.Boolean("running").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Start dispatching immediately, rather than paused"),
 );
 
 /**
@@ -61,8 +64,9 @@ const running = Options.boolean("running").pipe(
  * One `Quota` behind both — the dashboard row and this are two callers, not two
  * readings.
  */
-const json = Options.boolean("json").pipe(
-  Options.withDescription("Emit the report as JSON, every reset an absolute ISO instant"),
+const json = Flag.Boolean("json").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Emit the report as JSON, every reset an absolute ISO instant"),
 );
 
 const quotaCommand = Command.make("quota", { json }, ({ json }) =>
@@ -70,7 +74,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
     const config = yield* Settings;
     const quota = yield* Quota;
 
-    const blind = config.ladder
+    const blind = dispatchable(config.ladder)
       .filter((rung) => providerOf(rung) === undefined)
       .map((rung) => rung.name);
     const rungsOf = (provider: string) => rungsOn(config.ladder, provider);
@@ -101,12 +105,15 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
     for (const reading of readings) {
       if (reading._tag === "usage") {
         const resets = freeAt(reading.usage);
+        const width = Math.max(...reading.usage.allowances.map((a) => a.window.length));
         yield* Console.log(
           [
-            `${reading.provider}${reading.usage.plan === undefined ? "" : ` [${reading.usage.plan}]`}  rungs ${rungsOf(reading.provider).join(", ")}  ${exhausted(reading.usage) ? `OUT OF QUOTA — resets ${resets === undefined ? "unknown" : resetsLabel(resets)}` : "ok"}`,
+            // The rungs are named only when the account stops them: that list
+            // is what to move off it, and an account with room stops nothing.
+            `${reading.provider}${reading.usage.plan === undefined ? "" : ` [${reading.usage.plan}]`}  ${exhausted(reading.usage) ? `OUT OF QUOTA — resets ${resets === undefined ? "unknown" : resetsLabel(resets)}  stops ${rungsOf(reading.provider).join(", ")}` : "ok"}`,
             ...reading.usage.allowances.map(
               (allowance) =>
-                `    ${allowance.window.padEnd(18)} ${String(allowance.usedPercent).padStart(3)}% used   resets ${allowance.resetsAt === undefined ? "unknown" : resetsLabel(allowance.resetsAt)}`,
+                `    ${allowance.window.padEnd(width)}  ${usedLabel(allowance.usedPercent).padStart(4)} used   resets ${allowance.resetsAt === undefined ? "unknown" : resetsLabel(allowance.resetsAt)}`,
             ),
           ].join("\n"),
         );
@@ -197,7 +204,7 @@ const queueCommand = Command.make("queue", {}, () =>
  * the way an operator closing the screen does: the scope closes, the screen is
  * torn down and the loop is interrupted.
  */
-const signals = Effect.async<NodeJS.Signals>((resume) => {
+const signals = Effect.callback<NodeJS.Signals>((resume) => {
   const handlers: ReadonlyArray<[NodeJS.Signals, NodeJS.SignalsListener]> = [
     ["SIGINT", () => resume(Effect.succeed("SIGINT"))],
     ["SIGTERM", () => resume(Effect.succeed("SIGTERM"))],
@@ -213,17 +220,6 @@ const signals = Effect.async<NodeJS.Signals>((resume) => {
   Effect.asVoid,
 );
 
-const foreman = Command.make("foreman", { slots, running }, ({ slots, running }) =>
-  Effect.gen(function* () {
-    // The loop is forked and the dashboard is parked on, so closing the
-    // dashboard ends the process: an operator who quits the screen means to
-    // stop the fleet, not to leave it dispatching where they cannot see it.
-    // A signal ends it through the same race.
-    yield* Effect.forkScoped(Dispatcher.run);
-    yield* Effect.raceFirst(dashboard, signals);
-  }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
-).pipe(Command.withSubcommands([quotaCommand, statsCommand, queueCommand]));
-
 /**
  * herdr is the only multiplexer foreman speaks to today. Swapping this one line
  * for another adapter is the whole of that migration. The base set supplies
@@ -236,7 +232,7 @@ const foreman = Command.make("foreman", { slots, running }, ({ slots, running })
  * If DevTools is ever added it must come *before* the tracing layers, or the
  * tracer it patches is not the one foreman ends up using.
  */
-const live = (overrides: Overrides) => {
+const services = (overrides: Overrides) => {
   const config = settings(overrides);
   return Layer.provideMerge(
     Dispatcher.Default,
@@ -249,12 +245,48 @@ const live = (overrides: Overrides) => {
       Repository.Default,
       Trials.Default,
       logging(),
-      fzfScreen(BOUND_KEYS),
       telemetry.pipe(Layer.provide(config)),
     ),
   );
 };
 
-const cli = Command.run(foreman, { name: "foreman", version: VERSION });
+/** The daemon's set: every service, and the screen the dashboard draws on. */
+const live = (overrides: Overrides) => Layer.merge(services(overrides), fzfScreen(BOUND_KEYS));
 
-BunRuntime.runMain(cli(process.argv).pipe(Effect.provide(BunContext.layer)));
+/**
+ * How to drive foreman by hand, for an agent coordinating a fleet. Printed
+ * rather than installed as a skill file, so it ships with the binary it
+ * describes and cannot fall behind it.
+ */
+const skill = Flag.Boolean("skill").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Print how to drive foreman's lifecycle by hand, then exit"),
+);
+
+const foreman = Command.make("foreman", { slots, running, skill }, ({ slots, running, skill }) =>
+  skill
+    ? FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.readFileString(`${import.meta.dir}/skill.md`)),
+        Effect.flatMap(Console.log),
+      )
+    : Effect.gen(function* () {
+        // The loop is forked and the dashboard is parked on, so closing the
+        // dashboard ends the process: an operator who quits the screen means to
+        // stop the fleet, not to leave it dispatching where they cannot see it.
+        // A signal ends it through the same race.
+        yield* Effect.forkScoped((yield* Dispatcher).run);
+        yield* Effect.raceFirst(dashboard, signals);
+      }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
+).pipe(
+  Command.withSubcommands([
+    quotaCommand,
+    ladderCommand,
+    statsCommand,
+    queueCommand,
+    ...subcommands(services({ slots: Option.none(), running: false })),
+  ]),
+);
+
+const cli = foreman.pipe(Command.run({ version: VERSION }));
+
+BunRuntime.runMain(cli.pipe(Effect.provide(BunServices.layer)));

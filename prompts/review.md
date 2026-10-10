@@ -87,11 +87,7 @@ not yours to repair.
 
 The author may still be alive in a pane beside you, holding everything it worked out.
 One finding sent back there costs far less than a stronger model reading the whole
-codebase again:
-
-```
-herdr pane list --workspace "$HERDR_WORKSPACE_ID" | jq -r '.result.panes[] | select(.label == "foreman-author") | .pane_id'
-```
+codebase again.
 
 **Only mechanical findings may go back** — an unhandled case, a half-finished rename, a
 test that never runs the new path, an unticked box in the definition of done. Say what
@@ -103,27 +99,28 @@ then approve your own reasoning — and foreman never learns the task needed a b
 model, which is the only thing that routes the next one correctly. Log it and return
 the task.
 
-You get **one** round:
+Send all mechanical findings as one round, and wait for the author to finish it:
 
 ```
-herdr agent prompt <pane-id> "<your finding>" --wait --timeout 900000
+foreman correct {{ task }} "<your findings>"
+foreman wait {{ task }} --role author
 git -C {{ worktree }} diff {{ base }} HEAD
 ```
 
-Judge the result as you judged the first diff. Do not send a second round: an author
-that cannot act on one clear mechanical finding is telling you its rung is too low,
-which is what returning the task records.
+Judge the result as you judged the first diff. You may send one more round the same
+way; foreman refuses a third. If the author still falls short after that, return the
+task: that records that its rung is too low.
 
-If the wait reports `blocked`, the author is asking a question. Do not answer it —
-approvals belong to the operator. Log that it blocked and what it asked, and stop
-without a verdict, leaving both panes open.
+If `foreman wait` shows the author `blocked`, it is asking a question. Do not answer
+it — approvals belong to the operator. Log that it blocked and what it asked, and stop
+without a verdict.
 
-**Close the author's pane before you write your verdict**, whether you sent anything
-back or not: a settled agent holds its model's memory for as long as its pane exists.
-
-```
-herdr pane close <pane-id>
-```
+Before you approve, read the `council` skill and run its Review use over this branch's
+diff (`{{ base }}..HEAD`). Council members are larger models than you, and they read the
+diff cold. Weigh each finding as you weighed your own: a confirmed defect is a
+rejection, not a second correction round. Log what council found and what you
+decided, then close the member panes. Skip council only when you are already
+returning the task.
 
 To return the task, write findings to `prog log {{ task }}` in enough detail that the
 next agent can act without rediscovering anything, then `prog open {{ task }}`. The

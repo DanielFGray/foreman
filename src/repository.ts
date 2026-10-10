@@ -1,6 +1,6 @@
-import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Effect, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { BunServices } from "@effect/platform-bun";
+import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect";
 
 /** The namespace `labelFor` puts every branch foreman authors under. */
 const ours = "foreman/";
@@ -41,28 +41,26 @@ const SETUP_SCRIPT = "scripts/worktree-setup.sh";
  * foreman asks the checkout itself whether the operator is presently working
  * there, and lands through whichever tool records that checkout's history.
  */
-export class Repository extends Effect.Service<Repository>()("Repository", {
-  dependencies: [BunContext.layer],
-  accessors: true,
-  effect: Effect.gen(function* () {
-    const executor = yield* CommandExecutor.CommandExecutor;
+export class Repository extends Context.Service<Repository>()("Repository", {
+  make: Effect.gen(function* () {
+    const executor = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
     const run = (directory: string, program: string, args: ReadonlyArray<string>) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const process = yield* executor.start(
-            Command.make(program, ...args).pipe(
-              Command.workingDirectory(directory),
+          const process = yield* executor.spawn(
+            ChildProcess.make(program, args, {
+              cwd: directory,
               // Repository reads must not refresh the shared index. If an
               // observational subprocess is interrupted while doing that,
               // Git leaves index.lock behind and later landings cannot merge.
               // Required write locks are not optional and remain enabled.
-              Command.env({ GIT_OPTIONAL_LOCKS: "0" }),
-              Command.stdout("pipe"),
-              Command.stderr("pipe"),
-            ),
+              env: { GIT_OPTIONAL_LOCKS: "0" },
+              stdout: "pipe",
+              stderr: "pipe",
+            }),
           );
           const [exitCode, stdout, stderr] = yield* Effect.all(
             [
@@ -153,12 +151,12 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
     const check = (directory: string, command: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const process = yield* executor.start(
-            Command.make("sh", "-c", command).pipe(
-              Command.workingDirectory(directory),
-              Command.stdout("pipe"),
-              Command.stderr("pipe"),
-            ),
+          const process = yield* executor.spawn(
+            ChildProcess.make("sh", ["-c", command], {
+              cwd: directory,
+              stdout: "pipe",
+              stderr: "pipe",
+            }),
           );
           const [exitCode, stdout, stderr] = yield* Effect.all(
             [
@@ -1031,7 +1029,9 @@ export class Repository extends Effect.Service<Repository>()("Repository", {
         ),
     } as const;
   }),
-}) {}
+}) {
+  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
+}
 
 /** What became of a branch foreman tried to put into the operator's checkout. */
 export type Landing =
@@ -1120,4 +1120,8 @@ export const conflictsOf = (output: string): Stale => {
 export class RepositoryError extends Schema.TaggedError<RepositoryError>()("RepositoryError", {
   directory: Schema.String,
   detail: Schema.String,
-}) {}
+}) {
+  override get message() {
+    return `${this.directory}: ${this.detail}`;
+  }
+}

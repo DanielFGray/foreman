@@ -17,7 +17,7 @@ import { Cause, Effect, Layer, Logger } from "effect";
  * back to show the log instead.
  */
 export const logging = (path = logPath()): Layer.Layer<never> =>
-  Layer.scopedDiscard(
+  Logger.layer([
     Effect.gen(function* () {
       const stream = yield* Effect.acquireRelease(
         Effect.promise(async () => {
@@ -32,27 +32,22 @@ export const logging = (path = logPath()): Layer.Layer<never> =>
       // A write racing the end above — a finalizer logging during teardown —
       // must not raise an unhandled error event under the dying process.
       stream.on("error", () => {});
-      yield* Layer.build(
-        Logger.replace(
-          Logger.defaultLogger,
-          Logger.make(({ date, logLevel, message, cause }) => {
-            const said = Array.isArray(message) ? message.map(String).join(" ") : String(message);
-            // A fiber that dies logs an empty message and puts everything in the
-            // cause. Reading only the message wrote a blank ERROR line for every
-            // crash foreman ever had — the one event the file exists to explain.
-            const text = [said, Cause.isEmpty(cause) ? "" : Cause.pretty(cause)]
-              .filter((part) => part !== "")
-              .join("\n");
-            // Keep one stream so log records stay ordered without forking a fiber
-            // from the synchronous logger callback.
-            stream.write(
-              `${JSON.stringify({ at: date.toISOString(), level: logLevel.label, message: text })}\n`,
-            );
-          }),
-        ),
-      );
+      return Logger.make(({ date, logLevel, message, cause }) => {
+        const said = Array.isArray(message) ? message.map(String).join(" ") : String(message);
+        // A fiber that dies logs an empty message and puts everything in the
+        // cause. Reading only the message wrote a blank ERROR line for every
+        // crash foreman ever had — the one event the file exists to explain.
+        const text = [said, cause.reasons.length === 0 ? "" : Cause.pretty(cause)]
+          .filter((part) => part !== "")
+          .join("\n");
+        // Keep one stream so log records stay ordered without forking a fiber
+        // from the synchronous logger callback.
+        stream.write(
+          `${JSON.stringify({ at: date.toISOString(), level: logLevel.toUpperCase(), message: text })}\n`,
+        );
+      });
     }),
-  );
+  ]);
 
 /** Where the log is, for the dashboard that reads it back. */
 export const logPath = (): string => {

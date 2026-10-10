@@ -74,6 +74,13 @@ export interface Rung {
    * read at all.
    */
   readonly unmetered?: boolean | undefined;
+
+  /**
+   * How hard the model thinks: the registry's level for it (`low`, `medium`),
+   * or `auto` where the harness decides. The adapter turns it into the flag the
+   * harness takes, and passes nothing for a harness that has none.
+   */
+  readonly thinking?: string | undefined;
 }
 
 /** Whether foreman may dispatch a rung: everything but an explicit retirement. */

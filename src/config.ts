@@ -1,10 +1,10 @@
-import { FileSystem, Path } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Context, Effect, Layer, Option, Schema } from "effect";
-import { dispatchable, type Ladder, providerOf, type Rung } from "./ladder.ts";
+import { BunServices } from "@effect/platform-bun";
+import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
+import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
+import { readLadder, RegistryError, registryPath } from "./registry.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
-export class Settings extends Context.Tag("Settings")<Settings, SettingsShape>() {}
+export class Settings extends Context.Service<Settings, SettingsShape>()("Settings") {}
 
 /**
  * Loads and resolves foreman's configuration.
@@ -49,7 +49,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         catch: (cause) => new ConfigError({ detail: `reading ${file}: ${cause}` }),
       }).pipe(
         Effect.flatMap((contents) =>
-          Schema.decodeUnknown(ConfigFile)(contents).pipe(
+          Schema.decodeUnknownEffect(ConfigFile)(contents).pipe(
             Effect.mapError((cause) => new ConfigError({ detail: `parsing ${file}: ${cause}` })),
           ),
         ),
@@ -97,21 +97,16 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         }),
       );
 
-      // A bare string is a rung that is only a harness — `claude`, running
-      // whichever model it defaults to. Everything else names its model.
-      const rungOf = (entry: (typeof raw.ladder)[number]): Rung =>
-        typeof entry === "string"
-          ? { name: entry, harness: entry, model: undefined, provider: undefined, enabled: true }
-          : {
-              name: entry.name,
-              harness: entry.harness,
-              model: entry.model,
-              provider: entry.provider,
-              enabled: entry.enabled,
-              unmetered: entry.unmetered,
-            };
-      const [bottom, ...rest] = raw.ladder;
-      const ladder: Ladder = [rungOf(bottom), ...rest.map(rungOf)];
+      // The ladder is the registry's, not the config file's: one copy of the
+      // order, shared with the herd skill and the trial record.
+      const registry = registryPath();
+      const ladder = yield* Effect.try({
+        try: () => readLadder(registry),
+        catch: (cause) =>
+          new ConfigError({
+            detail: cause instanceof RegistryError ? cause.detail : String(cause),
+          }),
+      });
 
       // A duplicate name makes both "the next rung up" and "which rung failed
       // this task" ambiguous, and the second is durable: tasks record rung
@@ -130,7 +125,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
       // line commented out.
       if (dispatchable(ladder).length === 0) {
         return yield* new ConfigError({
-          detail: `every rung in ${file} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
+          detail: `every rung in ${registry} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
         });
       }
 
@@ -148,7 +143,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
             .map((rung) => `"${rung.name}"`)
             .join(
               ", ",
-            )} in ${file} — add "provider" to each so foreman can read its remaining quota before dispatching`,
+            )} in ${registry} — set "provider" on each so foreman can read its remaining quota before dispatching`,
         );
       }
 
@@ -167,7 +162,7 @@ export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigErro
         attemptsPerRung: raw.attemptsPerRung,
       } as const;
     }),
-  ).pipe(Layer.provide(BunContext.layer));
+  ).pipe(Layer.provide(BunServices.layer));
 
 /**
  * What the command line says: values that stand in for the config file, and
@@ -217,13 +212,16 @@ interface SettingsShape {
   readonly attemptsPerRung: number;
 }
 
+/** A number above zero. */
+const Positive = Schema.Number.check(Schema.isGreaterThan(0));
+
 const ConfigFile = Schema.Struct({
   /**
    * Only these projects feed the queue; everything else stays untouched. A name
    * is both the prog project and, under ~/build, its directory.
    */
   projects: Schema.NonEmptyArray(
-    Schema.Union(
+    Schema.Union([
       Schema.String,
       Schema.Struct({
         name: Schema.String,
@@ -246,62 +244,13 @@ const ConfigFile = Schema.Struct({
          */
         verificationSkill: Schema.optional(Schema.String),
       }),
-    ),
+    ]),
   ),
 
   /** Concurrent workers. Each claimed task occupies one until it lands. */
-  slots: Schema.optionalWith(Schema.Positive, { default: () => 3 }),
+  slots: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(3))),
 
-  /**
-   * Every model foreman may use, cheapest first. Required: a fleet with no
-   * ladder has nothing to dispatch, and a default here would silently pick
-   * somebody's models for them.
-   *
-   * A task starts at the bottom and climbs one rung on real evidence that the
-   * rung it is on failed it — a reviewer sending work back, a branch that
-   * would not land, or `attemptsPerRung` attempts ending unfinished. `name` is
-   * what tasks record and the dashboard shows, `harness` is a herdr agent
-   * kind, and `model` is the model that harness runs — the adapter knows how
-   * each harness is told. A bare string is a rung that is only a harness,
-   * running whatever that program defaults to.
-   */
-  ladder: Schema.NonEmptyArray(
-    Schema.Union(
-      Schema.String,
-      Schema.Struct({
-        name: Schema.String,
-        harness: Schema.String,
-        model: Schema.optional(Schema.String),
-
-        /**
-         * The account this rung spends, for the rungs where the model does not
-         * already say. Quota is the account's, not the rung's, so several rungs
-         * naming one provider share one allowance.
-         */
-        provider: Schema.optional(Schema.String),
-
-        /**
-         * Whether foreman may dispatch this rung. A retired model stays listed
-         * and disabled so it keeps its rank: the tasks it failed still record
-         * that failure, and the rank is what turns the name into "cheaper than
-         * the rung above was not enough". Deleting the entry says the model is
-         * no longer part of the rating at all.
-         */
-        enabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
-
-        /**
-         * Whether the account's allowance describes this rung's room at all.
-         * Set it on a model the provider is serving on promotional access,
-         * where the account's percentage measures a different pool: foreman
-         * then never stops the rung on that reading. Absent means the
-         * allowance governs it, which is the ordinary case.
-         */
-        unmetered: Schema.optional(Schema.Boolean),
-      }),
-    ),
-  ),
-
-  pollSeconds: Schema.optionalWith(Schema.Positive, { default: () => 20 }),
+  pollSeconds: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(20))),
 
   /**
    * Where spans and metrics go — an OTLP/HTTP collector, without the signal
@@ -312,9 +261,9 @@ const ConfigFile = Schema.Struct({
    * comes back. Naming a remote host here instead moves both of those jobs into
    * foreman, which remembers nothing and would drop the telemetry instead.
    */
-  otlpEndpoint: Schema.optionalWith(Schema.String, {
-    default: () => "http://localhost:4318",
-  }),
+  otlpEndpoint: Schema.String.pipe(
+    Schema.withDecodingDefault(Effect.succeed("http://localhost:4318")),
+  ),
 
   /**
    * How many times a task may end unfinished on one rung before it climbs.
@@ -326,14 +275,14 @@ const ConfigFile = Schema.Struct({
    * none of it. Both are written to the task as labels, so the count survives
    * a dispatch days later.
    */
-  attemptsPerRung: Schema.optionalWith(Schema.Positive, { default: () => 2 }),
+  attemptsPerRung: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(2))),
 
   /**
    * How long a claimed task may go without activity before the queue takes it
    * back. Long enough that a human working slowly on their own claim is not
    * interrupted.
    */
-  staleAfterHours: Schema.optionalWith(Schema.Positive, { default: () => 24 }),
+  staleAfterHours: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(24))),
 
   /**
    * How long an author's agent is kept alive after it hands off, so the
@@ -345,15 +294,19 @@ const ConfigFile = Schema.Struct({
    * loses the option. Reviews are filled before new work, so the window only
    * matters when reviews are queued behind a held project.
    */
-  coachWindowMinutes: Schema.optionalWith(Schema.Positive, { default: () => 30 }),
+  coachWindowMinutes: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(30))),
 
   /**
    * How far back the dashboard's landed column reaches. prog list has no
    * limit, so the dispatcher bounds the column by this window instead.
    */
-  landedWindowDays: Schema.optionalWith(Schema.Positive, { default: () => 7 }),
+  landedWindowDays: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(7))),
 });
 
 export class ConfigError extends Schema.TaggedError<ConfigError>()("ConfigError", {
   detail: Schema.String,
-}) {}
+}) {
+  override get message() {
+    return this.detail;
+  }
+}

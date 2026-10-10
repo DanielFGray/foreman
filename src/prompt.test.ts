@@ -3,6 +3,9 @@ import { Effect } from "effect";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./prog.ts";
 
+const run = <A, E>(f: (prompts: Prompts["Service"]) => Effect.Effect<A, E>) =>
+  Effect.runPromise(Prompts.use(f).pipe(Effect.provide(Prompts.Default)));
+
 const item: Item = {
   id: "ts-123456",
   title: "Adopt uncommitted work in foreman",
@@ -28,10 +31,8 @@ const ready = {
 
 describe("Prompts", () => {
   test("takes the operator's checkout away from the author", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.author(ready, "/tmp/worktree", "/tmp/repository").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
     );
 
     // Trivial work skips the reviewer, never the landing gate. An author told
@@ -49,10 +50,8 @@ describe("Prompts", () => {
   // is this block: the search command renders the project, and the instruction
   // is to append to an existing task rather than file a new one.
   test("an author searches the backlog before filing a pre-existing failure", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.author(ready, "/tmp/worktree", "/tmp/repository").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
     );
 
     expect(prompt).toContain("prog list -p foreman");
@@ -63,10 +62,8 @@ describe("Prompts", () => {
   });
 
   test("asks a successful reviewer for a verdict, not a merge", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("prog label ts-123456 approved");
@@ -81,10 +78,8 @@ describe("Prompts", () => {
   // point is what makes that possible: without it the author's work cannot be
   // named from inside the worktree at all.
   test("keeps every reviewer command out of the operator's checkout", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("git -C /tmp/worktree diff abc1234 HEAD");
@@ -97,10 +92,8 @@ describe("Prompts", () => {
   // three agents running one machine's test suite at once, and the branch that
   // is never rendered in the operator's own config is the one that would rot.
   test("names the landing verification the reviewer must not repeat", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("Foreman runs `bun test` in /tmp/repository");
@@ -108,10 +101,8 @@ describe("Prompts", () => {
   });
 
   test("leaves the full run to a reviewer whose project has no verification", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", undefined).pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", undefined),
     );
 
     expect(prompt).toContain("lands this branch on git's exit code alone");
@@ -120,10 +111,8 @@ describe("Prompts", () => {
   });
 
   test("diagnoses stuck work without taking over its implementation", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "diagnose").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "diagnose"),
     );
 
     expect(prompt).toContain("Diagnose why this attempt appears stuck");
@@ -133,19 +122,15 @@ describe("Prompts", () => {
   });
 
   test("diagnostic review includes uncommitted edits", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "review").pipe(
-        Effect.provide(Prompts.Default),
-      ),
+    const prompt = await run((prompts) =>
+      prompts.diagnose(item, "/tmp/worktree", "/tmp/repository", "review"),
     );
 
     expect(prompt).toContain("Review the work as it exists, including uncommitted edits");
   });
 
   test("sends an onboarding agent to the checkout and back off it", async () => {
-    const prompt = await Effect.runPromise(
-      Prompts.onboard(item, "/tmp/repository").pipe(Effect.provide(Prompts.Default)),
-    );
+    const prompt = await run((prompts) => prompts.onboard(item, "/tmp/repository"));
 
     expect(prompt).toContain("git -C /tmp/repository checkout -b foreman/ts-123456");
     // The whole safety of the run rests on the operator's branch ending where

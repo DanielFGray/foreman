@@ -1,6 +1,5 @@
-import { FileSystem, Path } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Effect, Schema } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import template from "lodash/template.js";
 import { labelFor } from "./fleet.ts";
 import type { DiagnosticIntent, Item, ReadyTask } from "./prog.ts";
@@ -16,10 +15,8 @@ import type { DiagnosticIntent, Item, ReadyTask } from "./prog.ts";
  *
  * Set FOREMAN_PROMPTS to point at a different directory.
  */
-export class Prompts extends Effect.Service<Prompts>()("Prompts", {
-  dependencies: [BunContext.layer],
-  accessors: true,
-  effect: Effect.gen(function* () {
+export class Prompts extends Context.Service<Prompts>()("Prompts", {
+  make: Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
@@ -120,7 +117,9 @@ export class Prompts extends Effect.Service<Prompts>()("Prompts", {
         }),
     } as const;
   }),
-}) {}
+}) {
+  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
+}
 
 const verificationSkillGuidance = (skill: string | undefined): string =>
   skill === undefined
@@ -140,4 +139,8 @@ const DELIMITERS = {
 export class PromptError extends Schema.TaggedError<PromptError>()("PromptError", {
   template: Schema.String,
   detail: Schema.String,
-}) {}
+}) {
+  override get message() {
+    return `${this.template}: ${this.detail}`;
+  }
+}
