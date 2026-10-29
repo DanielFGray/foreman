@@ -1,0 +1,28 @@
+{
+  "name": "herdr-web",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "effect-tsgo patch --typescript --oxlint",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware",
+    "test": "bun test",
+    "start": "bun src/main.ts"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.63.0",
+    "@types/bun": "latest",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "4.1.0",
+    "@effect/platform-bun": "^4.1.0",
+    "effect": "^4.1.0",
+    "foldkit": "0.170.0"
+  }
+}
