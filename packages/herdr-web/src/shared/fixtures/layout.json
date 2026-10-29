@@ -1,0 +1,39 @@
+{
+  "children": [
+    {
+      "content": {
+        "terminal": "t2b"
+      },
+      "id": "p01d9d7c7222a690d71aadb9fa1133131",
+      "size": {
+        "weight": 0.5
+      },
+      "type": "block"
+    },
+    {
+      "children": [
+        {
+          "content": {
+            "terminal": "t2c"
+          },
+          "id": "p05a5d8ecebeb48ad94ad8816e9030131",
+          "type": "block"
+        },
+        {
+          "content": {
+            "terminal": "t2d"
+          },
+          "id": "p828b4c82c1fa8fa5018f8f2a1331b9bd",
+          "type": "block"
+        }
+      ],
+      "id": "s00dcbac10d510c887130dbcae6cb88af",
+      "size": {
+        "weight": 0.5
+      },
+      "type": "column"
+    }
+  ],
+  "id": "tb8fe20c7f392ccb47ae293d76e7ce6dbd",
+  "type": "row"
+}

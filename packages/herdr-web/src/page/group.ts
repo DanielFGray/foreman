@@ -1,42 +1,47 @@
-// How the page files terminals: under the herdr-app space and tab that their
-// `herdr.space` and `herdr.tab` labels name, in herdr-app's own order.
-import { Array, Option, pipe, Result, String } from "effect"
-import type { Fleet, Space, Terminal } from "../shared/Fleet.ts"
+// How the page files terminals: by the herdr-app layout trees that place
+// them, in herdr-app's own order of spaces, tabs and panes.
+import { Array, HashMap, HashSet, Match, Option, pipe, Result, String } from "effect"
+import type { Fleet, Layout, Space, Tab, Terminal } from "../shared/Fleet.ts"
 
 export type Filter = "Agents" | "All"
 
-export type TabGroup = Readonly<{ id: string; label: string; terminals: ReadonlyArray<Terminal> }>
-export type SpaceGroup = Readonly<{ id: string; label: string; tabs: ReadonlyArray<TabGroup> }>
+export type SpaceGroup = Readonly<{ id: string; label: string; terminals: ReadonlyArray<Terminal> }>
 
-/** The spaces and tabs that hold at least one shown terminal; terminals no space claims come last, under "Other". */
+/**
+ * Every space with a shown terminal, then the shown terminals that no layout
+ * places, under "Other". hc keeps a terminal after its program exits, so only
+ * live terminals are listed.
+ */
 export const groupFleet = (fleet: Fleet, filter: Filter): ReadonlyArray<SpaceGroup> => {
-  const shown = Array.filter(fleet.terminals, (terminal) => filter === "All" || isAgent(terminal))
-  const spaceIds = new Set(Array.map(fleet.spaces, ({ id }) => id))
-  const unclaimed = Array.filter(shown, (terminal) => !Option.exists(label(terminal, SPACE), (id) => spaceIds.has(id)))
-
+  const isShown = (terminal: Terminal) => terminal.state === "live" && (filter === "All" || isAgent(terminal))
+  const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
   const spaces = Array.filterMap(fleet.spaces, (space) => {
-    const inSpace = Array.filter(shown, (terminal) => Option.contains(label(terminal, SPACE), space.id))
-    const tabIds = new Set(Array.map(space.tabs, ({ id }) => id))
-    const filed = Array.map(space.tabs, ({ id, name }, index) => ({
-      id,
-      label: nonEmptyOr(name, `${index + 1}`),
-      terminals: Array.filter(inSpace, (terminal) => Option.contains(label(terminal, TAB), id)),
-    }))
-    // herdr-app does not label every terminal with its tab; those still
-    // belong to the space.
-    const loose = {
-      id: `${space.id}/${OTHER}`,
-      label: "",
-      terminals: Array.filter(inSpace, (terminal) => !Option.exists(label(terminal, TAB), (id) => tabIds.has(id))),
-    }
-    const tabs = Array.filter([...filed, loose], ({ terminals }) => Array.isArrayNonEmpty(terminals))
-    return Array.isArrayNonEmpty(tabs) ? Result.succeed({ id: space.id, label: spaceLabel(space), tabs }) : Result.failVoid
+    const terminals = pipe(
+      spaceTerminals(space),
+      Array.filterMap((address) => Result.fromOption(HashMap.get(byAddress, address), () => undefined)),
+      Array.filter(isShown),
+    )
+    return Array.isArrayNonEmpty(terminals) ? Result.succeed({ id: space.id, label: spaceLabel(space), terminals }) : Result.failVoid
+  })
+  const placed = HashSet.fromIterable(Array.flatMap(fleet.spaces, spaceTerminals))
+  const loose = Array.filter(fleet.terminals, (terminal) => isShown(terminal) && !HashSet.has(placed, terminal.address))
+  return Array.isArrayNonEmpty(loose) ? [...spaces, { id: OTHER, label: "Other", terminals: loose }] : spaces
+}
+
+/** The terminals a layout shows, in reading order. */
+export const terminalsIn = (node: Layout): ReadonlyArray<string> =>
+  Match.valueTags(node, {
+    Block: ({ content }) => (content._tag === "Terminal" ? [content.terminal] : []),
+    Split: ({ children }) => Array.flatMap(children, terminalsIn),
+    Unknown: () => [],
   })
 
-  return Array.isArrayNonEmpty(unclaimed)
-    ? [...spaces, { id: OTHER, label: "Other", tabs: [{ id: OTHER, label: "", terminals: unclaimed }] }]
-    : spaces
-}
+/** The space and tab whose layout shows the terminal. */
+export const locate = (fleet: Fleet, address: string): Option.Option<Readonly<{ space: Space; tab: Tab }>> =>
+  pipe(
+    Array.flatMap(fleet.spaces, (space) => Array.map(space.tabs, (tab) => ({ space, tab }))),
+    Array.findFirst(({ tab }) => Array.contains(terminalsIn(tab.root), address)),
+  )
 
 /** A terminal whose program reports a status (OSC 7501), which is what agents do. */
 export const isAgent = (terminal: Terminal) => Option.isSome(terminal.status)
@@ -51,15 +56,15 @@ export const terminalLabel = (terminal: Terminal) =>
     Option.getOrElse(() => terminal.address),
   )
 
-const SPACE = "herdr.space"
-const TAB = "herdr.tab"
+// herdr-app leaves names empty until the user sets one. It then calls a
+// space after its folder's last segment, and a tab by its number.
+export const spaceLabel = ({ name, folder }: Space) =>
+  nonEmptyOr(name, pipe(String.split(folder, "/"), Array.last, Option.getOrElse(() => folder)))
+
+export const tabLabel = ({ name }: Tab, index: number) => nonEmptyOr(name, `${index + 1}`)
+
 const OTHER = "other"
 
-const label = (terminal: Terminal, key: string) => Option.fromUndefinedOr(terminal.labels[key])
+const spaceTerminals = (space: Space) => Array.flatMap(space.tabs, ({ root }) => terminalsIn(root))
 
 const nonEmptyOr = (text: string, fallback: string) => (String.isNonEmpty(text) ? text : fallback)
-
-// herdr-app leaves a space's name empty until the user names it, and then
-// shows the folder's last segment.
-const spaceLabel = ({ name, folder }: Space) =>
-  nonEmptyOr(name, pipe(String.split(folder, "/"), Array.last, Option.getOrElse(() => folder)))

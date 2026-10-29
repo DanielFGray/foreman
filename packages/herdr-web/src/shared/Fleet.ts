@@ -2,7 +2,8 @@
 // encoded side is hc's own wire shape (its OpenRPC `Terminal` and `Status`
 // components, and the `herdr-app` document), so one Schema decodes hc's reply
 // in the bridge and the bridge's message in the page.
-import { Schema } from "effect"
+import { type Option, Schema } from "effect"
+import { wireTag } from "./Wire.ts"
 
 /** What the program says it is doing (its OSC 7501 report). */
 export const StatusState = Schema.Literals(["idle", "working", "done", "blocked", "error"])
@@ -35,7 +36,55 @@ export const Terminal = Schema.Struct({
 })
 export type Terminal = typeof Terminal.Type
 
-export const Tab = Schema.Struct({ id: Schema.String, name: Schema.String })
+// LAYOUT
+// herdr-app lays a tab out as a tree. A node it adds later, or a pane content
+// the page does not know, decodes to a fallback variant instead of failing,
+// so the rest of the fleet still shows.
+
+/** A node's share of its parent along the split. herdr-app writes `{weight}`; any other form counts as an even share. */
+export const Size = Schema.Struct({ weight: Schema.OptionFromOptionalKey(Schema.Finite) })
+export type Size = typeof Size.Type
+
+export const PaneContent = Schema.Union([
+  Schema.Struct({ _tag: wireTag("Terminal"), terminal: Schema.String }),
+  Schema.Struct({ _tag: wireTag("Mod"), mod: Schema.String }),
+  Schema.Struct({ _tag: wireTag("Unknown") }),
+])
+export type PaneContent = typeof PaneContent.Type
+
+export type Layout =
+  | Readonly<{ _tag: "Block"; type: "block"; id: string; size: Option.Option<Size>; content: PaneContent }>
+  /** `row` and `column`; a container of another type (a `stack`) keeps its children too. */
+  | Readonly<{ _tag: "Split"; type: string; id: string; size: Option.Option<Size>; children: ReadonlyArray<Layout> }>
+  | Readonly<{ _tag: "Unknown"; type: string }>
+
+type LayoutEncoded =
+  | Readonly<{ _tag?: "Block"; type: "block"; id: string; size?: typeof Size.Encoded; content: typeof PaneContent.Encoded }>
+  | Readonly<{ _tag?: "Split"; type: string; id: string; size?: typeof Size.Encoded; children: ReadonlyArray<LayoutEncoded> }>
+  | Readonly<{ _tag?: "Unknown"; type: string }>
+
+const LayoutRef = Schema.suspend((): Schema.Codec<Layout, LayoutEncoded> => Layout)
+
+export const Layout: Schema.Codec<Layout, LayoutEncoded> = Schema.Union([
+  Schema.Struct({
+    _tag: wireTag("Block"),
+    type: Schema.Literal("block"),
+    id: Schema.String,
+    size: Schema.OptionFromOptionalKey(Size),
+    content: PaneContent,
+  }),
+  Schema.Struct({
+    _tag: wireTag("Split"),
+    type: Schema.String,
+    id: Schema.String,
+    size: Schema.OptionFromOptionalKey(Size),
+    children: Schema.Array(LayoutRef),
+  }),
+  Schema.Struct({ _tag: wireTag("Unknown"), type: Schema.String }),
+])
+
+export const Tab = Schema.Struct({ id: Schema.String, name: Schema.String, root: Layout })
+export type Tab = typeof Tab.Type
 
 export const Space = Schema.Struct({
   id: Schema.String,
