@@ -111,6 +111,8 @@ describe("decodeLine on real transcript lines", async () => {
     ["ai-title", []],
     ["queue-operation", []],
     ["file-history-snapshot", []],
+    ["prompt sent during a turn", [{ _tag: "Prompt", id, text: "<prompt>" }]],
+    ["task notification sent during a turn", []],
   ]
 
   test("the fixture splits into one line per kind", () => {

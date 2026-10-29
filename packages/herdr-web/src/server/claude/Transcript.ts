@@ -86,6 +86,17 @@ const TranscriptLine = Schema.Union([
     isSidechain: Flag,
     message: Schema.Struct({ content: Schema.Array(AssistantBlock) }),
   }),
+  // A prompt the user sends while the agent works waits in a queue, and
+  // reaches the transcript as this attachment instead of a user line.
+  // Notifications from background tasks and other agents queue the same way
+  // without humanTurn.
+  Schema.Struct({
+    _tag: wireTag("QueuedPrompt"),
+    type: Schema.Literal("attachment"),
+    uuid: Schema.String,
+    isSidechain: Flag,
+    attachment: Schema.Struct({ type: Schema.Literal("queued_command"), prompt: Schema.String, humanTurn: Schema.Literal(true) }),
+  }),
   Schema.Struct({
     _tag: wireTag("TurnEnded"),
     type: Schema.Literal("system"),
@@ -119,6 +130,8 @@ const toEntries = (line: TranscriptLine): ReadonlyArray<Entry> =>
       isSidechain === true
         ? []
         : Array.flatMap(message.content, (block, index) => assistantEntries(`${uuid}/${index}`, block)),
+    QueuedPrompt: ({ uuid, isSidechain, attachment }) =>
+      isSidechain === true || String.isEmpty(String.trim(attachment.prompt)) ? [] : [{ _tag: "Prompt", id: uuid, text: attachment.prompt }],
     TurnEnded: ({ uuid, durationMs }) => [{ _tag: "TurnEnded", id: uuid, durationMs }],
     Compacted: ({ uuid }) => [{ _tag: "Compacted", id: uuid }],
     Unshown: () => [],
