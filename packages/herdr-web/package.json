@@ -7,14 +7,18 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware",
     "test": "bun test",
-    "start": "bun src/main.ts"
+    "start": "bun src/server/main.ts",
+    "build": "vite build",
+    "build:watch": "vite build --watch"
   },
   "devDependencies": {
     "@effect/tsgo": "0.63.0",
+    "@foldkit/vite-plugin": "0.29.0",
     "@types/bun": "latest",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
   },
   "peerDependencies": {
     "typescript": "^7"
