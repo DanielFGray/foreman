@@ -67,7 +67,7 @@ describe("terminalLabel", () => {
   test("prefers the name, then the foreground program, then the address", () => {
     const plain = terminal("t9", {})
     expect(terminalLabel({ ...plain, name: Option.some("claude") })).toBe("claude")
-    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "nvim" }) })).toBe("nvim")
+    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "nvim", pid: 1 }) })).toBe("nvim")
     expect(terminalLabel(plain)).toBe("t9")
   })
 })

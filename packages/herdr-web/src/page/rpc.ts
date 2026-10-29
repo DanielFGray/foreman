@@ -1,5 +1,5 @@
 import { BrowserSocket } from "@effect/platform-browser"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Match } from "effect"
 import { RpcClient, type RpcClientError, RpcSerialization } from "effect/rpc"
 import { Api, type BridgeError } from "../shared/Api.ts"
 
@@ -17,13 +17,15 @@ export class BridgeClient extends Context.Service<BridgeClient>()("herdr-web/pag
   static readonly layer = Layer.effect(this, this.make).pipe(Layer.provide(Protocol))
 }
 
-/** Turns a failed call into a Message that says why: hc's own message, or that the bridge is gone. */
+/** Why a call failed: hc's own message, or that the bridge is gone. */
+export const failureReason = (error: BridgeError | RpcClientError.RpcClientError) =>
+  Match.valueTags(error, {
+    BridgeError: ({ message }) => message,
+    RpcClientError: () => "the bridge is not reachable",
+  })
+
+/** Turns a failed call into a Message that says why. */
 export const reportFailure =
   <Message>(toMessage: (reason: string) => Message) =>
   <A, R>(call: Effect.Effect<A, BridgeError | RpcClientError.RpcClientError, R>) =>
-    call.pipe(
-      Effect.catchTags({
-        BridgeError: ({ message }) => Effect.succeed(toMessage(message)),
-        RpcClientError: () => Effect.succeed(toMessage("the bridge is not reachable")),
-      }),
-    )
+    call.pipe(Effect.catch((error) => Effect.succeed(toMessage(failureReason(error)))))

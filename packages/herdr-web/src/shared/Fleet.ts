@@ -18,7 +18,7 @@ export const Status = Schema.Struct({
 })
 export type Status = typeof Status.Type
 
-export const Foreground = Schema.Struct({ name: Schema.String })
+export const Foreground = Schema.Struct({ name: Schema.String, pid: Schema.Int })
 
 export const Terminal = Schema.Struct({
   /** `t7` here, `machine/t7` on a connected machine. */

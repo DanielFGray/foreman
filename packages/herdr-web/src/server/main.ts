@@ -1,13 +1,15 @@
 // The bridge: serves the page from dist/ and the Api over a WebSocket at
 // /rpc, on loopback only, behind the Host/Origin guard.
-import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
-import { Config, Effect, Inspectable, Layer, Match } from "effect"
+import { BunFileSystem, BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { Config, Effect, Inspectable, Layer, Match, Stream } from "effect"
+import type { PlatformError } from "effect/PlatformError"
 import { HttpRouter, HttpStaticServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
 import { Hc } from "../hc/Hc.ts"
 import type { HcFailure } from "../hc/Connection.ts"
 import { Api, BridgeError } from "../shared/Api.ts"
 import { guard, LOOPBACK } from "./Access.ts"
+import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
 import { FleetModel } from "./FleetModel.ts"
 
 const toBridgeError = (error: HcFailure) =>
@@ -17,16 +19,38 @@ const toBridgeError = (error: HcFailure) =>
     HcProtocolError: ({ cause }) => new BridgeError({ kind: "protocol", message: `unreadable reply from hc: ${Inspectable.toStringUnknown(cause, 0)}` }),
   })
 
+const transcriptFailure = (error: NoTranscript | PlatformError) =>
+  Match.valueTags(error, {
+    NoTranscript: ({ reason }) => reason,
+    PlatformError: ({ message }) => `the transcript cannot be read: ${message}`,
+  })
+
 const Handlers = Api.toLayer(
   Effect.gen(function* () {
     const hc = yield* Hc
     const fleet = yield* FleetModel
+    const claude = yield* ClaudeChat
     return {
       watch: () => fleet.changes,
       read: ({ terminal, lines }) =>
         hc.read(terminal, lines).pipe(
           Effect.map(({ text }) => ({ text })),
           Effect.mapError(toBridgeError),
+        ),
+      chat: ({ terminal }) =>
+        hc.get(terminal).pipe(
+          Effect.mapError(toBridgeError),
+          Effect.flatMap(({ foreground }) =>
+            Effect.fromOption(foreground).pipe(
+              Effect.mapError(() => new BridgeError({ kind: "transcript", message: "no program runs in this terminal" })),
+            ),
+          ),
+          Effect.map(({ pid }) =>
+            claude.chat(pid).pipe(
+              Stream.mapError((error) => new BridgeError({ kind: "transcript", message: transcriptFailure(error) })),
+            ),
+          ),
+          Stream.unwrap,
         ),
       send: ({ terminal, text }) => hc.send(terminal, text).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
       keys: ({ terminal, keys }) => hc.keys(terminal, keys).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
@@ -48,6 +72,9 @@ const Bridge = Layer.unwrap(
     )
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: LOOPBACK, port })))
   }),
-).pipe(Layer.provide(FleetModel.layer), Layer.provide(Hc.layer))
+).pipe(
+  Layer.provide([FleetModel.layer, ClaudeChat.layer]),
+  Layer.provide([Hc.layer, BunFileSystem.layer]),
+)
 
 BunRuntime.runMain(Layer.launch(Bridge))
