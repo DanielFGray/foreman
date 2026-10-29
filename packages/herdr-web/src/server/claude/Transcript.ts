@@ -152,7 +152,7 @@ const typedText = (id: string, text: string): ReadonlyArray<Entry> =>
 
 const tagContent = (text: string, tag: string) =>
   pipe(
-    String.match(new RegExp(`<${tag}>([^<]*)</${tag}>`))(text),
+    String.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))(text),
     Option.flatMap((found) => Array.get(found, 1)),
     Option.map(String.trim),
   )

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Option } from "effect"
+import { Array, Option } from "effect"
+import type { Entry } from "../../shared/Chat.ts"
 import { parseMarkdown } from "./Markdown.ts"
 import { decodeLine, splitLines } from "./Transcript.ts"
 
@@ -77,6 +78,51 @@ describe("decodeLine", () => {
   test("a line that is not JSON shows nothing", () => {
     expect(decodeLine("{not json")).toEqual([])
   })
+})
+
+// One real line of each kind, from Claude Code's own transcripts, with every
+// string replaced by a placeholder named after its key.
+describe("decodeLine on real transcript lines", async () => {
+  const fixture = new Uint8Array(await Bun.file(`${import.meta.dir}/fixtures/transcript.jsonl`).arrayBuffer())
+  const { lines, rest } = splitLines(new Uint8Array(), fixture)
+  const id = expect.any(String)
+  const expected: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]> = [
+    ["prompt", [{ _tag: "Prompt", id, text: "<content>" }]],
+    ["command", [{ _tag: "Command", id, name: "/<name>", args: "<args>" }]],
+    ["local command output", []],
+    ["meta", []],
+    ["compact summary", []],
+    ["tool result", [{ _tag: "ToolResult", id, toolUseId: id, isError: false }]],
+    ["failed tool result", [{ _tag: "ToolResult", id, toolUseId: id, isError: true }]],
+    ["reply", [{ _tag: "Reply", id, blocks: [{ _tag: "Paragraph", inlines: [{ _tag: "Text", text: "<text>" }] }] }]],
+    ["tool use", [{ _tag: "Tool", id, toolUseId: id, name: "Bash", summary: "<description>" }]],
+    ["thinking", []],
+    ["sidechain", []],
+    ["turn end", [{ _tag: "TurnEnded", id, durationMs: expect.any(Number) }]],
+    ["compaction", [{ _tag: "Compacted", id }]],
+    ["away summary", []],
+    ["request blob, text", []],
+    ["request blob, tool result", []],
+    ["request blob, tool use", []],
+    ["api-request", []],
+    ["attachment", []],
+    ["last-prompt", []],
+    ["permission-mode", []],
+    ["ai-title", []],
+    ["queue-operation", []],
+    ["file-history-snapshot", []],
+  ]
+
+  test("the fixture splits into one line per kind", () => {
+    expect(lines.length).toBe(expected.length)
+    expect(rest.length).toBe(0)
+  })
+
+  Array.forEach(expected, ([kind, entries], index) =>
+    test(kind, () => {
+      expect(decodeLine(lines[index] ?? "")).toEqual(entries)
+    }),
+  )
 })
 
 describe("parseMarkdown", () => {

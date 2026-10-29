@@ -3,7 +3,7 @@
 import { Array, Duration, Match, Option, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Block, Entry, Inline } from "../shared/Chat.ts"
-import { type Call, foldEntries, type Item } from "./chat.ts"
+import { foldEntries, type Item, type Step } from "./chat.ts"
 
 export const chatView = <M>(entries: ReadonlyArray<Entry>, h: HtmlBuilder<M>): Html =>
   // The outer element is a reversed flex column, so it opens at the newest entry.
@@ -28,7 +28,7 @@ const itemView = <M>(item: Item, h: HtmlBuilder<M>): Html =>
       Prompt: ({ text }) => [h.p([], [text])],
       Command: ({ name, args }) => [h.code([], [`${name} ${args}`.trim()])],
       Reply: ({ blocks }) => Array.map(blocks, (block) => blockView(block, h)),
-      Tools: ({ calls }) => [toolsView(calls, h)],
+      Work: ({ steps }) => [workView(steps, h)],
       TurnEnded: ({ durationMs }) => [`turn took ${Duration.format(Duration.seconds(Math.round(durationMs / 1000)))}`],
       Compacted: () => ["earlier turns were compacted"],
     }),
@@ -39,34 +39,44 @@ const itemClass = (item: Item) =>
     Prompt: () => "bubble user",
     Command: () => "bubble user",
     Reply: () => "bubble agent",
-    Tools: () => "tools",
+    Work: () => "work",
     TurnEnded: () => "mark",
     Compacted: () => "mark",
   })
 
-const toolsView = <M>(calls: Array.NonEmptyReadonlyArray<Call>, h: HtmlBuilder<M>): Html => {
+/** A turn's work as one line that opens to every step: the count, any failures, and the latest call. */
+const workView = <M>(steps: Array.NonEmptyReadonlyArray<Step>, h: HtmlBuilder<M>): Html => {
+  const calls = Array.filter(steps, (step) => step._tag === "Call")
+  const notes = steps.length - calls.length
   const failed = Array.filter(calls, ({ outcome }) => outcome === "failed").length
-  const last = Array.lastNonEmpty(calls)
   return h.details(
     [],
     [
       h.summary(
         [],
         [
-          h.span([h.Class("count")], [calls.length === 1 ? "1 tool" : `${calls.length} tools`]),
+          h.span([h.Class("count")], [counted(calls.length, "tool"), ...(notes > 0 ? [`, ${counted(notes, "note")}`] : [])]),
           ...(failed > 0 ? [h.span([h.Class("failed")], [`${failed} failed`])] : []),
-          h.span([h.Class("last")], [String.isEmpty(last.summary) ? last.name : `${last.name}: ${last.summary}`]),
+          ...Option.match(Array.last(calls), {
+            onNone: () => [],
+            onSome: ({ name, summary }) => [h.span([h.Class("last")], [String.isEmpty(summary) ? name : `${name}: ${summary}`])],
+          }),
         ],
       ),
-      h.ul(
+      h.ol(
         [],
-        Array.map(calls, (call) =>
-          h.keyed("li")(call.id, [h.Class(call.outcome)], [h.b([], [call.name]), ` ${call.summary}`]),
+        Array.map(steps, (step) =>
+          Match.valueTags(step, {
+            Call: ({ id, name, summary, outcome }) => h.keyed("li")(id, [h.Class(outcome)], [h.b([], [name]), ` ${summary}`]),
+            Note: ({ id, blocks }) => h.keyed("li")(id, [h.Class("note")], Array.map(blocks, (block) => blockView(block, h))),
+          }),
         ),
       ),
     ],
   )
 }
+
+const counted = (count: number, noun: string) => (count === 1 ? `1 ${noun}` : `${count} ${noun}s`)
 
 // MARKDOWN
 

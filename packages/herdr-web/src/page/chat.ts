@@ -1,25 +1,36 @@
-// The chat as the page lists it: tool calls in a row fold into one item, each
-// call marked with its result, so a turn of fifty tool calls reads as one line.
-import { Array, HashMap, Option, Result, Schema } from "effect"
-import type { Entry } from "../shared/Chat.ts"
+// The chat as the page lists it, one turn at a time. A turn starts at a
+// prompt or a command. Its work (tool calls, and the replies the agent writes
+// between them) folds into one item, and its last reply stays outside the
+// fold as the answer. A turn of fifty tool calls reads as one line.
+import { Array, HashMap, Match, Option, Result, Schema, Tuple } from "effect"
+import { Block, type Entry } from "../shared/Chat.ts"
 
 export const Outcome = Schema.Literals(["running", "succeeded", "failed"])
 export type Outcome = typeof Outcome.Type
 
-export const Call = Schema.Struct({ id: Schema.String, name: Schema.String, summary: Schema.String, outcome: Outcome })
+export const Call = Schema.TaggedStruct("Call", { id: Schema.String, name: Schema.String, summary: Schema.String, outcome: Outcome })
 export type Call = typeof Call.Type
 
-/** Tool calls made one after another, with no text between them. */
-export const Tools = Schema.TaggedStruct("Tools", { id: Schema.String, calls: Schema.NonEmptyArray(Call) })
-export type Tools = typeof Tools.Type
+/** A reply written while the turn was still working. */
+export const Note = Schema.TaggedStruct("Note", { id: Schema.String, blocks: Schema.Array(Block) })
+export type Note = typeof Note.Type
 
-export type Item = Exclude<Entry, { _tag: "Tool" | "ToolResult" }> | Tools
+export const Step = Schema.Union([Call, Note])
+export type Step = typeof Step.Type
 
-/** Folds runs of tool calls into Tools items. A result never shows on its own; it marks its call. */
+/** A turn's work, in the order it happened. */
+export const Work = Schema.TaggedStruct("Work", { id: Schema.String, steps: Schema.NonEmptyArray(Step) })
+export type Work = typeof Work.Type
+
+export type Item = Exclude<Entry, { _tag: "Tool" | "ToolResult" }> | Work
+
 export const foldEntries = (entries: ReadonlyArray<Entry>): ReadonlyArray<Item> => {
   const results = HashMap.fromIterable(
     Array.filterMap(entries, (entry) =>
-      entry._tag === "ToolResult" ? Result.succeed([entry.toolUseId, entry.isError] as const) : Result.failVoid,
+      Match.value(entry).pipe(
+        Match.tag("ToolResult", ({ toolUseId, isError }) => Result.succeed(Tuple.make(toolUseId, isError))),
+        Match.orElse(() => Result.failVoid),
+      ),
     ),
   )
   const outcome = (toolUseId: string): Outcome =>
@@ -27,21 +38,53 @@ export const foldEntries = (entries: ReadonlyArray<Entry>): ReadonlyArray<Item> 
       onNone: () => "running",
       onSome: (isError) => (isError ? "failed" : "succeeded"),
     })
-
-  return Array.reduce(entries, Array.empty<Item>(), (items, entry) => {
-    if (entry._tag === "ToolResult") {
-      return items
-    }
-    if (entry._tag !== "Tool") {
-      return Array.append(items, entry)
-    }
-    const call: Call = { id: entry.id, name: entry.name, summary: entry.summary, outcome: outcome(entry.toolUseId) }
-    return Option.match(Array.last(items), {
-      onSome: (last) =>
-        last._tag === "Tools"
-          ? Array.append(Array.dropRight(items, 1), { ...last, calls: Array.append(last.calls, call) })
-          : Array.append(items, Tools.make({ id: entry.id, calls: [call] })),
-      onNone: () => [Tools.make({ id: entry.id, calls: [call] })],
-    })
-  })
+  const step = (entry: Entry): Option.Option<Step> =>
+    Match.value(entry).pipe(
+      Match.tag("Tool", ({ id, name, summary, toolUseId }) =>
+        Option.some(Call.make({ id, name, summary, outcome: outcome(toolUseId) })),
+      ),
+      Match.tag("Reply", ({ id, blocks }) => Option.some(Note.make({ id, blocks }))),
+      Match.orElse(() => Option.none()),
+    )
+  return Array.flatMap(turns(entries), (turn) => foldTurn(turn, step))
 }
+
+type Turn = ReadonlyArray<Entry>
+
+/** Splits the entries before each prompt or command, and at a compaction, which can fall inside a turn. */
+const turns = (entries: ReadonlyArray<Entry>): ReadonlyArray<Turn> =>
+  Array.reduce(entries, Array.empty<Turn>(), (split, entry) =>
+    Option.match(Array.last(split), {
+      onSome: (turn) =>
+        opensTurn(entry) ? Array.append(split, [entry]) : Array.append(Array.dropRight(split, 1), Array.append(turn, entry)),
+      onNone: () => [[entry]],
+    }),
+  )
+
+const opensTurn = (entry: Entry) => entry._tag === "Prompt" || entry._tag === "Command" || entry._tag === "Compacted"
+
+const foldTurn = (turn: Turn, step: (entry: Entry) => Option.Option<Step>): ReadonlyArray<Item> => {
+  const opener = Option.filter(Array.head(turn), opensTurn)
+  const body = Option.match(opener, { onNone: () => turn, onSome: () => Array.drop(turn, 1) })
+  const steps = Array.getSomes(Array.map(body, step))
+  // The last reply is the answer, unless the agent went on working after it.
+  const answer = Option.flatMap(
+    Option.filter(Array.last(steps), (last) => last._tag === "Note"),
+    () => Option.flatMap(Array.findLast(body, (entry) => entry._tag === "Reply"), shownAlone),
+  )
+  const work = Option.match(answer, { onNone: () => steps, onSome: () => Array.dropRight(steps, 1) })
+  const marks = Array.getSomes(Array.map(body, (entry) => (opensTurn(entry) || entry._tag === "Reply" ? Option.none() : shownAlone(entry))))
+  return [
+    ...Array.getSomes([Option.flatMap(opener, shownAlone)]),
+    ...Array.match(work, { onEmpty: () => [], onNonEmpty: (all) => [Work.make({ id: Array.headNonEmpty(all).id, steps: all })] }),
+    ...Array.getSomes([answer]),
+    ...marks,
+  ]
+}
+
+/** The entry as an item of its own; tool calls and results only show inside Work. */
+const shownAlone = (entry: Entry): Option.Option<Item> =>
+  Match.value(entry).pipe(
+    Match.tags({ Tool: () => Option.none(), ToolResult: () => Option.none() }),
+    Match.orElse((other) => Option.some(other)),
+  )

@@ -2,14 +2,14 @@
 //
 // Claude Code writes `<config>/sessions/<pid>.json` for each running process,
 // naming its session id, and appends the conversation to
-// `<config>/projects/<project>/<session id>.jsonl`. The pid record is
-// followed too, so the chat moves to the new transcript when the process
-// starts another session.
-import { Array, Config, Context, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect"
+// `<config>/projects/<project>/<session id>.jsonl`. Claude Code rewrites the
+// pid record in place when the process starts another session (`/clear`
+// does), so watching it moves the chat to the new transcript.
+import { Array, Config, Context, Effect, FileSystem, Layer, Option, Result, Schedule, Schema, Stream } from "effect"
 import type { ChatUpdate } from "../../shared/Chat.ts"
 import { decodeLine, splitLines } from "./Transcript.ts"
 
-/** The process has no session record, or its transcript is not where the record says. */
+/** The process has no session record Claude Code can be followed by. */
 export class NoTranscript extends Schema.TaggedError<NoTranscript, { readonly brand: unique symbol }>()(
   "NoTranscript",
   { pid: Schema.Int, reason: Schema.String },
@@ -24,23 +24,44 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
 
     const sessionId = (pid: number) =>
       fs.readFileString(`${configDir}/sessions/${pid}.json`).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PidRecord))),
+        Effect.catchReason("PlatformError", "NotFound", () =>
+          Effect.fail(new NoTranscript({ pid, reason: "Claude Code has no session record for this process" })),
+        ),
+        Effect.flatMap((text) =>
+          decodePidRecord(text).pipe(
+            Effect.mapError(({ message }) => new NoTranscript({ pid, reason: `unreadable session record: ${message}` })),
+          ),
+        ),
         Effect.map(({ sessionId }) => sessionId),
-        Effect.mapError(() => new NoTranscript({ pid, reason: "Claude Code has no session record for this process" })),
       )
 
-    const transcriptPath = Effect.fnUntraced(function* (pid: number, id: string) {
+    const findTranscript = Effect.fnUntraced(function* (id: string) {
       const projects = `${configDir}/projects`
-      const folders = yield* fs.readDirectory(projects).pipe(Effect.orElseSucceed(() => []))
-      const found = yield* Effect.filter(folders, (folder) =>
-        fs.exists(`${projects}/${folder}/${id}.jsonl`).pipe(Effect.orElseSucceed(() => false)),
-      )
-      return yield* Array.head(found).pipe(
-        Option.map((folder) => `${projects}/${folder}/${id}.jsonl`),
-        Effect.fromOption,
-        Effect.mapError(() => new NoTranscript({ pid, reason: `no transcript for session ${id} yet` })),
-      )
+      // No projects folder yet means Claude Code has written no transcript.
+      const folders = yield* fs.readDirectory(projects).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([])))
+      const found = yield* Effect.filter(folders, (folder) => fs.exists(`${projects}/${folder}/${id}.jsonl`))
+      return Option.map(Array.head(found), (folder) => `${projects}/${folder}/${id}.jsonl`)
     })
+
+    /** The transcript's path once it exists. */
+    const awaitTranscript = (id: string) =>
+      Stream.fromEffectSchedule(findTranscript(id), Schedule.spaced(TRANSCRIPT_CHECK)).pipe(
+        Stream.filterMap(Result.fromOption(() => undefined)),
+        Stream.take(1),
+      )
+
+    // A new session has no transcript until it writes its first line, so its
+    // chat is empty until then.
+    const session = (id: string) =>
+      Stream.unwrap(
+        Effect.map(
+          findTranscript(id),
+          Option.match({
+            onSome: follow,
+            onNone: () => Stream.concat(Stream.make(EMPTY), Stream.flatMap(awaitTranscript(id), follow)),
+          }),
+        ),
+      )
 
     /** Reads the file's bytes from `from` to `to`. */
     const readRange = (path: string, from: bigint, to: bigint) =>
@@ -78,7 +99,7 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
       Stream.merge(Stream.make("start"), fs.watch(`${configDir}/sessions/${pid}.json`)).pipe(
         Stream.mapEffect(() => sessionId(pid)),
         Stream.changes,
-        Stream.switchMap((id) => Stream.unwrap(Effect.map(transcriptPath(pid, id), follow))),
+        Stream.switchMap(session),
       )
 
     return { chat }
@@ -88,6 +109,7 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
 }
 
 const PidRecord = Schema.Struct({ sessionId: Schema.String })
+const decodePidRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(PidRecord))
 
 /** Where the next read starts, and the bytes of a line not yet complete. None before the first read. */
 type Tail = Option.Option<Readonly<{ offset: bigint; rest: Uint8Array }>>
@@ -95,6 +117,9 @@ type Tail = Option.Option<Readonly<{ offset: bigint; rest: Uint8Array }>>
 /** How much of the transcript's end the first read takes: enough for the recent turns of a long session. */
 const TAIL_BYTES = 4n * 1024n * 1024n
 const NEWLINE = 0x0a
+/** How often a new session is checked for its first transcript line. */
+const TRANSCRIPT_CHECK = "1 second"
+const EMPTY: ChatUpdate = { _tag: "Reset", entries: [] }
 
 const reset = (lines: ReadonlyArray<string>): ChatUpdate => ({ _tag: "Reset", entries: Array.flatMap(lines, decodeLine) })
 
