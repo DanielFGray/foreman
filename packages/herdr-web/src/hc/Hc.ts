@@ -4,7 +4,8 @@
 // notifications.
 import { Config, Context, Duration, Effect, Layer, Option, RcRef, Schema } from "effect"
 import { HerdrAppDoc, Terminal } from "../shared/Fleet.ts"
-import { connect, method, wireTag, type Method } from "./Connection.ts"
+import { wireTag } from "../shared/Wire.ts"
+import { connect, method, type Method } from "./Connection.ts"
 
 /**
  * What a subscription reports. Every terminal event (status, turn, title,

@@ -8,6 +8,7 @@ import { BunSocket } from "@effect/platform-bun"
 import { Deferred, Effect, Match, MutableHashMap, Option, Queue, Ref, Schema, Stream } from "effect"
 import { Ndjson } from "effect/encoding"
 import { Socket } from "effect/socket"
+import { wireTag } from "../shared/Wire.ts"
 
 /** hc refused a call; `kind` is its stable error kind (`not_found`, `blocked`, ...). */
 export class HcError extends Schema.TaggedError<HcError, { readonly brand: unique symbol }>()("HcError", {
@@ -130,13 +131,6 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
   yield* call(hello, { generation: 1 })
   return { call, notifications: Stream.fromQueue(notes) } satisfies Connection<N>
 })
-
-/**
- * A `_tag` for a wire shape that has none: the decoder fills it in and the
- * encoder leaves it out again, so variants can be matched by tag.
- */
-export const wireTag = <const T extends string>(tag: T) =>
-  Schema.Literal(tag).pipe(Schema.withDecodingDefaultKey(Effect.succeed(tag), { encodingStrategy: "omit" }))
 
 const hello = method(
   "hello",

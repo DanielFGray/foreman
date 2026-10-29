@@ -1,0 +1,114 @@
+import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
+import { parseMarkdown } from "./Markdown.ts"
+import { decodeLine, splitLines } from "./Transcript.ts"
+
+// Lines shaped like Claude Code's own (fields trimmed to the ones that matter).
+const user = (content: unknown, extra: object = {}) =>
+  JSON.stringify({ type: "user", uuid: "u1", isSidechain: false, message: { role: "user", content }, ...extra })
+const assistant = (block: object, extra: object = {}) =>
+  JSON.stringify({ type: "assistant", uuid: "a1", isSidechain: false, message: { role: "assistant", content: [block] }, ...extra })
+
+const bytes = (text: string) => new TextEncoder().encode(text)
+
+describe("splitLines", () => {
+  test("returns complete lines and keeps a partial last line for the next read", () => {
+    const first = splitLines(new Uint8Array(), bytes('{"a":1}\n{"b":'))
+    expect(first.lines).toEqual(['{"a":1}'])
+    expect(splitLines(first.rest, bytes("2}\n")).lines).toEqual(['{"b":2}'])
+  })
+
+  test("keeps a multibyte character that a read cut in two", () => {
+    const line = bytes('{"t":"ü"}\n')
+    const cut = line.indexOf(0xc3) + 1
+    const first = splitLines(new Uint8Array(), line.subarray(0, cut))
+    expect(first.lines).toEqual([])
+    expect(splitLines(first.rest, line.subarray(cut)).lines).toEqual(['{"t":"ü"}'])
+  })
+})
+
+describe("decodeLine", () => {
+  test("a typed prompt", () => {
+    expect(decodeLine(user("deploy the backend"))).toEqual([{ _tag: "Prompt", id: "u1/0", text: "deploy the backend" }])
+  })
+
+  test("a slash command", () => {
+    const text = "<command-message>go-forth</command-message>\n<command-name>/go-forth</command-name>\n<command-args>now</command-args>"
+    expect(decodeLine(user(text))).toEqual([{ _tag: "Command", id: "u1/0", name: "/go-forth", args: "now" }])
+  })
+
+  test("skips meta, sidechain, compact-summary and local-command lines", () => {
+    expect(decodeLine(user("hidden", { isMeta: true }))).toEqual([])
+    expect(decodeLine(user("subagent", { isSidechain: true }))).toEqual([])
+    expect(decodeLine(user("This session is being continued", { isCompactSummary: true }))).toEqual([])
+    expect(decodeLine(user("<local-command-stdout>ok</local-command-stdout>"))).toEqual([])
+  })
+
+  test("skips an api-request-blob, which repeats a turn with the same role", () => {
+    expect(decodeLine(JSON.stringify({ type: "api-request-blob", message: { role: "user", content: "again" } }))).toEqual([])
+  })
+
+  test("a tool call with its summary, and its result", () => {
+    const call = { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "bun test", description: "Run the tests" } }
+    expect(decodeLine(assistant(call))).toEqual([
+      { _tag: "Tool", id: "a1/0", toolUseId: "toolu_1", name: "Bash", summary: "Run the tests" },
+    ])
+    expect(decodeLine(user([{ type: "tool_result", tool_use_id: "toolu_1", is_error: true, content: "boom" }]))).toEqual([
+      { _tag: "ToolResult", id: "u1/0", toolUseId: "toolu_1", isError: true },
+    ])
+  })
+
+  test("a reply as parsed Markdown; thinking is not shown", () => {
+    expect(decodeLine(assistant({ type: "text", text: "**done**" }))).toEqual([
+      { _tag: "Reply", id: "a1/0", blocks: [{ _tag: "Paragraph", inlines: [{ _tag: "Strong", children: [{ _tag: "Text", text: "done" }] }] }] },
+    ])
+    expect(decodeLine(assistant({ type: "thinking", thinking: "hmm" }))).toEqual([])
+  })
+
+  test("turn end and compaction", () => {
+    expect(decodeLine(JSON.stringify({ type: "system", subtype: "turn_duration", uuid: "s1", durationMs: 1500 }))).toEqual([
+      { _tag: "TurnEnded", id: "s1", durationMs: 1500 },
+    ])
+    expect(decodeLine(JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: "s2" }))).toEqual([
+      { _tag: "Compacted", id: "s2" },
+    ])
+  })
+
+  test("a line that is not JSON shows nothing", () => {
+    expect(decodeLine("{not json")).toEqual([])
+  })
+})
+
+describe("parseMarkdown", () => {
+  test("raw HTML stays text", () => {
+    expect(parseMarkdown('<img src=x onerror="alert(1)">')).toEqual([
+      { _tag: "Paragraph", inlines: [{ _tag: "Text", text: '<img src=x onerror="alert(1)">' }] },
+    ])
+  })
+
+  test("a javascript: link loses its target; an https link keeps it", () => {
+    expect(parseMarkdown("[x](javascript:alert(1)) [y](https://example.com/)")).toEqual([
+      {
+        _tag: "Paragraph",
+        inlines: [
+          { _tag: "Text", text: "x" },
+          { _tag: "Text", text: " " },
+          { _tag: "Link", href: "https://example.com/", children: [{ _tag: "Text", text: "y" }] },
+        ],
+      },
+    ])
+  })
+
+  test("code blocks keep their language; tables keep their cells", () => {
+    expect(parseMarkdown("```ts\nconst a = 1\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |")).toEqual([
+      { _tag: "CodeBlock", lang: Option.some("ts"), text: "const a = 1" },
+      {
+        _tag: "Table",
+        rows: [
+          [[{ _tag: "Text", text: "a" }], [{ _tag: "Text", text: "b" }]],
+          [[{ _tag: "Text", text: "1" }], [{ _tag: "Text", text: "2" }]],
+        ],
+      },
+    ])
+  })
+})
