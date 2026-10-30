@@ -94,6 +94,15 @@ export const FontCatalog = defineTaggedUnion({
 })
 export type FontCatalog = typeof FontCatalog.Type
 
+/**
+ * A prompt sent to the agent and not yet in its transcript. `seen` is how many
+ * prompts with this text the chat held when it was sent. `sentAt` is the
+ * clock's first reading after the send: the page learns the time only from
+ * the clock, which reads it at once when a wait starts.
+ */
+export const Waiting = Schema.Struct({ address: Schema.String, text: Schema.String, seen: Schema.Int, sentAt: Schema.Option(Schema.Finite) })
+export type Waiting = typeof Waiting.Type
+
 export const Model = Schema.Struct({
   bridge: Bridge,
   /** On a phone the sidebar folds away once a tab or agent is picked, to give the panes the screen. */
@@ -103,6 +112,8 @@ export const Model = Schema.Struct({
   views: Schema.Record(Schema.String, View),
   prompt: Schema.String,
   delivery: Delivery,
+  /** The prompts the chats show as faded bubbles until the agent records them. */
+  waiting: Schema.Array(Waiting),
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
   settings: Settings,

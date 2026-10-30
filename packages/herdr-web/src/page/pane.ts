@@ -13,6 +13,7 @@ import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
 import { stateOf, statusDot } from "./status.ts"
+import { waitingAt } from "./waiting.ts"
 import { LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 
 /** A terminal's pane; `maybePane` is its herdr-app pane, which the split and close buttons act on. */
@@ -64,7 +65,7 @@ export const paneView = (
             [
               Conversation.match(conversation, {
                 Loading: () => h.p([h.Class("chat note")], ["reading the conversation…"]),
-                Shown: ({ entries }) => chatView(entries, h),
+                Shown: ({ entries }) => chatView(entries, waitingAt(model, address), h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
               ...(isFocused ? [promptView(model, h)] : []),

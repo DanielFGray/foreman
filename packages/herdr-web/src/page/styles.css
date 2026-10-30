@@ -219,6 +219,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bubble > :last-child { margin-bottom: 0; }
 .bubble.user { align-self: flex-end; background: var(--surface); white-space: pre-wrap; }
 .bubble.agent { align-self: flex-start; background: var(--mantle); }
+.bubble.waiting { display: flex; align-items: flex-end; gap: 6px; opacity: 0.5; }
+.bubble.waiting p { margin: 0; }
+.waiting-clock { display: inline-flex; color: var(--subtext); }
 .bubble h3, .bubble h4 { margin: 10px 0 4px; font-size: 1em; }
 .bubble ul, .bubble ol { padding-left: 20px; }
 .bubble blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--surface); color: var(--subtext); }

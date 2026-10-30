@@ -4,19 +4,35 @@ import { Array, Duration, Match, Option, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Block, Entry, Inline } from "../shared/Chat.ts"
 import { foldEntries, type Item, type Step } from "./chat.ts"
+import { Clock, icon } from "./icons.ts"
+import type { WaitingBubble } from "./waiting.ts"
 
-export const chatView = <M>(entries: ReadonlyArray<Entry>, h: HtmlBuilder<M>): Html =>
+/** The entries, then the prompts sent and not yet recorded, as faded bubbles. */
+export const chatView = <M>(entries: ReadonlyArray<Entry>, waiting: ReadonlyArray<WaitingBubble>, h: HtmlBuilder<M>): Html =>
   // The outer element is a reversed flex column, so it opens at the newest entry.
   h.div(
     [h.Class("chat")],
     [
       h.div(
         [],
-        Array.match(foldEntries(entries), {
-          onEmpty: () => [h.p([h.Class("note")], ["No conversation yet."])],
-          onNonEmpty: (items) => Array.map(items, (item) => itemView(item, h)),
-        }),
+        [
+          ...Array.match(foldEntries(entries), {
+            onEmpty: () => (Array.isReadonlyArrayNonEmpty(waiting) ? [] : [h.p([h.Class("note")], ["No conversation yet."])]),
+            onNonEmpty: (items) => Array.map(items, (item) => itemView(item, h)),
+          }),
+          ...Array.map(waiting, (one, index) => waitingView(one, index, h)),
+        ],
       ),
+    ],
+  )
+
+const waitingView = <M>({ text, isLate }: WaitingBubble, index: number, h: HtmlBuilder<M>): Html =>
+  h.keyed("div")(
+    `waiting ${index}`,
+    [h.Class("bubble user waiting")],
+    [
+      h.p([], [text]),
+      ...(isLate ? [h.span([h.Class("waiting-clock"), h.Title("not recorded by the agent yet")], [icon(Clock, h)])] : []),
     ],
   )
 

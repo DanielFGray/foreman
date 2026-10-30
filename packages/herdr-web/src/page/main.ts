@@ -15,6 +15,7 @@ import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSett
 import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
+import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
 
 // CONSTANT
@@ -22,6 +23,8 @@ import { topBarView, workspaceView } from "./workspace.ts"
 const RECONNECT_DELAY = "2 seconds"
 /** Reset countdowns count in minutes. */
 const CLOCK_TICK = "30 seconds"
+/** While a prompt waits, so its clock shows on time. */
+const WAITING_CLOCK_TICK = "1 second"
 
 // INIT
 
@@ -34,6 +37,7 @@ export const init = ({ settings, selection, sidebarWidth }: Flags): UpdateReturn
     views: {},
     prompt: "",
     delivery: Delivery.Ready(),
+    waiting: [],
     paneAction: PaneAction.Idle(),
     spaceDrag: SpaceDrag.Idle(),
     settings,
@@ -96,14 +100,16 @@ export const update = (model: Model, message: Message) =>
     SelectedView: ({ address, view }) => ({ model: withView(model, address, () => newView(view)) }),
 
     ReceivedChat: ({ address, update }) => ({
-      model: withView(model, address, (view) =>
-        withConversation(view, (conversation) =>
-          Conversation.Shown({
-            entries: Match.valueTags(update, {
-              Reset: ({ entries }) => entries,
-              Appended: ({ entries }) => Array.appendAll(shownEntries(conversation), entries),
+      model: settled(
+        withView(model, address, (view) =>
+          withConversation(view, (conversation) =>
+            Conversation.Shown({
+              entries: Match.valueTags(update, {
+                Reset: ({ entries }) => entries,
+                Appended: ({ entries }) => Array.appendAll(shownEntries(conversation), entries),
+              }),
             }),
-          }),
+          ),
         ),
       ),
     }),
@@ -231,7 +237,7 @@ export const update = (model: Model, message: Message) =>
           String.isEmpty(String.trim(model.prompt))
             ? { model }
             : {
-                model: modifyFields(model, { delivery: () => Delivery.Sending() }),
+                model: sentPrompt(modifyFields(model, { delivery: () => Delivery.Sending() }), address, model.prompt),
                 commands: [SendPrompt({ address, text: model.prompt })],
               },
       }),
@@ -241,8 +247,11 @@ export const update = (model: Model, message: Message) =>
         model: modifyFields(model, { prompt: () => "", delivery: () => Delivery.Ready() }),
       })),
 
-    FailedSendPrompt: ({ address, reason }) =>
-      whenFocused(model, address, () => ({ model: modifyFields(model, { delivery: () => Delivery.Refused({ reason }) }) })),
+    // The refused prompt stays in the box, so its text names the bubble to take back.
+    FailedSendPrompt: ({ address, reason }) => {
+      const without = refusedPrompt(model, address, model.prompt)
+      return whenFocused(without, address, () => ({ model: modifyFields(without, { delivery: () => Delivery.Refused({ reason }) }) }))
+    },
 
     ClickedKey: ({ key }) =>
       Option.match(maybeFocus(model), {
@@ -278,7 +287,7 @@ export const update = (model: Model, message: Message) =>
 
     CompletedRefreshUsage: () => ({ model }),
 
-    TickedClock: ({ now }) => ({ model: modifyFields(model, { now: () => now }) }),
+    TickedClock: ({ now }) => ({ model: clocked(modifyFields(model, { now: () => now })) }),
 
     // The sidebar starts at the page's left edge, so its width is where the pointer is, less its grip.
     PressedSidebarEdge: ({ x }) => ({ model: modifyFields(model, { sidebarGrip: () => Option.some(x - shownSidebarWidth(model)) }) }),
@@ -393,12 +402,16 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // Faster while a prompt waits. A new rate starts a new stream, which reads
+  // the clock at once, so a prompt just sent learns its time straight away.
   clock: entry(
-    {},
+    { isWaiting: Schema.Boolean },
     {
-      modelToDependencies: () => ({}),
-      dependenciesToStream: () =>
-        Stream.fromEffectSchedule(Clock.currentTimeMillis, Schedule.spaced(CLOCK_TICK)).pipe(Stream.map((now) => Message.TickedClock({ now }))),
+      modelToDependencies: (model) => ({ isWaiting: Array.isReadonlyArrayNonEmpty(model.waiting) }),
+      dependenciesToStream: ({ isWaiting }) =>
+        Stream.fromEffectSchedule(Clock.currentTimeMillis, Schedule.spaced(isWaiting ? WAITING_CLOCK_TICK : CLOCK_TICK)).pipe(
+          Stream.map((now) => Message.TickedClock({ now })),
+        ),
     },
   ),
 
