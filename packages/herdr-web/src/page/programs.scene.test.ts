@@ -45,7 +45,7 @@ test("a pane running an editor shows the editor's name and icon in its head", ()
   scene(
     { update, view },
     given({
-      ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none() }).model,
+      ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [] }).model,
       bridge: Bridge.Watching({ fleet }),
     }),
     Mount.resolveAll(

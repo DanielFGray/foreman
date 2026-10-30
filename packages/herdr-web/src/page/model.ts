@@ -11,6 +11,7 @@ import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Modifier, Modifiers } from "./keys.ts"
+import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
 import { AgentList, loadSettings, Settings, Surface } from "./settings.ts"
 import { loadSidebarWidth } from "./sidebarWidth.ts"
@@ -18,6 +19,7 @@ import { loadStored } from "./stored.ts"
 import { Link } from "./terminal.ts"
 
 export const SELECTION_KEY = "herdr-web.selection"
+export const RECENT_KEY = "herdr-web.recent"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -73,6 +75,13 @@ export const SpaceDrag = defineTaggedUnion({
 })
 export type SpaceDrag = typeof SpaceDrag.Type
 
+/** The command palette: shut, or open on what is typed and the result the arrow keys reached. */
+export const Palette = defineTaggedUnion({
+  Closed: {},
+  Open: { query: Schema.String, highlighted: Schema.Int },
+})
+export type Palette = typeof Palette.Type
+
 // The page keeps its own selection: following herdr-app's window would move
 // the page whenever the user works at the desk.
 export const Selection = defineTaggedUnion({
@@ -116,6 +125,9 @@ export const Model = Schema.Struct({
   waiting: Schema.Array(Waiting),
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
+  palette: Palette,
+  /** The panes opened last, newest first, for the palette's Recent group. */
+  recent: Schema.Array(Schema.String),
   settings: Settings,
   /** Soft ctrl and alt, armed until the next key. */
   modifiers: Modifiers,
@@ -134,13 +146,20 @@ export const Model = Schema.Struct({
 export type Model = typeof Model.Type
 
 /** What the page starts from: this browser's settings, the tab and pane it showed last, and its sidebar's width. */
-export const Flags = Schema.Struct({ settings: Settings, selection: Selection, sidebarWidth: Schema.Option(Schema.Int) })
+export const Flags = Schema.Struct({
+  settings: Settings,
+  selection: Selection,
+  sidebarWidth: Schema.Option(Schema.Int),
+  /** The panes opened last, newest first. */
+  recent: Schema.Array(Schema.String),
+})
 export type Flags = typeof Flags.Type
 
 export const loadFlags = Effect.all({
   settings: loadSettings,
   selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()),
   sidebarWidth: loadSidebarWidth,
+  recent: loadStored(RECENT_KEY, Schema.Array(Schema.String), []),
 })
 
 // MESSAGE
@@ -204,6 +223,14 @@ export const Message = defineMessageUnion({
   KeyedSidebarEdge: { key: Schema.String },
   ResetSidebarWidth: {},
   CompletedSaveSidebarWidth: {},
+  PressedPaletteKey: {},
+  ClosedPalette: {},
+  UpdatedPaletteQuery: { text: Schema.String },
+  MovedPaletteHighlight: { step: Schema.Int },
+  OpenedPaletteResult: { target: PaletteTarget },
+  SubmittedPalette: {},
+  CompletedFocusPalette: {},
+  CompletedSaveRecent: {},
 })
 export type Message = typeof Message.Type
 

@@ -39,7 +39,7 @@ const fleetOf = (tabIds: ReadonlyArray<string>): Fleet => ({
 })
 
 const start = (fleet: Fleet) => ({
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none() }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none(), recent: [] }).model,
   bridge: Bridge.Watching({ fleet }),
 })
 

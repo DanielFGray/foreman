@@ -37,7 +37,7 @@ const claude = reading(
 const signedOut = reading("opencode", "OpenCode", Option.none())
 
 const withUsage = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model,
   usage: Option.some({ readings: [claude, { ...signedOut, updated: Option.none() }] }),
   now: NOW,
 }

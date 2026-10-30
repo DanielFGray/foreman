@@ -48,7 +48,7 @@ const fleet: Fleet = {
 test("the sidebar lists every space, marked by its agents, and a click opens its first tab", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     expectAll(all.selector(".space-row")).toHaveCount(2),
     inside(role("button", { name: "prog" }), expect(selector(".dot")).toHaveClass("blocked")),
     // A space without agents still shows, with no mark.
@@ -71,7 +71,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
   const away: Machine = { name: "cynic", isLocal: false, state: "needs_login", spaces: [] }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
     expectAll(all.selector(".machine-head")).toHaveCount(2),
     expect(selector(".machine-head.needs_login")).toContainText("cynic"),
     expect(selector(".machine-head.needs_login")).toContainText("needs login"),
@@ -79,7 +79,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
 })
 
 test("agents list below the spaces, or under each space when the settings say so", () => {
-  const model = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }
+  const model = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }
   scene(
     { update, view },
     given(model),
@@ -98,7 +98,7 @@ test("agents list below the spaces, or under each space when the settings say so
 test("a space dragged onto another moves there, and a refusal says why", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     pointerDown(role("button", { name: "prog" })),
     hover(role("button", { name: "quiet" })),
     // Moving down, it lands after its target.
@@ -114,7 +114,7 @@ test("a space dragged onto another moves there, and a refusal says why", () => {
 test("a press released on its own space moves nothing", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     pointerDown(role("button", { name: "quiet" })),
     pointerUp(role("button", { name: "quiet" })),
     expect(role("button", { name: "quiet" })).not.toHaveClass("pressed"),
@@ -125,7 +125,7 @@ test("the sidebar's edge resizes it by key and goes back to the default on a dou
   const edge = role("separator", { name: "resize the sidebar" })
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     keydown(edge, "ArrowRight"),
     Command.expectExact(SaveSidebarWidth({ width: Option.some(356) })),
     Command.resolve(SaveSidebarWidth, Message.CompletedSaveSidebarWidth()),
@@ -143,7 +143,7 @@ test("the sidebar's edge resizes it by key and goes back to the default on a dou
 test("the settings take the place of the tab, and a space picked after them takes it back", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     click(role("button", { name: "prog" })),
     Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     click(role("button", { name: "Settings" })),
@@ -190,7 +190,7 @@ test("the agent list groups by state, most urgent first, with the time in each s
   }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, now: 100_000, bridge: Bridge.Watching({ fleet: grouped }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, now: 100_000, bridge: Bridge.Watching({ fleet: grouped }) }),
     expectAll(all.selector(".agent-list .state-head")).toHaveCount(3),
     expect(selector(".agent-list .state-head")).toContainText("Waiting for you"),
     expectAll(all.selector(".agent-row")).toHaveCount(3),

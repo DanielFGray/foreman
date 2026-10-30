@@ -46,7 +46,7 @@ const fleet: Fleet = {
 const prompt = (id: string, text: string): Entry => ({ _tag: "Prompt", id, text })
 
 const chatOpen = (entries: ReadonlyArray<Entry>): Model => ({
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none() }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [] }).model,
   bridge: Bridge.Watching({ fleet }),
   views: { t1: View.Chat({ conversation: Conversation.Shown({ entries }) }) },
 })

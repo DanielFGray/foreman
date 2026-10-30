@@ -407,3 +407,40 @@ p.usage-error { margin: 0; }
 /* Agent list grouped by state */
 .state-head { margin: 8px 8px 0; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
 .row .time { flex: none; color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* Command palette */
+.palette-backdrop { position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / 0.4); }
+.palette {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 32px));
+  max-height: 70vh;
+  background: var(--mantle);
+  border: 1px solid var(--surface);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.35);
+  overflow: hidden;
+}
+.palette-input {
+  flex: none;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--surface);
+  outline: none;
+}
+.palette-list { margin: 0; padding: 4px; overflow-y: auto; list-style: none; }
+.palette-group { margin: 8px 8px 2px; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
+.palette-empty { padding: 12px 8px; color: var(--subtext); }
+.palette-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.palette-option:hover, .palette-option.on { background: var(--surface); }
+.palette-option .icon { flex: none; color: var(--subtext); }
+.palette-option .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-option .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtext); font-size: 12px; text-align: right; }

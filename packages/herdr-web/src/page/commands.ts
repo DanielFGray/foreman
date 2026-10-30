@@ -1,13 +1,15 @@
 // The page's commands: each one call to the bridge or to this browser's storage.
 import { Effect, Schema } from "effect"
 import { Command } from "foldkit"
+import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, SELECTION_KEY, Selection } from "./model.ts"
+import { Message, RECENT_KEY, SELECTION_KEY, Selection } from "./model.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
 import { saveStored } from "./stored.ts"
+import { PALETTE_INPUT_ID } from "./palette.ts"
 
 export const SplitPane = Command.define("SplitPane", {
   args: { pane: Schema.String, direction: Direction },
@@ -125,4 +127,19 @@ export const PressKeys = Command.define("PressKeys", {
       yield* client.keys({ terminal: address, keys })
       return Message.SucceededPressKeys({ address })
     }).pipe(reportFailure((reason) => Message.FailedPressKeys({ address, reason }))),
+})
+
+export const SaveRecent = Command.define("SaveRecent", {
+  args: { recent: Schema.Array(Schema.String) },
+  messages: [Message.CompletedSaveRecent],
+  execute: ({ recent }) => saveStored(RECENT_KEY, Schema.Array(Schema.String), recent).pipe(Effect.as(Message.CompletedSaveRecent())),
+})
+
+/** Puts the caret in the palette's search box once it is on the page. */
+export const FocusPalette = Command.define("FocusPalette", {
+  messages: [Message.CompletedFocusPalette],
+  execute: Dom.focus(`#${PALETTE_INPUT_ID}`).pipe(
+    Effect.catchTag("ElementNotFound", (error) => Effect.logWarning("the palette's search box was not found", error)),
+    Effect.as(Message.CompletedFocusPalette()),
+  ),
 })

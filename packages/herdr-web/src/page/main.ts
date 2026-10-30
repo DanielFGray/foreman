@@ -1,6 +1,6 @@
 // The page: its start, how each message changes the model, what it watches,
 // and the layout of sidebar, edge and workspace.
-import { Array, Clock, Effect, Match, Option, Schedule, Schema, Stream, String } from "effect"
+import { Array, Clock, Effect, Equivalence, Match, Option, Schedule, Schema, Stream, String } from "effect"
 import { Subscription } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
@@ -11,12 +11,14 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab } from "./commands.ts"
-import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab, FocusPalette, SaveRecent } from "./commands.ts"
+import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
+import { isPaletteKey, PaletteTarget, withRecent } from "./palette.ts"
+import { paletteResults, paletteView } from "./paletteView.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
 
 // CONSTANT
@@ -29,7 +31,7 @@ const FAST_CLOCK_TICK = "1 second"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -41,6 +43,8 @@ export const init = ({ settings, selection, sidebarWidth }: Flags): UpdateReturn
     waiting: [],
     paneAction: PaneAction.Idle(),
     spaceDrag: SpaceDrag.Idle(),
+    palette: Palette.Closed(),
+    recent,
     settings,
     modifiers: NO_MODIFIERS,
     fontCatalog: FontCatalog.Loading(),
@@ -55,7 +59,7 @@ export const init = ({ settings, selection, sidebarWidth }: Flags): UpdateReturn
 
 // UPDATE
 
-export const update = (model: Model, message: Message) =>
+export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     ReceivedFleet: ({ fleet }) => ({ model: modifyFields(model, { bridge: () => Bridge.Watching({ fleet }) }) }),
 
@@ -320,6 +324,54 @@ export const update = (model: Model, message: Message) =>
     }),
 
     CompletedSaveSidebarWidth: () => ({ model }),
+
+    PressedPaletteKey: () =>
+      Palette.match<UpdateReturn>(model.palette, {
+        Closed: () => ({ model: modifyFields(model, { palette: () => Palette.Open({ query: "", highlighted: 0 }) }), commands: [FocusPalette()] }),
+        Open: () => ({ model: closedPalette(model) }),
+      }),
+
+    ClosedPalette: () => ({ model: closedPalette(model) }),
+
+    // A new query starts again from its best match.
+    UpdatedPaletteQuery: ({ text }) =>
+      model.palette._tag === "Open" ? { model: modifyFields(model, { palette: () => Palette.Open({ query: text, highlighted: 0 }) }) } : { model },
+
+    // The highlight wraps from the last result to the first and back.
+    MovedPaletteHighlight: ({ step }) => {
+      const count = paletteResults(model).length
+      return Palette.match<UpdateReturn>(model.palette, {
+        Closed: () => ({ model }),
+        Open: ({ query, highlighted }) =>
+          count > 0 ? { model: modifyFields(model, { palette: () => Palette.Open({ query, highlighted: (highlighted + step + count) % count }) }) } : { model },
+      })
+    },
+
+    OpenedPaletteResult: ({ target }) => openedTarget(closedPalette(model), target),
+
+    SubmittedPalette: () =>
+      Palette.match<UpdateReturn>(model.palette, {
+        Closed: () => ({ model }),
+        Open: ({ highlighted }) =>
+          Option.match(Array.get(paletteResults(model), highlighted), {
+            onNone: () => ({ model }),
+            onSome: ({ target }) => openedTarget(closedPalette(model), target),
+          }),
+      }),
+
+    CompletedFocusPalette: () => ({ model }),
+
+    CompletedSaveRecent: () => ({ model }),
+  })
+
+const closedPalette = (model: Model) => modifyFields(model, { palette: () => Palette.Closed() })
+
+/** A palette result opens what the same row in the sidebar opens. */
+const openedTarget = (model: Model, target: PaletteTarget): UpdateReturn =>
+  PaletteTarget.match(target, {
+    Tab: ({ tabId }) => update(model, Message.ClickedTab({ tabId })),
+    Terminal: ({ address }) => update(model, Message.ClickedTerminal({ address })),
+    Settings: () => update(model, Message.ClickedSettings()),
   })
 
 const withConversation = (view: View, change: (conversation: Conversation) => Conversation) =>
@@ -341,8 +393,14 @@ const openSettings = (model: Model): UpdateReturn => {
   return { model: next, commands: [SaveSelection({ selection: next.selection }), FetchFonts()] }
 }
 
-/** Keeps the tab and pane on show, so a reload opens on them. */
-const remembered = (model: Model) => ({ model, commands: [SaveSelection({ selection: model.selection })] })
+/** Keeps the tab and pane on show, so a reload opens on them, and the pane among the recent ones. */
+const remembered = (model: Model): UpdateReturn => {
+  const recent = Option.match(maybeFocus(model), { onNone: () => model.recent, onSome: (address) => withRecent(model.recent, address) })
+  return {
+    model: modifyFields(model, { recent: () => recent }),
+    commands: [SaveSelection({ selection: model.selection }), ...(Array.makeEquivalence(Equivalence.strictEqual<string>())(recent, model.recent) ? [] : [SaveRecent({ recent })])],
+  }
+}
 
 // SUBSCRIPTION
 
@@ -384,6 +442,27 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
             Stream.catchCause(() => Stream.empty),
           )
         }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
+    },
+  ),
+
+  // Ctrl+K anywhere on the page, a focused terminal included: the listener runs
+  // first (capture) and stops the key there, so it is never typed into the
+  // terminal, and the browser does not take it for its own.
+  palette: entry(
+    {},
+    {
+      modelToDependencies: () => ({}),
+      dependenciesToStream: () =>
+        Dom.streamFromEventFilterMapPreventDefault({
+          target: () => window,
+          type: "keydown",
+          options: { capture: true },
+          filterMapEvent: (event) => {
+            if (!isPaletteKey(event)) return Option.none()
+            event.stopPropagation()
+            return Option.some(Message.PressedPaletteKey())
+          },
+        }),
     },
   ),
 
@@ -455,6 +534,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
     [
       sidebarView(model, h),
       sidebarEdgeView(model, h),
+      ...paletteView(model, h),
       // On a phone the sidebar is a drawer over the page; a tap beside it closes it.
       ...(model.isFleetFolded ? [] : [h.div([h.Class("fleet-backdrop"), h.OnClick(Message.ClickedFleetToggle())], [])]),
       h.main(
