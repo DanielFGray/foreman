@@ -105,6 +105,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .row .msg { flex: 1; min-width: 0; }
 .row .dot { margin-left: auto; flex-shrink: 0; }
 .space-row .name { flex: 1; }
+/* A drag marks the space it carries and the edge it would land on. */
+.space-row { user-select: none; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+.fleet.dragging .space-row { cursor: grabbing; }
+.space-row.pressed { opacity: 0.6; }
+.space-row.drop-before { border-top-color: var(--accent); }
+.space-row.drop-after { border-bottom-color: var(--accent); }
 .row:disabled { opacity: 0.5; cursor: default; }
 .tab { display: inline-flex; align-items: center; gap: 6px; }
 .fleet-backdrop { display: none; }

@@ -11,7 +11,7 @@ import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Fleet, type Layout, type Size, type Space, type StatusState, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
-import { agentsIn, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalNote, terminalsIn } from "./group.ts"
+import { agentsIn, dropSide, type DropSide, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalNote, terminalsIn } from "./group.ts"
 import { Bot, Columns2, Folder, icon, type IconNode, MessageSquare, Monitor, PanelLeft, Rows2, Server, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { AgentList, fontStack, loadSettings, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
@@ -70,6 +70,20 @@ export const PaneAction = defineTaggedUnion({
 })
 export type PaneAction = typeof PaneAction.Type
 
+/**
+ * A space dragged to a new place in the sidebar, as in herdr-app's: pressed
+ * on one row and released on another, the row under the pointer marked as
+ * the target. Only one move is under way at a time, and the fleet then shows
+ * the new order.
+ */
+export const SpaceDrag = defineTaggedUnion({
+  Idle: {},
+  Pressed: { space: Schema.String, over: Schema.Option(Schema.String) },
+  Moving: {},
+  Refused: { reason: Schema.String },
+})
+export type SpaceDrag = typeof SpaceDrag.Type
+
 // The page keeps its own selection: following herdr-app's window would move
 // the page whenever the user works at the desk.
 export const Selection = defineTaggedUnion({
@@ -99,6 +113,7 @@ export const Model = Schema.Struct({
   prompt: Schema.String,
   delivery: Delivery,
   paneAction: PaneAction,
+  spaceDrag: SpaceDrag,
   settings: Settings,
   /** Soft ctrl and alt, armed until the next key. */
   modifiers: Modifiers,
@@ -140,6 +155,13 @@ export const Message = defineMessageUnion({
   ConfirmedClose: { pane: Schema.String },
   SucceededClose: {},
   FailedPaneAction: { reason: Schema.String },
+  PressedSpace: { space: Schema.String },
+  EnteredSpace: { space: Schema.String },
+  ReleasedSpace: { space: Schema.String },
+  /** The press ended away from a space row, or the pointer left the sidebar. */
+  DroppedSpaceDrag: {},
+  SucceededMoveSpace: {},
+  FailedMoveSpace: { reason: Schema.String },
   ClickedSettings: {},
   PickedFont: { surface: Surface, font: Schema.Option(Schema.String) },
   SteppedSize: { surface: Surface, step: Schema.Int },
@@ -178,6 +200,7 @@ export const init = ({ settings, selection }: Flags) => ({
     prompt: "",
     delivery: Delivery.Ready(),
     paneAction: PaneAction.Idle(),
+    spaceDrag: SpaceDrag.Idle(),
     settings,
     modifiers: NO_MODIFIERS,
     isSettingsOpen: false,
@@ -281,6 +304,40 @@ export const update = (model: Model, message: Message) =>
     SucceededClose: () => ({ model }),
 
     FailedPaneAction: ({ reason }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Refused({ reason }) }) }),
+
+    // A press while a move is under way waits for the fleet's new order.
+    PressedSpace: ({ space }) =>
+      model.spaceDrag._tag === "Moving"
+        ? { model }
+        : { model: modifyFields(model, { spaceDrag: () => SpaceDrag.Pressed({ space, over: Option.none() }) }) },
+
+    EnteredSpace: ({ space: over }) =>
+      SpaceDrag.match<UpdateReturn>(model.spaceDrag, {
+        Idle: () => ({ model }),
+        Pressed: ({ space }) => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Pressed({ space, over: Option.some(over) }) }) }),
+        Moving: () => ({ model }),
+        Refused: () => ({ model }),
+      }),
+
+    // A release on the pressed row is a click, which opens the space.
+    ReleasedSpace: ({ space: onto }) =>
+      SpaceDrag.match<UpdateReturn>(model.spaceDrag, {
+        Idle: () => ({ model }),
+        Pressed: ({ space }) =>
+          Option.match(Option.flatMap(lastFleet(model.bridge), (fleet) => dropSide(fleet, space, onto)), {
+            onNone: () => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Idle() }) }),
+            onSome: () => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Moving() }), commands: [MoveSpace({ space, onto })] }),
+          }),
+        Moving: () => ({ model }),
+        Refused: () => ({ model }),
+      }),
+
+    DroppedSpaceDrag: () =>
+      model.spaceDrag._tag === "Pressed" ? { model: modifyFields(model, { spaceDrag: () => SpaceDrag.Idle() }) } : { model },
+
+    SucceededMoveSpace: () => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Idle() }) }),
+
+    FailedMoveSpace: ({ reason }) => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Refused({ reason }) }) }),
 
     ClickedSettings: () =>
       model.isSettingsOpen
@@ -515,6 +572,17 @@ export const ClosePane = Command.define("ClosePane", {
     }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
 })
 
+export const MoveSpace = Command.define("MoveSpace", {
+  args: { space: Schema.String, onto: Schema.String },
+  messages: [Message.SucceededMoveSpace, Message.FailedMoveSpace],
+  execute: ({ space, onto }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.moveSpace({ space, onto })
+      return Message.SucceededMoveSpace()
+    }).pipe(reportFailure((reason) => Message.FailedMoveSpace({ reason }))),
+})
+
 export const SendPrompt = Command.define("SendPrompt", {
   args: { address: Schema.String, text: Schema.String },
   messages: [Message.SucceededSendPrompt, Message.FailedSendPrompt],
@@ -638,7 +706,15 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
       h.div(
         [h.Class("panes")],
         [
-          h.nav([h.Class(model.isFleetFolded ? "fleet folded" : "fleet")], fleetView(model, h)),
+          h.nav(
+            [
+              h.Class(`fleet${model.isFleetFolded ? " folded" : ""}${model.spaceDrag._tag === "Pressed" ? " dragging" : ""}`),
+              // A row's own release comes first; this one ends a press let go anywhere else.
+              h.OnPointerUp(() => whilePressed(model, Message.DroppedSpaceDrag())),
+              h.OnPointerLeave(() => whilePressed(model, Message.DroppedSpaceDrag())),
+            ],
+            fleetView(model, h),
+          ),
           // On a phone the sidebar is a drawer over the page; a tap beside it closes it.
           ...(model.isFleetFolded ? [] : [h.div([h.Class("fleet-backdrop"), h.OnClick(Message.ClickedFleetToggle())], [])]),
           model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
@@ -711,7 +787,8 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
       return !isHeaded && Array.every(machines, ({ spaces }) => Array.isReadonlyArrayEmpty(spaces)) && Array.isReadonlyArrayEmpty(listed)
         ? [h.p([h.Class("note")], ["No spaces."])]
         : [
-            ...Array.map(machines, (row) => machineView(row, isHeaded, isNested, openTab, model, h)),
+            ...(model.spaceDrag._tag === "Refused" ? [h.p([h.Class("note error")], [`The space did not move: ${model.spaceDrag.reason}`])] : []),
+            ...Array.map(machines, (row) => machineView(row, isHeaded, isNested, openTab, fleet, model, h)),
             ...(Array.isReadonlyArrayNonEmpty(listed)
               ? [
                   h.keyed("section")(
@@ -733,6 +810,7 @@ const machineView = (
   isHeaded: boolean,
   isNested: boolean,
   openTab: Option.Option<string>,
+  fleet: Fleet,
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html =>
@@ -753,7 +831,7 @@ const machineView = (
           ]
         : []),
       ...Array.flatMap(spaces, (row) => [
-        spaceView(row, openTab, h),
+        spaceView(row, openTab, dragMark(model.spaceDrag, fleet, row.space.id), h),
         ...(isNested && Array.isReadonlyArrayNonEmpty(agentsIn(row))
           ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView(terminal, model, h)))]
           : []),
@@ -761,17 +839,42 @@ const machineView = (
     ],
   )
 
-// A space opens on its first tab; the tab bar then moves between its tabs.
-const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Option<string>, h: HtmlBuilder<Message>): Html => {
+/** How a space row shows the drag: the pressed row, the row it would land beside, or neither. */
+type DragMark = "pressed" | `drop-${DropSide}` | "none"
+
+const dragMark = (drag: SpaceDrag, fleet: Fleet, row: string): DragMark =>
+  SpaceDrag.match<DragMark>(drag, {
+    Idle: () => "none",
+    Pressed: ({ space, over }) =>
+      space === row
+        ? "pressed"
+        : Option.contains(over, row)
+          ? Option.match(dropSide(fleet, space, row), { onNone: () => "none", onSome: (side): DragMark => `drop-${side}` })
+          : "none",
+    Moving: () => "none",
+    Refused: () => "none",
+  })
+
+const whilePressed = (model: Model, message: Message) => (model.spaceDrag._tag === "Pressed" ? Option.some(message) : Option.none())
+
+// A space opens on its first tab; the tab bar then moves between its tabs. A
+// mouse drags it to another place among its machine's spaces; a touch
+// scrolls the sidebar instead.
+const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Option<string>, mark: DragMark, h: HtmlBuilder<Message>): Html => {
   const isOpen = Array.some(tabs, ({ tab }) => Option.contains(openTab, tab.id))
   return h.keyed("button")(
     space.id,
     [
       h.Type("button"),
-      h.Class(isOpen ? "row space-row on" : "row space-row"),
+      h.Class(`row space-row${isOpen ? " on" : ""}${mark === "none" ? "" : ` ${mark}`}`),
       h.AriaCurrent(isOpen ? "page" : "false"),
       h.Disabled(Array.isReadonlyArrayEmpty(tabs)),
       ...Option.toArray(Option.map(Array.head(tabs), ({ tab }) => h.OnClick(Message.ClickedTab({ tabId: tab.id })))),
+      h.OnPointerDown((pointerType, button) =>
+        pointerType === "mouse" && button === 0 ? Option.some(Message.PressedSpace({ space: space.id })) : Option.none(),
+      ),
+      h.OnMouseEnter(Message.EnteredSpace({ space: space.id })),
+      h.OnPointerUp(() => Option.some(Message.ReleasedSpace({ space: space.id }))),
     ],
     [icon(Folder, h), h.span([h.Class("name")], [label]), ...statusMark(status, h)],
   )

@@ -53,6 +53,27 @@ export const spaceRowOf = (fleet: Fleet) => {
 
 const isLiveAgent = (terminal: Terminal) => terminal.state === "live" && isAgent(terminal)
 
+export type DropSide = "before" | "after"
+
+/**
+ * Where a space dragged onto another lands, as herdr-app's `space.move` puts
+ * it: after the target when it moves down, before it when it moves up. None
+ * for the space itself, or for a target on another machine, since herdr-app
+ * keeps each space on its own machine.
+ */
+export const dropSide = (fleet: Fleet, space: string, onto: string): Option.Option<DropSide> =>
+  pipe(
+    Array.findFirst(fleet.machines, ({ spaces }) => Array.some(spaces, ({ id }) => id === space)),
+    Option.flatMap(({ spaces }) =>
+      Option.zipWith(
+        Array.findFirstIndex(spaces, ({ id }) => id === space),
+        Array.findFirstIndex(spaces, ({ id }) => id === onto),
+        (from, to): Option.Option<DropSide> => (from === to ? Option.none() : Option.some(from < to ? "after" : "before")),
+      ),
+    ),
+    Option.flatten,
+  )
+
 /** Every machine's spaces, this machine's first. */
 export const spacesOf = (fleet: Fleet) => Array.flatMap(fleet.machines, ({ spaces }) => spaces)
 

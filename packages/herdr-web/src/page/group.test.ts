@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { Option } from "effect"
 import type { Fleet, Layout, Machine, StatusState, Terminal } from "../shared/Fleet.ts"
-import { isAgent, locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
+import { dropSide, isAgent, locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
 
 const terminal = (address: string, hasStatus = true, state: Terminal["state"] = "live"): Terminal => ({
   address,
@@ -128,5 +128,21 @@ describe("terminalLabel", () => {
   test("a known agent's program makes an agent without a status report", () => {
     const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1 }) }
     expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1 }) })]).toEqual([true, false])
+  })
+})
+
+describe("dropSide", () => {
+  const space = (id: string) => ({ id, name: id, folder: "/", tabs: [] })
+  const machine = (name: string, ids: ReadonlyArray<string>): Machine => ({ name, isLocal: name === "here", state: "connected", spaces: ids.map(space) })
+  const fleet: Fleet = { connected: true, machines: [machine("here", ["a", "b", "c"]), machine("cynic", ["d"])], terminals: [] }
+
+  test("a space lands after a target below it and before one above it", () => {
+    expect(dropSide(fleet, "a", "c")).toStrictEqual(Option.some("after"))
+    expect(dropSide(fleet, "c", "a")).toStrictEqual(Option.some("before"))
+  })
+
+  test("a space has no place on itself or on another machine", () => {
+    expect(dropSide(fleet, "b", "b")).toStrictEqual(Option.none())
+    expect(dropSide(fleet, "a", "d")).toStrictEqual(Option.none())
   })
 })

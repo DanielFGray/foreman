@@ -1,8 +1,9 @@
+// @vitest-environment happy-dom
 import { Option } from "effect"
-import { all, click, Command, expect, expectAll, given, inside, role, scene, selector } from "foldkit/scene"
+import { all, click, Command, expect, expectAll, given, hover, inside, pointerDown, pointerUp, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Machine, Terminal } from "../shared/Fleet.ts"
-import { Bridge, init, Message, SaveSelection, Selection, update, view } from "./main.ts"
+import { Bridge, init, Message, MoveSpace, SaveSelection, Selection, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const blockedAgent: Terminal = {
@@ -88,5 +89,31 @@ test("agents list below the spaces, or under each space when the settings say so
     expect(selector(".space-agents .agent-row")).toContainText("needs a yes"),
     // No agent is loose, so no list follows the spaces.
     expect(selector(".agent-list")).not.toExist(),
+  )
+})
+
+test("a space dragged onto another moves there, and a refusal says why", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, bridge: Bridge.Watching({ fleet }) }),
+    pointerDown(role("button", { name: "prog" })),
+    hover(role("button", { name: "quiet" })),
+    // Moving down, it lands after its target.
+    expect(role("button", { name: "quiet" })).toHaveClass("drop-after"),
+    expect(role("button", { name: "prog" })).toHaveClass("pressed"),
+    pointerUp(role("button", { name: "quiet" })),
+    Command.expectExact(MoveSpace({ space: "s1", onto: "s2" })),
+    Command.resolve(MoveSpace, Message.FailedMoveSpace({ reason: "the herdr-app window is not reachable" })),
+    expect(selector(".fleet .note.error")).toContainText("the herdr-app window is not reachable"),
+  )
+})
+
+test("a press released on its own space moves nothing", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, bridge: Bridge.Watching({ fleet }) }),
+    pointerDown(role("button", { name: "quiet" })),
+    pointerUp(role("button", { name: "quiet" })),
+    expect(role("button", { name: "quiet" })).not.toHaveClass("pressed"),
   )
 })

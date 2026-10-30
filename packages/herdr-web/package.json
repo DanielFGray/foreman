@@ -16,6 +16,7 @@
     "@foldkit/vite-plugin": "0.29.0",
     "@types/bun": "latest",
     "@types/mdast": "4.0.4",
+    "happy-dom": "^21.0.4",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2",
