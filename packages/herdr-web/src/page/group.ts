@@ -3,8 +3,10 @@
 import { Array, HashMap, HashSet, Match, Option, Order, pipe, String } from "effect"
 import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
 import { harnessOf } from "./harness.ts"
+import { type Program, programOf } from "./programs.ts"
 
-export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal> }>
+/** `program` is what runs in the tab's first pane, for its icon. */
+export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal>; program: Option.Option<Program> }>
 
 export type SpaceRow = Readonly<{ space: Space; label: string; status: Option.Option<StatusState>; tabs: ReadonlyArray<TabRow> }>
 
@@ -39,13 +41,10 @@ export const spaceRowOf = (fleet: Fleet) => {
   const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
   return (space: Space): SpaceRow => {
     const tabs = Array.map(space.tabs, (tab, index): TabRow => {
-      const agents = pipe(
-        terminalsIn(tab.root),
-        Array.map((address) => HashMap.get(byAddress, address)),
-        Array.getSomes,
-        Array.filter(isLiveAgent),
-      )
-      return { tab, label: tabLabel(tab, index), status: mostUrgent(agents), agents }
+      const terminals = Array.getSomes(Array.map(terminalsIn(tab.root), (address) => HashMap.get(byAddress, address)))
+      const agents = Array.filter(terminals, isLiveAgent)
+      const program = Option.flatMap(Array.head(terminals), programOf)
+      return { tab, label: tabLabel(tab, index), status: mostUrgent(agents), agents, program }
     })
     return { space, label: spaceLabel(space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
   }
@@ -104,14 +103,13 @@ export const locate = (fleet: Fleet, address: string): Option.Option<Readonly<{ 
 export const isAgent = (terminal: Terminal) => Option.isSome(terminal.status) || Option.isSome(harnessOf(terminal))
 
 /**
- * What the user calls the terminal: its name, else its agent, else its
- * foreground program. The address is hc's id, which the user never sees.
+ * What the user calls the terminal: its name, else its agent or program (see
+ * programs.ts). The address is hc's id, which the user never sees.
  */
 export const terminalLabel = (terminal: Terminal) =>
   pipe(
     Option.filter(terminal.name, String.isNonEmpty),
-    Option.orElse(() => harnessOf(terminal)),
-    Option.orElse(() => Option.filter(Option.map(terminal.foreground, ({ name }) => name), String.isNonEmpty)),
+    Option.orElse(() => Option.filter(Option.map(programOf(terminal), ({ name }) => name), String.isNonEmpty)),
     Option.getOrElse(() => "terminal"),
   )
 

@@ -2,7 +2,7 @@
 // agent names in its status report, else the foreground program's name. The
 // names follow herdr's own table (src/detect/mod.rs, `lookup_agent`). herdr
 // also reads the argv of `node`, `bun` and `python` to find an agent that
-// runs under one; hc reports only the program's name, so those stay unknown.
+// runs under one; this table reads only the program's name, so those stay unknown.
 import { Array, HashMap, Option, pipe, String } from "effect"
 import type { Terminal } from "../shared/Fleet.ts"
 

@@ -118,16 +118,16 @@ describe("locate", () => {
 describe("terminalLabel", () => {
   test("prefers the name, then the agent, then the foreground program, and never shows the address", () => {
     const plain = { ...terminal("t9", false), title: Option.some("") }
-    const claude = { ...plain, foreground: Option.some({ name: "/usr/bin/Claude", pid: 1 }) }
+    const claude = { ...plain, foreground: Option.some({ name: "/usr/bin/Claude", pid: 1, argv: [] }) }
     expect(terminalLabel({ ...claude, name: Option.some("build-c8") })).toBe("build-c8")
     expect(terminalLabel(claude)).toBe("Claude Code")
-    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "zsh", pid: 1 }) })).toBe("zsh")
+    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "zsh", pid: 1, argv: [] }) })).toBe("zsh")
     expect(terminalLabel(plain)).toBe("terminal")
   })
 
   test("a known agent's program makes an agent without a status report", () => {
-    const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1 }) }
-    expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1 }) })]).toEqual([true, false])
+    const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1, argv: [] }) }
+    expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1, argv: [] }) })]).toEqual([true, false])
   })
 })
 

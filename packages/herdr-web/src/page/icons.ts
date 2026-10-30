@@ -8,18 +8,26 @@ import type { IconNode } from "lucide"
 export type { IconNode } from "lucide"
 
 export {
+  Activity,
+  BookOpen,
   Bot,
   CodeXml,
   Columns2,
   ExternalLink,
+  FlaskConical,
   Folder,
+  GitBranch,
+  Hammer,
+  KeyRound,
   MessageSquare,
   Monitor,
   PanelLeft,
+  Play,
   RefreshCw,
   Rows2,
   Server,
   Settings,
+  SquarePen,
   SquareTerminal,
   X,
 } from "lucide"

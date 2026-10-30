@@ -6,6 +6,7 @@ import * as Mount from "foldkit/mount"
 import type { Size } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
+import { programOf } from "./programs.ts"
 import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, modifiersAttribute, SOFT_KEYS } from "./keys.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
@@ -33,6 +34,7 @@ export const paneView = (
         [h.Class("pane-head"), h.OnClick(Message.FocusedPane({ address }))],
         [
           ...Option.match(maybeTerminal, { onNone: () => [], onSome: (terminal) => [statusDot(stateOf(terminal), h)] }),
+          ...Option.toArray(Option.map(Option.flatMap(maybeTerminal, programOf), ({ icon: node }) => icon(node, h))),
           h.span([h.Class("name")], [labelAt(model, address)]),
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
           // Before the view chips, so they stay in place as these show and hide.

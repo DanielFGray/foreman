@@ -5,6 +5,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Fleet, Terminal } from "../shared/Fleet.ts"
 import { agentsIn, dropSide, type DropSide, type MachineRow, sidebarOf, type SpaceRow, terminalLabel, terminalNote } from "./group.ts"
 import { Bot, Folder, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
+import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
 import { lastFleet, maybeFocus, selectedTab } from "./selection.ts"
 import { DEFAULT_SIDEBAR_WIDTH, keyedSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "./sidebarWidth.ts"
@@ -183,7 +184,7 @@ const agentRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>)
           h.OnClick(Message.ClickedTerminal({ address: terminal.address })),
         ],
         [
-          icon(Bot, h),
+          icon(Option.match(programOf(terminal), { onNone: () => Bot, onSome: (program) => program.icon }), h),
           h.span([h.Class("name")], [terminalLabel(terminal)]),
           h.span([h.Class("msg")], [terminalNote(terminal)]),
           statusDot(stateOf(terminal), h),

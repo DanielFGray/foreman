@@ -2,7 +2,7 @@
 // encoded side is hc's own wire shape (its OpenRPC `Terminal` and `Status`
 // components, and the `herdr-app` document), so one Schema decodes hc's reply
 // in the bridge and the bridge's message in the page.
-import { type Option, Schema } from "effect"
+import { Effect, type Option, Schema } from "effect"
 import { wireTag } from "./Wire.ts"
 
 /** What the program says it is doing (its OSC 7501 report). */
@@ -19,7 +19,12 @@ export const Status = Schema.Struct({
 })
 export type Status = typeof Status.Type
 
-export const Foreground = Schema.Struct({ name: Schema.String, pid: Schema.Int })
+export const Foreground = Schema.Struct({
+  name: Schema.String,
+  pid: Schema.Int,
+  /** The command line, program first; `bun test` tells a test run from another script. */
+  argv: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+})
 
 export const Terminal = Schema.Struct({
   /** `t7` here, `machine/t7` on a connected machine. */
