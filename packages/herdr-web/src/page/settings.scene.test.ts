@@ -17,7 +17,7 @@ const terminalSettings = (font: Option.Option<string>, size: number) => ({
 test("settings offer the bridge's fonts, and a terminal only the monospaced ones", () => {
   scene(
     { update, view },
-    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model),
+    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model),
     click(role("button", { name: "settings" })),
     expect(selector(".fleet")).toHaveClass("folded"),
     expect(selector(".settings")).toContainText("Asking the bridge for its fonts"),
@@ -39,7 +39,7 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
 test("a size steps from the current settings and stops at its limit", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Nothing() }).model, isSettingsOpen: true }),
+    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, isSettingsOpen: true }),
     click(role("button", { name: "larger terminal text" })),
     Command.expectExact(SaveSettings({ settings: terminalSettings(Option.none(), MAX_SIZE) })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
@@ -51,7 +51,7 @@ test("a size steps from the current settings and stops at its limit", () => {
 test("the agent list choice saves, and settings saved before it existed keep their fonts", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, isSettingsOpen: true }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, isSettingsOpen: true }),
     click(label("Under each space")),
     Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested" } })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),

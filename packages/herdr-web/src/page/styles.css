@@ -72,12 +72,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .panes { flex: 1; display: flex; min-height: 0; }
 
 .fleet {
-  width: 340px;
+  /* The dragged width, never more than half the window. */
+  width: min(var(--sidebar-width, 340px), 50vw);
   flex-shrink: 0;
   overflow-y: auto;
   padding: 8px;
   border-right: 1px solid var(--surface);
 }
+/* The sidebar's edge: a grip over its border that lights up under the pointer. */
+.fleet-edge { position: relative; flex-shrink: 0; width: 6px; margin-left: -4px; margin-right: -2px; z-index: 5; cursor: col-resize; touch-action: none; }
+.fleet-edge::after { content: ""; position: absolute; inset: 0 2px; background: transparent; transition: background-color 120ms; }
+.fleet-edge:hover::after { background: var(--subtext); }
+.fleet-edge.held::after, .fleet-edge:focus-visible::after { background: var(--accent); }
+.fleet-edge:focus-visible { outline: none; }
+.app.resizing { cursor: col-resize; user-select: none; }
 .agent-list ul, .space-agents { list-style: none; margin: 0; padding: 0; }
 .space-agents { margin-left: 18px; }
 .machine + .machine, .agent-list { margin-top: 12px; border-top: 1px solid var(--surface); }
@@ -306,6 +314,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   /* A drawer over the page, from the left edge. */
   .fleet { position: absolute; z-index: 20; inset: 0 auto 0 0; width: min(85vw, 320px); background: var(--base); box-shadow: 4px 0 16px rgb(0 0 0 / 0.25); }
   .fleet-backdrop { display: block; position: absolute; z-index: 10; inset: 0; background: rgb(0 0 0 / 0.3); }
+  .fleet-edge { display: none; }
   .chip.fleet-toggle { display: inline-flex; }
   /* The pane's name needs the room more than the view chips' words. */
   .view-chip { padding: 4px 8px; }

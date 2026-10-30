@@ -1,3 +1,4 @@
+import { Option } from "effect"
 import { click, Command, expect, given, Mount, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import { DEFAULT_SETTINGS } from "./settings.ts"
@@ -5,7 +6,7 @@ import { init, Message, PressKeys, Selection, update, view } from "./main.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { LiveTerminal } from "./terminal.ts"
 
-const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, selection: Selection.Loose({ address: "t7" }) }
+const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, selection: Selection.Loose({ address: "t7" }) }
 
 test("ctrl and alt stay armed for the next soft key, then let go", () => {
   scene(

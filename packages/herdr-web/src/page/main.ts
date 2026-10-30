@@ -1,5 +1,6 @@
 import { Array, Clock, Effect, Match, Option, Record, Result, Schedule, Schema, Stream, String } from "effect"
 import { Command, Subscription, type Update } from "foldkit"
+import * as Dom from "foldkit/dom"
 import * as Mount from "foldkit/mount"
 import type { Document, Html, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
@@ -16,6 +17,7 @@ import { Bot, Columns2, Folder, icon, type IconNode, MessageSquare, Monitor, Pan
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { AgentList, fontStack, loadSettings, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { loadStored, saveStored } from "./stored.ts"
+import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, keyedSidebarWidth, loadSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, saveSidebarWidth } from "./sidebarWidth.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
 import { Link, LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 import { usageBarView } from "./usage.ts"
@@ -126,14 +128,22 @@ export const Model = Schema.Struct({
   usageDetail: Schema.Option(ProviderId),
   /** The time, for countdowns to a reset. */
   now: Schema.Finite,
+  /** The sidebar's width on a desk once its edge was dragged; none is the stylesheet's own. */
+  sidebarWidth: Schema.Option(Schema.Int),
+  /** While the edge is dragged: how far right of the edge the pointer took hold of it. */
+  sidebarGrip: Schema.Option(Schema.Finite),
 })
 export type Model = typeof Model.Type
 
-/** What the page starts from: this browser's settings, and the tab and pane it showed last. */
-export const Flags = Schema.Struct({ settings: Settings, selection: Selection })
+/** What the page starts from: this browser's settings, the tab and pane it showed last, and its sidebar's width. */
+export const Flags = Schema.Struct({ settings: Settings, selection: Selection, sidebarWidth: Schema.Option(Schema.Int) })
 export type Flags = typeof Flags.Type
 
-export const loadFlags = Effect.all({ settings: loadSettings, selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()) })
+export const loadFlags = Effect.all({
+  settings: loadSettings,
+  selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()),
+  sidebarWidth: loadSidebarWidth,
+})
 
 // MESSAGE
 
@@ -185,12 +195,18 @@ export const Message = defineMessageUnion({
   ClickedRefreshUsage: { provider: Schema.Option(ProviderId) },
   CompletedRefreshUsage: {},
   TickedClock: { now: Schema.Finite },
+  PressedSidebarEdge: { x: Schema.Finite },
+  MovedSidebarEdge: { x: Schema.Finite },
+  ReleasedSidebarEdge: {},
+  KeyedSidebarEdge: { key: Schema.String },
+  ResetSidebarWidth: {},
+  CompletedSaveSidebarWidth: {},
 })
 export type Message = typeof Message.Type
 
 // INIT
 
-export const init = ({ settings, selection }: Flags) => ({
+export const init = ({ settings, selection, sidebarWidth }: Flags) => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -208,6 +224,8 @@ export const init = ({ settings, selection }: Flags) => ({
     usage: Option.none(),
     usageDetail: Option.none(),
     now: 0,
+    sidebarWidth,
+    sidebarGrip: Option.none(),
   },
 })
 
@@ -418,6 +436,37 @@ export const update = (model: Model, message: Message) =>
     CompletedRefreshUsage: () => ({ model }),
 
     TickedClock: ({ now }) => ({ model: modifyFields(model, { now: () => now }) }),
+
+    // The sidebar starts at the page's left edge, so its width is where the pointer is, less its grip.
+    PressedSidebarEdge: ({ x }) => ({ model: modifyFields(model, { sidebarGrip: () => Option.some(x - shownSidebarWidth(model)) }) }),
+
+    MovedSidebarEdge: ({ x }) =>
+      Option.match(model.sidebarGrip, {
+        onNone: () => ({ model }),
+        onSome: (grip) => ({ model: modifyFields(model, { sidebarWidth: () => Option.some(clampSidebarWidth(x - grip)) }) }),
+      }),
+
+    // The width is kept once, when the edge is let go.
+    ReleasedSidebarEdge: () => ({
+      model: modifyFields(model, { sidebarGrip: () => Option.none() }),
+      commands: [SaveSidebarWidth({ width: model.sidebarWidth })],
+    }),
+
+    KeyedSidebarEdge: ({ key }) =>
+      Option.match(keyedSidebarWidth(shownSidebarWidth(model), key), {
+        onNone: () => ({ model }),
+        onSome: (width) => ({
+          model: modifyFields(model, { sidebarWidth: () => Option.some(width) }),
+          commands: [SaveSidebarWidth({ width: Option.some(width) })],
+        }),
+      }),
+
+    ResetSidebarWidth: () => ({
+      model: modifyFields(model, { sidebarWidth: () => Option.none() }),
+      commands: [SaveSidebarWidth({ width: Option.none() })],
+    }),
+
+    CompletedSaveSidebarWidth: () => ({ model }),
   })
 
 type UpdateReturn = Update.Return<Model, Message, BridgeClient>
@@ -547,6 +596,14 @@ export const SaveSettings = Command.define("SaveSettings", {
 /** Keeps the tab and pane on show, so a reload opens on them. */
 const remembered = (model: Model) => ({ model, commands: [SaveSelection({ selection: model.selection })] })
 
+const shownSidebarWidth = (model: Model) => Option.getOrElse(model.sidebarWidth, () => DEFAULT_SIDEBAR_WIDTH)
+
+export const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
+  args: { width: Schema.Option(Schema.Int) },
+  messages: [Message.CompletedSaveSidebarWidth],
+  execute: ({ width }) => saveSidebarWidth(width).pipe(Effect.as(Message.CompletedSaveSidebarWidth())),
+})
+
 export const SaveSelection = Command.define("SaveSelection", {
   args: { selection: Selection },
   messages: [Message.CompletedSaveSelection],
@@ -663,6 +720,22 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The pointer anywhere on the page while the sidebar's edge is held, since
+  // a drag soon leaves the thin edge behind.
+  sidebarDrag: entry(
+    { isHeld: Schema.Boolean },
+    {
+      modelToDependencies: (model) => ({ isHeld: Option.isSome(model.sidebarGrip) }),
+      dependenciesToStream: ({ isHeld }) =>
+        isHeld
+          ? Stream.merge(
+              Dom.streamFromEvent({ target: () => window, type: "pointermove", mapEvent: ({ clientX }) => Message.MovedSidebarEdge({ x: clientX }) }),
+              Dom.streamFromEvent({ target: () => window, type: "pointerup", mapEvent: () => Message.ReleasedSidebarEdge() }),
+            )
+          : Stream.empty,
+    },
+  ),
+
   clock: entry(
     {},
     {
@@ -699,7 +772,12 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   body: h.div(
     [
       h.Class("app"),
-      h.Style({ "--chat-font": fontStack("chat", model.settings.chat.font), "--chat-size": `${model.settings.chat.size}px` }),
+      h.Class(Option.isSome(model.sidebarGrip) ? "app resizing" : "app"),
+      h.Style({
+        "--chat-font": fontStack("chat", model.settings.chat.font),
+        "--chat-size": `${model.settings.chat.size}px`,
+        "--sidebar-width": `${shownSidebarWidth(model)}px`,
+      }),
     ],
     [
       headerView(model, h),
@@ -715,6 +793,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
             ],
             fleetView(model, h),
           ),
+          sidebarEdgeView(model, h),
           // On a phone the sidebar is a drawer over the page; a tap beside it closes it.
           ...(model.isFleetFolded ? [] : [h.div([h.Class("fleet-backdrop"), h.OnClick(Message.ClickedFleetToggle())], [])]),
           model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
@@ -733,6 +812,29 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
     ],
   ),
 })
+
+/** The sidebar's right edge on a desk: drag it or use the arrow keys to resize, double-click for the default width. */
+const sidebarEdgeView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.div(
+    [
+      h.Class(Option.isSome(model.sidebarGrip) ? "fleet-edge held" : "fleet-edge"),
+      h.Role("separator"),
+      h.Tabindex(0),
+      h.AriaOrientation("vertical"),
+      h.AriaLabel("resize the sidebar"),
+      h.AriaValuemin(MIN_SIDEBAR_WIDTH),
+      h.AriaValuemax(MAX_SIDEBAR_WIDTH),
+      h.AriaValuenow(shownSidebarWidth(model)),
+      h.Title("drag to resize, double-click for the default width"),
+      h.OnPointerDown((pointerType, button, _screenX, _screenY, _timeStamp, clientX) =>
+        pointerType !== "touch" && button === 0 ? Option.some(Message.PressedSidebarEdge({ x: clientX })) : Option.none(),
+      ),
+      h.OnDoubleClick(Message.ResetSidebarWidth()),
+      // The arrow keys would otherwise scroll the page as well.
+      h.OnKeyDownPreventDefault((key) => Option.as(keyedSidebarWidth(shownSidebarWidth(model), key), Message.KeyedSidebarEdge({ key }))),
+    ],
+    [],
+  )
 
 const headerView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.header(
