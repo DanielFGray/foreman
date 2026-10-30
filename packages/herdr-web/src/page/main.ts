@@ -11,9 +11,9 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, SaveRecent } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
-import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
+import { isClaudeCode, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
@@ -46,6 +46,7 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     delivery: Delivery.Ready(),
     queued: [],
     boxes: {},
+    models: {},
     waiting: [],
     questions: {},
     paneAction: PaneAction.Idle(),
@@ -352,6 +353,21 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // Unread, the box may hold a draft, so the agent's messages wait until it is read again.
     FailedInputBox: ({ address }) => ({ model: modifyFields(model, { boxes: (all) => Record.remove(all, address) }) }),
 
+    ReceivedModel: ({ address, model: name }) => ({
+      model: modifyFields(model, { models: (all) => Option.match(name, { onNone: () => Record.remove(all, address), onSome: (one) => Record.set(all, address, one) }) }),
+    }),
+
+    // A second click on the tag closes its menu.
+    ClickedModelTag: ({ address }) => ({
+      model: modifyFields(model, {
+        paneAction: (action) => (action._tag === "PickingModel" && action.address === address ? PaneAction.Idle() : PaneAction.PickingModel({ address })),
+      }),
+    }),
+
+    PickedModel: ({ address, alias }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Idle() }), commands: [PickModel({ address, alias })] }),
+
+    SucceededPickModel: () => ({ model }),
+
     ClickedKey: ({ key }) =>
       Option.match(maybeFocus(model), {
         onNone: () => ({ model }),
@@ -612,6 +628,16 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The model of each shown Claude Code agent. A failed read shows no tag, and
+  // is tried again after a pause.
+  models: entry(
+    { addresses: Schema.Array(Schema.String) },
+    {
+      modelToDependencies: (model) => ({ addresses: Array.filter(shownTerminals(model), (address) => isClaudeCode(model, address)) }),
+      dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, modelStream), { concurrency: "unbounded" }),
+    },
+  ),
+
   // Each shown chat, live. When a call fails the page shows why and calls
   // again after a pause; the bridge then sends the whole recent chat again.
   chat: entry(
@@ -639,6 +665,16 @@ const inputBoxStream = (address: string) =>
       Stream.map((box) => Message.ReceivedInputBox({ address, box })),
       Stream.tapCause((cause) => Effect.logWarning("the bridge's input box watch failed", cause)),
       Stream.catchCause(() => Stream.make(Message.FailedInputBox({ address }))),
+    )
+  }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
+
+const modelStream = (address: string) =>
+  Effect.gen(function* () {
+    const client = yield* BridgeClient
+    return client.model({ terminal: address }).pipe(
+      Stream.map((model) => Message.ReceivedModel({ address, model })),
+      Stream.tapCause((cause) => Effect.logWarning("the bridge's model watch failed", cause)),
+      Stream.catchCause(() => Stream.make(Message.ReceivedModel({ address, model: Option.none() }))),
     )
   }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
 

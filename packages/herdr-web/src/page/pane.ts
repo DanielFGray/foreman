@@ -1,8 +1,9 @@
 // One pane: its head with the split, close and view buttons, its chat or
 // live terminal, the chat's prompt, and the phone's soft keys.
-import { Array, Match, Option } from "effect"
+import { Array, Match, Option, Record, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import * as Mount from "foldkit/mount"
+import { modelName } from "../shared/Chat.ts"
 import type { Size } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
@@ -39,6 +40,7 @@ export const paneView = (
           ...Option.match(maybeTerminal, { onNone: () => [], onSome: (terminal) => [statusDot(stateOf(terminal), h)] }),
           ...Option.toArray(Option.map(Option.flatMap(maybeTerminal, programOf), ({ icon: node }) => icon(node, h))),
           h.span([h.Class("name")], [labelAt(model, address)]),
+          ...modelTagView(address, model, h),
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
           // Before the view chips, so they stay in place as these show and hide.
           ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
@@ -59,6 +61,7 @@ export const paneView = (
             : []),
         ],
       ),
+      ...modelMenuView(address, model, h),
       View.match(shown, {
         // The prompt sits under the focused pane's chat; a click on another chat moves it there.
         Chat: ({ conversation }) =>
@@ -128,6 +131,7 @@ export const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyA
     ConfirmingTab: () => [],
     ConfirmingSpace: () => [],
     RenamingSpace: () => [],
+    PickingModel: () => [],
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
@@ -173,6 +177,7 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html 
     ConfirmingTab: () => false,
     ConfirmingSpace: () => false,
     RenamingSpace: () => false,
+    PickingModel: () => false,
     Refused: () => false,
   })
   return h.span(
@@ -205,3 +210,53 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
       h.button([h.Type("submit")], ["send"]),
     ],
   )
+
+/**
+ * The model a Claude Code agent answers with, as a button that opens the
+ * model menu. Its exact id shows on hover.
+ */
+const modelTagView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  Option.toArray(
+    Option.map(Record.get(model.models, address), (id) =>
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(isPickingModel(model, address) ? "model-tag on" : "model-tag"),
+          h.Title(id),
+          h.AriaLabel(`model: ${modelName(id)}; pick another`),
+          h.AriaExpanded(isPickingModel(model, address)),
+          h.OnClick(Message.ClickedModelTag({ address })),
+        ],
+        [modelName(id)],
+      ),
+    ),
+  )
+
+/** The models `/model` takes by alias, newest family first; each alias picks that family's latest. */
+const MODELS = [
+  { alias: "fable", name: "Fable" },
+  { alias: "opus", name: "Opus" },
+  { alias: "sonnet", name: "Sonnet" },
+  { alias: "haiku", name: "Haiku" },
+]
+
+const modelMenuView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  isPickingModel(model, address)
+    ? [
+        h.div(
+          [h.Class("model-menu"), h.Role("menu"), h.AriaLabel("models")],
+          [
+            ...Array.map(MODELS, ({ alias, name }) => {
+              const isCurrent = Option.exists(Record.get(model.models, address), (id) => String.startsWith(`${name} `)(modelName(id)))
+              return h.button(
+                [h.Type("button"), h.Class(isCurrent ? "chip on" : "chip"), h.Role("menuitem"), h.AriaCurrent(isCurrent ? "true" : "false"), h.OnClick(Message.PickedModel({ address, alias }))],
+                [name],
+              )
+            }),
+            h.span([h.Class("note")], ["Claude Code may also keep the pick for its new sessions."]),
+          ],
+        ),
+      ]
+    : []
+
+const isPickingModel = (model: Model, address: string) => model.paneAction._tag === "PickingModel" && model.paneAction.address === address

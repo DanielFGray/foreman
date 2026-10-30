@@ -193,3 +193,32 @@ const summarize = (input: ToolInput) =>
     Option.map((line) => line.slice(0, SUMMARY_LENGTH)),
     Option.getOrElse(() => ""),
   )
+
+// MODEL
+
+/** The model of the newest reply among `lines`, or `before` when they hold none. */
+export const newestModel = (lines: ReadonlyArray<string>, before: Option.Option<string>) =>
+  Option.orElse(Array.last(Array.getSomes(Array.map(lines, modelOfLine))), () => before)
+
+/**
+ * The model a line of the main conversation names: the id of the model that
+ * wrote a reply, or the name `/model` reports when it switches, such as
+ * "Opus 5.5". None for any other line.
+ */
+const modelOfLine = (line: string): Option.Option<string> =>
+  pipe(
+    decodeModelLine(line),
+    Option.filter(({ isSidechain }) => isSidechain !== true),
+    Option.flatMap((one) =>
+      one.type === "assistant"
+        ? // Claude Code writes its own notices, such as an API error, as replies from "<synthetic>".
+          Option.filter(Option.some(one.message.model), (model) => !String.startsWith("<")(model))
+        : Option.flatMap(String.match(/<local-command-stdout>Set model to `([^`]+)`/)(one.message.content), (found) => Array.get(found, 1)),
+    ),
+  )
+
+const ModelLine = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("assistant"), isSidechain: Flag, message: Schema.Struct({ model: Schema.String }) }),
+  Schema.Struct({ type: Schema.Literal("user"), isSidechain: Flag, message: Schema.Struct({ content: Schema.String }) }),
+])
+const decodeModelLine = Schema.decodeUnknownOption(Schema.fromJsonString(ModelLine))

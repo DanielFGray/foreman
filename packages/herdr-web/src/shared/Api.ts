@@ -42,6 +42,8 @@ export const Api = RpcGroup.make(
   Rpc.make("watch", { success: Fleet, stream: true }),
   /** The conversation of the Claude Code agent in the terminal: its recent entries, then each batch of new ones. */
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
+  /** The model the agent in the terminal answers with: the id of its newest reply, such as `claude-opus-5-5`, or the name `/model` switched to, then after each change; none before its first reply. */
+  Rpc.make("model", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Schema.String), error: BridgeError, stream: true }),
   /**
    * Types text and presses Enter. It is refused, with kind `draft`, while the
    * agent's input box holds text typed in the terminal, which the paste would

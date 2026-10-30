@@ -1,7 +1,7 @@
 // An agent's conversation as the page shows it: what the user asked, what the
 // agent answered (as Markdown, already parsed), and the tools it ran. The
 // bridge builds these from the agent's own transcript.
-import { type Option, Schema } from "effect"
+import { Array, Option, Schema, String } from "effect"
 
 // MARKDOWN
 // A small Markdown vocabulary the page draws with its own elements. Raw HTML
@@ -120,3 +120,22 @@ export const InputBox = Schema.Union([
   Schema.TaggedStruct("Draft", { text: Schema.String }),
 ])
 export type InputBox = typeof InputBox.Type
+
+// MODEL
+
+/**
+ * A model id as people name it: `claude-opus-5-5[1m]` is "Opus 5.5", and the
+ * older `claude-3-5-sonnet-20241022` is "Sonnet 3.5". An id of another form
+ * stays as it is.
+ */
+export const modelName = (id: string): string => {
+  // Anthropic's own provider prefix names the same model.
+  const [head, ...rest] = String.split(String.replace(/^anthropic\/|\[.*\]$/g, "")(id), "-")
+  const words = Array.filter(rest, (token) => /^[a-z]+$/.test(token))
+  // A date suffix has eight digits; a version part has one or two.
+  const version = Array.filter(rest, (token) => /^\d{1,2}$/.test(token))
+  return Option.match(
+    Option.filter(Array.head(words), () => head === "claude" && words.length === 1 && Array.isArrayNonEmpty(version)),
+    { onNone: () => id, onSome: (word) => `${String.capitalize(word)} ${version.join(".")}` },
+  )
+}

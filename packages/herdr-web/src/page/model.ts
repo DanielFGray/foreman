@@ -63,6 +63,8 @@ export const PaneAction = defineTaggedUnion({
   ConfirmingTab: { tab: Schema.String },
   ConfirmingSpace: { space: Schema.String },
   RenamingSpace: { space: Schema.String, name: Schema.String },
+  /** The model menu of the agent at `address` is open. */
+  PickingModel: { address: Schema.String },
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
@@ -213,6 +215,8 @@ export const Model = Schema.Struct({
   queued: Schema.Array(Queued),
   /** What each watched agent's input box in the terminal holds, by address; none before the first reading. */
   boxes: Schema.Record(Schema.String, InputBox),
+  /** The model each shown Claude Code agent answers with, by address: the id of its newest reply, or the name `/model` switched to; none before either. */
+  models: Schema.Record(Schema.String, Schema.String),
   /** The prompts the chats show as faded bubbles until the agent records them. */
   waiting: Schema.Array(Waiting),
   /** The question each blocked agent in a chat waits on, by address. */
@@ -334,6 +338,10 @@ export const Message = defineMessageUnion({
   ClickedDropQueued: { address: Schema.String, id: Schema.Int },
   ReceivedInputBox: { address: Schema.String, box: InputBox },
   FailedInputBox: { address: Schema.String },
+  ReceivedModel: { address: Schema.String, model: Schema.Option(Schema.String) },
+  ClickedModelTag: { address: Schema.String },
+  PickedModel: { address: Schema.String, alias: Schema.String },
+  SucceededPickModel: {},
   ClickedKey: { key: Schema.String },
   ToggledModifier: { modifier: Modifier },
   UsedModifiers: {},

@@ -90,6 +90,7 @@ export const spaceHeadView = (row: SpaceRow, model: Model, h: HtmlBuilder<Messag
     Idle: plain,
     Confirming: plain,
     ConfirmingTab: plain,
+    PickingModel: plain,
     Refused: plain,
     RenamingSpace: ({ space, name }) => (space === row.space.id ? renameView(row.label, name, h) : plain()),
     ConfirmingSpace: ({ space }) => (space === row.space.id ? confirmView(row, h) : plain()),

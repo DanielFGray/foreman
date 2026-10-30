@@ -520,3 +520,20 @@ p.usage-error { margin: 0; }
 @media (max-width: 640px) {
   .checkout { grid-template-columns: minmax(0, 1fr); }
 }
+
+.model-tag {
+  flex-shrink: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  padding: 0 6px;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  color: var(--subtext);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.model-tag.on, .model-tag:hover { border-color: var(--accent); color: var(--text); }
+.model-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--surface); }
+.model-menu .note { margin: 0; }

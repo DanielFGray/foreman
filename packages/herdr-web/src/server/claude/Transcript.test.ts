@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest"
 import { Array, Option } from "effect"
-import type { Entry } from "../../shared/Chat.ts"
+import { type Entry, modelName } from "../../shared/Chat.ts"
 import { parseMarkdown } from "./Markdown.ts"
-import { decodeLine, splitLines } from "./Transcript.ts"
+import { decodeLine, newestModel, splitLines } from "./Transcript.ts"
 
 // Lines shaped like Claude Code's own (fields trimmed to the ones that matter).
 const user = (content: unknown, extra: object = {}) =>
@@ -159,4 +159,31 @@ describe("parseMarkdown", () => {
       },
     ])
   })
+})
+
+describe("newestModel", () => {
+  const reply = (model: string, extra: object = {}) => assistant({ type: "text", text: "hi" }, { message: { role: "assistant", model, content: [] }, ...extra })
+
+  test("is the model of the last reply of the main conversation", () => {
+    const lines = [reply("claude-sonnet-5-5"), reply("claude-opus-5-5"), user("next"), reply("claude-haiku-5-5", { isSidechain: true })]
+    expect(newestModel(lines, Option.none())).toEqual(Option.some("claude-opus-5-5"))
+  })
+
+  test("is the model `/model` switched to, before any reply from it", () => {
+    const switched = user("<local-command-stdout>Set model to `Haiku 5.5` for this session only</local-command-stdout>")
+    expect(newestModel([reply("claude-opus-5-5"), switched], Option.none())).toEqual(Option.some("Haiku 5.5"))
+  })
+
+  test("keeps the model read before when the lines hold no reply, or only Claude Code's own notices", () => {
+    expect(newestModel([user("hi"), reply("<synthetic>")], Option.some("claude-opus-5-5"))).toEqual(Option.some("claude-opus-5-5"))
+  })
+})
+
+test("a model id reads as its family and version", () => {
+  expect(
+    Array.map(
+      ["claude-opus-5-5", "claude-opus-5-5[1m]", "anthropic/claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022", "claude-sonnet-4", "gpt-5.6"],
+      modelName,
+    ),
+  ).toEqual(["Opus 5.5", "Opus 5.5", "Sonnet 5.5", "Haiku 4.5", "Sonnet 3.5", "Sonnet 4", "gpt-5.6"])
 })

@@ -103,6 +103,7 @@ const tabsView = (row: SpaceRow, tabId: string, model: Model, h: HtmlBuilder<Mes
           ConfirmingTab: ({ tab: closing }) => closing === tab.id,
           ConfirmingSpace: () => false,
           RenamingSpace: () => false,
+          PickingModel: () => false,
           Refused: () => false,
         })
         return h.keyed("span")(

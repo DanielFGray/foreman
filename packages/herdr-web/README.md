@@ -14,6 +14,7 @@ It shows the spaces, tabs and panes of your herdr-app window, live:
 - Split and close panes, open and close tabs, and drag spaces into a new order, with the herdr-app window open or closed. The bridge writes the change to herdr-app's layout in herdr-core, so an open window shows it too.
 - Open a space in a folder on any machine, with a program such as `claude` in its first pane. Rename a space, or close it after the page says what it ends.
 - From a space in a git repository, check out a new or existing branch as a new space, open its other checkouts, or remove a clean one. Checkouts go in `~/.herdr/worktrees`, where herdr-app puts its own; removal never forces and keeps the branch.
+- Each Claude Code pane names the model it answers with, such as "Opus 5.5", from its transcript. A click on the name picks another model through `/model`.
 - Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
 - On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
 

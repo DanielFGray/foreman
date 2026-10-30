@@ -42,10 +42,13 @@ const toAppError = (error: HerdrAppError | WorktreeError | HcFailure) =>
       ? new BridgeError({ kind: "git", message: error.message })
       : toBridgeError(error)
 
-const transcriptFailure = (error: NoTranscript | PlatformError) =>
-  Match.valueTags(error, {
-    NoTranscript: ({ reason }) => reason,
-    PlatformError: ({ message }) => `the transcript cannot be read: ${message}`,
+const transcriptError = (error: NoTranscript | PlatformError) =>
+  new BridgeError({
+    kind: "transcript",
+    message: Match.valueTags(error, {
+      NoTranscript: ({ reason }) => reason,
+      PlatformError: ({ message }) => `the transcript cannot be read: ${message}`,
+    }),
   })
 
 const Handlers = Api.toLayer(
@@ -60,23 +63,19 @@ const Handlers = Api.toLayer(
     const usage = yield* Usage
     const screens = yield* ScreenCells
     const inputBox = (terminal: string) => Effect.map(screens.read(terminal), inputBoxOf)
+    // The process whose transcript a terminal's chat and model are read from.
+    const claudePid = (terminal: string) =>
+      hc.get(terminal).pipe(
+        Effect.mapError(toBridgeError),
+        Effect.flatMap(({ foreground }) =>
+          Effect.fromOption(foreground).pipe(Effect.mapError(() => new BridgeError({ kind: "transcript", message: "no program runs in this terminal" }))),
+        ),
+        Effect.map(({ pid }) => pid),
+      )
     return {
       watch: () => fleet.changes,
-      chat: ({ terminal }) =>
-        hc.get(terminal).pipe(
-          Effect.mapError(toBridgeError),
-          Effect.flatMap(({ foreground }) =>
-            Effect.fromOption(foreground).pipe(
-              Effect.mapError(() => new BridgeError({ kind: "transcript", message: "no program runs in this terminal" })),
-            ),
-          ),
-          Effect.map(({ pid }) =>
-            claude.chat(pid).pipe(
-              Stream.mapError((error) => new BridgeError({ kind: "transcript", message: transcriptFailure(error) })),
-            ),
-          ),
-          Stream.unwrap,
-        ),
+      chat: ({ terminal }) => Stream.unwrap(Effect.map(claudePid(terminal), (pid) => Stream.mapError(claude.chat(pid), transcriptError))),
+      model: ({ terminal }) => Stream.unwrap(Effect.map(claudePid(terminal), (pid) => Stream.mapError(claude.model(pid), transcriptError))),
       send: ({ terminal, text, whileWorking }) =>
         Effect.all([hc.get(terminal), inputBox(terminal)], { concurrency: 2 }).pipe(
           Effect.mapError(toBridgeError),

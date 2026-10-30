@@ -7,7 +7,7 @@
 // does), so watching it moves the chat to the new transcript.
 import { Array, Config, Context, Effect, FileSystem, Layer, Option, Result, Schedule, Schema, Stream } from "effect"
 import type { ChatUpdate } from "../../shared/Chat.ts"
-import { decodeLine, splitLines } from "./Transcript.ts"
+import { decodeLine, newestModel, splitLines } from "./Transcript.ts"
 
 /** The process has no session record Claude Code can be followed by. */
 export class NoTranscript extends Schema.TaggedError<NoTranscript, { readonly brand: unique symbol }>()(
@@ -78,15 +78,13 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
           // Starting mid-file, the first line is cut; drop it.
           const whole = from === 0n ? bytes : bytes.subarray(bytes.indexOf(NEWLINE) + 1)
           const { lines, rest } = splitLines(new Uint8Array(), whole)
-          return [Option.some({ offset: size, rest }), [reset(lines)]] as const
+          return step(Option.some({ offset: size, rest }), [{ isReset: true, lines }])
         }
         if (size === tail.value.offset) {
-          return [tail, []] as const
+          return step(tail, [])
         }
         const { lines, rest } = splitLines(tail.value.rest, yield* readRange(path, tail.value.offset, size))
-        const entries = Array.flatMap(lines, decodeLine)
-        const updates: ReadonlyArray<ChatUpdate> = Array.isArrayNonEmpty(entries) ? [{ _tag: "Appended", entries }] : []
-        return [Option.some({ offset: size, rest }), updates] as const
+        return step(Option.some({ offset: size, rest }), Array.isArrayNonEmpty(lines) ? [{ isReset: false, lines }] : [])
       })
 
     // Every read goes to the file's current size, so an event missed between
@@ -94,15 +92,34 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
     const follow = (path: string) =>
       Stream.merge(Stream.make("start"), fs.watch(path)).pipe(Stream.mapAccumEffect((): Tail => Option.none(), (tail) => next(path)(tail)))
 
-    /** The chat of the Claude Code process `pid`: its recent entries, then each batch of new ones. */
-    const chat = (pid: number) =>
+    // The transcript lines of the Claude Code process `pid`: its recent ones, then each batch of new ones.
+    const lines = (pid: number) =>
       Stream.merge(Stream.make("start"), fs.watch(`${configDir}/sessions/${pid}.json`)).pipe(
         Stream.mapEffect(() => sessionId(pid)),
         Stream.changes,
         Stream.switchMap(session),
       )
 
-    return { chat }
+    return {
+      /** The chat of the Claude Code process `pid`: its recent entries, then each batch of new ones. */
+      chat: (pid: number) => Stream.filterMap(lines(pid), toUpdate),
+      /**
+       * The id of the model that wrote the newest reply, such as
+       * `claude-opus-5-5`, each time it changes. None until the session's first reply.
+       */
+      model: (pid: number) =>
+        lines(pid).pipe(
+          Stream.mapAccum(
+            (): Option.Option<string> => Option.none(),
+            (last, { isReset, lines }) => {
+              // Lines that replace all read before forget the model read before.
+              const next = newestModel(lines, isReset ? Option.none() : last)
+              return [next, [next]] as const
+            },
+          ),
+          Stream.changes,
+        ),
+    }
   }),
 }) {
   static readonly layer = Layer.effect(this, this.make)
@@ -119,9 +136,22 @@ const TAIL_BYTES = 4n * 1024n * 1024n
 const NEWLINE = 0x0a
 /** How often a new session is checked for its first transcript line. */
 const TRANSCRIPT_CHECK = "1 second"
-const EMPTY: ChatUpdate = { _tag: "Reset", entries: [] }
+/** Lines read from the transcript; `isReset` when they replace all read before. */
+type Lines = Readonly<{ isReset: boolean; lines: ReadonlyArray<string> }>
 
-const reset = (lines: ReadonlyArray<string>): ChatUpdate => ({ _tag: "Reset", entries: Array.flatMap(lines, decodeLine) })
+const step = (tail: Tail, batches: ReadonlyArray<Lines>) => [tail, batches] as const
+
+const EMPTY: Lines = { isReset: true, lines: [] }
+
+// A reset always reaches the page, even with no entries; a batch of appended lines only when it holds one.
+const toUpdate = ({ isReset, lines }: Lines): Result.Result<ChatUpdate, void> => {
+  const entries = Array.flatMap(lines, decodeLine)
+  return isReset
+    ? Result.succeed({ _tag: "Reset", entries })
+    : Array.isArrayNonEmpty(entries)
+      ? Result.succeed({ _tag: "Appended", entries })
+      : Result.fail(undefined)
+}
 
 const join = (a: Uint8Array, b: Uint8Array) => {
   const bytes = new Uint8Array(a.length + b.length)
