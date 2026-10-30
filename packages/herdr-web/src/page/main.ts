@@ -935,7 +935,7 @@ const paneView = (
                 ),
               )
             : []),
-          ...Option.match(maybePane, { onNone: () => [], onSome: (pane) => paneButtons(pane, model, h) }),
+          ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
         ],
       ),
       View.match(shown, {
@@ -1000,7 +1000,8 @@ const paneView = (
   )
 }
 
-const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+/** The head shows these under the pointer or keyboard focus; a close waiting for its answer keeps them shown. */
+const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html => {
   const button = (label: string, title: string, message: Message) =>
     h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [label])
   const iconButton = (node: IconNode, title: string, message: Message) =>
@@ -1010,13 +1011,16 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Reado
     Confirming: ({ pane: closing }) => closing === pane,
     Refused: () => false,
   })
-  return isClosing
-    ? [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())]
-    : [
-        iconButton(Columns2, "split right", Message.ClickedSplit({ pane, direction: "right" })),
-        iconButton(Rows2, "split down", Message.ClickedSplit({ pane, direction: "down" })),
-        iconButton(X, "close the pane", Message.ClickedClose({ pane })),
-      ]
+  return h.span(
+    [h.Class(isClosing ? "pane-actions confirming" : "pane-actions")],
+    isClosing
+      ? [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())]
+      : [
+          iconButton(Columns2, "split right", Message.ClickedSplit({ pane, direction: "right" })),
+          iconButton(Rows2, "split down", Message.ClickedSplit({ pane, direction: "down" })),
+          iconButton(X, "close the pane", Message.ClickedClose({ pane })),
+        ],
+  )
 }
 
 /** Why herdr-app refused the last split or close. */

@@ -154,6 +154,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pane-head .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pane-head .msg { flex: 1; min-width: 0; }
 .pane-head .chip { flex-shrink: 0; }
+/* As herdr-app's pane header: the pane's actions show under the pointer. A
+   screen without hover (a phone) always shows them. */
+.pane-actions { display: none; gap: 4px; }
+.pane-head:hover .pane-actions, .pane-head:focus-within .pane-actions, .pane-actions.confirming { display: inline-flex; }
+@media (hover: none) { .pane-actions { display: inline-flex; } }
 .focus-chips { display: none; }
 .chip.fleet-toggle { display: none; }
 
