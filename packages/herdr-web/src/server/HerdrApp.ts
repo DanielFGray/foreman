@@ -48,6 +48,10 @@ export class HerdrApp extends Context.Service<HerdrApp>()("herdr-web/server/Herd
       split: (pane: string, direction: Direction) => run("pane.split", { pane, direction }, Split),
       /** Closes the pane and ends its terminal. */
       close: (pane: string) => run("pane.close", { pane }, Done),
+      /** Opens a tab with a shell in the space; the tab and its terminal. */
+      newTab: (space: string) => run("tab.new", { space }, NewTab),
+      /** Closes the tab and ends its terminals. */
+      closeTab: (tab: string) => run("tab.close", { id: tab }, Done),
       /**
        * Moves the space to where `onto` is now, as a drag in herdr-app's own
        * sidebar does: after it when moving down, before it when moving up.
@@ -88,5 +92,7 @@ const World = Schema.Struct({ spaces: Schema.Array(Schema.Struct({ id: Schema.St
 const Refused = Schema.Struct({ _tag: wireTag("Refused"), error: Schema.String })
 
 const Split = Schema.Struct({ pane: Schema.String, terminal: Schema.String })
+
+const NewTab = Schema.Struct({ tab: Schema.String, terminal: Schema.String })
 
 const Done = Schema.Struct({})

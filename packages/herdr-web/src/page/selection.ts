@@ -9,6 +9,16 @@ import { Bridge, Conversation, Delivery, type Model, PaneAction, Selection, type
 /** The app name hc's status gives a Claude Code agent. */
 const CLAUDE_CODE = "claude-code"
 
+/** The tab to show in place of `tabId` once it closes: the next, else the one before; none unless `tabId` is on show. */
+export const tabAfterClosing = (model: Model, tabId: string): Option.Option<Tab> =>
+  Option.flatMap(selectedTab(model), ({ space, tab }) =>
+    tab.id === tabId
+      ? Option.flatMap(Array.findFirstIndex(space.tabs, (other) => other.id === tabId), (index) =>
+          Option.orElse(Array.get(space.tabs, index + 1), () => Array.get(space.tabs, index - 1)),
+        )
+      : Option.none(),
+  )
+
 export const lastFleet = (bridge: Bridge) =>
   Bridge.match(bridge, {
     Waiting: () => Option.none<Fleet>(),

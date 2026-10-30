@@ -50,10 +50,11 @@ export const Delivery = defineTaggedUnion({
 })
 export type Delivery = typeof Delivery.Type
 
-/** A split or close of a herdr-app pane: none under way, a close waiting for a second click, or herdr-app's refusal. */
+/** A split, new tab or close of a herdr-app pane or tab: none under way, a close waiting for a second click, or herdr-app's refusal. */
 export const PaneAction = defineTaggedUnion({
   Idle: {},
   Confirming: { pane: Schema.String },
+  ConfirmingTab: { tab: Schema.String },
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
@@ -150,6 +151,11 @@ export const Message = defineMessageUnion({
   ClickedKeepPane: {},
   ConfirmedClose: { pane: Schema.String },
   SucceededClose: {},
+  ClickedNewTab: { space: Schema.String },
+  SucceededNewTab: { tab: Schema.String },
+  ClickedCloseTab: { tab: Schema.String },
+  ConfirmedCloseTab: { tab: Schema.String },
+  SucceededCloseTab: {},
   FailedPaneAction: { reason: Schema.String },
   PressedSpace: { space: Schema.String },
   EnteredSpace: { space: Schema.String },

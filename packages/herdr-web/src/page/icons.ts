@@ -22,6 +22,7 @@ export {
   MessageSquare,
   Monitor,
   PanelLeft,
+  Plus,
   Play,
   RefreshCw,
   Rows2,

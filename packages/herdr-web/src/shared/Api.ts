@@ -59,6 +59,10 @@ export const Api = RpcGroup.make(
   }),
   /** Closes a pane of herdr-app's layout and ends its terminal. */
   Rpc.make("closePane", { payload: { pane: Schema.String }, error: BridgeError }),
+  /** Opens a tab with a shell in a space; the new tab's id. */
+  Rpc.make("newTab", { payload: { space: Schema.String }, success: Schema.Struct({ tab: Schema.String }), error: BridgeError }),
+  /** Closes a tab of herdr-app's layout and ends its terminals. */
+  Rpc.make("closeTab", { payload: { tab: Schema.String }, error: BridgeError }),
   /** Moves a space to where another space of its machine is now, as herdr-app's sidebar drag does. */
   Rpc.make("moveSpace", { payload: { space: Schema.String, onto: Schema.String }, error: BridgeError }),
   /** The font families the bridge serves at /fonts.css. */

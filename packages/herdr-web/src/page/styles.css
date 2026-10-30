@@ -142,6 +142,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
   white-space: nowrap;
 }
 .tab.on { border-bottom-color: var(--accent); color: var(--text); }
+.tab-item { display: inline-flex; align-items: center; }
+.tab-close, .tab-new { padding: 2px; border: 0; background: transparent; color: var(--subtext); display: inline-flex; }
+.tab-close { display: none; }
+.tab-item.on .tab-close, .tab-item:hover .tab-close, .tab-item:focus-within .tab-close { display: inline-flex; }
+/* No pointer to hover with: only the shown tab offers its ×. */
+@media (hover: none) { .tab-item:not(.on) .tab-close { display: none; } }
+.spinner {
+  width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%;
+  border: 2px solid var(--surface); border-top-color: var(--yellow);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
 /* herdr-app's split tree: each node's inline flex is its weight. */
 .layout { flex: 1; display: flex; min-height: 0; }

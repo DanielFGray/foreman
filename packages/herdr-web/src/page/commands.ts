@@ -57,6 +57,28 @@ export const ClosePane = Command.define("ClosePane", {
     }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
 })
 
+export const NewTab = Command.define("NewTab", {
+  args: { space: Schema.String },
+  messages: [Message.SucceededNewTab, Message.FailedPaneAction],
+  execute: ({ space }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { tab } = yield* client.newTab({ space })
+      return Message.SucceededNewTab({ tab })
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
+export const CloseTab = Command.define("CloseTab", {
+  args: { tab: Schema.String },
+  messages: [Message.SucceededCloseTab, Message.FailedPaneAction],
+  execute: ({ tab }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.closeTab({ tab })
+      return Message.SucceededCloseTab()
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
 export const MoveSpace = Command.define("MoveSpace", {
   args: { space: Schema.String, onto: Schema.String },
   messages: [Message.SucceededMoveSpace, Message.FailedMoveSpace],

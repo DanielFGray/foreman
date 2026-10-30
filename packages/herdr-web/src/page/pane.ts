@@ -118,11 +118,12 @@ export const paneView = (
   )
 }
 
-/** Why herdr-app refused the last split or close. */
+/** Why herdr-app refused the last split, new tab or close. */
 export const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   PaneAction.match(model.paneAction, {
     Idle: () => [],
     Confirming: () => [],
+    ConfirmingTab: () => [],
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
@@ -165,6 +166,7 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html 
   const isClosing = PaneAction.match(model.paneAction, {
     Idle: () => false,
     Confirming: ({ pane: closing }) => closing === pane,
+    ConfirmingTab: () => false,
     Refused: () => false,
   })
   return h.span(

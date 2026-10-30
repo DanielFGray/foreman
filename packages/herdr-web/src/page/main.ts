@@ -11,9 +11,9 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab } from "./commands.ts"
 import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
-import { lastFleet, maybeFocus, newView, openAs, selected, whenFocused, withView } from "./selection.ts"
+import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
 
@@ -141,6 +141,31 @@ export const update = (model: Model, message: Message) =>
     }),
 
     SucceededClose: () => ({ model }),
+
+    ClickedNewTab: ({ space }) => ({
+      model: modifyFields(model, { paneAction: () => PaneAction.Idle() }),
+      commands: [NewTab({ space })],
+    }),
+
+    // The new tab shows once the fleet lists it.
+    SucceededNewTab: ({ tab }) => remembered(selected(model, Selection.Tab({ tabId: tab, maybeFocus: Option.none() }))),
+
+    // Closing a tab ends its programs, so it takes a second click like a pane.
+    ClickedCloseTab: ({ tab }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.ConfirmingTab({ tab }) }) }),
+
+    // Closing the tab on show moves to its neighbour at once, not to a page that says it is gone.
+    ConfirmedCloseTab: ({ tab }) => {
+      const idle = modifyFields(model, { paneAction: () => PaneAction.Idle() })
+      return Option.match(tabAfterClosing(model, tab), {
+        onNone: () => ({ model: idle, commands: [CloseTab({ tab })] }),
+        onSome: (next) => {
+          const moved = selected(idle, Selection.Tab({ tabId: next.id, maybeFocus: Option.none() }))
+          return { model: moved, commands: [CloseTab({ tab }), SaveSelection({ selection: moved.selection })] }
+        },
+      })
+    },
+
+    SucceededCloseTab: () => ({ model }),
 
     FailedPaneAction: ({ reason }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Refused({ reason }) }) }),
 

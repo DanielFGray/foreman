@@ -65,6 +65,8 @@ const Handlers = Api.toLayer(
       split: ({ pane, direction }) =>
         app.split(pane, direction).pipe(Effect.map(({ terminal }) => ({ terminal })), Effect.mapError(toAppError)),
       closePane: ({ pane }) => app.close(pane).pipe(Effect.asVoid, Effect.mapError(toAppError)),
+      newTab: ({ space }) => app.newTab(space).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
+      closeTab: ({ tab }) => app.closeTab(tab).pipe(Effect.asVoid, Effect.mapError(toAppError)),
       moveSpace: ({ space, onto }) => app.moveSpace(space, onto).pipe(Effect.asVoid, Effect.mapError(toAppError)),
       fonts: () => Effect.succeed(fonts.families),
       usage: () => usage.changes,

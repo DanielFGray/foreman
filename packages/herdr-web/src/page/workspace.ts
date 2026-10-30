@@ -2,10 +2,10 @@
 // selection shows: a tab's panes, a lone agent, or the settings.
 import { Array, Match, Option } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import type { Layout } from "../shared/Fleet.ts"
+import type { Layout, StatusState } from "../shared/Fleet.ts"
 import { spaceRowOf, type SpaceRow } from "./group.ts"
-import { icon, PanelLeft } from "./icons.ts"
-import { Bridge, Message, type Model, Selection } from "./model.ts"
+import { icon, type IconNode, PanelLeft, Plus, X } from "./icons.ts"
+import { Bridge, Message, type Model, PaneAction, Selection } from "./model.ts"
 import { flexOf, keysView, paneActionView, paneView } from "./pane.ts"
 import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./selection.ts"
 import { settingsView } from "./settingsView.ts"
@@ -19,7 +19,7 @@ import { statusMark } from "./status.ts"
 export const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const tabs = Option.toArray(
     Option.flatMap(selectedTab(model), ({ space, tab }) =>
-      Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, h)),
+      Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, model, h)),
     ),
   )
   const problem = Option.toArray(Option.map(linkProblem(model.bridge), (text) => h.span([h.Class("link-problem")], [text])))
@@ -77,21 +77,54 @@ const linkProblem = (bridge: Bridge) =>
     Lost: () => Option.some("the bridge is not reachable"),
   })
 
-/** The space's tabs, each with its most urgent agent's dot. */
-const tabsView = ({ label, tabs }: SpaceRow, tabId: string, h: HtmlBuilder<Message>): Html =>
-  h.div(
+/**
+ * The space's tabs, each with its most urgent agent's dot, or a spinner while
+ * that agent works, and a × that closes it; then a + that opens a new one. The
+ * last tab has no ×, since herdr-app would close its space with it.
+ */
+const tabsView = ({ space, label, tabs }: SpaceRow, tabId: string, model: Model, h: HtmlBuilder<Message>): Html => {
+  const button = (text: string, title: string, message: Message) =>
+    h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [text])
+  const iconButton = (className: string, node: IconNode, title: string, message: Message) =>
+    h.button([h.Type("button"), h.Class(className), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [icon(node, h)])
+  return h.div(
     [h.Class("tabs")],
     [
       h.span([h.Class("space-name")], [label]),
-      ...Array.map(tabs, ({ tab, label, status }) =>
-        h.keyed("button")(
+      ...Array.map(tabs, ({ tab, label, status, program }) => {
+        const isClosing = PaneAction.match(model.paneAction, {
+          Idle: () => false,
+          Confirming: () => false,
+          ConfirmingTab: ({ tab: closing }) => closing === tab.id,
+          Refused: () => false,
+        })
+        return h.keyed("span")(
           tab.id,
-          [h.Type("button"), h.Class(tab.id === tabId ? "tab on" : "tab"), h.OnClick(Message.ClickedTab({ tabId: tab.id }))],
-          [label, ...statusMark(status, h)],
-        ),
-      ),
+          [h.Class(tab.id === tabId ? "tab-item on" : "tab-item")],
+          [
+            h.button(
+              [h.Type("button"), h.Class(tab.id === tabId ? "tab on" : "tab"), h.OnClick(Message.ClickedTab({ tabId: tab.id }))],
+              [...Option.toArray(Option.map(program, ({ icon: node }) => icon(node, h))), label, ...tabMark(status, h)],
+            ),
+            ...(isClosing
+              ? [
+                  button("end it", "close the tab and end its programs", Message.ConfirmedCloseTab({ tab: tab.id })),
+                  button("keep", "keep the tab", Message.ClickedKeepPane()),
+                ]
+              : tabs.length > 1
+                ? [iconButton("tab-close", X, `close tab ${label}`, Message.ClickedCloseTab({ tab: tab.id }))]
+                : []),
+          ],
+        )
+      }),
+      iconButton("tab-new", Plus, "new tab", Message.ClickedNewTab({ space: space.id })),
     ],
   )
+}
+
+/** A working agent shows a spinner where any other state shows its dot. */
+const tabMark = (status: Option.Option<StatusState>, h: HtmlBuilder<Message>) =>
+  Option.contains(status, "working") ? [h.span([h.Class("spinner"), h.Title("working")], [])] : statusMark(status, h)
 
 /** On a phone the page shows only the focused pane; these chips move the focus. */
 const focusChipsView = (model: Model, h: HtmlBuilder<Message>): Html => {
