@@ -127,12 +127,12 @@ export const CloseSpace = Command.define("CloseSpace", {
 })
 
 export const SendPrompt = Command.define("SendPrompt", {
-  args: { address: Schema.String, id: Schema.Int, text: Schema.String, whileWorking: Schema.Boolean },
+  args: { address: Schema.String, id: Schema.Int, text: Schema.String, whileWorking: Schema.Boolean, replaces: Schema.Option(Schema.String) },
   messages: [Message.SucceededSendPrompt, Message.FailedSendPrompt],
-  execute: ({ address, id, text, whileWorking }) =>
+  execute: ({ address, id, text, whileWorking, replaces }) =>
     Effect.gen(function* () {
       const client = yield* BridgeClient
-      yield* client.send({ terminal: address, text, whileWorking })
+      yield* client.send({ terminal: address, text, whileWorking, replaces })
       return Message.SucceededSendPrompt({ address, id })
     }).pipe(reportFailure((reason) => Message.FailedSendPrompt({ address, id, reason }))),
 })
@@ -282,4 +282,15 @@ export const ListCommands = Command.define("ListCommands", {
       const client = yield* BridgeClient
       return Message.ReceivedCommands({ address, commands: yield* client.commands({ terminal: address }) })
     }).pipe(reportFailure((reason) => Message.FailedCommands({ address, reason }))),
+})
+
+export const WriteInputBox = Command.define("WriteInputBox", {
+  args: { address: Schema.String, expected: Schema.String, text: Schema.String },
+  messages: [Message.WroteInputBox, Message.FailedWriteInputBox],
+  execute: ({ address, expected, text }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const box = yield* client.writeInputBox({ terminal: address, expected, text })
+      return Message.WroteInputBox({ address, text, box })
+    }).pipe(reportFailure((reason) => Message.FailedWriteInputBox({ address, reason }))),
 })

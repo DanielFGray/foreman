@@ -3,7 +3,7 @@
 // name that session; a session ends with its stream. A watching page gets the
 // terminal's size first, and again, with a fresh paint, after each change.
 import { Array, Config, Context, Effect, Layer, Match, MutableHashMap, Option, Ref, Result, Stream } from "effect"
-import { type Attached, attach, HISTORY_LINES, observe } from "../hc/Attach.ts"
+import { type Attached, attach, HISTORY_LINES, observe, type Size } from "../hc/Attach.ts"
 import { HcLost } from "../hc/Connection.ts"
 import { Attached as AttachedUpdate, Output, Sized, type Viewer } from "../shared/Api.ts"
 import { FleetModel } from "./FleetModel.ts"
@@ -60,8 +60,21 @@ export class LiveTerminals extends Context.Service<LiveTerminals>()("herdr-web/s
         session(id).pipe(Effect.flatMap(({ input }) => input(new TextEncoder().encode(text)))),
       resize: (id: number, cols: number, rows: number) =>
         session(id).pipe(Effect.flatMap(({ resize }) => resize(cols, rows))),
+      /**
+       * Pastes `text` as a person's paste, with no Enter after it. hc's own
+       * send always presses Enter, so the paste goes through an attach of its
+       * own, at the terminal's size so that nothing is resized.
+       */
+      paste: (terminal: string, size: Size, text: string) =>
+        Effect.scoped(
+          Effect.flatMap(attach(path, { terminal, ...size }), ({ input }) => input(new TextEncoder().encode(`${PASTE_START}${text}${PASTE_END}`))),
+        ),
     }
   }),
 }) {
   static readonly layer = Layer.effect(this, this.make)
 }
+
+// Bracketed paste: the program takes what is between as pasted text, line breaks and all.
+const PASTE_START = "\x1b[200~"
+const PASTE_END = "\x1b[201~"

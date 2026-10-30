@@ -1,7 +1,8 @@
 // Messages for an agent, held until it can take them. A message waits while
-// the agent works, waits on a question, or holds text typed into its own
-// input box in the terminal, and goes as soon as none of these is so. The
-// input box counts only for an agent whose box the page reads. The
+// the agent works, waits on a question, or holds text in its own input box
+// that the page did not write there (see mirror.ts), and goes as soon as none
+// of these is so. The page's own text in the box is emptied as the message
+// goes. The input box counts only for an agent whose box the page reads. The
 // queue lives in the page, so it outlasts a lost connection to the bridge.
 import { Array, Option, Record, Schema, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
@@ -9,6 +10,7 @@ import { modifyFields } from "foldkit/struct"
 import { InputBox } from "../shared/Chat.ts"
 import { SendPrompt } from "./commands.ts"
 import { Message, type Model, type Queued, QueueState, type UpdateReturn } from "./model.ts"
+import { isWriting, ownText, promptOf } from "./mirror.ts"
 import { lastFleet, supportsAt } from "./selection.ts"
 import { refusedPrompt, sentPrompt } from "./waiting.ts"
 
@@ -33,7 +35,7 @@ export const drained = (model: Model): UpdateReturn => {
   )
   return {
     model: Array.reduce(due, model, (sofar, one) => sending(sofar, one)),
-    commands: Array.map(due, ({ address, id, text }) => SendPrompt({ address, id, text, whileWorking: false })),
+    commands: Array.map(due, ({ address, id, text }) => SendPrompt({ address, id, text, whileWorking: false, replaces: ownText(model, address) })),
   }
 }
 
@@ -43,7 +45,7 @@ export const sentNow = (model: Model, address: string, id: number): UpdateReturn
     Array.findFirst(model.queued, (one) => one.address === address && one.id === id && one.state._tag !== "Sending"),
     {
       onNone: () => ({ model }),
-      onSome: (one) => ({ model: sending(model, one), commands: [SendPrompt({ address, id, text: one.text, whileWorking: true })] }),
+      onSome: (one) => ({ model: sending(model, one), commands: [SendPrompt({ address, id, text: one.text, whileWorking: true, replaces: ownText(model, address) })] }),
     },
   )
 
@@ -90,15 +92,25 @@ export const watchedBoxes = (model: Model, shown: ReadonlyArray<string>): Readon
 export const suggestion = (model: Model, address: string): Option.Option<string> =>
   Option.flatMap(Record.get(model.boxes, address), (box) => (box._tag === "Suggestion" ? Option.some(box.text) : Option.none()))
 
-/** The agent's queue over its prompt, and a word on a draft in its own input box. */
+/**
+ * The agent's queue over its prompt, and a word on its own input box: text
+ * typed there that the prompt does not show, or why the page could not write
+ * the box.
+ */
 export const queueView = (model: Model, address: string, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const mine = Array.filter(model.queued, (one) => one.address === address)
-  const draft = Option.flatMap(Record.get(model.boxes, address), (box) => (box._tag === "Draft" ? Option.some(box.text) : Option.none()))
+  const draft = Option.filter(
+    Option.flatMap(Record.get(model.boxes, address), (box) => (box._tag === "Draft" || box._tag === "Partial" ? Option.some(box.text) : Option.none())),
+    () => Option.isNone(ownText(model, address)),
+  )
   return [
     ...Option.toArray(
       Option.map(draft, (text) =>
         h.p([h.Class("note queue-draft")], [`The agent's input box in the terminal holds "${String.trim(text)}". Messages wait until it is empty.`]),
       ),
+    ),
+    ...Option.toArray(
+      Option.map(promptOf(model, address).problem, (reason) => h.p([h.Class("note queue-draft box-problem")], [`The page could not write the agent's input box: ${reason}.`])),
     ),
     ...(Array.isReadonlyArrayNonEmpty(mine) ? [h.ol([h.Class("queue"), h.AriaLabel("Queued messages")], Array.map(mine, (one) => queuedView(model, one, h)))] : []),
   ]
@@ -140,15 +152,19 @@ const blocker = (model: Model, address: string): Option.Option<string> => {
       : Option.contains(state, "blocked")
         ? Option.some("waits for the agent's question to be answered")
         : supportsAt(model, address, "inputBox")
-          ? boxBlocker(Record.get(model.boxes, address))
+          ? boxBlocker(model, address)
           : Option.none()
 }
 
-const boxBlocker = (box: Option.Option<InputBox>): Option.Option<string> =>
-  Option.match(box, {
-    onNone: () => Option.some("waits for a reading of the agent's input box"),
-    onSome: ({ _tag }) => (_tag === "Draft" ? Option.some("waits for the agent's input box to empty") : Option.none()),
-  })
+// Text the page itself wrote into the box is emptied when the message goes.
+const boxBlocker = (model: Model, address: string): Option.Option<string> =>
+  isWriting(model, address)
+    ? Option.some("waits for the page to write the agent's input box")
+    : Option.match(Record.get(model.boxes, address), {
+        onNone: () => Option.some("waits for a reading of the agent's input box"),
+        onSome: (box) =>
+          (box._tag === "Draft" || box._tag === "Partial") && Option.isNone(ownText(model, address)) ? Option.some("waits for the agent's input box to empty") : Option.none(),
+      })
 
 // What a held message waits on a change of.
 const Sign = Schema.Struct({ isConnected: Schema.Boolean, statusMs: Schema.Option(Schema.Int), box: Schema.Option(InputBox) })

@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs"
+import { Option } from "effect"
 import { Ghostty } from "ghostty-web"
 import { expect, test } from "vitest"
 import { render } from "../ScreenCells.ts"
-import { inputBoxOf } from "./InputBox.ts"
+import { boxOnScreen, inputBoxOf } from "./InputBox.ts"
 
 const ghostty = await Ghostty.load(new URL(import.meta.resolve("ghostty-web/ghostty-vt.wasm")).pathname)
 
@@ -43,18 +44,18 @@ test("the IDE pill is no input", () => {
   expect(inputBoxOf(screen(`❯ [⧉ In src/main.ts] ${FAINT("run the tests")}`))).toEqual({ _tag: "Suggestion", text: "run the tests" })
 })
 
-test("a folded paste is a draft, however it is drawn", () => {
-  expect(inputBoxOf(screen(`❯ ${FAINT("[Pasted text #1 +40 lines]")}`))).toEqual({ _tag: "Draft", text: "[Pasted text #1 +40 lines]" })
+test("a folded paste shows only in part, however it is drawn", () => {
+  expect(inputBoxOf(screen(`❯ ${FAINT("[Pasted text #1 +40 lines]")}`))).toEqual({ _tag: "Partial", text: "[Pasted text #1 +40 lines]" })
 })
 
 test("bash mode is a draft: its box runs what is typed as a command", () => {
   expect(inputBoxOf(screen("! ls"))).toEqual({ _tag: "Draft", text: "! ls" })
 })
 
-test("a box too tall for the screen shows only its bottom rule, and is taken for a draft", () => {
+test("a box too tall for the screen shows only its bottom rule, so only part of its text", () => {
   const lines = ["❯ a long draft", "  goes on", RULE, "  -- INSERT --"]
   expect(inputBoxOf(render(ghostty.createTerminal(COLS, lines.length), { cols: COLS, rows: lines.length }, lines.join("\r\n")))).toEqual({
-    _tag: "Draft",
+    _tag: "Partial",
     text: "❯ a long draft\n  goes on",
   })
 })
@@ -78,4 +79,10 @@ test("a question or a permission Claude Code asks stands where the box was, so t
 test("a typed draft that reads like a menu choice is still a draft", () => {
   const lines = ["● Done.", "", RULE, "❯ 1. fix it", RULE]
   expect(inputBoxOf(render(ghostty.createTerminal(COLS, lines.length), { cols: COLS, rows: lines.length }, lines.join("\r\n")))).toEqual({ _tag: "Draft", text: "1. fix it" })
+})
+
+test("the box's rows are counted for emptying it, and unknown when the box is taller than the screen", () => {
+  expect(boxOnScreen(screen("❯ first line", "  second line")).rows).toEqual(Option.some(2))
+  const tall = ["❯ a long draft", "  goes on", RULE, "  -- INSERT --"]
+  expect(boxOnScreen(render(ghostty.createTerminal(COLS, tall.length), { cols: COLS, rows: tall.length }, tall.join("\r\n"))).rows).toEqual(Option.none())
 })

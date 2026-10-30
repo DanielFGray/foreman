@@ -14,6 +14,7 @@ import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { slashView } from "./slash.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
+import { promptOf } from "./mirror.ts"
 import { queueView, suggestion } from "./queue.ts"
 import { findTerminal, labelAt, supportsAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
@@ -216,7 +217,7 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
     [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
     [
       h.textarea([
-        h.Value(model.prompt),
+        h.Value(promptOf(model, address).text),
         h.AriaLabel("Prompt"),
         h.Placeholder(Option.getOrElse(Option.orElse(ownAnswerPrompt(model, address), () => suggestion(model, address)), () => "")),
         h.OnInput((text) => Message.UpdatedPrompt({ text })),

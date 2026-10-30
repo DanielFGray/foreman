@@ -13,21 +13,27 @@ export type Cell = Readonly<{ char: string; faint: boolean; inverse: boolean }>
 
 export type Screen = ReadonlyArray<ReadonlyArray<Cell>>
 
+/** What the input box at the bottom of `screen` holds. */
+export const inputBoxOf = (screen: Screen): InputBox => boxOnScreen(screen).box
+
 /**
- * What the input box at the bottom of `screen` holds. A box too tall for the
- * screen shows only its bottom rule; what it holds is then unknown, and is
- * taken for a draft, so nothing is typed over it.
+ * The input box at the bottom of `screen`, and how many rows it takes; none
+ * when the box is taller than the screen, which then shows only its bottom
+ * rule.
  */
-export const inputBoxOf = (screen: Screen): InputBox => {
+export const boxOnScreen = (screen: Screen): Readonly<{ box: InputBox; rows: Option.Option<number> }> => {
   const lines = Array.map(screen, textOf)
   return Option.isSome(questionOnScreen(Array.join(lines, "\n")))
-    ? { _tag: "Absent" }
+    ? { box: { _tag: "Absent" }, rows: Option.none() }
     : Option.match(Array.findLastIndex(lines, isRule), {
-        onNone: (): InputBox => ({ _tag: "Absent" }),
+        onNone: () => ({ box: { _tag: "Absent" }, rows: Option.none() }),
         onSome: (end) =>
           Option.match(Array.findLastIndex(Array.take(lines, end), isRule), {
-            onNone: (): InputBox => ({ _tag: "Draft", text: plainText(Array.take(lines, end)) }),
-            onSome: (start) => boxOf(Array.drop(Array.take(screen, end), start + 1)),
+            onNone: () => ({ box: { _tag: "Partial", text: plainText(Array.take(lines, end)) }, rows: Option.none() }),
+            onSome: (start) => {
+              const rows = Array.drop(Array.take(screen, end), start + 1)
+              return { box: boxOf(rows), rows: Option.some(rows.length) }
+            },
           }),
       })
 }
@@ -42,13 +48,16 @@ const boxOf = (rows: Screen): InputBox =>
         const cells = [...afterPill(afterPrompt(first)), ...Array.flatten(Array.drop(rows, 1))]
         const text = String.trim(plainText([textOf(cells)]))
         const marks = Array.filter(cells, ({ char }) => !isBlank(char))
+        const typed = plainText(Array.map(rows, textOf)).replace(/^\s*❯\s?/, "")
         return Array.isReadonlyArrayEmpty(marks)
           ? { _tag: "Empty" }
-          : FOLDED.test(text) || !isClaudesOwn(marks)
-            ? { _tag: "Draft", text: plainText(Array.map(rows, textOf)).replace(/^\s*❯\s?/, "") }
-            : TIP.test(text)
-              ? { _tag: "Empty" }
-              : { _tag: "Suggestion", text }
+          : FOLDED.test(text)
+            ? { _tag: "Partial", text: typed }
+            : !isClaudesOwn(marks)
+              ? { _tag: "Draft", text: typed }
+              : TIP.test(text)
+                ? { _tag: "Empty" }
+                : { _tag: "Suggestion", text }
       },
     },
   )
@@ -96,10 +105,23 @@ const FOLDED = /\[(?:Pasted text #\d+|Image #\d+)/
  * caller allows only for a message it means to hand over at once.
  */
 export const refusal = (box: InputBox, status: Option.Option<Status>, whileWorking: boolean): Option.Option<Refusal> =>
-  box._tag === "Draft"
+  box._tag === "Draft" || box._tag === "Partial"
     ? Option.some({ kind: "draft", message: `the agent's input box holds text typed in the terminal: "${box.text}"` })
     : !whileWorking && Option.exists(status, ({ state }) => state === "working")
       ? Option.some({ kind: "working", message: "the agent is working" })
       : Option.none()
 
 export type Refusal = Readonly<{ kind: "draft" | "working"; message: string }>
+
+/**
+ * The keys that empty a box of `rows` rows, wherever its cursor is. In vim
+ * NORMAL mode `i` enters INSERT mode; otherwise it types a letter the rest
+ * delete. Each ctrl+u deletes back to the start of its line, and the next
+ * one the line break before it.
+ */
+export const clearingKeys = (rows: number): ReadonlyArray<string> => [
+  "i",
+  ...Array.replicate("down", rows),
+  "end",
+  ...Array.replicate("ctrl+u", 2 * rows + 1),
+]

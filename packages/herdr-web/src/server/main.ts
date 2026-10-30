@@ -1,7 +1,7 @@
 // The bridge: serves the page from dist/ and the Api over a WebSocket at
 // /rpc, on loopback only, behind the Host/Origin guard.
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun"
-import { Config, Effect, Layer, Option, Stream } from "effect"
+import { Config, Effect, Layer, Option, Stream, String } from "effect"
 import { FetchHttpClient, HttpRouter, HttpStaticServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
 import { Hc } from "../hc/Hc.ts"
@@ -42,10 +42,18 @@ const Handlers = Api.toLayer(
       chat: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "chat"), ({ terminal, implementation }) => implementation(terminal))),
       model: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.watch(terminal))),
       pickModel: ({ terminal, alias }) => Effect.flatMap(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.pick(terminal, alias)),
-      send: ({ terminal, text, whileWorking }) =>
+      send: ({ terminal, text, whileWorking, replaces }) =>
         agents.find(terminal, "inputBox").pipe(
           Effect.flatMap(({ terminal, implementation }) =>
-            Option.match(implementation, { onNone: () => Effect.succeedNone, onSome: ({ refusal }) => refusal(terminal, whileWorking) }),
+            Option.match(implementation, {
+              onNone: () => Effect.succeedNone,
+              // A box that no longer holds the page's own text keeps it, and the refusal names it.
+              onSome: ({ refusal, write }) =>
+                Option.match(Option.filter(replaces, String.isNonEmpty), {
+                  onNone: () => Effect.void,
+                  onSome: (own) => write(terminal, own, "").pipe(Effect.asVoid, Effect.catchIf(({ kind }) => kind === "changed", () => Effect.void)),
+                }).pipe(Effect.andThen(refusal(terminal, whileWorking))),
+            }),
           ),
           Effect.flatMap(
             Option.match({
@@ -55,6 +63,8 @@ const Handlers = Api.toLayer(
           ),
         ),
       inputBox: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "inputBox"), ({ terminal, implementation }) => implementation.watch(terminal))),
+      writeInputBox: ({ terminal, expected, text }) =>
+        Effect.flatMap(agents.use(terminal, "inputBox"), ({ terminal, implementation }) => implementation.write(terminal, expected, text)),
       keys: ({ terminal, keys }) => hc.keys(terminal, keys).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
       question: ({ terminal }) => Effect.flatMap(agents.use(terminal, "questions"), ({ terminal, implementation }) => implementation.read(terminal)),
       answer: ({ terminal, question, answer }) =>
@@ -101,7 +111,10 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
-  Layer.provide([Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer])), LiveTerminals.layer, Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
+  Layer.provide([
+    // The agents paste into the box through the live terminals.
+    Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer]), Layer.provideMerge(LiveTerminals.layer)),
+    Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),

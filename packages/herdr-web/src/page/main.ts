@@ -1,7 +1,7 @@
 // The page: its start, how each message changes the model, what it watches,
 // and the layout of sidebar, edge and workspace.
 import { Array, Clock, Effect, Equivalence, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
-import { Subscription } from "foldkit"
+import { Subscription, Update } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
@@ -22,6 +22,7 @@ import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey,
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
+import { boxRead, emptied, failedWrite, paused, pendingEdit, promptOf, submitted, wrote, writeDue } from "./mirror.ts"
 import { clocked, settled } from "./waiting.ts"
 import { isPaletteKey, PALETTE_INPUT_ID, PaletteTarget, withRecent } from "./palette.ts"
 import { answered, chose, QuestionRead, questionReads, readQuestion, typedAnswer } from "./question.ts"
@@ -35,6 +36,8 @@ const RECONNECT_DELAY = "2 seconds"
 const CLOCK_TICK = "30 seconds"
 /** While a prompt waits, or an agent changed state under a minute ago, so their clocks show on time. */
 const FAST_CLOCK_TICK = "1 second"
+/** How long typing in a prompt pauses before the prompt goes into the agent's input box. */
+const TYPING_PAUSE = "500 millis"
 
 // INIT
 
@@ -45,7 +48,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Fl
     isFleetFolded: selection._tag !== "Nothing",
     selection,
     views: {},
-    prompt: "",
+    prompts: {},
     delivery: Delivery.Ready(),
     queued: [],
     boxes: {},
@@ -333,28 +336,36 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     FailedFonts: ({ reason }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Failed({ reason }) }) }),
 
-    UpdatedPrompt: ({ text }) => updatedPrompt(model, text),
+    UpdatedPrompt: ({ text }) => Option.match(maybeFocus(model), { onNone: () => ({ model }), onSome: (address) => updatedPrompt(model, address, text) }),
+
+    PausedTyping: ({ address, text }) => paused(model, address, text),
+
+    WroteInputBox: ({ address, text, box }) => Update.combine(model, [(now) => wrote(now, address, text, box), (now) => reconsidered(model, now)]),
+
+    FailedWriteInputBox: ({ address, reason }) => ({ model: failedWrite(model, address, reason) }),
 
     ReceivedCommands: ({ address, commands }) => ({ model: listedCommands(model, address, CommandList.Listed({ address, commands })) }),
 
     FailedCommands: ({ address, reason }) => ({ model: listedCommands(model, address, CommandList.Unlisted({ address, reason })) }),
 
-    PickedCommand: ({ name }) => ({ model: pickedCommand(model, name) }),
+    PickedCommand: ({ name }) => ({ model: Option.match(maybeFocus(model), { onNone: () => model, onSome: (address) => pickedCommand(model, address, name) }) }),
 
     SubmittedPrompt: () =>
       Option.match(maybeFocus(model), {
         onNone: () => ({ model }),
-        onSome: (address) =>
-          String.isEmpty(String.trim(model.prompt))
+        onSome: (address) => {
+          const { text } = promptOf(model, address)
+          return String.isEmpty(String.trim(text))
             ? { model }
-            : Option.match(typedAnswer(model, address, model.prompt), {
+            : Option.match(typedAnswer(model, address, text), {
                 // While the agent waits on a question, the prompt answers it.
-                onSome: (answer) => chose(modifyFields(model, { prompt: () => "" }), address, answer),
-                onNone: () => queued(modifyFields(model, { prompt: () => "" }), address, model.prompt),
-              }),
+                onSome: (answer) => chose(submitted(model, address), address, answer),
+                onNone: () => queued(submitted(model, address), address, text),
+              })
+        },
       }),
 
-    SucceededSendPrompt: ({ address, id }) => delivered(model, address, id),
+    SucceededSendPrompt: ({ address, id }) => Update.combine(emptied(model, address), [(now) => delivered(now, address, id), (now) => writeDue(now, address)]),
 
     FailedSendPrompt: ({ address, id, reason }) => ({ model: held(model, address, id, reason) }),
 
@@ -362,7 +373,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     ClickedDropQueued: ({ address, id }) => ({ model: dropped(model, address, id) }),
 
-    ReceivedInputBox: ({ address, box }) => reconsidered(model, modifyFields(model, { boxes: (all) => Record.set(all, address, box) })),
+    ReceivedInputBox: ({ address, box }) => reconsidered(model, boxRead(modifyFields(model, { boxes: (all) => Record.set(all, address, box) }), address, box)),
 
     // Unread, the box may hold a draft, so the agent's messages wait until it is read again.
     FailedInputBox: ({ address }) => ({ model: modifyFields(model, { boxes: (all) => Record.remove(all, address) }) }),
@@ -701,6 +712,19 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     {
       modelToDependencies: (model) => ({ addresses: Array.filter(watchedBoxes(model, openAs(model, "Chat")), (address) => supportsAt(model, address, "inputBox")) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, inputBoxStream), { concurrency: "unbounded" }),
+    },
+  ),
+
+  // A pause in typing in the focused prompt: each edit starts the wait again.
+  typingPause: entry(
+    { edit: Schema.Option(Schema.Struct({ address: Schema.String, text: Schema.String })) },
+    {
+      modelToDependencies: (model) => ({ edit: pendingEdit(model) }),
+      dependenciesToStream: ({ edit }) =>
+        Option.match(edit, {
+          onNone: () => Stream.empty,
+          onSome: ({ address, text }) => Stream.fromEffect(Effect.as(Effect.sleep(TYPING_PAUSE), Message.PausedTyping({ address, text }))),
+        }),
     },
   ),
 

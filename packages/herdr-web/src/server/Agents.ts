@@ -26,6 +26,8 @@ export type Features = {
     watch: (terminal: Terminal) => Stream.Stream<InputBox, BridgeError>
     /** Why a message must not go now, such as text typed in the box; none when it may. */
     refusal: (terminal: Terminal, whileWorking: boolean) => Effect.Effect<Option.Option<BridgeError>, BridgeError>
+    /** Replaces the box's text, when it still holds `expected`; the box as it reads after. See `writeInputBox` in Api.ts. */
+    write: (terminal: Terminal, expected: string, text: string) => Effect.Effect<InputBox, BridgeError>
   }
   questions: {
     /** The question the agent waits on, once it shows; none when it asks nothing. */

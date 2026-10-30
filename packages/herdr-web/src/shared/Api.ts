@@ -51,11 +51,24 @@ export const Api = RpcGroup.make(
    * Types text and presses Enter. It is refused, with kind `draft`, while the
    * agent's input box holds text typed in the terminal, which the paste would
    * join; and with kind `working` while the agent works, unless `whileWorking`.
-   * An agent whose input box the page cannot read is never refused.
+   * An agent whose input box the page cannot read is never refused. When the
+   * box still holds `replaces`, the text the page itself wrote there, the box
+   * is emptied first and the message goes.
    */
-  Rpc.make("send", { payload: { terminal: Schema.String, text: Schema.String, whileWorking: Schema.Boolean }, error: BridgeError }),
+  Rpc.make("send", {
+    payload: { terminal: Schema.String, text: Schema.String, whileWorking: Schema.Boolean, replaces: Schema.OptionFromNullOr(Schema.String) },
+    error: BridgeError,
+  }),
   /** What the agent's input box holds now, then after each change, for as long as the page reads. */
   Rpc.make("inputBox", { payload: { terminal: Schema.String }, success: InputBox, error: BridgeError, stream: true }),
+  /**
+   * Replaces the text in the agent's input box with `text`, without sending
+   * it, and answers with the box as it reads after. It is refused, with kind
+   * `changed`, when the box no longer holds `expected` (compared as
+   * `sameTyped` does), and with kind `draft` when the box is taller than the
+   * screen.
+   */
+  Rpc.make("writeInputBox", { payload: { terminal: Schema.String, expected: Schema.String, text: Schema.String }, success: InputBox, error: BridgeError }),
   /** The question the agent waits on, read from its screen; none while it shows no menu. */
   Rpc.make("question", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Question), error: BridgeError }),
   /**

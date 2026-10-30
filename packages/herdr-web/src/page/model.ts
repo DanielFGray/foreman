@@ -224,6 +224,20 @@ export type QueueState = typeof QueueState.Type
 export const Queued = Schema.Struct({ address: Schema.String, id: Schema.Int, text: Schema.String, state: QueueState })
 export type Queued = typeof Queued.Type
 
+/**
+ * What the user writes to one agent, in its chat's prompt. For an agent whose
+ * input box the page reads, the prompt and the box mirror each other (see
+ * mirror.ts): `agreed` is the text both last held, with the box's text as the
+ * page read it then. `problem` is why the page last failed to write the box.
+ */
+export const Prompt = Schema.Struct({
+  text: Schema.String,
+  agreed: Schema.Struct({ text: Schema.String, typed: Schema.String }),
+  isWriting: Schema.Boolean,
+  problem: Schema.Option(Schema.String),
+})
+export type Prompt = typeof Prompt.Type
+
 /** What the page knows of the question an agent waits on. */
 export const Asking = defineTaggedUnion({
   Reading: {},
@@ -249,7 +263,8 @@ export const Model = Schema.Struct({
   selection: Selection,
   /** The view of each shown terminal; a terminal not in it shows its default view. */
   views: Schema.Record(Schema.String, View),
-  prompt: Schema.String,
+  /** Each agent's prompt, by address; an agent not in it has an empty one. */
+  prompts: Schema.Record(Schema.String, Prompt),
   delivery: Delivery,
   /** The messages not yet handed to their agents (see queue.ts). */
   queued: Schema.Array(Queued),
@@ -394,6 +409,9 @@ export const Message = defineMessageUnion({
   ClickedSendNow: { address: Schema.String, id: Schema.Int },
   ClickedDropQueued: { address: Schema.String, id: Schema.Int },
   ReceivedInputBox: { address: Schema.String, box: InputBox },
+  PausedTyping: { address: Schema.String, text: Schema.String },
+  WroteInputBox: { address: Schema.String, text: Schema.String, box: InputBox },
+  FailedWriteInputBox: { address: Schema.String, reason: Schema.String },
   FailedInputBox: { address: Schema.String },
   ReceivedModel: { address: Schema.String, model: Schema.Option(Schema.String) },
   ClickedModelTag: { address: Schema.String },

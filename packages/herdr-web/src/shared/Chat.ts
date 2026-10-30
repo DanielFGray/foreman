@@ -1,7 +1,7 @@
 // An agent's conversation as the page shows it: what the user asked, what the
 // agent answered (as Markdown, already parsed), and the tools it ran. The
 // bridge builds these from the agent's own transcript.
-import { Array, Option, pipe, Schema, String } from "effect"
+import { Array, Match, Option, pipe, Schema, String } from "effect"
 
 // MARKDOWN
 // A small Markdown vocabulary the page draws with its own elements. Raw HTML
@@ -132,10 +132,33 @@ export const InputBox = Schema.Union([
   Schema.TaggedStruct("Empty", {}),
   /** The prompt Claude Code suggests next; a paste replaces it. */
   Schema.TaggedStruct("Suggestion", { text: Schema.String }),
-  /** Text typed into the box in the terminal; a paste would join it. */
+  /** Text typed into the box; a paste would join it. Claude Code's own line breaks read as typed ones. */
   Schema.TaggedStruct("Draft", { text: Schema.String }),
+  /**
+   * Text in the box that the screen shows only in part: a paste Claude Code
+   * folded into a placeholder, or a box taller than the screen. `text` is
+   * what shows.
+   */
+  Schema.TaggedStruct("Partial", { text: Schema.String }),
 ])
 export type InputBox = typeof InputBox.Type
+
+/** The text typed into the box, as it shows; none when there is no box. A suggestion is no text. */
+export const typedText = (box: InputBox): Option.Option<string> =>
+  Match.valueTags(box, {
+    Absent: () => Option.none(),
+    Empty: () => Option.some(""),
+    Suggestion: () => Option.some(""),
+    Draft: ({ text }) => Option.some(text),
+    Partial: ({ text }) => Option.some(text),
+  })
+
+/**
+ * Whether two texts of the box are the same text. The box wraps a long line
+ * where it likes, so the screen shows breaks and indents the text does not
+ * have: only the characters that are not whitespace count.
+ */
+export const sameTyped = (one: string, other: string) => one.replace(/\s/g, "") === other.replace(/\s/g, "")
 
 // MODEL
 

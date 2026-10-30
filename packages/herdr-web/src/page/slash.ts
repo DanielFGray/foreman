@@ -4,10 +4,12 @@
 import { Array, Option, Order, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
+import { Update } from "foldkit"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { ListCommands } from "./commands.ts"
 import { CommandList, Message, type Model, type UpdateReturn } from "./model.ts"
-import { maybeFocus, supportsAt } from "./selection.ts"
+import { edited, promptOf } from "./mirror.ts"
+import { supportsAt } from "./selection.ts"
 
 /** Rows the list shows at most. */
 const MOST = 8
@@ -34,32 +36,30 @@ export const suggestions = (commands: ReadonlyArray<SlashCommand>, prompt: strin
   })
 
 /** The prompt changed: it reads the agent's commands again when it starts a command. */
-export const updatedPrompt = (model: Model, text: string): UpdateReturn => {
-  const next = modifyFields(model, { prompt: () => text })
-  return Option.match(
-    Option.filter(maybeFocus(model), (address) => supportsAt(model, address, "commands") && Option.isSome(commandTyped(text)) && Option.isNone(commandTyped(model.prompt))),
-    {
-      onNone: () => ({ model: next }),
-      onSome: (address) => ({ model: modifyFields(next, { commandList: () => CommandList.Loading({ address }) }), commands: [ListCommands({ address })] }),
-    },
-  )
-}
+export const updatedPrompt = (model: Model, address: string, text: string): UpdateReturn =>
+  Update.combine(model, [
+    (now) => ({ model: edited(now, address, text) }),
+    (now) =>
+      supportsAt(now, address, "commands") && Option.isSome(commandTyped(text)) && Option.isNone(commandTyped(promptOf(model, address).text))
+        ? { model: modifyFields(now, { commandList: () => CommandList.Loading({ address }) }), commands: [ListCommands({ address })] }
+        : { model: now },
+  ])
 
 /** A list read for another agent, or an older one, is not this prompt's. */
 export const listedCommands = (model: Model, address: string, list: CommandList): Model =>
   modifyFields(model, { commandList: (now) => (now._tag === "Loading" && now.address === address ? list : now) })
 
-export const pickedCommand = (model: Model, name: string): Model => modifyFields(model, { prompt: () => `/${name} ` })
+export const pickedCommand = (model: Model, address: string, name: string): Model => edited(model, address, `/${name} `)
 
 /** The suggestions over the prompt of the agent at `address`; nothing while the prompt starts no command. */
 export const slashView = (model: Model, address: string, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
-  Option.isNone(commandTyped(model.prompt))
+  Option.isNone(commandTyped(promptOf(model, address).text))
     ? []
     : CommandList.match(model.commandList, {
         Unread: () => [],
         Loading: (list) => (list.address === address ? [note("Reading the commands…", h)] : []),
         Unlisted: (list) => (list.address === address ? [note(`The commands cannot be read: ${list.reason}`, h)] : []),
-        Listed: (list) => (list.address === address ? listView(suggestions(list.commands, model.prompt), Option.exists(commandTyped(model.prompt), ({ hasArgument }) => hasArgument), h) : []),
+        Listed: (list) => (list.address === address ? listView(suggestions(list.commands, promptOf(model, address).text), Option.exists(commandTyped(promptOf(model, address).text), ({ hasArgument }) => hasArgument), h) : []),
       })
 
 const commandTyped = (prompt: string) =>
