@@ -18,7 +18,7 @@ export const messagesQuery = (session: string, limit: number) => `
 select json_group_array(json(message)) from (
   select case type
     when 'user' then json_object('type', type, 'id', id, 'created', data ->> '$.time.created', 'text', data ->> '$.text')
-    when 'assistant' then json_object('type', type, 'id', id, 'content', json((
+    when 'assistant' then json_object('type', type, 'id', id, 'completed', data ->> '$.time.completed', 'content', json((
       select json_group_array(case item.value ->> '$.type'
         when 'text' then json_object('type', 'text', 'text', item.value ->> '$.text')
         when 'tool' then json_object(
@@ -34,28 +34,43 @@ select json_group_array(json(message)) from (
 
 /**
  * The chat entries of `messages`, oldest first. A turn's length is the time
- * from the user's message to the idle message that ends the turn, so a turn
+ * from the user's message to the last reply the agent completed. The idle
+ * message that ends a turn can come much later: OpenCode closes a turn it
+ * lost, such as one cut off by a restart, only when it starts again. A turn
  * whose start is not among `messages` shows no length.
  */
 export const toEntries = (messages: ReadonlyArray<Message>): ReadonlyArray<Entry> =>
   Array.flatten(
-    Array.mapAccum(messages, Option.none<number>(), (asked, message) =>
+    Array.mapAccum(messages, NO_TURN, (turn, message) =>
       Match.value(message).pipe(
-        Match.withReturnType<[Option.Option<number>, ReadonlyArray<Entry>]>(),
+        Match.withReturnType<[Turn, ReadonlyArray<Entry>]>(),
         Match.tagsExhaustive({
-          User: ({ id, created, text }) => [Option.some(created), String.isEmpty(String.trim(text)) ? [] : [{ _tag: "Prompt", id, text }]],
-          Assistant: ({ id, content }) => [asked, Array.flatMap(content, (item, index) => contentEntries(`${id}/${index}`, item))],
-          Shell: (shell) => [asked, shellEntries(shell)],
-          Idle: ({ id, created }) => [
-            Option.none(),
-            Option.toArray(Option.map(asked, (from): Entry => ({ _tag: "TurnEnded", id, durationMs: created - from }))),
+          User: ({ id, created, text }) => [
+            { asked: Option.some(created), answered: Option.none() },
+            String.isEmpty(String.trim(text)) ? [] : [{ _tag: "Prompt", id, text }],
           ],
-          Compacted: ({ id }) => [asked, [{ _tag: "Compacted", id }]],
-          Unshown: () => [asked, []],
+          Assistant: ({ id, completed, content }) => [
+            { ...turn, answered: Option.orElse(completed, () => turn.answered) },
+            Array.flatMap(content, (item, index) => contentEntries(`${id}/${index}`, item)),
+          ],
+          Shell: (shell) => [turn, shellEntries(shell)],
+          Idle: ({ id, created }) => [
+            NO_TURN,
+            Option.toArray(
+              Option.map(turn.asked, (from): Entry => ({ _tag: "TurnEnded", id, durationMs: Option.getOrElse(turn.answered, () => created) - from })),
+            ),
+          ],
+          Compacted: ({ id }) => [turn, [{ _tag: "Compacted", id }]],
+          Unshown: () => [turn, []],
         }),
       ),
     )[1],
   )
+
+/** When the current turn's user message came, and when the agent last completed a reply in it. */
+type Turn = Readonly<{ asked: Option.Option<number>; answered: Option.Option<number> }>
+
+const NO_TURN: Turn = { asked: Option.none(), answered: Option.none() }
 
 // While the model still writes a call, its input is unparsed JSON text, and every key reads null.
 const INPUT_KEYS = ["description", "command", "filePath", "path", "pattern", "url", "query", "name"]
@@ -78,7 +93,14 @@ type ContentItem = typeof ContentItem.Type
 
 export const Message = Schema.Union([
   Schema.Struct({ _tag: wireTag("User"), type: Schema.Literal("user"), id: Schema.String, created: Schema.Finite, text: Schema.String }),
-  Schema.Struct({ _tag: wireTag("Assistant"), type: Schema.Literal("assistant"), id: Schema.String, content: Schema.Array(ContentItem) }),
+  Schema.Struct({
+    _tag: wireTag("Assistant"),
+    type: Schema.Literal("assistant"),
+    id: Schema.String,
+    // None while the reply is still being written.
+    completed: Schema.OptionFromNullOr(Schema.Finite),
+    content: Schema.Array(ContentItem),
+  }),
   // A command the user ran in OpenCode's own shell (`!`).
   Schema.Struct({
     _tag: wireTag("Shell"),

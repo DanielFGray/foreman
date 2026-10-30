@@ -24,7 +24,7 @@ const MESSAGES: ReadonlyArray<readonly [string, object]> = [
   [
     "assistant",
     {
-      time: { created: 1100 },
+      time: { created: 1100, completed: 2500 },
       agent: "build",
       model: { id: "some-model", providerID: "some-provider" },
       content: [
@@ -58,7 +58,7 @@ test("OpenCode's messages read as the chat's entries, oldest first", () => {
     { _tag: "Reply", id: "msg_2/4", blocks: parseMarkdown("There are **12** tests.") },
     { _tag: "Tool", id: "msg_4", toolUseId: "msg_4", name: "shell", summary: "git status" },
     { _tag: "ToolResult", id: "msg_4/result", toolUseId: "msg_4", isError: true },
-    { _tag: "TurnEnded", id: "msg_5", durationMs: 3000 },
+    { _tag: "TurnEnded", id: "msg_5", durationMs: 1500 },
     { _tag: "Compacted", id: "msg_6" },
   ])
 })
