@@ -1180,7 +1180,7 @@ const paneView = (
                 Shown: ({ entries }) => chatView(entries, h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
-              ...(isFocused ? [promptView(model, address, h)] : []),
+              ...(isFocused ? [promptView(model, h)] : []),
             ],
           ),
         Terminal: ({ link }) =>
@@ -1290,14 +1290,13 @@ const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   })
 
 /** The focused chat's prompt: its text goes to the agent, and Enter after it. */
-const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Html => {
+const promptView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
   return h.form(
     [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
     [
       h.textarea([
         h.Value(model.prompt),
-        h.Placeholder(`Type to ${labelAt(model, address)}; Enter is pressed for you`),
         h.AriaLabel("Prompt"),
         h.OnInput((text) => Message.UpdatedPrompt({ text })),
       ]),
