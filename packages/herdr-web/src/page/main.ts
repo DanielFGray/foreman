@@ -271,7 +271,11 @@ export const update = (model: Model, message: Message) =>
     ClickedSettings: () =>
       model.isSettingsOpen
         ? { model: modifyFields(model, { isSettingsOpen: () => false }) }
-        : { model: modifyFields(model, { isSettingsOpen: () => true, fontCatalog: () => FontCatalog.Loading() }), commands: [FetchFonts()] },
+        : {
+            // On a phone the settings open behind the sidebar drawer, so it closes as a picked tab closes it.
+            model: modifyFields(model, { isSettingsOpen: () => true, isFleetFolded: () => true, fontCatalog: () => FontCatalog.Loading() }),
+            commands: [FetchFonts()],
+          },
 
     PickedFont: ({ surface, font }) => settingsChanged(model, restyle(model.settings, surface, (style) => ({ ...style, font }))),
 
