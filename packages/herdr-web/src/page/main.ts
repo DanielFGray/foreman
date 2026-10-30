@@ -5,7 +5,7 @@ import { Subscription } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
-import { dropSide, locate } from "./group.ts"
+import { dropSide, hasFreshStatus, locate } from "./group.ts"
 import { BridgeClient, failureReason } from "./rpc.ts"
 import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
@@ -14,6 +14,7 @@ import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab } from "./commands.ts"
 import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
+import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
@@ -23,8 +24,8 @@ import { topBarView, workspaceView } from "./workspace.ts"
 const RECONNECT_DELAY = "2 seconds"
 /** Reset countdowns count in minutes. */
 const CLOCK_TICK = "30 seconds"
-/** While a prompt waits, so its clock shows on time. */
-const WAITING_CLOCK_TICK = "1 second"
+/** While a prompt waits, or an agent changed state under a minute ago, so their clocks show on time. */
+const FAST_CLOCK_TICK = "1 second"
 
 // INIT
 
@@ -402,14 +403,17 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
-  // Faster while a prompt waits. A new rate starts a new stream, which reads
+  // Faster while a prompt waits or an agent shows seconds. A new rate starts a new stream, which reads
   // the clock at once, so a prompt just sent learns its time straight away.
   clock: entry(
-    { isWaiting: Schema.Boolean },
+    { isFast: Schema.Boolean },
     {
-      modelToDependencies: (model) => ({ isWaiting: Array.isReadonlyArrayNonEmpty(model.waiting) }),
-      dependenciesToStream: ({ isWaiting }) =>
-        Stream.fromEffectSchedule(Clock.currentTimeMillis, Schedule.spaced(isWaiting ? WAITING_CLOCK_TICK : CLOCK_TICK)).pipe(
+      modelToDependencies: (model) => ({
+        isFast:
+          Array.isReadonlyArrayNonEmpty(model.waiting) || Option.exists(lastFleet(model.bridge), (fleet) => hasFreshStatus(fleet, model.now, SECONDS_SHOWN_UNTIL)),
+      }),
+      dependenciesToStream: ({ isFast }) =>
+        Stream.fromEffectSchedule(Clock.currentTimeMillis, Schedule.spaced(isFast ? FAST_CLOCK_TICK : CLOCK_TICK)).pipe(
           Stream.map((now) => Message.TickedClock({ now })),
         ),
     },

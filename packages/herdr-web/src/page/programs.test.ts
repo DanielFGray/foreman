@@ -13,6 +13,7 @@ const running = (name: string, ...argv: ReadonlyArray<string>): Terminal => ({
   status: Option.none(),
   foreground: Option.some({ name, pid: 1, argv: [name, ...argv] }),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 })
 

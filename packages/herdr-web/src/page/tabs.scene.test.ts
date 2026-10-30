@@ -18,6 +18,7 @@ const agent: Terminal = {
   status: Option.some({ state: "working", app: Option.some("claude-code"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
   foreground: Option.some({ name: "claude", pid: 1, argv: [] }),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 }
 

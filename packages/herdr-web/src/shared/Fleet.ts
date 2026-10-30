@@ -34,6 +34,8 @@ export const Terminal = Schema.Struct({
   cwd: Schema.String,
   state: Schema.Literals(["live", "finished"]),
   status: Schema.OptionFromOptionalNullOr(Status),
+  /** When `status` last changed, in milliseconds since the epoch. */
+  status_ms: Schema.OptionFromOptionalNullOr(Schema.Int),
   foreground: Schema.OptionFromOptionalNullOr(Foreground),
   /** herdr-app files a terminal under `herdr.space` and `herdr.tab`. */
   labels: Schema.Record(Schema.String, Schema.String),

@@ -17,6 +17,7 @@ const editor: Terminal = {
   status: Option.none(),
   foreground: Option.some({ name: "nvim", pid: 1, argv: ["nvim", "notes.md"] }),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 }
 

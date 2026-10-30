@@ -17,6 +17,7 @@ const blockedAgent: Terminal = {
   status: Option.some({ state: "blocked", app: Option.none(), msg: Option.some("needs a yes"), kind: Option.none(), progress: Option.none() }),
   foreground: Option.none(),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 }
 
@@ -158,5 +159,47 @@ test("the settings take the place of the tab, and a space picked after them take
     Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     expect(selector(".settings")).not.toExist(),
     expect(role("button", { name: "Settings" })).toHaveAttr("aria-current", "false"),
+  )
+})
+
+test("the agent list groups by state, most urgent first, with the time in each state", () => {
+  const agent = (address: string, state: "idle" | "working" | "blocked", msg: string, since: Option.Option<number>): Terminal => ({
+    ...blockedAgent,
+    address,
+    status: Option.some({ state, app: Option.none(), msg: Option.some(msg), kind: Option.none(), progress: Option.none() }),
+    status_ms: since,
+  })
+  const pane = (terminal: string) => ({ _tag: "Block" as const, type: "block" as const, id: `p-${terminal}`, size: Option.none(), content: { _tag: "Terminal" as const, terminal } })
+  const here: Machine = {
+    name: "here",
+    isLocal: true,
+    state: "connected",
+    spaces: [
+      { id: "s1", name: "prog", folder: "/", tabs: [{ id: "a", name: "", root: pane("t1") }, { id: "b", name: "", root: pane("t2") }] },
+      { id: "s2", name: "quiet", folder: "/", tabs: [{ id: "c", name: "", root: pane("t3") }] },
+    ],
+  }
+  const grouped: Fleet = {
+    connected: true,
+    machines: [here],
+    terminals: [
+      agent("t1", "idle", "ready", Option.none()),
+      agent("t2", "working", "running tests", Option.some(88_000)),
+      agent("t3", "blocked", "needs a yes", Option.some(-152_000)),
+    ],
+  }
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, now: 100_000, bridge: Bridge.Watching({ fleet: grouped }) }),
+    expectAll(all.selector(".agent-list .state-head")).toHaveCount(3),
+    expect(selector(".agent-list .state-head")).toContainText("Waiting for you"),
+    expectAll(all.selector(".agent-row")).toHaveCount(3),
+    // A blocked agent is "space · what it does", and says how long it has waited.
+    expect(selector(".agent-list ul .agent-row")).toContainText("quiet"),
+    expect(selector(".agent-list ul .agent-row")).toContainText("· needs a yes"),
+    expect(selector(".agent-list ul .agent-row .time")).toContainText("waiting 4m"),
+    expect(selector(".agent-row .dot.working")).toExist(),
+    // Without a time from hc, the row shows none.
+    expectAll(all.selector(".agent-row .time")).toHaveCount(2),
   )
 })

@@ -1,6 +1,6 @@
 // How the page files terminals: by the herdr-app layout trees that place
 // them, in herdr-app's own order of spaces, tabs and panes.
-import { Array, HashMap, HashSet, Match, Option, Order, pipe, String } from "effect"
+import { Array, HashMap, HashSet, Match, Option, Order, pipe, Result, String } from "effect"
 import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
 import { harnessOf } from "./harness.ts"
 import { type Program, programOf } from "./programs.ts"
@@ -131,3 +131,23 @@ export const tabLabel = ({ name }: Tab, index: number) => nonEmptyOr(name, `${in
 const spaceTerminals = (space: Space) => Array.flatMap(space.tabs, ({ root }) => terminalsIn(root))
 
 const nonEmptyOr = (text: string, fallback: string) => (String.isNonEmpty(text) ? text : fallback)
+
+/** An agent as the list shows it: with the space that holds it, when one does. */
+export type ListedAgent = Readonly<{ terminal: Terminal; space: Option.Option<string> }>
+
+/** The agents of every space in the sidebar, then the loose ones. */
+export const listedAgents = ({ machines, loose }: Sidebar): ReadonlyArray<ListedAgent> => [
+  ...Array.flatMap(machines, ({ spaces }) => Array.flatMap(spaces, (row) => Array.map(agentsIn(row), (terminal) => ({ terminal, space: Option.some(row.label) })))),
+  ...Array.map(loose, (terminal) => ({ terminal, space: Option.none() })),
+]
+
+/** The agents of each state that has any, in urgency order. An agent with no status counts as idle. */
+export const byState = (agents: ReadonlyArray<ListedAgent>): ReadonlyArray<Readonly<{ state: StatusState; agents: ReadonlyArray<ListedAgent> }>> =>
+  Array.filterMap(URGENCY, (state) => {
+    const inState = Array.filter(agents, ({ terminal }) => Option.getOrElse(Option.map(terminal.status, (status) => status.state), () => "idle") === state)
+    return Array.isReadonlyArrayNonEmpty(inState) ? Result.succeed({ state, agents: inState }) : Result.failVoid
+  })
+
+/** Whether a live agent changed state within `window` ms of `now`, so a clock that shows seconds must tick. */
+export const hasFreshStatus = (fleet: Fleet, now: number, window: number) =>
+  Array.some(fleet.terminals, (terminal) => isLiveAgent(terminal) && Option.exists(terminal.status_ms, (since) => now - since < window))

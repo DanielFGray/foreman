@@ -2,14 +2,14 @@
 // resize edge, and the Settings row.
 import { Array, Option, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import type { Fleet, Terminal } from "../shared/Fleet.ts"
-import { agentsIn, dropSide, type DropSide, type MachineRow, sidebarOf, type SpaceRow, terminalLabel, terminalNote } from "./group.ts"
+import type { Fleet } from "../shared/Fleet.ts"
+import { agentsIn, byState, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, terminalLabel, terminalNote } from "./group.ts"
 import { Bot, Folder, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
 import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
 import { lastFleet, maybeFocus, selectedTab } from "./selection.ts"
 import { DEFAULT_SIDEBAR_WIDTH, keyedSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "./sidebarWidth.ts"
-import { stateOf, statusDot, statusMark } from "./status.ts"
+import { stateHeading, stateOf, statusDot, statusMark, timeInState } from "./status.ts"
 
 /** The sidebar: the page's name, every machine's spaces and agents, and the Settings row. */
 export const sidebarView = (model: Model, h: HtmlBuilder<Message>): Html =>
@@ -74,8 +74,8 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
       const isNested = model.settings.agents === "nested"
       // Nested, a space lists its own agents, and this list keeps the ones no space holds.
       const [listTitle, listed] = isNested
-        ? ["Other agents", loose]
-        : ["Agents", [...Array.flatMap(machines, ({ spaces }) => Array.flatMap(spaces, agentsIn)), ...loose]]
+        ? ["Other agents", Array.map(loose, (terminal): ListedAgent => ({ terminal, space: Option.none() }))]
+        : ["Agents", listedAgents({ machines, loose })]
       return !isHeaded && Array.every(machines, ({ spaces }) => Array.isReadonlyArrayEmpty(spaces)) && Array.isReadonlyArrayEmpty(listed)
         ? [h.p([h.Class("note")], ["No spaces."])]
         : [
@@ -88,7 +88,13 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
                     [h.Class("agent-list"), h.AriaLabel(listTitle)],
                     [
                       h.h2([h.Class("list-head")], [h.span([h.Class("name")], [listTitle])]),
-                      h.ul([], Array.map(listed, (terminal) => agentRowView(terminal, model, h))),
+                      // Below the spaces, the agents sit in groups by state; "Other agents" under nested spaces has few enough to stay flat.
+                      ...(isNested
+                        ? [h.ul([], Array.map(listed, (agent) => agentRowView(agent, model, h)))]
+                        : Array.flatMap(byState(listed), ({ state, agents }) => [
+                            h.h3([h.Class("state-head")], [stateHeading[state]]),
+                            h.keyed("ul")(`agents/${state}`, [], Array.map(agents, (agent) => agentRowView(agent, model, h))),
+                          ])),
                     ],
                   ),
                 ]
@@ -125,7 +131,7 @@ const machineView = (
       ...Array.flatMap(spaces, (row) => [
         spaceView(row, openTab, dragMark(model.spaceDrag, fleet, row.space.id), h),
         ...(isNested && Array.isReadonlyArrayNonEmpty(agentsIn(row))
-          ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView(terminal, model, h)))]
+          ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView({ terminal, space: Option.none() }, model, h)))]
           : []),
       ]),
     ],
@@ -172,7 +178,9 @@ const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Opt
   )
 }
 
-const agentRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>): Html =>
+// "space · what it is doing", then how long it has been so. Under its own
+// space, an agent is named by its program instead, as the space is above it.
+const agentRowView = ({ terminal, space }: ListedAgent, model: Model, h: HtmlBuilder<Message>): Html =>
   h.keyed("li")(
     terminal.address,
     [],
@@ -185,8 +193,9 @@ const agentRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>)
         ],
         [
           icon(Option.match(programOf(terminal), { onNone: () => Bot, onSome: (program) => program.icon }), h),
-          h.span([h.Class("name")], [terminalLabel(terminal)]),
-          h.span([h.Class("msg")], [terminalNote(terminal)]),
+          h.span([h.Class("name")], [Option.getOrElse(space, () => terminalLabel(terminal))]),
+          h.span([h.Class("msg")], [`${Option.isSome(space) ? "· " : ""}${terminalNote(terminal)}`]),
+          ...Option.toArray(Option.map(timeInState(terminal, model.now), (time) => h.span([h.Class("time")], [time]))),
           statusDot(stateOf(terminal), h),
         ],
       ),

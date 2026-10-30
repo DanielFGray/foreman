@@ -14,6 +14,7 @@ const terminal = (address: string, hasStatus = true, state: Terminal["state"] = 
     : Option.none(),
   foreground: Option.none(),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 })
 

@@ -17,6 +17,7 @@ const shell: Terminal = {
   status: Option.none(),
   foreground: Option.some({ name: "zsh", pid: 2, argv: ["zsh"] }),
   labels: {},
+  status_ms: Option.none(),
   created_ms: 0,
 }
 
