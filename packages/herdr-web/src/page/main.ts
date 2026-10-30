@@ -94,6 +94,8 @@ export const Selection = defineTaggedUnion({
   Tab: { tabId: Schema.String, maybeFocus: Schema.Option(Schema.String) },
   /** A terminal that no herdr-app layout shows, alone. */
   Loose: { address: Schema.String },
+  /** This browser's settings, in place of a tab. */
+  Settings: {},
 })
 export type Selection = typeof Selection.Type
 
@@ -120,7 +122,6 @@ export const Model = Schema.Struct({
   /** Soft ctrl and alt, armed until the next key. */
   modifiers: Modifiers,
   /** Settings take the workspace's place while open. */
-  isSettingsOpen: Schema.Boolean,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: Schema.Option(Usage),
@@ -206,7 +207,7 @@ export type Message = typeof Message.Type
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth }: Flags) => ({
+export const init = ({ settings, selection, sidebarWidth }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -219,7 +220,6 @@ export const init = ({ settings, selection, sidebarWidth }: Flags) => ({
     spaceDrag: SpaceDrag.Idle(),
     settings,
     modifiers: NO_MODIFIERS,
-    isSettingsOpen: false,
     fontCatalog: FontCatalog.Loading(),
     usage: Option.none(),
     usageDetail: Option.none(),
@@ -227,6 +227,7 @@ export const init = ({ settings, selection, sidebarWidth }: Flags) => ({
     sidebarWidth,
     sidebarGrip: Option.none(),
   },
+  commands: selection._tag === "Settings" ? [FetchFonts()] : [],
 })
 
 // UPDATE
@@ -270,6 +271,7 @@ export const update = (model: Model, message: Message) =>
                 }),
               ),
         Loose: () => ({ model }),
+        Settings: () => ({ model }),
       }),
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
@@ -307,6 +309,7 @@ export const update = (model: Model, message: Message) =>
         Nothing: () => ({ model }),
         Tab: ({ tabId }) => remembered(modifyFields(model, { selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(terminal) }) })),
         Loose: () => ({ model }),
+        Settings: () => ({ model }),
       }),
 
     // Closing a pane ends its program, so it takes a second click.
@@ -357,14 +360,11 @@ export const update = (model: Model, message: Message) =>
 
     FailedMoveSpace: ({ reason }) => ({ model: modifyFields(model, { spaceDrag: () => SpaceDrag.Refused({ reason }) }) }),
 
+    // On a phone the settings open behind the sidebar drawer, so it closes as a picked tab closes it.
     ClickedSettings: () =>
-      model.isSettingsOpen
-        ? { model: modifyFields(model, { isSettingsOpen: () => false }) }
-        : {
-            // On a phone the settings open behind the sidebar drawer, so it closes as a picked tab closes it.
-            model: modifyFields(model, { isSettingsOpen: () => true, isFleetFolded: () => true, fontCatalog: () => FontCatalog.Loading() }),
-            commands: [FetchFonts()],
-          },
+      model.selection._tag === "Settings"
+        ? { model: modifyFields(model, { isFleetFolded: () => true }) }
+        : openSettings(model),
 
     PickedFont: ({ surface, font }) => settingsChanged(model, restyle(model.settings, surface, (style) => ({ ...style, font }))),
 
@@ -492,6 +492,7 @@ const selectedTab = (model: Model): Option.Option<Readonly<{ space: Space; tab: 
         ),
       ),
     Loose: () => Option.none(),
+    Settings: () => Option.none(),
   })
 
 /** The terminals on show, in the layout's reading order. */
@@ -500,6 +501,7 @@ const shownTerminals = (model: Model): ReadonlyArray<string> =>
     Nothing: () => [],
     Tab: () => Option.match(selectedTab(model), { onNone: () => [], onSome: ({ tab }) => terminalsIn(tab.root) }),
     Loose: ({ address }) => [address],
+    Settings: () => [],
   })
 
 /** The terminal the prompt and keys go to: the chosen pane while it is on show, else the first one. */
@@ -513,6 +515,7 @@ const maybeFocus = (model: Model) => {
         () => Array.head(shown),
       ),
     Loose: ({ address }) => Option.some(address),
+    Settings: () => Option.none<string>(),
   })
 }
 
@@ -594,6 +597,12 @@ export const SaveSettings = Command.define("SaveSettings", {
 })
 
 /** Keeps the tab and pane on show, so a reload opens on them. */
+/** Shows the settings in place of the tab, and asks the bridge for its fonts again. */
+const openSettings = (model: Model): UpdateReturn => {
+  const next = selected(modifyFields(model, { isFleetFolded: () => true, fontCatalog: () => FontCatalog.Loading() }), Selection.Settings())
+  return { model: next, commands: [SaveSelection({ selection: next.selection }), FetchFonts()] }
+}
+
 const remembered = (model: Model) => ({ model, commands: [SaveSelection({ selection: model.selection })] })
 
 const shownSidebarWidth = (model: Model) => Option.getOrElse(model.sidebarWidth, () => DEFAULT_SIDEBAR_WIDTH)
@@ -799,7 +808,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
         [h.Class("main")],
         [
           topBarView(model, h),
-          model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
+          workspaceView(model, h),
           ...usageBarView(
             model.usage,
             model.usageDetail,
@@ -822,13 +831,11 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
  * and a desk hides the row when it has nothing else to show.
  */
 const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const tabs = model.isSettingsOpen
-    ? []
-    : Option.toArray(
-        Option.flatMap(selectedTab(model), ({ space, tab }) =>
-          Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, h)),
-        ),
-      )
+  const tabs = Option.toArray(
+    Option.flatMap(selectedTab(model), ({ space, tab }) =>
+      Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, h)),
+    ),
+  )
   const problem = Option.toArray(Option.map(linkProblem(model.bridge), (text) => h.span([h.Class("link-problem")], [text])))
   return h.div(
     [h.Class(Array.isReadonlyArrayEmpty(tabs) && Array.isReadonlyArrayEmpty(problem) ? "top-bar bare" : "top-bar")],
@@ -853,8 +860,8 @@ const settingsButton = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.button(
     [
       h.Type("button"),
-      h.Class(model.isSettingsOpen ? "row settings-toggle on" : "row settings-toggle"),
-      h.AriaPressed(model.isSettingsOpen ? "true" : "false"),
+      h.Class(model.selection._tag === "Settings" ? "row settings-row on" : "row settings-row"),
+      h.AriaCurrent(model.selection._tag === "Settings" ? "page" : "false"),
       h.OnClick(Message.ClickedSettings()),
     ],
     [icon(SettingsIcon, h), h.span([h.Class("name")], ["Settings"])],
@@ -1039,6 +1046,7 @@ const stateOf = ({ status }: Terminal) => Option.map(status, ({ state }) => stat
 
 const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
+    Settings: () => settingsView(model, h),
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {

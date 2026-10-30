@@ -3,7 +3,7 @@ import { Option } from "effect"
 import { all, click, Command, doubleClick, expect, expectAll, expectIgnored, given, hover, inside, keydown, pointerDown, pointerUp, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Machine, Terminal } from "../shared/Fleet.ts"
-import { Bridge, init, Message, MoveSpace, SaveSelection, SaveSidebarWidth, Selection, update, view } from "./main.ts"
+import { Bridge, FetchFonts, init, Message, MoveSpace, SaveSelection, SaveSidebarWidth, Selection, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const blockedAgent: Terminal = {
@@ -134,5 +134,27 @@ test("the sidebar's edge resizes it by key and goes back to the default on a dou
     Command.expectExact(SaveSidebarWidth({ width: Option.none() })),
     Command.resolve(SaveSidebarWidth, Message.CompletedSaveSidebarWidth()),
     expect(edge).toHaveAttr("aria-valuenow", "340"),
+  )
+})
+
+test("the settings take the place of the tab, and a space picked after them takes it back", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    click(role("button", { name: "prog" })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    click(role("button", { name: "Settings" })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    Command.resolve(FetchFonts, Message.ReceivedFonts({ families: [] })),
+    expect(role("button", { name: "Settings" })).toHaveAttr("aria-current", "page"),
+    expect(role("button", { name: "prog" })).toHaveAttr("aria-current", "false"),
+    expect(selector(".tabs")).not.toExist(),
+    // A second click leaves them open.
+    click(role("button", { name: "Settings" })),
+    expect(selector(".settings")).toExist(),
+    click(role("button", { name: "quiet" })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    expect(selector(".settings")).not.toExist(),
+    expect(role("button", { name: "Settings" })).toHaveAttr("aria-current", "false"),
   )
 })

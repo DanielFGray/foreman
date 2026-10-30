@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 import { all, click, Command, change, expect, expectAll, given, inside, label, role, scene, selector } from "foldkit/scene"
 import { expect as expectValue, test } from "vitest"
-import { FetchFonts, init, Message, SaveSettings, Selection, update, view } from "./main.ts"
+import { FetchFonts, init, Message, SaveSelection, SaveSettings, Selection, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS, MAX_SIZE, Settings } from "./settings.ts"
 
 const families = [
@@ -21,7 +21,9 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
     click(role("button", { name: "Settings" })),
     expect(selector(".fleet")).toHaveClass("folded"),
     expect(selector(".settings")).toContainText("Asking the bridge for its fonts"),
-    Command.expectExact(FetchFonts),
+    // A reload opens on the settings again.
+    Command.expectExact(FetchFonts, SaveSelection({ selection: Selection.Settings() })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     Command.resolve(FetchFonts, Message.ReceivedFonts({ families })),
     // The fallback, then the fonts.
     expectAll(all.selector("#chat-font option")).toHaveCount(3),
@@ -39,7 +41,7 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
 test("a size steps from the current settings and stops at its limit", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, isSettingsOpen: true }),
+    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Settings(), sidebarWidth: Option.none() }).model }),
     click(role("button", { name: "larger terminal text" })),
     Command.expectExact(SaveSettings({ settings: terminalSettings(Option.none(), MAX_SIZE) })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
@@ -51,7 +53,7 @@ test("a size steps from the current settings and stops at its limit", () => {
 test("the agent list choice saves, and settings saved before it existed keep their fonts", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model, isSettingsOpen: true }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none() }).model }),
     click(label("Under each space")),
     Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested" } })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
