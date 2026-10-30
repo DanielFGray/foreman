@@ -1,6 +1,6 @@
 // The page: its start, how each message changes the model, what it watches,
 // and the layout of sidebar, edge and workspace.
-import { Array, Clock, Effect, Equivalence, Match, Option, Schedule, Schema, Stream, String } from "effect"
+import { Array, Clock, Effect, Equivalence, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
 import { Subscription } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
@@ -11,12 +11,13 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab, FocusPalette, SaveRecent } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusPalette, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
-import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
+import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
+import { clocked, settled } from "./waiting.ts"
 import { isPaletteKey, PaletteTarget, withRecent } from "./palette.ts"
 import { answered, chose, QuestionRead, questionReads, readQuestion, typedAnswer } from "./question.ts"
 import { paletteResults, paletteView } from "./paletteView.ts"
@@ -41,6 +42,8 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     views: {},
     prompt: "",
     delivery: Delivery.Ready(),
+    queued: [],
+    boxes: {},
     waiting: [],
     questions: {},
     paneAction: PaneAction.Idle(),
@@ -63,11 +66,9 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    ReceivedFleet: ({ fleet }) => ({ model: modifyFields(model, { bridge: () => Bridge.Watching({ fleet }) }) }),
+    ReceivedFleet: ({ fleet }) => reconsidered(model, modifyFields(model, { bridge: () => Bridge.Watching({ fleet }) })),
 
-    LostBridge: () => ({
-      model: modifyFields(model, { bridge: () => Bridge.Lost({ maybeFleet: lastFleet(model.bridge) }) }),
-    }),
+    LostBridge: () => reconsidered(model, modifyFields(model, { bridge: () => Bridge.Lost({ maybeFleet: lastFleet(model.bridge) }) })),
 
     ClickedFleetToggle: () => ({ model: modifyFields(model, { isFleetFolded: (isFolded) => !isFolded }) }),
 
@@ -268,23 +269,22 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             : Option.match(typedAnswer(model, address, model.prompt), {
                 // While the agent waits on a question, the prompt answers it.
                 onSome: (answer) => chose(modifyFields(model, { prompt: () => "" }), address, answer),
-                onNone: () => ({
-                  model: sentPrompt(modifyFields(model, { delivery: () => Delivery.Sending() }), address, model.prompt),
-                  commands: [SendPrompt({ address, text: model.prompt })],
-                }),
+                onNone: () => queued(modifyFields(model, { prompt: () => "" }), address, model.prompt),
               }),
       }),
 
-    SucceededSendPrompt: ({ address }) =>
-      whenFocused(model, address, () => ({
-        model: modifyFields(model, { prompt: () => "", delivery: () => Delivery.Ready() }),
-      })),
+    SucceededSendPrompt: ({ address, id }) => delivered(model, address, id),
 
-    // The refused prompt stays in the box, so its text names the bubble to take back.
-    FailedSendPrompt: ({ address, reason }) => {
-      const without = refusedPrompt(model, address, model.prompt)
-      return whenFocused(without, address, () => ({ model: modifyFields(without, { delivery: () => Delivery.Refused({ reason }) }) }))
-    },
+    FailedSendPrompt: ({ address, id, reason }) => ({ model: held(model, address, id, reason) }),
+
+    ClickedSendNow: ({ address, id }) => sentNow(model, address, id),
+
+    ClickedDropQueued: ({ address, id }) => ({ model: dropped(model, address, id) }),
+
+    ReceivedInputBox: ({ address, box }) => reconsidered(model, modifyFields(model, { boxes: (all) => Record.set(all, address, box) })),
+
+    // Unread, the box may hold a draft, so the agent's messages wait until it is read again.
+    FailedInputBox: ({ address }) => ({ model: modifyFields(model, { boxes: (all) => Record.remove(all, address) }) }),
 
     ClickedKey: ({ key }) =>
       Option.match(maybeFocus(model), {
@@ -536,6 +536,16 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The input box of each agent in a shown chat or with messages queued, which
+  // tells the queue when the agent can take a message and the prompt what it suggests.
+  inputBoxes: entry(
+    { addresses: Schema.Array(Schema.String) },
+    {
+      modelToDependencies: (model) => ({ addresses: watchedBoxes(model, openAs(model, "Chat")) }),
+      dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, inputBoxStream), { concurrency: "unbounded" }),
+    },
+  ),
+
   // Each shown chat, live. When a call fails the page shows why and calls
   // again after a pause; the bridge then sends the whole recent chat again.
   chat: entry(
@@ -555,6 +565,16 @@ const questionStream = ({ address, statusMs }: QuestionRead) =>
       return Message.ReceivedQuestion({ address, statusMs, question })
     }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedQuestion({ address, statusMs, reason: failureReason(error) })))),
   )
+
+const inputBoxStream = (address: string) =>
+  Effect.gen(function* () {
+    const client = yield* BridgeClient
+    return client.inputBox({ terminal: address }).pipe(
+      Stream.map((box) => Message.ReceivedInputBox({ address, box })),
+      Stream.tapCause((cause) => Effect.logWarning("the bridge's input box watch failed", cause)),
+      Stream.catchCause(() => Stream.make(Message.FailedInputBox({ address }))),
+    )
+  }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
 
 const chatStream = (address: string) =>
   Effect.gen(function* () {

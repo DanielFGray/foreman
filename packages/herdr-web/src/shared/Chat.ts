@@ -104,3 +104,19 @@ export type Question = typeof Question.Type
 /** An answer to a question: one of its choices, or text of the user's own. */
 export const Answer = Schema.Union([Schema.TaggedStruct("Picked", { choice: Schema.Int }), Schema.TaggedStruct("Typed", { text: Schema.String })])
 export type Answer = typeof Answer.Type
+
+// INPUT BOX
+// Claude Code's own input box, read from its screen. A suggested prompt is
+// drawn faint in an empty box; only the screen's styles tell it from text the
+// user typed in the terminal.
+
+export const InputBox = Schema.Union([
+  /** The screen shows no input box: another program, or a dialog over it. */
+  Schema.TaggedStruct("Absent", {}),
+  Schema.TaggedStruct("Empty", {}),
+  /** The prompt Claude Code suggests next; a paste replaces it. */
+  Schema.TaggedStruct("Suggestion", { text: Schema.String }),
+  /** Text typed into the box in the terminal; a paste would join it. */
+  Schema.TaggedStruct("Draft", { text: Schema.String }),
+])
+export type InputBox = typeof InputBox.Type

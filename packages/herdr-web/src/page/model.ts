@@ -6,7 +6,7 @@ import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
 import { Direction } from "../shared/Api.ts"
-import { Answer, ChatUpdate, Entry, Question } from "../shared/Chat.ts"
+import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts"
 import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
@@ -45,9 +45,9 @@ export type View = typeof View.Type
 export const ViewName = Schema.Literals(["Chat", "Terminal"])
 export type ViewName = typeof ViewName.Type
 
+/** The last soft key press: taken, or refused with the bridge's reason. */
 export const Delivery = defineTaggedUnion({
   Ready: {},
-  Sending: {},
   Refused: { reason: Schema.String },
 })
 export type Delivery = typeof Delivery.Type
@@ -112,6 +112,18 @@ export type FontCatalog = typeof FontCatalog.Type
 export const Waiting = Schema.Struct({ address: Schema.String, text: Schema.String, seen: Schema.Int, sentAt: Schema.Option(Schema.Finite) })
 export type Waiting = typeof Waiting.Type
 
+/** A queued message: waiting for its agent, on its way, or refused by the bridge and held until the agent changes. */
+export const QueueState = defineTaggedUnion({
+  Waits: {},
+  Sending: {},
+  Held: { reason: Schema.String },
+})
+export type QueueState = typeof QueueState.Type
+
+/** A message for the agent at `address`, in the order the user sent it. `id` tells apart two messages with the same text. */
+export const Queued = Schema.Struct({ address: Schema.String, id: Schema.Int, text: Schema.String, state: QueueState })
+export type Queued = typeof Queued.Type
+
 /** What the page knows of the question an agent waits on. */
 export const Asking = defineTaggedUnion({
   Reading: {},
@@ -139,6 +151,10 @@ export const Model = Schema.Struct({
   views: Schema.Record(Schema.String, View),
   prompt: Schema.String,
   delivery: Delivery,
+  /** The messages not yet handed to their agents (see queue.ts). */
+  queued: Schema.Array(Queued),
+  /** What each watched agent's input box in the terminal holds, by address; none before the first reading. */
+  boxes: Schema.Record(Schema.String, InputBox),
   /** The prompts the chats show as faded bubbles until the agent records them. */
   waiting: Schema.Array(Waiting),
   /** The question each blocked agent in a chat waits on, by address. */
@@ -229,8 +245,12 @@ export const Message = defineMessageUnion({
   FailedFonts: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
   SubmittedPrompt: {},
-  SucceededSendPrompt: { address: Schema.String },
-  FailedSendPrompt: { address: Schema.String, reason: Schema.String },
+  SucceededSendPrompt: { address: Schema.String, id: Schema.Int },
+  FailedSendPrompt: { address: Schema.String, id: Schema.Int, reason: Schema.String },
+  ClickedSendNow: { address: Schema.String, id: Schema.Int },
+  ClickedDropQueued: { address: Schema.String, id: Schema.Int },
+  ReceivedInputBox: { address: Schema.String, box: InputBox },
+  FailedInputBox: { address: Schema.String },
   ClickedKey: { key: Schema.String },
   ToggledModifier: { modifier: Modifier },
   UsedModifiers: {},

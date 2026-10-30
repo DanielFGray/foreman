@@ -10,6 +10,7 @@ import { programOf } from "./programs.ts"
 import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, modifiersAttribute, SOFT_KEYS } from "./keys.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
+import { queueView, suggestion } from "./queue.ts"
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
 import { stateOf, statusDot } from "./status.ts"
@@ -69,7 +70,7 @@ export const paneView = (
                 Shown: ({ entries }) => chatView(entries, waitingAt(model, address), questionView(model, address, h), h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
-              ...(isFocused ? [promptView(model, address, h)] : []),
+              ...(isFocused ? [...queueView(model, address, h), promptView(model, address, h)] : []),
             ],
           ),
         Terminal: ({ link }) =>
@@ -108,11 +109,10 @@ export const paneView = (
             ],
           ),
       }),
-      // A refused prompt or key press, said in the pane it was for.
+      // A refused key press, said in the pane it was for.
       ...(isFocused
         ? Delivery.match(model.delivery, {
             Ready: () => [],
-            Sending: () => [],
             Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
           })
         : []),
@@ -183,19 +183,21 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html 
   )
 }
 
-/** The focused chat's prompt: its text goes to the agent, and Enter after it. */
-const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Html => {
-  const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
-  return h.form(
+/**
+ * The focused chat's prompt: its text joins the agent's queue, and goes with
+ * Enter after it when the agent can take it. An empty prompt shows what the
+ * agent suggests.
+ */
+const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Html =>
+  h.form(
     [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
     [
       h.textarea([
         h.Value(model.prompt),
         h.AriaLabel("Prompt"),
-        h.Placeholder(Option.getOrElse(ownAnswerPrompt(model, address), () => "")),
+        h.Placeholder(Option.getOrElse(Option.orElse(ownAnswerPrompt(model, address), () => suggestion(model, address)), () => "")),
         h.OnInput((text) => Message.UpdatedPrompt({ text })),
       ]),
-      h.button([h.Type("submit"), h.Disabled(isSending)], [isSending ? "sending…" : "send"]),
+      h.button([h.Type("submit")], ["send"]),
     ],
   )
-}

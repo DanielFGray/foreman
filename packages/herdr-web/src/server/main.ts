@@ -1,20 +1,23 @@
 // The bridge: serves the page from dist/ and the Api over a WebSocket at
 // /rpc, on loopback only, behind the Host/Origin guard.
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun"
-import { Config, Effect, Inspectable, Layer, Match, Option, Schedule, Stream } from "effect"
+import { Config, Effect, Inspectable, Layer, Match, Option, Schedule, Schema, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { FetchHttpClient, HttpRouter, HttpStaticServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
 import { Hc } from "../hc/Hc.ts"
 import type { HcFailure } from "../hc/Connection.ts"
 import { Api, BridgeError } from "../shared/Api.ts"
+import { InputBox } from "../shared/Chat.ts"
 import { guard, Host } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
+import { inputBoxOf, refusal } from "./claude/InputBox.ts"
 import { asks, keyFor, questionOnScreen } from "./claude/Menu.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { LiveTerminals } from "./LiveTerminals.ts"
+import { ScreenCells } from "./ScreenCells.ts"
 import { Usage } from "./usage/Usage.ts"
 
 const toBridgeError = (error: HcFailure) =>
@@ -26,6 +29,10 @@ const toBridgeError = (error: HcFailure) =>
 
 /** How often, and how many times, a screen is read again while Claude Code redraws it. */
 const REDRAW = { schedule: Schedule.spaced("200 millis"), times: 10 }
+
+const INPUT_BOX_POLL = "1 second"
+
+const sameInputBox = Schema.toEquivalence(InputBox)
 
 const toAppError = ({ message }: HerdrAppError) => new BridgeError({ kind: "herdr-app", message })
 
@@ -44,6 +51,8 @@ const Handlers = Api.toLayer(
     const app = yield* HerdrApp
     const fonts = yield* Fonts
     const usage = yield* Usage
+    const screens = yield* ScreenCells
+    const inputBox = (terminal: string) => Effect.map(screens.read(terminal), inputBoxOf)
     return {
       watch: () => fleet.changes,
       chat: ({ terminal }) =>
@@ -61,7 +70,19 @@ const Handlers = Api.toLayer(
           ),
           Stream.unwrap,
         ),
-      send: ({ terminal, text }) => hc.send(terminal, text).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+      send: ({ terminal, text, whileWorking }) =>
+        Effect.all([hc.get(terminal), inputBox(terminal)], { concurrency: 2 }).pipe(
+          Effect.mapError(toBridgeError),
+          Effect.flatMap(([{ status }, box]) =>
+            Option.match(refusal(box, status, whileWorking), {
+              onNone: () => hc.send(terminal, text).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+              onSome: (refused) => Effect.fail(new BridgeError(refused)),
+            }),
+          ),
+        ),
+      // Polled: hc reports no event when a screen changes.
+      inputBox: ({ terminal }) =>
+        Stream.fromEffectSchedule(inputBox(terminal), Schedule.spaced(INPUT_BOX_POLL)).pipe(Stream.changesWith(sameInputBox), Stream.mapError(toBridgeError)),
       keys: ({ terminal, keys }) => hc.keys(terminal, keys).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
       // The status turns blocked a moment before Claude Code draws the menu.
       question: ({ terminal }) =>
@@ -123,7 +144,7 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
-  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
+  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),
 )
 

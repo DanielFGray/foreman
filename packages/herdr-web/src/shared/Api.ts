@@ -1,7 +1,7 @@
 // The calls a page makes to the bridge, over Effect RPC on a WebSocket.
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
-import { Answer, ChatUpdate, Question } from "./Chat.ts"
+import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
@@ -30,8 +30,14 @@ export const Api = RpcGroup.make(
   Rpc.make("watch", { success: Fleet, stream: true }),
   /** The conversation of the Claude Code agent in the terminal: its recent entries, then each batch of new ones. */
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
-  /** Types text and presses Enter. */
-  Rpc.make("send", { payload: { terminal: Schema.String, text: Schema.String }, error: BridgeError }),
+  /**
+   * Types text and presses Enter. It is refused, with kind `draft`, while the
+   * agent's input box holds text typed in the terminal, which the paste would
+   * join; and with kind `working` while the agent works, unless `whileWorking`.
+   */
+  Rpc.make("send", { payload: { terminal: Schema.String, text: Schema.String, whileWorking: Schema.Boolean }, error: BridgeError }),
+  /** What the agent's input box holds now, then after each change, for as long as the page reads. */
+  Rpc.make("inputBox", { payload: { terminal: Schema.String }, success: InputBox, error: BridgeError, stream: true }),
   /** The question the agent waits on, read from its screen; none while it shows no menu. */
   Rpc.make("question", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Question), error: BridgeError }),
   /**

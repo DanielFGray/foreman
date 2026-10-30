@@ -10,7 +10,12 @@ import { creditPayload, encodeFrame, type Frame, FrameKind, type Incoming, readC
 
 export type AttachRequest = Readonly<{ terminal: string; cols: number; rows: number }>
 
+/** The terminal's size in cells, as hc reports it when a stream opens. */
+export type Size = Readonly<{ cols: number; rows: number }>
+
 export interface Attached {
+  /** The terminal's size when the stream opened. */
+  readonly size: Size
   /** The terminal's screen first, then everything it writes; ends when hc closes the stream. */
   readonly output: Stream.Stream<Uint8Array, HcFailure>
   readonly input: (bytes: Uint8Array) => Effect.Effect<void, HcLost>
@@ -24,7 +29,15 @@ export interface Attached {
  * watches does not resize it for one in use. (Probed on hc 0.1.14: a lone
  * viewer's size applies at once.)
  */
-export const attach = Effect.fnUntraced(function* (path: string, request: AttachRequest) {
+export const attach = (path: string, request: AttachRequest) => open(path, viewerParams(request))
+
+/**
+ * Watches a terminal in the current scope without typing into it or setting
+ * its size, so the program keeps the size its own viewers gave it.
+ */
+export const observe = (path: string, terminal: string) => open(path, { terminal, cols: 0, rows: 0, observe: true })
+
+const open = Effect.fnUntraced(function* (path: string, params: AttachParams) {
   const socket = yield* BunSocket.makeNet({ path })
   const writer = yield* socket.writer
   const write = (bytes: Uint8Array | string) => writer.write(bytes).pipe(Effect.mapError((cause) => new HcLost({ cause })))
@@ -71,8 +84,8 @@ export const attach = Effect.fnUntraced(function* (path: string, request: Attach
   yield* write(`${yield* encodeRequest(framedHello, "0", { generation: 1, framed: true })}\n`)
   yield* Deferred.await(helloReply).pipe(Effect.flatMap(decodeReply), Effect.flatMap((reply) => settle(framedHello, reply)))
 
-  yield* send({ channel: 0, kind: FrameKind.Data, payload: new TextEncoder().encode(yield* encodeRequest(attachMethod, "1", attachParams(request))) })
-  const { channel } = yield* Deferred.await(attachReply).pipe(
+  yield* send({ channel: 0, kind: FrameKind.Data, payload: new TextEncoder().encode(yield* encodeRequest(attachMethod, "1", params)) })
+  const { channel, terminal: size } = yield* Deferred.await(attachReply).pipe(
     Effect.flatMap(decodeReply),
     Effect.flatMap((reply) => settle(attachMethod, reply)),
   )
@@ -81,6 +94,7 @@ export const attach = Effect.fnUntraced(function* (path: string, request: Attach
   yield* Effect.addFinalizer(() => send({ channel, kind: FrameKind.Close, payload: new Uint8Array() }).pipe(Effect.ignore))
 
   return {
+    size,
     // Credit goes back as the bridge passes output on, so a page that falls
     // behind slows the terminal's stream instead of filling the bridge.
     output: Stream.fromQueue(output).pipe(
@@ -94,7 +108,17 @@ export const attach = Effect.fnUntraced(function* (path: string, request: Attach
 /** Scrollback lines hc paints before the screen, so a new viewer can scroll back. */
 const HISTORY_LINES = 1000
 
-const attachParams = ({ terminal, cols, rows }: AttachRequest) => ({ terminal, cols, rows, resumed: true, history: HISTORY_LINES })
+const AttachParams = Schema.Struct({
+  terminal: Schema.String,
+  cols: Schema.Int,
+  rows: Schema.Int,
+  resumed: Schema.optionalKey(Schema.Boolean),
+  history: Schema.optionalKey(Schema.Int),
+  observe: Schema.optionalKey(Schema.Boolean),
+})
+type AttachParams = typeof AttachParams.Type
+
+const viewerParams = ({ terminal, cols, rows }: AttachRequest): AttachParams => ({ terminal, cols, rows, resumed: true, history: HISTORY_LINES })
 
 const framedHello = method(
   "hello",
@@ -104,8 +128,8 @@ const framedHello = method(
 
 const attachMethod = method(
   "terminal.attach",
-  Schema.Struct({ terminal: Schema.String, cols: Schema.Int, rows: Schema.Int, resumed: Schema.Boolean, history: Schema.Int }),
-  Schema.Struct({ channel: Schema.Int }),
+  AttachParams,
+  Schema.Struct({ channel: Schema.Int, terminal: Schema.Struct({ cols: Schema.Int, rows: Schema.Int }) }),
 )
 
 const encodeRequest = <P, A, AI>(m: Method<P, A, AI>, id: string, params: P) =>

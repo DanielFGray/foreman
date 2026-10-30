@@ -94,14 +94,14 @@ export const MoveSpace = Command.define("MoveSpace", {
 })
 
 export const SendPrompt = Command.define("SendPrompt", {
-  args: { address: Schema.String, text: Schema.String },
+  args: { address: Schema.String, id: Schema.Int, text: Schema.String, whileWorking: Schema.Boolean },
   messages: [Message.SucceededSendPrompt, Message.FailedSendPrompt],
-  execute: ({ address, text }) =>
+  execute: ({ address, id, text, whileWorking }) =>
     Effect.gen(function* () {
       const client = yield* BridgeClient
-      yield* client.send({ terminal: address, text })
-      return Message.SucceededSendPrompt({ address })
-    }).pipe(reportFailure((reason) => Message.FailedSendPrompt({ address, reason }))),
+      yield* client.send({ terminal: address, text, whileWorking })
+      return Message.SucceededSendPrompt({ address, id })
+    }).pipe(reportFailure((reason) => Message.FailedSendPrompt({ address, id, reason }))),
 })
 
 // The reading that follows arrives on the usage subscription; a refresh the
