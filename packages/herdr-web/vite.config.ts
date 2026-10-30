@@ -8,4 +8,7 @@ export default defineConfig({
   root: "src/page",
   build: { outDir: "../../dist", emptyOutDir: true },
   plugins: [foldkit()],
+  // Tests cover the bridge as well as the page; they run on Bun (`bun --bun
+  // vitest`), so the bridge's tests keep Bun's APIs.
+  test: { dir: `${import.meta.dirname}/src` },
 })

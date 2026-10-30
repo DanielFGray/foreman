@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import { Option } from "effect"
 import { allowedHosts, isAllowed, LOOPBACK } from "./Access.ts"
 

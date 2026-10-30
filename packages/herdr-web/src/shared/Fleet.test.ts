@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import { Option, Schema } from "effect"
 import { Layout } from "./Fleet.ts"
 
@@ -14,7 +14,7 @@ const block = (id: string, terminal: string, weight: Option.Option<number>): Lay
 describe("Layout", () => {
   // herdr-app's document for a tab split right, then down.
   test("decodes a real split", async () => {
-    const root = decode(await Bun.file(`${import.meta.dir}/fixtures/layout.json`).json())
+    const root = decode(await Bun.file(`${import.meta.dirname}/fixtures/layout.json`).json())
     expect(root).toMatchObject({
       _tag: "Split",
       type: "row",

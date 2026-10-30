@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import { Option } from "effect"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
 import { groupFleet, locate, terminalLabel } from "./group.ts"

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import type { Entry } from "../shared/Chat.ts"
 import { foldEntries, type Item } from "./chat.ts"
 

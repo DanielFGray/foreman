@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import { encodeFrame, FrameKind, readConnection, resizePayload, splitFrames, startReading } from "./Frame.ts"
 
 const bytes = (...values: ReadonlyArray<number>) => Uint8Array.from(values)

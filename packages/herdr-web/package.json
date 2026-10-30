@@ -6,7 +6,7 @@
     "prepare": "effect-tsgo patch --typescript --oxlint",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware",
-    "test": "bun test",
+    "test": "bun --bun vitest run",
     "start": "bun src/server/main.ts",
     "build": "vite build",
     "build:watch": "vite build --watch"
@@ -19,7 +19,8 @@
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
   },
   "peerDependencies": {
     "typescript": "^7"

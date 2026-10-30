@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 import { Array, Option } from "effect"
 import type { Entry } from "../../shared/Chat.ts"
 import { parseMarkdown } from "./Markdown.ts"
@@ -83,7 +83,7 @@ describe("decodeLine", () => {
 // One real line of each kind, from Claude Code's own transcripts, with every
 // string replaced by a placeholder named after its key.
 describe("decodeLine on real transcript lines", async () => {
-  const fixture = new Uint8Array(await Bun.file(`${import.meta.dir}/fixtures/transcript.jsonl`).arrayBuffer())
+  const fixture = new Uint8Array(await Bun.file(`${import.meta.dirname}/fixtures/transcript.jsonl`).arrayBuffer())
   const { lines, rest } = splitLines(new Uint8Array(), fixture)
   const id = expect.any(String)
   const expected: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]> = [
