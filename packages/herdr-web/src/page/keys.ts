@@ -1,7 +1,7 @@
 // The soft keys under a pane: the keys a phone's keyboard lacks. Ctrl and alt
 // stay armed until the next key, whether that is a soft key or a key typed
 // into a live terminal.
-import { Effect, Match, Option, Schema } from "effect"
+import { Array, Effect, Match, Option, Record, Result, Schema, String } from "effect"
 import * as Mount from "foldkit/mount"
 
 export const Modifiers = Schema.Struct({ ctrl: Schema.Boolean, alt: Schema.Boolean })
@@ -12,27 +12,83 @@ export type Modifier = typeof Modifier.Type
 
 export const NO_MODIFIERS: Modifiers = { ctrl: false, alt: false }
 
-/** A soft key: one hc presses, by its hc name, or a modifier for the next key. */
-export type SoftKey = Readonly<{ _tag: "Press"; key: string; label: string }> | Readonly<{ _tag: "Hold"; modifier: Modifier }>
+/** A soft key: one hc presses, by its hc name such as `ctrl+c`, or a modifier for the next key. */
+export const SoftKey = Schema.Union([
+  Schema.TaggedStruct("Press", { key: Schema.String }),
+  Schema.TaggedStruct("Hold", { modifier: Modifier }),
+])
+export type SoftKey = typeof SoftKey.Type
 
-const press = (key: string, label = key): SoftKey => ({ _tag: "Press", key, label })
+const press = (key: string): SoftKey => ({ _tag: "Press", key })
 const hold = (modifier: Modifier): SoftKey => ({ _tag: "Hold", modifier })
 
-/** In the order they show. */
-export const SOFT_KEYS: ReadonlyArray<SoftKey> = [
+/** The row a browser shows until its person changes it, in the order the keys show. */
+export const DEFAULT_SOFT_KEYS: ReadonlyArray<SoftKey> = [
   press("esc"),
   press("tab"),
   hold("ctrl"),
   hold("alt"),
-  press("left", "←"),
-  press("up", "↑"),
-  press("down", "↓"),
-  press("right", "→"),
-  press("enter", "⏎"),
-  press("ctrl+c", "^C"),
+  press("left"),
+  press("up"),
+  press("down"),
+  press("right"),
+  press("enter"),
+  press("ctrl+c"),
   press("y"),
   press("n"),
 ]
+
+/** What a key's chip shows: arrows and Enter as symbols, ctrl with one character as `^C`, else the hc name. */
+export const keyLabel = (name: string): string => {
+  const parts = String.split(name, "+")
+  const base = Option.getOrElse(Array.last(parts), () => name)
+  const modifiers = parts.slice(0, -1)
+  const shown = Option.getOrElse(Record.get(BASE_LABELS, base), () => (/^f\d+$/.test(base) ? base.toUpperCase() : base))
+  return modifiers.length === 1 && modifiers[0] === "ctrl" && base.length === 1 ? `^${base.toUpperCase()}` : [...modifiers, shown].join("+")
+}
+
+// SEND KEYS SHEET
+// It offers only what hc can encode (herdr-core's keys.rs): these modifiers,
+// its named keys, F1–F12, and one character of its set.
+
+export const SheetModifier = Schema.Literals(["ctrl", "alt", "shift", "super"])
+export type SheetModifier = typeof SheetModifier.Type
+
+export const SheetModifiers = Schema.Struct({ ctrl: Schema.Boolean, alt: Schema.Boolean, shift: Schema.Boolean, super: Schema.Boolean })
+export type SheetModifiers = typeof SheetModifiers.Type
+
+export const NO_SHEET_MODIFIERS: SheetModifiers = { ctrl: false, alt: false, shift: false, super: false }
+
+/** The named keys the sheet offers, with the words its buttons show. */
+export const NAMED_KEYS: ReadonlyArray<readonly [name: string, label: string]> = [
+  ["esc", "Esc"],
+  ["tab", "Tab"],
+  ["enter", "Enter"],
+  ["backspace", "Backspace"],
+  ["space", "Space"],
+  ["up", "↑"],
+  ["down", "↓"],
+  ["left", "←"],
+  ["right", "→"],
+  ["home", "Home"],
+  ["end", "End"],
+  ["pageup", "PgUp"],
+  ["pagedown", "PgDn"],
+  ["insert", "Ins"],
+  ["delete", "Del"],
+]
+
+export const F_KEYS: ReadonlyArray<string> = Array.makeBy(12, (index) => `f${index + 1}`)
+
+/** One typed character as hc names it, or why hc cannot send it. */
+export const characterKey = (text: string): Result.Result<string, string> =>
+  /^[a-z0-9`\\[\],=\-.';/]$/.test(text)
+    ? Result.succeed(text)
+    : /^[A-Z]$/.test(text)
+      ? Result.fail(`Type ${text.toLowerCase()} and turn on Shift.`)
+      : String.isEmpty(text)
+        ? Result.fail("Type one character.")
+        : Result.fail(`hc cannot send ${text}; it takes a letter, a digit, or one of \` \\ [ ] , = - . ' ; /`)
 
 /** The key with the armed modifiers, as hc names it: `ctrl+alt+left`. */
 export const withModifiers = (key: string, { ctrl, alt }: Modifiers) =>
@@ -86,7 +142,9 @@ const controlCode = (key: string): Option.Option<string> =>
     Match.orElse((upper) =>
       Option.map(
         Option.liftPredicate(upper.charCodeAt(0), (code) => code >= 64 && code <= 95),
-        (code) => String.fromCharCode(code - 64),
+        (code) => globalThis.String.fromCharCode(code - 64),
       ),
     ),
   )
+
+const BASE_LABELS: Readonly<Record<string, string>> = { left: "←", up: "↑", down: "↓", right: "→", enter: "⏎" }

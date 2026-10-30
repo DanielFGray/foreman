@@ -5,7 +5,7 @@ import { Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 import { keyedSidebarWidth } from "./sidebarWidth.ts"
 
-const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model
+const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none() }).model
 
 test("a drag moves the sidebar's edge with the pointer, keeps its grip, and is kept on release", () => {
   // Taken 2px right of the edge at its default 340, then moved 100px right.

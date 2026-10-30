@@ -29,7 +29,7 @@ const listed: RepoCheckouts = {
 }
 
 const start = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none(), recent: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none() }).model,
   bridge: Bridge.Watching({ fleet }),
 }
 

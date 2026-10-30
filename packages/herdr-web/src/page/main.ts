@@ -12,10 +12,11 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { isClaudeCode, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
+import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey, restoredSoftKeys, sentSheetKey, withSheet } from "./keySheet.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
@@ -35,7 +36,7 @@ const FAST_CLOCK_TICK = "1 second"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -58,6 +59,8 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     recent,
     settings,
     modifiers: NO_MODIFIERS,
+    softKeys,
+    keySheet: KeySheet.Closed(),
     fontCatalog: FontCatalog.Loading(),
     usage: Option.none(),
     usageDetail: Option.none(),
@@ -382,6 +385,33 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     ToggledModifier: ({ modifier }) =>
       ({ model: modifyFields(model, { modifiers: (armed) => ({ ...armed, [modifier]: !armed[modifier] }) }) }),
+
+    ClickedSendKeys: () => ({ model: withSheet(model, () => CHOOSING_START) }),
+
+    ClosedKeySheet: () => ({ model: withSheet(model, () => KeySheet.Closed()) }),
+
+    PickedKeyGroup: ({ group }) => ({ model: choosing(model, (sheet) => ({ ...sheet, group })) }),
+
+    PickedSheetKey: ({ key }) => ({ model: choosing(model, (sheet) => ({ ...sheet, named: key })) }),
+
+    TypedSheetCharacter: ({ text }) => ({ model: choosing(model, (sheet) => ({ ...sheet, typed: text })) }),
+
+    ToggledSheetModifier: ({ modifier }) =>
+      ({ model: choosing(model, (sheet) => ({ ...sheet, modifiers: { ...sheet.modifiers, [modifier]: !sheet.modifiers[modifier] } })) }),
+
+    ClickedSendSheetKey: () => sentSheetKey(model),
+
+    ClickedPinSheetKey: () => pinnedSheetKey(model),
+
+    ClickedEditSoftKeys: () => ({ model: withSheet(model, () => KeySheet.Editing()) }),
+
+    MovedSoftKey: ({ index, by }) => movedSoftKey(model, index, by),
+
+    RemovedSoftKey: ({ index }) => removedSoftKey(model, index),
+
+    ClickedRestoreSoftKeys: () => restoredSoftKeys(model),
+
+    CompletedSaveSoftKeys: () => ({ model }),
 
     UsedModifiers: () => ({ model: modifyFields(model, { modifiers: () => NO_MODIFIERS }) }),
 

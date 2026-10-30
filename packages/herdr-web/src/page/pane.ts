@@ -9,7 +9,8 @@ import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
 import { programOf } from "./programs.ts"
 import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
-import { KeepTypingFocus, modifiersAttribute, SOFT_KEYS } from "./keys.ts"
+import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
+import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
 import { queueView, suggestion } from "./queue.ts"
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
@@ -135,17 +136,21 @@ export const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyA
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
-/** The soft keys for the focused pane, a terminal's or a chat's; none when no terminal is on show. */
+/**
+ * The soft keys for the focused pane, a terminal's or a chat's, with the Send
+ * keys sheet over them when it is open; none when no terminal is on show.
+ */
 export const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   Option.match(maybeFocus(model), {
     onNone: () => [],
     onSome: () => [
+        ...keySheetView(model, h),
         h.div(
           [h.Class("keys"), h.OnMount(Mount.mapMessage(KeepTypingFocus(), () => Message.CompletedKeepTypingFocus()))],
-          Array.map(SOFT_KEYS, (softKey) =>
+          [...Array.map(softKeysOf(model), (softKey) =>
             Match.valueTags(softKey, {
-              Press: ({ key, label }) =>
-                h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(key), h.OnClick(Message.ClickedKey({ key }))], [label]),
+              Press: ({ key }) =>
+                h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(key), h.OnClick(Message.ClickedKey({ key }))], [keyLabel(key)]),
               Hold: ({ modifier }) =>
                 h.button(
                   [
@@ -158,6 +163,12 @@ export const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<H
                 ),
             }),
           ),
+          // Any other key, and the row's editor.
+          h.button(
+            [h.Type("button"), h.Class(model.keySheet._tag === "Closed" ? "chip" : "chip on"), h.AriaLabel("more keys"), h.OnClick(model.keySheet._tag === "Closed" ? Message.ClickedSendKeys() : Message.ClosedKeySheet())],
+            ["⋯"],
+          ),
+          ],
         ),
       ],
   })

@@ -60,7 +60,7 @@ const remembered = Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") })
 test("a pane shows its terminal first, and only an agent's pane offers a chat, with the prompt inside it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -78,6 +78,6 @@ test("a pane shows its terminal first, and only an agent's pane offers a chat, w
 })
 
 test("a reload opens on the remembered tab, and waits for the bridge to show it", () => {
-  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [] })
+  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none() })
   scene({ update, view }, given(model), expect(selector(".workspace")).toContainText("Waiting for the bridge."), expect(selector(".fleet")).toHaveClass("folded"))
 })

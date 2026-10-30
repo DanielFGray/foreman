@@ -5,11 +5,12 @@ import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, RECENT_KEY, SELECTION_KEY, Selection } from "./model.ts"
+import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY } from "./model.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
-import { saveStored } from "./stored.ts"
+import { SoftKey } from "./keys.ts"
+import { forgetStored, saveStored } from "./stored.ts"
 
 export const SplitPane = Command.define("SplitPane", {
   args: { pane: Schema.String, direction: Direction },
@@ -244,4 +245,17 @@ export const PickModel = Command.define("PickModel", {
       yield* client.send({ terminal: address, text: `/model ${alias}`, whileWorking: false })
       return Message.SucceededPickModel()
     }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
+export const SaveSoftKeys = Command.define("SaveSoftKeys", {
+  args: { softKeys: Schema.Array(SoftKey) },
+  messages: [Message.CompletedSaveSoftKeys],
+  execute: ({ softKeys }) => saveStored(SOFT_KEYS_KEY, Schema.Array(SoftKey), softKeys).pipe(Effect.as(Message.CompletedSaveSoftKeys())),
+})
+
+/** Forgets the browser's own row, so it shows the defaults, now and as they change. */
+export const ForgetSoftKeys = Command.define("ForgetSoftKeys", {
+  args: {},
+  messages: [Message.CompletedSaveSoftKeys],
+  execute: () => forgetStored(SOFT_KEYS_KEY).pipe(Effect.as(Message.CompletedSaveSoftKeys())),
 })

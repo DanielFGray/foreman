@@ -11,16 +11,17 @@ import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
-import { Modifier, Modifiers } from "./keys.ts"
+import { Modifier, Modifiers, SheetModifier, SheetModifiers, SoftKey } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
 import { AgentList, loadSettings, Settings, Surface } from "./settings.ts"
 import { loadSidebarWidth } from "./sidebarWidth.ts"
-import { loadStored } from "./stored.ts"
+import { loadKept, loadStored } from "./stored.ts"
 import { Link } from "./terminal.ts"
 
 export const SELECTION_KEY = "herdr-web.selection"
 export const RECENT_KEY = "herdr-web.recent"
+export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -68,6 +69,22 @@ export const PaneAction = defineTaggedUnion({
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
+
+/** The groups of keys the Send keys sheet offers. */
+export const KeyGroup = Schema.Literals(["Common", "F keys", "Character"])
+export type KeyGroup = typeof KeyGroup.Type
+
+/**
+ * The Send keys sheet: closed, choosing a key to send or pin, or editing the
+ * soft-key row. `named` is the key picked in the Common or F keys group;
+ * `typed` is the text in the Character group.
+ */
+export const KeySheet = defineTaggedUnion({
+  Closed: {},
+  Choosing: { group: KeyGroup, named: Schema.String, typed: Schema.String, modifiers: SheetModifiers },
+  Editing: {},
+})
+export type KeySheet = typeof KeySheet.Type
 
 /** The checkouts on the Worktrees page: being read, read, or not readable. */
 export const CheckoutList = defineTaggedUnion({
@@ -231,6 +248,9 @@ export const Model = Schema.Struct({
   settings: Settings,
   /** Soft ctrl and alt, armed until the next key. */
   modifiers: Modifiers,
+  /** The soft-key row this browser keeps; none for the default row, so a browser that never changed it gets later defaults. */
+  softKeys: Schema.Option(Schema.Array(SoftKey)),
+  keySheet: KeySheet,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: Schema.Option(Usage),
@@ -258,6 +278,8 @@ export const Flags = Schema.Struct({
   sidebarWidth: Schema.Option(Schema.Int),
   /** The panes opened last, newest first. */
   recent: Schema.Array(Schema.String),
+  /** The soft-key row this browser keeps; none for the default row. */
+  softKeys: Schema.Option(Schema.Array(SoftKey)),
 })
 export type Flags = typeof Flags.Type
 
@@ -266,6 +288,7 @@ export const loadFlags = Effect.all({
   selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()),
   sidebarWidth: loadSidebarWidth,
   recent: loadStored(RECENT_KEY, Schema.Array(Schema.String), []),
+  softKeys: loadKept(SOFT_KEYS_KEY, Schema.Array(SoftKey)),
 })
 
 // MESSAGE
@@ -350,6 +373,19 @@ export const Message = defineMessageUnion({
   SucceededPickModel: {},
   ClickedKey: { key: Schema.String },
   ToggledModifier: { modifier: Modifier },
+  ClickedSendKeys: {},
+  ClosedKeySheet: {},
+  PickedKeyGroup: { group: KeyGroup },
+  PickedSheetKey: { key: Schema.String },
+  TypedSheetCharacter: { text: Schema.String },
+  ToggledSheetModifier: { modifier: SheetModifier },
+  ClickedSendSheetKey: {},
+  ClickedPinSheetKey: {},
+  ClickedEditSoftKeys: {},
+  MovedSoftKey: { index: Schema.Int, by: Schema.Literals([-1, 1]) },
+  RemovedSoftKey: { index: Schema.Int },
+  ClickedRestoreSoftKeys: {},
+  CompletedSaveSoftKeys: {},
   UsedModifiers: {},
   CompletedKeepTypingFocus: {},
   SucceededPressKeys: { address: Schema.String },

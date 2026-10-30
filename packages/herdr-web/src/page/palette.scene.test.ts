@@ -53,7 +53,7 @@ const fleet: Fleet = {
 }
 
 const start = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none() }).model,
   bridge: Bridge.Watching({ fleet }),
 }
 
