@@ -11,10 +11,10 @@ import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Fleet, type Layout, type Size, type Space, type StatusState, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
-import { locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalsIn } from "./group.ts"
+import { agentsIn, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalsIn } from "./group.ts"
 import { Bot, Columns2, Folder, icon, type IconNode, MessageSquare, Monitor, PanelLeft, Rows2, Server, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
-import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
+import { AgentList, fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
 import { Link, LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 import { usageBarView } from "./usage.ts"
@@ -135,6 +135,7 @@ export const Message = defineMessageUnion({
   ClickedSettings: {},
   PickedFont: { surface: Surface, font: Schema.Option(Schema.String) },
   SteppedSize: { surface: Surface, step: Schema.Int },
+  PickedAgentList: { agents: AgentList },
   CompletedSaveSettings: {},
   ReceivedFonts: { families: Schema.Array(FontFamily) },
   FailedFonts: { reason: Schema.String },
@@ -276,6 +277,7 @@ export const update = (model: Model, message: Message) =>
 
     SteppedSize: ({ surface, step }) => settingsChanged(model, restyle(model.settings, surface, (style) => stepSize(style, step))),
 
+    PickedAgentList: ({ agents }) => settingsChanged(model, { ...model.settings, agents }),
     CompletedSaveSettings: () => ({ model }),
 
     ReceivedFonts: ({ families }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Loaded({ families }) }) }),
@@ -677,18 +679,23 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
       const openTab = Option.map(selectedTab(model), ({ tab }) => tab.id)
       // With one machine, a heading would only repeat its name.
       const isHeaded = machines.length > 1
-      return !isHeaded && Array.every(machines, ({ spaces }) => Array.isReadonlyArrayEmpty(spaces)) && Array.isReadonlyArrayEmpty(loose)
+      const isNested = model.settings.agents === "nested"
+      // Nested, a space lists its own agents, and this list keeps the ones no space holds.
+      const [listTitle, listed] = isNested
+        ? ["Other agents", loose]
+        : ["Agents", [...Array.flatMap(machines, ({ spaces }) => Array.flatMap(spaces, agentsIn)), ...loose]]
+      return !isHeaded && Array.every(machines, ({ spaces }) => Array.isReadonlyArrayEmpty(spaces)) && Array.isReadonlyArrayEmpty(listed)
         ? [h.p([h.Class("note")], ["No spaces."])]
         : [
-            ...Array.map(machines, (row) => machineView(row, isHeaded, openTab, h)),
-            ...(Array.isReadonlyArrayNonEmpty(loose)
+            ...Array.map(machines, (row) => machineView(row, isHeaded, isNested, openTab, model, h)),
+            ...(Array.isReadonlyArrayNonEmpty(listed)
               ? [
                   h.keyed("section")(
-                    "loose",
-                    [h.Class("loose"), h.AriaLabel("Other agents")],
+                    "agents",
+                    [h.Class("agent-list"), h.AriaLabel(listTitle)],
                     [
-                      h.h2([h.Class("machine-head")], [h.span([h.Class("name")], ["Other agents"])]),
-                      h.ul([], Array.map(loose, (terminal) => agentRowView(terminal, model, h))),
+                      h.h2([h.Class("list-head")], [h.span([h.Class("name")], [listTitle])]),
+                      h.ul([], Array.map(listed, (terminal) => agentRowView(terminal, model, h))),
                     ],
                   ),
                 ]
@@ -697,7 +704,14 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
     },
   })
 
-const machineView = ({ machine, spaces }: MachineRow, isHeaded: boolean, openTab: Option.Option<string>, h: HtmlBuilder<Message>): Html =>
+const machineView = (
+  { machine, spaces }: MachineRow,
+  isHeaded: boolean,
+  isNested: boolean,
+  openTab: Option.Option<string>,
+  model: Model,
+  h: HtmlBuilder<Message>,
+): Html =>
   h.keyed("div")(
     machine.name,
     [h.Class("machine")],
@@ -714,7 +728,12 @@ const machineView = ({ machine, spaces }: MachineRow, isHeaded: boolean, openTab
             ),
           ]
         : []),
-      ...Array.map(spaces, (row) => spaceView(row, openTab, h)),
+      ...Array.flatMap(spaces, (row) => [
+        spaceView(row, openTab, h),
+        ...(isNested && Array.isReadonlyArrayNonEmpty(agentsIn(row))
+          ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView(terminal, model, h)))]
+          : []),
+      ]),
     ],
   )
 
@@ -1027,11 +1046,38 @@ const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.p([h.Class("note")], ["This browser keeps its own settings, so a phone and a desk can differ."]),
       textStyleView("chat", model.settings.chat, model, h),
       textStyleView("terminal", model.settings.terminal, model, h),
+      agentListView(model.settings.agents, h),
       ...FontCatalog.match(model.fontCatalog, {
         Loading: () => [h.p([h.Class("note")], ["Asking the bridge for its fonts…"])],
         Loaded: () => [],
         Failed: ({ reason }) => [h.p([h.Class("note error")], [`The bridge's fonts are not available: ${reason}`])],
       }),
+    ],
+  )
+
+const AGENT_LIST_TEXT = { below: "Below the spaces", nested: "Under each space" } satisfies Record<AgentList, string>
+
+const agentListView = (agents: AgentList, h: HtmlBuilder<Message>): Html =>
+  h.fieldset(
+    [h.Class("setting choices")],
+    [
+      h.legend([], ["Sidebar agents"]),
+      ...Array.map(AgentList.literals, (choice) =>
+        h.label(
+          [],
+          [
+            h.input([
+              h.Type("radio"),
+              h.Name("agents"),
+              h.Value(choice),
+              h.Checked(choice === agents),
+              // A browser fires click on a radio for a key press too.
+              h.OnClick(Message.PickedAgentList({ agents: choice })),
+            ]),
+            AGENT_LIST_TEXT[choice],
+          ],
+        ),
+      ),
     ],
   )
 

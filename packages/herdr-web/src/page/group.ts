@@ -26,6 +26,9 @@ export const sidebarOf = (fleet: Fleet): Sidebar => {
   }
 }
 
+/** The space's agents, tab by tab in pane order. */
+export const agentsIn = ({ tabs }: SpaceRow) => Array.flatMap(tabs, ({ agents }) => agents)
+
 /**
  * A space and each of its tabs marked with its most urgent agent, with each
  * tab's agents in pane order. hc keeps a terminal after its program exits, so

@@ -70,3 +70,20 @@ test("with another machine, each machine heads its spaces and says when it is aw
     expect(selector(".machine-head.needs_login")).toContainText("needs login"),
   )
 })
+
+test("agents list below the spaces, or under each space when the settings say so", () => {
+  const model = { ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet }) }
+  scene(
+    { update, view },
+    given(model),
+    inside(role("region", { name: "Agents" }), expect(selector(".agent-row")).toContainText("needs a yes")),
+    expect(selector(".space-agents")).not.toExist(),
+  )
+  scene(
+    { update, view },
+    given({ ...model, settings: { ...DEFAULT_SETTINGS, agents: "nested" } }),
+    expect(selector(".space-agents .agent-row")).toContainText("needs a yes"),
+    // No agent is loose, so no list follows the spaces.
+    expect(selector(".agent-list")).not.toExist(),
+  )
+})

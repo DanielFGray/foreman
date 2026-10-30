@@ -15,12 +15,22 @@ export const TextStyle = Schema.Struct({
 })
 export type TextStyle = typeof TextStyle.Type
 
-export const Settings = Schema.Struct({ chat: TextStyle, terminal: TextStyle })
+/** Where the sidebar lists agents: in one list below the spaces, or under the space that holds each. */
+export const AgentList = Schema.Literals(["below", "nested"])
+export type AgentList = typeof AgentList.Type
+
+export const Settings = Schema.Struct({
+  chat: TextStyle,
+  terminal: TextStyle,
+  // Settings saved before this choice existed keep their fonts.
+  agents: AgentList.pipe(Schema.withDecodingDefaultKey(Effect.succeed("below"))),
+})
 export type Settings = typeof Settings.Type
 
 export const DEFAULT_SETTINGS: Settings = {
   chat: { font: Option.none(), size: 14 },
   terminal: { font: Option.none(), size: 13 },
+  agents: "below",
 }
 
 export const MIN_SIZE = 8

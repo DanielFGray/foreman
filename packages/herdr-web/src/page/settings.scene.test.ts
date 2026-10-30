@@ -1,8 +1,8 @@
-import { Option } from "effect"
+import { Option, Schema } from "effect"
 import { all, click, Command, change, expect, expectAll, given, inside, label, role, scene, selector } from "foldkit/scene"
-import { test } from "vitest"
+import { expect as expectValue, test } from "vitest"
 import { FetchFonts, init, Message, SaveSettings, update, view } from "./main.ts"
-import { DEFAULT_SETTINGS, MAX_SIZE } from "./settings.ts"
+import { DEFAULT_SETTINGS, MAX_SIZE, Settings } from "./settings.ts"
 
 const families = [
   { name: "Cascadia Code", isMono: true },
@@ -44,5 +44,20 @@ test("a size steps from the current settings and stops at its limit", () => {
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
     expect(role("button", { name: "larger terminal text" })).toBeDisabled(),
     expect(label("Font")).toExist(),
+  )
+})
+
+test("the agent list choice saves, and settings saved before it existed keep their fonts", () => {
+  scene(
+    { update, view },
+    given({ ...init(DEFAULT_SETTINGS).model, isSettingsOpen: true }),
+    click(label("Under each space")),
+    Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested" } })),
+    Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
+    expect(label("Under each space")).toBeChecked(),
+  )
+  const saved = { chat: { font: "Inter", size: 15 }, terminal: { font: null, size: 13 } }
+  expectValue(Schema.decodeOption(Settings)(saved)).toEqual(
+    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below" }),
   )
 })
