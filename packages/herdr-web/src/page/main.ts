@@ -1,4 +1,4 @@
-import { Array, Effect, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
+import { Array, Effect, Match, Option, Record, Result, Schedule, Schema, Stream, String } from "effect"
 import { Command, Subscription, type Update } from "foldkit"
 import * as Mount from "foldkit/mount"
 import type { Document, Html, HtmlBuilder } from "foldkit/html"
@@ -7,10 +7,12 @@ import { defineTaggedUnion } from "foldkit/schema"
 import { modifyFields } from "foldkit/struct"
 import { Direction } from "../shared/Api.ts"
 import { ChatUpdate, Entry } from "../shared/Chat.ts"
+import { FontFamily } from "../shared/Fonts.ts"
 import { Fleet, type Layout, type Size, type Space, type Status, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { groupFleet, locate, type SpaceGroup, spaceLabel, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
+import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { Link, LiveTerminal } from "./terminal.ts"
 
 // CONSTANT
@@ -75,6 +77,14 @@ export const Selection = defineTaggedUnion({
 })
 export type Selection = typeof Selection.Type
 
+/** The fonts the bridge serves, asked for when settings open. */
+export const FontCatalog = defineTaggedUnion({
+  Loading: {},
+  Loaded: { families: Schema.Array(FontFamily) },
+  Failed: { reason: Schema.String },
+})
+export type FontCatalog = typeof FontCatalog.Type
+
 export const Model = Schema.Struct({
   bridge: Bridge,
   filter: Filter,
@@ -86,6 +96,10 @@ export const Model = Schema.Struct({
   prompt: Schema.String,
   delivery: Delivery,
   paneAction: PaneAction,
+  settings: Settings,
+  /** Settings take the workspace's place while open. */
+  isSettingsOpen: Schema.Boolean,
+  fontCatalog: FontCatalog,
 })
 export type Model = typeof Model.Type
 
@@ -110,6 +124,12 @@ export const Message = defineMessageUnion({
   ConfirmedClose: { pane: Schema.String },
   SucceededClose: {},
   FailedPaneAction: { reason: Schema.String },
+  ClickedSettings: {},
+  PickedFont: { surface: Surface, font: Schema.Option(Schema.String) },
+  SteppedSize: { surface: Surface, step: Schema.Int },
+  CompletedSaveSettings: {},
+  ReceivedFonts: { families: Schema.Array(FontFamily) },
+  FailedFonts: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
   SubmittedPrompt: {},
   SucceededSendPrompt: { address: Schema.String },
@@ -122,7 +142,7 @@ export type Message = typeof Message.Type
 
 // INIT
 
-export const init = () => ({
+export const init = (settings: Settings) => ({
   model: {
     bridge: Bridge.Waiting(),
     filter: Filter.make("Agents"),
@@ -132,6 +152,9 @@ export const init = () => ({
     prompt: "",
     delivery: Delivery.Ready(),
     paneAction: PaneAction.Idle(),
+    settings,
+    isSettingsOpen: false,
+    fontCatalog: FontCatalog.Loading(),
   },
 })
 
@@ -224,6 +247,21 @@ export const update = (model: Model, message: Message) =>
     SucceededClose: () => ({ model }),
 
     FailedPaneAction: ({ reason }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Refused({ reason }) }) }),
+
+    ClickedSettings: () =>
+      model.isSettingsOpen
+        ? { model: modifyFields(model, { isSettingsOpen: () => false }) }
+        : { model: modifyFields(model, { isSettingsOpen: () => true, fontCatalog: () => FontCatalog.Loading() }), commands: [FetchFonts()] },
+
+    PickedFont: ({ surface, font }) => settingsChanged(model, restyle(model.settings, surface, (style) => ({ ...style, font }))),
+
+    SteppedSize: ({ surface, step }) => settingsChanged(model, restyle(model.settings, surface, (style) => stepSize(style, step))),
+
+    CompletedSaveSettings: () => ({ model }),
+
+    ReceivedFonts: ({ families }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Loaded({ families }) }) }),
+
+    FailedFonts: ({ reason }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Failed({ reason }) }) }),
 
     UpdatedPrompt: ({ text }) => ({ model: modifyFields(model, { prompt: () => text }) }),
 
@@ -369,6 +407,34 @@ export const SplitPane = Command.define("SplitPane", {
     }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
 })
 
+// The settings in use are already in the model, so a save that fails costs
+// only the next visit's settings; it is logged, not shown.
+const settingsChanged = (model: Model, settings: Settings) => ({
+  model: modifyFields(model, { settings: () => settings }),
+  commands: [SaveSettings({ settings })],
+})
+
+export const SaveSettings = Command.define("SaveSettings", {
+  args: { settings: Settings },
+  messages: [Message.CompletedSaveSettings],
+  execute: ({ settings }) =>
+    saveSettings(settings).pipe(
+      Effect.catchTags({
+        KeyValueStoreError: (error) => Effect.logWarning("the settings were not saved", error),
+        SchemaError: (error) => Effect.logWarning("the settings were not saved", error),
+      }),
+      Effect.as(Message.CompletedSaveSettings()),
+    ),
+})
+
+export const FetchFonts = Command.define("FetchFonts", {
+  messages: [Message.ReceivedFonts, Message.FailedFonts],
+  execute: Effect.gen(function* () {
+    const client = yield* BridgeClient
+    return Message.ReceivedFonts({ families: yield* client.fonts() })
+  }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedFonts({ reason: failureReason(error) })))),
+})
+
 export const ClosePane = Command.define("ClosePane", {
   args: { pane: Schema.String },
   messages: [Message.SucceededClose, Message.FailedPaneAction],
@@ -453,12 +519,18 @@ const chatStream = (address: string) =>
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   title: "herdr",
   body: h.div(
-    [h.Class("app")],
+    [
+      h.Class("app"),
+      h.Style({ "--chat-font": fontStack("chat", model.settings.chat.font), "--chat-size": `${model.settings.chat.size}px` }),
+    ],
     [
       headerView(model, h),
       h.div(
         [h.Class("panes")],
-        [h.nav([h.Class(model.isFleetFolded ? "fleet folded" : "fleet")], fleetView(model, h)), workspaceView(model, h)],
+        [
+          h.nav([h.Class(model.isFleetFolded ? "fleet folded" : "fleet")], fleetView(model, h)),
+          model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
+        ],
       ),
     ],
   ),
@@ -474,6 +546,10 @@ const headerView = (model: Model, h: HtmlBuilder<Message>): Html =>
         [model.isFleetFolded ? "agents ▾" : "agents ▴"],
       ),
       h.span([h.Class(`link ${linkState(model.bridge)}`)], [linkText(model.bridge)]),
+      h.button(
+        [h.Type("button"), h.Class(model.isSettingsOpen ? "chip on" : "chip"), h.OnClick(Message.ClickedSettings())],
+        ["settings"],
+      ),
       h.div(
         [h.Class("filter")],
         Array.map(Filter.literals, (filter) =>
@@ -697,10 +773,17 @@ const paneView = (
                 Lost: ({ reason }) => [h.p([h.Class("note error link-note")], [`${reason}; trying again`])],
               }),
               // The emulator owns this element's children, so it has none here.
-              h.div(
+              // Keyed by its font, so a new font or size starts the terminal afresh.
+              h.keyed("div")(
+                `${address} ${fontStack("terminal", model.settings.terminal.font)} ${model.settings.terminal.size}`,
                 [
                   h.Class("terminal"),
-                  h.OnMount(Mount.mapMessage(LiveTerminal({ address }), ({ link }) => Message.ChangedLink({ address, link }))),
+                  h.OnMount(
+                    Mount.mapMessage(
+                      LiveTerminal({ address, font: model.settings.terminal.font, size: model.settings.terminal.size }),
+                      ({ link }) => Message.ChangedLink({ address, link }),
+                    ),
+                  ),
                   h.OnClick(Message.FocusedPane({ address })),
                 ],
                 [],
@@ -769,3 +852,73 @@ const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html
       ]
     },
   })
+
+const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.section(
+    [h.Class("workspace settings")],
+    [
+      h.h2([], ["Settings"]),
+      h.p([h.Class("note")], ["This browser keeps its own settings, so a phone and a desk can differ."]),
+      textStyleView("chat", model.settings.chat, model, h),
+      textStyleView("terminal", model.settings.terminal, model, h),
+      ...FontCatalog.match(model.fontCatalog, {
+        Loading: () => [h.p([h.Class("note")], ["Asking the bridge for its fonts…"])],
+        Loaded: () => [],
+        Failed: ({ reason }) => [h.p([h.Class("note error")], [`The bridge's fonts are not available: ${reason}`])],
+      }),
+    ],
+  )
+
+const SURFACE_TEXT = {
+  chat: { title: "Chat", sample: "Fixed the login bug — 3 files changed, tests pass.", fallback: "the page's font" },
+  terminal: { title: "Terminal", sample: "$ ls -la ~/build  {} [] => 0O 1lI", fallback: "the browser's monospace" },
+} satisfies Record<Surface, Readonly<{ title: string; sample: string; fallback: string }>>
+
+/** A surface's font and size; a terminal offers only monospaced fonts. */
+const textStyleView = (surface: Surface, { font, size }: TextStyle, model: Model, h: HtmlBuilder<Message>): Html => {
+  const { title, sample, fallback } = SURFACE_TEXT[surface]
+  const offered = FontCatalog.match(model.fontCatalog, {
+    Loading: () => [],
+    Loaded: ({ families }) =>
+      Array.filterMap(families, ({ name, isMono }) => (surface === "terminal" && !isMono ? Result.failVoid : Result.succeed(name))),
+    Failed: () => [],
+  })
+  // The chosen font stays in the list while the catalog loads, or if the bridge stops serving it.
+  const names = Array.dedupe([...Option.toArray(font), ...offered])
+  return h.fieldset(
+    [h.Class("setting")],
+    [
+      h.legend([], [title]),
+      h.label([h.For(`${surface}-font`)], ["Font"]),
+      h.select(
+        [
+          h.Id(`${surface}-font`),
+          h.OnChange((value) => Message.PickedFont({ surface, font: Option.liftPredicate(value, String.isNonEmpty) })),
+        ],
+        [
+          h.option([h.Value(""), h.Selected(Option.isNone(font))], [fallback]),
+          ...Array.map(names, (name) => h.option([h.Value(name), h.Selected(Option.contains(font, name))], [name])),
+        ],
+      ),
+      h.span([h.Class("size-label")], ["Size"]),
+      h.div(
+        [h.Class("size")],
+        [
+          h.button(
+            [h.Type("button"), h.Class("chip"), h.AriaLabel(`smaller ${surface} text`), h.Disabled(size <= MIN_SIZE), h.OnClick(Message.SteppedSize({ surface, step: -1 }))],
+            ["−"],
+          ),
+          h.span([], [`${size}px`]),
+          h.button(
+            [h.Type("button"), h.Class("chip"), h.AriaLabel(`larger ${surface} text`), h.Disabled(size >= MAX_SIZE), h.OnClick(Message.SteppedSize({ surface, step: 1 }))],
+            ["+"],
+          ),
+        ],
+      ),
+      h.p(
+        [h.Class("sample"), h.Style({ "font-family": fontStack(surface, font), "font-size": `${size}px` })],
+        [sample],
+      ),
+    ],
+  )
+}

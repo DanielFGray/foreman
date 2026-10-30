@@ -1,6 +1,6 @@
 // The bridge: serves the page from dist/ and the Api over a WebSocket at
 // /rpc, on loopback only, behind the Host/Origin guard.
-import { BunFileSystem, BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun"
 import { Config, Effect, Inspectable, Layer, Match, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { HttpRouter, HttpStaticServer } from "effect/http"
@@ -11,6 +11,7 @@ import { Api, BridgeError } from "../shared/Api.ts"
 import { guard, LOOPBACK } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
 import { FleetModel } from "./FleetModel.ts"
+import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { LiveTerminals } from "./LiveTerminals.ts"
 
@@ -36,6 +37,7 @@ const Handlers = Api.toLayer(
     const claude = yield* ClaudeChat
     const live = yield* LiveTerminals
     const app = yield* HerdrApp
+    const fonts = yield* Fonts
     return {
       watch: () => fleet.changes,
       chat: ({ terminal }) =>
@@ -61,6 +63,7 @@ const Handlers = Api.toLayer(
       split: ({ pane, direction }) =>
         app.split(pane, direction).pipe(Effect.map(({ terminal }) => ({ terminal })), Effect.mapError(toAppError)),
       closePane: ({ pane }) => app.close(pane).pipe(Effect.asVoid, Effect.mapError(toAppError)),
+      fonts: () => Effect.succeed(fonts.families),
     }
   }),
 )
@@ -75,13 +78,14 @@ const Bridge = Layer.unwrap(
         Layer.provide([Handlers, RpcSerialization.layerJson]),
       ),
       HttpStaticServer.layer({ root: `${import.meta.dir}/../../dist`, index: "index.html" }),
+      FontRoutes,
       guard(port),
     )
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: LOOPBACK, port })))
   }),
 ).pipe(
-  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer]),
-  Layer.provide([Hc.layer, BunFileSystem.layer]),
+  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer, Fonts.layer]),
+  Layer.provide([Hc.layer, BunServices.layer]),
 )
 
 BunRuntime.runMain(Layer.launch(Bridge))

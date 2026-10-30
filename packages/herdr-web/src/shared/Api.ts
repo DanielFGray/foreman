@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { ChatUpdate } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
+import { FontFamily } from "./Fonts.ts"
 
 /**
  * A call that failed. `kind` is hc's error kind, `lost` or `protocol` for hc
@@ -57,4 +58,6 @@ export const Api = RpcGroup.make(
   }),
   /** Closes a pane of herdr-app's layout and ends its terminal. */
   Rpc.make("closePane", { payload: { pane: Schema.String }, error: BridgeError }),
+  /** The font families the bridge serves at /fonts.css. */
+  Rpc.make("fonts", { success: Schema.Array(FontFamily) }),
 )

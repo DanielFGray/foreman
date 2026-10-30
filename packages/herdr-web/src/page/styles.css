@@ -157,6 +157,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 6px;
 }
 
+.chat, .prompt textarea { font-family: var(--chat-font); font-size: var(--chat-size); }
+
 .chat {
   min-height: 0;
   flex: 1;
@@ -174,19 +176,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bubble > :last-child { margin-bottom: 0; }
 .bubble.user { align-self: flex-end; background: var(--surface); white-space: pre-wrap; }
 .bubble.agent { align-self: flex-start; background: var(--mantle); }
-.bubble h3, .bubble h4 { margin: 10px 0 4px; font-size: 14px; }
+.bubble h3, .bubble h4 { margin: 10px 0 4px; font-size: 1em; }
 .bubble ul, .bubble ol { padding-left: 20px; }
 .bubble blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--surface); color: var(--subtext); }
 .bubble hr { border: 0; border-top: 1px solid var(--surface); }
 .bubble a { color: var(--accent); }
-.bubble code { font: 12px ui-monospace, monospace; }
+.bubble code { font: 0.86em ui-monospace, monospace; }
 .bubble :not(pre) > code { padding: 0 3px; border-radius: 3px; background: var(--surface); }
 .bubble pre.code { padding: 8px; overflow-x: auto; border-radius: 6px; background: var(--base); }
 .bubble .table { overflow-x: auto; }
 .bubble table { border-collapse: collapse; }
 .bubble th, .bubble td { padding: 2px 8px; border: 1px solid var(--surface); text-align: left; }
 
-.work { align-self: stretch; font-size: 12px; color: var(--subtext); }
+.work { align-self: stretch; font-size: 0.86em; color: var(--subtext); }
 .work summary { display: flex; gap: 8px; cursor: pointer; white-space: nowrap; }
 .work summary .count { font-weight: 600; }
 .work summary .failed { color: var(--red); }
@@ -197,7 +199,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .work li.succeeded::before { color: var(--green); }
 .work li.failed::before { color: var(--red); }
 .work li.running::before { color: var(--yellow); }
-.work li.note { margin: 6px 0; font-family: system-ui, sans-serif; font-size: 13px; color: var(--text); }
+.work li.note { margin: 6px 0; font-family: var(--chat-font); font-size: 1.08em; color: var(--text); }
 .work li.note::before { content: none; }
 .work li.note > * { margin: 2px 0; }
 
@@ -229,6 +231,48 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .note { margin: 8px; color: var(--subtext); }
 .error { color: var(--red); }
+
+.settings { overflow-y: auto; }
+.settings h2 { margin: 4px 0; font-size: 16px; }
+.settings .note { margin: 0; }
+.setting {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 24rem);
+  align-items: center;
+  gap: 8px 12px;
+  max-width: 40rem;
+  /* A fieldset is at least as wide as its widest content: here the longest font name. */
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px 12px;
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+}
+.setting legend { padding: 0 4px; font-weight: 600; color: var(--accent); }
+/* A grid item is at least as wide as its content; the sample line scrolls instead. */
+.setting > * { min-width: 0; }
+.setting select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+  background: var(--mantle);
+  color: inherit;
+  font: inherit;
+}
+.setting .size { display: flex; align-items: center; gap: 8px; }
+.setting .size span { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
+.setting .chip:disabled { opacity: 0.5; cursor: default; }
+.setting .sample {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--mantle);
+  white-space: nowrap;
+}
 
 @media (max-width: 720px) {
   .panes { flex-direction: column; }

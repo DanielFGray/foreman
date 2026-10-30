@@ -6,6 +6,7 @@ import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Strea
 import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
 import { BridgeClient, failureReason } from "./rpc.ts"
+import { fontStack } from "./settings.ts"
 
 const RECONNECT_DELAY = "2 seconds"
 /** Lines the page keeps above the screen; hc paints up to 1000 of them on attach. */
@@ -32,13 +33,13 @@ class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique
  * then paints the whole screen anew.
  */
 export const LiveTerminal = Mount.defineStream("LiveTerminal", {
-  args: { address: Schema.String },
+  args: { address: Schema.String, font: Schema.Option(Schema.String), size: Schema.Int },
   messages: [ChangedLink],
-  execute: ({ element, address }) =>
+  execute: ({ element, address, font, size }) =>
     Stream.callback<typeof ChangedLink.Type>((links) =>
       Effect.gen(function* () {
         const report = (link: Link) => Queue.offer(links, ChangedLink.make({ address, link }))
-        const terminal = yield* openTerminal(element)
+        const terminal = yield* openTerminal(element, font, size)
         // Keys and sizes go out in the order they happen, to the session now attached.
         const outgoing = yield* Queue.unbounded<Outgoing>()
         const session = yield* Ref.make(Option.none<number>())
@@ -106,19 +107,31 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
 
 const Typed = Schema.TaggedStruct("Typed", { data: Schema.String })
 const Resized = Schema.TaggedStruct("Resized", { cols: Schema.Int, rows: Schema.Int })
+/** Fetches the chosen font from the bridge's /fonts.css; without it the terminal uses the fallback. */
+const loadFont = (font: Option.Option<string>, size: number) =>
+  Option.match(font, {
+    onNone: () => Effect.void,
+    onSome: (name) =>
+      Effect.tryPromise(() => document.fonts.load(`${size}px ${JSON.stringify(name)}`)).pipe(
+        Effect.catchTag("UnknownError", (error) => Effect.logWarning(`the font ${name} did not load`, error)),
+      ),
+  })
+
 type Outgoing = typeof Typed.Type | typeof Resized.Type
 
 // The emulator draws into the element and keeps itself at the element's size.
-const openTerminal = (element: Element) =>
+const openTerminal = (element: Element, font: Option.Option<string>, size: number) =>
   Effect.acquireRelease(
     Effect.tryPromise({ try: () => init(), catch: (cause) => new NoEmulator({ cause }) }).pipe(
+      // The emulator measures its cells once, so the font must be loaded first.
+      Effect.andThen(loadFont(font, size)),
       Effect.andThen(
         Effect.sync(() => {
           const style = getComputedStyle(element)
           const color = (token: string) => style.getPropertyValue(token).trim()
           const terminal = new Terminal({
-            fontFamily: "ui-monospace, monospace",
-            fontSize: 13,
+            fontFamily: fontStack("terminal", font),
+            fontSize: size,
             scrollback: SCROLLBACK_LINES,
             theme: { background: color("--mantle"), foreground: color("--text"), cursor: color("--accent") },
           })

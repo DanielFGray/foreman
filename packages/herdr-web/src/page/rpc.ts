@@ -3,12 +3,16 @@ import { Context, Effect, Layer, Match } from "effect"
 import { RpcClient, type RpcClientError, RpcSerialization } from "effect/rpc"
 import { Api, type BridgeError } from "../shared/Api.ts"
 
-// The bridge serves this page, so its Api is on the same host, at /rpc.
-const bridgeUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/rpc`
-
-const Protocol = RpcClient.layerProtocolSocket().pipe(
-  Layer.provide([BrowserSocket.layerWebSocket(bridgeUrl), RpcSerialization.layerJson]),
+// The bridge serves this page, so its Api is on the same host, at /rpc. The
+// address is read when the client starts, so the page's modules load outside
+// a browser too, as its tests do.
+const BridgeSocket = Layer.unwrap(
+  Effect.sync(() =>
+    BrowserSocket.layerWebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/rpc`),
+  ),
 )
+
+const Protocol = RpcClient.layerProtocolSocket().pipe(Layer.provide([BridgeSocket, RpcSerialization.layerJson]))
 
 /** The bridge's Api, over one WebSocket for the life of the page. */
 export class BridgeClient extends Context.Service<BridgeClient>()("herdr-web/page/BridgeClient", {
