@@ -108,7 +108,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row .msg { flex: 1; min-width: 0; }
 .row .dot { margin-left: auto; flex-shrink: 0; }
-.space-row .name { flex: 1; }
+.space-row .name { flex: 1 1 auto; }
+/* A space's letter takes the colour of its most urgent agent, as the status dots do. */
+.badge { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 18px; height: 18px; border-radius: 5px; font-size: 11px; font-weight: 700; background: var(--surface); color: var(--text); }
+.badge.idle { background: var(--subtext); color: var(--base); }
+.badge.working { background: var(--yellow); color: var(--base); }
+.badge.done { background: var(--green); color: var(--base); }
+.badge.blocked { background: var(--peach); color: var(--base); }
+.badge.error { background: var(--red); color: var(--base); }
+/* Narrow, the branch shortens first; the name shrinks only once the branch is down to a few characters. */
+.git { display: inline-flex; align-items: center; gap: 4px; flex: 0 100 auto; min-width: 3ch; font-size: 12px; color: var(--subtext); }
+.branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); }
 /* A drag marks the space it carries and the edge it would land on. */
 .space-row { user-select: none; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
 .fleet.dragging .space-row { cursor: grabbing; }

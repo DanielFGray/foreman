@@ -25,6 +25,7 @@ const claude: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   terminals: [claude],
   machines: [
     {

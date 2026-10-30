@@ -1,15 +1,15 @@
 // The sidebar: every machine's spaces and agents, the space drag, the
 // resize edge, and the Settings row.
-import { Array, Option, String } from "effect"
+import { Array, Option, Record, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import type { Fleet } from "../shared/Fleet.ts"
-import { agentsIn, byState, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, terminalLabel, terminalNote } from "./group.ts"
-import { Bot, Folder, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
+import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
+import { agentsIn, byState, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, spaceBadge, terminalLabel, terminalNote } from "./group.ts"
+import { Bot, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
 import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
 import { lastFleet, maybeFocus, selectedTab } from "./selection.ts"
 import { DEFAULT_SIDEBAR_WIDTH, keyedSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "./sidebarWidth.ts"
-import { stateHeading, stateOf, statusDot, statusMark, timeInState } from "./status.ts"
+import { stateHeading, stateOf, statusDot, timeInState } from "./status.ts"
 
 /** The sidebar: the page's name, every machine's spaces and agents, and the Settings row. */
 export const sidebarView = (model: Model, h: HtmlBuilder<Message>): Html =>
@@ -128,8 +128,8 @@ const machineView = (
             ),
           ]
         : []),
-      ...Array.flatMap(spaces, (row) => [
-        spaceView(row, openTab, dragMark(model.spaceDrag, fleet, row.space.id), h),
+      ...Array.flatMap(spaces, (row, index) => [
+        spaceView(row, spaceBadge(row.label, index), Record.get(fleet.git, row.space.id), openTab, dragMark(model.spaceDrag, fleet, row.space.id), h),
         ...(isNested && Array.isReadonlyArrayNonEmpty(agentsIn(row))
           ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView({ terminal, space: Option.none() }, model, h)))]
           : []),
@@ -158,7 +158,14 @@ const whilePressed = (model: Model, message: Message) => (model.spaceDrag._tag =
 // A space opens on its first tab; the tab bar then moves between its tabs. A
 // mouse drags it to another place among its machine's spaces; a touch
 // scrolls the sidebar instead.
-const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Option<string>, mark: DragMark, h: HtmlBuilder<Message>): Html => {
+const spaceView = (
+  { space, label, status, tabs }: SpaceRow,
+  badge: string,
+  git: Option.Option<SpaceGit>,
+  openTab: Option.Option<string>,
+  mark: DragMark,
+  h: HtmlBuilder<Message>,
+): Html => {
   const isOpen = Array.some(tabs, ({ tab }) => Option.contains(openTab, tab.id))
   return h.keyed("button")(
     space.id,
@@ -174,9 +181,24 @@ const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Opt
       h.OnMouseEnter(Message.EnteredSpace({ space: space.id })),
       h.OnPointerUp(() => Option.some(Message.ReleasedSpace({ space: space.id }))),
     ],
-    [icon(Folder, h), h.span([h.Class("name")], [label]), ...statusMark(status, h)],
+    [
+      // The badge takes the colour of the space's most urgent agent. The row's name already says which space it is.
+      h.span([h.Class(`badge ${Option.getOrElse(status, () => "none")}`), h.Title(Option.getOrElse(status, () => "no agents")), h.AriaHidden(true)], [badge]),
+      h.span([h.Class("name")], [label]),
+      ...Option.toArray(Option.map(git, (state) => gitView(state, h))),
+    ],
   )
 }
+
+// The branch gives way to the space's name; a dot after it marks a dirty tree.
+const gitView = ({ branch, changed }: SpaceGit, h: HtmlBuilder<Message>): Html =>
+  h.span(
+    [h.Class("git")],
+    [
+      ...Option.toArray(Option.map(branch, (name) => h.span([h.Class("branch"), h.Title(name)], [name]))),
+      ...(changed ? [h.span([h.Class("changes"), h.Title("uncommitted changes")], [])] : []),
+    ],
+  )
 
 // "space · what it is doing", then how long it has been so. Under its own
 // space, an agent is named by its program instead, as the space is above it.

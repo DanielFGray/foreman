@@ -23,6 +23,7 @@ const editor: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   terminals: [editor],
   machines: [
     {

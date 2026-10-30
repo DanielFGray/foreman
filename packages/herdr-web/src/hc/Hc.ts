@@ -73,6 +73,28 @@ const subscribeMethod = method(
   Schema.Struct({ terminals: Schema.Array(Terminal) }),
 )
 
+const ExecParams = Schema.Struct({
+  argv: Schema.Array(Schema.String),
+  cwd: Schema.OptionFromOptionalKey(Schema.String),
+  on: Schema.OptionFromOptionalKey(Schema.String),
+  /** Seconds before the program and what it started are ended. */
+  timeout: Schema.OptionFromOptionalKey(Schema.Finite),
+})
+
+/** Runs a program with no terminal, here or on the machine `on` names. A nonzero exit or a timeout is a result, not an error. */
+const exec = method(
+  "machine.exec",
+  ExecParams,
+  Schema.Struct({
+    /** None when a signal ended the program. */
+    code: Schema.OptionFromOptionalNullOr(Schema.Int),
+    stdout: Schema.StringFromBase64,
+    stderr: Schema.StringFromBase64,
+    truncated: Schema.Boolean,
+    timed_out: Schema.Boolean,
+  }),
+)
+
 /** herdr-app's document: its spaces and their tabs. */
 export const HERDR_APP_DOC = "herdr-app"
 
@@ -106,6 +128,8 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
         call(docGet, { name: HERDR_APP_DOC, on }).pipe(
           Effect.map(({ value }) => Option.match(value, { onNone: () => [], onSome: (doc) => doc.spaces })),
         ),
+      /** Runs a program here or on another machine, with no shell. */
+      exec: (params: typeof ExecParams.Type) => call(exec, params),
       /** The other machines and how hc reaches each now. */
       machines: Effect.map(call(machineList, {}), ({ machines }) => machines),
       /** This machine's name. */

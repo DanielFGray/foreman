@@ -27,6 +27,7 @@ const block = (terminal: string): Layout =>
 
 const fleetOf = (tabIds: ReadonlyArray<string>): Fleet => ({
   connected: true,
+  git: {},
   terminals: [agent],
   machines: [
     {

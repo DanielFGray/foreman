@@ -122,6 +122,10 @@ export const Machine = Schema.Struct({
 })
 export type Machine = typeof Machine.Type
 
+/** A space's folder as git sees it. `branch` is none for a detached head. */
+export const SpaceGit = Schema.Struct({ branch: Schema.OptionFromNullOr(Schema.String), changed: Schema.Boolean })
+export type SpaceGit = typeof SpaceGit.Type
+
 export const Fleet = Schema.Struct({
   /** False while the bridge has no live subscription to hc; the terminals are then the last ones seen. */
   connected: Schema.Boolean,
@@ -129,5 +133,11 @@ export const Fleet = Schema.Struct({
   terminals: Schema.Array(Terminal),
   /** This machine first, then the others in hc's order. */
   machines: Schema.Array(Machine),
+  /**
+   * Git state by space id (machine-prefixed on another machine). A space with
+   * no entry has none: its folder is no repository, git is missing, or its
+   * machine is away.
+   */
+  git: Schema.Record(Schema.String, SpaceGit),
 })
 export type Fleet = typeof Fleet.Type

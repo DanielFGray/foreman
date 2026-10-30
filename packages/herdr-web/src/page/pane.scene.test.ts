@@ -33,6 +33,7 @@ const block = (terminal: string): Layout =>
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   terminals: [claude, shell],
   machines: [
     {

@@ -31,6 +31,7 @@ const here = (spaces: Machine["spaces"]): Machine => ({ name: "here", isLocal: t
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   machines: [
     here([
       {
@@ -135,7 +136,7 @@ describe("terminalLabel", () => {
 describe("dropSide", () => {
   const space = (id: string) => ({ id, name: id, folder: "/", tabs: [] })
   const machine = (name: string, ids: ReadonlyArray<string>): Machine => ({ name, isLocal: name === "here", state: "connected", spaces: ids.map(space) })
-  const fleet: Fleet = { connected: true, machines: [machine("here", ["a", "b", "c"]), machine("cynic", ["d"])], terminals: [] }
+  const fleet: Fleet = { connected: true, git: {}, machines: [machine("here", ["a", "b", "c"]), machine("cynic", ["d"])], terminals: [] }
 
   test("a space lands after a target below it and before one above it", () => {
     expect(dropSide(fleet, "a", "c")).toStrictEqual(Option.some("after"))

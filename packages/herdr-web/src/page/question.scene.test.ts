@@ -32,6 +32,7 @@ const claude = (status: Status, statusMs: number): Terminal => ({
 
 const fleetWith = (terminal: Terminal): Fleet => ({
   connected: true,
+  git: {},
   terminals: [terminal],
   machines: [
     {

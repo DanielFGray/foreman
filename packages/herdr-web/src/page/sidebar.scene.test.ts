@@ -23,6 +23,7 @@ const blockedAgent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   machines: [
     {
       name: "here",
@@ -50,9 +51,9 @@ test("the sidebar lists every space, marked by its agents, and a click opens its
     { update, view },
     given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     expectAll(all.selector(".space-row")).toHaveCount(2),
-    inside(role("button", { name: "prog" }), expect(selector(".dot")).toHaveClass("blocked")),
-    // A space without agents still shows, with no mark.
-    inside(role("button", { name: "quiet" }), expect(selector(".dot")).not.toExist()),
+    inside(role("button", { name: "prog" }), expect(selector(".badge")).toHaveClass("blocked")),
+    // A space without agents still shows, with a neutral badge.
+    inside(role("button", { name: "quiet" }), expect(selector(".badge")).toHaveClass("none")),
     click(role("button", { name: "prog" })),
     // A reload opens on it again.
     Command.expectExact(SaveSelection({ selection: Selection.Tab({ tabId: "b", maybeFocus: Option.none() }) })),
@@ -75,6 +76,50 @@ test("with another machine, each machine heads its spaces and says when it is aw
     expectAll(all.selector(".machine-head")).toHaveCount(2),
     expect(selector(".machine-head.needs_login")).toContainText("cynic"),
     expect(selector(".machine-head.needs_login")).toContainText("needs login"),
+  )
+})
+
+test("a space row shows its letter badge, coloured by its most urgent agent, and its git branch and changes", () => {
+  const git = { s1: { branch: Option.some("feat/sidebar"), changed: true } }
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git } }) }),
+    // "prog" has a blocked agent; "quiet" has none, and no git state.
+    expectAll(all.selector(".badge")).toHaveCount(2),
+    expect(selector(".badge.blocked")).toContainText("P"),
+    expect(selector(".badge.none")).toContainText("Q"),
+    expect(selector(".badge.blocked")).toHaveAttr("aria-hidden", "true"),
+    expectAll(all.selector(".branch")).toHaveCount(1),
+    expect(selector(".branch")).toContainText("feat/sidebar"),
+    expect(selector(".branch")).toHaveAttr("title", "feat/sidebar"),
+    expect(selector(".changes")).toHaveAttr("title", "uncommitted changes"),
+  )
+})
+
+test("a space with no git state shows no branch, and a clean one shows no changes mark", () => {
+  const clean = { s2: { branch: Option.some("main"), changed: false } }
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    expect(selector(".git")).not.toExist(),
+  )
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git: clean } }) }),
+    expect(selector(".branch")).toContainText("main"),
+    expect(selector(".changes")).not.toExist(),
+  )
+})
+
+test("a space whose name starts with no letter or digit is badged with its place", () => {
+  const symbol: Fleet = {
+    ...fleet,
+    machines: [{ name: "here", isLocal: true, state: "connected", spaces: [{ id: "s9", name: "~", folder: "/", tabs: [] }] }],
+  }
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model, bridge: Bridge.Watching({ fleet: symbol }) }),
+    expect(selector(".badge")).toContainText("1"),
   )
 })
 
@@ -181,6 +226,7 @@ test("the agent list groups by state, most urgent first, with the time in each s
   }
   const grouped: Fleet = {
     connected: true,
+    git: {},
     machines: [here],
     terminals: [
       agent("t1", "idle", "ready", Option.none()),

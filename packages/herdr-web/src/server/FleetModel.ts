@@ -5,18 +5,21 @@
 // again with terminal.get, and a not_found reply removes it. A document event
 // names the machine whose herdr-app spaces changed. hc reports no event when a
 // machine connects or drops, so each heartbeat (every 15 s) reads the machines
-// again. When hc goes away or reports that this subscriber fell behind, the
-// model subscribes again and starts over from hc's snapshot.
-import { Array, Context, Effect, Layer, Match, Option, Schedule, Schema, Stream, SubscriptionRef } from "effect"
+// again. Each space's git state is read through hc when its machine's spaces
+// are read and on each heartbeat. When hc goes away or reports that this
+// subscriber fell behind, the model subscribes again and starts over from
+// hc's snapshot.
+import { Array, Context, Effect, HashSet, Layer, Match, Option, Record, Schedule, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { HERDR_APP_DOC, Hc, type Notification } from "../hc/Hc.ts"
-import type { Fleet, Layout, Machine, Space, Terminal } from "../shared/Fleet.ts"
+import { Fleet, type Layout, type Machine, type Space, type Terminal } from "../shared/Fleet.ts"
+import { readSpaceGits } from "./SpaceGit.ts"
 
 class FellBehind extends Schema.TaggedError<FellBehind, { readonly brand: unique symbol }>()("FellBehind", {}) {}
 
 export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/FleetModel", {
   make: Effect.gen(function* () {
     const hc = yield* Hc
-    const fleet = yield* SubscriptionRef.make<Fleet>({ connected: false, terminals: [], machines: [] })
+    const fleet = yield* SubscriptionRef.make<Fleet>({ connected: false, terminals: [], machines: [], git: {} })
 
     const put = (terminal: Terminal) =>
       SubscriptionRef.update(fleet, (f) => ({ ...f, terminals: upsert(f.terminals, terminal) }))
@@ -54,7 +57,30 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
             })),
           ),
         )
+        yield* refreshGit(isNamed)
       })
+
+    // Git runs in the background, one read at a time: a slow folder must not
+    // hold up terminal events. The fleet is set only when a value changed.
+    const gitReads = yield* Semaphore.make(1)
+    const refreshGit = (isRead: (machine: Machine) => boolean) =>
+      gitReads
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const { machines, git: last } = yield* SubscriptionRef.get(fleet)
+            const connected = Array.filter(machines, ({ state }) => state === "connected")
+            const read = Array.filter(connected, isRead)
+            const targets = Array.flatMap(read, (machine) =>
+              Array.map(machine.spaces, ({ id, folder }) => ({ id, folder, on: machine.isLocal ? Option.none() : Option.some(machine.name) })),
+            )
+            // Machines not read keep their entries; a machine that is away loses them.
+            const skipped = Array.filter(connected, (machine: Machine) => !isRead(machine))
+            const kept = HashSet.fromIterable(Array.flatMap(skipped, (machine: Machine) => Array.map(machine.spaces, ({ id }) => id)))
+            const next = { ...Record.filter(last, (_, id) => HashSet.has(kept, id)), ...(yield* readSpaceGits(hc, targets, last)) }
+            yield* SubscriptionRef.updateSome(fleet, (f) => (sameGit(f.git, next) ? Option.none() : Option.some({ ...f, git: next })))
+          }),
+        )
+        .pipe(Effect.forkScoped, Effect.asVoid)
 
     // A machine's spaces are read when it connects; until then it keeps the last ones.
     const others = (previous: ReadonlyArray<Machine>) =>
@@ -84,7 +110,7 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
 
     const apply = (notification: Notification) =>
       Match.valueTags(notification, {
-        Heartbeat: () => refreshMachines,
+        Heartbeat: () => Effect.andThen(refreshMachines, refreshGit(() => true)),
         Missed: () => Effect.fail(new FellBehind()),
         Event: ({ params }) =>
           Match.valueTags(params, {
@@ -97,7 +123,8 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
       const { terminals, notifications } = yield* hc.subscribe
       const name = yield* hc.name
       const local: Machine = { name, isLocal: true, state: "connected", spaces: yield* readSpaces({ name, isLocal: true }, []) }
-      yield* SubscriptionRef.set(fleet, { connected: true, terminals, machines: [local, ...(yield* others([]))] })
+      yield* SubscriptionRef.set(fleet, { connected: true, terminals, machines: [local, ...(yield* others([]))], git: {} })
+      yield* refreshGit(() => true)
       yield* notifications.pipe(Stream.runForEach(apply))
     }).pipe(
       Effect.scoped,
@@ -118,6 +145,8 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
 }) {
   static readonly layer = Layer.effect(this, this.make)
 }
+
+const sameGit = Schema.toEquivalence(Fleet.fields.git)
 
 /**
  * A space read from another machine's document, addressed from here: its

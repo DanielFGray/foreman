@@ -126,6 +126,14 @@ export const terminalNote = (terminal: Terminal) =>
 export const spaceLabel = ({ name, folder }: Space) =>
   nonEmptyOr(name, pipe(String.split(folder, "/"), Array.last, Option.getOrElse(() => folder)))
 
+/** A space's badge: its label's first letter or digit in capitals, else its 1-based place among its machine's spaces. */
+export const spaceBadge = (label: string, index: number) =>
+  pipe(
+    String.match(/^[\p{L}\p{N}]/u)(label),
+    Option.map(([first]) => String.toUpperCase(first)),
+    Option.getOrElse(() => `${index + 1}`),
+  )
+
 export const tabLabel = ({ name }: Tab, index: number) => nonEmptyOr(name, `${index + 1}`)
 
 const spaceTerminals = (space: Space) => Array.flatMap(space.tabs, ({ root }) => terminalsIn(root))

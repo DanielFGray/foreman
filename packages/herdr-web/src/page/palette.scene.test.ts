@@ -25,6 +25,7 @@ const agent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
+  git: {},
   terminals: [agent],
   machines: [
     {
