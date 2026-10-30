@@ -10,6 +10,7 @@
 // never drops what the window wrote.
 import { Array, Option, pipe, Schema } from "effect"
 import type { Direction } from "../shared/Api.ts"
+import type { Layout, PaneContent, Space } from "../shared/Fleet.ts"
 
 /** The fields herdr-app owns and the bridge never reads. */
 const Rest = [Schema.Record(Schema.String, Schema.Unknown)] as const
@@ -19,7 +20,7 @@ const Size = Schema.StructWithRest(Schema.Struct({ weight: Schema.optionalKey(Sc
 type Size = typeof Size.Type
 
 /** What a block shows: a terminal, a mod, or something else herdr-app draws. */
-const Content = Schema.StructWithRest(Schema.Struct({ terminal: Schema.optionalKey(Schema.String) }), Rest)
+const Content = Schema.StructWithRest(Schema.Struct({ terminal: Schema.optionalKey(Schema.String), mod: Schema.optionalKey(Schema.String) }), Rest)
 
 export type Node = {
   readonly id?: string
@@ -59,6 +60,18 @@ type SharedSpace = typeof SharedSpace.Type
 
 export const LayoutDoc = Schema.StructWithRest(Schema.Struct({ spaces: Schema.Array(SharedSpace) }), Rest)
 export type LayoutDoc = typeof LayoutDoc.Type
+
+/**
+ * The spaces as the page shows them: each tab's tree reduced to its splits
+ * and panes. A node or a pane content the page does not know shows as unknown.
+ */
+export const spacesOf = (doc: LayoutDoc): ReadonlyArray<Space> =>
+  Array.map(doc.spaces, ({ id, name, folder, tabs }) => ({
+    id,
+    name,
+    folder,
+    tabs: Array.map(tabs, (tab) => ({ id: tab.id, name: tab.name, root: layoutOf(tab.root) })),
+  }))
 
 /** A layout without a pane or tab, and the terminals it showed there. */
 export type Closed = Readonly<{ doc: LayoutDoc; terminals: ReadonlyArray<string> }>
@@ -282,3 +295,20 @@ const panesIn = (node: Node): ReadonlyArray<Node> => (node.type === "block" ? [n
 
 const terminalsIn = (node: Node): ReadonlyArray<string> =>
   Array.flatMap(panesIn(node), ({ content }) => Option.toArray(Option.fromUndefinedOr(content?.terminal)))
+
+const layoutOf = (node: Node): Layout =>
+  node.type === "block"
+    ? { _tag: "Block", type: "block", id: node.id ?? "", size: sizeOf(node.size), content: contentOf(node.content) }
+    : Option.match(Option.fromUndefinedOr(node.children), {
+        onNone: (): Layout => ({ _tag: "Unknown", type: node.type }),
+        onSome: (children): Layout => ({ _tag: "Split", type: node.type, id: node.id ?? "", size: sizeOf(node.size), children: Array.map(children, layoutOf) }),
+      })
+
+const sizeOf = (size: Size | undefined) => Option.map(Option.fromUndefinedOr(size), ({ weight }) => ({ weight: Option.fromUndefinedOr(weight) }))
+
+const contentOf = (content: typeof Content.Type | undefined): PaneContent =>
+  content?.terminal !== undefined
+    ? { _tag: "Terminal", terminal: content.terminal }
+    : content?.mod !== undefined
+      ? { _tag: "Mod", mod: content.mod }
+      : { _tag: "Unknown" }

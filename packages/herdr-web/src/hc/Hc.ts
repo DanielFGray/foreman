@@ -3,9 +3,9 @@
 // its own, because once subscribed a plain-mode connection carries only
 // notifications.
 import { Config, Context, Duration, Effect, Layer, Option, RcRef, Schema } from "effect"
-import { HerdrAppDoc, MachineState, Terminal } from "../shared/Fleet.ts"
+import { MachineState, Terminal } from "../shared/Fleet.ts"
 import { wireTag } from "../shared/Wire.ts"
-import { LayoutDoc } from "./LayoutDoc.ts"
+import { LayoutDoc, spacesOf } from "./LayoutDoc.ts"
 import { connect, method, type Method } from "./Connection.ts"
 
 /**
@@ -82,13 +82,6 @@ const run = method(
 /** Ends the program: hangup, then terminate, then kill. */
 const kill = method("terminal.kill", TerminalParams, Schema.Struct({}))
 
-/** A document here, or on the machine `on` names. */
-const docGet = method(
-  "doc.get",
-  DocName,
-  Schema.Struct({ value: Schema.OptionFromNullOr(HerdrAppDoc) }),
-)
-
 const machineList = method(
   "machine.list",
   Schema.Struct({}),
@@ -145,6 +138,12 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
         Effect.scoped,
       )
 
+    // Before herdr-app first runs on a machine its document is null, at version 0.
+    const layout = (on: Option.Option<string>) =>
+      call(layoutGet, { name: HERDR_APP_DOC, on }).pipe(
+        Effect.map(({ value, version }) => ({ doc: Option.getOrElse(value, (): LayoutDoc => ({ spaces: [] })), version })),
+      )
+
     return {
       get: (terminal: string) => call(get, { terminal }),
       send: (terminal: string, text: string) => call(send, { terminal, text }),
@@ -153,16 +152,10 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
       keys: (terminal: string, names: ReadonlyArray<string>) => call(keys, { terminal, keys: names }),
       /** What the terminal shows now, as text. */
       screen: (terminal: string) => Effect.map(call(read, { terminal }), ({ text }) => text),
-      /** herdr-app's spaces here, or on another machine. None yet means herdr-app has not run there. */
-      spaces: (on: Option.Option<string>) =>
-        call(docGet, { name: HERDR_APP_DOC, on }).pipe(
-          Effect.map(({ value }) => Option.match(value, { onNone: () => [], onSome: (doc) => doc.spaces })),
-        ),
+      /** herdr-app's spaces here, or on another machine, as the page shows them. None before herdr-app first runs there. */
+      spaces: (on: Option.Option<string>) => Effect.map(layout(on), ({ doc }) => spacesOf(doc)),
       /** herdr-app's layout here, or on another machine, at its version. */
-      layout: (on: Option.Option<string>) =>
-        call(layoutGet, { name: HERDR_APP_DOC, on }).pipe(
-          Effect.map(({ value, version }) => ({ doc: Option.getOrElse(value, () => ({ spaces: [] })), version })),
-        ),
+      layout,
       /** Writes herdr-app's layout over the one read at `version`; fails with kind `conflict` when another write came first. */
       setLayout: (on: Option.Option<string>, doc: LayoutDoc, version: number) =>
         call(layoutSet, { name: HERDR_APP_DOC, value: doc, version, on }).pipe(Effect.asVoid),

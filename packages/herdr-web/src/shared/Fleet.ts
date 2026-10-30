@@ -106,9 +106,6 @@ export const Space = Schema.Struct({
 })
 export type Space = typeof Space.Type
 
-/** The value of herdr-app's `herdr-app` document. */
-export const HerdrAppDoc = Schema.Struct({ spaces: Schema.Array(Space) })
-
 /** How hc reaches a machine. This machine is always connected. */
 export const MachineState = Schema.Literals(["connecting", "connected", "needs_login", "unreachable"])
 export type MachineState = typeof MachineState.Type

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { Option, Schema } from "effect"
-import { closePane, closeTab, LayoutDoc, moveSpace, newTab, type Node, split } from "./LayoutDoc.ts"
+import { closePane, closeTab, LayoutDoc, moveSpace, newTab, type Node, spacesOf, split } from "./LayoutDoc.ts"
 
 const decode = Schema.decodeUnknownSync(LayoutDoc)
 const encode = Schema.encodeSync(LayoutDoc)
@@ -52,6 +52,33 @@ describe("LayoutDoc", () => {
       version: 3,
     }
     expect(encode(decode(wire))).toEqual(wire)
+  })
+
+  // Hand-written: no herdr-app command makes a stack, and the other shapes are
+  // ones herdr-app may add.
+  test("shows the page a tree with nodes, contents and sizes it does not know", () => {
+    const doc = docWith({
+      type: "stack",
+      id: "s1",
+      children: [
+        { type: "block", id: "p1", content: { terminal: "t1" }, size: { fixed: 20 } },
+        { type: "block", id: "p2", content: { mod: "board", props: { file: "x" } } },
+        { type: "block", id: "p3", content: { url: "https://example.com" } },
+        { type: "browser", id: "p4" },
+      ],
+    })
+    expect(spacesOf(doc)[0]?.tabs[0]?.root).toEqual({
+      _tag: "Split",
+      type: "stack",
+      id: "s1",
+      size: Option.none(),
+      children: [
+        { _tag: "Block", type: "block", id: "p1", size: Option.some({ weight: Option.none() }), content: { _tag: "Terminal", terminal: "t1" } },
+        { _tag: "Block", type: "block", id: "p2", size: Option.none(), content: { _tag: "Mod", mod: "board" } },
+        { _tag: "Block", type: "block", id: "p3", size: Option.none(), content: { _tag: "Unknown" } },
+        { _tag: "Unknown", type: "browser" },
+      ],
+    })
   })
 
   test("a split along the parent's way halves the pane's share", () => {
