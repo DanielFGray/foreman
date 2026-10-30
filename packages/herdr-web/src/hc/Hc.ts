@@ -5,6 +5,7 @@
 import { Config, Context, Duration, Effect, Layer, Option, RcRef, Schema } from "effect"
 import { HerdrAppDoc, MachineState, Terminal } from "../shared/Fleet.ts"
 import { wireTag } from "../shared/Wire.ts"
+import { LayoutDoc } from "./LayoutDoc.ts"
 import { connect, method, type Method } from "./Connection.ts"
 
 /**
@@ -52,10 +53,39 @@ const keys = method(
 /** The terminal's screen as text. */
 const read = method("terminal.read", TerminalParams, Schema.Struct({ text: Schema.String }))
 
+const DocName = Schema.Struct({ name: Schema.String, on: Schema.OptionFromOptionalKey(Schema.String) })
+
+/** herdr-app's layout and its version; none, at version 0, before herdr-app first runs there. */
+const layoutGet = method("doc.get", DocName, Schema.Struct({ value: Schema.OptionFromNullOr(LayoutDoc), version: Schema.Int }))
+
+/** Writes the layout if its version is still `version`; else fails with kind `conflict`. */
+const layoutSet = method(
+  "doc.set",
+  Schema.Struct({ name: Schema.String, value: LayoutDoc, version: Schema.Int, on: Schema.OptionFromOptionalKey(Schema.String) }),
+  Schema.Struct({ version: Schema.Int }),
+)
+
+/** Starts that machine's shell in a new terminal, kept after it exits, as herdr-app starts a pane's. */
+const run = method(
+  "terminal.run",
+  Schema.Struct({
+    argv: Schema.Array(Schema.String),
+    cwd: Schema.String,
+    env: Schema.Record(Schema.String, Schema.String),
+    labels: Schema.Record(Schema.String, Schema.String),
+    keep: Schema.Boolean,
+    on: Schema.OptionFromOptionalKey(Schema.String),
+  }),
+  Schema.Struct({ address: Schema.String }),
+)
+
+/** Ends the program: hangup, then terminate, then kill. */
+const kill = method("terminal.kill", TerminalParams, Schema.Struct({}))
+
 /** A document here, or on the machine `on` names. */
 const docGet = method(
   "doc.get",
-  Schema.Struct({ name: Schema.String, on: Schema.OptionFromOptionalKey(Schema.String) }),
+  DocName,
   Schema.Struct({ value: Schema.OptionFromNullOr(HerdrAppDoc) }),
 )
 
@@ -128,6 +158,18 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
         call(docGet, { name: HERDR_APP_DOC, on }).pipe(
           Effect.map(({ value }) => Option.match(value, { onNone: () => [], onSome: (doc) => doc.spaces })),
         ),
+      /** herdr-app's layout here, or on another machine, at its version. */
+      layout: (on: Option.Option<string>) =>
+        call(layoutGet, { name: HERDR_APP_DOC, on }).pipe(
+          Effect.map(({ value, version }) => ({ doc: Option.getOrElse(value, () => ({ spaces: [] })), version })),
+        ),
+      /** Writes herdr-app's layout over the one read at `version`; fails with kind `conflict` when another write came first. */
+      setLayout: (on: Option.Option<string>, doc: LayoutDoc, version: number) =>
+        call(layoutSet, { name: HERDR_APP_DOC, value: doc, version, on }).pipe(Effect.asVoid),
+      /** Starts a shell in a new terminal, in `cwd`, with `labels`; its address. */
+      shell: (params: Readonly<{ cwd: string; labels: Readonly<Record<string, string>>; on: Option.Option<string> }>) =>
+        Effect.map(call(run, { ...params, argv: [], env: SHELL_ENV, keep: true }), ({ address }) => address),
+      kill: (terminal: string) => call(kill, { terminal }).pipe(Effect.asVoid),
       /** Runs a program here or on another machine, with no shell. */
       exec: (params: typeof ExecParams.Type) => call(exec, params),
       /** The other machines and how hc reaches each now. */
@@ -148,3 +190,6 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
 }) {
   static readonly layer = Layer.effect(this, this.make)
 }
+
+/** What herdr-app gives a pane's shell, so programs in it draw as they do in the window. */
+const SHELL_ENV = { TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "herdr" }

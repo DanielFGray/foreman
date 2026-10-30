@@ -154,8 +154,8 @@ test("a space dragged onto another moves there, and a refusal says why", () => {
     expect(role("button", { name: "prog" })).toHaveClass("pressed"),
     pointerUp(role("button", { name: "quiet" })),
     Command.expectExact(MoveSpace({ space: "s1", onto: "s2" })),
-    Command.resolve(MoveSpace, Message.FailedMoveSpace({ reason: "the herdr-app window is not reachable" })),
-    expect(selector(".fleet .note.error")).toContainText("the herdr-app window is not reachable"),
+    Command.resolve(MoveSpace, Message.FailedMoveSpace({ reason: "no space w9" })),
+    expect(selector(".fleet .note.error")).toContainText("no space w9"),
   )
 })
 

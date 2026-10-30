@@ -138,6 +138,7 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
     yield* follow.pipe(Effect.retry(Schedule.spaced("2 seconds")), Effect.forkScoped)
 
     return {
+      get: SubscriptionRef.get(fleet),
       /** The current value, then every change. */
       changes: SubscriptionRef.changes(fleet),
     }

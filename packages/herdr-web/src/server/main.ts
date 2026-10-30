@@ -34,7 +34,8 @@ const INPUT_BOX_POLL = "1 second"
 
 const sameInputBox = Schema.toEquivalence(InputBox)
 
-const toAppError = ({ message }: HerdrAppError) => new BridgeError({ kind: "herdr-app", message })
+const toAppError = (error: HerdrAppError | HcFailure) =>
+  error._tag === "HerdrAppError" ? new BridgeError({ kind: "herdr-app", message: error.message }) : toBridgeError(error)
 
 const transcriptFailure = (error: NoTranscript | PlatformError) =>
   Match.valueTags(error, {

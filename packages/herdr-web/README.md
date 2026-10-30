@@ -11,11 +11,11 @@ It shows the spaces, tabs and panes of your herdr-app window, live:
 - Send messages while an agent works: they wait in a queue and go when its turn ends. "Send now" hands one over at once. A message never goes while the agent's input box in its terminal holds text you typed there. When the box is empty, the chat prompt shows the agent's suggested next prompt.
 - See which agents are working, waiting for you, or done, and for how long, in the sidebar and the tabs.
 - Open any space, tab, pane or setting by name: press Ctrl+K (Cmd+K on a Mac).
-- Split and close panes, and drag spaces into a new order. herdr-app makes the change, so the window shows it too.
+- Split and close panes, open and close tabs, and drag spaces into a new order, with the herdr-app window open or closed. The bridge writes the change to herdr-app's layout in herdr-core, so an open window shows it too.
 - Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
 - On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
 
-herdr-web is a bridge, a small Bun server on the computer that runs herdr. The page talks to the bridge, and the bridge talks to herdr-core and herdr-app.
+herdr-web is a bridge, a small Bun server on the computer that runs herdr. The page talks to the bridge, and the bridge talks to herdr-core, which also keeps herdr-app's layout.
 
 ## Requirements
 
@@ -71,7 +71,6 @@ The bridge reads these environment variables:
 | `HERDR_WEB_PORT` | `4180` | The port the bridge listens on. |
 | `HOST` | `127.0.0.1` | The address the bridge listens on. Anything other than loopback opens it to that network. |
 | `HERDR_WEB_HOSTS` | none | More host names a request may use, separated by commas, each with its port, such as a Tailscale name. |
-| `HERDR_APP_HOME` | `~/.config/herdr-app` | Where herdr-app keeps its command socket. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where Claude Code keeps its conversations and login. |
 | `CODEX_HOME` | `~/.codex` | Where Codex keeps its login. |
 
