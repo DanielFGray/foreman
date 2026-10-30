@@ -28,6 +28,7 @@ const claude = (status: Status, statusMs: number): Terminal => ({
   labels: {},
   status_ms: Option.some(statusMs),
   created_ms: 0,
+  parent: Option.none(),
 })
 
 const fleetWith = (terminal: Terminal): Fleet => ({

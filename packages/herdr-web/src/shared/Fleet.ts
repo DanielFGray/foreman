@@ -40,6 +40,8 @@ export const Terminal = Schema.Struct({
   /** herdr-app files a terminal under `herdr.space` and `herdr.tab`. */
   labels: Schema.Record(Schema.String, Schema.String),
   created_ms: Schema.Int,
+  /** The terminal that started this one (`hc run` from inside its pane), addressed like `address`. */
+  parent: Schema.OptionFromOptionalNullOr(Schema.String),
 })
 export type Terminal = typeof Terminal.Type
 

@@ -19,6 +19,7 @@ const blockedAgent: Terminal = {
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
+  parent: Option.none(),
 }
 
 const fleet: Fleet = {
@@ -247,5 +248,26 @@ test("the agent list groups by state, most urgent first, with the time in each s
     expect(selector(".agent-row .dot.working")).toExist(),
     // Without a time from hc, the row shows none.
     expectAll(all.selector(".agent-row .time")).toHaveCount(2),
+  )
+})
+
+test("an agent that another started nests one level under its row, in both listings", () => {
+  const child: Terminal = { ...blockedAgent, address: "t2", name: Option.some("helper"), parent: Option.some("t1") }
+  const model = {
+    ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [] }).model,
+    bridge: Bridge.Watching({ fleet: { ...fleet, terminals: [blockedAgent, child] } }),
+  }
+  scene(
+    { update, view },
+    given(model),
+    expect(selector(".agent-list .agent-children .agent-row")).toContainText("helper"),
+    expectAll(all.selector(".agent-row")).toHaveCount(2),
+  )
+  scene(
+    { update, view },
+    given({ ...model, settings: { ...DEFAULT_SETTINGS, agents: "nested" } }),
+    expect(selector(".space-agents .agent-children .agent-row")).toContainText("helper"),
+    // The child is not also listed as loose.
+    expect(selector(".agent-list")).not.toExist(),
   )
 })

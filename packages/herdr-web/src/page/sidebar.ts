@@ -1,9 +1,9 @@
 // The sidebar: every machine's spaces and agents, the space drag, the
 // resize edge, and the Settings row.
-import { Array, Option, Record, String } from "effect"
+import { Array, HashMap, Option, Record, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
-import { agentsIn, byState, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, spaceBadge, terminalLabel, terminalNote } from "./group.ts"
+import { agentsIn, byState, type Children, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, spaceBadge, terminalLabel, terminalNote } from "./group.ts"
 import { Bot, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
 import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
@@ -67,7 +67,7 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
   Option.match(lastFleet(model.bridge), {
     onNone: () => [h.p([h.Class("note")], ["Waiting for the bridge."])],
     onSome: (fleet) => {
-      const { machines, loose } = sidebarOf(fleet)
+      const { machines, loose, children } = sidebarOf(fleet)
       const openTab = Option.map(selectedTab(model), ({ tab }) => tab.id)
       // With one machine, a heading would only repeat its name.
       const isHeaded = machines.length > 1
@@ -80,7 +80,7 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
         ? [h.p([h.Class("note")], ["No spaces."])]
         : [
             ...(model.spaceDrag._tag === "Refused" ? [h.p([h.Class("note error")], [`The space did not move: ${model.spaceDrag.reason}`])] : []),
-            ...Array.map(machines, (row) => machineView(row, isHeaded, isNested, openTab, fleet, model, h)),
+            ...Array.map(machines, (row) => machineView(row, isHeaded, isNested, openTab, fleet, children, model, h)),
             ...(Array.isReadonlyArrayNonEmpty(listed)
               ? [
                   h.keyed("section")(
@@ -90,10 +90,10 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
                       h.h2([h.Class("list-head")], [h.span([h.Class("name")], [listTitle])]),
                       // Below the spaces, the agents sit in groups by state; "Other agents" under nested spaces has few enough to stay flat.
                       ...(isNested
-                        ? [h.ul([], Array.map(listed, (agent) => agentRowView(agent, model, h)))]
+                        ? [h.ul([], Array.map(listed, (agent) => agentRowView(agent, children, model, h)))]
                         : Array.flatMap(byState(listed), ({ state, agents }) => [
                             h.h3([h.Class("state-head")], [stateHeading[state]]),
-                            h.keyed("ul")(`agents/${state}`, [], Array.map(agents, (agent) => agentRowView(agent, model, h))),
+                            h.keyed("ul")(`agents/${state}`, [], Array.map(agents, (agent) => agentRowView(agent, children, model, h))),
                           ])),
                     ],
                   ),
@@ -109,6 +109,7 @@ const machineView = (
   isNested: boolean,
   openTab: Option.Option<string>,
   fleet: Fleet,
+  children: Children,
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html =>
@@ -131,7 +132,7 @@ const machineView = (
       ...Array.flatMap(spaces, (row, index) => [
         spaceView(row, spaceBadge(row.label, index), Record.get(fleet.git, row.space.id), openTab, dragMark(model.spaceDrag, fleet, row.space.id), h),
         ...(isNested && Array.isReadonlyArrayNonEmpty(agentsIn(row))
-          ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView({ terminal, space: Option.none() }, model, h)))]
+          ? [h.keyed("ul")(`${row.space.id}/agents`, [h.Class("space-agents")], Array.map(agentsIn(row), (terminal) => agentRowView({ terminal, space: Option.none() }, children, model, h)))]
           : []),
       ]),
     ],
@@ -202,8 +203,10 @@ const gitView = ({ branch, changed }: SpaceGit, h: HtmlBuilder<Message>): Html =
 
 // "space · what it is doing", then how long it has been so. Under its own
 // space, an agent is named by its program instead, as the space is above it.
-const agentRowView = ({ terminal, space }: ListedAgent, model: Model, h: HtmlBuilder<Message>): Html =>
-  h.keyed("li")(
+// The agents it started follow, one level in.
+const agentRowView = ({ terminal, space }: ListedAgent, children: Children, model: Model, h: HtmlBuilder<Message>): Html => {
+  const started = Option.getOrElse(HashMap.get(children, terminal.address), () => [])
+  return h.keyed("li")(
     terminal.address,
     [],
     [
@@ -221,5 +224,9 @@ const agentRowView = ({ terminal, space }: ListedAgent, model: Model, h: HtmlBui
           statusDot(stateOf(terminal), h),
         ],
       ),
+      ...(Array.isReadonlyArrayNonEmpty(started)
+        ? [h.ul([h.Class("agent-children")], Array.map(started, (child) => agentRowView({ terminal: child, space: Option.none() }, children, model, h)))]
+        : []),
     ],
   )
+}

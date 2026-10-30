@@ -15,6 +15,7 @@ const running = (name: string, ...argv: ReadonlyArray<string>): Terminal => ({
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
+  parent: Option.none(),
 })
 
 const nameOf = (terminal: Terminal) => Option.map(programOf(terminal), ({ name }) => name)

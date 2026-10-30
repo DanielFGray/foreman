@@ -12,21 +12,55 @@ export type SpaceRow = Readonly<{ space: Space; label: string; status: Option.Op
 
 export type MachineRow = Readonly<{ machine: Machine; spaces: ReadonlyArray<SpaceRow> }>
 
-/** Every machine with its spaces and their tabs, then the agents that no layout places. */
-export type Sidebar = Readonly<{ machines: ReadonlyArray<MachineRow>; loose: ReadonlyArray<Terminal> }>
+/** The agents an agent started, by its address. */
+export type Children = HashMap.HashMap<string, ReadonlyArray<Terminal>>
+
+/**
+ * Every machine with its spaces and their tabs, then the agents that no
+ * layout places and no listed agent started, then the agents each agent started.
+ */
+export type Sidebar = Readonly<{
+  machines: ReadonlyArray<MachineRow>
+  loose: ReadonlyArray<Terminal>
+  children: Children
+}>
 
 /**
  * Every machine and space in hc's and herdr-app's order, each space marked
  * with its most urgent agent. A loose agent is one no space shows, such as a
- * sub-agent; a loose shell belongs to another app.
+ * sub-agent; a loose shell belongs to another app. A loose agent with a live
+ * agent up its parent chain is filed in `children` under the nearest one; a
+ * chain that loops leaves it loose.
  */
 export const sidebarOf = (fleet: Fleet): Sidebar => {
   const spaceRow = spaceRowOf(fleet)
   const placed = HashSet.fromIterable(Array.flatMap(spacesOf(fleet), spaceTerminals))
+  const anchor = anchorIn(fleet)
+  const [nested, loose] = Array.partition(
+    Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)),
+    (terminal) => Option.match(anchor(terminal), { onNone: () => Result.fail(terminal), onSome: (parent) => Result.succeed([parent, terminal] as const) }),
+  )
   return {
     machines: Array.map(fleet.machines, (machine) => ({ machine, spaces: Array.map(machine.spaces, spaceRow) })),
-    loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)),
+    loose,
+    children: Array.reduce(nested, HashMap.empty<string, ReadonlyArray<Terminal>>(), (acc, [parent, terminal]) =>
+      HashMap.set(acc, parent, [...Option.getOrElse(HashMap.get(acc, parent), () => []), terminal]),
+    ),
   }
+}
+
+/** The address of the nearest live agent up a terminal's parent chain; none when there is none, or the chain loops. */
+const anchorIn = (fleet: Fleet) => {
+  const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
+  // The terminals up the chain, nearest first, as far as hc still knows them.
+  const chain = (terminal: Terminal, seen: HashSet.HashSet<string>): Option.Option<ReadonlyArray<Terminal>> =>
+    Option.match(Option.flatMap(terminal.parent, (address) => HashMap.get(byAddress, address)), {
+      onNone: () => Option.some([]),
+      onSome: (parent) =>
+        HashSet.has(seen, parent.address) ? Option.none() : Option.map(chain(parent, HashSet.add(seen, parent.address)), (rest) => [parent, ...rest]),
+    })
+  return (terminal: Terminal) =>
+    Option.map(Option.flatMap(chain(terminal, HashSet.make(terminal.address)), Array.findFirst(isLiveAgent)), ({ address }) => address)
 }
 
 /** The space's agents, tab by tab in pane order. */
@@ -144,7 +178,7 @@ const nonEmptyOr = (text: string, fallback: string) => (String.isNonEmpty(text) 
 export type ListedAgent = Readonly<{ terminal: Terminal; space: Option.Option<string> }>
 
 /** The agents of every space in the sidebar, then the loose ones. */
-export const listedAgents = ({ machines, loose }: Sidebar): ReadonlyArray<ListedAgent> => [
+export const listedAgents = ({ machines, loose }: Pick<Sidebar, "machines" | "loose">): ReadonlyArray<ListedAgent> => [
   ...Array.flatMap(machines, ({ spaces }) => Array.flatMap(spaces, (row) => Array.map(agentsIn(row), (terminal) => ({ terminal, space: Option.some(row.label) })))),
   ...Array.map(loose, (terminal) => ({ terminal, space: Option.none() })),
 ]

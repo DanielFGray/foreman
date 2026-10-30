@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { Option } from "effect"
+import { HashMap, Option } from "effect"
 import type { Fleet, Layout, Machine, StatusState, Terminal } from "../shared/Fleet.ts"
 import { dropSide, isAgent, locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
 
@@ -16,6 +16,7 @@ const terminal = (address: string, hasStatus = true, state: Terminal["state"] = 
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
+  parent: Option.none(),
 })
 
 const pane = (address: string): Layout => ({
@@ -146,5 +147,37 @@ describe("dropSide", () => {
   test("a space has no place on itself or on another machine", () => {
     expect(dropSide(fleet, "b", "b")).toStrictEqual(Option.none())
     expect(dropSide(fleet, "a", "d")).toStrictEqual(Option.none())
+  })
+})
+
+describe("sidebarOf nesting", () => {
+  const startedBy = (address: string, parent: string): Terminal => ({ ...terminal(address), parent: Option.some(parent) })
+  const nesting = (terminals: ReadonlyArray<Terminal>) => {
+    const { loose, children } = sidebarOf({ ...fleet, terminals: [terminal("t1"), terminal("t2"), terminal("t3", false), ...terminals] })
+    return {
+      loose: loose.map(({ address }) => address),
+      children: Object.fromEntries(HashMap.toEntries(children).map(([parent, kids]) => [parent, kids.map(({ address }) => address)])),
+    }
+  }
+
+  test("files an unplaced agent under the placed agent that started it, and a grandchild under the child", () => {
+    expect(nesting([startedBy("t5", "t1"), startedBy("t6", "t5")])).toEqual({ loose: [], children: { t1: ["t5"], t5: ["t6"] } })
+  })
+
+  test("files a child under a loose agent", () => {
+    expect(nesting([terminal("t4"), startedBy("t5", "t4")])).toEqual({ loose: ["t4"], children: { t4: ["t5"] } })
+  })
+
+  test("looks past an ancestor that is no live agent", () => {
+    const shell: Terminal = { ...terminal("t7", false), parent: Option.some("t1") }
+    expect(nesting([shell, startedBy("t8", "t7")])).toEqual({ loose: [], children: { t1: ["t8"] } })
+  })
+
+  test("leaves a child loose when its parent is gone", () => {
+    expect(nesting([startedBy("t5", "t99")])).toEqual({ loose: ["t5"], children: {} })
+  })
+
+  test("leaves agents loose that parent each other, and the agent that hangs from them", () => {
+    expect(nesting([startedBy("t5", "t6"), startedBy("t6", "t5"), startedBy("t7", "t5")])).toEqual({ loose: ["t5", "t6", "t7"], children: {} })
   })
 })
