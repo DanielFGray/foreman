@@ -1,7 +1,7 @@
 // The bridge: serves the page from dist/ and the Api over a WebSocket at
 // /rpc, on loopback only, behind the Host/Origin guard.
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun"
-import { Config, Effect, Inspectable, Layer, Match, Stream } from "effect"
+import { Config, Effect, Inspectable, Layer, Match, Option, Schedule, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { FetchHttpClient, HttpRouter, HttpStaticServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
@@ -10,6 +10,7 @@ import type { HcFailure } from "../hc/Connection.ts"
 import { Api, BridgeError } from "../shared/Api.ts"
 import { guard, Host } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
+import { keyFor, questionOnScreen } from "./claude/Menu.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
@@ -22,6 +23,9 @@ const toBridgeError = (error: HcFailure) =>
     HcLost: ({ cause }) => new BridgeError({ kind: "lost", message: `hc is not reachable: ${Inspectable.toStringUnknown(cause, 0)}` }),
     HcProtocolError: ({ cause }) => new BridgeError({ kind: "protocol", message: `unreadable reply from hc: ${Inspectable.toStringUnknown(cause, 0)}` }),
   })
+
+/** How often, and how many times, a question is read again until its menu is drawn. */
+const MENU_DRAWN = { schedule: Schedule.spaced("200 millis"), times: 10 }
 
 const toAppError = ({ message }: HerdrAppError) => new BridgeError({ kind: "herdr-app", message })
 
@@ -59,6 +63,24 @@ const Handlers = Api.toLayer(
         ),
       send: ({ terminal, text }) => hc.send(terminal, text).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
       keys: ({ terminal, keys }) => hc.keys(terminal, keys).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+      // The status turns blocked a moment before Claude Code draws the menu.
+      question: ({ terminal }) =>
+        hc.screen(terminal).pipe(
+          Effect.map(questionOnScreen),
+          Effect.repeat({ ...MENU_DRAWN, until: Option.isSome }),
+          Effect.mapError(toBridgeError),
+        ),
+      answer: ({ terminal, question, choice }) =>
+        hc.screen(terminal).pipe(
+          Effect.map((screen) => keyFor(screen, question, choice)),
+          Effect.mapError(toBridgeError),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(new BridgeError({ kind: "moved-on", message: "the agent no longer asks this" })),
+              onSome: (key) => hc.keys(terminal, [key]).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+            }),
+          ),
+        ),
       attach: (request) => live.attach(request).pipe(Stream.mapError(toBridgeError)),
       input: ({ session, data }) => live.input(session, data).pipe(Effect.mapError(toBridgeError)),
       resize: ({ session, cols, rows }) => live.resize(session, cols, rows).pipe(Effect.mapError(toBridgeError)),

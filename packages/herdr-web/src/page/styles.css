@@ -444,3 +444,18 @@ p.usage-error { margin: 0; }
 .palette-option .icon { flex: none; color: var(--subtext); }
 .palette-option .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-option .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtext); font-size: 12px; text-align: right; }
+
+/* A question the agent waits on, under its chat */
+.question { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-left: 3px solid var(--peach); border-radius: 6px; background: var(--mantle); font-family: var(--chat-font); font-size: var(--chat-size); }
+.question p { margin: 0; }
+.question .note { margin: 0; }
+.question-about { color: var(--subtext); font-size: 0.9em; overflow-wrap: anywhere; }
+.question-text { font-weight: 600; }
+.choices { display: flex; flex-direction: column; gap: 4px; }
+.choice { display: grid; grid-template-columns: 1.5em 1fr; gap: 0 6px; padding: 8px 10px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.choice:hover:not(:disabled) { border-color: var(--accent); }
+.choice:disabled { opacity: 0.6; cursor: default; }
+.choice[aria-busy="true"] { opacity: 1; border-color: var(--accent); }
+.choice-number { color: var(--subtext); font-variant-numeric: tabular-nums; }
+.choice-detail { grid-column: 2; color: var(--subtext); font-size: 0.9em; }
+.question-note { margin: 0; }

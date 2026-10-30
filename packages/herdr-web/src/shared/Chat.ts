@@ -85,3 +85,17 @@ export const ChatUpdate = Schema.Union([
   Schema.TaggedStruct("Appended", { entries: Schema.Array(Entry) }),
 ])
 export type ChatUpdate = typeof ChatUpdate.Type
+
+// QUESTION
+
+/** One answer the agent offers; pressing `number` picks it. */
+export const Choice = Schema.Struct({ number: Schema.Int, label: Schema.String, detail: Schema.OptionFromOptionalKey(Schema.String) })
+export type Choice = typeof Choice.Type
+
+/**
+ * A question the agent waits on, as its menu shows it: a permission to run a
+ * tool, or a question with set answers. The menu itself is its identity, since
+ * the status stays the same from one question of a series to the next.
+ */
+export const Question = Schema.Struct({ text: Schema.String, choices: Schema.Array(Choice) })
+export type Question = typeof Question.Type

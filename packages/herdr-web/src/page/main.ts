@@ -12,12 +12,13 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SendPrompt, SplitPane, ClosePane, NewTab, CloseTab, FocusPalette, SaveRecent } from "./commands.ts"
-import { Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Asking, Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
 import { isPaletteKey, PaletteTarget, withRecent } from "./palette.ts"
+import { answered, chose, QuestionRead, questionReads, readQuestion, typedChoice } from "./question.ts"
 import { paletteResults, paletteView } from "./paletteView.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
 
@@ -41,6 +42,7 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     prompt: "",
     delivery: Delivery.Ready(),
     waiting: [],
+    questions: {},
     paneAction: PaneAction.Idle(),
     spaceDrag: SpaceDrag.Idle(),
     palette: Palette.Closed(),
@@ -122,6 +124,28 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedChat: ({ address, reason }) => ({
       model: withView(model, address, (view) => withConversation(view, () => Conversation.Unreadable({ reason }))),
     }),
+
+    ReceivedQuestion: ({ address, statusMs, question }) => ({
+      model: readQuestion(
+        model,
+        address,
+        statusMs,
+        Option.match(question, {
+          onNone: () => Asking.Unshown({ reason: Option.none() }),
+          onSome: (shown) => Asking.Shown({ question: shown, sending: Option.none() }),
+        }),
+      ),
+    }),
+
+    FailedQuestion: ({ address, statusMs, reason }) => ({
+      model: readQuestion(model, address, statusMs, Asking.Unshown({ reason: Option.some(reason) })),
+    }),
+
+    ClickedChoice: ({ address, choice }) => chose(model, address, choice),
+
+    SucceededAnswer: ({ address }) => ({ model: answered(model, address, Option.none()) }),
+
+    FailedAnswer: ({ address, reason }) => ({ model: answered(model, address, Option.some(reason)) }),
 
     ChangedLink: ({ address, link }) => ({
       model: withView(model, address, (view) => View.match(view, { Chat: () => view, Terminal: () => View.Terminal({ link }) })),
@@ -241,10 +265,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         onSome: (address) =>
           String.isEmpty(String.trim(model.prompt))
             ? { model }
-            : {
-                model: sentPrompt(modifyFields(model, { delivery: () => Delivery.Sending() }), address, model.prompt),
-                commands: [SendPrompt({ address, text: model.prompt })],
-              },
+            : Option.match(typedChoice(model, address, model.prompt), {
+                // While the agent waits on a question, its number answers it.
+                onSome: (choice) => chose(modifyFields(model, { prompt: () => "" }), address, choice),
+                onNone: () => ({
+                  model: sentPrompt(modifyFields(model, { delivery: () => Delivery.Sending() }), address, model.prompt),
+                  commands: [SendPrompt({ address, text: model.prompt })],
+                }),
+              }),
       }),
 
     SucceededSendPrompt: ({ address }) =>
@@ -498,6 +526,16 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The question each blocked agent in a shown chat waits on. A new block, or
+  // an answer, changes the reads and so reads the screens again.
+  questions: entry(
+    { reads: Schema.Array(QuestionRead) },
+    {
+      modelToDependencies: (model) => ({ reads: questionReads(model) }),
+      dependenciesToStream: ({ reads }) => Stream.mergeAll(Array.map(reads, questionStream), { concurrency: "unbounded" }),
+    },
+  ),
+
   // Each shown chat, live. When a call fails the page shows why and calls
   // again after a pause; the bridge then sends the whole recent chat again.
   chat: entry(
@@ -508,6 +546,15 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 }))
+
+const questionStream = ({ address, statusMs }: QuestionRead) =>
+  Stream.fromEffect(
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const question = yield* client.question({ terminal: address })
+      return Message.ReceivedQuestion({ address, statusMs, question })
+    }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedQuestion({ address, statusMs, reason: failureReason(error) })))),
+  )
 
 const chatStream = (address: string) =>
   Effect.gen(function* () {

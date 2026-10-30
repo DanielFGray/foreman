@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
+import { Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
 import { Message, RECENT_KEY, SELECTION_KEY, Selection } from "./model.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
@@ -142,4 +143,15 @@ export const FocusPalette = Command.define("FocusPalette", {
     Effect.catchTag("ElementNotFound", (error) => Effect.logWarning("the palette's search box was not found", error)),
     Effect.as(Message.CompletedFocusPalette()),
   ),
+})
+
+export const AnswerQuestion = Command.define("AnswerQuestion", {
+  args: { address: Schema.String, question: Question, choice: Schema.Int },
+  messages: [Message.SucceededAnswer, Message.FailedAnswer],
+  execute: ({ address, question, choice }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.answer({ terminal: address, question, choice })
+      return Message.SucceededAnswer({ address })
+    }).pipe(reportFailure((reason) => Message.FailedAnswer({ address, reason }))),
 })

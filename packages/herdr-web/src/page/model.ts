@@ -6,7 +6,7 @@ import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
 import { Direction } from "../shared/Api.ts"
-import { ChatUpdate, Entry } from "../shared/Chat.ts"
+import { ChatUpdate, Entry, Question } from "../shared/Chat.ts"
 import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
@@ -112,6 +112,24 @@ export type FontCatalog = typeof FontCatalog.Type
 export const Waiting = Schema.Struct({ address: Schema.String, text: Schema.String, seen: Schema.Int, sentAt: Schema.Option(Schema.Finite) })
 export type Waiting = typeof Waiting.Type
 
+/** What the page knows of the question an agent waits on. */
+export const Asking = defineTaggedUnion({
+  Reading: {},
+  /** `sending` is the choice on its way to the agent. */
+  Shown: { question: Question, sending: Schema.Option(Schema.Int) },
+  /** The agent waits, but its screen shows no menu the page can answer. */
+  Unshown: { reason: Schema.Option(Schema.String) },
+})
+export type Asking = typeof Asking.Type
+
+/**
+ * The question of one blocked agent. `statusMs` names the status it was read
+ * under, and `reads` counts the reads under that status: an answer, taken or
+ * refused, reads the screen again, since a series of questions keeps one status.
+ */
+export const Asked = Schema.Struct({ statusMs: Schema.Int, reads: Schema.Int, notice: Schema.Option(Schema.String), asking: Asking })
+export type Asked = typeof Asked.Type
+
 export const Model = Schema.Struct({
   bridge: Bridge,
   /** On a phone the sidebar folds away once a tab or agent is picked, to give the panes the screen. */
@@ -123,6 +141,8 @@ export const Model = Schema.Struct({
   delivery: Delivery,
   /** The prompts the chats show as faded bubbles until the agent records them. */
   waiting: Schema.Array(Waiting),
+  /** The question each blocked agent in a chat waits on, by address. */
+  questions: Schema.Record(Schema.String, Asked),
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
   palette: Palette,
@@ -173,6 +193,11 @@ export const Message = defineMessageUnion({
   FocusedPane: { address: Schema.String },
   SelectedView: { address: Schema.String, view: ViewName },
   ReceivedChat: { address: Schema.String, update: ChatUpdate },
+  ReceivedQuestion: { address: Schema.String, statusMs: Schema.Int, question: Schema.Option(Question) },
+  FailedQuestion: { address: Schema.String, statusMs: Schema.Int, reason: Schema.String },
+  ClickedChoice: { address: Schema.String, choice: Schema.Int },
+  SucceededAnswer: { address: Schema.String },
+  FailedAnswer: { address: Schema.String, reason: Schema.String },
   FailedChat: { address: Schema.String, reason: Schema.String },
   ChangedLink: { address: Schema.String, link: Link },
   ClickedSplit: { pane: Schema.String, direction: Direction },

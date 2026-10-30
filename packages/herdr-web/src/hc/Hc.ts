@@ -49,6 +49,9 @@ const keys = method(
   Schema.Struct({ turn: Schema.Int }),
 )
 
+/** The terminal's screen as text. */
+const read = method("terminal.read", TerminalParams, Schema.Struct({ text: Schema.String }))
+
 /** A document here, or on the machine `on` names. */
 const docGet = method(
   "doc.get",
@@ -94,6 +97,8 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
       get: (terminal: string) => call(get, { terminal }),
       send: (terminal: string, text: string) => call(send, { terminal, text }),
       keys: (terminal: string, names: ReadonlyArray<string>) => call(keys, { terminal, keys: names }),
+      /** What the terminal shows now, as text. */
+      screen: (terminal: string) => Effect.map(call(read, { terminal }), ({ text }) => text),
       /** herdr-app's spaces here, or on another machine. None yet means herdr-app has not run there. */
       spaces: (on: Option.Option<string>) =>
         call(docGet, { name: HERDR_APP_DOC, on }).pipe(

@@ -13,6 +13,7 @@ import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
 import { stateOf, statusDot } from "./status.ts"
+import { questionView } from "./question.ts"
 import { waitingAt } from "./waiting.ts"
 import { LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 
@@ -40,7 +41,7 @@ export const paneView = (
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
           // Before the view chips, so they stay in place as these show and hide.
           ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
-          // A permission dialog shows only in the terminal, so a chat can switch to it.
+          // A question that wants typed text is answered in the terminal, so a chat can switch to it.
           ...(isClaudeCode(model, address)
             ? Array.map(ViewName.literals, (name) =>
                 h.button(
@@ -68,6 +69,7 @@ export const paneView = (
                 Shown: ({ entries }) => chatView(entries, waitingAt(model, address), h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
+              ...questionView(model, address, h),
               ...(isFocused ? [promptView(model, h)] : []),
             ],
           ),

@@ -1,7 +1,7 @@
 // The calls a page makes to the bridge, over Effect RPC on a WebSocket.
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
-import { ChatUpdate } from "./Chat.ts"
+import { ChatUpdate, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
@@ -32,6 +32,13 @@ export const Api = RpcGroup.make(
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
   /** Types text and presses Enter. */
   Rpc.make("send", { payload: { terminal: Schema.String, text: Schema.String }, error: BridgeError }),
+  /** The question the agent waits on, read from its screen; none while it shows no menu. */
+  Rpc.make("question", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Question), error: BridgeError }),
+  /**
+   * Picks a choice, if the agent still asks `question`. When it has moved on,
+   * nothing is pressed and the call fails with kind `moved-on`.
+   */
+  Rpc.make("answer", { payload: { terminal: Schema.String, question: Question, choice: Schema.Int }, error: BridgeError }),
   /** Presses named keys, such as `1`, `y`, `esc` or `ctrl+c`. */
   Rpc.make("keys", {
     payload: { terminal: Schema.String, keys: Schema.Array(Schema.String) },

@@ -1,0 +1,33 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Haiku 5.5 with high effort
+ ▝▝   ▝▝   /home/me/project
+
+❯ Run the shell command: rm -f now.txt; date > now2.txt
+
+  Ran 1 shell command
+
+● Neither file exists yet, so rm -f has nothing to remove. Running your command now.
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Baked for 6s · done 12:22 AM
+
+❯ <hc from="t6">Use the AskUserQuestion tool to ask me one question: which colour, with options red, green, blue. Do nothing else.</hc>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Colour
+
+Which colour?
+
+❯ 1. Red
+     Choose red.
+  2. Green
+     Choose green.
+  3. Blue
+     Choose blue.
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
