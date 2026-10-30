@@ -18,7 +18,7 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
   scene(
     { update, view },
     given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none() }).model),
-    click(role("button", { name: "settings" })),
+    click(role("button", { name: "Settings" })),
     expect(selector(".fleet")).toHaveClass("folded"),
     expect(selector(".settings")).toContainText("Asking the bridge for its fonts"),
     Command.expectExact(FetchFonts),

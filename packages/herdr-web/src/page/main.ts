@@ -768,10 +768,9 @@ const chatStream = (address: string) =>
 // VIEW
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
-  title: "herdr",
+  title: "herdr-web",
   body: h.div(
     [
-      h.Class("app"),
       h.Class(Option.isSome(model.sidebarGrip) ? "app resizing" : "app"),
       h.Style({
         "--chat-font": fontStack("chat", model.settings.chat.font),
@@ -780,38 +779,86 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
       }),
     ],
     [
-      headerView(model, h),
-      h.div(
-        [h.Class("panes")],
+      h.nav(
         [
-          h.nav(
-            [
-              h.Class(`fleet${model.isFleetFolded ? " folded" : ""}${model.spaceDrag._tag === "Pressed" ? " dragging" : ""}`),
-              // A row's own release comes first; this one ends a press let go anywhere else.
-              h.OnPointerUp(() => whilePressed(model, Message.DroppedSpaceDrag())),
-              h.OnPointerLeave(() => whilePressed(model, Message.DroppedSpaceDrag())),
-            ],
-            fleetView(model, h),
-          ),
-          sidebarEdgeView(model, h),
-          // On a phone the sidebar is a drawer over the page; a tap beside it closes it.
-          ...(model.isFleetFolded ? [] : [h.div([h.Class("fleet-backdrop"), h.OnClick(Message.ClickedFleetToggle())], [])]),
-          model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
+          h.Class(`fleet${model.isFleetFolded ? " folded" : ""}${model.spaceDrag._tag === "Pressed" ? " dragging" : ""}`),
+          // A row's own release comes first; this one ends a press let go anywhere else.
+          h.OnPointerUp(() => whilePressed(model, Message.DroppedSpaceDrag())),
+          h.OnPointerLeave(() => whilePressed(model, Message.DroppedSpaceDrag())),
+        ],
+        [
+          h.div([h.Class("fleet-top")], [h.h1([], ["herdr-web"])]),
+          h.div([h.Class("fleet-list")], fleetView(model, h)),
+          h.div([h.Class("fleet-foot")], [settingsButton(model, h)]),
         ],
       ),
-      ...usageBarView(
-        model.usage,
-        model.usageDetail,
-        model.now,
-        {
-          toggled: (provider) => Message.ToggledUsageDetail({ provider }),
-          refreshed: (provider) => Message.ClickedRefreshUsage({ provider }),
-        },
-        h,
+      sidebarEdgeView(model, h),
+      // On a phone the sidebar is a drawer over the page; a tap beside it closes it.
+      ...(model.isFleetFolded ? [] : [h.div([h.Class("fleet-backdrop"), h.OnClick(Message.ClickedFleetToggle())], [])]),
+      h.main(
+        [h.Class("main")],
+        [
+          topBarView(model, h),
+          model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
+          ...usageBarView(
+            model.usage,
+            model.usageDetail,
+            model.now,
+            {
+              toggled: (provider) => Message.ToggledUsageDetail({ provider }),
+              refreshed: (provider) => Message.ClickedRefreshUsage({ provider }),
+            },
+            h,
+          ),
+        ],
       ),
     ],
   ),
 })
+
+/**
+ * The row over the workspace: why the fleet may be out of date, then the shown
+ * space's tabs. A phone puts the button that opens the sidebar drawer first,
+ * and a desk hides the row when it has nothing else to show.
+ */
+const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const tabs = model.isSettingsOpen
+    ? []
+    : Option.toArray(
+        Option.flatMap(selectedTab(model), ({ space, tab }) =>
+          Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, h)),
+        ),
+      )
+  const problem = Option.toArray(Option.map(linkProblem(model.bridge), (text) => h.span([h.Class("link-problem")], [text])))
+  return h.div(
+    [h.Class(Array.isReadonlyArrayEmpty(tabs) && Array.isReadonlyArrayEmpty(problem) ? "top-bar bare" : "top-bar")],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(model.isFleetFolded ? "chip icon-button fleet-toggle" : "chip icon-button fleet-toggle on"),
+          h.AriaLabel("spaces"),
+          h.AriaPressed(model.isFleetFolded ? "false" : "true"),
+          h.OnClick(Message.ClickedFleetToggle()),
+        ],
+        [icon(PanelLeft, h)],
+      ),
+      ...problem,
+      ...tabs,
+    ],
+  )
+}
+
+const settingsButton = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.button(
+    [
+      h.Type("button"),
+      h.Class(model.isSettingsOpen ? "row settings-toggle on" : "row settings-toggle"),
+      h.AriaPressed(model.isSettingsOpen ? "true" : "false"),
+      h.OnClick(Message.ClickedSettings()),
+    ],
+    [icon(SettingsIcon, h), h.span([h.Class("name")], ["Settings"])],
+  )
 
 /** The sidebar's right edge on a desk: drag it or use the arrow keys to resize, double-click for the default width. */
 const sidebarEdgeView = (model: Model, h: HtmlBuilder<Message>): Html =>
@@ -834,35 +881,6 @@ const sidebarEdgeView = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.OnKeyDownPreventDefault((key) => Option.as(keyedSidebarWidth(shownSidebarWidth(model), key), Message.KeyedSidebarEdge({ key }))),
     ],
     [],
-  )
-
-const headerView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.header(
-    [h.Class("header")],
-    [
-      h.button(
-        [
-          h.Type("button"),
-          h.Class(model.isFleetFolded ? "chip icon-button fleet-toggle" : "chip icon-button fleet-toggle on"),
-          h.AriaLabel("spaces"),
-          h.AriaPressed(model.isFleetFolded ? "false" : "true"),
-          h.OnClick(Message.ClickedFleetToggle()),
-        ],
-        [icon(PanelLeft, h)],
-      ),
-      h.h1([], ["herdr"]),
-      ...Option.toArray(Option.map(linkProblem(model.bridge), (problem) => h.span([h.Class("link-problem")], [problem]))),
-      h.button(
-        [
-          h.Type("button"),
-          h.Class(model.isSettingsOpen ? "chip icon-button settings-toggle on" : "chip icon-button settings-toggle"),
-          h.AriaLabel("settings"),
-          h.AriaPressed(model.isSettingsOpen ? "true" : "false"),
-          h.OnClick(Message.ClickedSettings()),
-        ],
-        [icon(SettingsIcon, h)],
-      ),
-    ],
   )
 
 /** Why the fleet may be out of date; nothing while it is live. */
@@ -1027,11 +1045,10 @@ const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
         // A remembered tab waits for the fleet before it can say it is gone.
         onNone: () =>
           h.section([h.Class("workspace empty")], [Option.isSome(lastFleet(model.bridge)) ? "This tab is closed." : "Waiting for the bridge."]),
-        onSome: ({ space, tab }) =>
+        onSome: ({ tab }) =>
           h.section(
             [h.Class("workspace")],
             [
-              ...Option.toArray(Option.map(lastFleet(model.bridge), (fleet) => tabsView(spaceRowOf(fleet)(space), tab.id, h))),
               focusChipsView(model, h),
               ...paneActionView(model, h),
               h.div([h.Class("layout")], [layoutView(tab.root, model, h)]),
@@ -1125,6 +1142,8 @@ const paneView = (
           ...Option.match(maybeTerminal, { onNone: () => [], onSome: (terminal) => [statusDot(stateOf(terminal), h)] }),
           h.span([h.Class("name")], [labelAt(model, address)]),
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
+          // Before the view chips, so they stay in place as these show and hide.
+          ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
           // A permission dialog shows only in the terminal, so a chat can switch to it.
           ...(isClaudeCode(model, address)
             ? Array.map(ViewName.literals, (name) =>
@@ -1140,7 +1159,6 @@ const paneView = (
                 ),
               )
             : []),
-          ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
         ],
       ),
       View.match(shown, {

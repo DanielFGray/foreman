@@ -41,18 +41,12 @@ body {
 
 button { font: inherit; color: inherit; cursor: pointer; }
 
-.app { display: flex; flex-direction: column; height: 100dvh; }
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: var(--mantle);
-  border-bottom: 1px solid var(--surface);
-}
-.header h1 { margin: 0; font-size: 16px; }
-.settings-toggle { margin-left: auto; }
+/* The sidebar runs the window's full height; the main column holds the rest. */
+.app { position: relative; display: flex; height: 100dvh; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.top-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; }
+.top-bar .tabs { flex: 1; min-width: 0; }
+.top-bar.bare { display: none; }
 
 .link-problem { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--red); }
 
@@ -69,16 +63,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Lucide draws on a 24-unit grid; this sizes it to the text around it. */
 .icon { width: 1.1em; height: 1.1em; flex-shrink: 0; }
 
-.panes { flex: 1; display: flex; min-height: 0; }
-
 .fleet {
   /* The dragged width, never more than half the window. */
   width: min(var(--sidebar-width, 340px), 50vw);
   flex-shrink: 0;
-  overflow-y: auto;
-  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  background: var(--mantle);
   border-right: 1px solid var(--surface);
 }
+.fleet-top { display: flex; align-items: baseline; gap: 8px; padding: 10px 16px 4px; }
+.fleet-top h1 { margin: 0; font-size: 16px; }
+.fleet-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+.fleet-foot { padding: 6px 8px; border-top: 1px solid var(--surface); }
 /* The sidebar's edge: a grip over its border that lights up under the pointer. */
 .fleet-edge { position: relative; flex-shrink: 0; width: 6px; margin-left: -4px; margin-right: -2px; z-index: 5; cursor: col-resize; touch-action: none; }
 .fleet-edge::after { content: ""; position: absolute; inset: 0 2px; background: transparent; transition: background-color 120ms; }
@@ -105,8 +102,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: transparent;
   text-align: left;
 }
-.row:hover { background: var(--mantle); }
-.row.shown { background: var(--mantle); }
+.row:hover, .row.shown { background: var(--base); }
 .row.on { background: var(--surface); }
 .row .icon { color: var(--subtext); }
 .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -164,7 +160,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .pane.focused { border-color: var(--accent); }
 .pane.placeholder { align-items: center; justify-content: center; color: var(--subtext); }
-.pane-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* The height of its chips, so the pane's actions showing do not move the pane below. */
+.pane-head { display: flex; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; }
 .pane-head .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pane-head .msg { flex: 1; min-width: 0; }
 .pane-head .chip { flex-shrink: 0; }
@@ -238,7 +235,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .mark { align-self: center; font-size: 11px; color: var(--subtext); }
 
-.keys { display: flex; flex-wrap: wrap; gap: 4px; }
+/* A desk has a keyboard; the soft keys show on a phone. */
+.keys { display: none; flex-wrap: wrap; gap: 4px; }
 .keys .chip { min-width: 2.5em; font-family: ui-monospace, monospace; text-align: center; }
 
 .prompt { display: flex; gap: 8px; }
@@ -310,9 +308,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 @media (max-width: 720px) {
-  .panes { position: relative; flex-direction: column; }
   /* A drawer over the page, from the left edge. */
-  .fleet { position: absolute; z-index: 20; inset: 0 auto 0 0; width: min(85vw, 320px); background: var(--base); box-shadow: 4px 0 16px rgb(0 0 0 / 0.25); }
+  .fleet { position: absolute; z-index: 20; inset: 0 auto 0 0; width: min(85vw, 320px); box-shadow: 4px 0 16px rgb(0 0 0 / 0.25); }
+  .top-bar.bare { display: flex; }
+  .keys { display: flex; }
   .fleet-backdrop { display: block; position: absolute; z-index: 10; inset: 0; background: rgb(0 0 0 / 0.3); }
   .fleet-edge { display: none; }
   .chip.fleet-toggle { display: inline-flex; }
@@ -331,8 +330,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .split { gap: 0; }
 }
 
-/* The quota bar: a meter per coding plan, and above it the open plan's detail; above the phone's sidebar drawer too. */
-.usage { position: relative; z-index: 30; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }
+/* The quota bar: a meter per coding plan, and above it the open plan's detail. */
+.usage { position: relative; z-index: 1; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }
 .usage-bar { display: flex; gap: 4px; padding: 2px 8px; overflow-x: auto; }
 .usage-segment {
   display: flex;
