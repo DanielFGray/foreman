@@ -4,6 +4,7 @@
 import { Array, Option, Order } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { ProviderId, Reading, Usage, UsageSection, UsageWindow } from "../shared/Usage.ts"
+import { ExternalLink, icon, RefreshCw } from "./icons.ts"
 
 export type UsageMessages<M> = Readonly<{
   toggled: (provider: ProviderId) => M
@@ -147,8 +148,11 @@ const detailView = <M>(reading: Reading, now: number, messages: UsageMessages<M>
                 : Option.match(reading.updated, { onNone: () => "Not read yet", onSome: (at) => `Read ${ago(at, now)} ago` }),
             ],
           ),
-          h.button([h.Type("button"), h.Class("chip"), h.OnClick(messages.refreshed(Option.some(reading.id)))], ["refresh"]),
-          h.a([h.Href(reading.dashboard), h.Target("_blank"), h.Rel("noreferrer")], ["dashboard"]),
+          h.button(
+            [h.Type("button"), h.Class("chip icon-chip"), h.OnClick(messages.refreshed(Option.some(reading.id)))],
+            [icon(RefreshCw, h), "refresh"],
+          ),
+          h.a([h.Class("icon-chip"), h.Href(reading.dashboard), h.Target("_blank"), h.Rel("noreferrer")], ["dashboard", icon(ExternalLink, h)]),
         ],
       ),
     ],

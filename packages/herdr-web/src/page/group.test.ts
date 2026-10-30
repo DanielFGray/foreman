@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { Option } from "effect"
-import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
-import { groupFleet, locate, terminalLabel } from "./group.ts"
+import type { Fleet, Layout, StatusState, Terminal } from "../shared/Fleet.ts"
+import { locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
 
 const terminal = (address: string, isAgent = true, state: Terminal["state"] = "live"): Terminal => ({
   address,
@@ -43,27 +43,55 @@ const fleet: Fleet = {
   terminals: [terminal("t1"), terminal("t2"), terminal("t3", false), terminal("t4")],
 }
 
-const outline = (groups: ReturnType<typeof groupFleet>) =>
-  groups.map(({ label, terminals }) => [label, terminals.map(({ address }) => address)])
+const withState = (t: Terminal, state: StatusState): Terminal => ({
+  ...t,
+  status: Option.map(t.status, (status) => ({ ...status, state })),
+})
 
-describe("groupFleet", () => {
-  test("files agents under the space whose layout shows them, in tab and pane order", () => {
-    expect(outline(groupFleet(fleet, "Agents"))).toEqual([
-      ["prog", ["t2", "t1"]],
-      ["Other", ["t4"]],
-    ])
+const outline = ({ spaces, loose }: Sidebar) => ({
+  spaces: spaces.map(({ label, status, tabs }) => [
+    label,
+    Option.getOrNull(status),
+    tabs.map(({ label, status, agents }) => [label, Option.getOrNull(status), agents.map(({ address }) => address)]),
+  ]),
+  loose: loose.map(({ address }) => address),
+})
+
+describe("sidebarOf", () => {
+  test("lists every space and tab in order, with each tab's agents in pane order and loose agents apart", () => {
+    expect(outline(sidebarOf(fleet))).toEqual({
+      spaces: [
+        ["prog", "idle", [["1", "idle", ["t2", "t1"]], ["logs", null, []]]],
+        ["empty", null, [["1", null, []]]],
+      ],
+      loose: ["t4"],
+    })
   })
 
-  test("shows non-agent terminals only for the All filter", () => {
-    expect(outline(groupFleet(fleet, "All"))[0]).toEqual(["prog", ["t2", "t3", "t1"]])
+  test("marks a space and a tab with its most urgent agent", () => {
+    const urgent = { ...fleet, terminals: [withState(terminal("t1"), "working"), withState(terminal("t2"), "blocked"), terminal("t9")] }
+    expect(outline(sidebarOf(urgent)).spaces[0]).toEqual(["prog", "blocked", [["1", "blocked", ["t2", "t1"]], ["logs", "idle", ["t9"]]]])
   })
 
-  test("leaves out terminals whose program has exited", () => {
-    expect(outline(groupFleet({ ...fleet, terminals: [terminal("t1", true, "finished"), terminal("t4", false, "finished")] }, "All"))).toEqual([])
+  test("leaves out agents whose program has exited, and shells", () => {
+    const exited = { ...fleet, terminals: [terminal("t1", true, "finished"), terminal("t3", false), terminal("t4", true, "finished")] }
+    expect(outline(sidebarOf(exited))).toEqual({
+      spaces: [
+        ["prog", null, [["1", null, []], ["logs", null, []]]],
+        ["empty", null, [["1", null, []]]],
+      ],
+      loose: [],
+    })
   })
+})
 
-  test("omits Other when every terminal is placed", () => {
-    expect(outline(groupFleet({ ...fleet, terminals: [terminal("t1")] }, "All"))).toEqual([["prog", ["t1"]]])
+describe("mostUrgent", () => {
+  test("ranks blocked, error, done, working, then idle", () => {
+    const states: ReadonlyArray<StatusState> = ["idle", "working", "done", "error", "blocked"]
+    const agents = states.map((state, index) => withState(terminal(`t${index}`), state))
+    expect(mostUrgent(agents)).toEqual(Option.some("blocked"))
+    expect(mostUrgent(agents.slice(0, 3))).toEqual(Option.some("done"))
+    expect(mostUrgent([])).toEqual(Option.none())
   })
 })
 

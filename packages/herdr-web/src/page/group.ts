@@ -1,32 +1,47 @@
 // How the page files terminals: by the herdr-app layout trees that place
 // them, in herdr-app's own order of spaces, tabs and panes.
-import { Array, HashMap, HashSet, Match, Option, pipe, Result, String } from "effect"
-import type { Fleet, Layout, Space, Tab, Terminal } from "../shared/Fleet.ts"
+import { Array, HashMap, HashSet, Match, Option, Order, pipe, String } from "effect"
+import type { Fleet, Layout, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
 
-export type Filter = "Agents" | "All"
+export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal> }>
 
-export type SpaceGroup = Readonly<{ id: string; label: string; terminals: ReadonlyArray<Terminal> }>
+export type SpaceRow = Readonly<{ space: Space; label: string; status: Option.Option<StatusState>; tabs: ReadonlyArray<TabRow> }>
+
+/** Every space with its tabs, then the agents that no layout places. */
+export type Sidebar = Readonly<{ spaces: ReadonlyArray<SpaceRow>; loose: ReadonlyArray<Terminal> }>
 
 /**
- * Every space with a shown terminal, then the shown terminals that no layout
- * places, under "Other". hc keeps a terminal after its program exits, so only
- * live terminals are listed.
+ * Every space and tab in herdr-app's order, each marked with its most urgent
+ * agent, and under each tab its agents in pane order. hc keeps a terminal
+ * after its program exits, so only live ones count. A loose agent is one no
+ * space shows, such as a sub-agent; a loose shell belongs to another app.
  */
-export const groupFleet = (fleet: Fleet, filter: Filter): ReadonlyArray<SpaceGroup> => {
-  const isShown = (terminal: Terminal) => terminal.state === "live" && (filter === "All" || isAgent(terminal))
+export const sidebarOf = (fleet: Fleet): Sidebar => {
   const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
-  const spaces = Array.filterMap(fleet.spaces, (space) => {
-    const terminals = pipe(
-      spaceTerminals(space),
-      Array.filterMap((address) => Result.fromOption(HashMap.get(byAddress, address), () => undefined)),
-      Array.filter(isShown),
-    )
-    return Array.isArrayNonEmpty(terminals) ? Result.succeed({ id: space.id, label: spaceLabel(space), terminals }) : Result.failVoid
+  const isLiveAgent = (terminal: Terminal) => terminal.state === "live" && isAgent(terminal)
+  const spaces = Array.map(fleet.spaces, (space): SpaceRow => {
+    const tabs = Array.map(space.tabs, (tab, index): TabRow => {
+      const agents = pipe(
+        terminalsIn(tab.root),
+        Array.map((address) => HashMap.get(byAddress, address)),
+        Array.getSomes,
+        Array.filter(isLiveAgent),
+      )
+      return { tab, label: tabLabel(tab, index), status: mostUrgent(agents), agents }
+    })
+    return { space, label: spaceLabel(space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
   })
   const placed = HashSet.fromIterable(Array.flatMap(fleet.spaces, spaceTerminals))
-  const loose = Array.filter(fleet.terminals, (terminal) => isShown(terminal) && !HashSet.has(placed, terminal.address))
-  return Array.isArrayNonEmpty(loose) ? [...spaces, { id: OTHER, label: "Other", terminals: loose }] : spaces
+  return { spaces, loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)) }
 }
+
+/** The state that most needs the user: blocked, error, done, working, then idle. */
+export const mostUrgent = (agents: ReadonlyArray<Terminal>): Option.Option<StatusState> =>
+  Array.head(Array.sort(Array.getSomes(Array.map(agents, ({ status }) => Option.map(status, ({ state }) => state))), byUrgency))
+
+const URGENCY: ReadonlyArray<StatusState> = ["blocked", "error", "done", "working", "idle"]
+
+const byUrgency = Order.mapInput(Order.Number, (state: StatusState) => URGENCY.indexOf(state))
 
 /** The terminals a layout shows, in reading order. */
 export const terminalsIn = (node: Layout): ReadonlyArray<string> =>
@@ -62,8 +77,6 @@ export const spaceLabel = ({ name, folder }: Space) =>
   nonEmptyOr(name, pipe(String.split(folder, "/"), Array.last, Option.getOrElse(() => folder)))
 
 export const tabLabel = ({ name }: Tab, index: number) => nonEmptyOr(name, `${index + 1}`)
-
-const OTHER = "other"
 
 const spaceTerminals = (space: Space) => Array.flatMap(space.tabs, ({ root }) => terminalsIn(root))
 

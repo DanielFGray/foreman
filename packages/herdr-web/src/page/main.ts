@@ -9,9 +9,10 @@ import { Direction } from "../shared/Api.ts"
 import { ChatUpdate, Entry } from "../shared/Chat.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
-import { Fleet, type Layout, type Size, type Space, type Status, type Tab, type Terminal } from "../shared/Fleet.ts"
+import { Fleet, type Layout, type Size, type Space, type StatusState, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
-import { groupFleet, locate, type SpaceGroup, spaceLabel, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
+import { locate, sidebarOf, type SpaceRow, spaceLabel, type TabRow, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
+import { Bot, Columns2, icon, type IconNode, MessageSquare, PanelLeft, Rows2, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
@@ -27,8 +28,6 @@ const CLOCK_TICK = "30 seconds"
 const CLAUDE_CODE = "claude-code"
 
 // MODEL
-
-const Filter = Schema.Literals(["Agents", "All"])
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -90,8 +89,7 @@ export type FontCatalog = typeof FontCatalog.Type
 
 export const Model = Schema.Struct({
   bridge: Bridge,
-  filter: Filter,
-  /** On a phone the agent list folds away once an agent is picked, to give the panes the screen. */
+  /** On a phone the sidebar folds away once a tab or agent is picked, to give the panes the screen. */
   isFleetFolded: Schema.Boolean,
   selection: Selection,
   /** The view of each shown terminal; a terminal not in it shows its default view. */
@@ -119,7 +117,6 @@ export type Model = typeof Model.Type
 export const Message = defineMessageUnion({
   ReceivedFleet: { fleet: Fleet },
   LostBridge: {},
-  SelectedFilter: { filter: Filter },
   ClickedFleetToggle: {},
   ClickedTerminal: { address: Schema.String },
   ClickedTab: { tabId: Schema.String },
@@ -164,7 +161,6 @@ export type Message = typeof Message.Type
 export const init = (settings: Settings) => ({
   model: {
     bridge: Bridge.Waiting(),
-    filter: Filter.make("Agents"),
     isFleetFolded: false,
     selection: Selection.Nothing(),
     views: {},
@@ -191,8 +187,6 @@ export const update = (model: Model, message: Message) =>
       model: modifyFields(model, { bridge: () => Bridge.Lost({ maybeFleet: lastFleet(model.bridge) }) }),
     }),
 
-    SelectedFilter: ({ filter }) => ({ model: modifyFields(model, { filter: () => filter }) }),
-
     ClickedFleetToggle: () => ({ model: modifyFields(model, { isFleetFolded: (isFolded) => !isFolded }) }),
 
     ClickedTerminal: ({ address }) => ({
@@ -205,7 +199,9 @@ export const update = (model: Model, message: Message) =>
       ),
     }),
 
-    ClickedTab: ({ tabId }) => ({ model: selected(model, Selection.Tab({ tabId, maybeFocus: Option.none() })) }),
+    ClickedTab: ({ tabId }) => ({
+      model: selected(modifyFields(model, { isFleetFolded: () => true }), Selection.Tab({ tabId, maybeFocus: Option.none() })),
+    }),
 
     FocusedPane: ({ address }) =>
       Selection.match<UpdateReturn>(model.selection, {
@@ -638,28 +634,27 @@ const headerView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.header(
     [h.Class("header")],
     [
-      h.h1([], ["herdr"]),
       h.button(
-        [h.Type("button"), h.Class(model.isFleetFolded ? "chip fleet-toggle" : "chip fleet-toggle on"), h.OnClick(Message.ClickedFleetToggle())],
-        [model.isFleetFolded ? "agents ▾" : "agents ▴"],
+        [
+          h.Type("button"),
+          h.Class(model.isFleetFolded ? "chip icon-button fleet-toggle" : "chip icon-button fleet-toggle on"),
+          h.AriaLabel("spaces"),
+          h.AriaPressed(model.isFleetFolded ? "false" : "true"),
+          h.OnClick(Message.ClickedFleetToggle()),
+        ],
+        [icon(PanelLeft, h)],
       ),
+      h.h1([], ["herdr"]),
       h.span([h.Class(`link ${linkState(model.bridge)}`)], [linkText(model.bridge)]),
       h.button(
-        [h.Type("button"), h.Class(model.isSettingsOpen ? "chip on" : "chip"), h.OnClick(Message.ClickedSettings())],
-        ["settings"],
-      ),
-      h.div(
-        [h.Class("filter")],
-        Array.map(Filter.literals, (filter) =>
-          h.button(
-            [
-              h.Type("button"),
-              h.Class(filter === model.filter ? "chip on" : "chip"),
-              h.OnClick(Message.SelectedFilter({ filter })),
-            ],
-            [filter],
-          ),
-        ),
+        [
+          h.Type("button"),
+          h.Class(model.isSettingsOpen ? "chip icon-button settings-toggle on" : "chip icon-button settings-toggle"),
+          h.AriaLabel("settings"),
+          h.AriaPressed(model.isSettingsOpen ? "true" : "false"),
+          h.OnClick(Message.ClickedSettings()),
+        ],
+        [icon(SettingsIcon, h)],
       ),
     ],
   )
@@ -681,21 +676,69 @@ const linkText = (bridge: Bridge) =>
 const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   Option.match(lastFleet(model.bridge), {
     onNone: () => [h.p([h.Class("note")], ["Waiting for the bridge."])],
-    onSome: (fleet) =>
-      Array.match(groupFleet(fleet, model.filter), {
-        onEmpty: () => [h.p([h.Class("note")], ["No terminals."])],
-        onNonEmpty: (groups) => Array.map(groups, (group) => spaceView(group, model, h)),
-      }),
+    onSome: (fleet) => {
+      const { spaces, loose } = sidebarOf(fleet)
+      const openTab = Option.map(selectedTab(model), ({ tab }) => tab.id)
+      return Array.isReadonlyArrayEmpty(spaces) && Array.isReadonlyArrayEmpty(loose)
+        ? [h.p([h.Class("note")], ["No spaces."])]
+        : [
+            ...Array.map(spaces, (row) => spaceView(row, openTab, model, h)),
+            ...(Array.isReadonlyArrayNonEmpty(loose)
+              ? [
+                  h.keyed("section")(
+                    "loose",
+                    [h.Class("space"), h.AriaLabel("Other agents")],
+                    [
+                      h.h2([h.Class("space-head")], [h.span([h.Class("name")], ["Other agents"])]),
+                      h.ul([h.Class("agents")], Array.map(loose, (terminal) => agentRowView(terminal, model, h))),
+                    ],
+                  ),
+                ]
+              : []),
+          ]
+    },
   })
 
-const spaceView = ({ id, label, terminals }: SpaceGroup, model: Model, h: HtmlBuilder<Message>): Html =>
+// A space opens on its first tab; a tab lists its agents under it.
+const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Option<string>, model: Model, h: HtmlBuilder<Message>): Html =>
   h.keyed("section")(
-    id,
-    [h.Class("space")],
-    [h.h2([], [label]), h.ul([], Array.map(terminals, (terminal) => terminalRowView(terminal, model, h)))],
+    space.id,
+    [h.Class(Array.some(tabs, ({ tab }) => Option.contains(openTab, tab.id)) ? "space open" : "space"), h.AriaLabel(label)],
+    [
+      h.h2(
+        [h.Class("space-head")],
+        [
+          Option.match(Array.head(tabs), {
+            onNone: () => h.span([h.Class("name")], [label]),
+            onSome: ({ tab }) =>
+              h.button([h.Type("button"), h.Class("space-button"), h.OnClick(Message.ClickedTab({ tabId: tab.id }))], [h.span([h.Class("name")], [label])]),
+          }),
+          ...statusMark(status, h),
+        ],
+      ),
+      h.ul([h.Class("tabs-list")], Array.map(tabs, (row) => tabRowView(row, openTab, model, h))),
+    ],
   )
 
-const terminalRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>): Html =>
+const tabRowView = ({ tab, label, status, agents }: TabRow, openTab: Option.Option<string>, model: Model, h: HtmlBuilder<Message>): Html =>
+  h.keyed("li")(
+    tab.id,
+    [],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(Option.contains(openTab, tab.id) ? "row tab-row on" : "row tab-row"),
+          h.AriaCurrent(Option.contains(openTab, tab.id) ? "page" : "false"),
+          h.OnClick(Message.ClickedTab({ tabId: tab.id })),
+        ],
+        [icon(SquareTerminal, h), h.span([h.Class("name")], [label]), ...statusMark(status, h)],
+      ),
+      ...(Array.isReadonlyArrayNonEmpty(agents) ? [h.ul([h.Class("agents")], Array.map(agents, (terminal) => agentRowView(terminal, model, h)))] : []),
+    ],
+  )
+
+const agentRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>): Html =>
   h.keyed("li")(
     terminal.address,
     [],
@@ -703,32 +746,33 @@ const terminalRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Messag
       h.button(
         [
           h.Type("button"),
-          h.Class(
-            Option.contains(maybeFocus(model), terminal.address)
-              ? "row on"
-              : Array.contains(shownTerminals(model), terminal.address)
-                ? "row shown"
-                : "row",
-          ),
+          h.Class(Option.contains(maybeFocus(model), terminal.address) ? "row agent-row on" : "row agent-row"),
           h.OnClick(Message.ClickedTerminal({ address: terminal.address })),
         ],
         [
-          statusDot(terminal.status, h),
+          icon(Bot, h),
           h.span([h.Class("name")], [terminalLabel(terminal)]),
           h.span([h.Class("msg")], [statusText(terminal)]),
+          statusDot(stateOf(terminal), h),
         ],
       ),
     ],
   )
 
-const statusDot = (maybeStatus: Option.Option<Status>, h: HtmlBuilder<Message>): Html =>
+const statusDot = (maybeState: Option.Option<StatusState>, h: HtmlBuilder<Message>): Html =>
   h.span(
     [
-      h.Class(`dot ${Option.match(maybeStatus, { onNone: () => "shell", onSome: ({ state }) => state })}`),
-      h.Title(Option.match(maybeStatus, { onNone: () => "no status", onSome: ({ state }) => state })),
+      h.Class(`dot ${Option.getOrElse(maybeState, () => "shell")}`),
+      h.Title(Option.getOrElse(maybeState, () => "no status")),
     ],
     [],
   )
+
+/** A space's or tab's mark: its most urgent agent's dot, or nothing without agents. */
+const statusMark = (maybeState: Option.Option<StatusState>, h: HtmlBuilder<Message>) =>
+  Option.toArray(Option.map(maybeState, (state) => statusDot(Option.some(state), h)))
+
+const stateOf = ({ status }: Terminal) => Option.map(status, ({ state }) => state)
 
 const statusText = (terminal: Terminal) =>
   Option.match(terminal.status, {
@@ -738,7 +782,7 @@ const statusText = (terminal: Terminal) =>
 
 const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
-    Nothing: () => h.section([h.Class("workspace empty")], ["Pick an agent."]),
+    Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {
         onNone: () => h.section([h.Class("workspace empty")], ["This tab is closed."]),
@@ -835,7 +879,7 @@ const paneView = (
       h.div(
         [h.Class("pane-head"), h.OnClick(Message.FocusedPane({ address }))],
         [
-          ...Option.match(maybeTerminal, { onNone: () => [], onSome: ({ status }) => [statusDot(status, h)] }),
+          ...Option.match(maybeTerminal, { onNone: () => [], onSome: (terminal) => [statusDot(stateOf(terminal), h)] }),
           h.span([h.Class("name")], [Option.match(maybeTerminal, { onNone: () => address, onSome: terminalLabel })]),
           h.span([h.Class("msg")], [Option.match(maybeTerminal, { onNone: () => "gone", onSome: statusText })]),
           // A permission dialog shows only in the terminal, so a chat can switch to it.
@@ -844,10 +888,12 @@ const paneView = (
                 h.button(
                   [
                     h.Type("button"),
-                    h.Class(shown._tag === name ? "chip on" : "chip"),
+                    h.Class(shown._tag === name ? "chip icon-chip view-chip on" : "chip icon-chip view-chip"),
+                    h.AriaLabel(name === "Chat" ? "chat" : "terminal"),
+                    h.AriaPressed(shown._tag === name ? "true" : "false"),
                     h.OnClick(Message.SelectedView({ address, view: name })),
                   ],
-                  [name === "Chat" ? "chat" : "terminal"],
+                  [icon(name === "Chat" ? MessageSquare : SquareTerminal, h), h.span([h.Class("label")], [name === "Chat" ? "chat" : "terminal"])],
                 ),
               )
             : []),
@@ -904,6 +950,8 @@ const paneView = (
 const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const button = (label: string, title: string, message: Message) =>
     h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [label])
+  const iconButton = (node: IconNode, title: string, message: Message) =>
+    h.button([h.Type("button"), h.Class("chip icon-button"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [icon(node, h)])
   const isClosing = PaneAction.match(model.paneAction, {
     Idle: () => false,
     Confirming: ({ pane: closing }) => closing === pane,
@@ -912,9 +960,9 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Reado
   return isClosing
     ? [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())]
     : [
-        button("⇥", "split right", Message.ClickedSplit({ pane, direction: "right" })),
-        button("⤓", "split down", Message.ClickedSplit({ pane, direction: "down" })),
-        button("✕", "close the pane", Message.ClickedClose({ pane })),
+        iconButton(Columns2, "split right", Message.ClickedSplit({ pane, direction: "right" })),
+        iconButton(Rows2, "split down", Message.ClickedSplit({ pane, direction: "down" })),
+        iconButton(X, "close the pane", Message.ClickedClose({ pane })),
       ]
 }
 
