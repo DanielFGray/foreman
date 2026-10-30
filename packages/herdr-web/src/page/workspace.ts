@@ -7,6 +7,7 @@ import { spaceRowOf, type SpaceRow } from "./group.ts"
 import { icon, type IconNode, PanelLeft, Plus, X } from "./icons.ts"
 import { Bridge, Message, type Model, PaneAction, Selection } from "./model.ts"
 import { flexOf, keysView, paneActionView, paneView } from "./pane.ts"
+import { linkSheetView } from "./linkSheet.ts"
 import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./selection.ts"
 import { settingsView } from "./settingsView.ts"
 import { spaceFormView, spaceHeadView } from "./spaces.ts"
@@ -62,6 +63,7 @@ export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
               focusChipsView(model, h),
               ...paneActionView(model, h),
               h.div([h.Class("layout")], [layoutView(tab.root, model, h)]),
+              ...linkSheetView(model, h),
               ...keysView(model, h),
             ],
           ),
@@ -69,7 +71,7 @@ export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Loose: ({ address }) =>
       h.section(
         [h.Class("workspace")],
-        [h.div([h.Class("layout")], [paneView(address, Option.none(), Option.none(), model, h)]), ...keysView(model, h)],
+        [h.div([h.Class("layout")], [paneView(address, Option.none(), Option.none(), model, h)]), ...linkSheetView(model, h), ...keysView(model, h)],
       ),
   })
 

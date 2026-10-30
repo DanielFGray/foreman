@@ -12,10 +12,11 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { isClaudeCode, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
+import { closedLinkSheet, copiedLink, notedLink, pointedAtLink } from "./linkSheet.ts"
 import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey, restoredSoftKeys, sentSheetKey, withSheet } from "./keySheet.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
@@ -61,6 +62,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Fl
     modifiers: NO_MODIFIERS,
     softKeys,
     keySheet: KeySheet.Closed(),
+    linkSheet: LinkSheet.Closed(),
     fontCatalog: FontCatalog.Loading(),
     usage: Option.none(),
     usageDetail: Option.none(),
@@ -412,6 +414,16 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedRestoreSoftKeys: () => restoredSoftKeys(model),
 
     CompletedSaveSoftKeys: () => ({ model }),
+
+    PointedAtLink: ({ uri }) => ({ model: pointedAtLink(model, uri) }),
+
+    ClosedLinkSheet: () => ({ model: closedLinkSheet(model) }),
+
+    ClickedCopyLink: () => copiedLink(model),
+
+    CopiedLink: () => ({ model: notedLink(model, "Copied.") }),
+
+    FailedCopyLink: ({ reason }) => ({ model: notedLink(model, `Not copied: ${reason}`) }),
 
     UsedModifiers: () => ({ model: modifyFields(model, { modifiers: () => NO_MODIFIERS }) }),
 

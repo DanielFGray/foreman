@@ -1,5 +1,5 @@
 // The page's commands: each one call to the bridge or to this browser's storage.
-import { Effect, Schema } from "effect"
+import { Effect, Inspectable, Schema } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
@@ -258,4 +258,18 @@ export const ForgetSoftKeys = Command.define("ForgetSoftKeys", {
   args: {},
   messages: [Message.CompletedSaveSoftKeys],
   execute: () => forgetStored(SOFT_KEYS_KEY).pipe(Effect.as(Message.CompletedSaveSoftKeys())),
+})
+
+/** Copies text to the clipboard. Browsers allow it only on an https page or at localhost. */
+export const CopyText = Command.define("CopyText", {
+  args: { text: Schema.String },
+  messages: [Message.CopiedLink, Message.FailedCopyLink],
+  execute: ({ text }) =>
+    Effect.tryPromise(() => navigator.clipboard.writeText(text)).pipe(
+      Effect.match({
+        onSuccess: () => Message.CopiedLink(),
+        onFailure: ({ cause }) =>
+          Message.FailedCopyLink({ reason: window.isSecureContext ? Inspectable.toStringUnknown(cause, 0) : "the browser copies only on an https page" }),
+      }),
+    ),
 })

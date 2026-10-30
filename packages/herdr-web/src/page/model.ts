@@ -86,6 +86,16 @@ export const KeySheet = defineTaggedUnion({
 })
 export type KeySheet = typeof KeySheet.Type
 
+/**
+ * The sheet that shows a terminal link's whole address before it opens, with
+ * a note on the last copy: done, or why not.
+ */
+export const LinkSheet = defineTaggedUnion({
+  Closed: {},
+  Showing: { uri: Schema.String, note: Schema.Option(Schema.String) },
+})
+export type LinkSheet = typeof LinkSheet.Type
+
 /** The checkouts on the Worktrees page: being read, read, or not readable. */
 export const CheckoutList = defineTaggedUnion({
   Loading: {},
@@ -251,6 +261,7 @@ export const Model = Schema.Struct({
   /** The soft-key row this browser keeps; none for the default row, so a browser that never changed it gets later defaults. */
   softKeys: Schema.Option(Schema.Array(SoftKey)),
   keySheet: KeySheet,
+  linkSheet: LinkSheet,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: Schema.Option(Usage),
@@ -386,6 +397,11 @@ export const Message = defineMessageUnion({
   RemovedSoftKey: { index: Schema.Int },
   ClickedRestoreSoftKeys: {},
   CompletedSaveSoftKeys: {},
+  PointedAtLink: { uri: Schema.String },
+  ClosedLinkSheet: {},
+  ClickedCopyLink: {},
+  CopiedLink: {},
+  FailedCopyLink: { reason: Schema.String },
   UsedModifiers: {},
   CompletedKeepTypingFocus: {},
   SucceededPressKeys: { address: Schema.String },

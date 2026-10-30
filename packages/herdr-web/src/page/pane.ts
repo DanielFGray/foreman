@@ -102,6 +102,7 @@ export const paneView = (
                       (message) =>
                         Match.valueTags(message, {
                           ChangedLink: ({ link }) => Message.ChangedLink({ address, link }),
+                          PointedAtLink: ({ uri }) => Message.PointedAtLink({ uri }),
                           UsedModifiers: () => Message.UsedModifiers(),
                         }),
                     ),

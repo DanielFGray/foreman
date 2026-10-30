@@ -9,6 +9,7 @@ import { ForgetSoftKeys, PressKeys, SaveSoftKeys } from "./commands.ts"
 import { characterKey, DEFAULT_SOFT_KEYS, F_KEYS, keyLabel, NAMED_KEYS, NO_SHEET_MODIFIERS, SheetModifier, type SheetModifiers, type SoftKey } from "./keys.ts"
 import { KeyGroup, KeySheet, Message, type Model, type UpdateReturn } from "./model.ts"
 import { maybeFocus } from "./selection.ts"
+import { sheetView } from "./sheet.ts"
 
 /** The row the page shows: the browser's own, or the default one. */
 export const softKeysOf = (model: Model): ReadonlyArray<SoftKey> => Option.getOrElse(model.softKeys, () => DEFAULT_SOFT_KEYS)
@@ -57,8 +58,8 @@ export const restoredSoftKeys = (model: Model): UpdateReturn => ({ model: modify
 export const keySheetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   KeySheet.match(model.keySheet, {
     Closed: () => [],
-    Choosing: (sheet) => [sheetFrame("Send keys", [chooserView(sheet, Option.isSome(maybeFocus(model)), h)], h)],
-    Editing: () => [sheetFrame("Edit the soft keys", [editorView(softKeysOf(model), h)], h)],
+    Choosing: (sheet) => [sheetView("Send keys", Message.ClosedKeySheet(), [chooserView(sheet, Option.isSome(maybeFocus(model)), h)], h)],
+    Editing: () => [sheetView("Edit the soft keys", Message.ClosedKeySheet(), [editorView(softKeysOf(model), h)], h)],
   })
 
 const chosenOf = (model: Model) => (model.keySheet._tag === "Choosing" ? Result.getSuccess(chosenKey(model.keySheet)) : Option.none())
@@ -67,21 +68,6 @@ const changedRow = (model: Model, change: (row: ReadonlyArray<SoftKey>) => Reado
   const row = change(softKeysOf(model))
   return { model: modifyFields(model, { softKeys: () => Option.some(row) }), commands: [SaveSoftKeys({ softKeys: row })] }
 }
-
-const sheetFrame = (title: string, body: ReadonlyArray<Html>, h: HtmlBuilder<Message>): Html =>
-  h.section(
-    [h.Class("key-sheet"), h.Role("dialog"), h.AriaLabel(title)],
-    [
-      h.div(
-        [h.Class("key-sheet-head")],
-        [
-          h.h2([], [title]),
-          h.button([h.Type("button"), h.Class("chip"), h.AriaLabel("close the sheet"), h.OnClick(Message.ClosedKeySheet())], ["×"]),
-        ],
-      ),
-      ...body,
-    ],
-  )
 
 const chooserView = (sheet: KeySheet & { _tag: "Choosing" }, hasPane: boolean, h: HtmlBuilder<Message>): Html => {
   const chosen = chosenKey(sheet)
@@ -120,7 +106,7 @@ const chooserView = (sheet: KeySheet & { _tag: "Choosing" }, hasPane: boolean, h
             ),
           ),
       h.div(
-        [h.Class("key-sheet-foot")],
+        [h.Class("sheet-foot")],
         [
           h.output([h.Class("key-preview"), h.AriaLabel("the key to send")], [Result.match(chosen, { onSuccess: keyLabel, onFailure: (reason) => reason })]),
           h.button([h.Type("button"), h.Class("chip"), h.Disabled(Result.isFailure(chosen)), h.OnClick(Message.ClickedPinSheetKey())], ["Pin"]),
@@ -154,7 +140,7 @@ const editorView = (row: ReadonlyArray<SoftKey>, h: HtmlBuilder<Message>): Html 
         }),
       ),
       h.div(
-        [h.Class("key-sheet-foot")],
+        [h.Class("sheet-foot")],
         [
           h.button([h.Type("button"), h.Class("chip"), h.OnClick(Message.ClickedRestoreSoftKeys())], ["Restore defaults"]),
           h.button([h.Type("button"), h.Class("chip"), h.OnClick(Message.ClickedSendKeys())], ["Done"]),

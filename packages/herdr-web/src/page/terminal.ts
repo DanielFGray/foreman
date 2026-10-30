@@ -6,6 +6,7 @@ import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Strea
 import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
 import { applyModifiers, parseModifiersAttribute } from "./keys.ts"
+import { watchLinks } from "./terminalLinks.ts"
 import { BridgeClient, failureReason } from "./rpc.ts"
 import { fontStack } from "./settings.ts"
 
@@ -22,6 +23,9 @@ export const Link = Schema.Union([
 export type Link = typeof Link.Type
 
 export const ChangedLink = Schema.TaggedStruct("ChangedLink", { address: Schema.String, link: Link })
+
+/** A tap, or a Ctrl or Cmd click, on a link in the terminal. */
+export const PointedAtLink = Schema.TaggedStruct("PointedAtLink", { uri: Schema.String })
 
 /** A key typed into the terminal took the armed soft modifiers. */
 export const UsedModifiers = Schema.TaggedStruct("UsedModifiers", {})
@@ -48,12 +52,13 @@ class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique
  */
 export const LiveTerminal = Mount.defineStream("LiveTerminal", {
   args: { address: Schema.String, font: Schema.Option(Schema.String), size: Schema.Int },
-  messages: [ChangedLink, UsedModifiers],
+  messages: [ChangedLink, UsedModifiers, PointedAtLink],
   execute: ({ element, address, font, size }) =>
-    Stream.callback<typeof ChangedLink.Type | typeof UsedModifiers.Type>((messages) =>
+    Stream.callback<typeof ChangedLink.Type | typeof UsedModifiers.Type | typeof PointedAtLink.Type>((messages) =>
       Effect.gen(function* () {
         const report = (link: Link) => Queue.offer(messages, ChangedLink.make({ address, link }))
-        const { terminal, fit } = yield* openTerminal(element, font, size)
+        const { terminal, fit, page } = yield* openTerminal(element, font, size)
+        yield* watchLinks(terminal, page, ({ uri }) => Queue.offer(messages, PointedAtLink.make({ uri })).pipe(Effect.asVoid))
         // Keys and sizes go out in the order they happen, to the session now attached.
         const outgoing = yield* Queue.unbounded<Outgoing>()
         const session = yield* Ref.make(Option.none<number>())
@@ -208,9 +213,12 @@ const openTerminal = (element: Element, font: Option.Option<string>, size: numbe
           return { terminal, fit }
         }),
       ),
-      Effect.tap(({ terminal }) =>
+      Effect.flatMap(({ terminal, fit }) =>
         element instanceof HTMLElement
-          ? Effect.sync(() => terminal.open(element))
+          ? Effect.sync(() => {
+              terminal.open(element)
+              return { terminal, fit, page: element }
+            })
           : Effect.fail(new NoEmulator({ cause: "the pane is not an HTML element" })),
       ),
     ),

@@ -57,6 +57,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: transparent;
 }
 .chip.on { background: var(--surface); }
+/* A link drawn as a chip, such as a sheet's Open. */
+a.chip { color: inherit; text-decoration: none; }
 .icon-button, .icon-chip { display: inline-flex; align-items: center; gap: 4px; }
 .icon-button { padding: 4px 8px; }
 
@@ -538,9 +540,9 @@ p.usage-error { margin: 0; }
 .model-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--surface); }
 .model-menu .note { margin: 0; }
 
-/* The Send keys sheet sits over the soft keys, in the page's own column, so it
+/* A sheet sits over the soft keys, in the page's own column, so it
    stays above a phone's keyboard as the page does. */
-.key-sheet {
+.sheet {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -550,12 +552,14 @@ p.usage-error { margin: 0; }
   border-top: 1px solid var(--surface);
   background: var(--mantle);
 }
-.key-sheet-head { display: flex; align-items: center; justify-content: space-between; }
-.key-sheet-head h2 { margin: 0; font-size: 14px; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head h2 { margin: 0; font-size: 14px; }
 .key-row { display: flex; flex-wrap: wrap; gap: 4px; }
 .key-grid .chip { min-width: 2.5em; text-align: center; }
-.key-sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sheet-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .key-preview { flex: 1; min-width: 8em; font-family: ui-monospace, monospace; }
 .key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .key-list li { display: flex; align-items: center; gap: 4px; }
 .key-name { flex: 1; font-family: ui-monospace, monospace; }
+/* The whole address, broken anywhere, and selected at one tap so it can be copied by hand where the clipboard is shut. */
+.link-address { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; user-select: all; }

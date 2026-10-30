@@ -16,6 +16,7 @@ It shows the spaces, tabs and panes of your herdr-app window, live:
 - From a space in a git repository, check out a new or existing branch as a new space, open its other checkouts, or remove a clean one. Checkouts go in `~/.herdr/worktrees`, where herdr-app puts its own; removal never forces and keeps the branch.
 - Each Claude Code pane names the model it answers with, such as "Opus 5.5", from its transcript. A click on the name picks another model through `/model`.
 - On a phone, the ⋯ soft key opens a Send keys sheet: any key hc can send (Esc, Tab, arrows, F1–F12, one character) with Ctrl, Alt, Shift or Super, shown before it goes. Pin a key to the soft-key row, then reorder, remove or restore the row; each browser keeps its own.
+- A tap on a web address in a terminal, or a Ctrl or Cmd click, shows the whole address first, with Open and Copy. Only http and https addresses open.
 - Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
 - On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
 
