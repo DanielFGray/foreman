@@ -2,7 +2,7 @@ import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, Mount, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
-import { SaveRecent, SaveSelection, SaveZoom } from "./commands.ts"
+import { SaveChatRuns, SaveRecent, SaveSelection, SaveZoom } from "./commands.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, Selection } from "./model.ts"
@@ -62,7 +62,7 @@ const remembered = Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") })
 test("a pane shows its terminal first, and only an agent's pane offers a chat, with the prompt inside it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -72,6 +72,7 @@ test("a pane shows its terminal first, and only an agent's pane offers a chat, w
     expect(role("textbox", { name: "Prompt" })).not.toExist(),
     expectAll(all.role("button", { name: "chat" })).toHaveCount(1),
     click(role("button", { name: "chat" })),
+    Command.resolve(SaveChatRuns, Message.CompletedSaveChatRuns()),
     // The chat takes the terminal's place, which lets go of it.
     Mount.expectEnded(LiveTerminal),
     expect(selector(".chat-view .prompt")).toExist(),
@@ -80,14 +81,14 @@ test("a pane shows its terminal first, and only an agent's pane offers a chat, w
 })
 
 test("a reload opens on the remembered tab, and waits for the bridge to show it", () => {
-  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false })
+  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] })
   scene({ update, view }, given(model), expect(selector(".workspace")).toContainText("Waiting for the bridge."), expect(selector(".fleet")).toHaveClass("folded"))
 })
 
 test("zoom fills the window with the pane whose button was clicked, and the page remembers it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -105,5 +106,54 @@ test("zoom fills the window with the pane whose button was clicked, and the page
     Command.expectExact(SaveZoom({ isZoomed: false })),
     Command.resolve(SaveZoom, Message.CompletedSaveZoom()),
     expect(selector(".app.zoomed")).not.toExist(),
+  )
+})
+
+const opened = (chatRuns: ReadonlyArray<string>, terminals: ReadonlyArray<Terminal>) => ({
+  ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns }).model,
+  bridge: Bridge.Watching({ fleet: { ...fleet, terminals } }),
+})
+
+test("the view picked for an agent is kept for its run, and a terminal again forgets it", () => {
+  scene(
+    { update, view },
+    given(opened([], [claude, shell])),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    click(role("button", { name: "chat" })),
+    Command.expectHas(SaveChatRuns({ chatRuns: ["t1:1"] })),
+    Command.resolve(SaveChatRuns, Message.CompletedSaveChatRuns()),
+    Mount.expectEnded(LiveTerminal),
+    click(role("button", { name: "terminal", pressed: false })),
+    Command.expectHas(SaveChatRuns({ chatRuns: [] })),
+    Command.resolve(SaveChatRuns, Message.CompletedSaveChatRuns()),
+    Mount.resolve(LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })),
+    expect(selector(".chat-view")).not.toExist(),
+    expectAll(all.selector(".terminal")).toHaveCount(2),
+  )
+})
+
+test("a reloaded page shows the chat picked for the agent that still runs, and the terminal for a new run", () => {
+  scene(
+    { update, view },
+    given(opened(["t1:1"], [claude, shell])),
+    Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()], [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })]),
+    expect(selector(".chat-view")).toExist(),
+    expectAll(all.selector(".terminal")).toHaveCount(1),
+  )
+  scene(
+    { update, view },
+    // `claude` started again in the same terminal: another process.
+    given(opened(["t1:1"], [{ ...claude, foreground: Option.some({ name: "claude", pid: 9, argv: ["claude"] }) }, shell])),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expect(selector(".chat-view")).not.toExist(),
+    expectAll(all.selector(".terminal")).toHaveCount(2),
   )
 })

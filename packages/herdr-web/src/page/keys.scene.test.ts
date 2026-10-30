@@ -8,7 +8,7 @@ import { Message, Selection } from "./model.ts"
 import { DEFAULT_SOFT_KEYS, KeepTypingFocus } from "./keys.ts"
 import { LiveTerminal } from "./terminal.ts"
 
-const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, selection: Selection.Loose({ address: "t7" }) }
+const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, selection: Selection.Loose({ address: "t7" }) }
 
 test("ctrl and alt stay armed for the next soft key, then let go", () => {
   scene(

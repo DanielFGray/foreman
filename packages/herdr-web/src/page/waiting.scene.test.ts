@@ -54,7 +54,7 @@ const prompt = (id: string, text: string): Entry => ({ _tag: "Prompt", id, text 
 const typed = (text: string) => ({ text, agreed: { text: "", typed: "" }, isWriting: false, problem: Option.none() })
 
 const chatOpen = (entries: ReadonlyArray<Entry>): Model => ({
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model,
   bridge: Bridge.Watching({ fleet }),
   views: { t1: View.Chat({ conversation: Conversation.Shown({ entries }) }) },
   boxes: { t1: { _tag: "Empty" } },

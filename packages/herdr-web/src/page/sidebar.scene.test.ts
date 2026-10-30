@@ -53,7 +53,7 @@ const fleet: Fleet = {
 test("the sidebar lists every space, marked by its agents, and a click opens its first tab", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     expectAll(all.selector(".space-row")).toHaveCount(2),
     inside(role("button", { name: "prog" }), expect(selector(".badge")).toHaveClass("blocked")),
     // A space without agents still shows, with a neutral badge.
@@ -76,7 +76,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
   const away: Machine = { name: "cynic", isLocal: false, state: "needs_login", spaces: [] }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
     expectAll(all.selector(".machine-head")).toHaveCount(2),
     expect(selector(".machine-head.needs_login")).toContainText("cynic"),
     expect(selector(".machine-head.needs_login")).toContainText("needs login"),
@@ -87,7 +87,7 @@ test("a space row shows its letter badge, coloured by its most urgent agent, and
   const git = { s1: { branch: Option.some("feat/sidebar"), changed: true } }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git } }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git } }) }),
     // "prog" has a blocked agent; "quiet" has none, and no git state.
     expectAll(all.selector(".badge")).toHaveCount(2),
     expect(selector(".badge.blocked")).toContainText("P"),
@@ -104,12 +104,12 @@ test("a space with no git state shows no branch, and a clean one shows no change
   const clean = { s2: { branch: Option.some("main"), changed: false } }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     expect(selector(".git")).not.toExist(),
   )
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git: clean } }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git: clean } }) }),
     expect(selector(".branch")).toContainText("main"),
     expect(selector(".changes")).not.toExist(),
   )
@@ -122,13 +122,13 @@ test("a space whose name starts with no letter or digit is badged with its place
   }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet: symbol }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet: symbol }) }),
     expect(selector(".badge")).toContainText("1"),
   )
 })
 
 test("agents list below the spaces, or under each space when the settings say so", () => {
-  const model = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }
+  const model = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }
   scene(
     { update, view },
     given(model),
@@ -147,7 +147,7 @@ test("agents list below the spaces, or under each space when the settings say so
 test("a space dragged onto another moves there, and a refusal says why", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     pointerDown(role("button", { name: "prog" })),
     hover(role("button", { name: "quiet" })),
     // Moving down, it lands after its target.
@@ -163,7 +163,7 @@ test("a space dragged onto another moves there, and a refusal says why", () => {
 test("a press released on its own space moves nothing", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     pointerDown(role("button", { name: "quiet" })),
     pointerUp(role("button", { name: "quiet" })),
     expect(role("button", { name: "quiet" })).not.toHaveClass("pressed"),
@@ -174,7 +174,7 @@ test("the sidebar's edge resizes it by key and goes back to the default on a dou
   const edge = role("separator", { name: "resize the sidebar" })
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     keydown(edge, "ArrowRight"),
     Command.expectExact(SaveSidebarWidth({ width: Option.some(356) })),
     Command.resolve(SaveSidebarWidth, Message.CompletedSaveSidebarWidth()),
@@ -192,7 +192,7 @@ test("the sidebar's edge resizes it by key and goes back to the default on a dou
 test("the settings take the place of the tab, and a space picked after them takes it back", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     click(role("button", { name: "prog" })),
     Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     click(role("button", { name: "Settings" })),
@@ -240,7 +240,7 @@ test("the agent list groups by state, most urgent first, with the time in each s
   }
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, now: 100_000, bridge: Bridge.Watching({ fleet: grouped }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, now: 100_000, bridge: Bridge.Watching({ fleet: grouped }) }),
     expectAll(all.selector(".agent-list .state-head")).toHaveCount(3),
     expect(selector(".agent-list .state-head")).toContainText("Waiting for you"),
     expectAll(all.selector(".agent-row")).toHaveCount(3),
@@ -257,7 +257,7 @@ test("the agent list groups by state, most urgent first, with the time in each s
 test("an agent that another started nests one level under its row, in both listings", () => {
   const child: Terminal = { ...blockedAgent, address: "t2", name: Option.some("helper"), parent: Option.some("t1") }
   const model = {
-    ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model,
+    ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model,
     bridge: Bridge.Watching({ fleet: { ...fleet, terminals: [blockedAgent, child] } }),
   }
   scene(
