@@ -12,10 +12,11 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { isClaudeCode, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
+import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { closedLinkSheet, copiedLink, notedLink, pointedAtLink } from "./linkSheet.ts"
 import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey, restoredSoftKeys, sentSheetKey, withSheet } from "./keySheet.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
@@ -63,6 +64,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Fl
     softKeys,
     keySheet: KeySheet.Closed(),
     linkSheet: LinkSheet.Closed(),
+    commandList: CommandList.Unread(),
     fontCatalog: FontCatalog.Loading(),
     usage: Option.none(),
     usageDetail: Option.none(),
@@ -331,7 +333,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     FailedFonts: ({ reason }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Failed({ reason }) }) }),
 
-    UpdatedPrompt: ({ text }) => ({ model: modifyFields(model, { prompt: () => text }) }),
+    UpdatedPrompt: ({ text }) => updatedPrompt(model, text),
+
+    ReceivedCommands: ({ address, commands }) => ({ model: listedCommands(model, address, CommandList.Listed({ address, commands })) }),
+
+    FailedCommands: ({ address, reason }) => ({ model: listedCommands(model, address, CommandList.Unlisted({ address, reason })) }),
+
+    PickedCommand: ({ name }) => ({ model: pickedCommand(model, name) }),
 
     SubmittedPrompt: () =>
       Option.match(maybeFocus(model), {

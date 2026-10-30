@@ -11,6 +11,7 @@ import { programOf } from "./programs.ts"
 import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
+import { slashView } from "./slash.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
 import { queueView, suggestion } from "./queue.ts"
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
@@ -74,7 +75,7 @@ export const paneView = (
                 Shown: ({ entries }) => chatView(entries, waitingAt(model, address), questionView(model, address, h), h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
-              ...(isFocused ? [...queueView(model, address, h), promptView(model, address, h)] : []),
+              ...(isFocused ? [...queueView(model, address, h), ...slashView(model, address, h), promptView(model, address, h)] : []),
             ],
           ),
         Terminal: ({ link }) =>

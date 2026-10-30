@@ -563,3 +563,24 @@ p.usage-error { margin: 0; }
 .key-name { flex: 1; font-family: ui-monospace, monospace; }
 /* The whole address, broken anywhere, and selected at one tap so it can be copied by hand where the clipboard is shut. */
 .link-address { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; user-select: all; }
+
+/* Slash command suggestions, over the prompt. */
+.slash-list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.slash-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+  background: var(--mantle);
+  color: inherit;
+  text-align: left;
+}
+button.slash-row:hover, button.slash-row:focus-visible { background: var(--surface); }
+.slash-name { font-family: ui-monospace, monospace; font-weight: 600; }
+.slash-hint { font-family: ui-monospace, monospace; color: var(--subtext); }
+.slash-description { flex-basis: 100%; color: var(--subtext); font-size: 0.9em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.slash-note { margin: 0; }

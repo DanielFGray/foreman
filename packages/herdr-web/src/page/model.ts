@@ -11,6 +11,7 @@ import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
+import { SlashCommand } from "../shared/SlashCommand.ts"
 import { Modifier, Modifiers, SheetModifier, SheetModifiers, SoftKey } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
@@ -103,6 +104,18 @@ export const CheckoutList = defineTaggedUnion({
   Unlisted: { reason: Schema.String },
 })
 export type CheckoutList = typeof CheckoutList.Type
+
+/**
+ * The slash commands of the agent the prompt writes to, read again each time
+ * the prompt starts a command, since skills change on disk.
+ */
+export const CommandList = defineTaggedUnion({
+  Unread: {},
+  Loading: { address: Schema.String },
+  Listed: { address: Schema.String, commands: Schema.Array(SlashCommand) },
+  Unlisted: { address: Schema.String, reason: Schema.String },
+})
+export type CommandList = typeof CommandList.Type
 
 /** What the Worktrees page is doing: nothing, a removal waiting for a second click, a call under way, or git's refusal. */
 export const CheckoutAction = defineTaggedUnion({
@@ -262,6 +275,7 @@ export const Model = Schema.Struct({
   softKeys: Schema.Option(Schema.Array(SoftKey)),
   keySheet: KeySheet,
   linkSheet: LinkSheet,
+  commandList: CommandList,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: Schema.Option(Usage),
@@ -371,6 +385,9 @@ export const Message = defineMessageUnion({
   ReceivedFonts: { families: Schema.Array(FontFamily) },
   FailedFonts: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
+  ReceivedCommands: { address: Schema.String, commands: Schema.Array(SlashCommand) },
+  FailedCommands: { address: Schema.String, reason: Schema.String },
+  PickedCommand: { name: Schema.String },
   SubmittedPrompt: {},
   SucceededSendPrompt: { address: Schema.String, id: Schema.Int },
   FailedSendPrompt: { address: Schema.String, id: Schema.Int, reason: Schema.String },

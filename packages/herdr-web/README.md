@@ -9,6 +9,7 @@ It shows the spaces, tabs and panes of your herdr-app window, live:
 - Type into any terminal, or read a Claude Code agent's conversation as a chat and answer it.
 - Answer an agent's permission prompts and questions from its chat: tap a choice, or type its number.
 - Send messages while an agent works: they wait in a queue and go when its turn ends. "Send now" hands one over at once. A message never goes while the agent's input box in its terminal holds text you typed there. When the box is empty, the chat prompt shows the agent's suggested next prompt.
+- Type `/` in a Claude Code chat prompt to see the commands that match: the skills and commands Claude Code reads for the pane's folder (yours, the project's and enabled plugins'), and a few built-ins. A tap writes the command into the prompt and sends nothing. The terminal's own `/` menu has the full list.
 - See which agents are working, waiting for you, or done, and for how long, in the sidebar and the tabs.
 - Open any space, tab, pane or setting by name: press Ctrl+K (Cmd+K on a Mac).
 - Split and close panes, open and close tabs, and drag spaces into a new order, with the herdr-app window open or closed. The bridge writes the change to herdr-app's layout in herdr-core, so an open window shows it too.

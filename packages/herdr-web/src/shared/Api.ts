@@ -5,6 +5,7 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
+import { SlashCommand } from "./SlashCommand.ts"
 import { RepoCheckouts } from "./Worktree.ts"
 
 /**
@@ -107,6 +108,8 @@ export const Api = RpcGroup.make(
   Rpc.make("renameSpace", { payload: { space: Schema.String, name: Schema.String }, error: BridgeError }),
   /** Closes a space and ends the terminals of all its tabs. */
   Rpc.make("closeSpace", { payload: { space: Schema.String }, error: BridgeError }),
+  /** The slash commands of the Claude Code agent in a terminal: a few built-ins, and the skills and command files on its machine for its folder. */
+  Rpc.make("commands", { payload: { terminal: Schema.String }, success: Schema.Array(SlashCommand), error: BridgeError }),
   /** The checkouts of the repository a space is in, and the space that shows each. */
   Rpc.make("worktrees", { payload: { space: Schema.String }, success: RepoCheckouts, error: BridgeError }),
   /**

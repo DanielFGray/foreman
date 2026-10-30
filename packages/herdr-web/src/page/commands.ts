@@ -273,3 +273,13 @@ export const CopyText = Command.define("CopyText", {
       }),
     ),
 })
+
+export const ListCommands = Command.define("ListCommands", {
+  args: { address: Schema.String },
+  messages: [Message.ReceivedCommands, Message.FailedCommands],
+  execute: ({ address }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      return Message.ReceivedCommands({ address, commands: yield* client.commands({ terminal: address }) })
+    }).pipe(reportFailure((reason) => Message.FailedCommands({ address, reason }))),
+})

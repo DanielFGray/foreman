@@ -11,6 +11,7 @@ import { Api, BridgeError } from "../shared/Api.ts"
 import { InputBox } from "../shared/Chat.ts"
 import { guard, Host } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
+import { ClaudeCommands } from "./claude/Commands.ts"
 import { inputBoxOf, refusal } from "./claude/InputBox.ts"
 import { asks, keyFor, questionOnScreen } from "./claude/Menu.ts"
 import { FleetModel } from "./FleetModel.ts"
@@ -59,6 +60,7 @@ const Handlers = Api.toLayer(
     const live = yield* LiveTerminals
     const app = yield* HerdrApp
     const worktrees = yield* Worktrees
+    const commands = yield* ClaudeCommands
     const fonts = yield* Fonts
     const usage = yield* Usage
     const screens = yield* ScreenCells
@@ -130,6 +132,11 @@ const Handlers = Api.toLayer(
         app.newSpace({ on: machine, folder, name, program }).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
       renameSpace: ({ space, name }) => app.renameSpace(space, name).pipe(Effect.mapError(toAppError)),
       closeSpace: ({ space }) => app.closeSpace(space).pipe(Effect.asVoid, Effect.mapError(toAppError)),
+      commands: ({ terminal }) =>
+        hc.get(terminal).pipe(
+          Effect.mapError(toBridgeError),
+          Effect.flatMap(({ cwd }) => commands.list(terminal, cwd).pipe(Effect.mapError(({ message }) => new BridgeError({ kind: "commands", message })))),
+        ),
       worktrees: ({ space }) => worktrees.list(space).pipe(Effect.mapError(toAppError)),
       newWorktree: ({ space, branch, program }) => worktrees.create(space, branch, program).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
       openWorktree: ({ space, path }) => worktrees.open(space, path).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
@@ -158,7 +165,7 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
-  Layer.provide([ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
+  Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, LiveTerminals.layer, ScreenCells.layer, Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),
