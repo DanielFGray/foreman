@@ -17,11 +17,13 @@ export {
   ExternalLink,
   FlaskConical,
   Folder,
+  FolderPlus,
   GitBranch,
   Hammer,
   KeyRound,
   MessageSquare,
   Monitor,
+  Pencil,
   PanelLeft,
   Plus,
   Play,
@@ -31,6 +33,7 @@ export {
   Settings,
   SquarePen,
   SquareTerminal,
+  Trash2,
   X,
 } from "lucide"
 

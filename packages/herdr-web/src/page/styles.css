@@ -157,6 +157,24 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tab-item { display: inline-flex; align-items: center; }
 .tab-close, .tab-new { padding: 2px; border: 0; background: transparent; color: var(--subtext); display: inline-flex; }
 .tab-close { display: none; }
+.space-action { padding: 2px; border: 0; background: transparent; color: var(--subtext); display: inline-flex; }
+.space-action:hover, .space-action:focus-visible { color: var(--text); }
+.space-head { display: inline-flex; align-items: center; margin-right: 8px; }
+.space-head .space-name { margin-right: 4px; }
+.space-closing { margin: 0 8px; color: var(--subtext); white-space: nowrap; }
+.space-rename input, .space-form input, .space-form select {
+  padding: 4px 6px;
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+  background: var(--mantle);
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+}
+.space-rename { margin-right: 8px; }
+.space-form { display: flex; flex-direction: column; gap: 10px; max-width: 32rem; }
+.form-field { display: grid; grid-template-columns: 5em minmax(0, 1fr); align-items: center; gap: 12px; }
+.form-actions { display: flex; gap: 8px; }
 .tab-item.on .tab-close, .tab-item:hover .tab-close, .tab-item:focus-within .tab-close { display: inline-flex; }
 /* No pointer to hover with: only the shown tab offers its ×. */
 @media (hover: none) { .tab-item:not(.on) .tab-close { display: none; } }

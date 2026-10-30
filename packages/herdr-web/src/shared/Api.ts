@@ -89,6 +89,20 @@ export const Api = RpcGroup.make(
   Rpc.make("closeTab", { payload: { tab: Schema.String }, error: BridgeError }),
   /** Moves a space to where another space of its machine is now, as herdr-app's sidebar drag does. */
   Rpc.make("moveSpace", { payload: { space: Schema.String, onto: Schema.String }, error: BridgeError }),
+  /**
+   * Opens a space with one tab, here or on another machine. Its pane runs the
+   * program, then the shell, or the shell alone. A relative folder is taken
+   * from the machine's home. The new space's first tab.
+   */
+  Rpc.make("newSpace", {
+    payload: { machine: Schema.OptionFromOptionalKey(Schema.String), folder: Schema.String, name: Schema.String, program: Schema.OptionFromOptionalKey(Schema.String) },
+    success: Schema.Struct({ tab: Schema.String }),
+    error: BridgeError,
+  }),
+  /** Names a space; an empty name shows it by its folder. */
+  Rpc.make("renameSpace", { payload: { space: Schema.String, name: Schema.String }, error: BridgeError }),
+  /** Closes a space and ends the terminals of all its tabs. */
+  Rpc.make("closeSpace", { payload: { space: Schema.String }, error: BridgeError }),
   /** The font families the bridge serves at /fonts.css. */
   Rpc.make("fonts", { success: Schema.Array(FontFamily) }),
   /** Each coding plan's usage now, then after every read; the bridge reads only while a page watches. */

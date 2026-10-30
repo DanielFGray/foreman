@@ -9,6 +9,7 @@ import { Bridge, Message, type Model, PaneAction, Selection } from "./model.ts"
 import { flexOf, keysView, paneActionView, paneView } from "./pane.ts"
 import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./selection.ts"
 import { settingsView } from "./settingsView.ts"
+import { spaceFormView, spaceHeadView } from "./spaces.ts"
 import { statusMark } from "./status.ts"
 
 /**
@@ -45,6 +46,7 @@ export const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
 export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
     Settings: () => settingsView(model, h),
+    NewSpace: () => spaceFormView(model, h),
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {
@@ -78,11 +80,12 @@ const linkProblem = (bridge: Bridge) =>
   })
 
 /**
- * The space's tabs, each with its most urgent agent's dot, or a spinner while
+ * The space's name and its rename and close buttons, then its tabs, each with its most urgent agent's dot, or a spinner while
  * that agent works, and a × that closes it; then a + that opens a new one. The
- * last tab has no ×, since herdr-app would close its space with it.
+ * last tab has no ×: closing the space is the bin's job, which asks first.
  */
-const tabsView = ({ space, label, tabs }: SpaceRow, tabId: string, model: Model, h: HtmlBuilder<Message>): Html => {
+const tabsView = (row: SpaceRow, tabId: string, model: Model, h: HtmlBuilder<Message>): Html => {
+  const { space, tabs } = row
   const button = (text: string, title: string, message: Message) =>
     h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [text])
   const iconButton = (className: string, node: IconNode, title: string, message: Message) =>
@@ -90,12 +93,14 @@ const tabsView = ({ space, label, tabs }: SpaceRow, tabId: string, model: Model,
   return h.div(
     [h.Class("tabs")],
     [
-      h.span([h.Class("space-name")], [label]),
+      ...spaceHeadView(row, model, h),
       ...Array.map(tabs, ({ tab, label, status, program }) => {
         const isClosing = PaneAction.match(model.paneAction, {
           Idle: () => false,
           Confirming: () => false,
           ConfirmingTab: ({ tab: closing }) => closing === tab.id,
+          ConfirmingSpace: () => false,
+          RenamingSpace: () => false,
           Refused: () => false,
         })
         return h.keyed("span")(

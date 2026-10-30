@@ -126,6 +126,8 @@ export const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyA
     Idle: () => [],
     Confirming: () => [],
     ConfirmingTab: () => [],
+    ConfirmingSpace: () => [],
+    RenamingSpace: () => [],
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
@@ -169,6 +171,8 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html 
     Idle: () => false,
     Confirming: ({ pane: closing }) => closing === pane,
     ConfirmingTab: () => false,
+    ConfirmingSpace: () => false,
+    RenamingSpace: () => false,
     Refused: () => false,
   })
   return h.span(

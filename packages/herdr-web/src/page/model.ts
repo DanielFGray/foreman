@@ -52,14 +52,43 @@ export const Delivery = defineTaggedUnion({
 })
 export type Delivery = typeof Delivery.Type
 
-/** A split, new tab or close of a herdr-app pane or tab: none under way, a close waiting for a second click, or herdr-app's refusal. */
+/**
+ * A change to a herdr-app pane, tab or space: none under way, a close waiting
+ * for a second click, a space's new name being typed, or herdr-app's refusal.
+ */
 export const PaneAction = defineTaggedUnion({
   Idle: {},
   Confirming: { pane: Schema.String },
   ConfirmingTab: { tab: Schema.String },
+  ConfirmingSpace: { space: Schema.String },
+  RenamingSpace: { space: Schema.String, name: Schema.String },
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
+
+/** Where the new-space form's last try stands. */
+export const SpaceFormState = defineTaggedUnion({
+  Editing: {},
+  Opening: {},
+  Refused: { reason: Schema.String },
+})
+export type SpaceFormState = typeof SpaceFormState.Type
+
+export const SpaceFormField = Schema.Literals(["machine", "folder", "name", "program"])
+export type SpaceFormField = typeof SpaceFormField.Type
+
+/**
+ * The new-space form. `machine` is the name hc gives it; this machine's own
+ * name opens the space here. An empty program opens the shell alone.
+ */
+export const SpaceForm = Schema.Struct({
+  machine: Schema.String,
+  folder: Schema.String,
+  name: Schema.String,
+  program: Schema.String,
+  state: SpaceFormState,
+})
+export type SpaceForm = typeof SpaceForm.Type
 
 /**
  * A space dragged to a new place in the sidebar, as in herdr-app's: pressed
@@ -92,6 +121,8 @@ export const Selection = defineTaggedUnion({
   Loose: { address: Schema.String },
   /** This browser's settings, in place of a tab. */
   Settings: {},
+  /** The form that opens a space, in place of a tab. */
+  NewSpace: {},
 })
 export type Selection = typeof Selection.Type
 
@@ -161,6 +192,7 @@ export const Model = Schema.Struct({
   questions: Schema.Record(Schema.String, Asked),
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
+  spaceForm: SpaceForm,
   palette: Palette,
   /** The panes opened last, newest first, for the palette's Recent group. */
   recent: Schema.Array(Schema.String),
@@ -227,6 +259,17 @@ export const Message = defineMessageUnion({
   ClickedCloseTab: { tab: Schema.String },
   ConfirmedCloseTab: { tab: Schema.String },
   SucceededCloseTab: {},
+  ClickedCloseSpace: { space: Schema.String },
+  ConfirmedCloseSpace: { space: Schema.String },
+  ClickedRenameSpace: { space: Schema.String },
+  UpdatedSpaceName: { name: Schema.String },
+  SubmittedSpaceName: {},
+  SucceededSpaceChange: {},
+  ClickedNewSpace: {},
+  UpdatedSpaceForm: { field: SpaceFormField, value: Schema.String },
+  SubmittedSpaceForm: {},
+  SucceededNewSpace: { tab: Schema.String },
+  FailedNewSpace: { reason: Schema.String },
   FailedPaneAction: { reason: Schema.String },
   PressedSpace: { space: Schema.String },
   EnteredSpace: { space: Schema.String },
@@ -274,7 +317,7 @@ export const Message = defineMessageUnion({
   MovedPaletteHighlight: { step: Schema.Int },
   OpenedPaletteResult: { target: PaletteTarget },
   SubmittedPalette: {},
-  CompletedFocusPalette: {},
+  CompletedFocusField: {},
   CompletedSaveRecent: {},
 })
 export type Message = typeof Message.Type

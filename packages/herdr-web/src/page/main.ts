@@ -11,14 +11,15 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusPalette, SaveRecent } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
+import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
 import { clocked, settled } from "./waiting.ts"
-import { isPaletteKey, PaletteTarget, withRecent } from "./palette.ts"
+import { isPaletteKey, PALETTE_INPUT_ID, PaletteTarget, withRecent } from "./palette.ts"
 import { answered, chose, QuestionRead, questionReads, readQuestion, typedAnswer } from "./question.ts"
 import { paletteResults, paletteView } from "./paletteView.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
@@ -48,6 +49,7 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     questions: {},
     paneAction: PaneAction.Idle(),
     spaceDrag: SpaceDrag.Idle(),
+    spaceForm: EMPTY_SPACE_FORM,
     palette: Palette.Closed(),
     recent,
     settings,
@@ -102,6 +104,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
               ),
         Loose: () => ({ model }),
         Settings: () => ({ model }),
+        NewSpace: () => ({ model }),
       }),
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
@@ -164,6 +167,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         Tab: ({ tabId }) => remembered(modifyFields(model, { selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(terminal) }) })),
         Loose: () => ({ model }),
         Settings: () => ({ model }),
+        NewSpace: () => ({ model }),
       }),
 
     // Closing a pane ends its program, so it takes a second click.
@@ -204,6 +208,29 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededCloseTab: () => ({ model }),
 
     FailedPaneAction: ({ reason }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Refused({ reason }) }) }),
+
+    ClickedCloseSpace: ({ space }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.ConfirmingSpace({ space }) }) }),
+
+    ConfirmedCloseSpace: ({ space }) => confirmedCloseSpace(model, space),
+
+    ClickedRenameSpace: ({ space }) => startedRename(model, space),
+
+    UpdatedSpaceName: ({ name }) => ({ model: typedSpaceName(model, name) }),
+
+    SubmittedSpaceName: () => submittedSpaceName(model),
+
+    SucceededSpaceChange: () => ({ model }),
+
+    // On a phone the form opens behind the sidebar drawer, so it closes as a picked tab closes it.
+    ClickedNewSpace: () => (model.selection._tag === "NewSpace" ? { model: modifyFields(model, { isFleetFolded: () => true }) } : openedSpaceForm(model)),
+
+    UpdatedSpaceForm: ({ field, value }) => ({ model: editedSpaceForm(model, field, value) }),
+
+    SubmittedSpaceForm: () => submittedSpaceForm(model),
+
+    SucceededNewSpace: ({ tab }) => remembered(openedSpace(model, tab)),
+
+    FailedNewSpace: ({ reason }) => ({ model: refusedSpace(model, reason) }),
 
     // A press while a move is under way waits for the fleet's new order.
     PressedSpace: ({ space }) =>
@@ -355,7 +382,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     PressedPaletteKey: () =>
       Palette.match<UpdateReturn>(model.palette, {
-        Closed: () => ({ model: modifyFields(model, { palette: () => Palette.Open({ query: "", highlighted: 0 }) }), commands: [FocusPalette()] }),
+        Closed: () => ({ model: modifyFields(model, { palette: () => Palette.Open({ query: "", highlighted: 0 }) }), commands: [FocusField({ id: PALETTE_INPUT_ID })] }),
         Open: () => ({ model: closedPalette(model) }),
       }),
 
@@ -387,7 +414,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           }),
       }),
 
-    CompletedFocusPalette: () => ({ model }),
+    CompletedFocusField: () => ({ model }),
 
     CompletedSaveRecent: () => ({ model }),
   })

@@ -150,6 +150,37 @@ export const newTab = (doc: LayoutDoc, at: Readonly<{ space: string; tab: string
     }),
   )
 
+/** Adds a space at the end, with one tab that holds one terminal pane. */
+export const newSpace = (
+  doc: LayoutDoc,
+  at: Readonly<{ space: string; name: string; folder: string; tab: string; pane: string; terminal: string }>,
+): LayoutDoc => ({
+  ...doc,
+  spaces: Array.append(doc.spaces, {
+    id: at.space,
+    name: at.name.trim(),
+    folder: at.folder,
+    tabs: [{ id: at.tab, name: "", root: { id: at.tab, type: "row", children: [{ id: at.pane, type: "block", content: { terminal: at.terminal } }] } }],
+  }),
+})
+
+/** Names a space; an empty name shows the space by its folder. None when there is no such space. */
+export const renameSpace = (doc: LayoutDoc, space: string, name: string): Option.Option<LayoutDoc> =>
+  Option.map(
+    Array.findFirst(doc.spaces, ({ id }) => id === space),
+    () => ({ ...doc, spaces: Array.map(doc.spaces, (one) => (one.id === space ? { ...one, name: name.trim() } : one)) }),
+  )
+
+/** Takes a space out, with the terminals of all its tabs. None when there is no such space. */
+export const closeSpace = (doc: LayoutDoc, space: string): Option.Option<Closed> =>
+  Option.map(
+    Array.findFirst(doc.spaces, ({ id }) => id === space),
+    (closed): Closed => ({
+      doc: { ...doc, spaces: Array.filter(doc.spaces, ({ id }) => id !== space) },
+      terminals: Array.flatMap(closed.tabs, ({ root }) => terminalsIn(root)),
+    }),
+  )
+
 /** Moves a space to where `onto` is now: after it when moving down, before it when moving up. */
 export const moveSpace = (doc: LayoutDoc, space: string, onto: string): Option.Option<LayoutDoc> =>
   Option.flatMap(
@@ -174,8 +205,8 @@ export const terminalOf = (doc: LayoutDoc, pane: string): Option.Option<string> 
     ({ content }) => Option.fromUndefinedOr(content?.terminal),
   )
 
-/** A new id as herdr-app makes them: a prefix (`p` pane, `tb` tab, `s` split) and 32 hex digits. */
-export const freshId = (prefix: "p" | "tb" | "s") => `${prefix}${crypto.randomUUID().replaceAll("-", "")}`
+/** A new id as herdr-app makes them: a prefix (`p` pane, `tb` tab, `s` split, `sp` space) and 32 hex digits. */
+export const freshId = (prefix: "p" | "tb" | "s" | "sp") => `${prefix}${crypto.randomUUID().replaceAll("-", "")}`
 
 const editTab = (doc: LayoutDoc, node: string, edit: (tab: Tab) => Tab): Option.Option<LayoutDoc> =>
   Option.map(findTab(doc, node), ({ tab }) => ({

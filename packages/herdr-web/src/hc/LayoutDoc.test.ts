@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { Option, Schema } from "effect"
-import { closePane, closeTab, LayoutDoc, moveSpace, newTab, type Node, spacesOf, split } from "./LayoutDoc.ts"
+import { closePane, closeSpace, closeTab, LayoutDoc, moveSpace, newSpace, newTab, type Node, renameSpace, spacesOf, split } from "./LayoutDoc.ts"
 
 const decode = Schema.decodeUnknownSync(LayoutDoc)
 const encode = Schema.encodeSync(LayoutDoc)
@@ -163,5 +163,26 @@ describe("LayoutDoc", () => {
     const order = (moved: Option.Option<LayoutDoc>) => Option.map(moved, ({ spaces }) => spaces.map(({ id }) => id))
     expect(order(moveSpace(doc, "a", "c"))).toEqual(Option.some(["b", "c", "a"]))
     expect(order(moveSpace(doc, "c", "a"))).toEqual(Option.some(["c", "a", "b"]))
+  })
+
+  test("a new space goes at the end, with one tab that holds one pane", () => {
+    const doc = newSpace(docWith(pane("a")), { space: "sp2", name: " web ", folder: "/src/web", tab: "tb2", pane: "p2", terminal: "t2" })
+    expect(doc.spaces[1]).toEqual({
+      id: "sp2",
+      name: "web",
+      folder: "/src/web",
+      tabs: [{ id: "tb2", name: "", root: { id: "tb2", type: "row", children: [{ id: "p2", type: "block", content: { terminal: "t2" } }] } }],
+    })
+  })
+
+  test("a space takes a new name, trimmed", () => {
+    expect(Option.map(renameSpace(docWith(pane("a")), "w1", "  api "), ({ spaces }) => spaces[0]?.name)).toEqual(Option.some("api"))
+    expect(renameSpace(docWith(pane("a")), "w9", "api")).toEqual(Option.none())
+  })
+
+  test("closing a space ends the terminals of all its tabs", () => {
+    const doc = withSecondTab(docWith({ id: "tb1", type: "row", children: [pane("a")] }))
+    expect(Option.map(closeSpace(doc, "w1"), ({ doc, terminals }) => [doc.spaces, terminals])).toEqual(Option.some([[], ["t-a", "t-b"]]))
+    expect(closeSpace(doc, "w9")).toEqual(Option.none())
   })
 })

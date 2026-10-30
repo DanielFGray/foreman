@@ -10,7 +10,6 @@ import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
 import { saveStored } from "./stored.ts"
-import { PALETTE_INPUT_ID } from "./palette.ts"
 
 export const SplitPane = Command.define("SplitPane", {
   args: { pane: Schema.String, direction: Direction },
@@ -93,6 +92,39 @@ export const MoveSpace = Command.define("MoveSpace", {
     }).pipe(reportFailure((reason) => Message.FailedMoveSpace({ reason }))),
 })
 
+export const NewSpace = Command.define("NewSpace", {
+  args: { machine: Schema.Option(Schema.String), folder: Schema.String, name: Schema.String, program: Schema.Option(Schema.String) },
+  messages: [Message.SucceededNewSpace, Message.FailedNewSpace],
+  execute: (at) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { tab } = yield* client.newSpace(at)
+      return Message.SucceededNewSpace({ tab })
+    }).pipe(reportFailure((reason) => Message.FailedNewSpace({ reason }))),
+})
+
+export const RenameSpace = Command.define("RenameSpace", {
+  args: { space: Schema.String, name: Schema.String },
+  messages: [Message.SucceededSpaceChange, Message.FailedPaneAction],
+  execute: ({ space, name }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.renameSpace({ space, name })
+      return Message.SucceededSpaceChange()
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
+export const CloseSpace = Command.define("CloseSpace", {
+  args: { space: Schema.String },
+  messages: [Message.SucceededSpaceChange, Message.FailedPaneAction],
+  execute: ({ space }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.closeSpace({ space })
+      return Message.SucceededSpaceChange()
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
 export const SendPrompt = Command.define("SendPrompt", {
   args: { address: Schema.String, id: Schema.Int, text: Schema.String, whileWorking: Schema.Boolean },
   messages: [Message.SucceededSendPrompt, Message.FailedSendPrompt],
@@ -137,12 +169,15 @@ export const SaveRecent = Command.define("SaveRecent", {
 })
 
 /** Puts the caret in the palette's search box once it is on the page. */
-export const FocusPalette = Command.define("FocusPalette", {
-  messages: [Message.CompletedFocusPalette],
-  execute: Dom.focus(`#${PALETTE_INPUT_ID}`).pipe(
-    Effect.catchTag("ElementNotFound", (error) => Effect.logWarning("the palette's search box was not found", error)),
-    Effect.as(Message.CompletedFocusPalette()),
-  ),
+/** Puts the keyboard focus in a text box the page just drew; a browser applies autofocus only as the page loads. */
+export const FocusField = Command.define("FocusField", {
+  args: { id: Schema.String },
+  messages: [Message.CompletedFocusField],
+  execute: ({ id }) =>
+    Dom.focus(`#${id}`).pipe(
+      Effect.catchTag("ElementNotFound", (error) => Effect.logWarning(`text box #${id} was not found`, error)),
+      Effect.as(Message.CompletedFocusField()),
+    ),
 })
 
 export const AnswerQuestion = Command.define("AnswerQuestion", {

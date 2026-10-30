@@ -3,7 +3,8 @@ import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, keydown, Mount, role, scene, selector, Subscription, type } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Terminal } from "../shared/Fleet.ts"
-import { FetchFonts, FocusPalette, SaveRecent, SaveSelection } from "./commands.ts"
+import { FetchFonts, FocusField, SaveRecent, SaveSelection } from "./commands.ts"
+import { PALETTE_INPUT_ID } from "./palette.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
@@ -64,8 +65,8 @@ test("Ctrl+K opens the palette and again closes it", () => {
     given(start),
     expect(role("dialog", { name: "Command palette" })).not.toExist(),
     Subscription.emit(Message.PressedPaletteKey()),
-    Command.expectExact(FocusPalette()),
-    Command.resolve(FocusPalette, Message.CompletedFocusPalette()),
+    Command.expectExact(FocusField({ id: PALETTE_INPUT_ID })),
+    Command.resolve(FocusField, Message.CompletedFocusField()),
     expect(role("dialog", { name: "Command palette" })).toExist(),
     expectAll(all.role("option")).toHaveCount(10),
     Subscription.emit(Message.PressedPaletteKey()),
@@ -78,7 +79,7 @@ test("arrow keys move over the results that match, and Enter opens the one reach
     { update, view },
     given(start),
     Subscription.emit(Message.PressedPaletteKey()),
-    Command.resolve(FocusPalette, Message.CompletedFocusPalette()),
+    Command.resolve(FocusField, Message.CompletedFocusField()),
     type(box, "srv"),
     expectAll(all.role("option")).toHaveCount(2),
     expect(role("option", { name: /^quiet/ })).toHaveAttr("aria-selected", "true"),
@@ -105,7 +106,7 @@ test("a pane opened from the palette is kept as recent, and Escape closes the pa
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
     ),
     Subscription.emit(Message.PressedPaletteKey()),
-    Command.resolve(FocusPalette, Message.CompletedFocusPalette()),
+    Command.resolve(FocusField, Message.CompletedFocusField()),
     // The recent pane heads the empty search.
     expect(selector(".palette-group")).toContainText("Recent"),
     expect(role("option", { name: /^claude/ })).toExist(),
@@ -131,7 +132,7 @@ test("a space is found by its git branch", () => {
     { update, view },
     given(start),
     Subscription.emit(Message.PressedPaletteKey()),
-    Command.resolve(FocusPalette, Message.CompletedFocusPalette()),
+    Command.resolve(FocusField, Message.CompletedFocusField()),
     type(box, "login"),
     expectAll(all.role("option")).toHaveCount(1),
     expect(role("option", { name: /^quiet/ })).toContainText("feat/login"),

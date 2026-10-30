@@ -4,10 +4,10 @@
 //
 // The page addresses a space, tab or pane on another machine as `machine/id`,
 // as herdr-app does; that machine's document holds the bare id.
-import { Array, Context, Effect, HashSet, Layer, Option, Schema, String } from "effect"
+import { Array, Config, Context, Effect, HashSet, Layer, Option, Schema, String } from "effect"
 import type { HcFailure } from "../hc/Connection.ts"
 import { Hc } from "../hc/Hc.ts"
-import { closePane, closeTab, findTab, freshId, type LayoutDoc, moveSpace, newTab, split, terminalOf } from "../hc/LayoutDoc.ts"
+import { closePane, closeSpace, closeTab, findTab, freshId, type LayoutDoc, moveSpace, newSpace, newTab, renameSpace, split, terminalOf } from "../hc/LayoutDoc.ts"
 import type { Direction } from "../shared/Api.ts"
 import type { Terminal } from "../shared/Fleet.ts"
 import { FleetModel } from "./FleetModel.ts"
@@ -46,9 +46,16 @@ export class HerdrApp extends Context.Service<HerdrApp>()("herdr-web/server/Herd
     const endTerminal = (terminal: string) =>
       hc.kill(terminal).pipe(Effect.catch((error) => Effect.logWarning(`cannot end terminal ${terminal}`, error)))
 
-    // A new pane's shell, labelled with its space and tab as herdr-app labels them.
+    // Without SHELL (a bare service manager) a program still starts, in sh.
+    const loginShell = yield* Config.String("SHELL").pipe(Config.withDefault("sh"))
+    const home = yield* Config.String("HOME")
+
+    // A new pane's program, labelled with its space and tab as herdr-app labels them.
+    const start = (on: Option.Option<string>, argv: ReadonlyArray<string>, cwd: string, space: string, tab: string) =>
+      hc.start({ argv, cwd, labels: { "herdr.space": space, "herdr.tab": tab }, on })
+
     const shell = (on: Option.Option<string>, cwd: string, space: string, tab: string) =>
-      hc.shell({ cwd, labels: { "herdr.space": space, "herdr.tab": tab }, on })
+      Effect.map(start(on, [], cwd, space, tab), ({ address }) => address)
 
     return {
       /** Opens a shell beside the pane, in the folder of the pane's terminal, else of its space. */
@@ -98,6 +105,37 @@ export class HerdrApp extends Context.Service<HerdrApp>()("herdr-web/server/Herd
         ).pipe(Effect.flatMap((terminals) => killed(Array.map(terminals, (terminal) => qualified(on, terminal)))))
       },
       /**
+       * Opens a space on the machine `on` (none for this one) with one tab,
+       * whose pane runs `program` and then the shell, or the shell alone. The
+       * folder is absolute, or relative to that machine's home; the space
+       * keeps the folder the program started in.
+       */
+      newSpace: (at: Readonly<{ on: Option.Option<string>; folder: string; name: string; program: Option.Option<string> }>) =>
+        Effect.gen(function* () {
+          const [space, tab] = [freshId("sp"), freshId("tb")]
+          const argv = Option.match(Option.filter(Option.map(at.program, String.trim), String.isNonEmpty), {
+            onNone: () => [],
+            onSome: (line) => withShellAfter(at.on, loginShell, String.split(line, /\s+/)),
+          })
+          const started = yield* start(at.on, argv, folderOn(at.on, home, at.folder), space, tab)
+          yield* edit(at.on, "cannot add the space", (doc) =>
+            Option.some([newSpace(doc, { space, name: at.name, folder: started.cwd, tab, pane: freshId("p"), terminal: localOf(started.address).id }), undefined] as const),
+          ).pipe(Effect.tapError(() => endTerminal(started.address)))
+          return { tab: qualified(at.on, tab), terminal: started.address }
+        }),
+      /** Names the space; an empty name shows it by its folder. */
+      renameSpace: (space: string, name: string) => {
+        const { on, id } = localOf(space)
+        return edit(on, `no space ${space}`, (doc) => Option.map(renameSpace(doc, id, name), (next) => [next, undefined] as const))
+      },
+      /** Closes the space and ends the terminals of all its tabs. The page asks the user first. */
+      closeSpace: (space: string) => {
+        const { on, id } = localOf(space)
+        return edit(on, `no space ${space}`, (doc) => Option.map(closeSpace(doc, id), (closed) => [closed.doc, closed.terminals] as const)).pipe(
+          Effect.flatMap((terminals) => killed(Array.map(terminals, (terminal) => qualified(on, terminal)))),
+        )
+      },
+      /**
        * Moves the space to where `onto` is now, as a drag in herdr-app's own
        * sidebar does: after it when moving down, before it when moving up.
        * Each machine keeps its own spaces, so both must be on one machine.
@@ -142,4 +180,25 @@ export const doomed = (terminals: ReadonlyArray<Terminal>, closed: ReadonlyArray
     return Array.isReadonlyArrayEmpty(more) ? sofar : grow(HashSet.union(sofar, HashSet.fromIterable(Array.map(more, ({ address }) => address))))
   }
   return Array.fromIterable(grow(HashSet.fromIterable(closed)))
+}
+
+/**
+ * A program's argv that leaves the user in a shell when the program ends, as
+ * herdr-app starts one. Here the user's login shell runs it, so its startup
+ * files set the PATH; on another machine, whose shell the bridge does not
+ * know, sh runs it and then that machine's $SHELL.
+ */
+export const withShellAfter = (on: Option.Option<string>, loginShell: string, program: ReadonlyArray<string>): ReadonlyArray<string> =>
+  Option.isSome(on)
+    ? ["sh", "-c", '"$@"; exec "${SHELL:-sh}" -i', "sh", ...program]
+    : [loginShell, "-ic", Option.contains(Array.last(String.split(loginShell, "/")), "fish") ? "command $argv[2..]; exec $argv[1] -i" : '"$@"; exec "$0" -i', loginShell, ...program]
+
+/**
+ * Where a new space starts. hc starts a terminal on another machine relative
+ * to that machine's home, and here relative to its own folder, so here a
+ * relative folder is taken from the home first. `~` means the home on either.
+ */
+export const folderOn = (on: Option.Option<string>, home: string, folder: string): string => {
+  const relative = folder.replace(/^~(\/|$)/, "")
+  return relative.startsWith("/") || Option.isSome(on) ? relative : relative === "" ? home : `${home}/${relative}`
 }

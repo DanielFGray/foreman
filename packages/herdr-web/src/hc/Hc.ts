@@ -65,7 +65,7 @@ const layoutSet = method(
   Schema.Struct({ version: Schema.Int }),
 )
 
-/** Starts that machine's shell in a new terminal, kept after it exits, as herdr-app starts a pane's. */
+/** Starts a program, or with no argv that machine's shell, in a new terminal kept after it exits, as herdr-app starts a pane's. */
 const run = method(
   "terminal.run",
   Schema.Struct({
@@ -76,7 +76,7 @@ const run = method(
     keep: Schema.Boolean,
     on: Schema.OptionFromOptionalKey(Schema.String),
   }),
-  Schema.Struct({ address: Schema.String }),
+  Schema.Struct({ address: Schema.String, cwd: Schema.String }),
 )
 
 /** Ends the program: hangup, then terminate, then kill. */
@@ -159,9 +159,9 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
       /** Writes herdr-app's layout over the one read at `version`; fails with kind `conflict` when another write came first. */
       setLayout: (on: Option.Option<string>, doc: LayoutDoc, version: number) =>
         call(layoutSet, { name: HERDR_APP_DOC, value: doc, version, on }).pipe(Effect.asVoid),
-      /** Starts a shell in a new terminal, in `cwd`, with `labels`; its address. */
-      shell: (params: Readonly<{ cwd: string; labels: Readonly<Record<string, string>>; on: Option.Option<string> }>) =>
-        Effect.map(call(run, { ...params, argv: [], env: SHELL_ENV, keep: true }), ({ address }) => address),
+      /** Starts a pane's program in a new terminal, in `cwd`, with `labels`; its address and the folder it started in. An empty argv starts the shell. */
+      start: (params: Readonly<{ argv: ReadonlyArray<string>; cwd: string; labels: Readonly<Record<string, string>>; on: Option.Option<string> }>) =>
+        call(run, { ...params, env: SHELL_ENV, keep: true }),
       kill: (terminal: string) => call(kill, { terminal }).pipe(Effect.asVoid),
       /** Runs a program here or on another machine, with no shell. */
       exec: (params: typeof ExecParams.Type) => call(exec, params),
