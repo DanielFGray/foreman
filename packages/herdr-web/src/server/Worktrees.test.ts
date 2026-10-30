@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { Option, Schema } from "effect"
+import { Option, Schema as S } from "effect"
 import { LayoutDoc } from "../hc/LayoutDoc.ts"
 import { parseWorktreeList, slug, withSpaces } from "./Worktrees.ts"
 
@@ -31,7 +31,7 @@ test("a branch becomes a folder name as herdr-app writes it", () => {
 })
 
 test("each checkout shows the space whose folder is in it, the deeper checkout winning", () => {
-  const doc = Schema.decodeSync(LayoutDoc)({
+  const doc = S.decodeSync(LayoutDoc)({
     spaces: [
       { id: "sp1", name: "", folder: "/src/app/web", tabs: [] },
       { id: "sp2", name: "", folder: "/src/app/wt/x", tabs: [] },

@@ -4,7 +4,7 @@
 //
 // The page addresses a space, tab or pane on another machine as `machine/id`,
 // as herdr-app does; that machine's document holds the bare id.
-import { Array, Config, Context, Effect, HashSet, Layer, Option, Schema, String } from "effect"
+import { Array, Config, Context, Effect, HashSet, Layer, Option, Schema as S, String } from "effect"
 import type { HcFailure } from "../hc/Connection.ts"
 import { Hc } from "../hc/Hc.ts"
 import { closePane, closeSpace, closeTab, findTab, freshId, type LayoutDoc, moveSpace, newSpace, newTab, renameSpace, split, terminalOf } from "../hc/LayoutDoc.ts"
@@ -13,8 +13,8 @@ import type { Terminal } from "../shared/Fleet.ts"
 import { FleetModel } from "./FleetModel.ts"
 
 /** The layout has no such space, tab or pane, or herdr-app keeps it. */
-export class HerdrAppError extends Schema.TaggedError<HerdrAppError, { readonly brand: unique symbol }>()("HerdrAppError", {
-  message: Schema.String,
+export class HerdrAppError extends S.TaggedError<HerdrAppError, { readonly brand: unique symbol }>()("HerdrAppError", {
+  message: S.String,
 }) {}
 
 export class HerdrApp extends Context.Service<HerdrApp>()("herdr-web/server/HerdrApp", {

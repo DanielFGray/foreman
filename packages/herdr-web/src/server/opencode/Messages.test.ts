@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite"
-import { Array, Option, Schema } from "effect"
+import { Array, Option, Schema as S } from "effect"
 import { expect, test } from "vitest"
 import { parseMarkdown } from "../Markdown.ts"
 import { Messages, messagesQuery, toEntries } from "./Messages.ts"
@@ -44,7 +44,7 @@ const MESSAGES: ReadonlyArray<readonly [string, object]> = [
 ]
 
 // The one value a query prints, decoded from its JSON.
-const printed = <A, I>(schema: Schema.Codec<A, I>, sql: string) => Schema.decodeUnknownSync(Schema.Tuple([Schema.Tuple([Schema.fromJsonString(schema)])]))(database().query(sql).values())[0][0]
+const printed = <A, I>(schema: S.Codec<A, I>, sql: string) => S.decodeUnknownSync(S.Tuple([S.Tuple([S.fromJsonString(schema)])]))(database().query(sql).values())[0][0]
 
 test("OpenCode's messages read as the chat's entries, oldest first", () => {
   const messages = printed(Messages, messagesQuery("ses_a", 100))

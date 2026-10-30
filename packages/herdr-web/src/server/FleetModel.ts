@@ -9,12 +9,12 @@
 // are read and on each heartbeat. When hc goes away or reports that this
 // subscriber fell behind, the model subscribes again and starts over from
 // hc's snapshot.
-import { Array, Context, Effect, HashSet, Layer, Match, Option, Record, Schedule, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Array, Context, Effect, HashSet, Layer, Match, Option, Record, Schedule, Schema as S, Semaphore, Stream, SubscriptionRef } from "effect"
 import { HERDR_APP_DOC, Hc, type Notification } from "../hc/Hc.ts"
 import { Fleet, type Layout, type Machine, type Space, type Terminal } from "../shared/Fleet.ts"
 import { readSpaceGits } from "./SpaceGit.ts"
 
-class FellBehind extends Schema.TaggedError<FellBehind, { readonly brand: unique symbol }>()("FellBehind", {}) {}
+class FellBehind extends S.TaggedError<FellBehind, { readonly brand: unique symbol }>()("FellBehind", {}) {}
 
 export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/FleetModel", {
   make: Effect.gen(function* () {
@@ -147,7 +147,7 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
   static readonly layer = Layer.effect(this, this.make)
 }
 
-const sameGit = Schema.toEquivalence(Fleet.fields.git)
+const sameGit = S.toEquivalence(Fleet.fields.git)
 
 /**
  * A space read from another machine's document, addressed from here: its

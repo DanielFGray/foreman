@@ -2,15 +2,15 @@
 // branch and open it as a space, open a checkout no space shows, and remove a
 // clean checkout. Git runs through hc on the space's own machine. Checkouts
 // go where herdr-app's worktree mod puts them, so both apps see the same ones.
-import { Array, Config, Context, Effect, Layer, Option, Order, Schema, String } from "effect"
+import { Array, Config, Context, Effect, Layer, Option, Order, Schema as S, String } from "effect"
 import { Hc } from "../hc/Hc.ts"
 import type { LayoutDoc } from "../hc/LayoutDoc.ts"
 import type { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
 import { HerdrApp, localOf, qualified } from "./HerdrApp.ts"
 
 /** Git refused, or the space is in no repository, or the checkout may not go. */
-export class WorktreeError extends Schema.TaggedError<WorktreeError, { readonly brand: unique symbol }>()("WorktreeError", {
-  message: Schema.String,
+export class WorktreeError extends S.TaggedError<WorktreeError, { readonly brand: unique symbol }>()("WorktreeError", {
+  message: S.String,
 }) {}
 
 export class Worktrees extends Context.Service<Worktrees>()("herdr-web/server/Worktrees", {

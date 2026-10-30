@@ -1,5 +1,5 @@
 // Codex's plan usage, read with the ChatGPT login of Codex, or else OpenCode's.
-import { Array, Effect, Option, Schema } from "effect"
+import { Array, Effect, Option, Schema as S } from "effect"
 import type { UsageReport, UsageSection, UsageWindow } from "../../shared/Usage.ts"
 import { readOpencodeAuth } from "./OpenCode.ts"
 import { decodeOptional, getJson, parseTime, readOptionalFile, SESSION, Time, titleCase, type UsageEnv, WEEK } from "./Read.ts"
@@ -35,29 +35,29 @@ export const readCodex = Effect.fn("readCodex")(function* (env: UsageEnv) {
   return Option.some(codexReport(usage, yield* Effect.clockWith((clock) => clock.currentTimeMillis)))
 })
 
-const Maybe = Schema.OptionFromOptionalNullOr
+const Maybe = S.OptionFromOptionalNullOr
 
 // An API-key login has no tokens.
-const CodexAuth = Schema.Struct({
-  tokens: Maybe(Schema.Struct({ access_token: Maybe(Schema.String), account_id: Maybe(Schema.String) })),
+const CodexAuth = S.Struct({
+  tokens: Maybe(S.Struct({ access_token: Maybe(S.String), account_id: Maybe(S.String) })),
 })
 
-const CodexWindow = Schema.Struct({
-  used_percent: Maybe(Schema.Finite),
-  limit_window_seconds: Maybe(Schema.Finite),
+const CodexWindow = S.Struct({
+  used_percent: Maybe(S.Finite),
+  limit_window_seconds: Maybe(S.Finite),
   reset_at: Maybe(Time),
-  reset_after_seconds: Maybe(Schema.Finite),
+  reset_after_seconds: Maybe(S.Finite),
 })
 
-const RateLimit = Schema.Struct({ primary_window: Maybe(CodexWindow), secondary_window: Maybe(CodexWindow) })
+const RateLimit = S.Struct({ primary_window: Maybe(CodexWindow), secondary_window: Maybe(CodexWindow) })
 
-export const CodexUsage = Schema.Struct({
-  email: Maybe(Schema.String),
-  plan_type: Maybe(Schema.String),
+export const CodexUsage = S.Struct({
+  email: Maybe(S.String),
+  plan_type: Maybe(S.String),
   rate_limit: Maybe(RateLimit),
   code_review_rate_limit: Maybe(RateLimit),
-  rate_limit_reset_credits: Maybe(Schema.Struct({ available_count: Schema.Finite })),
-  credits: Maybe(Schema.Struct({ unlimited: Maybe(Schema.Boolean), balance: Maybe(Schema.Union([Schema.String, Schema.Finite])) })),
+  rate_limit_reset_credits: Maybe(S.Struct({ available_count: S.Finite })),
+  credits: Maybe(S.Struct({ unlimited: Maybe(S.Boolean), balance: Maybe(S.Union([S.String, S.Finite])) })),
 })
 export type CodexUsage = typeof CodexUsage.Type
 

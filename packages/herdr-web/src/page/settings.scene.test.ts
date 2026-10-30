@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect"
+import { Option, Schema as S } from "effect"
 import { all, click, Command, change, expect, expectAll, given, inside, label, role, scene, selector } from "foldkit/scene"
 import { expect as expectValue, test } from "vitest"
 import { FetchFonts, SaveSelection, SaveSettings } from "./commands.ts"
@@ -66,7 +66,7 @@ test("the agent choices save, and settings saved before they existed keep their 
     expect(label("Always the chat")).toBeChecked(),
   )
   const saved = { chat: { font: "Inter", size: 15 }, terminal: { font: null, size: 13 } }
-  expectValue(Schema.decodeOption(Settings)(saved)).toEqual(
+  expectValue(S.decodeOption(Settings)(saved)).toEqual(
     Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run" }),
   )
 })

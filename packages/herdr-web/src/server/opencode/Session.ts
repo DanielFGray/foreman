@@ -8,7 +8,7 @@
 // chat showed before breaks a tie. A record of a session id that is not 1–32
 // characters of [\w.+-] is keyed by a hash instead; OpenCode's own ids always
 // fit, so such a record narrows nothing.
-import { Array, Option, Record, Schema, String } from "effect"
+import { Array, Option, Record, Schema as S, String } from "effect"
 import type { Terminal } from "../../shared/Fleet.ts"
 import { quoted } from "./Database.ts"
 
@@ -18,20 +18,20 @@ select json_group_array(json_object('id', id, 'title', title, 'parentID', parent
 from session_v2 where directory = ${quoted(directory)}`
 
 /** A model as OpenCode names it: by its provider, and its id there. */
-export const ModelRef = Schema.Struct({ id: Schema.String, providerID: Schema.String })
+export const ModelRef = S.Struct({ id: S.String, providerID: S.String })
 export type ModelRef = typeof ModelRef.Type
 
-export const SessionSummary = Schema.Struct({
-  id: Schema.String,
-  title: Schema.OptionFromNullOr(Schema.String),
-  parentID: Schema.OptionFromNullOr(Schema.String),
+export const SessionSummary = S.Struct({
+  id: S.String,
+  title: S.OptionFromNullOr(S.String),
+  parentID: S.OptionFromNullOr(S.String),
   /** The model the session asks for, which a pick changes at once; none while it takes OpenCode's default. */
-  model: Schema.OptionFromNullOr(ModelRef),
+  model: S.OptionFromNullOr(ModelRef),
 })
 export type SessionSummary = typeof SessionSummary.Type
 
 /** What `sessionsQuery` prints. */
-export const Sessions = Schema.Array(SessionSummary)
+export const Sessions = S.Array(SessionSummary)
 
 /** The session `terminal` shows, among `sessions` in its folder; none when the signals do not settle on one. */
 export const shownSession = (terminal: Terminal, sessions: ReadonlyArray<SessionSummary>, before: Option.Option<string>): Option.Option<string> => {

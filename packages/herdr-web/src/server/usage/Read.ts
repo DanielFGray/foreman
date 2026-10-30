@@ -1,7 +1,7 @@
 // What every usage provider needs: its sign-in file, one GET to its service,
 // and the service's reply decoded. A provider that finds no sign-in reads as
 // none, and is not shown.
-import { Duration, Effect, FileSystem, Match, Option, Schema } from "effect"
+import { Duration, Effect, FileSystem, Match, Option, Schema as S } from "effect"
 import { HttpClient } from "effect/http"
 import type { UsageReport } from "../../shared/Usage.ts"
 
@@ -10,9 +10,9 @@ import type { UsageReport } from "../../shared/Usage.ts"
  * `rate_limited` that it asked to be asked less often: each waits longer
  * before the next read.
  */
-export class UsageError extends Schema.TaggedError<UsageError, { readonly brand: unique symbol }>()("UsageError", {
-  kind: Schema.Literals(["rejected", "rate_limited", "http", "invalid"]),
-  message: Schema.String,
+export class UsageError extends S.TaggedError<UsageError, { readonly brand: unique symbol }>()("UsageError", {
+  kind: S.Literals(["rejected", "rate_limited", "http", "invalid"]),
+  message: S.String,
 }) {}
 
 export type ReadReport = Effect.Effect<
@@ -37,12 +37,12 @@ export const readOptionalFile = (path: string) =>
 
 /** The JSON text decoded, or none when it does not match: a sign-in file this reader does not know. */
 export const decodeOptional =
-  <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
+  <S extends S.ConstraintDecoder<unknown>>(schema: S) =>
   (text: Option.Option<string>): Option.Option<S["Type"]> =>
-    Option.flatMap(text, Schema.decodeOption(Schema.fromJsonString(schema)))
+    Option.flatMap(text, S.decodeOption(S.fromJsonString(schema)))
 
 /** The reply's body, decoded; a refusal, a rate limit or another failure as its UsageError. */
-export const getJson = <S extends Schema.ConstraintDecoder<unknown>>(url: string, headers: Readonly<Record<string, string>>, schema: S) =>
+export const getJson = <S extends S.ConstraintDecoder<unknown>>(url: string, headers: Readonly<Record<string, string>>, schema: S) =>
   getReply(url, headers).pipe(
     Effect.flatMap(({ status, text }) => replyBody(status, text)),
     Effect.flatMap((text) => decodeReply(schema, text)),
@@ -64,8 +64,8 @@ export const getReply = (url: string, headers: Readonly<Record<string, string>>)
 
 const REQUEST_TIMEOUT = Duration.seconds(20)
 
-export const decodeReply = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, text: string): Effect.Effect<S["Type"], UsageError> =>
-  Schema.decodeEffect(Schema.fromJsonString(schema))(text).pipe(
+export const decodeReply = <S extends S.ConstraintDecoder<unknown>>(schema: S, text: string): Effect.Effect<S["Type"], UsageError> =>
+  S.decodeEffect(S.fromJsonString(schema))(text).pipe(
     Effect.mapError((error) => new UsageError({ kind: "invalid", message: `unexpected reply: ${error.message}` })),
   )
 
@@ -79,7 +79,7 @@ export const replyBody = (status: number, text: string): Effect.Effect<string, U
           new UsageError({
             kind: "rejected",
             message: Option.getOrElse(
-              Option.map(Schema.decodeOption(Schema.fromJsonString(ServiceError))(text), ({ error }) => error.message),
+              Option.map(S.decodeOption(S.fromJsonString(ServiceError))(text), ({ error }) => error.message),
               () => `sign-in rejected (${status})`,
             ),
           }),
@@ -91,8 +91,8 @@ export const replyBody = (status: number, text: string): Effect.Effect<string, U
   )
 
 /** The error a service sends with a refusal. */
-export const ServiceError = Schema.Struct({
-  error: Schema.Struct({ type: Schema.OptionFromOptionalNullOr(Schema.String), message: Schema.String }),
+export const ServiceError = S.Struct({
+  error: S.Struct({ type: S.OptionFromOptionalNullOr(S.String), message: S.String }),
 })
 
 /**
@@ -137,4 +137,4 @@ export type UsageEnv = Readonly<{
 }>
 
 /** A time a service sends: epoch seconds or milliseconds, or an ISO date. */
-export const Time = Schema.Union([Schema.Finite, Schema.String])
+export const Time = S.Union([S.Finite, S.String])

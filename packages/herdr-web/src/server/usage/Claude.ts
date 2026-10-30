@@ -1,5 +1,5 @@
 // Claude's plan usage, read with Claude Code's own sign-in.
-import { Array, Effect, Match, Option, Schema } from "effect"
+import { Array, Effect, Match, Option, Schema as S } from "effect"
 import type { UsageReport, UsageSection, UsageWindow } from "../../shared/Usage.ts"
 import { decodeOptional, getJson, parseTime, readOptionalFile, SESSION, Time, titleCase, type UsageEnv, WEEK } from "./Read.ts"
 
@@ -23,42 +23,42 @@ export const readClaude = Effect.fn("readClaude")(function* (env: UsageEnv) {
   return Option.some(claudeReport(usage, { plan: claudePlan(oauth.subscriptionType, oauth.rateLimitTier), email }))
 })
 
-const Maybe = Schema.OptionFromOptionalNullOr
+const Maybe = S.OptionFromOptionalNullOr
 
-const ClaudeSettings = Schema.Struct({
-  env: Maybe(Schema.Struct({ ANTHROPIC_BASE_URL: Maybe(Schema.String) })),
-  apiKeyHelper: Maybe(Schema.String),
+const ClaudeSettings = S.Struct({
+  env: Maybe(S.Struct({ ANTHROPIC_BASE_URL: Maybe(S.String) })),
+  apiKeyHelper: Maybe(S.String),
 })
 
-const Credentials = Schema.Struct({
-  claudeAiOauth: Schema.Struct({
-    accessToken: Schema.String,
-    subscriptionType: Maybe(Schema.String),
-    rateLimitTier: Maybe(Schema.String),
+const Credentials = S.Struct({
+  claudeAiOauth: S.Struct({
+    accessToken: S.String,
+    subscriptionType: Maybe(S.String),
+    rateLimitTier: Maybe(S.String),
   }),
 })
 
-const Account = Schema.Struct({ oauthAccount: Schema.Struct({ emailAddress: Schema.String }) })
+const Account = S.Struct({ oauthAccount: S.Struct({ emailAddress: S.String }) })
 
-const Money = Schema.Struct({ amount_minor: Schema.Finite, currency: Maybe(Schema.String), exponent: Maybe(Schema.Finite) })
+const Money = S.Struct({ amount_minor: S.Finite, currency: Maybe(S.String), exponent: Maybe(S.Finite) })
 
-const ClaudeWindow = Schema.Struct({ utilization: Maybe(Schema.Finite), resets_at: Maybe(Time) })
+const ClaudeWindow = S.Struct({ utilization: Maybe(S.Finite), resets_at: Maybe(Time) })
 
-const Limit = Schema.Struct({
-  kind: Schema.String,
-  percent: Maybe(Schema.Finite),
+const Limit = S.Struct({
+  kind: S.String,
+  percent: Maybe(S.Finite),
   resets_at: Maybe(Time),
-  scope: Maybe(Schema.Struct({ model: Maybe(Schema.Struct({ display_name: Maybe(Schema.String) })) })),
+  scope: Maybe(S.Struct({ model: Maybe(S.Struct({ display_name: Maybe(S.String) })) })),
 })
 
-const Spend = Schema.Struct({ enabled: Schema.Boolean, used: Maybe(Money), limit: Maybe(Money) })
+const Spend = S.Struct({ enabled: S.Boolean, used: Maybe(Money), limit: Maybe(Money) })
 
-export const ClaudeUsage = Schema.Struct({
-  limits: Maybe(Schema.Array(Limit)),
+export const ClaudeUsage = S.Struct({
+  limits: Maybe(S.Array(Limit)),
   five_hour: Maybe(ClaudeWindow),
   seven_day: Maybe(ClaudeWindow),
   seven_day_breakdown: Maybe(
-    Schema.Struct({ rows: Schema.Array(Schema.Struct({ display_name: Maybe(Schema.String), percent: Maybe(Schema.Finite) })) }),
+    S.Struct({ rows: S.Array(S.Struct({ display_name: Maybe(S.String), percent: Maybe(S.Finite) })) }),
   ),
   spend: Maybe(Spend),
 })

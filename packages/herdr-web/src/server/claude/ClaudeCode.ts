@@ -1,7 +1,7 @@
 // Claude Code's adapter: its chat and model from its transcript, its todo
 // list from its task files, its input box and questions from its screen, and
 // its slash commands from its folders.
-import { Array, Effect, Match, Option, Schedule, Schema, Stream, String } from "effect"
+import { Array, Effect, Match, Option, Schedule, Schema as S, Stream, String } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
@@ -133,7 +133,7 @@ const REDRAW = { schedule: Schedule.spaced("200 millis"), times: 10 }
 
 const INPUT_BOX_POLL = "1 second"
 
-const sameInputBox = Schema.toEquivalence(InputBox)
+const sameInputBox = S.toEquivalence(InputBox)
 
 const transcriptError = (error: NoTranscript | PlatformError) =>
   new BridgeError({

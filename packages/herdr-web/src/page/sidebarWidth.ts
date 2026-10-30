@@ -1,6 +1,6 @@
 // The sidebar's width on a desk, when its edge was dragged: kept per browser,
 // as Ovis and herdr-app keep it. A phone's drawer keeps its own width.
-import { Match, Option, Schema } from "effect"
+import { Match, Option, Schema as S } from "effect"
 import { loadStored, saveStored } from "./stored.ts"
 
 /** The width the stylesheet gives the sidebar until its edge is dragged. */
@@ -11,7 +11,7 @@ export const MAX_SIDEBAR_WIDTH = 560
 const STEP = 16
 
 const STORAGE_KEY = "herdr-web.sidebar-width"
-const Width = Schema.OptionFromNullOr(Schema.Int)
+const Width = S.OptionFromNullOr(S.Int)
 
 /** Within the limits, in whole pixels. The stylesheet also keeps it under half the window. */
 export const clampSidebarWidth = (width: number) => Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)))

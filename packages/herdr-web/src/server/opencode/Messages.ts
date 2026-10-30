@@ -3,7 +3,7 @@
 // query that picks only what the chat shows: tool outputs alone make a page of
 // messages megabytes long. A message or content item of a type the chat does
 // not show, or one that does not decode, shows nothing.
-import { Array, Match, Option, Schema, String } from "effect"
+import { Array, Match, Option, Schema as S, String } from "effect"
 import { type Entry, toolSummary } from "../../shared/Chat.ts"
 import { wireTag } from "../../shared/Wire.ts"
 import { parseMarkdown } from "../Markdown.ts"
@@ -75,49 +75,49 @@ const NO_TURN: Turn = { asked: Option.none(), answered: Option.none() }
 // While the model still writes a call, its input is unparsed JSON text, and every key reads null.
 const INPUT_KEYS = ["description", "command", "filePath", "path", "pattern", "url", "query", "name"]
 
-const Unshown = Schema.Struct({ _tag: wireTag("Unshown"), type: Schema.String })
+const Unshown = S.Struct({ _tag: wireTag("Unshown"), type: S.String })
 
-const ContentItem = Schema.Union([
-  Schema.Struct({ _tag: wireTag("Text"), type: Schema.Literal("text"), text: Schema.String }),
-  Schema.Struct({
+const ContentItem = S.Union([
+  S.Struct({ _tag: wireTag("Text"), type: S.Literal("text"), text: S.String }),
+  S.Struct({
     _tag: wireTag("Tool"),
-    type: Schema.Literal("tool"),
-    id: Schema.String,
-    name: Schema.String,
-    status: Schema.Literals(["streaming", "running", "completed", "error"]),
-    inputs: Schema.Array(Schema.NullOr(Schema.String)),
+    type: S.Literal("tool"),
+    id: S.String,
+    name: S.String,
+    status: S.Literals(["streaming", "running", "completed", "error"]),
+    inputs: S.Array(S.NullOr(S.String)),
   }),
   Unshown,
 ])
 type ContentItem = typeof ContentItem.Type
 
-export const Message = Schema.Union([
-  Schema.Struct({ _tag: wireTag("User"), type: Schema.Literal("user"), id: Schema.String, created: Schema.Finite, text: Schema.String }),
-  Schema.Struct({
+export const Message = S.Union([
+  S.Struct({ _tag: wireTag("User"), type: S.Literal("user"), id: S.String, created: S.Finite, text: S.String }),
+  S.Struct({
     _tag: wireTag("Assistant"),
-    type: Schema.Literal("assistant"),
-    id: Schema.String,
+    type: S.Literal("assistant"),
+    id: S.String,
     // None while the reply is still being written.
-    completed: Schema.OptionFromNullOr(Schema.Finite),
-    content: Schema.Array(ContentItem),
+    completed: S.OptionFromNullOr(S.Finite),
+    content: S.Array(ContentItem),
   }),
   // A command the user ran in OpenCode's own shell (`!`).
-  Schema.Struct({
+  S.Struct({
     _tag: wireTag("Shell"),
-    type: Schema.Literal("shell"),
-    id: Schema.String,
-    command: Schema.String,
-    status: Schema.Literals(["running", "exited", "timeout", "killed"]),
-    exit: Schema.NullOr(Schema.Union([Schema.Finite, Schema.String])),
+    type: S.Literal("shell"),
+    id: S.String,
+    command: S.String,
+    status: S.Literals(["running", "exited", "timeout", "killed"]),
+    exit: S.NullOr(S.Union([S.Finite, S.String])),
   }),
-  Schema.Struct({ _tag: wireTag("Idle"), type: Schema.Literal("idle"), id: Schema.String, created: Schema.Finite }),
-  Schema.Struct({ _tag: wireTag("Compacted"), type: Schema.Literal("compaction"), id: Schema.String, status: Schema.Literal("completed") }),
+  S.Struct({ _tag: wireTag("Idle"), type: S.Literal("idle"), id: S.String, created: S.Finite }),
+  S.Struct({ _tag: wireTag("Compacted"), type: S.Literal("compaction"), id: S.String, status: S.Literal("completed") }),
   Unshown,
 ])
 export type Message = typeof Message.Type
 
 /** What `messagesQuery` prints. */
-export const Messages = Schema.Array(Message)
+export const Messages = S.Array(Message)
 
 const contentEntries = (id: string, item: ContentItem): ReadonlyArray<Entry> =>
   Match.valueTags(item, {

@@ -4,20 +4,20 @@
 // session id. Claude Code names it otherwise for an agent in a team, or one
 // started with CLAUDE_CODE_TASK_LIST_ID; the bridge sees neither, so such an
 // agent shows no list.
-import { Array, Option, Order, Schema } from "effect"
+import { Array, Option, Order, Schema as S } from "effect"
 import type { TodoItem } from "../../shared/Todo.ts"
 
 /** One task file, as Claude Code 2.1 writes it. */
-export const TaskFile = Schema.Struct({
-  id: Schema.String,
-  subject: Schema.String,
-  activeForm: Schema.optionalKey(Schema.String),
-  status: Schema.Literals(["pending", "in_progress", "completed"]),
-  blockedBy: Schema.Array(Schema.String),
+export const TaskFile = S.Struct({
+  id: S.String,
+  subject: S.String,
+  activeForm: S.optionalKey(S.String),
+  status: S.Literals(["pending", "in_progress", "completed"]),
+  blockedBy: S.Array(S.String),
 })
 export type TaskFile = typeof TaskFile.Type
 
-export const decodeTaskFile = Schema.decodeUnknownEffect(Schema.fromJsonString(TaskFile))
+export const decodeTaskFile = S.decodeUnknownEffect(S.fromJsonString(TaskFile))
 
 /** The list of tasks, in the order the agent made them. */
 export const todosOf = (tasks: ReadonlyArray<TaskFile>): ReadonlyArray<TodoItem> =>

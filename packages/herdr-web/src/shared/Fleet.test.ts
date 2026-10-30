@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest"
-import { Option, Schema } from "effect"
+import { Option, Schema as S } from "effect"
 import { Layout } from "./Fleet.ts"
 
-const decode = Schema.decodeUnknownSync(Layout)
+const decode = S.decodeUnknownSync(Layout)
 const block = (id: string, terminal: string, weight: Option.Option<number>): Layout => ({
   _tag: "Block",
   type: "block",
@@ -61,6 +61,6 @@ describe("Layout", () => {
 
   test("survives the trip from the bridge to the page", () => {
     const root: Layout = { _tag: "Split", type: "row", id: "r", size: Option.none(), children: [block("p1", "t1", Option.some(1))] }
-    expect(Schema.decodeSync(Layout)(Schema.encodeSync(Layout)(root))).toEqual(root)
+    expect(S.decodeSync(Layout)(S.encodeSync(Layout)(root))).toEqual(root)
   })
 })

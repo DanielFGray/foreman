@@ -1,4 +1,4 @@
-import { Effect, Option, Result, Schema } from "effect"
+import { Effect, Option, Result, Schema as S } from "effect"
 import { describe, expect, test } from "vitest"
 import type { UsageReport } from "../../shared/Usage.ts"
 import { ClaudeUsage, claudeReport } from "./Claude.ts"
@@ -8,8 +8,8 @@ import { OpencodeUsage, opencodeReport } from "./OpenCode.ts"
 import { parseTime, replyBody, SESSION, UsageError, WEEK } from "./Read.ts"
 import { afterRead, type ProviderState, REFRESH, REJECTED_LIMIT } from "./Usage.ts"
 
-const decode = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, json: string): S["Type"] =>
-  Schema.decodeSync(Schema.fromJsonString(schema))(json)
+const decode = <S extends S.ConstraintDecoder<unknown>>(schema: S, json: string): S["Type"] =>
+  S.decodeSync(S.fromJsonString(schema))(json)
 
 const NOW = Date.parse("2026-10-30T01:00:00Z")
 

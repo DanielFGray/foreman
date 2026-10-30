@@ -5,26 +5,26 @@
 // Effect's RpcClient is not used: its socket protocol pings every few seconds
 // and drops a connection that sends no frame back, and hc never answers a ping.
 import { BunSocket } from "@effect/platform-bun"
-import { Deferred, Effect, Match, MutableHashMap, Option, Queue, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Match, MutableHashMap, Option, Queue, Ref, Schema as S, Stream } from "effect"
 import { Ndjson } from "effect/encoding"
 import { Socket } from "effect/socket"
 import { wireTag } from "../shared/Wire.ts"
 
 /** hc refused a call; `kind` is its stable error kind (`not_found`, `blocked`, ...). */
-export class HcError extends Schema.TaggedError<HcError, { readonly brand: unique symbol }>()("HcError", {
-  method: Schema.String,
-  kind: Schema.String,
-  message: Schema.String,
+export class HcError extends S.TaggedError<HcError, { readonly brand: unique symbol }>()("HcError", {
+  method: S.String,
+  kind: S.String,
+  message: S.String,
 }) {}
 
 /** The connection ended or never opened: hc stopped, restarted or is not running. */
-export class HcLost extends Schema.TaggedError<HcLost, { readonly brand: unique symbol }>()("HcLost", {
-  cause: Schema.Defect(),
+export class HcLost extends S.TaggedError<HcLost, { readonly brand: unique symbol }>()("HcLost", {
+  cause: S.Defect(),
 }) {}
 
 /** hc sent something this client cannot read, or speaks another protocol generation. */
-export class HcProtocolError extends Schema.TaggedError<HcProtocolError, { readonly brand: unique symbol }>()("HcProtocolError", {
-  cause: Schema.Defect(),
+export class HcProtocolError extends S.TaggedError<HcProtocolError, { readonly brand: unique symbol }>()("HcProtocolError", {
+  cause: S.Defect(),
 }) {}
 
 export type HcFailure = HcError | HcLost | HcProtocolError
@@ -32,8 +32,8 @@ export type HcFailure = HcError | HcLost | HcProtocolError
 /** An hc method: its name with the Schemas of its params and its result. */
 export interface Method<P, A, AI> {
   readonly name: string
-  readonly request: Schema.Codec<Request<P>, string>
-  readonly result: Schema.Codec<A, AI>
+  readonly request: S.Codec<Request<P>, string>
+  readonly result: S.Codec<A, AI>
 }
 
 interface Request<P> {
@@ -45,12 +45,12 @@ interface Request<P> {
 
 export const method = <P, PI, A, AI>(
   name: string,
-  params: Schema.Codec<P, PI>,
-  result: Schema.Codec<A, AI>,
+  params: S.Codec<P, PI>,
+  result: S.Codec<A, AI>,
 ): Method<P, A, AI> => ({
   name,
-  request: Schema.fromJsonString(
-    Schema.Struct({ jsonrpc: Schema.Literal("2.0"), id: Schema.String, method: Schema.String, params }),
+  request: S.fromJsonString(
+    S.Struct({ jsonrpc: S.Literal("2.0"), id: S.String, method: S.String, params }),
   ),
   result,
 })
@@ -66,7 +66,7 @@ export interface Connection<N> {
  * generation 1). Closing the scope closes the socket. When the socket ends,
  * every call in flight and the notification stream fail with HcLost.
  */
-export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notification: Schema.Codec<N, NI>) {
+export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notification: S.Codec<N, NI>) {
   const socket = yield* BunSocket.makeNet({ path })
   const writer = yield* socket.writer
   const nextId = yield* Ref.make(0)
@@ -94,7 +94,7 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
       : Queue.offer(notes, message).pipe(Effect.asVoid)
 
   yield* Socket.toStream(socket).pipe(
-    Stream.pipeThroughChannel(Ndjson.decodeSchema(Schema.Union([Reply, notification]))()),
+    Stream.pipeThroughChannel(Ndjson.decodeSchema(S.Union([Reply, notification]))()),
     Stream.runForEach(dispatch),
     Effect.matchCauseEffect({
       onSuccess: () => lose("hc closed the connection"),
@@ -113,7 +113,7 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
           Match.valueTags(reply, { Lost: ({ error }) => Effect.fail(error), Failure: (failure) => settle(m, failure), Success: (success) => settle(m, success) }),
         ).pipe(Effect.asVoid),
       )
-      const line = yield* Schema.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
+      const line = yield* S.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
         Effect.mapError((cause) => new HcProtocolError({ cause })),
       )
       yield* writer.write(`${line}\n`).pipe(Effect.mapError((cause) => new HcLost({ cause })))
@@ -129,30 +129,30 @@ export const settle = <P, A, AI>(m: Method<P, A, AI>, reply: Reply): Effect.Effe
   Match.valueTags(reply, {
     Failure: ({ error }) => Effect.fail(new HcError({ method: m.name, kind: error.data.kind, message: error.message })),
     Success: ({ result }) =>
-      Schema.decodeUnknownEffect(m.result)(result).pipe(Effect.mapError((cause) => new HcProtocolError({ cause }))),
+      S.decodeUnknownEffect(m.result)(result).pipe(Effect.mapError((cause) => new HcProtocolError({ cause }))),
   })
 
 const hello = method(
   "hello",
-  Schema.Struct({ generation: Schema.Literal(1) }),
-  Schema.Struct({ generation: Schema.Literal(1) }),
+  S.Struct({ generation: S.Literal(1) }),
+  S.Struct({ generation: S.Literal(1) }),
 )
 
 // `result` stays undecoded here: its Schema belongs to the call that the id
 // names, and that call decodes it as soon as the reply is matched.
-const Success = Schema.Struct({ _tag: wireTag("Success"), id: Schema.String, result: Schema.Unknown })
-const Failure = Schema.Struct({
+const Success = S.Struct({ _tag: wireTag("Success"), id: S.String, result: S.Unknown })
+const Failure = S.Struct({
   _tag: wireTag("Failure"),
-  id: Schema.String,
-  error: Schema.Struct({ message: Schema.String, data: Schema.Struct({ kind: Schema.String }) }),
+  id: S.String,
+  error: S.Struct({ message: S.String, data: S.Struct({ kind: S.String }) }),
 })
 
 /** A reply to a call, with its result not yet decoded. */
-export const Reply = Schema.Union([Success, Failure])
+export const Reply = S.Union([Success, Failure])
 export type Reply = typeof Reply.Type
 interface Lost {
   readonly _tag: "Lost"
   readonly error: HcLost
 }
 
-const isReply = Schema.is(Schema.toType(Reply))
+const isReply = S.is(S.toType(Reply))

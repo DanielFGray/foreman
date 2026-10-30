@@ -2,24 +2,24 @@
 // prompt or a command. Its work (tool calls, and the replies the agent writes
 // between them) folds into one item, and its last reply stays outside the
 // fold as the answer. A turn of fifty tool calls reads as one line.
-import { Array, HashMap, Match, Option, Result, Schema, Tuple } from "effect"
+import { Array, HashMap, Match, Option, Result, Schema as S, Tuple } from "effect"
 import { Block, type Entry } from "../shared/Chat.ts"
 
-export const Outcome = Schema.Literals(["running", "succeeded", "failed"])
+export const Outcome = S.Literals(["running", "succeeded", "failed"])
 export type Outcome = typeof Outcome.Type
 
-export const Call = Schema.TaggedStruct("Call", { id: Schema.String, name: Schema.String, summary: Schema.String, outcome: Outcome })
+export const Call = S.TaggedStruct("Call", { id: S.String, name: S.String, summary: S.String, outcome: Outcome })
 export type Call = typeof Call.Type
 
 /** A reply written while the turn was still working. */
-export const Note = Schema.TaggedStruct("Note", { id: Schema.String, blocks: Schema.Array(Block) })
+export const Note = S.TaggedStruct("Note", { id: S.String, blocks: S.Array(Block) })
 export type Note = typeof Note.Type
 
-export const Step = Schema.Union([Call, Note])
+export const Step = S.Union([Call, Note])
 export type Step = typeof Step.Type
 
 /** A turn's work, in the order it happened. */
-export const Work = Schema.TaggedStruct("Work", { id: Schema.String, steps: Schema.NonEmptyArray(Step) })
+export const Work = S.TaggedStruct("Work", { id: S.String, steps: S.NonEmptyArray(Step) })
 export type Work = typeof Work.Type
 
 export type Item = Exclude<Entry, { _tag: "Tool" | "ToolResult" }> | Work

@@ -1,5 +1,5 @@
 // OpenCode Go's usage, read with a key from OpenCode's own auth file.
-import { Array, Effect, Option, Schema } from "effect"
+import { Array, Effect, Option, Schema as S } from "effect"
 import type { UsageReport, UsageWindow } from "../../shared/Usage.ts"
 import {
   decodeOptional,
@@ -46,17 +46,17 @@ export const readOpencode = Effect.fn("readOpencode")(function* (env: UsageEnv) 
 export const readOpencodeAuth = (env: UsageEnv) =>
   Effect.map(readOptionalFile(`${env.dataHome}/opencode/auth.json`), decodeOptional(OpencodeAuth))
 
-const Maybe = Schema.OptionFromOptionalNullOr
+const Maybe = S.OptionFromOptionalNullOr
 
-const OpencodeAuth = Schema.Struct({
-  "opencode-go": Maybe(Schema.Struct({ key: Maybe(Schema.String) })),
-  opencode: Maybe(Schema.Struct({ key: Maybe(Schema.String) })),
-  openai: Maybe(Schema.Struct({ type: Schema.String, access: Maybe(Schema.String), accountId: Maybe(Schema.String) })),
+const OpencodeAuth = S.Struct({
+  "opencode-go": Maybe(S.Struct({ key: Maybe(S.String) })),
+  opencode: Maybe(S.Struct({ key: Maybe(S.String) })),
+  openai: Maybe(S.Struct({ type: S.String, access: Maybe(S.String), accountId: Maybe(S.String) })),
 })
 
 // A valid key whose workspace has no Go subscription: nothing to show.
 const isUnentitled = (text: string) =>
-  Option.exists(Schema.decodeOption(Schema.fromJsonString(ServiceError))(text), ({ error }) =>
+  Option.exists(S.decodeOption(S.fromJsonString(ServiceError))(text), ({ error }) =>
     Option.contains(error.type, "EntitlementError"),
   )
 
@@ -69,33 +69,33 @@ const LIMIT_KEYS = ["limit", "total", "quota", "limitMicroCents"] as const
 const RESET_IN_KEYS = ["resetInSec", "resetInSeconds", "resetSeconds", "reset_sec", "reset_in_sec", "resetsInSec", "resetsInSeconds", "resetIn", "resetSec"] as const
 const RESET_AT_KEYS = ["resetAt", "resetsAt", "reset_at", "resets_at", "nextReset", "next_reset", "renewAt", "renew_at"] as const
 
-const Meter = Schema.Struct({
-  usagePercent: Maybe(Schema.Finite),
-  usedPercent: Maybe(Schema.Finite),
-  percentUsed: Maybe(Schema.Finite),
-  percent: Maybe(Schema.Finite),
-  usage_percent: Maybe(Schema.Finite),
-  used_percent: Maybe(Schema.Finite),
-  utilization: Maybe(Schema.Finite),
-  utilizationPercent: Maybe(Schema.Finite),
-  utilization_percent: Maybe(Schema.Finite),
-  used: Maybe(Schema.Finite),
-  usage: Maybe(Schema.Finite),
-  consumed: Maybe(Schema.Finite),
-  usedMicroCents: Maybe(Schema.Finite),
-  limit: Maybe(Schema.Finite),
-  total: Maybe(Schema.Finite),
-  quota: Maybe(Schema.Finite),
-  limitMicroCents: Maybe(Schema.Finite),
-  resetInSec: Maybe(Schema.Finite),
-  resetInSeconds: Maybe(Schema.Finite),
-  resetSeconds: Maybe(Schema.Finite),
-  reset_sec: Maybe(Schema.Finite),
-  reset_in_sec: Maybe(Schema.Finite),
-  resetsInSec: Maybe(Schema.Finite),
-  resetsInSeconds: Maybe(Schema.Finite),
-  resetIn: Maybe(Schema.Finite),
-  resetSec: Maybe(Schema.Finite),
+const Meter = S.Struct({
+  usagePercent: Maybe(S.Finite),
+  usedPercent: Maybe(S.Finite),
+  percentUsed: Maybe(S.Finite),
+  percent: Maybe(S.Finite),
+  usage_percent: Maybe(S.Finite),
+  used_percent: Maybe(S.Finite),
+  utilization: Maybe(S.Finite),
+  utilizationPercent: Maybe(S.Finite),
+  utilization_percent: Maybe(S.Finite),
+  used: Maybe(S.Finite),
+  usage: Maybe(S.Finite),
+  consumed: Maybe(S.Finite),
+  usedMicroCents: Maybe(S.Finite),
+  limit: Maybe(S.Finite),
+  total: Maybe(S.Finite),
+  quota: Maybe(S.Finite),
+  limitMicroCents: Maybe(S.Finite),
+  resetInSec: Maybe(S.Finite),
+  resetInSeconds: Maybe(S.Finite),
+  resetSeconds: Maybe(S.Finite),
+  reset_sec: Maybe(S.Finite),
+  reset_in_sec: Maybe(S.Finite),
+  resetsInSec: Maybe(S.Finite),
+  resetsInSeconds: Maybe(S.Finite),
+  resetIn: Maybe(S.Finite),
+  resetSec: Maybe(S.Finite),
   resetAt: Maybe(Time),
   resetsAt: Maybe(Time),
   reset_at: Maybe(Time),
@@ -107,8 +107,8 @@ const Meter = Schema.Struct({
 })
 type Meter = typeof Meter.Type
 
-export const OpencodeUsage = Schema.Struct({
-  usage: Schema.Struct({ rolling: Maybe(Meter), weekly: Maybe(Meter), monthly: Maybe(Meter) }),
+export const OpencodeUsage = S.Struct({
+  usage: S.Struct({ rolling: Maybe(Meter), weekly: Maybe(Meter), monthly: Maybe(Meter) }),
 })
 export type OpencodeUsage = typeof OpencodeUsage.Type
 

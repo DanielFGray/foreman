@@ -8,19 +8,19 @@
 // grows: a node's look, a mod's props. The bridge types only the fields it
 // reads or edits, and carries every other field through as it was, so a write
 // never drops what the window wrote.
-import { Array, Option, pipe, Schema } from "effect"
+import { Array, Option, pipe, Schema as S } from "effect"
 import type { Direction } from "../shared/Api.ts"
 import type { Layout, PaneContent, Space } from "../shared/Fleet.ts"
 
 /** The fields herdr-app owns and the bridge never reads. */
-const Rest = [Schema.Record(Schema.String, Schema.Unknown)] as const
+const Rest = [S.Record(S.String, S.Unknown)] as const
 
 /** A node's share of its parent: a weight, or fixed pixels. */
-const Size = Schema.StructWithRest(Schema.Struct({ weight: Schema.optionalKey(Schema.Finite), px: Schema.optionalKey(Schema.Finite) }), Rest)
+const Size = S.StructWithRest(S.Struct({ weight: S.optionalKey(S.Finite), px: S.optionalKey(S.Finite) }), Rest)
 type Size = typeof Size.Type
 
 /** What a block shows: a terminal, a mod, or something else herdr-app draws. */
-const Content = Schema.StructWithRest(Schema.Struct({ terminal: Schema.optionalKey(Schema.String), mod: Schema.optionalKey(Schema.String) }), Rest)
+const Content = S.StructWithRest(S.Struct({ terminal: S.optionalKey(S.String), mod: S.optionalKey(S.String) }), Rest)
 
 export type Node = {
   readonly id?: string
@@ -36,29 +36,29 @@ export type Node = {
   readonly [key: string]: unknown
 }
 
-export const Node: Schema.Codec<Node> = Schema.StructWithRest(
-  Schema.Struct({
-    id: Schema.optionalKey(Schema.String),
-    type: Schema.String,
-    children: Schema.optionalKey(Schema.Array(Schema.suspend((): Schema.Codec<Node> => Node))),
-    content: Schema.optionalKey(Content),
-    size: Schema.optionalKey(Size),
-    active: Schema.optionalKey(Schema.String),
-    closable: Schema.optionalKey(Schema.Boolean),
+export const Node: S.Codec<Node> = S.StructWithRest(
+  S.Struct({
+    id: S.optionalKey(S.String),
+    type: S.String,
+    children: S.optionalKey(S.Array(S.suspend((): S.Codec<Node> => Node))),
+    content: S.optionalKey(Content),
+    size: S.optionalKey(Size),
+    active: S.optionalKey(S.String),
+    closable: S.optionalKey(S.Boolean),
   }),
   Rest,
 )
 
-const Tab = Schema.StructWithRest(Schema.Struct({ id: Schema.String, name: Schema.String, root: Node }), Rest)
+const Tab = S.StructWithRest(S.Struct({ id: S.String, name: S.String, root: Node }), Rest)
 type Tab = typeof Tab.Type
 
-const SharedSpace = Schema.StructWithRest(
-  Schema.Struct({ id: Schema.String, name: Schema.String, folder: Schema.String, tabs: Schema.Array(Tab) }),
+const SharedSpace = S.StructWithRest(
+  S.Struct({ id: S.String, name: S.String, folder: S.String, tabs: S.Array(Tab) }),
   Rest,
 )
 type SharedSpace = typeof SharedSpace.Type
 
-export const LayoutDoc = Schema.StructWithRest(Schema.Struct({ spaces: Schema.Array(SharedSpace) }), Rest)
+export const LayoutDoc = S.StructWithRest(S.Struct({ spaces: S.Array(SharedSpace) }), Rest)
 export type LayoutDoc = typeof LayoutDoc.Type
 
 /**

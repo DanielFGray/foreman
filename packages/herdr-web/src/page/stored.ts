@@ -1,15 +1,15 @@
 // What this browser keeps for itself, in its local storage: a phone and a
 // desk each keep their own.
 import { BrowserKeyValueStore } from "@effect/platform-browser"
-import { Effect, Option, type Schema } from "effect"
+import { Effect, Option, type Schema as S } from "effect"
 import { KeyValueStore } from "effect/persistence"
 
 /** The kept value, or the fallback when there is none, it is from another version, or storage is closed to the page (a private window). */
-export const loadStored = <S extends Schema.Constraint>(key: string, schema: S, fallback: S["Type"]) =>
+export const loadStored = <S extends S.Constraint>(key: string, schema: S, fallback: S["Type"]) =>
   Effect.map(loadKept(key, schema), Option.getOrElse(() => fallback))
 
 /** The kept value; none in the same cases as `loadStored`. */
-export const loadKept = <S extends Schema.Constraint>(key: string, schema: S) =>
+export const loadKept = <S extends S.Constraint>(key: string, schema: S) =>
   Effect.gen(function* () {
     const store = KeyValueStore.toSchemaStore(yield* KeyValueStore.KeyValueStore, schema)
     return yield* store.get(key)
@@ -22,7 +22,7 @@ export const loadKept = <S extends Schema.Constraint>(key: string, schema: S) =>
   )
 
 /** Keeps the value; a failure only costs the next load its value, so it is logged and dropped. */
-export const saveStored = <S extends Schema.Constraint>(key: string, schema: S, value: S["Type"]) =>
+export const saveStored = <S extends S.Constraint>(key: string, schema: S, value: S["Type"]) =>
   Effect.gen(function* () {
     const store = KeyValueStore.toSchemaStore(yield* KeyValueStore.KeyValueStore, schema)
     yield* store.set(key, value)

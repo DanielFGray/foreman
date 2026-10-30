@@ -6,7 +6,7 @@
 //
 // Each feature an agent lists here, the bridge implements in that agent's
 // adapter (src/server/Agents.ts); the types hold the two to the same list.
-import { Array, HashMap, Option, pipe, Schema, String } from "effect"
+import { Array, HashMap, Option, pipe, Schema as S, String } from "effect"
 import type { Terminal } from "./Fleet.ts"
 
 /**
@@ -18,11 +18,11 @@ import type { Terminal } from "./Fleet.ts"
 export type Feature = "chat" | "model" | "inputBox" | "questions" | "commands" | "todos" | "pairing"
 
 /** A model the agent may switch to: what the agent takes, and what the page calls it. */
-export const ModelChoice = Schema.Struct({ alias: Schema.String, name: Schema.String })
+export const ModelChoice = S.Struct({ alias: S.String, name: S.String })
 export type ModelChoice = typeof ModelChoice.Type
 
 /** The models the agent may switch to, the one it uses now, and a note under them. */
-export const ModelChoices = Schema.Struct({ choices: Schema.Array(ModelChoice), current: Schema.Option(Schema.String), note: Schema.String })
+export const ModelChoices = S.Struct({ choices: S.Array(ModelChoice), current: S.Option(S.String), note: S.String })
 export type ModelChoices = typeof ModelChoices.Type
 
 export type Harness = Readonly<{

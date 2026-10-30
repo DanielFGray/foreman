@@ -2,7 +2,7 @@
 // ghostty-web, drawing the terminal's output to a canvas, and sending the keys
 // typed into it. hc emulates its terminals as Ghostty too, so programs see
 // the same terminal here as at the desk.
-import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Stream, SubscriptionRef } from "effect"
+import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema as S, Stream, SubscriptionRef } from "effect"
 import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
 import { applyModifiers, parseModifiersAttribute } from "./keys.ts"
@@ -15,20 +15,20 @@ const RECONNECT_DELAY = "2 seconds"
 const SCROLLBACK_LINES = 5000
 
 /** The state of a pane's line to its terminal. */
-export const Link = Schema.Union([
-  Schema.TaggedStruct("Connecting", {}),
-  Schema.TaggedStruct("Live", {}),
-  Schema.TaggedStruct("Lost", { reason: Schema.String }),
+export const Link = S.Union([
+  S.TaggedStruct("Connecting", {}),
+  S.TaggedStruct("Live", {}),
+  S.TaggedStruct("Lost", { reason: S.String }),
 ])
 export type Link = typeof Link.Type
 
-export const ChangedLink = Schema.TaggedStruct("ChangedLink", { address: Schema.String, link: Link })
+export const ChangedLink = S.TaggedStruct("ChangedLink", { address: S.String, link: Link })
 
 /** A tap, or a Ctrl or Cmd click, on a link in the terminal. */
-export const PointedAtLink = Schema.TaggedStruct("PointedAtLink", { uri: Schema.String })
+export const PointedAtLink = S.TaggedStruct("PointedAtLink", { uri: S.String })
 
 /** A key typed into the terminal took the armed soft modifiers. */
-export const UsedModifiers = Schema.TaggedStruct("UsedModifiers", {})
+export const UsedModifiers = S.TaggedStruct("UsedModifiers", {})
 
 /**
  * The soft modifiers armed for this terminal, as the view writes them: the
@@ -37,8 +37,8 @@ export const UsedModifiers = Schema.TaggedStruct("UsedModifiers", {})
 export const MODIFIERS_ATTRIBUTE = "data-modifiers"
 
 /** The emulator could not start in this browser. */
-class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique symbol }>()("NoEmulator", {
-  cause: Schema.Defect(),
+class NoEmulator extends S.TaggedError<NoEmulator, { readonly brand: unique symbol }>()("NoEmulator", {
+  cause: S.Defect(),
 }) {}
 
 /**
@@ -51,7 +51,7 @@ class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique
  * while soft modifiers are armed (MODIFIERS_ATTRIBUTE) goes out with them.
  */
 export const LiveTerminal = Mount.defineStream("LiveTerminal", {
-  args: { address: Schema.String, font: Schema.Option(Schema.String), size: Schema.Int },
+  args: { address: S.String, font: S.Option(S.String), size: S.Int },
   messages: [ChangedLink, UsedModifiers, PointedAtLink],
   execute: ({ element, address, font, size }) =>
     Stream.callback<typeof ChangedLink.Type | typeof UsedModifiers.Type | typeof PointedAtLink.Type>((messages) =>
@@ -177,8 +177,8 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
     ),
 })
 
-const Typed = Schema.TaggedStruct("Typed", { data: Schema.String })
-const Resized = Schema.TaggedStruct("Resized", { cols: Schema.Int, rows: Schema.Int })
+const Typed = S.TaggedStruct("Typed", { data: S.String })
+const Resized = S.TaggedStruct("Resized", { cols: S.Int, rows: S.Int })
 /** Fetches the chosen font from the bridge's /fonts.css; without it the terminal uses the fallback. */
 const loadFont = (font: Option.Option<string>, size: number) =>
   Option.match(font, {

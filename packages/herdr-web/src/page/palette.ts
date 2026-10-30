@@ -1,6 +1,6 @@
 // The command palette's search: every machine's spaces, tabs, panes and
 // agents, and the settings, matched by a typed query and ranked.
-import { Array, Option, Order, pipe, Record, Result, Schema, String } from "effect"
+import { Array, Option, Order, pipe, Record, Result, Schema as S, String } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
 import type { Fleet, Terminal } from "../shared/Fleet.ts"
 import { locate, spaceRowOf, spacesOf, terminalLabel, terminalNote } from "./group.ts"
@@ -9,8 +9,8 @@ import { programOf } from "./programs.ts"
 
 /** What opening a result shows: the same things a click in the sidebar shows. */
 export const PaletteTarget = defineTaggedUnion({
-  Tab: { tabId: Schema.String },
-  Terminal: { address: Schema.String },
+  Tab: { tabId: S.String },
+  Terminal: { address: S.String },
   Settings: {},
 })
 export type PaletteTarget = typeof PaletteTarget.Type

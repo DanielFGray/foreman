@@ -4,7 +4,7 @@
 // since a series of questions keeps one status. The card shows only while the
 // agent still waits under the status it was read under, so an answer from the
 // terminal or another device takes it away with the next fleet.
-import { Array, Match, Option, Record, Schema, String } from "effect"
+import { Array, Match, Option, Record, Schema as S, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import type { Answer, Question } from "../shared/Chat.ts"
@@ -14,7 +14,7 @@ import { type Asked, Asking, Message, type Model, type UpdateReturn } from "./mo
 import { lastFleet, openAs, supportsAt } from "./selection.ts"
 
 /** One read of a blocked agent's question. */
-export const QuestionRead = Schema.Struct({ address: Schema.String, statusMs: Schema.Int, reads: Schema.Int })
+export const QuestionRead = S.Struct({ address: S.String, statusMs: S.Int, reads: S.Int })
 export type QuestionRead = typeof QuestionRead.Type
 
 /** The reads the shown chats need: one per blocked agent, and one more after each answer. */

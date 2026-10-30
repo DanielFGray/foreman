@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest"
-import { Option, Schema } from "effect"
+import { Option, Schema as S } from "effect"
 import { closePane, closeSpace, closeTab, LayoutDoc, moveSpace, newSpace, newTab, type Node, renameSpace, spacesOf, split } from "./LayoutDoc.ts"
 
-const decode = Schema.decodeUnknownSync(LayoutDoc)
-const encode = Schema.encodeSync(LayoutDoc)
+const decode = S.decodeUnknownSync(LayoutDoc)
+const encode = S.encodeSync(LayoutDoc)
 
 const pane = (id: string, size?: Node["size"]): Node => {
   const block: Node = { id, type: "block", content: { terminal: `t-${id}` } }

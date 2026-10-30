@@ -3,7 +3,7 @@
 // carries the attach call on channel 0 and the terminal's bytes on the channel
 // hc gives back.
 import { BunSocket } from "@effect/platform-bun"
-import { Cause, Deferred, Effect, Match, Queue, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Match, Queue, Schema as S, Stream } from "effect"
 import { Socket } from "effect/socket"
 import { type HcFailure, HcLost, HcProtocolError, type Method, method, Reply, settle } from "./Connection.ts"
 import { creditPayload, encodeFrame, type Frame, FrameKind, type Incoming, readConnection, resizePayload, startReading } from "./Frame.ts"
@@ -108,13 +108,13 @@ const open = Effect.fnUntraced(function* (path: string, params: AttachParams) {
 /** Scrollback lines hc paints before the screen, so a new viewer can scroll back. */
 export const HISTORY_LINES = 1000
 
-const AttachParams = Schema.Struct({
-  terminal: Schema.String,
-  cols: Schema.Int,
-  rows: Schema.Int,
-  resumed: Schema.optionalKey(Schema.Boolean),
-  history: Schema.optionalKey(Schema.Int),
-  observe: Schema.optionalKey(Schema.Boolean),
+const AttachParams = S.Struct({
+  terminal: S.String,
+  cols: S.Int,
+  rows: S.Int,
+  resumed: S.optionalKey(S.Boolean),
+  history: S.optionalKey(S.Int),
+  observe: S.optionalKey(S.Boolean),
 })
 type AttachParams = typeof AttachParams.Type
 
@@ -122,20 +122,20 @@ const viewerParams = ({ terminal, cols, rows }: AttachRequest): AttachParams => 
 
 const framedHello = method(
   "hello",
-  Schema.Struct({ generation: Schema.Literal(1), framed: Schema.Literal(true) }),
-  Schema.Struct({ generation: Schema.Literal(1) }),
+  S.Struct({ generation: S.Literal(1), framed: S.Literal(true) }),
+  S.Struct({ generation: S.Literal(1) }),
 )
 
 const attachMethod = method(
   "terminal.attach",
   AttachParams,
-  Schema.Struct({ channel: Schema.Int, terminal: Schema.Struct({ cols: Schema.Int, rows: Schema.Int }) }),
+  S.Struct({ channel: S.Int, terminal: S.Struct({ cols: S.Int, rows: S.Int }) }),
 )
 
 const encodeRequest = <P, A, AI>(m: Method<P, A, AI>, id: string, params: P) =>
-  Schema.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
+  S.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
     Effect.mapError((cause) => new HcProtocolError({ cause })),
   )
 
 const decodeReply = (text: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(Reply))(text).pipe(Effect.mapError((cause) => new HcProtocolError({ cause })))
+  S.decodeEffect(S.fromJsonString(Reply))(text).pipe(Effect.mapError((cause) => new HcProtocolError({ cause })))

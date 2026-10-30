@@ -1,6 +1,6 @@
 // The page: its start, how each message changes the model, what it watches,
 // and the layout of sidebar, edge and workspace.
-import { Array, Clock, Effect, Equivalence, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
+import { Array, Clock, Effect, Equivalence, Match, Option, Record, Schedule, Schema as S, Stream, String } from "effect"
 import { Subscription } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
@@ -700,7 +700,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // The pointer anywhere on the page while the sidebar's edge is held, since
   // a drag soon leaves the thin edge behind.
   sidebarDrag: entry(
-    { isHeld: Schema.Boolean },
+    { isHeld: S.Boolean },
     {
       modelToDependencies: (model) => ({ isHeld: Option.isSome(model.sidebarGrip) }),
       dependenciesToStream: ({ isHeld }) =>
@@ -716,7 +716,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // Faster while a prompt waits or an agent shows seconds. A new rate starts a new stream, which reads
   // the clock at once, so a prompt just sent learns its time straight away.
   clock: entry(
-    { isFast: Schema.Boolean },
+    { isFast: S.Boolean },
     {
       modelToDependencies: (model) => ({
         isFast:
@@ -732,7 +732,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // The question each blocked agent in a shown chat waits on. A new block, or
   // an answer, changes the reads and so reads the screens again.
   questions: entry(
-    { reads: Schema.Array(QuestionRead) },
+    { reads: S.Array(QuestionRead) },
     {
       modelToDependencies: (model) => ({ reads: questionReads(model) }),
       dependenciesToStream: ({ reads }) => Stream.mergeAll(Array.map(reads, questionStream), { concurrency: "unbounded" }),
@@ -742,7 +742,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // The input box of each agent in a shown chat or with messages queued, which
   // tells the queue when the agent can take a message and the prompt what it suggests.
   inputBoxes: entry(
-    { addresses: Schema.Array(Schema.String) },
+    { addresses: S.Array(S.String) },
     {
       modelToDependencies: (model) => ({ addresses: Array.filter(watchedBoxes(model, openAs(model, "Chat")), (address) => supportsAt(model, address, "inputBox")) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, inputBoxStream), { concurrency: "unbounded" }),
@@ -751,7 +751,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
 
   // A pause in typing in the focused prompt: each edit starts the wait again.
   typingPause: entry(
-    { edit: Schema.Option(Schema.Struct({ address: Schema.String, text: Schema.String })) },
+    { edit: S.Option(S.Struct({ address: S.String, text: S.String })) },
     {
       modelToDependencies: (model) => ({ edit: pendingEdit(model) }),
       dependenciesToStream: ({ edit }) =>
@@ -765,7 +765,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // The model of each shown agent that names one. A failed read shows no tag, and
   // is tried again after a pause.
   models: entry(
-    { addresses: Schema.Array(Schema.String) },
+    { addresses: S.Array(S.String) },
     {
       modelToDependencies: (model) => ({ addresses: Array.filter(shownTerminals(model), (address) => supportsAt(model, address, "model")) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, modelStream), { concurrency: "unbounded" }),
@@ -775,7 +775,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // The todo list of each live agent that keeps one, for its chat and its sidebar row.
   // A failed read shows no list, and is tried again after a pause.
   todos: entry(
-    { addresses: Schema.Array(Schema.String) },
+    { addresses: S.Array(S.String) },
     {
       modelToDependencies: (model) => ({ addresses: watchedTodos(model) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, todosStream), { concurrency: "unbounded" }),
@@ -785,7 +785,7 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // Each shown chat, live. When a call fails the page shows why and calls
   // again after a pause; the bridge then sends the whole recent chat again.
   chat: entry(
-    { addresses: Schema.Array(Schema.String) },
+    { addresses: S.Array(S.String) },
     {
       modelToDependencies: (model) => ({ addresses: openAs(model, "Chat") }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, chatStream), { concurrency: "unbounded" }),

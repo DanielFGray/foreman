@@ -2,12 +2,12 @@
 // leaves out. The bridge watches the terminal without typing into it or
 // setting its size, replays hc's first paint into a headless terminal of the
 // same size, and reads the cells back.
-import { Array, Config, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Array, Config, Context, Effect, Layer, Option, Schema as S, Stream } from "effect"
 import { CellFlags, Ghostty, type GhosttyTerminal } from "ghostty-web"
 import { observe, type Size } from "../hc/Attach.ts"
 import type { Screen } from "./claude/InputBox.ts"
 
-class NoTerminalEmulator extends Schema.TaggedError<NoTerminalEmulator, { readonly brand: unique symbol }>()("NoTerminalEmulator", { cause: Schema.Defect() }) {}
+class NoTerminalEmulator extends S.TaggedError<NoTerminalEmulator, { readonly brand: unique symbol }>()("NoTerminalEmulator", { cause: S.Defect() }) {}
 
 export class ScreenCells extends Context.Service<ScreenCells>()("herdr-web/server/ScreenCells", {
   make: Effect.gen(function* () {

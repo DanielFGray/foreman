@@ -1,7 +1,7 @@
 // Cursor's plan usage. Cursor keeps its access token in a local SQLite state
 // database; the dashboard API takes it as the WorkOS session cookie
 // `<user id>::<token>`.
-import { Array, Effect, FileSystem, Option, Schema, Stream } from "effect"
+import { Array, Effect, FileSystem, Option, Schema as S, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import type { UsageReport, UsageSection, UsageWindow } from "../../shared/Usage.ts"
 import { getJson, MONTH, parseTime, Time, type UsageEnv, UsageError } from "./Read.ts"
@@ -31,30 +31,30 @@ export const readCursor = Effect.fn("readCursor")(function* (env: UsageEnv) {
   return Option.some(cursorReport(usage, email))
 })
 
-const Maybe = Schema.OptionFromOptionalNullOr
+const Maybe = S.OptionFromOptionalNullOr
 
-const Amounts = Schema.Struct({ used: Maybe(Schema.Finite), limit: Maybe(Schema.Finite) })
+const Amounts = S.Struct({ used: Maybe(S.Finite), limit: Maybe(S.Finite) })
 type Amounts = typeof Amounts.Type
 
-export const CursorUsage = Schema.Struct({
+export const CursorUsage = S.Struct({
   billingCycleStart: Maybe(Time),
   billingCycleEnd: Maybe(Time),
-  membershipType: Maybe(Schema.String),
+  membershipType: Maybe(S.String),
   individualUsage: Maybe(
-    Schema.Struct({
+    S.Struct({
       plan: Maybe(
-        Schema.Struct({
+        S.Struct({
           ...Amounts.fields,
-          autoPercentUsed: Maybe(Schema.Finite),
-          apiPercentUsed: Maybe(Schema.Finite),
-          totalPercentUsed: Maybe(Schema.Finite),
+          autoPercentUsed: Maybe(S.Finite),
+          apiPercentUsed: Maybe(S.Finite),
+          totalPercentUsed: Maybe(S.Finite),
         }),
       ),
       overall: Maybe(Amounts),
       onDemand: Maybe(Amounts),
     }),
   ),
-  teamUsage: Maybe(Schema.Struct({ pooled: Maybe(Amounts), onDemand: Maybe(Amounts) })),
+  teamUsage: Maybe(S.Struct({ pooled: Maybe(Amounts), onDemand: Maybe(Amounts) })),
 })
 export type CursorUsage = typeof CursorUsage.Type
 
@@ -164,12 +164,12 @@ const MEMBERSHIPS: Readonly<Record<string, string>> = {
 export const jwtUser = (jwt: string) =>
   Option.flatMap(Array.get(jwt.split("."), 1), (payload) =>
     Option.flatMap(
-      Option.flatMap(Schema.decodeOption(Schema.StringFromBase64Url)(payload), Schema.decodeOption(Schema.fromJsonString(JwtClaims))),
+      Option.flatMap(S.decodeOption(S.StringFromBase64Url)(payload), S.decodeOption(S.fromJsonString(JwtClaims))),
       ({ sub }) => Option.filter(Array.last(sub.split("|")), (user) => user.length > 0),
     ),
   )
 
-const JwtClaims = Schema.Struct({ sub: Schema.String })
+const JwtClaims = S.Struct({ sub: S.String })
 
 /** A value from Cursor's state database; none when the key is not set. */
 const stateValue = (db: string, key: string) =>

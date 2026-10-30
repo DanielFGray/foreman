@@ -1,21 +1,21 @@
 // The soft keys under a pane: the keys a phone's keyboard lacks. Ctrl and alt
 // stay armed until the next key, whether that is a soft key or a key typed
 // into a live terminal.
-import { Array, Effect, Match, Option, Record, Result, Schema, String } from "effect"
+import { Array, Effect, Match, Option, Record, Result, Schema as S, String } from "effect"
 import * as Mount from "foldkit/mount"
 
-export const Modifiers = Schema.Struct({ ctrl: Schema.Boolean, alt: Schema.Boolean })
+export const Modifiers = S.Struct({ ctrl: S.Boolean, alt: S.Boolean })
 export type Modifiers = typeof Modifiers.Type
 
-export const Modifier = Schema.Literals(["ctrl", "alt"])
+export const Modifier = S.Literals(["ctrl", "alt"])
 export type Modifier = typeof Modifier.Type
 
 export const NO_MODIFIERS: Modifiers = { ctrl: false, alt: false }
 
 /** A soft key: one hc presses, by its hc name such as `ctrl+c`, or a modifier for the next key. */
-export const SoftKey = Schema.Union([
-  Schema.TaggedStruct("Press", { key: Schema.String }),
-  Schema.TaggedStruct("Hold", { modifier: Modifier }),
+export const SoftKey = S.Union([
+  S.TaggedStruct("Press", { key: S.String }),
+  S.TaggedStruct("Hold", { modifier: Modifier }),
 ])
 export type SoftKey = typeof SoftKey.Type
 
@@ -51,10 +51,10 @@ export const keyLabel = (name: string): string => {
 // It offers only what hc can encode (herdr-core's keys.rs): these modifiers,
 // its named keys, F1–F12, and one character of its set.
 
-export const SheetModifier = Schema.Literals(["ctrl", "alt", "shift", "super"])
+export const SheetModifier = S.Literals(["ctrl", "alt", "shift", "super"])
 export type SheetModifier = typeof SheetModifier.Type
 
-export const SheetModifiers = Schema.Struct({ ctrl: Schema.Boolean, alt: Schema.Boolean, shift: Schema.Boolean, super: Schema.Boolean })
+export const SheetModifiers = S.Struct({ ctrl: S.Boolean, alt: S.Boolean, shift: S.Boolean, super: S.Boolean })
 export type SheetModifiers = typeof SheetModifiers.Type
 
 export const NO_SHEET_MODIFIERS: SheetModifiers = { ctrl: false, alt: false, shift: false, super: false }
@@ -113,7 +113,7 @@ export const parseModifiersAttribute = (attribute: string): Modifiers => {
   return { ctrl: words.includes("ctrl"), alt: words.includes("alt") }
 }
 
-export const CompletedKeepTypingFocus = Schema.TaggedStruct("CompletedKeepTypingFocus", {})
+export const CompletedKeepTypingFocus = S.TaggedStruct("CompletedKeepTypingFocus", {})
 
 /**
  * Keeps the focus where it is when a key in the element is pressed: a tap on

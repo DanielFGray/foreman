@@ -3,7 +3,7 @@
 // machine. The models it may switch to and its commands come from
 // OpenCode's server, which the bridge reaches on its own machine once paired
 // (see Server.ts).
-import { Array, Effect, Option, Schedule, Schema, Stream } from "effect"
+import { Array, Effect, Option, Schedule, Schema as S, Stream } from "effect"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
 import { type ChatUpdate, Entry } from "../../shared/Chat.ts"
@@ -193,12 +193,12 @@ const refOf = (alias: string): Option.Option<ModelRef> =>
   Option.map(Option.fromNullOr(/^([^/]+)\/(.+)$/.exec(alias)), ([, providerID = "", id = ""]) => ({ providerID, id }))
 
 /** What `/api/model` answers, of what the picker shows. */
-const ModelList = Schema.Struct({ data: Schema.Array(Schema.Struct({ ...ModelRef.fields, name: Schema.String, enabled: Schema.Boolean })) })
+const ModelList = S.Struct({ data: S.Array(S.Struct({ ...ModelRef.fields, name: S.String, enabled: S.Boolean })) })
 
 /** What `/api/command` answers. */
-const CommandList = Schema.Struct({ data: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.OptionFromOptionalKey(Schema.String) })) })
+const CommandList = S.Struct({ data: S.Array(S.Struct({ name: S.String, description: S.OptionFromOptionalKey(S.String) })) })
 
-const SwitchModel = Schema.Struct({ model: ModelRef })
+const SwitchModel = S.Struct({ model: ModelRef })
 /** What a read of the shown session saw last: the terminal as hc reported it, and its session. */
 type Seen = Readonly<{ terminal: Option.Option<Terminal>; session: Option.Option<string> }>
 
@@ -212,16 +212,16 @@ const TIMEOUT = 10
 /** The newest messages the chat shows. */
 const MESSAGES = 100
 
-const sameTerminal = Schema.toEquivalence(Terminal)
-const sameEntries = Schema.toEquivalence(Schema.Array(Entry))
+const sameTerminal = S.toEquivalence(Terminal)
+const sameEntries = S.toEquivalence(S.Array(Entry))
 
 const chatError = (message: string) => new BridgeError({ kind: "transcript", message })
 
 const decodeSessions = (text: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(Sessions))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's sessions cannot be read: ${message}`)))
+  S.decodeEffect(S.fromJsonString(Sessions))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's sessions cannot be read: ${message}`)))
 
 const decodeTodoRows = (text: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(Schema.Array(TodoRow)))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's todo list cannot be read: ${message}`)))
+  S.decodeEffect(S.fromJsonString(S.Array(TodoRow)))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's todo list cannot be read: ${message}`)))
 
 const decodeMessages = (text: string) =>
-  Schema.decodeEffect(Schema.fromJsonString(Messages))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's messages cannot be read: ${message}`)))
+  S.decodeEffect(S.fromJsonString(Messages))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's messages cannot be read: ${message}`)))

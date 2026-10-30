@@ -3,7 +3,7 @@
 // lines repeat whole turns with the same message roles, so choosing by role
 // would show every turn twice. Claude Code writes one content block per line,
 // so each block becomes its own entry and no lines need merging.
-import { Array, Match, Option, pipe, Schema, String } from "effect"
+import { Array, Match, Option, pipe, Schema as S, String } from "effect"
 import { type Entry, toolSummary } from "../../shared/Chat.ts"
 import { wireTag } from "../../shared/Wire.ts"
 import { parseMarkdown } from "../Markdown.ts"
@@ -35,86 +35,86 @@ const decoder = new TextDecoder()
 // LINE
 
 /** The tool inputs a summary is drawn from; Claude Code's tools use these keys. */
-const ToolInput = Schema.Struct({
-  description: Schema.optionalKey(Schema.String),
-  command: Schema.optionalKey(Schema.String),
-  file_path: Schema.optionalKey(Schema.String),
-  pattern: Schema.optionalKey(Schema.String),
-  url: Schema.optionalKey(Schema.String),
-  query: Schema.optionalKey(Schema.String),
-  prompt: Schema.optionalKey(Schema.String),
+const ToolInput = S.Struct({
+  description: S.optionalKey(S.String),
+  command: S.optionalKey(S.String),
+  file_path: S.optionalKey(S.String),
+  pattern: S.optionalKey(S.String),
+  url: S.optionalKey(S.String),
+  query: S.optionalKey(S.String),
+  prompt: S.optionalKey(S.String),
 })
 type ToolInput = typeof ToolInput.Type
 
-const Unshown = Schema.Struct({ _tag: wireTag("Unshown"), type: Schema.String })
+const Unshown = S.Struct({ _tag: wireTag("Unshown"), type: S.String })
 
-const UserBlock = Schema.Union([
-  Schema.Struct({ _tag: wireTag("Text"), type: Schema.Literal("text"), text: Schema.String }),
-  Schema.Struct({
+const UserBlock = S.Union([
+  S.Struct({ _tag: wireTag("Text"), type: S.Literal("text"), text: S.String }),
+  S.Struct({
     _tag: wireTag("ToolResult"),
-    type: Schema.Literal("tool_result"),
-    tool_use_id: Schema.String,
-    is_error: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+    type: S.Literal("tool_result"),
+    tool_use_id: S.String,
+    is_error: S.optionalKey(S.NullOr(S.Boolean)),
   }),
   Unshown,
 ])
 type UserBlock = typeof UserBlock.Type
 
-const AssistantBlock = Schema.Union([
-  Schema.Struct({ _tag: wireTag("Text"), type: Schema.Literal("text"), text: Schema.String }),
-  Schema.Struct({ _tag: wireTag("ToolUse"), type: Schema.Literal("tool_use"), id: Schema.String, name: Schema.String, input: ToolInput }),
+const AssistantBlock = S.Union([
+  S.Struct({ _tag: wireTag("Text"), type: S.Literal("text"), text: S.String }),
+  S.Struct({ _tag: wireTag("ToolUse"), type: S.Literal("tool_use"), id: S.String, name: S.String, input: ToolInput }),
   Unshown,
 ])
 type AssistantBlock = typeof AssistantBlock.Type
 
-const Flag = Schema.optionalKey(Schema.NullOr(Schema.Boolean))
+const Flag = S.optionalKey(S.NullOr(S.Boolean))
 
-const TranscriptLine = Schema.Union([
-  Schema.Struct({
+const TranscriptLine = S.Union([
+  S.Struct({
     _tag: wireTag("User"),
-    type: Schema.Literal("user"),
-    uuid: Schema.String,
+    type: S.Literal("user"),
+    uuid: S.String,
     isSidechain: Flag,
     isMeta: Flag,
     isCompactSummary: Flag,
-    message: Schema.Struct({ content: Schema.Union([Schema.String, Schema.Array(UserBlock)]) }),
+    message: S.Struct({ content: S.Union([S.String, S.Array(UserBlock)]) }),
   }),
-  Schema.Struct({
+  S.Struct({
     _tag: wireTag("Assistant"),
-    type: Schema.Literal("assistant"),
-    uuid: Schema.String,
+    type: S.Literal("assistant"),
+    uuid: S.String,
     isSidechain: Flag,
-    message: Schema.Struct({ content: Schema.Array(AssistantBlock) }),
+    message: S.Struct({ content: S.Array(AssistantBlock) }),
   }),
   // A prompt the user sends while the agent works waits in a queue, and
   // reaches the transcript as this attachment instead of a user line.
   // Notifications from background tasks and other agents queue the same way
   // without humanTurn.
-  Schema.Struct({
+  S.Struct({
     _tag: wireTag("QueuedPrompt"),
-    type: Schema.Literal("attachment"),
-    uuid: Schema.String,
+    type: S.Literal("attachment"),
+    uuid: S.String,
     isSidechain: Flag,
-    attachment: Schema.Struct({ type: Schema.Literal("queued_command"), prompt: Schema.String, humanTurn: Schema.Literal(true) }),
+    attachment: S.Struct({ type: S.Literal("queued_command"), prompt: S.String, humanTurn: S.Literal(true) }),
   }),
-  Schema.Struct({
+  S.Struct({
     _tag: wireTag("TurnEnded"),
-    type: Schema.Literal("system"),
-    subtype: Schema.Literal("turn_duration"),
-    uuid: Schema.String,
-    durationMs: Schema.Finite,
+    type: S.Literal("system"),
+    subtype: S.Literal("turn_duration"),
+    uuid: S.String,
+    durationMs: S.Finite,
   }),
-  Schema.Struct({
+  S.Struct({
     _tag: wireTag("Compacted"),
-    type: Schema.Literal("system"),
-    subtype: Schema.Literal("compact_boundary"),
-    uuid: Schema.String,
+    type: S.Literal("system"),
+    subtype: S.Literal("compact_boundary"),
+    uuid: S.String,
   }),
   Unshown,
 ])
 type TranscriptLine = typeof TranscriptLine.Type
 
-const decodeTranscriptLine = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptLine))
+const decodeTranscriptLine = S.decodeUnknownOption(S.fromJsonString(TranscriptLine))
 
 // ENTRIES
 // One line can hold several blocks, so an entry's id is the line's uuid and
@@ -206,8 +206,8 @@ const modelOfLine = (line: string): Option.Option<string> =>
     ),
   )
 
-const ModelLine = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("assistant"), isSidechain: Flag, message: Schema.Struct({ model: Schema.String }) }),
-  Schema.Struct({ type: Schema.Literal("user"), isSidechain: Flag, message: Schema.Struct({ content: Schema.String }) }),
+const ModelLine = S.Union([
+  S.Struct({ type: S.Literal("assistant"), isSidechain: Flag, message: S.Struct({ model: S.String }) }),
+  S.Struct({ type: S.Literal("user"), isSidechain: Flag, message: S.Struct({ content: S.String }) }),
 ])
-const decodeModelLine = Schema.decodeUnknownOption(Schema.fromJsonString(ModelLine))
+const decodeModelLine = S.decodeUnknownOption(S.fromJsonString(ModelLine))

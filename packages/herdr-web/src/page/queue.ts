@@ -4,7 +4,7 @@
 // of these is so. The page's own text in the box is emptied as the message
 // goes. The input box counts only for an agent whose box the page reads. The
 // queue lives in the page, so it outlasts a lost connection to the bridge.
-import { Array, Option, Record, Schema, String } from "effect"
+import { Array, Option, Record, Schema as S, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import { InputBox } from "../shared/Chat.ts"
@@ -167,9 +167,9 @@ const boxBlocker = (model: Model, address: string): Option.Option<string> =>
       })
 
 // What a held message waits on a change of.
-const Sign = Schema.Struct({ isConnected: Schema.Boolean, statusMs: Schema.Option(Schema.Int), box: Schema.Option(InputBox) })
+const Sign = S.Struct({ isConnected: S.Boolean, statusMs: S.Option(S.Int), box: S.Option(InputBox) })
 
-const sameAgent = Schema.toEquivalence(Sign)
+const sameAgent = S.toEquivalence(Sign)
 
 const signOf = (model: Model, address: string): typeof Sign.Type => ({
   isConnected: model.bridge._tag === "Watching",

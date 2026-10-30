@@ -1,7 +1,7 @@
 // The page's state and the messages that change it: one Model and one
 // Message for the whole page, since the sidebar, tabs and panes all read and
 // change the same selection.
-import { Effect, Schema } from "effect"
+import { Effect, Schema as S } from "effect"
 import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
@@ -31,14 +31,14 @@ export const VIEW_PICKS_KEY = "herdr-web.view-picks"
 export const Bridge = defineTaggedUnion({
   Waiting: {},
   Watching: { fleet: Fleet },
-  Lost: { maybeFleet: Schema.Option(Fleet) },
+  Lost: { maybeFleet: S.Option(Fleet) },
 })
 export type Bridge = typeof Bridge.Type
 
 export const Conversation = defineTaggedUnion({
   Loading: {},
-  Shown: { entries: Schema.Array(Entry) },
-  Unreadable: { reason: Schema.String },
+  Shown: { entries: S.Array(Entry) },
+  Unreadable: { reason: S.String },
 })
 export type Conversation = typeof Conversation.Type
 
@@ -49,20 +49,20 @@ export const View = defineTaggedUnion({
 })
 export type View = typeof View.Type
 
-export const ViewName = Schema.Literals(["Chat", "Terminal"])
+export const ViewName = S.Literals(["Chat", "Terminal"])
 export type ViewName = typeof ViewName.Type
 
 /**
  * A view picked for an agent's pane, and where it holds: `run:<address>:<pid>`
  * for one run of an agent, or `space:<machine>:<space id>` for a space.
  */
-export const ViewPick = Schema.Struct({ scope: Schema.String, view: ViewName })
+export const ViewPick = S.Struct({ scope: S.String, view: ViewName })
 export type ViewPick = typeof ViewPick.Type
 
 /** The last soft key press: taken, or refused with the bridge's reason. */
 export const Delivery = defineTaggedUnion({
   Ready: {},
-  Refused: { reason: Schema.String },
+  Refused: { reason: S.String },
 })
 export type Delivery = typeof Delivery.Type
 
@@ -80,8 +80,8 @@ export type ChoiceList = typeof ChoiceList.Type
  */
 export const Pairing = defineTaggedUnion({
   Idle: {},
-  Pairing: { address: Schema.String },
-  Failed: { address: Schema.String, reason: Schema.String },
+  Pairing: { address: S.String },
+  Failed: { address: S.String, reason: S.String },
 })
 export type Pairing = typeof Pairing.Type
 
@@ -91,18 +91,18 @@ export type Pairing = typeof Pairing.Type
  */
 export const PaneAction = defineTaggedUnion({
   Idle: {},
-  Confirming: { pane: Schema.String },
-  ConfirmingTab: { tab: Schema.String },
-  ConfirmingSpace: { space: Schema.String },
-  RenamingSpace: { space: Schema.String, name: Schema.String },
+  Confirming: { pane: S.String },
+  ConfirmingTab: { tab: S.String },
+  ConfirmingSpace: { space: S.String },
+  RenamingSpace: { space: S.String, name: S.String },
   /** The model menu of the agent at `address` is open, with the models it may switch to as far as they are read. */
-  PickingModel: { address: Schema.String, choices: ChoiceList },
-  Refused: { reason: Schema.String },
+  PickingModel: { address: S.String, choices: ChoiceList },
+  Refused: { reason: S.String },
 })
 export type PaneAction = typeof PaneAction.Type
 
 /** The groups of keys the Send keys sheet offers. */
-export const KeyGroup = Schema.Literals(["Common", "F keys", "Character"])
+export const KeyGroup = S.Literals(["Common", "F keys", "Character"])
 export type KeyGroup = typeof KeyGroup.Type
 
 /**
@@ -112,7 +112,7 @@ export type KeyGroup = typeof KeyGroup.Type
  */
 export const KeySheet = defineTaggedUnion({
   Closed: {},
-  Choosing: { group: KeyGroup, named: Schema.String, typed: Schema.String, modifiers: SheetModifiers },
+  Choosing: { group: KeyGroup, named: S.String, typed: S.String, modifiers: SheetModifiers },
   Editing: {},
 })
 export type KeySheet = typeof KeySheet.Type
@@ -123,7 +123,7 @@ export type KeySheet = typeof KeySheet.Type
  */
 export const LinkSheet = defineTaggedUnion({
   Closed: {},
-  Showing: { uri: Schema.String, note: Schema.Option(Schema.String) },
+  Showing: { uri: S.String, note: S.Option(S.String) },
 })
 export type LinkSheet = typeof LinkSheet.Type
 
@@ -131,7 +131,7 @@ export type LinkSheet = typeof LinkSheet.Type
 export const CheckoutList = defineTaggedUnion({
   Loading: {},
   Listed: { list: RepoCheckouts },
-  Unlisted: { reason: Schema.String },
+  Unlisted: { reason: S.String },
 })
 export type CheckoutList = typeof CheckoutList.Type
 
@@ -141,48 +141,48 @@ export type CheckoutList = typeof CheckoutList.Type
  */
 export const CommandList = defineTaggedUnion({
   Unread: {},
-  Loading: { address: Schema.String },
-  Listed: { address: Schema.String, commands: Schema.Array(SlashCommand) },
-  Unlisted: { address: Schema.String, failure: BridgeError },
+  Loading: { address: S.String },
+  Listed: { address: S.String, commands: S.Array(SlashCommand) },
+  Unlisted: { address: S.String, failure: BridgeError },
 })
 export type CommandList = typeof CommandList.Type
 
 /** What the Worktrees page is doing: nothing, a removal waiting for a second click, a call under way, or git's refusal. */
 export const CheckoutAction = defineTaggedUnion({
   Idle: {},
-  Confirming: { path: Schema.String },
+  Confirming: { path: S.String },
   Busy: {},
-  Refused: { reason: Schema.String },
+  Refused: { reason: S.String },
 })
 export type CheckoutAction = typeof CheckoutAction.Type
 
-export const WorktreeField = Schema.Literals(["branch", "program"])
+export const WorktreeField = S.Literals(["branch", "program"])
 export type WorktreeField = typeof WorktreeField.Type
 
 /** The Worktrees page: its checkouts, the branch and program typed for a new one, and what it is doing. */
-export const WorktreePage = Schema.Struct({ list: CheckoutList, branch: Schema.String, program: Schema.String, action: CheckoutAction })
+export const WorktreePage = S.Struct({ list: CheckoutList, branch: S.String, program: S.String, action: CheckoutAction })
 export type WorktreePage = typeof WorktreePage.Type
 
 /** Where the new-space form's last try stands. */
 export const SpaceFormState = defineTaggedUnion({
   Editing: {},
   Opening: {},
-  Refused: { reason: Schema.String },
+  Refused: { reason: S.String },
 })
 export type SpaceFormState = typeof SpaceFormState.Type
 
-export const SpaceFormField = Schema.Literals(["machine", "folder", "name", "program"])
+export const SpaceFormField = S.Literals(["machine", "folder", "name", "program"])
 export type SpaceFormField = typeof SpaceFormField.Type
 
 /**
  * The new-space form. `machine` is the name hc gives it; this machine's own
  * name opens the space here. An empty program opens the shell alone.
  */
-export const SpaceForm = Schema.Struct({
-  machine: Schema.String,
-  folder: Schema.String,
-  name: Schema.String,
-  program: Schema.String,
+export const SpaceForm = S.Struct({
+  machine: S.String,
+  folder: S.String,
+  name: S.String,
+  program: S.String,
   state: SpaceFormState,
 })
 export type SpaceForm = typeof SpaceForm.Type
@@ -195,16 +195,16 @@ export type SpaceForm = typeof SpaceForm.Type
  */
 export const SpaceDrag = defineTaggedUnion({
   Idle: {},
-  Pressed: { space: Schema.String, over: Schema.Option(Schema.String) },
+  Pressed: { space: S.String, over: S.Option(S.String) },
   Moving: {},
-  Refused: { reason: Schema.String },
+  Refused: { reason: S.String },
 })
 export type SpaceDrag = typeof SpaceDrag.Type
 
 /** The command palette: shut, or open on what is typed and the result the arrow keys reached. */
 export const Palette = defineTaggedUnion({
   Closed: {},
-  Open: { query: Schema.String, highlighted: Schema.Int },
+  Open: { query: S.String, highlighted: S.Int },
 })
 export type Palette = typeof Palette.Type
 
@@ -213,23 +213,23 @@ export type Palette = typeof Palette.Type
 export const Selection = defineTaggedUnion({
   Nothing: {},
   /** A herdr-app tab, and the pane the prompt and keys go to; none means its first terminal. */
-  Tab: { tabId: Schema.String, maybeFocus: Schema.Option(Schema.String) },
+  Tab: { tabId: S.String, maybeFocus: S.Option(S.String) },
   /** A terminal that no herdr-app layout shows, alone. */
-  Loose: { address: Schema.String },
+  Loose: { address: S.String },
   /** This browser's settings, in place of a tab. */
   Settings: {},
   /** The form that opens a space, in place of a tab. */
   NewSpace: {},
   /** The checkouts of the repository a space is in, in place of a tab. */
-  Worktrees: { space: Schema.String },
+  Worktrees: { space: S.String },
 })
 export type Selection = typeof Selection.Type
 
 /** The fonts the bridge serves, asked for when settings open. */
 export const FontCatalog = defineTaggedUnion({
   Loading: {},
-  Loaded: { families: Schema.Array(FontFamily) },
-  Failed: { reason: Schema.String },
+  Loaded: { families: S.Array(FontFamily) },
+  Failed: { reason: S.String },
 })
 export type FontCatalog = typeof FontCatalog.Type
 
@@ -239,19 +239,19 @@ export type FontCatalog = typeof FontCatalog.Type
  * clock's first reading after the send: the page learns the time only from
  * the clock, which reads it at once when a wait starts.
  */
-export const Waiting = Schema.Struct({ address: Schema.String, text: Schema.String, seen: Schema.Int, sentAt: Schema.Option(Schema.Finite) })
+export const Waiting = S.Struct({ address: S.String, text: S.String, seen: S.Int, sentAt: S.Option(S.Finite) })
 export type Waiting = typeof Waiting.Type
 
 /** A queued message: waiting for its agent, on its way, or refused by the bridge and held until the agent changes. */
 export const QueueState = defineTaggedUnion({
   Waits: {},
   Sending: {},
-  Held: { reason: Schema.String },
+  Held: { reason: S.String },
 })
 export type QueueState = typeof QueueState.Type
 
 /** A message for the agent at `address`, in the order the user sent it. `id` tells apart two messages with the same text. */
-export const Queued = Schema.Struct({ address: Schema.String, id: Schema.Int, text: Schema.String, state: QueueState })
+export const Queued = S.Struct({ address: S.String, id: S.Int, text: S.String, state: QueueState })
 export type Queued = typeof Queued.Type
 
 /**
@@ -260,11 +260,11 @@ export type Queued = typeof Queued.Type
  * mirror.ts): `agreed` is the text both last held, with the box's text as the
  * page read it then. `problem` is why the page last failed to write the box.
  */
-export const Prompt = Schema.Struct({
-  text: Schema.String,
-  agreed: Schema.Struct({ text: Schema.String, typed: Schema.String }),
-  isWriting: Schema.Boolean,
-  problem: Schema.Option(Schema.String),
+export const Prompt = S.Struct({
+  text: S.String,
+  agreed: S.Struct({ text: S.String, typed: S.String }),
+  isWriting: S.Boolean,
+  problem: S.Option(S.String),
 })
 export type Prompt = typeof Prompt.Type
 
@@ -272,9 +272,9 @@ export type Prompt = typeof Prompt.Type
 export const Asking = defineTaggedUnion({
   Reading: {},
   /** `sending` is the answer on its way to the agent. */
-  Shown: { question: Question, sending: Schema.Option(Answer) },
+  Shown: { question: Question, sending: S.Option(Answer) },
   /** The agent waits, but its screen shows no menu the page can answer. */
-  Unshown: { reason: Schema.Option(Schema.String) },
+  Unshown: { reason: S.Option(S.String) },
 })
 export type Asking = typeof Asking.Type
 
@@ -283,82 +283,82 @@ export type Asking = typeof Asking.Type
  * under, and `reads` counts the reads under that status: an answer, taken or
  * refused, reads the screen again, since a series of questions keeps one status.
  */
-export const Asked = Schema.Struct({ statusMs: Schema.Int, reads: Schema.Int, notice: Schema.Option(Schema.String), asking: Asking })
+export const Asked = S.Struct({ statusMs: S.Int, reads: S.Int, notice: S.Option(S.String), asking: Asking })
 export type Asked = typeof Asked.Type
 
-export const Model = Schema.Struct({
+export const Model = S.Struct({
   bridge: Bridge,
   /** On a phone the sidebar folds away once a tab or agent is picked, to give the panes the screen. */
-  isFleetFolded: Schema.Boolean,
+  isFleetFolded: S.Boolean,
   /** The focused pane fills the window: the sidebar, the bars over and under the panes, and the other panes hide. */
-  isZoomed: Schema.Boolean,
+  isZoomed: S.Boolean,
   /** The views picked for agents' panes, newest first; see openingView.ts. */
-  viewPicks: Schema.Array(ViewPick),
+  viewPicks: S.Array(ViewPick),
   selection: Selection,
   /** The view of each shown terminal; a terminal not in it shows its default view. */
-  views: Schema.Record(Schema.String, View),
+  views: S.Record(S.String, View),
   /** Each agent's prompt, by address; an agent not in it has an empty one. */
-  prompts: Schema.Record(Schema.String, Prompt),
+  prompts: S.Record(S.String, Prompt),
   delivery: Delivery,
   /** The messages not yet handed to their agents (see queue.ts). */
-  queued: Schema.Array(Queued),
+  queued: S.Array(Queued),
   /** What each watched agent's input box in the terminal holds, by address; none before the first reading. */
-  boxes: Schema.Record(Schema.String, InputBox),
+  boxes: S.Record(S.String, InputBox),
   /** The model each shown agent answers with, by address, as the bridge's `model` call names it. */
-  models: Schema.Record(Schema.String, Schema.String),
+  models: S.Record(S.String, S.String),
   /** The todo list of each watched agent that has one, by address (see todos.ts). */
-  todos: Schema.Record(Schema.String, Schema.Array(TodoItem)),
+  todos: S.Record(S.String, S.Array(TodoItem)),
   /** The prompts the chats show as faded bubbles until the agent records them. */
-  waiting: Schema.Array(Waiting),
+  waiting: S.Array(Waiting),
   /** The question each blocked agent in a chat waits on, by address. */
-  questions: Schema.Record(Schema.String, Asked),
+  questions: S.Record(S.String, Asked),
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
   spaceForm: SpaceForm,
   worktreePage: WorktreePage,
   palette: Palette,
   /** The panes opened last, newest first, for the palette's Recent group. */
-  recent: Schema.Array(Schema.String),
+  recent: S.Array(S.String),
   settings: Settings,
   /** Soft ctrl and alt, armed until the next key. */
   modifiers: Modifiers,
   /** The soft-key row this browser keeps; none for the default row, so a browser that never changed it gets later defaults. */
-  softKeys: Schema.Option(Schema.Array(SoftKey)),
+  softKeys: S.Option(S.Array(SoftKey)),
   keySheet: KeySheet,
   linkSheet: LinkSheet,
   commandList: CommandList,
   pairing: Pairing,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
-  usage: Schema.Option(Usage),
+  usage: S.Option(Usage),
   /** The plan whose usage panel is open. */
-  usageDetail: Schema.Option(ProviderId),
+  usageDetail: S.Option(ProviderId),
   /** The time, for countdowns to a reset. */
-  now: Schema.Finite,
+  now: S.Finite,
   /** The sidebar's width on a desk once its edge was dragged; none is the stylesheet's own. */
-  sidebarWidth: Schema.Option(Schema.Int),
+  sidebarWidth: S.Option(S.Int),
   /** While the edge is dragged: how far right of the edge the pointer took hold of it. */
-  sidebarGrip: Schema.Option(Schema.Finite),
+  sidebarGrip: S.Option(S.Finite),
   /**
    * The part of the window a person sees, in CSS pixels from the top of the
    * layout: smaller than the window while a phone's keyboard is open. None
    * where the browser does not report it, or while the page is zoomed.
    */
-  viewport: Schema.Option(Schema.Struct({ top: Schema.Finite, height: Schema.Finite })),
+  viewport: S.Option(S.Struct({ top: S.Finite, height: S.Finite })),
 })
 export type Model = typeof Model.Type
 
 /** What the page starts from: this browser's settings, the tab and pane it showed last, and its sidebar's width. */
-export const Flags = Schema.Struct({
+export const Flags = S.Struct({
   settings: Settings,
   selection: Selection,
-  sidebarWidth: Schema.Option(Schema.Int),
+  sidebarWidth: S.Option(S.Int),
   /** The panes opened last, newest first. */
-  recent: Schema.Array(Schema.String),
+  recent: S.Array(S.String),
   /** The soft-key row this browser keeps; none for the default row. */
-  softKeys: Schema.Option(Schema.Array(SoftKey)),
-  isZoomed: Schema.Boolean,
-  viewPicks: Schema.Array(ViewPick),
+  softKeys: S.Option(S.Array(SoftKey)),
+  isZoomed: S.Boolean,
+  viewPicks: S.Array(ViewPick),
 })
 export type Flags = typeof Flags.Type
 
@@ -366,10 +366,10 @@ export const loadFlags = Effect.all({
   settings: loadSettings,
   selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()),
   sidebarWidth: loadSidebarWidth,
-  recent: loadStored(RECENT_KEY, Schema.Array(Schema.String), []),
-  softKeys: loadKept(SOFT_KEYS_KEY, Schema.Array(SoftKey)),
-  isZoomed: loadStored(ZOOM_KEY, Schema.Boolean, false),
-  viewPicks: loadStored(VIEW_PICKS_KEY, Schema.Array(ViewPick), []),
+  recent: loadStored(RECENT_KEY, S.Array(S.String), []),
+  softKeys: loadKept(SOFT_KEYS_KEY, S.Array(SoftKey)),
+  isZoomed: loadStored(ZOOM_KEY, S.Boolean, false),
+  viewPicks: loadStored(VIEW_PICKS_KEY, S.Array(ViewPick), []),
 })
 
 // MESSAGE
@@ -378,127 +378,127 @@ export const Message = defineMessageUnion({
   ReceivedFleet: { fleet: Fleet },
   LostBridge: {},
   ClickedFleetToggle: {},
-  ClickedTerminal: { address: Schema.String },
-  ClickedTab: { tabId: Schema.String },
-  FocusedPane: { address: Schema.String },
-  SelectedView: { address: Schema.String, view: ViewName },
-  ReceivedChat: { address: Schema.String, update: ChatUpdate },
-  ReceivedQuestion: { address: Schema.String, statusMs: Schema.Int, question: Schema.Option(Question) },
-  FailedQuestion: { address: Schema.String, statusMs: Schema.Int, reason: Schema.String },
-  ClickedChoice: { address: Schema.String, choice: Schema.Int },
-  SucceededAnswer: { address: Schema.String },
-  FailedAnswer: { address: Schema.String, reason: Schema.String },
-  FailedChat: { address: Schema.String, reason: Schema.String },
-  ChangedLink: { address: Schema.String, link: Link },
-  ClickedSplit: { pane: Schema.String, direction: Direction },
-  SucceededSplit: { terminal: Schema.String },
-  ClickedClose: { pane: Schema.String },
+  ClickedTerminal: { address: S.String },
+  ClickedTab: { tabId: S.String },
+  FocusedPane: { address: S.String },
+  SelectedView: { address: S.String, view: ViewName },
+  ReceivedChat: { address: S.String, update: ChatUpdate },
+  ReceivedQuestion: { address: S.String, statusMs: S.Int, question: S.Option(Question) },
+  FailedQuestion: { address: S.String, statusMs: S.Int, reason: S.String },
+  ClickedChoice: { address: S.String, choice: S.Int },
+  SucceededAnswer: { address: S.String },
+  FailedAnswer: { address: S.String, reason: S.String },
+  FailedChat: { address: S.String, reason: S.String },
+  ChangedLink: { address: S.String, link: Link },
+  ClickedSplit: { pane: S.String, direction: Direction },
+  SucceededSplit: { terminal: S.String },
+  ClickedClose: { pane: S.String },
   ClickedKeepPane: {},
-  ConfirmedClose: { pane: Schema.String },
+  ConfirmedClose: { pane: S.String },
   SucceededClose: {},
-  ClickedNewTab: { space: Schema.String },
-  SucceededNewTab: { tab: Schema.String },
-  ClickedCloseTab: { tab: Schema.String },
-  ConfirmedCloseTab: { tab: Schema.String },
+  ClickedNewTab: { space: S.String },
+  SucceededNewTab: { tab: S.String },
+  ClickedCloseTab: { tab: S.String },
+  ConfirmedCloseTab: { tab: S.String },
   SucceededCloseTab: {},
-  ClickedCloseSpace: { space: Schema.String },
-  ConfirmedCloseSpace: { space: Schema.String },
-  ClickedRenameSpace: { space: Schema.String },
-  UpdatedSpaceName: { name: Schema.String },
+  ClickedCloseSpace: { space: S.String },
+  ConfirmedCloseSpace: { space: S.String },
+  ClickedRenameSpace: { space: S.String },
+  UpdatedSpaceName: { name: S.String },
   SubmittedSpaceName: {},
   SucceededSpaceChange: {},
   ClickedNewSpace: {},
-  UpdatedSpaceForm: { field: SpaceFormField, value: Schema.String },
+  UpdatedSpaceForm: { field: SpaceFormField, value: S.String },
   SubmittedSpaceForm: {},
-  SucceededNewSpace: { tab: Schema.String },
-  FailedNewSpace: { reason: Schema.String },
-  ClickedWorktrees: { space: Schema.String },
+  SucceededNewSpace: { tab: S.String },
+  FailedNewSpace: { reason: S.String },
+  ClickedWorktrees: { space: S.String },
   ReceivedWorktrees: { list: RepoCheckouts },
-  FailedWorktrees: { reason: Schema.String },
-  UpdatedWorktreeField: { field: WorktreeField, value: Schema.String },
+  FailedWorktrees: { reason: S.String },
+  UpdatedWorktreeField: { field: WorktreeField, value: S.String },
   SubmittedWorktree: {},
   ClickedOpenCheckout: { checkout: Checkout },
-  ClickedRemoveCheckout: { path: Schema.String },
+  ClickedRemoveCheckout: { path: S.String },
   ClickedKeepCheckout: {},
-  ConfirmedRemoveCheckout: { path: Schema.String },
+  ConfirmedRemoveCheckout: { path: S.String },
   SucceededRemoveCheckout: {},
-  SucceededCheckoutSpace: { tab: Schema.String },
-  FailedCheckoutAction: { reason: Schema.String },
-  FailedPaneAction: { reason: Schema.String },
-  PressedSpace: { space: Schema.String },
-  EnteredSpace: { space: Schema.String },
-  ReleasedSpace: { space: Schema.String },
+  SucceededCheckoutSpace: { tab: S.String },
+  FailedCheckoutAction: { reason: S.String },
+  FailedPaneAction: { reason: S.String },
+  PressedSpace: { space: S.String },
+  EnteredSpace: { space: S.String },
+  ReleasedSpace: { space: S.String },
   /** The press ended away from a space row, or the pointer left the sidebar. */
   DroppedSpaceDrag: {},
   SucceededMoveSpace: {},
-  FailedMoveSpace: { reason: Schema.String },
+  FailedMoveSpace: { reason: S.String },
   ClickedSettings: {},
-  PickedFont: { surface: Surface, font: Schema.Option(Schema.String) },
-  SteppedSize: { surface: Surface, step: Schema.Int },
+  PickedFont: { surface: Surface, font: S.Option(S.String) },
+  SteppedSize: { surface: Surface, step: S.Int },
   PickedAgentList: { agents: AgentList },
   PickedAgentView: { agentView: AgentView },
   CompletedSaveSettings: {},
   CompletedSaveSelection: {},
-  ReceivedFonts: { families: Schema.Array(FontFamily) },
-  FailedFonts: { reason: Schema.String },
-  UpdatedPrompt: { text: Schema.String },
-  ReceivedCommands: { address: Schema.String, commands: Schema.Array(SlashCommand) },
-  FailedCommands: { address: Schema.String, failure: BridgeError },
-  PickedCommand: { name: Schema.String },
+  ReceivedFonts: { families: S.Array(FontFamily) },
+  FailedFonts: { reason: S.String },
+  UpdatedPrompt: { text: S.String },
+  ReceivedCommands: { address: S.String, commands: S.Array(SlashCommand) },
+  FailedCommands: { address: S.String, failure: BridgeError },
+  PickedCommand: { name: S.String },
   SubmittedPrompt: {},
-  SucceededSendPrompt: { address: Schema.String, id: Schema.Int },
-  FailedSendPrompt: { address: Schema.String, id: Schema.Int, reason: Schema.String },
-  ClickedSendNow: { address: Schema.String, id: Schema.Int },
-  ClickedDropQueued: { address: Schema.String, id: Schema.Int },
-  ReceivedInputBox: { address: Schema.String, box: InputBox },
-  PausedTyping: { address: Schema.String, text: Schema.String },
-  WroteInputBox: { address: Schema.String, text: Schema.String, box: InputBox },
-  FailedWriteInputBox: { address: Schema.String, reason: Schema.String },
-  FailedInputBox: { address: Schema.String },
-  ReceivedModel: { address: Schema.String, model: Schema.Option(Schema.String) },
-  ReceivedTodos: { address: Schema.String, todos: Schema.Array(TodoItem) },
-  ClickedModelTag: { address: Schema.String },
-  ReceivedModelChoices: { address: Schema.String, choices: ModelChoices },
-  FailedModelChoices: { address: Schema.String, failure: BridgeError },
-  PickedModel: { address: Schema.String, alias: Schema.String },
-  ClickedPair: { address: Schema.String },
-  SucceededPair: { address: Schema.String },
-  FailedPair: { address: Schema.String, reason: Schema.String },
+  SucceededSendPrompt: { address: S.String, id: S.Int },
+  FailedSendPrompt: { address: S.String, id: S.Int, reason: S.String },
+  ClickedSendNow: { address: S.String, id: S.Int },
+  ClickedDropQueued: { address: S.String, id: S.Int },
+  ReceivedInputBox: { address: S.String, box: InputBox },
+  PausedTyping: { address: S.String, text: S.String },
+  WroteInputBox: { address: S.String, text: S.String, box: InputBox },
+  FailedWriteInputBox: { address: S.String, reason: S.String },
+  FailedInputBox: { address: S.String },
+  ReceivedModel: { address: S.String, model: S.Option(S.String) },
+  ReceivedTodos: { address: S.String, todos: S.Array(TodoItem) },
+  ClickedModelTag: { address: S.String },
+  ReceivedModelChoices: { address: S.String, choices: ModelChoices },
+  FailedModelChoices: { address: S.String, failure: BridgeError },
+  PickedModel: { address: S.String, alias: S.String },
+  ClickedPair: { address: S.String },
+  SucceededPair: { address: S.String },
+  FailedPair: { address: S.String, reason: S.String },
   SucceededPickModel: {},
-  ClickedKey: { key: Schema.String },
+  ClickedKey: { key: S.String },
   ToggledModifier: { modifier: Modifier },
   ClickedSendKeys: {},
   ClosedKeySheet: {},
   PickedKeyGroup: { group: KeyGroup },
-  PickedSheetKey: { key: Schema.String },
-  TypedSheetCharacter: { text: Schema.String },
+  PickedSheetKey: { key: S.String },
+  TypedSheetCharacter: { text: S.String },
   ToggledSheetModifier: { modifier: SheetModifier },
   ClickedSendSheetKey: {},
   ClickedPinSheetKey: {},
   ClickedEditSoftKeys: {},
-  MovedSoftKey: { index: Schema.Int, by: Schema.Literals([-1, 1]) },
-  RemovedSoftKey: { index: Schema.Int },
+  MovedSoftKey: { index: S.Int, by: S.Literals([-1, 1]) },
+  RemovedSoftKey: { index: S.Int },
   ClickedRestoreSoftKeys: {},
   CompletedSaveSoftKeys: {},
-  PointedAtLink: { uri: Schema.String },
+  PointedAtLink: { uri: S.String },
   ClosedLinkSheet: {},
   ClickedCopyLink: {},
   CopiedLink: {},
-  FailedCopyLink: { reason: Schema.String },
+  FailedCopyLink: { reason: S.String },
   UsedModifiers: {},
   CompletedKeepTypingFocus: {},
-  SucceededPressKeys: { address: Schema.String },
-  FailedPressKeys: { address: Schema.String, reason: Schema.String },
+  SucceededPressKeys: { address: S.String },
+  FailedPressKeys: { address: S.String, reason: S.String },
   ReceivedUsage: { usage: Usage },
   ToggledUsageDetail: { provider: ProviderId },
-  ClickedRefreshUsage: { provider: Schema.Option(ProviderId) },
+  ClickedRefreshUsage: { provider: S.Option(ProviderId) },
   CompletedRefreshUsage: {},
-  TickedClock: { now: Schema.Finite },
-  PressedSidebarEdge: { x: Schema.Finite },
-  MovedSidebarEdge: { x: Schema.Finite },
+  TickedClock: { now: S.Finite },
+  PressedSidebarEdge: { x: S.Finite },
+  MovedSidebarEdge: { x: S.Finite },
   ReleasedSidebarEdge: {},
-  ChangedViewport: { viewport: Schema.Option(Schema.Struct({ top: Schema.Finite, height: Schema.Finite })) },
-  KeyedSidebarEdge: { key: Schema.String },
+  ChangedViewport: { viewport: S.Option(S.Struct({ top: S.Finite, height: S.Finite })) },
+  KeyedSidebarEdge: { key: S.String },
   ResetSidebarWidth: {},
   CompletedSaveSidebarWidth: {},
   ClickedZoom: {},
@@ -506,8 +506,8 @@ export const Message = defineMessageUnion({
   CompletedSaveViewPicks: {},
   PressedPaletteKey: {},
   ClosedPalette: {},
-  UpdatedPaletteQuery: { text: Schema.String },
-  MovedPaletteHighlight: { step: Schema.Int },
+  UpdatedPaletteQuery: { text: S.String },
+  MovedPaletteHighlight: { step: S.Int },
   OpenedPaletteResult: { target: PaletteTarget },
   SubmittedPalette: {},
   CompletedFocusField: {},

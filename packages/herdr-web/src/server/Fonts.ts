@@ -2,7 +2,7 @@
 // of the desktop's fonts, so the bridge serves them. fontconfig lists them
 // once, at start; a font file is served only by its number in that list, so
 // the routes reach no other file.
-import { Array, Context, Effect, Layer, Option, Order, pipe, Record, Schema } from "effect"
+import { Array, Context, Effect, Layer, Option, Order, pipe, Record, Schema as S } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import type { FontFamily } from "../shared/Fonts.ts"
@@ -47,7 +47,7 @@ export const FontRoutes = Layer.mergeAll(
     "/fonts/:n",
     Effect.gen(function* () {
       const { faces } = yield* Fonts
-      const { n } = yield* HttpRouter.schemaPathParams(Schema.Struct({ n: Schema.FiniteFromString }))
+      const { n } = yield* HttpRouter.schemaPathParams(S.Struct({ n: S.FiniteFromString }))
       return yield* Option.match(Array.get(faces, n), {
         onNone: () => Effect.succeed(HttpServerResponse.empty({ status: 404 })),
         onSome: ({ file }) =>

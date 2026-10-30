@@ -6,7 +6,7 @@
 // in the bridge's config folder, which only the user may read. The server
 // refuses a token that expired or that a new password made void; the bridge
 // then deletes it, and the page offers to pair again.
-import { Array, Config, Context, Effect, FileSystem, Layer, Option, Redacted, Schema, Semaphore } from "effect"
+import { Array, Config, Context, Effect, FileSystem, Layer, Option, Redacted, Schema as S, Semaphore } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
@@ -26,7 +26,7 @@ export class OpenCodeServer extends Context.Service<OpenCodeServer>()("herdr-web
     const lock = yield* Semaphore.make(1)
 
     const stored = fs.readFileString(file).pipe(
-      Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Pairing))),
+      Effect.flatMap(S.decodeEffect(S.fromJsonString(Pairing))),
       Effect.asSome,
       Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
       Effect.mapError(() => new BridgeError({ kind: "unpaired", message: `the bridge's sign-in to OpenCode, ${file}, cannot be read; pair again` })),
@@ -38,7 +38,7 @@ export class OpenCodeServer extends Context.Service<OpenCodeServer>()("herdr-web
         yield* fs.makeDirectory(folder, { recursive: true, mode: 0o700 })
         const written = `${file}.new`
         yield* fs.remove(written).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.void))
-        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Pairing))(pairing)
+        const text = yield* S.encodeEffect(S.fromJsonString(Pairing))(pairing)
         yield* fs.writeFileString(written, text, { flag: "wx", mode: 0o600 })
         yield* fs.rename(written, file)
       }).pipe(Effect.mapError(({ message }) => new BridgeError({ kind: "pairing", message: `the sign-in cannot be saved: ${message}` })))
@@ -93,23 +93,23 @@ export class OpenCodeServer extends Context.Service<OpenCodeServer>()("herdr-web
           if (response.status < 200 || response.status >= 300) {
             return yield* new BridgeError({ kind: "pairing", message: `OpenCode's server refused the pairing code with status ${response.status}` })
           }
-          const { token } = yield* Effect.flatMap(response.json, Schema.decodeUnknownEffect(PairingSession)).pipe(
+          const { token } = yield* Effect.flatMap(response.json, S.decodeUnknownEffect(PairingSession)).pipe(
             Effect.mapError(() => new BridgeError({ kind: "pairing", message: "OpenCode's server sent no token for the pairing code" })),
           )
           yield* save({ url: link.origin, token })
         }),
       ),
       /** A GET of `path` on the server, with `params` in its query, decoded with `schema`. */
-      get: <S extends Schema.ConstraintDecoder<unknown>>(path: string, params: Readonly<Record<string, string>>, schema: S) =>
+      get: <S extends S.ConstraintDecoder<unknown>>(path: string, params: Readonly<Record<string, string>>, schema: S) =>
         call((url) => Effect.succeed(HttpClientRequest.get(`${url}${path}`).pipe(HttpClientRequest.setUrlParams(params)))).pipe(
-          Effect.flatMap((response) => Effect.flatMap(response.json, Schema.decodeUnknownEffect(schema))),
+          Effect.flatMap((response) => Effect.flatMap(response.json, S.decodeUnknownEffect(schema))),
           Effect.catchTags({
             HttpClientError: () => Effect.fail(new BridgeError({ kind: "opencode-server", message: "OpenCode's server sent no JSON" })),
             SchemaError: ({ message }) => Effect.fail(new BridgeError({ kind: "opencode-server", message: `OpenCode's server sent a reply the bridge cannot read: ${message}` })),
           }),
         ),
       /** A POST of `body`, encoded with `schema`, to `path` on the server; what the server answers is not read. */
-      post: <S extends Schema.Constraint>(path: string, schema: S, body: S["Type"]) =>
+      post: <S extends S.Constraint>(path: string, schema: S, body: S["Type"]) =>
         call((url) =>
           HttpClientRequest.schemaBodyJson(schema)(HttpClientRequest.post(`${url}${path}`), body).pipe(
             Effect.mapError(() => new BridgeError({ kind: "opencode-server", message: `the call to ${path} cannot be encoded` })),
@@ -132,11 +132,11 @@ export const pairingLink = (printed: string): Option.Option<URL> =>
   )
 
 /** What the bridge keeps: the server's address, and the token it takes. */
-const Pairing = Schema.Struct({ url: Schema.String, token: Schema.String })
+const Pairing = S.Struct({ url: S.String, token: S.String })
 type Pairing = typeof Pairing.Type
 
 /** What the server answers a pairing link with, for a caller that accepts JSON. */
-const PairingSession = Schema.Struct({ token: Schema.String })
+const PairingSession = S.Struct({ token: S.String })
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"]
 

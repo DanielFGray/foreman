@@ -1,5 +1,5 @@
-import { Schema } from "effect"
+import { Schema as S } from "effect"
 
 /** A font family the bridge can serve; a monospaced one suits a terminal. */
-export const FontFamily = Schema.Struct({ name: Schema.String, isMono: Schema.Boolean })
+export const FontFamily = S.Struct({ name: S.String, isMono: S.Boolean })
 export type FontFamily = typeof FontFamily.Type

@@ -1,5 +1,5 @@
 // The page's commands: each one call to the bridge or to this browser's storage.
-import { Effect, Inspectable, Schema } from "effect"
+import { Effect, Inspectable, Schema as S } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
@@ -13,7 +13,7 @@ import { SoftKey } from "./keys.ts"
 import { forgetStored, saveStored } from "./stored.ts"
 
 export const SplitPane = Command.define("SplitPane", {
-  args: { pane: Schema.String, direction: Direction },
+  args: { pane: S.String, direction: Direction },
   messages: [Message.SucceededSplit, Message.FailedPaneAction],
   execute: ({ pane, direction }) =>
     Effect.gen(function* () {
@@ -30,7 +30,7 @@ export const SaveSettings = Command.define("SaveSettings", {
 })
 
 export const SaveSidebarWidth = Command.define("SaveSidebarWidth", {
-  args: { width: Schema.Option(Schema.Int) },
+  args: { width: S.Option(S.Int) },
   messages: [Message.CompletedSaveSidebarWidth],
   execute: ({ width }) => saveSidebarWidth(width).pipe(Effect.as(Message.CompletedSaveSidebarWidth())),
 })
@@ -50,7 +50,7 @@ export const FetchFonts = Command.define("FetchFonts", {
 })
 
 export const ClosePane = Command.define("ClosePane", {
-  args: { pane: Schema.String },
+  args: { pane: S.String },
   messages: [Message.SucceededClose, Message.FailedPaneAction],
   execute: ({ pane }) =>
     Effect.gen(function* () {
@@ -61,7 +61,7 @@ export const ClosePane = Command.define("ClosePane", {
 })
 
 export const NewTab = Command.define("NewTab", {
-  args: { space: Schema.String },
+  args: { space: S.String },
   messages: [Message.SucceededNewTab, Message.FailedPaneAction],
   execute: ({ space }) =>
     Effect.gen(function* () {
@@ -72,7 +72,7 @@ export const NewTab = Command.define("NewTab", {
 })
 
 export const CloseTab = Command.define("CloseTab", {
-  args: { tab: Schema.String },
+  args: { tab: S.String },
   messages: [Message.SucceededCloseTab, Message.FailedPaneAction],
   execute: ({ tab }) =>
     Effect.gen(function* () {
@@ -83,7 +83,7 @@ export const CloseTab = Command.define("CloseTab", {
 })
 
 export const MoveSpace = Command.define("MoveSpace", {
-  args: { space: Schema.String, onto: Schema.String },
+  args: { space: S.String, onto: S.String },
   messages: [Message.SucceededMoveSpace, Message.FailedMoveSpace],
   execute: ({ space, onto }) =>
     Effect.gen(function* () {
@@ -94,7 +94,7 @@ export const MoveSpace = Command.define("MoveSpace", {
 })
 
 export const NewSpace = Command.define("NewSpace", {
-  args: { machine: Schema.Option(Schema.String), folder: Schema.String, name: Schema.String, program: Schema.Option(Schema.String) },
+  args: { machine: S.Option(S.String), folder: S.String, name: S.String, program: S.Option(S.String) },
   messages: [Message.SucceededNewSpace, Message.FailedNewSpace],
   execute: (at) =>
     Effect.gen(function* () {
@@ -105,7 +105,7 @@ export const NewSpace = Command.define("NewSpace", {
 })
 
 export const RenameSpace = Command.define("RenameSpace", {
-  args: { space: Schema.String, name: Schema.String },
+  args: { space: S.String, name: S.String },
   messages: [Message.SucceededSpaceChange, Message.FailedPaneAction],
   execute: ({ space, name }) =>
     Effect.gen(function* () {
@@ -116,7 +116,7 @@ export const RenameSpace = Command.define("RenameSpace", {
 })
 
 export const CloseSpace = Command.define("CloseSpace", {
-  args: { space: Schema.String },
+  args: { space: S.String },
   messages: [Message.SucceededSpaceChange, Message.FailedPaneAction],
   execute: ({ space }) =>
     Effect.gen(function* () {
@@ -127,7 +127,7 @@ export const CloseSpace = Command.define("CloseSpace", {
 })
 
 export const SendPrompt = Command.define("SendPrompt", {
-  args: { address: Schema.String, id: Schema.Int, text: Schema.String, whileWorking: Schema.Boolean, replaces: Schema.Option(Schema.String) },
+  args: { address: S.String, id: S.Int, text: S.String, whileWorking: S.Boolean, replaces: S.Option(S.String) },
   messages: [Message.SucceededSendPrompt, Message.FailedSendPrompt],
   execute: ({ address, id, text, whileWorking, replaces }) =>
     Effect.gen(function* () {
@@ -140,7 +140,7 @@ export const SendPrompt = Command.define("SendPrompt", {
 // The reading that follows arrives on the usage subscription; a refresh the
 // bridge did not take costs only a stale number, so it is logged.
 export const RefreshUsage = Command.define("RefreshUsage", {
-  args: { provider: Schema.Option(ProviderId) },
+  args: { provider: S.Option(ProviderId) },
   messages: [Message.CompletedRefreshUsage],
   execute: ({ provider }) =>
     Effect.gen(function* () {
@@ -153,7 +153,7 @@ export const RefreshUsage = Command.define("RefreshUsage", {
 })
 
 export const PressKeys = Command.define("PressKeys", {
-  args: { address: Schema.String, keys: Schema.Array(Schema.String) },
+  args: { address: S.String, keys: S.Array(S.String) },
   messages: [Message.SucceededPressKeys, Message.FailedPressKeys],
   execute: ({ address, keys }) =>
     Effect.gen(function* () {
@@ -164,27 +164,27 @@ export const PressKeys = Command.define("PressKeys", {
 })
 
 export const SaveRecent = Command.define("SaveRecent", {
-  args: { recent: Schema.Array(Schema.String) },
+  args: { recent: S.Array(S.String) },
   messages: [Message.CompletedSaveRecent],
-  execute: ({ recent }) => saveStored(RECENT_KEY, Schema.Array(Schema.String), recent).pipe(Effect.as(Message.CompletedSaveRecent())),
+  execute: ({ recent }) => saveStored(RECENT_KEY, S.Array(S.String), recent).pipe(Effect.as(Message.CompletedSaveRecent())),
 })
 
 export const SaveViewPicks = Command.define("SaveViewPicks", {
-  args: { viewPicks: Schema.Array(ViewPick) },
+  args: { viewPicks: S.Array(ViewPick) },
   messages: [Message.CompletedSaveViewPicks],
-  execute: ({ viewPicks }) => saveStored(VIEW_PICKS_KEY, Schema.Array(ViewPick), viewPicks).pipe(Effect.as(Message.CompletedSaveViewPicks())),
+  execute: ({ viewPicks }) => saveStored(VIEW_PICKS_KEY, S.Array(ViewPick), viewPicks).pipe(Effect.as(Message.CompletedSaveViewPicks())),
 })
 
 export const SaveZoom = Command.define("SaveZoom", {
-  args: { isZoomed: Schema.Boolean },
+  args: { isZoomed: S.Boolean },
   messages: [Message.CompletedSaveZoom],
-  execute: ({ isZoomed }) => saveStored(ZOOM_KEY, Schema.Boolean, isZoomed).pipe(Effect.as(Message.CompletedSaveZoom())),
+  execute: ({ isZoomed }) => saveStored(ZOOM_KEY, S.Boolean, isZoomed).pipe(Effect.as(Message.CompletedSaveZoom())),
 })
 
 /** Puts the caret in the palette's search box once it is on the page. */
 /** Puts the keyboard focus in a text box the page just drew; a browser applies autofocus only as the page loads. */
 export const FocusField = Command.define("FocusField", {
-  args: { id: Schema.String },
+  args: { id: S.String },
   messages: [Message.CompletedFocusField],
   execute: ({ id }) =>
     Dom.focus(`#${id}`).pipe(
@@ -194,7 +194,7 @@ export const FocusField = Command.define("FocusField", {
 })
 
 export const AnswerQuestion = Command.define("AnswerQuestion", {
-  args: { address: Schema.String, question: Question, answer: Answer },
+  args: { address: S.String, question: Question, answer: Answer },
   messages: [Message.SucceededAnswer, Message.FailedAnswer],
   execute: ({ address, question, answer }) =>
     Effect.gen(function* () {
@@ -205,7 +205,7 @@ export const AnswerQuestion = Command.define("AnswerQuestion", {
 })
 
 export const ListWorktrees = Command.define("ListWorktrees", {
-  args: { space: Schema.String },
+  args: { space: S.String },
   messages: [Message.ReceivedWorktrees, Message.FailedWorktrees],
   execute: ({ space }) =>
     Effect.gen(function* () {
@@ -215,7 +215,7 @@ export const ListWorktrees = Command.define("ListWorktrees", {
 })
 
 export const NewWorktree = Command.define("NewWorktree", {
-  args: { space: Schema.String, branch: Schema.String, program: Schema.Option(Schema.String) },
+  args: { space: S.String, branch: S.String, program: S.Option(S.String) },
   messages: [Message.SucceededCheckoutSpace, Message.FailedCheckoutAction],
   execute: (at) =>
     Effect.gen(function* () {
@@ -226,7 +226,7 @@ export const NewWorktree = Command.define("NewWorktree", {
 })
 
 export const OpenWorktree = Command.define("OpenWorktree", {
-  args: { space: Schema.String, path: Schema.String },
+  args: { space: S.String, path: S.String },
   messages: [Message.SucceededCheckoutSpace, Message.FailedCheckoutAction],
   execute: (at) =>
     Effect.gen(function* () {
@@ -237,7 +237,7 @@ export const OpenWorktree = Command.define("OpenWorktree", {
 })
 
 export const RemoveWorktree = Command.define("RemoveWorktree", {
-  args: { space: Schema.String, path: Schema.String },
+  args: { space: S.String, path: S.String },
   messages: [Message.SucceededRemoveCheckout, Message.FailedCheckoutAction],
   execute: (at) =>
     Effect.gen(function* () {
@@ -249,7 +249,7 @@ export const RemoveWorktree = Command.define("RemoveWorktree", {
 
 /** The models the agent may switch to, for its open model menu. */
 export const ListModelChoices = Command.define("ListModelChoices", {
-  args: { address: Schema.String },
+  args: { address: S.String },
   messages: [Message.ReceivedModelChoices, Message.FailedModelChoices],
   execute: ({ address }) =>
     Effect.gen(function* () {
@@ -260,7 +260,7 @@ export const ListModelChoices = Command.define("ListModelChoices", {
 
 /** Pairs the bridge with the server of the agent at `address`; see `pair` in Api.ts. */
 export const Pair = Command.define("Pair", {
-  args: { address: Schema.String },
+  args: { address: S.String },
   messages: [Message.SucceededPair, Message.FailedPair],
   execute: ({ address }) =>
     Effect.gen(function* () {
@@ -272,7 +272,7 @@ export const Pair = Command.define("Pair", {
 
 /** Switches the agent to one of its model choices; Claude Code refuses while it works. */
 export const PickModel = Command.define("PickModel", {
-  args: { address: Schema.String, alias: Schema.String },
+  args: { address: S.String, alias: S.String },
   messages: [Message.SucceededPickModel, Message.FailedPaneAction],
   execute: ({ address, alias }) =>
     Effect.gen(function* () {
@@ -283,9 +283,9 @@ export const PickModel = Command.define("PickModel", {
 })
 
 export const SaveSoftKeys = Command.define("SaveSoftKeys", {
-  args: { softKeys: Schema.Array(SoftKey) },
+  args: { softKeys: S.Array(SoftKey) },
   messages: [Message.CompletedSaveSoftKeys],
-  execute: ({ softKeys }) => saveStored(SOFT_KEYS_KEY, Schema.Array(SoftKey), softKeys).pipe(Effect.as(Message.CompletedSaveSoftKeys())),
+  execute: ({ softKeys }) => saveStored(SOFT_KEYS_KEY, S.Array(SoftKey), softKeys).pipe(Effect.as(Message.CompletedSaveSoftKeys())),
 })
 
 /** Forgets the browser's own row, so it shows the defaults, now and as they change. */
@@ -297,7 +297,7 @@ export const ForgetSoftKeys = Command.define("ForgetSoftKeys", {
 
 /** Copies text to the clipboard. Browsers allow it only on an https page or at localhost. */
 export const CopyText = Command.define("CopyText", {
-  args: { text: Schema.String },
+  args: { text: S.String },
   messages: [Message.CopiedLink, Message.FailedCopyLink],
   execute: ({ text }) =>
     Effect.tryPromise(() => navigator.clipboard.writeText(text)).pipe(
@@ -310,7 +310,7 @@ export const CopyText = Command.define("CopyText", {
 })
 
 export const ListCommands = Command.define("ListCommands", {
-  args: { address: Schema.String },
+  args: { address: S.String },
   messages: [Message.ReceivedCommands, Message.FailedCommands],
   execute: ({ address }) =>
     Effect.gen(function* () {
@@ -320,7 +320,7 @@ export const ListCommands = Command.define("ListCommands", {
 })
 
 export const WriteInputBox = Command.define("WriteInputBox", {
-  args: { address: Schema.String, expected: Schema.String, text: Schema.String },
+  args: { address: S.String, expected: S.String, text: S.String },
   messages: [Message.WroteInputBox, Message.FailedWriteInputBox],
   execute: ({ address, expected, text }) =>
     Effect.gen(function* () {

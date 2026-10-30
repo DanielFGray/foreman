@@ -1,6 +1,6 @@
 // An OpenCode session's todo list, from the `todo` table of its database:
 // one row per step, at its position in the list.
-import { Array, Option, Order, Schema } from "effect"
+import { Array, Option, Order, Schema as S } from "effect"
 import type { TodoItem } from "../../shared/Todo.ts"
 import { quoted } from "./Database.ts"
 
@@ -9,10 +9,10 @@ export const todosQuery = (session: string) => `
 select json_group_array(json_object('content', content, 'status', status, 'position', position))
 from todo where session_id = ${quoted(session)}`
 
-export const TodoRow = Schema.Struct({
-  content: Schema.String,
-  status: Schema.Literals(["pending", "in_progress", "completed", "cancelled"]),
-  position: Schema.Int,
+export const TodoRow = S.Struct({
+  content: S.String,
+  status: S.Literals(["pending", "in_progress", "completed", "cancelled"]),
+  position: S.Int,
 })
 export type TodoRow = typeof TodoRow.Type
 

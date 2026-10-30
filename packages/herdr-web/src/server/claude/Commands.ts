@@ -4,14 +4,14 @@
 // authority: a command here proves only that a file is where Claude Code
 // looks. Read with the rules of Claude Code 2.1.314; CLAUDE_CONFIG_DIR, managed
 // settings, synced claude.ai skills and project plugin settings are not read.
-import { Array, Context, Effect, Layer, Match, Option, Order, pipe, Schema, String } from "effect"
+import { Array, Context, Effect, Layer, Match, Option, Order, pipe, Schema as S, String } from "effect"
 import { Hc } from "../../hc/Hc.ts"
 import type { SlashCommand } from "../../shared/SlashCommand.ts"
 import { localOf } from "../HerdrApp.ts"
 
 /** The scan failed: hc could not run it, or it ran too long. */
-export class CommandsError extends Schema.TaggedError<CommandsError, { readonly brand: unique symbol }>()("CommandsError", {
-  message: Schema.String,
+export class CommandsError extends S.TaggedError<CommandsError, { readonly brand: unique symbol }>()("CommandsError", {
+  message: S.String,
 }) {}
 
 export class ClaudeCommands extends Context.Service<ClaudeCommands>()("herdr-web/server/claude/ClaudeCommands", {
@@ -65,7 +65,7 @@ export const BUILT_INS: ReadonlyArray<SlashCommand> = Array.map(
   ([name, description, hint]) => ({ name, description, hint, origin: "built-in" }),
 )
 
-const RecordKind = Schema.Literals(["skill", "command", "json"])
+const RecordKind = S.Literals(["skill", "command", "json"])
 
 /** One file the scan read: what it holds, where it was, and its frontmatter and first lines. */
 export type ScanRecord = Readonly<{ kind: typeof RecordKind.Type; origin: string; prefix: string; root: string; path: string; text: string }>
@@ -81,7 +81,7 @@ export const parseRecords = (stdout: string): ReadonlyArray<ScanRecord> =>
       const fields = String.split(header ?? "", "\t")
       return fields.length !== 5
         ? Option.none()
-        : Option.map(Schema.decodeUnknownOption(RecordKind)(fields[0]), (kind) => ({ kind, origin: fields[1] ?? "", prefix: fields[2] ?? "", root: fields[3] ?? "", path: fields[4] ?? "", text: lines.join("\n") }))
+        : Option.map(S.decodeUnknownOption(RecordKind)(fields[0]), (kind) => ({ kind, origin: fields[1] ?? "", prefix: fields[2] ?? "", root: fields[3] ?? "", path: fields[4] ?? "", text: lines.join("\n") }))
     }),
   )
 
@@ -106,22 +106,22 @@ export const commandsOf = (records: ReadonlyArray<ScanRecord>, settings: Setting
 }
 
 /** The parts of the user's settings.json the scan uses. */
-export const Settings = Schema.Struct({
-  enabledPlugins: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
-  skillOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+export const Settings = S.Struct({
+  enabledPlugins: S.optionalKey(S.Record(S.String, S.Boolean)),
+  skillOverrides: S.optionalKey(S.Record(S.String, S.String)),
 })
 export type Settings = typeof Settings.Type
 
-const InstalledPlugins = Schema.Struct({
-  plugins: Schema.Record(Schema.String, Schema.Array(Schema.Struct({ installPath: Schema.String }))),
+const InstalledPlugins = S.Struct({
+  plugins: S.Record(S.String, S.Array(S.Struct({ installPath: S.String }))),
 })
 
 /** The frontmatter fields a command's file may set; others are left alone. */
-const Frontmatter = Schema.Struct({
-  name: Schema.optionalKey(Schema.String),
-  description: Schema.optionalKey(Schema.String),
-  "argument-hint": Schema.optionalKey(Schema.String),
-  "user-invocable": Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Finite, Schema.String])),
+const Frontmatter = S.Struct({
+  name: S.optionalKey(S.String),
+  description: S.optionalKey(S.String),
+  "argument-hint": S.optionalKey(S.String),
+  "user-invocable": S.optionalKey(S.Union([S.Boolean, S.Finite, S.String])),
 })
 
 const NO_FIELDS: typeof Frontmatter.Type = {}
@@ -146,10 +146,10 @@ const pluginsOf = (records: ReadonlyArray<ScanRecord>, settings: Settings) =>
       ),
   })
 
-const jsonOf = <S extends Schema.Top & { readonly DecodingServices: never }>(records: ReadonlyArray<ScanRecord>, ending: string, schema: S) =>
+const jsonOf = <S extends S.Top & { readonly DecodingServices: never }>(records: ReadonlyArray<ScanRecord>, ending: string, schema: S) =>
   Option.flatMap(
     Array.findFirst(records, ({ kind, path }) => kind === "json" && String.endsWith(ending)(path)),
-    ({ text }) => Schema.decodeOption(Schema.fromJsonString(schema))(text),
+    ({ text }) => S.decodeOption(S.fromJsonString(schema))(text),
   )
 
 const commandOf = (record: ScanRecord) => {
@@ -194,7 +194,7 @@ export const frontmatterOf = (text: string) =>
       fields: Option.getOrElse(
         Option.flatMap(
           Option.liftThrowable(() => Bun.YAML.parse(yaml))(),
-          Schema.decodeUnknownOption(Frontmatter),
+          S.decodeUnknownOption(Frontmatter),
         ),
         () => NO_FIELDS,
       ),

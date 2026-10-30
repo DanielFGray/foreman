@@ -6,16 +6,16 @@
 // `<config>/projects/<project>/<session id>.jsonl`. Claude Code rewrites the
 // pid record in place when the process starts another session (`/clear`
 // does), so watching it moves the chat to the new transcript.
-import { Array, Config, Context, Effect, FileSystem, Layer, Option, Result, Schedule, Schema, Stream } from "effect"
+import { Array, Config, Context, Effect, FileSystem, Layer, Option, Result, Schedule, Schema as S, Stream } from "effect"
 import type { ChatUpdate } from "../../shared/Chat.ts"
 import { sameTodos } from "../../shared/Todo.ts"
 import { decodeTaskFile, isTaskFile, todosOf } from "./Tasks.ts"
 import { decodeLine, newestModel, splitLines } from "./Transcript.ts"
 
 /** The process has no session record Claude Code can be followed by. */
-export class NoTranscript extends Schema.TaggedError<NoTranscript, { readonly brand: unique symbol }>()(
+export class NoTranscript extends S.TaggedError<NoTranscript, { readonly brand: unique symbol }>()(
   "NoTranscript",
-  { pid: Schema.Int, reason: Schema.String },
+  { pid: S.Int, reason: S.String },
 ) {}
 
 export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/claude/ClaudeChat", {
@@ -159,8 +159,8 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
   static readonly layer = Layer.effect(this, this.make)
 }
 
-const PidRecord = Schema.Struct({ sessionId: Schema.String })
-const decodePidRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(PidRecord))
+const PidRecord = S.Struct({ sessionId: S.String })
+const decodePidRecord = S.decodeUnknownEffect(S.fromJsonString(PidRecord))
 
 /** Where the next read starts, and the bytes of a line not yet complete. None before the first read. */
 type Tail = Option.Option<Readonly<{ offset: bigint; rest: Uint8Array }>>

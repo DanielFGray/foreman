@@ -1,7 +1,7 @@
 // An agent's conversation as the page shows it: what the user asked, what the
 // agent answered (as Markdown, already parsed), and the tools it ran. The
 // bridge builds these from the agent's own transcript.
-import { Array, Match, Option, pipe, Schema, String } from "effect"
+import { Array, Match, Option, pipe, Schema as S, String } from "effect"
 
 // MARKDOWN
 // A small Markdown vocabulary the page draws with its own elements. Raw HTML
@@ -16,16 +16,16 @@ export type Inline =
   | Readonly<{ _tag: "Link"; href: string; children: ReadonlyArray<Inline> }>
   | Readonly<{ _tag: "Break" }>
 
-const InlineRef = Schema.suspend((): Schema.Codec<Inline> => Inline)
+const InlineRef = S.suspend((): S.Codec<Inline> => Inline)
 
-export const Inline: Schema.Codec<Inline> = Schema.Union([
-  Schema.TaggedStruct("Text", { text: Schema.String }),
-  Schema.TaggedStruct("Code", { text: Schema.String }),
-  Schema.TaggedStruct("Strong", { children: Schema.Array(InlineRef) }),
-  Schema.TaggedStruct("Emphasis", { children: Schema.Array(InlineRef) }),
-  Schema.TaggedStruct("Delete", { children: Schema.Array(InlineRef) }),
-  Schema.TaggedStruct("Link", { href: Schema.String, children: Schema.Array(InlineRef) }),
-  Schema.TaggedStruct("Break", {}),
+export const Inline: S.Codec<Inline> = S.Union([
+  S.TaggedStruct("Text", { text: S.String }),
+  S.TaggedStruct("Code", { text: S.String }),
+  S.TaggedStruct("Strong", { children: S.Array(InlineRef) }),
+  S.TaggedStruct("Emphasis", { children: S.Array(InlineRef) }),
+  S.TaggedStruct("Delete", { children: S.Array(InlineRef) }),
+  S.TaggedStruct("Link", { href: S.String, children: S.Array(InlineRef) }),
+  S.TaggedStruct("Break", {}),
 ])
 
 export type Block =
@@ -46,36 +46,36 @@ type BlockEncoded =
   | Readonly<{ _tag: "Table"; rows: ReadonlyArray<ReadonlyArray<ReadonlyArray<Inline>>> }>
   | Readonly<{ _tag: "Rule" }>
 
-const BlockRef = Schema.suspend((): Schema.Codec<Block, BlockEncoded> => Block)
+const BlockRef = S.suspend((): S.Codec<Block, BlockEncoded> => Block)
 
-export const Block: Schema.Codec<Block, BlockEncoded> = Schema.Union([
-  Schema.TaggedStruct("Paragraph", { inlines: Schema.Array(Inline) }),
-  Schema.TaggedStruct("Heading", { depth: Schema.Int, inlines: Schema.Array(Inline) }),
-  Schema.TaggedStruct("CodeBlock", { lang: Schema.OptionFromOptionalKey(Schema.String), text: Schema.String }),
-  Schema.TaggedStruct("List", { isOrdered: Schema.Boolean, items: Schema.Array(Schema.Array(BlockRef)) }),
-  Schema.TaggedStruct("Quote", { blocks: Schema.Array(BlockRef) }),
-  Schema.TaggedStruct("Table", { rows: Schema.Array(Schema.Array(Schema.Array(Inline))) }),
-  Schema.TaggedStruct("Rule", {}),
+export const Block: S.Codec<Block, BlockEncoded> = S.Union([
+  S.TaggedStruct("Paragraph", { inlines: S.Array(Inline) }),
+  S.TaggedStruct("Heading", { depth: S.Int, inlines: S.Array(Inline) }),
+  S.TaggedStruct("CodeBlock", { lang: S.OptionFromOptionalKey(S.String), text: S.String }),
+  S.TaggedStruct("List", { isOrdered: S.Boolean, items: S.Array(S.Array(BlockRef)) }),
+  S.TaggedStruct("Quote", { blocks: S.Array(BlockRef) }),
+  S.TaggedStruct("Table", { rows: S.Array(S.Array(S.Array(Inline))) }),
+  S.TaggedStruct("Rule", {}),
 ])
 
 // ENTRY
 
 /** One thing in the conversation, in order. `id` is unique within the conversation. */
-export const Entry = Schema.Union([
+export const Entry = S.Union([
   /** What the user typed. */
-  Schema.TaggedStruct("Prompt", { id: Schema.String, text: Schema.String }),
+  S.TaggedStruct("Prompt", { id: S.String, text: S.String }),
   /** A slash command the user ran, such as `/go-forth`. */
-  Schema.TaggedStruct("Command", { id: Schema.String, name: Schema.String, args: Schema.String }),
+  S.TaggedStruct("Command", { id: S.String, name: S.String, args: S.String }),
   /** Text the agent wrote to the user. */
-  Schema.TaggedStruct("Reply", { id: Schema.String, blocks: Schema.Array(Block) }),
+  S.TaggedStruct("Reply", { id: S.String, blocks: S.Array(Block) }),
   /** A tool the agent ran: its name and a one-line description of what it did. */
-  Schema.TaggedStruct("Tool", { id: Schema.String, toolUseId: Schema.String, name: Schema.String, summary: Schema.String }),
+  S.TaggedStruct("Tool", { id: S.String, toolUseId: S.String, name: S.String, summary: S.String }),
   /** The outcome of a Tool, matched by `toolUseId`. */
-  Schema.TaggedStruct("ToolResult", { id: Schema.String, toolUseId: Schema.String, isError: Schema.Boolean }),
+  S.TaggedStruct("ToolResult", { id: S.String, toolUseId: S.String, isError: S.Boolean }),
   /** The agent finished a turn, after `durationMs`. */
-  Schema.TaggedStruct("TurnEnded", { id: Schema.String, durationMs: Schema.Finite }),
+  S.TaggedStruct("TurnEnded", { id: S.String, durationMs: S.Finite }),
   /** The conversation was compacted; earlier entries are summarized. */
-  Schema.TaggedStruct("Compacted", { id: Schema.String }),
+  S.TaggedStruct("Compacted", { id: S.String }),
 ])
 export type Entry = typeof Entry.Type
 
@@ -96,16 +96,16 @@ const SUMMARY_LENGTH = 160
  * batch of new ones. An agent that changes entries in place, such as a reply
  * it still writes, sends a whole `Reset` again.
  */
-export const ChatUpdate = Schema.Union([
-  Schema.TaggedStruct("Reset", { entries: Schema.Array(Entry) }),
-  Schema.TaggedStruct("Appended", { entries: Schema.Array(Entry) }),
+export const ChatUpdate = S.Union([
+  S.TaggedStruct("Reset", { entries: S.Array(Entry) }),
+  S.TaggedStruct("Appended", { entries: S.Array(Entry) }),
 ])
 export type ChatUpdate = typeof ChatUpdate.Type
 
 // QUESTION
 
 /** One answer the agent offers; pressing `number` picks it. */
-export const Choice = Schema.Struct({ number: Schema.Int, label: Schema.String, detail: Schema.OptionFromOptionalKey(Schema.String) })
+export const Choice = S.Struct({ number: S.Int, label: S.String, detail: S.OptionFromOptionalKey(S.String) })
 export type Choice = typeof Choice.Type
 
 /**
@@ -114,11 +114,11 @@ export type Choice = typeof Choice.Type
  * the status stays the same from one question of a series to the next.
  * `ownAnswer` is the number of the choice that takes a typed answer instead.
  */
-export const Question = Schema.Struct({ text: Schema.String, choices: Schema.Array(Choice), ownAnswer: Schema.OptionFromOptionalKey(Schema.Int) })
+export const Question = S.Struct({ text: S.String, choices: S.Array(Choice), ownAnswer: S.OptionFromOptionalKey(S.Int) })
 export type Question = typeof Question.Type
 
 /** An answer to a question: one of its choices, or text of the user's own. */
-export const Answer = Schema.Union([Schema.TaggedStruct("Picked", { choice: Schema.Int }), Schema.TaggedStruct("Typed", { text: Schema.String })])
+export const Answer = S.Union([S.TaggedStruct("Picked", { choice: S.Int }), S.TaggedStruct("Typed", { text: S.String })])
 export type Answer = typeof Answer.Type
 
 // INPUT BOX
@@ -126,20 +126,20 @@ export type Answer = typeof Answer.Type
 // drawn faint in an empty box; only the screen's styles tell it from text the
 // user typed in the terminal.
 
-export const InputBox = Schema.Union([
+export const InputBox = S.Union([
   /** The screen shows no input box: another program, or a dialog over it. */
-  Schema.TaggedStruct("Absent", {}),
-  Schema.TaggedStruct("Empty", {}),
+  S.TaggedStruct("Absent", {}),
+  S.TaggedStruct("Empty", {}),
   /** The prompt Claude Code suggests next; a paste replaces it. */
-  Schema.TaggedStruct("Suggestion", { text: Schema.String }),
+  S.TaggedStruct("Suggestion", { text: S.String }),
   /** Text typed into the box; a paste would join it. Claude Code's own line breaks read as typed ones. */
-  Schema.TaggedStruct("Draft", { text: Schema.String }),
+  S.TaggedStruct("Draft", { text: S.String }),
   /**
    * Text in the box that the screen shows only in part: a paste Claude Code
    * folded into a placeholder, or a box taller than the screen. `text` is
    * what shows.
    */
-  Schema.TaggedStruct("Partial", { text: Schema.String }),
+  S.TaggedStruct("Partial", { text: S.String }),
 ])
 export type InputBox = typeof InputBox.Type
 
