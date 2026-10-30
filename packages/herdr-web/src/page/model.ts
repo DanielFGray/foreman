@@ -242,6 +242,12 @@ export const Model = Schema.Struct({
   sidebarWidth: Schema.Option(Schema.Int),
   /** While the edge is dragged: how far right of the edge the pointer took hold of it. */
   sidebarGrip: Schema.Option(Schema.Finite),
+  /**
+   * The part of the window a person sees, in CSS pixels from the top of the
+   * layout: smaller than the window while a phone's keyboard is open. None
+   * where the browser does not report it, or while the page is zoomed.
+   */
+  viewport: Schema.Option(Schema.Struct({ top: Schema.Finite, height: Schema.Finite })),
 })
 export type Model = typeof Model.Type
 
@@ -356,6 +362,7 @@ export const Message = defineMessageUnion({
   PressedSidebarEdge: { x: Schema.Finite },
   MovedSidebarEdge: { x: Schema.Finite },
   ReleasedSidebarEdge: {},
+  ChangedViewport: { viewport: Schema.Option(Schema.Struct({ top: Schema.Finite, height: Schema.Finite })) },
   KeyedSidebarEdge: { key: Schema.String },
   ResetSidebarWidth: {},
   CompletedSaveSidebarWidth: {},

@@ -47,6 +47,7 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     queued: [],
     boxes: {},
     models: {},
+    viewport: Option.none(),
     waiting: [],
     questions: {},
     paneAction: PaneAction.Idle(),
@@ -368,6 +369,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     SucceededPickModel: () => ({ model }),
 
+    ChangedViewport: ({ viewport }) => ({ model: modifyFields(model, { viewport: () => viewport }) }),
+
     ClickedKey: ({ key }) =>
       Option.match(maybeFocus(model), {
         onNone: () => ({ model }),
@@ -576,6 +579,29 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The visible part of the window, now and after each change. A browser
+  // without visualViewport reports nothing, and the page fills the window.
+  viewport: entry(
+    {},
+    {
+      modelToDependencies: () => ({}),
+      dependenciesToStream: () =>
+        Option.match(Option.fromNullishOr(window.visualViewport), {
+          onNone: () => Stream.empty,
+          onSome: (visible) => {
+            const read = () => Message.ChangedViewport({ viewport: viewportOf(visible) })
+            return Stream.concat(
+              Stream.sync(read),
+              Stream.merge(
+                Dom.streamFromEvent({ target: visible, type: "resize", mapEvent: read }),
+                Dom.streamFromEvent({ target: visible, type: "scroll", mapEvent: read }),
+              ),
+            )
+          },
+        }),
+    },
+  ),
+
   // The pointer anywhere on the page while the sidebar's edge is held, since
   // a drag soon leaves the thin edge behind.
   sidebarDrag: entry(
@@ -668,6 +694,11 @@ const inputBoxStream = (address: string) =>
     )
   }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
 
+// A zoomed page shows part of itself on purpose; fitting the page to that part
+// would undo the zoom. The keyboard leaves the scale at 1.
+const viewportOf = (visible: VisualViewport) =>
+  visible.scale === 1 ? Option.some({ top: visible.offsetTop, height: visible.height }) : Option.none()
+
 const modelStream = (address: string) =>
   Effect.gen(function* () {
     const client = yield* BridgeClient
@@ -698,6 +729,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
         "--chat-font": fontStack("chat", model.settings.chat.font),
         "--chat-size": `${model.settings.chat.size}px`,
         "--sidebar-width": `${shownSidebarWidth(model)}px`,
+        // The page fills what a person sees, so a phone's keyboard pushes the prompt up instead of covering it.
+        "--viewport-top": `${Option.match(model.viewport, { onNone: () => 0, onSome: ({ top }) => top })}px`,
+        "--viewport-height": Option.match(model.viewport, { onNone: () => "100dvh", onSome: ({ height }) => `${height}px` }),
       }),
     ],
     [

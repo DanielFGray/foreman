@@ -59,3 +59,16 @@ test("an agent's pane names its model, and the tag picks another through /model"
     expect(role("menu", { name: "models" })).not.toExist(),
   )
 })
+
+test("the page fits the part of the window a person sees, and the whole window when the browser says nothing", () => {
+  scene(
+    { update, view },
+    given(start),
+    Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()], [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })]),
+    expect(selector(".app")).toHaveStyle("--viewport-height", "100dvh"),
+    // A phone's keyboard opened, and the browser moved what it shows down by 40px.
+    Subscription.emit(Message.ChangedViewport({ viewport: Option.some({ top: 40, height: 400 }) })),
+    expect(selector(".app")).toHaveStyle("--viewport-top", "40px"),
+    expect(selector(".app")).toHaveStyle("--viewport-height", "400px"),
+  )
+})
