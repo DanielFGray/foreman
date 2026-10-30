@@ -54,11 +54,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .header h1 { margin: 0; font-size: 16px; }
 .settings-toggle { margin-left: auto; }
 
-.link { font-size: 12px; color: var(--subtext); white-space: nowrap; }
-.link::before { content: "● "; }
-.link.live::before { color: var(--green); }
-.link.waiting::before { color: var(--yellow); }
-.link.stale::before { color: var(--red); }
+.link-problem { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--red); }
 
 .chip {
   padding: 2px 10px;
@@ -82,12 +78,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 8px;
   border-right: 1px solid var(--surface);
 }
-.space ul { list-style: none; margin: 0; padding: 0; }
-.space-head { display: flex; align-items: center; gap: 8px; margin: 12px 8px 2px; font-size: 13px; color: var(--accent); }
-.space-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.space-button { display: flex; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
-.space.open .space-head { color: var(--text); }
-.space .agents { margin-left: 18px; }
+.loose ul { list-style: none; margin: 0; padding: 0; }
 .machine + .machine { margin-top: 12px; border-top: 1px solid var(--surface); }
 .machine-head { display: flex; align-items: center; gap: 8px; margin: 12px 8px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
 .machine-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -112,7 +103,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row .msg { flex: 1; min-width: 0; }
 .row .dot { margin-left: auto; flex-shrink: 0; }
-.tab-row .name { flex: 1; font-weight: 400; }
+.space-row .name { flex: 1; }
+.row:disabled { opacity: 0.5; cursor: default; }
+.tab { display: inline-flex; align-items: center; gap: 6px; }
+.fleet-backdrop { display: none; }
 .name { font-weight: 600; white-space: nowrap; }
 .msg { color: var(--subtext); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -293,8 +287,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 @media (max-width: 720px) {
-  .panes { flex-direction: column; }
-  .fleet { width: auto; max-height: 40dvh; border-right: 0; border-bottom: 1px solid var(--surface); }
+  .panes { position: relative; flex-direction: column; }
+  /* A drawer over the page, from the left edge. */
+  .fleet { position: absolute; z-index: 20; inset: 0 auto 0 0; width: min(85vw, 320px); background: var(--base); box-shadow: 4px 0 16px rgb(0 0 0 / 0.25); }
+  .fleet-backdrop { display: block; position: absolute; z-index: 10; inset: 0; background: rgb(0 0 0 / 0.3); }
   .chip.fleet-toggle { display: inline-flex; }
   /* The pane's name needs the room more than the view chips' words. */
   .view-chip { padding: 4px 8px; }
@@ -311,8 +307,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .split { gap: 0; }
 }
 
-/* The quota bar: a meter per coding plan, and above it the open plan's detail. */
-.usage { position: relative; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }
+/* The quota bar: a meter per coding plan, and above it the open plan's detail; above the phone's sidebar drawer too. */
+.usage { position: relative; z-index: 30; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }
 .usage-bar { display: flex; gap: 4px; padding: 2px 8px; overflow-x: auto; }
 .usage-segment {
   display: flex;
@@ -366,4 +362,5 @@ p.usage-error { margin: 0; }
   .usage-bar { gap: 0; padding: 2px 4px; }
   .usage-segment { gap: 4px; padding: 3px 4px; }
   .usage-meter { width: 16px; }
+  .usage-name { display: none; }
 }

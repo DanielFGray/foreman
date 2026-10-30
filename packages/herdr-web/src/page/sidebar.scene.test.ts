@@ -30,8 +30,8 @@ const fleet: Fleet = {
           name: "",
           folder: "/home/dan/build/prog",
           tabs: [
-            { id: "a", name: "", root: { _tag: "Block", type: "block", id: "p1", size: Option.none(), content: { _tag: "Terminal", terminal: "t1" } } },
             { id: "b", name: "notes", root: { _tag: "Unknown", type: "browser" } },
+            { id: "a", name: "", root: { _tag: "Block", type: "block", id: "p1", size: Option.none(), content: { _tag: "Terminal", terminal: "t1" } } },
           ],
         },
         { id: "s2", name: "quiet", folder: "/", tabs: [{ id: "c", name: "", root: { _tag: "Unknown", type: "browser" } }] },
@@ -41,21 +41,20 @@ const fleet: Fleet = {
   terminals: [blockedAgent],
 }
 
-test("the sidebar lists every space and tab, marks them by their agents, and opens a tab", () => {
+test("the sidebar lists every space, marked by its agents, and a click opens its first tab", () => {
   scene(
     { update, view },
     given({ ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet }) }),
-    expectAll(all.selector(".space-head")).toHaveCount(2),
-    inside(
-      role("region", { name: "prog" }),
-      expect(selector(".space-head .dot")).toHaveClass("blocked"),
-      expect(selector(".agent-row")).toContainText("needs a yes"),
-    ),
+    expectAll(all.selector(".space-row")).toHaveCount(2),
+    inside(role("button", { name: "prog" }), expect(selector(".dot")).toHaveClass("blocked")),
     // A space without agents still shows, with no mark.
-    inside(role("region", { name: "quiet" }), expect(selector(".dot")).not.toExist()),
-    click(role("button", { name: "notes" })),
-    expect(role("button", { name: "notes" })).toHaveAttr("aria-current", "page"),
+    inside(role("button", { name: "quiet" }), expect(selector(".dot")).not.toExist()),
+    click(role("button", { name: "prog" })),
+    expect(role("button", { name: "prog" })).toHaveAttr("aria-current", "page"),
     expect(selector(".tabs .tab.on")).toContainText("notes"),
+    // The tab bar marks the tab whose agent waits.
+    inside(role("button", { name: "2" }), expect(selector(".dot")).toHaveClass("blocked")),
+    inside(role("button", { name: "notes" }), expect(selector(".dot")).not.toExist()),
     // One machine needs no heading.
     expect(selector(".machine-head")).not.toExist(),
   )

@@ -13,16 +13,27 @@ export type MachineRow = Readonly<{ machine: Machine; spaces: ReadonlyArray<Spac
 export type Sidebar = Readonly<{ machines: ReadonlyArray<MachineRow>; loose: ReadonlyArray<Terminal> }>
 
 /**
- * Every machine, space and tab in hc's and herdr-app's order, each space and
- * tab marked with its most urgent agent, and under each tab its agents in pane
- * order. hc keeps a terminal after its program exits, so only live ones
- * count. A loose agent is one no space shows, such as a sub-agent; a loose
- * shell belongs to another app.
+ * Every machine and space in hc's and herdr-app's order, each space marked
+ * with its most urgent agent. A loose agent is one no space shows, such as a
+ * sub-agent; a loose shell belongs to another app.
  */
 export const sidebarOf = (fleet: Fleet): Sidebar => {
+  const spaceRow = spaceRowOf(fleet)
+  const placed = HashSet.fromIterable(Array.flatMap(spacesOf(fleet), spaceTerminals))
+  return {
+    machines: Array.map(fleet.machines, (machine) => ({ machine, spaces: Array.map(machine.spaces, spaceRow) })),
+    loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)),
+  }
+}
+
+/**
+ * A space and each of its tabs marked with its most urgent agent, with each
+ * tab's agents in pane order. hc keeps a terminal after its program exits, so
+ * only live ones count.
+ */
+export const spaceRowOf = (fleet: Fleet) => {
   const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
-  const isLiveAgent = (terminal: Terminal) => terminal.state === "live" && isAgent(terminal)
-  const spaceRow = (space: Space): SpaceRow => {
+  return (space: Space): SpaceRow => {
     const tabs = Array.map(space.tabs, (tab, index): TabRow => {
       const agents = pipe(
         terminalsIn(tab.root),
@@ -34,12 +45,9 @@ export const sidebarOf = (fleet: Fleet): Sidebar => {
     })
     return { space, label: spaceLabel(space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
   }
-  const placed = HashSet.fromIterable(Array.flatMap(spacesOf(fleet), spaceTerminals))
-  return {
-    machines: Array.map(fleet.machines, (machine) => ({ machine, spaces: Array.map(machine.spaces, spaceRow) })),
-    loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)),
-  }
 }
+
+const isLiveAgent = (terminal: Terminal) => terminal.state === "live" && isAgent(terminal)
 
 /** Every machine's spaces, this machine's first. */
 export const spacesOf = (fleet: Fleet) => Array.flatMap(fleet.machines, ({ spaces }) => spaces)

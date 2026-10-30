@@ -9,8 +9,10 @@ export type { IconNode } from "lucide"
 
 export {
   Bot,
+  CodeXml,
   Columns2,
   ExternalLink,
+  Folder,
   MessageSquare,
   Monitor,
   PanelLeft,
@@ -37,6 +39,13 @@ export const icon = <M>(node: IconNode, h: HtmlBuilder<M>): Html =>
     ],
     Array.getSomes(Array.map(node, ([tag, attributes]) => child(tag, attributes, h))),
   )
+
+/**
+ * A product's mark from Simple Icons (https://simpleicons.org, CC0): one
+ * filled path on the same 24-unit grid, in the text colour.
+ */
+export const mark = <M>(path: string, h: HtmlBuilder<M>): Html =>
+  h.svg([h.Class("icon"), h.AriaHidden(true), h.ViewBox("0 0 24 24"), h.Attribute("fill", "currentColor")], [h.path([h.Attribute("d", path)], [])])
 
 // Lucide draws with these few shapes; a shape outside them is left out.
 const child = <M>(tag: string, attributes: Readonly<Record<string, string | number | undefined>>, h: HtmlBuilder<M>): Option.Option<Html> => {

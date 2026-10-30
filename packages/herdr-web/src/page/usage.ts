@@ -1,10 +1,11 @@
 // The quota bar at the foot of the page: a meter per coding plan for its
 // window closest to the limit, and on a tap that plan's every window, how its
 // spend compares with an even one, and its other facts.
-import { Array, Option, Order } from "effect"
+import { Array, Match, Option, Order } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { ProviderId, Reading, Usage, UsageSection, UsageWindow } from "../shared/Usage.ts"
-import { ExternalLink, icon, RefreshCw } from "./icons.ts"
+import { siClaude, siCursor, siOpencode } from "simple-icons"
+import { CodeXml, ExternalLink, icon, mark, RefreshCw } from "./icons.ts"
 
 export type UsageMessages<M> = Readonly<{
   toggled: (provider: ProviderId) => M
@@ -106,7 +107,9 @@ const segmentView = <M>(reading: Reading, isOpen: boolean, messages: UsageMessag
       h.OnClick(messages.toggled(reading.id)),
     ],
     [
-      h.span([], [reading.name]),
+      providerIcon(reading.id, h),
+      // A small screen keeps the mark; the button's label still names the plan.
+      h.span([h.Class("usage-name")], [reading.name]),
       ...Option.toArray(Option.map(worst, ({ used }) => meterView(used, h))),
       ...Option.toArray(Option.map(worst, ({ used }) => h.span([h.Class("usage-percent")], [`${Math.round(used)}%`]))),
       // The numbers are the last good ones; the panel says why.
@@ -114,6 +117,17 @@ const segmentView = <M>(reading: Reading, isOpen: boolean, messages: UsageMessag
     ],
   )
 }
+
+// Simple Icons has no OpenAI or Codex mark (OpenAI asked for its removal), so
+// Codex takes lucide's code sign.
+const providerIcon = <M>(id: ProviderId, h: HtmlBuilder<M>): Html =>
+  Match.value(id).pipe(
+    Match.when("claude", () => mark(siClaude.path, h)),
+    Match.when("codex", () => icon(CodeXml, h)),
+    Match.when("opencode", () => mark(siOpencode.path, h)),
+    Match.when("cursor", () => mark(siCursor.path, h)),
+    Match.exhaustive,
+  )
 
 const meterView = <M>(used: number, h: HtmlBuilder<M>): Html =>
   h.span([h.Class(`usage-meter ${severity(used)}`)], [h.span([h.Style({ width: `${used}%` })], [])])
@@ -125,7 +139,7 @@ const detailView = <M>(reading: Reading, now: number, messages: UsageMessages<M>
       h.div(
         [h.Class("usage-title")],
         [
-          h.strong([], [reading.name]),
+          h.strong([h.Class("icon-chip")], [providerIcon(reading.id, h), reading.name]),
           ...Option.toArray(Option.map(Option.flatMap(reading.report, ({ plan }) => plan), (plan) => h.span([], [plan]))),
         ],
       ),
