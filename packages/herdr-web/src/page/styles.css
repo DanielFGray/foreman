@@ -206,7 +206,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .mark { align-self: center; font-size: 11px; color: var(--subtext); }
 
 .keys { display: flex; flex-wrap: wrap; gap: 4px; }
-.keys .chip { font-family: ui-monospace, monospace; }
+.keys .chip { min-width: 2.5em; font-family: ui-monospace, monospace; text-align: center; }
 
 .prompt { display: flex; gap: 8px; }
 .prompt textarea {

@@ -13,13 +13,12 @@ import { chatView } from "./chatView.ts"
 import { groupFleet, locate, type SpaceGroup, spaceLabel, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
-import { Link, LiveTerminal } from "./terminal.ts"
+import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
+import { Link, LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 
 // CONSTANT
 
 const RECONNECT_DELAY = "2 seconds"
-/** Keys an agent's prompts ask for: menu choices, yes and no, and the ways out. */
-const QUICK_KEYS = ["1", "2", "3", "y", "n", "enter", "esc", "ctrl+c"]
 /** The app name hc's status gives a Claude Code agent. */
 const CLAUDE_CODE = "claude-code"
 
@@ -97,6 +96,8 @@ export const Model = Schema.Struct({
   delivery: Delivery,
   paneAction: PaneAction,
   settings: Settings,
+  /** Soft ctrl and alt, armed until the next key. */
+  modifiers: Modifiers,
   /** Settings take the workspace's place while open. */
   isSettingsOpen: Schema.Boolean,
   fontCatalog: FontCatalog,
@@ -135,6 +136,9 @@ export const Message = defineMessageUnion({
   SucceededSendPrompt: { address: Schema.String },
   FailedSendPrompt: { address: Schema.String, reason: Schema.String },
   ClickedKey: { key: Schema.String },
+  ToggledModifier: { modifier: Modifier },
+  UsedModifiers: {},
+  CompletedKeepTypingFocus: {},
   SucceededPressKeys: { address: Schema.String },
   FailedPressKeys: { address: Schema.String, reason: Schema.String },
 })
@@ -153,6 +157,7 @@ export const init = (settings: Settings) => ({
     delivery: Delivery.Ready(),
     paneAction: PaneAction.Idle(),
     settings,
+    modifiers: NO_MODIFIERS,
     isSettingsOpen: false,
     fontCatalog: FontCatalog.Loading(),
   },
@@ -288,8 +293,18 @@ export const update = (model: Model, message: Message) =>
     ClickedKey: ({ key }) =>
       Option.match(maybeFocus(model), {
         onNone: () => ({ model }),
-        onSome: (address) => ({ model, commands: [PressKeys({ address, keys: [key] })] }),
+        onSome: (address) => ({
+          model: modifyFields(model, { modifiers: () => NO_MODIFIERS }),
+          commands: [PressKeys({ address, keys: [withModifiers(key, model.modifiers)] })],
+        }),
       }),
+
+    ToggledModifier: ({ modifier }) =>
+      ({ model: modifyFields(model, { modifiers: (armed) => ({ ...armed, [modifier]: !armed[modifier] }) }) }),
+
+    UsedModifiers: () => ({ model: modifyFields(model, { modifiers: () => NO_MODIFIERS }) }),
+
+    CompletedKeepTypingFocus: () => ({ model }),
 
     SucceededPressKeys: ({ address }) =>
       whenFocused(model, address, () => ({ model: modifyFields(model, { delivery: () => Delivery.Ready() }) })),
@@ -778,10 +793,18 @@ const paneView = (
                 `${address} ${fontStack("terminal", model.settings.terminal.font)} ${model.settings.terminal.size}`,
                 [
                   h.Class("terminal"),
+                  h.Attribute(
+                    MODIFIERS_ATTRIBUTE,
+                    Option.contains(maybeFocus(model), address) ? modifiersAttribute(model.modifiers) : "",
+                  ),
                   h.OnMount(
                     Mount.mapMessage(
                       LiveTerminal({ address, font: model.settings.terminal.font, size: model.settings.terminal.size }),
-                      ({ link }) => Message.ChangedLink({ address, link }),
+                      (message) =>
+                        Match.valueTags(message, {
+                          ChangedLink: ({ link }) => Message.ChangedLink({ address, link }),
+                          UsedModifiers: () => Message.UsedModifiers(),
+                        }),
                     ),
                   ),
                   h.OnClick(Message.FocusedPane({ address })),
@@ -829,8 +852,23 @@ const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html
       const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
       return [
         h.div(
-          [h.Class("keys")],
-          Array.map(QUICK_KEYS, (key) => h.button([h.Type("button"), h.Class("chip"), h.OnClick(Message.ClickedKey({ key }))], [key])),
+          [h.Class("keys"), h.OnMount(Mount.mapMessage(KeepTypingFocus(), () => Message.CompletedKeepTypingFocus()))],
+          Array.map(SOFT_KEYS, (softKey) =>
+            Match.valueTags(softKey, {
+              Press: ({ key, label }) =>
+                h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(key), h.OnClick(Message.ClickedKey({ key }))], [label]),
+              Hold: ({ modifier }) =>
+                h.button(
+                  [
+                    h.Type("button"),
+                    h.Class(model.modifiers[modifier] ? "chip on" : "chip"),
+                    h.AriaPressed(model.modifiers[modifier] ? "true" : "false"),
+                    h.OnClick(Message.ToggledModifier({ modifier })),
+                  ],
+                  [modifier],
+                ),
+            }),
+          ),
         ),
         h.form(
           [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],

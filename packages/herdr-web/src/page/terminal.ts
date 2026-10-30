@@ -5,6 +5,7 @@
 import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Stream } from "effect"
 import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
+import { applyModifiers, parseModifiersAttribute } from "./keys.ts"
 import { BridgeClient, failureReason } from "./rpc.ts"
 import { fontStack } from "./settings.ts"
 
@@ -22,6 +23,15 @@ export type Link = typeof Link.Type
 
 export const ChangedLink = Schema.TaggedStruct("ChangedLink", { address: Schema.String, link: Link })
 
+/** A key typed into the terminal took the armed soft modifiers. */
+export const UsedModifiers = Schema.TaggedStruct("UsedModifiers", {})
+
+/**
+ * The soft modifiers armed for this terminal, as the view writes them: the
+ * terminal reads them at each key typed, and reports when it uses them.
+ */
+export const MODIFIERS_ATTRIBUTE = "data-modifiers"
+
 /** The emulator could not start in this browser. */
 class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique symbol }>()("NoEmulator", {
   cause: Schema.Defect(),
@@ -30,22 +40,32 @@ class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique
 /**
  * Shows the terminal live in the element, at the element's size, for as long
  * as the element is on the page. When the line drops it attaches again: hc
- * then paints the whole screen anew.
+ * then paints the whole screen anew. A key typed while soft modifiers are
+ * armed (MODIFIERS_ATTRIBUTE) goes out with them.
  */
 export const LiveTerminal = Mount.defineStream("LiveTerminal", {
   args: { address: Schema.String, font: Schema.Option(Schema.String), size: Schema.Int },
-  messages: [ChangedLink],
+  messages: [ChangedLink, UsedModifiers],
   execute: ({ element, address, font, size }) =>
-    Stream.callback<typeof ChangedLink.Type>((links) =>
+    Stream.callback<typeof ChangedLink.Type | typeof UsedModifiers.Type>((messages) =>
       Effect.gen(function* () {
-        const report = (link: Link) => Queue.offer(links, ChangedLink.make({ address, link }))
+        const report = (link: Link) => Queue.offer(messages, ChangedLink.make({ address, link }))
         const terminal = yield* openTerminal(element, font, size)
         // Keys and sizes go out in the order they happen, to the session now attached.
         const outgoing = yield* Queue.unbounded<Outgoing>()
         const session = yield* Ref.make(Option.none<number>())
         yield* Effect.acquireRelease(
           Effect.sync(() => [
-            terminal.onData((data) => Queue.offerUnsafe(outgoing, Typed.make({ data }))),
+            terminal.onData((data) => {
+              const armed = parseModifiersAttribute(element.getAttribute(MODIFIERS_ATTRIBUTE) ?? "")
+              Option.match(applyModifiers(data, armed), {
+                onNone: () => Queue.offerUnsafe(outgoing, Typed.make({ data })),
+                onSome: (modified) => {
+                  Queue.offerUnsafe(outgoing, Typed.make({ data: modified }))
+                  Queue.offerUnsafe(messages, UsedModifiers.make({}))
+                },
+              })
+            }),
             terminal.onResize(({ cols, rows }) => Queue.offerUnsafe(outgoing, Resized.make({ cols, rows }))),
           ]),
           (listeners) => Effect.sync(() => listeners.forEach((listener) => listener.dispose())),
@@ -98,7 +118,7 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
         return yield* attachOnce.pipe(Effect.repeat(Schedule.spaced(RECONNECT_DELAY)))
       }).pipe(
         Effect.catchTag("NoEmulator", ({ cause }) =>
-          Queue.offer(links, ChangedLink.make({ address, link: { _tag: "Lost", reason: `the terminal cannot start: ${Inspectable.toStringUnknown(cause, 0)}` } })),
+          Queue.offer(messages, ChangedLink.make({ address, link: { _tag: "Lost", reason: `the terminal cannot start: ${Inspectable.toStringUnknown(cause, 0)}` } })),
         ),
         Effect.provide(BridgeClient.layer),
       ),
