@@ -19,8 +19,18 @@ export class BridgeError extends Schema.TaggedError<BridgeError, { readonly bran
 export const Attached = Schema.TaggedStruct("Attached", { session: Schema.Int })
 /** Bytes the terminal wrote, escape sequences and all; the first are its screen. */
 export const Output = Schema.TaggedStruct("Output", { bytes: Schema.Uint8ArrayFromBase64 })
-export const TerminalUpdate = Schema.Union([Attached, Output])
+/** A watched terminal's size, first and after each change; the screen is painted anew after it. */
+export const Sized = Schema.TaggedStruct("Sized", { cols: Schema.Int, rows: Schema.Int })
+export const TerminalUpdate = Schema.Union([Attached, Sized, Output])
 export type TerminalUpdate = typeof TerminalUpdate.Type
+
+/**
+ * How a page views a live terminal. Watching never types or sets the size, so
+ * the program keeps its viewers' size. Typing takes the terminal: hc gives it
+ * the size of whichever viewer typed or resized last.
+ */
+export const Viewer = Schema.Union([Schema.TaggedStruct("Watching", {}), Schema.TaggedStruct("Typing", { cols: Schema.Int, rows: Schema.Int })])
+export type Viewer = typeof Viewer.Type
 
 export const Direction = Schema.Literals(["right", "down"])
 export type Direction = typeof Direction.Type
@@ -52,12 +62,12 @@ export const Api = RpcGroup.make(
     error: BridgeError,
   }),
   /**
-   * The terminal live, at the page's size: a session, then its output for as
-   * long as the page reads. The terminal takes the size of whichever viewer
-   * typed last, so a page that only watches leaves it as it is.
+   * The terminal live, for as long as the page reads. Typing, a session first,
+   * which the input and resize calls name; watching, its size first. Then the
+   * terminal's output.
    */
   Rpc.make("attach", {
-    payload: { terminal: Schema.String, cols: Schema.Int, rows: Schema.Int },
+    payload: { terminal: Schema.String, as: Viewer },
     success: TerminalUpdate,
     error: BridgeError,
     stream: true,

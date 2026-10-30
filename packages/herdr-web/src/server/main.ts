@@ -111,7 +111,7 @@ const Handlers = Api.toLayer(
             }),
           ),
         ),
-      attach: (request) => live.attach(request).pipe(Stream.mapError(toBridgeError)),
+      attach: ({ terminal, as }) => live.attach(terminal, as).pipe(Stream.mapError(toBridgeError)),
       input: ({ session, data }) => live.input(session, data).pipe(Effect.mapError(toBridgeError)),
       resize: ({ session, cols, rows }) => live.resize(session, cols, rows).pipe(Effect.mapError(toBridgeError)),
       split: ({ pane, direction }) =>
@@ -144,7 +144,9 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
-  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
+  Layer.provide([ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
+  // The handlers and the live terminals read the same fleet.
+  Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),
 )
 

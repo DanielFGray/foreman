@@ -35,7 +35,7 @@ export const attach = (path: string, request: AttachRequest) => open(path, viewe
  * Watches a terminal in the current scope without typing into it or setting
  * its size, so the program keeps the size its own viewers gave it.
  */
-export const observe = (path: string, terminal: string) => open(path, { terminal, cols: 0, rows: 0, observe: true })
+export const observe = (path: string, terminal: string, history: number) => open(path, { terminal, cols: 0, rows: 0, observe: true, history })
 
 const open = Effect.fnUntraced(function* (path: string, params: AttachParams) {
   const socket = yield* BunSocket.makeNet({ path })
@@ -106,7 +106,7 @@ const open = Effect.fnUntraced(function* (path: string, params: AttachParams) {
 })
 
 /** Scrollback lines hc paints before the screen, so a new viewer can scroll back. */
-const HISTORY_LINES = 1000
+export const HISTORY_LINES = 1000
 
 const AttachParams = Schema.Struct({
   terminal: Schema.String,

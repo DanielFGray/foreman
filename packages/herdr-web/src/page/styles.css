@@ -200,12 +200,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .live { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 .link-note { margin: 0; }
-/* The emulator sizes its canvas to this box, so the box must not grow with it. */
+/* A typing emulator sizes its canvas to this box, so the box must not grow
+   with it. A watching one keeps the terminal's own size and scrolls in it. */
 .terminal {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: auto;
   padding: 4px;
   background: var(--mantle);
   border-radius: 6px;

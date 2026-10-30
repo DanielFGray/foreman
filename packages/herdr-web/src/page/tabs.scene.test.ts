@@ -21,6 +21,8 @@ const agent: Terminal = {
   status_ms: Option.none(),
   created_ms: 0,
   parent: Option.none(),
+  cols: 80,
+  rows: 24,
 }
 
 const block = (terminal: string): Layout =>

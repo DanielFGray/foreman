@@ -2,7 +2,7 @@
 // ghostty-web, drawing the terminal's output to a canvas, and sending the keys
 // typed into it. hc emulates its terminals as Ghostty too, so programs see
 // the same terminal here as at the desk.
-import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Stream } from "effect"
+import { Effect, Inspectable, Match, Option, Queue, Ref, Schedule, Schema, Stream, SubscriptionRef } from "effect"
 import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
 import { applyModifiers, parseModifiersAttribute } from "./keys.ts"
@@ -38,10 +38,13 @@ class NoEmulator extends Schema.TaggedError<NoEmulator, { readonly brand: unique
 }) {}
 
 /**
- * Shows the terminal live in the element, at the element's size, for as long
- * as the element is on the page. When the line drops it attaches again: hc
- * then paints the whole screen anew. A key typed while soft modifiers are
- * armed (MODIFIERS_ATTRIBUTE) goes out with them.
+ * Shows the terminal live in the element for as long as the element is on
+ * the page. The page watches first, at the terminal's own size, so opening a
+ * view leaves the size the program's viewers gave it. The first key typed
+ * takes the terminal: the page attaches again as a typing viewer at the
+ * element's size, and sends the key once that session is up. When the line
+ * drops it attaches again: hc then paints the whole screen anew. A key typed
+ * while soft modifiers are armed (MODIFIERS_ATTRIBUTE) goes out with them.
  */
 export const LiveTerminal = Mount.defineStream("LiveTerminal", {
   args: { address: Schema.String, font: Schema.Option(Schema.String), size: Schema.Int },
@@ -50,10 +53,13 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
     Stream.callback<typeof ChangedLink.Type | typeof UsedModifiers.Type>((messages) =>
       Effect.gen(function* () {
         const report = (link: Link) => Queue.offer(messages, ChangedLink.make({ address, link }))
-        const terminal = yield* openTerminal(element, font, size)
+        const { terminal, fit } = yield* openTerminal(element, font, size)
         // Keys and sizes go out in the order they happen, to the session now attached.
         const outgoing = yield* Queue.unbounded<Outgoing>()
         const session = yield* Ref.make(Option.none<number>())
+        const viewer = yield* SubscriptionRef.make<"Watching" | "Typing">("Watching")
+        // The keys that take the terminal, until the typing session is up.
+        const taking = yield* Ref.make(Option.none<ReadonlyArray<string>>())
         yield* Effect.acquireRelease(
           Effect.sync(() => [
             terminal.onData((data) => {
@@ -72,20 +78,41 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
         )
         const client = yield* BridgeClient
 
+        // The emulator takes the element's size, and keeps it from now on.
+        const take = (data: string) =>
+          Ref.set(taking, Option.some([data])).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                fit.fit()
+                fit.observeResize()
+              }),
+            ),
+            Effect.andThen(SubscriptionRef.set(viewer, "Typing")),
+          )
+
+        const typed = (data: string) =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(session)
+            const keys = yield* Ref.get(taking)
+            return yield* Option.match(current, {
+              onSome: (id) => client.input({ session: id, data }),
+              onNone: () =>
+                Option.match(keys, {
+                  onSome: (sofar) => Ref.set(taking, Option.some([...sofar, data])),
+                  // Keys typed while the line is down are lost; the pane says it is down.
+                  onNone: () => Effect.flatMap(SubscriptionRef.get(viewer), (as) => (as === "Watching" ? take(data) : Effect.void)),
+                }),
+            })
+          })
+
         yield* Stream.fromQueue(outgoing).pipe(
           Stream.runForEach((change) =>
-            Ref.get(session).pipe(
-              Effect.flatMap(
-                Option.match({
-                  // Keys typed while the line is down are lost; the pane says it is down.
-                  onNone: () => Effect.void,
-                  onSome: (id) =>
-                    Match.valueTags(change, {
-                      Typed: ({ data }) => client.input({ session: id, data }),
-                      Resized: ({ cols, rows }) => client.resize({ session: id, cols, rows }),
-                    }),
-                }),
-              ),
+            Match.valueTags(change, {
+              Typed: ({ data }) => typed(data),
+              // A watching page's size is the terminal's, and no one's to set.
+              Resized: ({ cols, rows }) =>
+                Effect.flatMap(Ref.get(session), Option.match({ onNone: () => Effect.void, onSome: (id) => client.resize({ session: id, cols, rows }) })),
+            }).pipe(
               // A failed call means the line dropped; the attach below reports that.
               Effect.ignore,
             ),
@@ -93,29 +120,49 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
           Effect.forkScoped,
         )
 
-        const attachOnce = report({ _tag: "Connecting" }).pipe(
-          Effect.andThen(
-            client.attach({ terminal: address, cols: terminal.cols, rows: terminal.rows }).pipe(
-              Stream.runForEach((update) =>
-                Match.valueTags(update, {
-                  // hc paints the whole screen after this, so the last line's screen goes.
-                  Attached: ({ session: id }) =>
-                    Effect.sync(() => terminal.reset()).pipe(
-                      Effect.andThen(Ref.set(session, Option.some(id))),
-                      Effect.andThen(report({ _tag: "Live" })),
-                    ),
-                  Output: ({ bytes }) => Effect.sync(() => terminal.write(bytes)),
-                }),
+        const updates = (as: "Watching" | "Typing") =>
+          client.attach({
+            terminal: address,
+            as: as === "Watching" ? { _tag: "Watching" } : { _tag: "Typing", cols: terminal.cols, rows: terminal.rows },
+          })
+
+        const attachOnce = (as: "Watching" | "Typing") =>
+          report({ _tag: "Connecting" }).pipe(
+            Effect.andThen(
+              updates(as).pipe(
+                Stream.runForEach((update) =>
+                  Match.valueTags(update, {
+                    // hc paints the whole screen after this, so the last line's screen goes.
+                    Attached: ({ session: id }) =>
+                      Effect.sync(() => terminal.reset()).pipe(
+                        Effect.andThen(Ref.set(session, Option.some(id))),
+                        Effect.andThen(report({ _tag: "Live" })),
+                        Effect.andThen(Ref.getAndSet(taking, Option.none())),
+                        Effect.flatMap((keys) => Effect.forEach(Option.getOrElse(keys, () => []), (data) => client.input({ session: id, data }).pipe(Effect.ignore))),
+                      ),
+                    Sized: ({ cols, rows }) =>
+                      Effect.sync(() => {
+                        terminal.reset()
+                        terminal.resize(cols, rows)
+                      }).pipe(Effect.andThen(report({ _tag: "Live" }))),
+                    Output: ({ bytes }) => Effect.sync(() => terminal.write(bytes)),
+                  }),
+                ),
               ),
             ),
-          ),
-          Effect.matchEffect({
-            onSuccess: () => report({ _tag: "Lost", reason: "the terminal closed" }),
-            onFailure: (error) => report({ _tag: "Lost", reason: failureReason(error) }),
-          }),
-          Effect.ensuring(Ref.set(session, Option.none())),
+            Effect.matchEffect({
+              onSuccess: () => report({ _tag: "Lost", reason: "the terminal closed" }),
+              onFailure: (error) => report({ _tag: "Lost", reason: failureReason(error) }),
+            }),
+            Effect.ensuring(Ref.set(session, Option.none())),
+            Effect.repeat(Schedule.spaced(RECONNECT_DELAY)),
+          )
+
+        // Taking the terminal ends the watch and starts the typing session.
+        return yield* SubscriptionRef.changes(viewer).pipe(
+          Stream.switchMap((as) => Stream.fromEffect(attachOnce(as))),
+          Stream.runDrain,
         )
-        return yield* attachOnce.pipe(Effect.repeat(Schedule.spaced(RECONNECT_DELAY)))
       }).pipe(
         Effect.catchTag("NoEmulator", ({ cause }) =>
           Queue.offer(messages, ChangedLink.make({ address, link: { _tag: "Lost", reason: `the terminal cannot start: ${Inspectable.toStringUnknown(cause, 0)}` } })),
@@ -139,7 +186,8 @@ const loadFont = (font: Option.Option<string>, size: number) =>
 
 type Outgoing = typeof Typed.Type | typeof Resized.Type
 
-// The emulator draws into the element and keeps itself at the element's size.
+// The emulator draws into the element. It takes the element's size only once
+// the page types into the terminal; until then it takes the terminal's.
 const openTerminal = (element: Element, font: Option.Option<string>, size: number) =>
   Effect.acquireRelease(
     Effect.tryPromise({ try: () => init(), catch: (cause) => new NoEmulator({ cause }) }).pipe(
@@ -160,15 +208,11 @@ const openTerminal = (element: Element, font: Option.Option<string>, size: numbe
           return { terminal, fit }
         }),
       ),
-      Effect.tap(({ terminal, fit }) =>
+      Effect.tap(({ terminal }) =>
         element instanceof HTMLElement
-          ? Effect.sync(() => {
-              terminal.open(element)
-              fit.fit()
-              fit.observeResize()
-            })
+          ? Effect.sync(() => terminal.open(element))
           : Effect.fail(new NoEmulator({ cause: "the pane is not an HTML element" })),
       ),
     ),
     ({ terminal }) => Effect.sync(() => terminal.dispose()),
-  ).pipe(Effect.map(({ terminal }) => terminal))
+  )

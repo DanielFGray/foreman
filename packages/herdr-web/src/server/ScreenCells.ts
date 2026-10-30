@@ -22,7 +22,7 @@ export class ScreenCells extends Context.Service<ScreenCells>()("herdr-web/serve
       read: (terminal: string) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const watched = yield* observe(path, terminal)
+            const watched = yield* observe(path, terminal, 0)
             const paint = yield* firstPaint(watched.output)
             const headless = yield* Effect.acquireRelease(
               Effect.sync(() => ghostty.createTerminal(watched.size.cols, watched.size.rows)),
