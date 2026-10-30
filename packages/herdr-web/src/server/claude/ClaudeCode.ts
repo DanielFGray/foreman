@@ -9,6 +9,7 @@ import { type Answer, InputBox, modelName, type Question, sameTyped, typedText }
 import type { ModelChoice, ModelChoices } from "../../shared/Harness.ts"
 import type { Terminal } from "../../shared/Fleet.ts"
 import { toBridgeError } from "../hcError.ts"
+import { localOf } from "../HerdrApp.ts"
 import { LiveTerminals } from "../LiveTerminals.ts"
 import { ScreenCells } from "../ScreenCells.ts"
 import { ClaudeChat, type NoTranscript } from "./ClaudeChat.ts"
@@ -48,11 +49,14 @@ export const claudeCode = Effect.gen(function* () {
     )
   })
   // The process whose transcript the chat and the model are read from.
+  // Claude Code's files are on the agent's own machine, and a pid names a process only there.
   const fromTranscript = <A>(terminal: Terminal, read: (pid: number) => Stream.Stream<A, NoTranscript | PlatformError>) =>
-    Option.match(terminal.foreground, {
-      onNone: () => Stream.fail(new BridgeError({ kind: "transcript", message: "no program runs in this terminal" })),
-      onSome: ({ pid }) => Stream.mapError(read(pid), transcriptError),
-    })
+    Option.isSome(localOf(terminal.address).on)
+      ? Stream.fail(new BridgeError({ kind: "remote", message: "the bridge reads Claude Code's files only on its own machine" }))
+      : Option.match(terminal.foreground, {
+          onNone: () => Stream.fail(new BridgeError({ kind: "transcript", message: "no program runs in this terminal" })),
+          onSome: ({ pid }) => Stream.mapError(read(pid), transcriptError),
+        })
 
   return {
     chat: (terminal: Terminal) => fromTranscript(terminal, claude.chat),
