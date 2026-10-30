@@ -74,3 +74,8 @@ test("a question or a permission Claude Code asks stands where the box was, so t
   expect(inputBoxOf(saved("permission"))).toEqual({ _tag: "Absent" })
   expect(inputBoxOf(saved("idle"))._tag).not.toBe("Absent")
 })
+
+test("a typed draft that reads like a menu choice is still a draft", () => {
+  const lines = ["● Done.", "", RULE, "❯ 1. fix it", RULE]
+  expect(inputBoxOf(render(ghostty.createTerminal(COLS, lines.length), { cols: COLS, rows: lines.length }, lines.join("\r\n")))).toEqual({ _tag: "Draft", text: "1. fix it" })
+})
