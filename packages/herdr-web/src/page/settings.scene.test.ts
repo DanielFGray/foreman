@@ -1,7 +1,9 @@
 import { Option, Schema } from "effect"
 import { all, click, Command, change, expect, expectAll, given, inside, label, role, scene, selector } from "foldkit/scene"
 import { expect as expectValue, test } from "vitest"
-import { FetchFonts, init, Message, SaveSelection, SaveSettings, Selection, update, view } from "./main.ts"
+import { FetchFonts, SaveSelection, SaveSettings } from "./commands.ts"
+import { init, update, view } from "./main.ts"
+import { Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS, MAX_SIZE, Settings } from "./settings.ts"
 
 const families = [

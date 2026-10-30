@@ -3,7 +3,9 @@ import { Option } from "effect"
 import { all, click, Command, doubleClick, expect, expectAll, expectIgnored, given, hover, inside, keydown, pointerDown, pointerUp, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Machine, Terminal } from "../shared/Fleet.ts"
-import { Bridge, FetchFonts, init, Message, MoveSpace, SaveSelection, SaveSidebarWidth, Selection, update, view } from "./main.ts"
+import { FetchFonts, MoveSpace, SaveSelection, SaveSidebarWidth } from "./commands.ts"
+import { init, update, view } from "./main.ts"
+import { Bridge, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const blockedAgent: Terminal = {

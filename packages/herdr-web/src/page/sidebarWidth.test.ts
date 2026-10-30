@@ -1,6 +1,7 @@
 import { Option } from "effect"
 import { expect, test } from "vitest"
-import { init, Message, Selection, update } from "./main.ts"
+import { init, update } from "./main.ts"
+import { Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 import { keyedSidebarWidth } from "./sidebarWidth.ts"
 

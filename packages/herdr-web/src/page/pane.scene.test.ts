@@ -3,7 +3,8 @@ import { all, click, expect, expectAll, given, Mount, role, scene, selector } fr
 import { test } from "vitest"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
 import { KeepTypingFocus } from "./keys.ts"
-import { Bridge, init, Message, Selection, update, view } from "./main.ts"
+import { init, update, view } from "./main.ts"
+import { Bridge, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 import { LiveTerminal } from "./terminal.ts"
 

@@ -1,6 +1,7 @@
 import "./styles.css"
 import { Runtime } from "foldkit"
-import { Flags, init, loadFlags, Model, subscriptions, update, view } from "./main.ts"
+import { init, subscriptions, update, view } from "./main.ts"
+import { Flags, loadFlags, Model } from "./model.ts"
 import { BridgeClient } from "./rpc.ts"
 
 const container = document.getElementById("root")
