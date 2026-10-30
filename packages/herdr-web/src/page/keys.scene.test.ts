@@ -5,7 +5,7 @@ import { init, Message, PressKeys, Selection, update, view } from "./main.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { LiveTerminal } from "./terminal.ts"
 
-const focused = { ...init(DEFAULT_SETTINGS).model, selection: Selection.Loose({ address: "t7" }) }
+const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, selection: Selection.Loose({ address: "t7" }) }
 
 test("ctrl and alt stay armed for the next soft key, then let go", () => {
   scene(

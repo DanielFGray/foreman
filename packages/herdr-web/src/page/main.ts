@@ -14,7 +14,8 @@ import { chatView } from "./chatView.ts"
 import { agentsIn, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalNote, terminalsIn } from "./group.ts"
 import { Bot, Columns2, Folder, icon, type IconNode, MessageSquare, Monitor, PanelLeft, Rows2, Server, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
-import { AgentList, fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
+import { AgentList, fontStack, loadSettings, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
+import { loadStored, saveStored } from "./stored.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
 import { Link, LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 import { usageBarView } from "./usage.ts"
@@ -26,6 +27,7 @@ const RECONNECT_DELAY = "2 seconds"
 const CLOCK_TICK = "30 seconds"
 /** The app name hc's status gives a Claude Code agent. */
 const CLAUDE_CODE = "claude-code"
+const SELECTION_KEY = "herdr-web.selection"
 
 // MODEL
 
@@ -112,6 +114,12 @@ export const Model = Schema.Struct({
 })
 export type Model = typeof Model.Type
 
+/** What the page starts from: this browser's settings, and the tab and pane it showed last. */
+export const Flags = Schema.Struct({ settings: Settings, selection: Selection })
+export type Flags = typeof Flags.Type
+
+export const loadFlags = Effect.all({ settings: loadSettings, selection: loadStored(SELECTION_KEY, Selection, Selection.Nothing()) })
+
 // MESSAGE
 
 export const Message = defineMessageUnion({
@@ -137,6 +145,7 @@ export const Message = defineMessageUnion({
   SteppedSize: { surface: Surface, step: Schema.Int },
   PickedAgentList: { agents: AgentList },
   CompletedSaveSettings: {},
+  CompletedSaveSelection: {},
   ReceivedFonts: { families: Schema.Array(FontFamily) },
   FailedFonts: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
@@ -159,11 +168,12 @@ export type Message = typeof Message.Type
 
 // INIT
 
-export const init = (settings: Settings) => ({
+export const init = ({ settings, selection }: Flags) => ({
   model: {
     bridge: Bridge.Waiting(),
-    isFleetFolded: false,
-    selection: Selection.Nothing(),
+    // A page that opens on a remembered tab shows it at once, on a phone too.
+    isFleetFolded: selection._tag !== "Nothing",
+    selection,
     views: {},
     prompt: "",
     delivery: Delivery.Ready(),
@@ -190,30 +200,34 @@ export const update = (model: Model, message: Message) =>
 
     ClickedFleetToggle: () => ({ model: modifyFields(model, { isFleetFolded: (isFolded) => !isFolded }) }),
 
-    ClickedTerminal: ({ address }) => ({
-      model: selected(
-        modifyFields(model, { isFleetFolded: () => true }),
-        Option.match(Option.flatMap(lastFleet(model.bridge), (fleet) => locate(fleet, address)), {
-          onNone: () => Selection.Loose({ address }),
-          onSome: ({ tab }) => Selection.Tab({ tabId: tab.id, maybeFocus: Option.some(address) }),
-        }),
+    ClickedTerminal: ({ address }) =>
+      remembered(
+        selected(
+          modifyFields(model, { isFleetFolded: () => true }),
+          Option.match(Option.flatMap(lastFleet(model.bridge), (fleet) => locate(fleet, address)), {
+            onNone: () => Selection.Loose({ address }),
+            onSome: ({ tab }) => Selection.Tab({ tabId: tab.id, maybeFocus: Option.some(address) }),
+          }),
+        ),
       ),
-    }),
 
-    ClickedTab: ({ tabId }) => ({
-      model: selected(modifyFields(model, { isFleetFolded: () => true }), Selection.Tab({ tabId, maybeFocus: Option.none() })),
-    }),
+    ClickedTab: ({ tabId }) =>
+      remembered(selected(modifyFields(model, { isFleetFolded: () => true }), Selection.Tab({ tabId, maybeFocus: Option.none() }))),
 
+    // The pane head carries the close button, so a focus keeps a close waiting for its second click.
     FocusedPane: ({ address }) =>
       Selection.match<UpdateReturn>(model.selection, {
         Nothing: () => ({ model }),
         // The tab and its views stay; only the prompt's last reply was for the old focus.
-        Tab: ({ tabId }) => ({
-          model: modifyFields(model, {
-            selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(address) }),
-            delivery: () => Delivery.Ready(),
-          }),
-        }),
+        Tab: ({ tabId, maybeFocus }) =>
+          Option.contains(maybeFocus, address)
+            ? { model }
+            : remembered(
+                modifyFields(model, {
+                  selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(address) }),
+                  delivery: () => Delivery.Ready(),
+                }),
+              ),
         Loose: () => ({ model }),
       }),
 
@@ -250,7 +264,7 @@ export const update = (model: Model, message: Message) =>
     SucceededSplit: ({ terminal }) =>
       Selection.match<UpdateReturn>(model.selection, {
         Nothing: () => ({ model }),
-        Tab: ({ tabId }) => ({ model: modifyFields(model, { selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(terminal) }) }) }),
+        Tab: ({ tabId }) => remembered(modifyFields(model, { selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(terminal) }) })),
         Loose: () => ({ model }),
       }),
 
@@ -283,6 +297,8 @@ export const update = (model: Model, message: Message) =>
 
     PickedAgentList: ({ agents }) => settingsChanged(model, { ...model.settings, agents }),
     CompletedSaveSettings: () => ({ model }),
+
+    CompletedSaveSelection: () => ({ model }),
 
     ReceivedFonts: ({ families }) => ({ model: modifyFields(model, { fontCatalog: () => FontCatalog.Loaded({ families }) }) }),
 
@@ -402,9 +418,8 @@ const selected = (model: Model, selection: Selection) => {
   return modifyFields(next, { views: (views) => Record.filter(views, (_, address) => Array.contains(shown, address)) })
 }
 
-/** The terminal's view: the one picked for it, else its chat when it has one, else the terminal. */
-const viewOf = (model: Model, address: string) =>
-  Option.getOrElse(Record.get(model.views, address), () => newView(isClaudeCode(model, address) ? "Chat" : "Terminal"))
+/** The terminal's view: the one picked for it, else the terminal itself. */
+const viewOf = (model: Model, address: string) => Option.getOrElse(Record.get(model.views, address), () => newView("Terminal"))
 
 /** The shown terminals whose view is `name`. */
 const openAs = (model: Model, name: ViewName) =>
@@ -469,14 +484,16 @@ const settingsChanged = (model: Model, settings: Settings) => ({
 export const SaveSettings = Command.define("SaveSettings", {
   args: { settings: Settings },
   messages: [Message.CompletedSaveSettings],
-  execute: ({ settings }) =>
-    saveSettings(settings).pipe(
-      Effect.catchTags({
-        KeyValueStoreError: (error) => Effect.logWarning("the settings were not saved", error),
-        SchemaError: (error) => Effect.logWarning("the settings were not saved", error),
-      }),
-      Effect.as(Message.CompletedSaveSettings()),
-    ),
+  execute: ({ settings }) => saveSettings(settings).pipe(Effect.as(Message.CompletedSaveSettings())),
+})
+
+/** Keeps the tab and pane on show, so a reload opens on them. */
+const remembered = (model: Model) => ({ model, commands: [SaveSelection({ selection: model.selection })] })
+
+export const SaveSelection = Command.define("SaveSelection", {
+  args: { selection: Selection },
+  messages: [Message.CompletedSaveSelection],
+  execute: ({ selection }) => saveStored(SELECTION_KEY, Selection, selection).pipe(Effect.as(Message.CompletedSaveSelection())),
 })
 
 export const FetchFonts = Command.define("FetchFonts", {
@@ -802,7 +819,9 @@ const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {
-        onNone: () => h.section([h.Class("workspace empty")], ["This tab is closed."]),
+        // A remembered tab waits for the fleet before it can say it is gone.
+        onNone: () =>
+          h.section([h.Class("workspace empty")], [Option.isSome(lastFleet(model.bridge)) ? "This tab is closed." : "Waiting for the bridge."]),
         onSome: ({ space, tab }) =>
           h.section(
             [h.Class("workspace")],
@@ -811,14 +830,14 @@ const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
               focusChipsView(model, h),
               ...paneActionView(model, h),
               h.div([h.Class("layout")], [layoutView(tab.root, model, h)]),
-              ...composerView(model, h),
+              ...keysView(model, h),
             ],
           ),
       }),
     Loose: ({ address }) =>
       h.section(
         [h.Class("workspace")],
-        [h.div([h.Class("layout")], [paneView(address, Option.none(), Option.none(), model, h)]), ...composerView(model, h)],
+        [h.div([h.Class("layout")], [paneView(address, Option.none(), Option.none(), model, h)]), ...keysView(model, h)],
       ),
   })
 
@@ -890,6 +909,7 @@ const paneView = (
 ): Html => {
   const maybeTerminal = findTerminal(model, address)
   const shown = viewOf(model, address)
+  const isFocused = Option.contains(maybeFocus(model), address)
   return h.keyed("section")(
     address,
     [h.Class(Option.contains(maybeFocus(model), address) ? "pane focused" : "pane"), h.Style(flexOf(size))],
@@ -919,12 +939,19 @@ const paneView = (
         ],
       ),
       View.match(shown, {
+        // The prompt sits under the focused pane's chat; a click on another chat moves it there.
         Chat: ({ conversation }) =>
-          Conversation.match(conversation, {
-            Loading: () => h.p([h.Class("chat note")], ["reading the conversation…"]),
-            Shown: ({ entries }) => chatView(entries, h),
-            Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
-          }),
+          h.div(
+            [h.Class("chat-view"), h.OnClick(Message.FocusedPane({ address }))],
+            [
+              Conversation.match(conversation, {
+                Loading: () => h.p([h.Class("chat note")], ["reading the conversation…"]),
+                Shown: ({ entries }) => chatView(entries, h),
+                Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
+              }),
+              ...(isFocused ? [promptView(model, address, h)] : []),
+            ],
+          ),
         Terminal: ({ link }) =>
           h.div(
             [h.Class("live")],
@@ -961,6 +988,14 @@ const paneView = (
             ],
           ),
       }),
+      // A refused prompt or key press, said in the pane it was for.
+      ...(isFocused
+        ? Delivery.match(model.delivery, {
+            Ready: () => [],
+            Sending: () => [],
+            Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
+          })
+        : []),
     ],
   )
 }
@@ -992,14 +1027,11 @@ const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Ht
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
-/** The keys and prompt for the focused pane; none when no terminal is on show. */
-const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+/** The soft keys for the focused pane, a terminal's or a chat's; none when no terminal is on show. */
+const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   Option.match(maybeFocus(model), {
     onNone: () => [],
-    onSome: (address) => {
-      const target = labelAt(model, address)
-      const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
-      return [
+    onSome: () => [
         h.div(
           [h.Class("keys"), h.OnMount(Mount.mapMessage(KeepTypingFocus(), () => Message.CompletedKeepTypingFocus()))],
           Array.map(SOFT_KEYS, (softKey) =>
@@ -1019,26 +1051,25 @@ const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html
             }),
           ),
         ),
-        h.form(
-          [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
-          [
-            h.textarea([
-              h.Value(model.prompt),
-              h.Placeholder(`Type to ${target}; Enter is pressed for you`),
-              h.AriaLabel("Prompt"),
-              h.OnInput((text) => Message.UpdatedPrompt({ text })),
-            ]),
-            h.button([h.Type("submit"), h.Disabled(isSending)], [isSending ? "sending…" : "send"]),
-          ],
-        ),
-        ...Delivery.match(model.delivery, {
-          Ready: () => [],
-          Sending: () => [],
-          Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
-        }),
-      ]
-    },
+      ],
   })
+
+/** The focused chat's prompt: its text goes to the agent, and Enter after it. */
+const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Html => {
+  const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
+  return h.form(
+    [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
+    [
+      h.textarea([
+        h.Value(model.prompt),
+        h.Placeholder(`Type to ${labelAt(model, address)}; Enter is pressed for you`),
+        h.AriaLabel("Prompt"),
+        h.OnInput((text) => Message.UpdatedPrompt({ text })),
+      ]),
+      h.button([h.Type("submit"), h.Disabled(isSending)], [isSending ? "sending…" : "send"]),
+    ],
+  )
+}
 
 const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.section(

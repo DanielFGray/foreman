@@ -170,6 +170,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 6px;
 }
 
+.chat-view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 .chat, .prompt textarea { font-family: var(--chat-font); font-size: var(--chat-size); }
 
 .chat {

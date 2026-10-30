@@ -1,8 +1,7 @@
 // The look this browser keeps for itself: a phone and a desk want different
 // sizes, so settings stay on the device, in its local storage.
-import { BrowserKeyValueStore } from "@effect/platform-browser"
 import { Effect, Match, Number, Option, Schema } from "effect"
-import { KeyValueStore } from "effect/persistence"
+import { loadStored, saveStored } from "./stored.ts"
 
 /** Where text appears; a terminal needs a monospaced font. */
 export const Surface = Schema.Literals(["chat", "terminal"])
@@ -49,23 +48,11 @@ export const stepSize = (style: TextStyle, step: number): TextStyle => ({
   size: Number.clamp(style.size + step, { minimum: MIN_SIZE, maximum: MAX_SIZE }),
 })
 
-/** The saved settings, or the defaults when there are none or storage is closed to the page (a private window). */
-export const loadSettings = Effect.gen(function* () {
-  const store = KeyValueStore.toSchemaStore(yield* KeyValueStore.KeyValueStore, Settings)
-  return Option.getOrElse(yield* store.get(STORAGE_KEY), () => DEFAULT_SETTINGS)
-}).pipe(
-  Effect.catchTags({
-    KeyValueStoreError: (error) => Effect.logWarning("the saved settings cannot be read", error).pipe(Effect.as(DEFAULT_SETTINGS)),
-    SchemaError: (error) => Effect.logWarning("the saved settings are from another version", error).pipe(Effect.as(DEFAULT_SETTINGS)),
-  }),
-  Effect.provide(BrowserKeyValueStore.layerLocalStorage),
-)
+const STORAGE_KEY = "herdr-web.settings"
 
-export const saveSettings = (settings: Settings) =>
-  Effect.gen(function* () {
-    const store = KeyValueStore.toSchemaStore(yield* KeyValueStore.KeyValueStore, Settings)
-    yield* store.set(STORAGE_KEY, settings)
-  }).pipe(Effect.provide(BrowserKeyValueStore.layerLocalStorage))
+export const loadSettings = loadStored(STORAGE_KEY, Settings, DEFAULT_SETTINGS)
+
+export const saveSettings = (settings: Settings) => saveStored(STORAGE_KEY, Settings, settings)
 
 /** A CSS font-family list: the chosen font first, then the surface's fallback. */
 export const fontStack = (surface: Surface, maybeFont: Option.Option<string>) =>
@@ -73,4 +60,3 @@ export const fontStack = (surface: Surface, maybeFont: Option.Option<string>) =>
 
 const FALLBACK = { chat: "system-ui, sans-serif", terminal: "ui-monospace, monospace" } satisfies Record<Surface, string>
 
-const STORAGE_KEY = "herdr-web.settings"

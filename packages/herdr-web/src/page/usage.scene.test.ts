@@ -2,7 +2,7 @@ import { Option } from "effect"
 import { click, Command, expect, expectAll, all, given, inside, role, scene, selector } from "foldkit/scene"
 import { describe, expect as expectValue, test } from "vitest"
 import type { Reading } from "../shared/Usage.ts"
-import { init, Message, RefreshUsage, update, view } from "./main.ts"
+import { init, Message, RefreshUsage, Selection, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 import { countdown, describePace, pace, tightest } from "./usage.ts"
 
@@ -35,7 +35,7 @@ const claude = reading(
 const signedOut = reading("opencode", "OpenCode", Option.none())
 
 const withUsage = {
-  ...init(DEFAULT_SETTINGS).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model,
   usage: Option.some({ readings: [claude, { ...signedOut, updated: Option.none() }] }),
   now: NOW,
 }

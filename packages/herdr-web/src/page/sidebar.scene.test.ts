@@ -1,8 +1,8 @@
 import { Option } from "effect"
-import { all, click, expect, expectAll, given, inside, role, scene, selector } from "foldkit/scene"
+import { all, click, Command, expect, expectAll, given, inside, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Machine, Terminal } from "../shared/Fleet.ts"
-import { Bridge, init, update, view } from "./main.ts"
+import { Bridge, init, Message, SaveSelection, Selection, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const blockedAgent: Terminal = {
@@ -44,12 +44,15 @@ const fleet: Fleet = {
 test("the sidebar lists every space, marked by its agents, and a click opens its first tab", () => {
   scene(
     { update, view },
-    given({ ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, bridge: Bridge.Watching({ fleet }) }),
     expectAll(all.selector(".space-row")).toHaveCount(2),
     inside(role("button", { name: "prog" }), expect(selector(".dot")).toHaveClass("blocked")),
     // A space without agents still shows, with no mark.
     inside(role("button", { name: "quiet" }), expect(selector(".dot")).not.toExist()),
     click(role("button", { name: "prog" })),
+    // A reload opens on it again.
+    Command.expectExact(SaveSelection({ selection: Selection.Tab({ tabId: "b", maybeFocus: Option.none() }) })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     expect(role("button", { name: "prog" })).toHaveAttr("aria-current", "page"),
     expect(selector(".tabs .tab.on")).toContainText("notes"),
     // The tab bar marks the tab whose agent waits.
@@ -64,7 +67,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
   const away: Machine = { name: "cynic", isLocal: false, state: "needs_login", spaces: [] }
   scene(
     { update, view },
-    given({ ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
     expectAll(all.selector(".machine-head")).toHaveCount(2),
     expect(selector(".machine-head.needs_login")).toContainText("cynic"),
     expect(selector(".machine-head.needs_login")).toContainText("needs login"),
@@ -72,7 +75,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
 })
 
 test("agents list below the spaces, or under each space when the settings say so", () => {
-  const model = { ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet }) }
+  const model = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing() }).model, bridge: Bridge.Watching({ fleet }) }
   scene(
     { update, view },
     given(model),
