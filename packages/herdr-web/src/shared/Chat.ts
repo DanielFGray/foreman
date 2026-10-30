@@ -164,17 +164,19 @@ export const sameTyped = (one: string, other: string) => one.replace(/\s/g, "") 
 
 /**
  * A model id as people name it: `claude-opus-5-5[1m]` is "Opus 5.5", and the
- * older `claude-3-5-sonnet-20241022` is "Sonnet 3.5". An id of another form
- * stays as it is.
+ * older `claude-3-5-sonnet-20241022` is "Sonnet 3.5". A provider before a
+ * slash, as in OpenCode's `opencode-go/deepseek-v4-pro`, names no part of
+ * the model, so it is dropped. An id of another form stays as it is, after
+ * its provider.
  */
 export const modelName = (id: string): string => {
-  // Anthropic's own provider prefix names the same model.
-  const [head, ...rest] = String.split(String.replace(/^anthropic\/|\[.*\]$/g, "")(id), "-")
+  const model = String.replace(/^[^/]+\//, "")(id)
+  const [head, ...rest] = String.split(String.replace(/\[.*\]$/, "")(model), "-")
   const words = Array.filter(rest, (token) => /^[a-z]+$/.test(token))
   // A date suffix has eight digits; a version part has one or two.
   const version = Array.filter(rest, (token) => /^\d{1,2}$/.test(token))
   return Option.match(
     Option.filter(Array.head(words), () => head === "claude" && words.length === 1 && Array.isArrayNonEmpty(version)),
-    { onNone: () => id, onSome: (word) => `${String.capitalize(word)} ${version.join(".")}` },
+    { onNone: () => model, onSome: (word) => `${String.capitalize(word)} ${version.join(".")}` },
   )
 }

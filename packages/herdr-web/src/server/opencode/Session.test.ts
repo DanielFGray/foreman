@@ -26,6 +26,7 @@ const session = (id: string, title?: string, parent?: string): SessionSummary =>
   id,
   title: Option.fromUndefinedOr(title),
   parentID: Option.fromUndefinedOr(parent),
+  model: Option.none(),
 })
 
 const parser = session("ses_a", "Fix the parser")

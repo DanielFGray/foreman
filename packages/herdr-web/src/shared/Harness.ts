@@ -1,5 +1,4 @@
-// Which coding agent runs in a terminal, and what the page can do with it.
-// An agent is known by the app it names in its status report, else by the
+// Which coding agent runs in a terminal, and what the page can do with it.// An agent is known by the app it names in its status report, else by the
 // foreground program's name. The names follow herdr's own table
 // (src/detect/mod.rs, `lookup_agent`). herdr also reads the argv of `node`,
 // `bun` and `python` to find an agent that runs under one; this table reads
@@ -7,18 +6,24 @@
 //
 // Each feature an agent lists here, the bridge implements in that agent's
 // adapter (src/server/Agents.ts); the types hold the two to the same list.
-import { Array, HashMap, Option, pipe, String } from "effect"
+import { Array, HashMap, Option, pipe, Schema, String } from "effect"
 import type { Terminal } from "./Fleet.ts"
 
 /**
- * What the page offers for an agent beyond its terminal: its chat, its model,
- * its input box (which tells when it takes a message), the questions it asks,
- * and its slash commands.
+ * What the page offers for an agent beyond its terminal: its chat, its model
+ * and the models it may switch to, its input box (which tells when it takes a
+ * message), the questions it asks, its slash commands, and pairing: a sign-in
+ * to the agent's own server, which some of the others need.
  */
-export type Feature = "chat" | "model" | "inputBox" | "questions" | "commands"
+export type Feature = "chat" | "model" | "inputBox" | "questions" | "commands" | "pairing"
 
-/** A model an agent's picker offers: what the agent takes, and what the page calls it. */
-export type ModelChoice = Readonly<{ alias: string; name: string }>
+/** A model the agent may switch to: what the agent takes, and what the page calls it. */
+export const ModelChoice = Schema.Struct({ alias: Schema.String, name: Schema.String })
+export type ModelChoice = typeof ModelChoice.Type
+
+/** The models the agent may switch to, the one it uses now, and a note under them. */
+export const ModelChoices = Schema.Struct({ choices: Schema.Array(ModelChoice), current: Schema.Option(Schema.String), note: Schema.String })
+export type ModelChoices = typeof ModelChoices.Type
 
 export type Harness = Readonly<{
   /** What the agent names itself in its status report, such as `claude-code`; an agent not yet seen to report goes by its main program. */
@@ -27,8 +32,6 @@ export type Harness = Readonly<{
   name: string
   programs: ReadonlyArray<string>
   features: ReadonlyArray<Feature>
-  /** The models its model tag offers, and a note under them; only with the model feature. */
-  picker: Option.Option<Readonly<{ choices: ReadonlyArray<ModelChoice>; note: string }>>
 }>
 
 /** The agent hc reports in the terminal; none for a shell or another program. */
@@ -41,7 +44,7 @@ export const harnessOf = ({ status, foreground }: Terminal): Option.Option<Harne
 export const supports = (terminal: Terminal, feature: Feature) => Option.exists(harnessOf(terminal), ({ features }) => Array.contains(features, feature))
 
 const terminalOnly = <const Id extends string>(id: Id, name: string, programs: ReadonlyArray<string>) =>
-  ({ id, name, programs, features: [], picker: Option.none() }) as const satisfies Harness
+  ({ id, name, programs, features: [] }) as const satisfies Harness
 
 export const HARNESSES = [
   terminalOnly("pi", "Pi", ["pi"]),
@@ -50,16 +53,6 @@ export const HARNESSES = [
     name: "Claude Code",
     programs: ["claude"],
     features: ["chat", "model", "inputBox", "questions", "commands"],
-    // Each alias picks that family's latest, newest family first.
-    picker: Option.some({
-      choices: [
-        { alias: "fable", name: "Fable" },
-        { alias: "opus", name: "Opus" },
-        { alias: "sonnet", name: "Sonnet" },
-        { alias: "haiku", name: "Haiku" },
-      ],
-      note: "Claude Code may also keep the pick for its new sessions.",
-    }),
   },
   terminalOnly("codex", "Codex", ["codex"]),
   terminalOnly("gemini", "Gemini", ["gemini"]),
@@ -69,7 +62,7 @@ export const HARNESSES = [
   terminalOnly("cline", "Cline", [".cline"]),
   terminalOnly("omp", "omp", ["omp"]),
   terminalOnly("mastracode", "Mastra Code", ["mastra-code"]),
-  { id: "opencode", name: "OpenCode", programs: ["opencode2", "open-code"], features: ["chat"], picker: Option.none() },
+  { id: "opencode", name: "OpenCode", programs: ["opencode2", "open-code"], features: ["chat", "model", "commands", "pairing"] },
   terminalOnly("copilot", "Copilot", ["github-copilot", "ghcs"]),
   terminalOnly("kimi", "Kimi", ["kimi-code"]),
   terminalOnly("kiro", "Kiro", ["kiro-cli"]),

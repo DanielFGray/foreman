@@ -1,10 +1,11 @@
 // Claude Code's adapter: its chat and model from its transcript, its input
 // box and questions from its screen, and its slash commands from its folders.
-import { Effect, Match, Option, Schedule, Schema, Stream } from "effect"
+import { Array, Effect, Match, Option, Schedule, Schema, Stream, String } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
-import { type Answer, InputBox, type Question, sameTyped, typedText } from "../../shared/Chat.ts"
+import { type Answer, InputBox, modelName, type Question, sameTyped, typedText } from "../../shared/Chat.ts"
+import type { ModelChoice, ModelChoices } from "../../shared/Harness.ts"
 import type { Terminal } from "../../shared/Fleet.ts"
 import { toBridgeError } from "../hcError.ts"
 import { LiveTerminals } from "../LiveTerminals.ts"
@@ -56,6 +57,16 @@ export const claudeCode = Effect.gen(function* () {
     chat: (terminal: Terminal) => fromTranscript(terminal, claude.chat),
     model: {
       watch: (terminal: Terminal) => fromTranscript(terminal, claude.model),
+      // The current choice is the one whose family names the model of the newest reply.
+      choices: (terminal: Terminal) =>
+        Effect.map(Stream.runHead(fromTranscript(terminal, claude.model)), (model): ModelChoices => ({
+          choices: MODEL_CHOICES,
+          current: Option.map(
+            Array.findFirst(MODEL_CHOICES, ({ name }) => Option.exists(Option.flatten(model), (id) => String.startsWith(`${name} `)(modelName(id)))),
+            ({ alias }) => alias,
+          ),
+          note: "Claude Code may also keep the pick for its new sessions.",
+        })),
       // Typed as a person would; Claude Code refuses it while the agent works.
       pick: (terminal: Terminal, alias: string) =>
         Effect.flatMap(
@@ -102,6 +113,14 @@ export const claudeCode = Effect.gen(function* () {
       commands.list(address, cwd).pipe(Effect.mapError(({ message }) => new BridgeError({ kind: "commands", message }))),
   }
 })
+
+// Each alias picks that family's latest, newest family first.
+const MODEL_CHOICES: ReadonlyArray<ModelChoice> = [
+  { alias: "fable", name: "Fable" },
+  { alias: "opus", name: "Opus" },
+  { alias: "sonnet", name: "Sonnet" },
+  { alias: "haiku", name: "Haiku" },
+]
 
 /** How often, and how many times, a screen is read again while Claude Code redraws it. */
 const REDRAW = { schedule: Schedule.spaced("200 millis"), times: 10 }

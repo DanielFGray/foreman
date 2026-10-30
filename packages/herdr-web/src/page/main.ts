@@ -12,11 +12,13 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
+import { clickedModelTag, listedChoices } from "./modelMenu.ts"
+import { clickedPair, failedPair, succeededPair } from "./pairing.ts"
 import { closedLinkSheet, copiedLink, notedLink, pointedAtLink } from "./linkSheet.ts"
 import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey, restoredSoftKeys, sentSheetKey, withSheet } from "./keySheet.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
@@ -68,6 +70,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Fl
     keySheet: KeySheet.Closed(),
     linkSheet: LinkSheet.Closed(),
     commandList: CommandList.Unread(),
+    pairing: Pairing.Idle(),
     fontCatalog: FontCatalog.Loading(),
     usage: Option.none(),
     usageDetail: Option.none(),
@@ -346,7 +349,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     ReceivedCommands: ({ address, commands }) => ({ model: listedCommands(model, address, CommandList.Listed({ address, commands })) }),
 
-    FailedCommands: ({ address, reason }) => ({ model: listedCommands(model, address, CommandList.Unlisted({ address, reason })) }),
+    FailedCommands: ({ address, failure }) => ({ model: listedCommands(model, address, CommandList.Unlisted({ address, failure })) }),
 
     PickedCommand: ({ name }) => ({ model: Option.match(maybeFocus(model), { onNone: () => model, onSome: (address) => pickedCommand(model, address, name) }) }),
 
@@ -382,12 +385,17 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: modifyFields(model, { models: (all) => Option.match(name, { onNone: () => Record.remove(all, address), onSome: (one) => Record.set(all, address, one) }) }),
     }),
 
-    // A second click on the tag closes its menu.
-    ClickedModelTag: ({ address }) => ({
-      model: modifyFields(model, {
-        paneAction: (action) => (action._tag === "PickingModel" && action.address === address ? PaneAction.Idle() : PaneAction.PickingModel({ address })),
-      }),
-    }),
+    ClickedModelTag: ({ address }) => clickedModelTag(model, address),
+
+    ReceivedModelChoices: ({ address, choices }) => ({ model: listedChoices(model, address, ChoiceList.Listed({ choices })) }),
+
+    FailedModelChoices: ({ address, failure }) => ({ model: listedChoices(model, address, ChoiceList.Unlisted({ failure })) }),
+
+    ClickedPair: ({ address }) => clickedPair(model, address),
+
+    SucceededPair: ({ address }) => succeededPair(model, address),
+
+    FailedPair: ({ address, reason }) => ({ model: failedPair(model, address, reason) }),
 
     PickedModel: ({ address, alias }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Idle() }), commands: [PickModel({ address, alias })] }),
 

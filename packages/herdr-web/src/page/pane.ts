@@ -1,17 +1,16 @@
 // One pane: its head with the split, close and view buttons, its chat or
 // live terminal, the chat's prompt, and the phone's soft keys.
-import { Array, Match, Option, Record, String } from "effect"
+import { Array, Match, Option } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import * as Mount from "foldkit/mount"
-import { modelName } from "../shared/Chat.ts"
 import type { Size } from "../shared/Fleet.ts"
-import { harnessOf } from "../shared/Harness.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
 import { programOf } from "./programs.ts"
 import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
+import { modelMenuView, modelTagView } from "./modelMenu.ts"
 import { slashView } from "./slash.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
 import { promptOf } from "./mirror.ts"
@@ -226,49 +225,3 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
     ],
   )
 
-/**
- * The model an agent answers with. When the agent offers a picker, the tag
- * is a button that opens the model menu. Its exact id shows on hover.
- */
-const modelTagView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
-  Option.toArray(
-    Option.map(Record.get(model.models, address), (id) =>
-      Option.isNone(pickerAt(model, address))
-        ? h.span([h.Class("model-tag"), h.Title(id)], [modelName(id)])
-        : h.button(
-            [
-              h.Type("button"),
-              h.Class(isPickingModel(model, address) ? "model-tag on" : "model-tag"),
-              h.Title(id),
-              h.AriaLabel(`model: ${modelName(id)}; pick another`),
-              h.AriaExpanded(isPickingModel(model, address)),
-              h.OnClick(Message.ClickedModelTag({ address })),
-            ],
-            [modelName(id)],
-          ),
-    ),
-  )
-
-const modelMenuView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
-  Option.match(Option.filter(pickerAt(model, address), () => isPickingModel(model, address)), {
-    onNone: () => [],
-    onSome: ({ choices, note }) => [
-      h.div(
-        [h.Class("model-menu"), h.Role("menu"), h.AriaLabel("models")],
-        [
-          ...Array.map(choices, ({ alias, name }) => {
-            const isCurrent = Option.exists(Record.get(model.models, address), (id) => String.startsWith(`${name} `)(modelName(id)))
-            return h.button(
-              [h.Type("button"), h.Class(isCurrent ? "chip on" : "chip"), h.Role("menuitem"), h.AriaCurrent(isCurrent ? "true" : "false"), h.OnClick(Message.PickedModel({ address, alias }))],
-              [name],
-            )
-          }),
-          h.span([h.Class("note")], [note]),
-        ],
-      ),
-    ],
-  })
-
-const pickerAt = (model: Model, address: string) => Option.flatMap(Option.flatMap(findTerminal(model, address), harnessOf), ({ picker }) => picker)
-
-const isPickingModel = (model: Model, address: string) => model.paneAction._tag === "PickingModel" && model.paneAction.address === address

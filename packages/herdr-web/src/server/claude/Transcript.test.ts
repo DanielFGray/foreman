@@ -182,8 +182,8 @@ describe("newestModel", () => {
 test("a model id reads as its family and version", () => {
   expect(
     Array.map(
-      ["claude-opus-5-5", "claude-opus-5-5[1m]", "anthropic/claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022", "claude-sonnet-4", "gpt-5.6"],
+      ["claude-opus-5-5", "claude-opus-5-5[1m]", "anthropic/claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022", "claude-sonnet-4", "gpt-5.6", "acme/model-one"],
       modelName,
     ),
-  ).toEqual(["Opus 5.5", "Opus 5.5", "Sonnet 5.5", "Haiku 4.5", "Sonnet 3.5", "Sonnet 4", "gpt-5.6"])
+  ).toEqual(["Opus 5.5", "Opus 5.5", "Sonnet 5.5", "Haiku 4.5", "Sonnet 3.5", "Sonnet 4", "gpt-5.6", "model-one"])
 })

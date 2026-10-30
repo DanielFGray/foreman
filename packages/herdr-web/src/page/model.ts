@@ -5,9 +5,10 @@ import { Effect, Schema } from "effect"
 import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
-import { Direction } from "../shared/Api.ts"
+import { BridgeError, Direction } from "../shared/Api.ts"
 import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts"
 import { Fleet } from "../shared/Fleet.ts"
+import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -55,6 +56,25 @@ export const Delivery = defineTaggedUnion({
 })
 export type Delivery = typeof Delivery.Type
 
+/** The models an agent may switch to: being read, read, or not readable, and why. */
+export const ChoiceList = defineTaggedUnion({
+  Loading: {},
+  Listed: { choices: ModelChoices },
+  Unlisted: { failure: BridgeError },
+})
+export type ChoiceList = typeof ChoiceList.Type
+
+/**
+ * The bridge's pairing with an agent's server, started from the page: none
+ * under way, under way for the agent at `address`, or refused, and why.
+ */
+export const Pairing = defineTaggedUnion({
+  Idle: {},
+  Pairing: { address: Schema.String },
+  Failed: { address: Schema.String, reason: Schema.String },
+})
+export type Pairing = typeof Pairing.Type
+
 /**
  * A change to a herdr-app pane, tab or space: none under way, a close waiting
  * for a second click, a space's new name being typed, or herdr-app's refusal.
@@ -65,8 +85,8 @@ export const PaneAction = defineTaggedUnion({
   ConfirmingTab: { tab: Schema.String },
   ConfirmingSpace: { space: Schema.String },
   RenamingSpace: { space: Schema.String, name: Schema.String },
-  /** The model menu of the agent at `address` is open. */
-  PickingModel: { address: Schema.String },
+  /** The model menu of the agent at `address` is open, with the models it may switch to as far as they are read. */
+  PickingModel: { address: Schema.String, choices: ChoiceList },
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
@@ -113,7 +133,7 @@ export const CommandList = defineTaggedUnion({
   Unread: {},
   Loading: { address: Schema.String },
   Listed: { address: Schema.String, commands: Schema.Array(SlashCommand) },
-  Unlisted: { address: Schema.String, reason: Schema.String },
+  Unlisted: { address: Schema.String, failure: BridgeError },
 })
 export type CommandList = typeof CommandList.Type
 
@@ -270,7 +290,7 @@ export const Model = Schema.Struct({
   queued: Schema.Array(Queued),
   /** What each watched agent's input box in the terminal holds, by address; none before the first reading. */
   boxes: Schema.Record(Schema.String, InputBox),
-  /** The model each shown Claude Code agent answers with, by address: the id of its newest reply, or the name `/model` switched to; none before either. */
+  /** The model each shown agent answers with, by address, as the bridge's `model` call names it. */
   models: Schema.Record(Schema.String, Schema.String),
   /** The prompts the chats show as faded bubbles until the agent records them. */
   waiting: Schema.Array(Waiting),
@@ -291,6 +311,7 @@ export const Model = Schema.Struct({
   keySheet: KeySheet,
   linkSheet: LinkSheet,
   commandList: CommandList,
+  pairing: Pairing,
   fontCatalog: FontCatalog,
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: Schema.Option(Usage),
@@ -401,7 +422,7 @@ export const Message = defineMessageUnion({
   FailedFonts: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
   ReceivedCommands: { address: Schema.String, commands: Schema.Array(SlashCommand) },
-  FailedCommands: { address: Schema.String, reason: Schema.String },
+  FailedCommands: { address: Schema.String, failure: BridgeError },
   PickedCommand: { name: Schema.String },
   SubmittedPrompt: {},
   SucceededSendPrompt: { address: Schema.String, id: Schema.Int },
@@ -415,7 +436,12 @@ export const Message = defineMessageUnion({
   FailedInputBox: { address: Schema.String },
   ReceivedModel: { address: Schema.String, model: Schema.Option(Schema.String) },
   ClickedModelTag: { address: Schema.String },
+  ReceivedModelChoices: { address: Schema.String, choices: ModelChoices },
+  FailedModelChoices: { address: Schema.String, failure: BridgeError },
   PickedModel: { address: Schema.String, alias: Schema.String },
+  ClickedPair: { address: Schema.String },
+  SucceededPair: { address: Schema.String },
+  FailedPair: { address: Schema.String, reason: Schema.String },
   SucceededPickModel: {},
   ClickedKey: { key: Schema.String },
   ToggledModifier: { modifier: Modifier },

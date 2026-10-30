@@ -2,7 +2,9 @@ import { Option } from "effect"
 import { click, Command, expect, given, Mount, role, scene, selector, Subscription } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
-import { PickModel, SaveRecent, SaveSelection } from "./commands.ts"
+import { BridgeError } from "../shared/Api.ts"
+import type { ModelChoices } from "../shared/Harness.ts"
+import { ListModelChoices, Pair, PickModel, SaveRecent, SaveSelection } from "./commands.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, Selection } from "./model.ts"
@@ -40,7 +42,16 @@ const start = {
   bridge: Bridge.Watching({ fleet }),
 }
 
-test("an agent's pane names its model, and the tag picks another through /model", () => {
+const claudeChoices: ModelChoices = {
+  choices: [
+    { alias: "opus", name: "Opus" },
+    { alias: "haiku", name: "Haiku" },
+  ],
+  current: Option.some("opus"),
+  note: "A note under the models.",
+}
+
+test("an agent's pane names its model, and the tag picks another of the choices the bridge reads", () => {
   scene(
     { update, view },
     given(start),
@@ -53,6 +64,8 @@ test("an agent's pane names its model, and the tag picks another through /model"
     // The click reaches the pane head too, which focuses the pane.
     Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     Command.resolve(SaveRecent, Message.CompletedSaveRecent()),
+    expect(selector(".model-menu")).toContainText("Reading the models"),
+    Command.resolve(ListModelChoices, Message.ReceivedModelChoices({ address: "t1", choices: claudeChoices })),
     expect(role("menuitem", { name: "Opus" })).toHaveAttr("aria-current", "true"),
     click(role("menuitem", { name: "Haiku" })),
     Command.expectExact(PickModel({ address: "t1", alias: "haiku" })),
@@ -71,5 +84,51 @@ test("the page fits the part of the window a person sees, and the whole window w
     Subscription.emit(Message.ChangedViewport({ viewport: Option.some({ top: 40, height: 400 }) })),
     expect(selector(".app")).toHaveStyle("--viewport-top", "40px"),
     expect(selector(".app")).toHaveStyle("--viewport-height", "400px"),
+  )
+})
+
+const opencode: Terminal = {
+  ...agent,
+  status: Option.some({ state: "idle", app: Option.some("opencode"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
+  foreground: Option.some({ name: "opencode", pid: 8, argv: ["opencode"] }),
+}
+
+test("an agent whose server lists its models offers to pair, and reads them again once paired", () => {
+  scene(
+    { update, view },
+    given({ ...start, bridge: Bridge.Watching({ fleet: { ...fleet, terminals: [opencode] } }) }),
+    Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()], [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })]),
+    Subscription.emit(Message.ReceivedModel({ address: "t1", model: Option.some("acme/model-one") })),
+    expect(selector(".model-tag")).toHaveText("model-one"),
+    click(role("button", { name: "model: model-one; pick another" })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    Command.resolve(SaveRecent, Message.CompletedSaveRecent()),
+    Command.resolve(ListModelChoices, Message.FailedModelChoices({ address: "t1", failure: new BridgeError({ kind: "unpaired", message: "not paired yet" }) })),
+    expect(selector(".model-menu")).toContainText("The models cannot be read: not paired yet"),
+    click(role("button", { name: "Pair" })),
+    Command.expectExact(Pair({ address: "t1" })),
+    expect(role("button", { name: "Pairing…" })).toBeDisabled(),
+    Command.resolve(Pair, Message.SucceededPair({ address: "t1" })),
+    Command.expectExact(ListModelChoices({ address: "t1" })),
+    Command.resolve(
+      ListModelChoices,
+      Message.ReceivedModelChoices({ address: "t1", choices: { choices: [{ alias: "acme/model-one", name: "Model One" }], current: Option.some("acme/model-one"), note: "A note." } }),
+    ),
+    expect(role("menuitem", { name: "Model One" })).toHaveAttr("aria-current", "true"),
+  )
+})
+
+test("a failure that pairing cannot mend shows no Pair button", () => {
+  scene(
+    { update, view },
+    given({ ...start, bridge: Bridge.Watching({ fleet: { ...fleet, terminals: [opencode] } }) }),
+    Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()], [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })]),
+    Subscription.emit(Message.ReceivedModel({ address: "t1", model: Option.some("acme/model-one") })),
+    click(role("button", { name: "model: model-one; pick another" })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    Command.resolve(SaveRecent, Message.CompletedSaveRecent()),
+    Command.resolve(ListModelChoices, Message.FailedModelChoices({ address: "t1", failure: new BridgeError({ kind: "remote", message: "on another machine" }) })),
+    expect(selector(".model-menu")).toContainText("on another machine"),
+    expect(role("button", { name: "Pair" })).not.toExist(),
   )
 })

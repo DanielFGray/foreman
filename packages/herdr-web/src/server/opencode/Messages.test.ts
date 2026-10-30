@@ -8,12 +8,12 @@ import { Sessions, sessionsQuery } from "./Session.ts"
 // A made-up database with the columns of OpenCode's two tables that the queries read, and its `data` shapes.
 const database = () => {
   const db = new Database(":memory:")
-  db.run("create table session_v2 (id text primary key, parent_id text, directory text not null, title text)")
+  db.run("create table session_v2 (id text primary key, parent_id text, directory text not null, title text, model text)")
   db.run("create table session_message (id text primary key, session_id text not null, type text not null, seq integer not null, data text not null)")
-  const session = db.prepare("insert into session_v2 values (?, ?, ?, ?)")
-  session.run("ses_a", null, "/work/it's here", "Count the tests")
-  session.run("ses_b", "ses_a", "/work/it's here", null)
-  session.run("ses_c", null, "/elsewhere", "Other work")
+  const session = db.prepare("insert into session_v2 values (?, ?, ?, ?, ?)")
+  session.run("ses_a", null, "/work/it's here", "Count the tests", JSON.stringify({ id: "model-one", providerID: "acme", variant: "high" }))
+  session.run("ses_b", "ses_a", "/work/it's here", null, null)
+  session.run("ses_c", null, "/elsewhere", "Other work", null)
   const message = db.prepare("insert into session_message values (?, 'ses_a', ?, ?, ?)")
   Array.forEach(MESSAGES, ([type, data], index) => message.run(`msg_${index + 1}`, type, index + 1, JSON.stringify(data)))
   return db
@@ -68,9 +68,9 @@ test("only the newest messages are read", () => {
   expect(toEntries(Array.reverse(messages))).toEqual([{ _tag: "Compacted", id: "msg_6" }])
 })
 
-test("the sessions of a folder are read with their titles and parents", () => {
+test("the sessions of a folder are read with their titles, parents and models", () => {
   expect(printed(Sessions, sessionsQuery("/work/it's here"))).toEqual([
-    { id: "ses_a", title: Option.some("Count the tests"), parentID: Option.none() },
-    { id: "ses_b", title: Option.none(), parentID: Option.some("ses_a") },
+    { id: "ses_a", title: Option.some("Count the tests"), parentID: Option.none(), model: Option.some({ id: "model-one", providerID: "acme" }) },
+    { id: "ses_b", title: Option.none(), parentID: Option.some("ses_a"), model: Option.none() },
   ])
 })

@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
+import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -43,9 +44,20 @@ export const Api = RpcGroup.make(
   Rpc.make("watch", { success: Fleet, stream: true }),
   /** The conversation of the agent in the terminal: its recent entries, then each batch of new ones. */
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
-  /** The model the agent in the terminal answers with: the id of its newest reply, such as `claude-opus-5-5`, or the name `/model` switched to, then after each change; none before its first reply. */
+  /**
+   * The model the agent in the terminal answers with, then after each change.
+   * For Claude Code, the id of its newest reply, such as `claude-opus-5-5`, or
+   * the name `/model` switched to; none before its first reply. For OpenCode,
+   * the session's own choice, as `<provider>/<model>`.
+   */
   Rpc.make("model", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Schema.String), error: BridgeError, stream: true }),
-  /** Switches the agent in the terminal to a model its picker offers, by alias. It is refused, with kind `working`, while the agent works. */
+  /**
+   * The models the agent in the terminal may switch to, and the one it uses
+   * now. An agent that lists them from its own server fails with kind
+   * `unpaired` until the bridge is paired with that server (see `pair`).
+   */
+  Rpc.make("modelChoices", { payload: { terminal: Schema.String }, success: ModelChoices, error: BridgeError }),
+  /** Switches the agent in the terminal to one of its model choices, by alias. Claude Code refuses it, with kind `working`, while it works. */
   Rpc.make("pickModel", { payload: { terminal: Schema.String, alias: Schema.String }, error: BridgeError }),
   /**
    * Types text and presses Enter. It is refused, with kind `draft`, while the
@@ -124,8 +136,20 @@ export const Api = RpcGroup.make(
   Rpc.make("renameSpace", { payload: { space: Schema.String, name: Schema.String }, error: BridgeError }),
   /** Closes a space and ends the terminals of all its tabs. */
   Rpc.make("closeSpace", { payload: { space: Schema.String }, error: BridgeError }),
-  /** The slash commands of the Claude Code agent in a terminal: a few built-ins, and the skills and command files on its machine for its folder. */
+  /**
+   * The slash commands of the agent in a terminal: a few built-ins, and for
+   * Claude Code the skills and command files on its machine for its folder,
+   * for OpenCode the commands its server lists. OpenCode's fail with kind
+   * `unpaired` until the bridge is paired with its server.
+   */
   Rpc.make("commands", { payload: { terminal: Schema.String }, success: Schema.Array(SlashCommand), error: BridgeError }),
+  /**
+   * Pairs the bridge with the server of the agent in a terminal, so that the
+   * calls above that need it work: the agent issues a one-time code, and the
+   * bridge trades it for a sign-in that it keeps. It fails with kind `remote`
+   * for an agent on another machine, whose server the bridge cannot reach.
+   */
+  Rpc.make("pair", { payload: { terminal: Schema.String }, error: BridgeError }),
   /** The checkouts of the repository a space is in, and the space that shows each. */
   Rpc.make("worktrees", { payload: { space: Schema.String }, success: RepoCheckouts, error: BridgeError }),
   /**

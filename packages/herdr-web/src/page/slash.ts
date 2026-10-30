@@ -7,6 +7,7 @@ import { modifyFields } from "foldkit/struct"
 import { Update } from "foldkit"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { ListCommands } from "./commands.ts"
+import { pairView } from "./pairing.ts"
 import { CommandList, Message, type Model, type UpdateReturn } from "./model.ts"
 import { edited, promptOf } from "./mirror.ts"
 import { supportsAt } from "./selection.ts"
@@ -58,7 +59,7 @@ export const slashView = (model: Model, address: string, h: HtmlBuilder<Message>
     : CommandList.match(model.commandList, {
         Unread: () => [],
         Loading: (list) => (list.address === address ? [note("Reading the commands…", h)] : []),
-        Unlisted: (list) => (list.address === address ? [note(`The commands cannot be read: ${list.reason}`, h)] : []),
+        Unlisted: (list) => (list.address === address ? [note(`The commands cannot be read: ${list.failure.message}`, h), ...pairView(model, address, list.failure, h)] : []),
         Listed: (list) => (list.address === address ? listView(suggestions(list.commands, promptOf(model, address).text), Option.exists(commandTyped(promptOf(model, address).text), ({ hasArgument }) => hasArgument), h) : []),
       })
 

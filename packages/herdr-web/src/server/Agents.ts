@@ -6,7 +6,7 @@ import { Hc } from "../hc/Hc.ts"
 import { BridgeError } from "../shared/Api.ts"
 import type { Answer, ChatUpdate, InputBox, Question } from "../shared/Chat.ts"
 import type { Terminal } from "../shared/Fleet.ts"
-import { type Feature, harnessOf, type HarnessId, type HarnessWith } from "../shared/Harness.ts"
+import { type Feature, harnessOf, type HarnessId, type HarnessWith, type ModelChoices } from "../shared/Harness.ts"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { claudeCode } from "./claude/ClaudeCode.ts"
 import { openCode } from "./opencode/OpenCode.ts"
@@ -17,9 +17,11 @@ export type Features = {
   /** The conversation, whole at first and then as it grows. */
   chat: (terminal: Terminal) => Stream.Stream<ChatUpdate, BridgeError>
   model: {
-    /** The id of the model that answers, each time it changes; none before the first answer. */
+    /** The id of the model that answers, each time it changes; none while it is not known yet. */
     watch: (terminal: Terminal) => Stream.Stream<Option.Option<string>, BridgeError>
-    /** Switches to a model the agent's picker offers, by its alias. */
+    /** The models the agent may switch to, and the one it uses now. */
+    choices: (terminal: Terminal) => Effect.Effect<ModelChoices, BridgeError>
+    /** Switches to one of the model choices, by its alias. */
     pick: (terminal: Terminal, alias: string) => Effect.Effect<void, BridgeError>
   }
   inputBox: {
@@ -35,6 +37,8 @@ export type Features = {
     answer: (terminal: Terminal, question: Question, answer: Answer) => Effect.Effect<void, BridgeError>
   }
   commands: (terminal: Terminal) => Effect.Effect<ReadonlyArray<SlashCommand>, BridgeError>
+  /** Signs the bridge in to the agent's own server; see `pair` in Api.ts. */
+  pairing: (terminal: Terminal) => Effect.Effect<void, BridgeError>
 }
 
 export class Agents extends Context.Service<Agents>()("herdr-web/server/Agents", {
@@ -45,10 +49,11 @@ export class Agents extends Context.Service<Agents>()("herdr-web/server/Agents",
     // Feature first, so each lists exactly the agents that offer it.
     const adapters: { readonly [F in Feature]: Record.ReadonlyRecord<string, Features[F]> } = {
       chat: { "claude-code": claude.chat, opencode: opencode.chat },
-      model: { "claude-code": claude.model },
+      model: { "claude-code": claude.model, opencode: opencode.model },
       inputBox: { "claude-code": claude.inputBox },
       questions: { "claude-code": claude.questions },
-      commands: { "claude-code": claude.commands },
+      commands: { "claude-code": claude.commands, opencode: opencode.commands },
+      pairing: { opencode: opencode.pairing },
     } satisfies { readonly [F in Feature]: { readonly [Id in HarnessWith<F>]: Features[F] } & { readonly [Id in Exclude<HarnessId, HarnessWith<F>>]?: never } }
 
     const terminalOf = (address: string) => Effect.mapError(hc.get(address), toBridgeError)

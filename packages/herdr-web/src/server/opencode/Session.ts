@@ -14,13 +14,19 @@ import { quoted } from "./Database.ts"
 
 /** SQL for the sessions OpenCode ran in `directory`, as one JSON array of `SessionSummary`. */
 export const sessionsQuery = (directory: string) => `
-select json_group_array(json_object('id', id, 'title', title, 'parentID', parent_id))
+select json_group_array(json_object('id', id, 'title', title, 'parentID', parent_id, 'model', json(model)))
 from session_v2 where directory = ${quoted(directory)}`
+
+/** A model as OpenCode names it: by its provider, and its id there. */
+export const ModelRef = Schema.Struct({ id: Schema.String, providerID: Schema.String })
+export type ModelRef = typeof ModelRef.Type
 
 export const SessionSummary = Schema.Struct({
   id: Schema.String,
   title: Schema.OptionFromNullOr(Schema.String),
   parentID: Schema.OptionFromNullOr(Schema.String),
+  /** The model the session asks for, which a pick changes at once; none while it takes OpenCode's default. */
+  model: Schema.OptionFromNullOr(ModelRef),
 })
 export type SessionSummary = typeof SessionSummary.Type
 

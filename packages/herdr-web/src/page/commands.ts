@@ -6,7 +6,7 @@ import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
 import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY } from "./model.ts"
-import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
+import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
 import { SoftKey } from "./keys.ts"
@@ -235,7 +235,30 @@ export const RemoveWorktree = Command.define("RemoveWorktree", {
     }).pipe(reportFailure((reason) => Message.FailedCheckoutAction({ reason }))),
 })
 
-/** Switches the agent to a model its picker offers; the agent may refuse while it works. */
+/** The models the agent may switch to, for its open model menu. */
+export const ListModelChoices = Command.define("ListModelChoices", {
+  args: { address: Schema.String },
+  messages: [Message.ReceivedModelChoices, Message.FailedModelChoices],
+  execute: ({ address }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      return Message.ReceivedModelChoices({ address, choices: yield* client.modelChoices({ terminal: address }) })
+    }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedModelChoices({ address, failure: failureOf(error) })))),
+})
+
+/** Pairs the bridge with the server of the agent at `address`; see `pair` in Api.ts. */
+export const Pair = Command.define("Pair", {
+  args: { address: Schema.String },
+  messages: [Message.SucceededPair, Message.FailedPair],
+  execute: ({ address }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.pair({ terminal: address })
+      return Message.SucceededPair({ address })
+    }).pipe(reportFailure((reason) => Message.FailedPair({ address, reason }))),
+})
+
+/** Switches the agent to one of its model choices; Claude Code refuses while it works. */
 export const PickModel = Command.define("PickModel", {
   args: { address: Schema.String, alias: Schema.String },
   messages: [Message.SucceededPickModel, Message.FailedPaneAction],
@@ -281,7 +304,7 @@ export const ListCommands = Command.define("ListCommands", {
     Effect.gen(function* () {
       const client = yield* BridgeClient
       return Message.ReceivedCommands({ address, commands: yield* client.commands({ terminal: address }) })
-    }).pipe(reportFailure((reason) => Message.FailedCommands({ address, reason }))),
+    }).pipe(Effect.catch((error) => Effect.succeed(Message.FailedCommands({ address, failure: failureOf(error) })))),
 })
 
 export const WriteInputBox = Command.define("WriteInputBox", {

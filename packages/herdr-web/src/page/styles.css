@@ -537,7 +537,7 @@ p.usage-error { margin: 0; }
   white-space: nowrap;
 }
 .model-tag.on, .model-tag:hover { border-color: var(--accent); color: var(--text); }
-.model-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--surface); }
+.model-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--surface); max-height: 40vh; overflow-y: auto; }
 .model-menu .note { margin: 0; }
 
 /* A sheet sits over the soft keys, in the page's own column, so it

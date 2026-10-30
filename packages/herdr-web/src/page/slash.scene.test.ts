@@ -3,6 +3,7 @@
 import { Option } from "effect"
 import { click, Command, expect, given, Mount, role, scene, selector, type as typeInto } from "foldkit/scene"
 import { test } from "vitest"
+import { BridgeError } from "../shared/Api.ts"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { ListCommands } from "./commands.ts"
 import { KeepTypingFocus } from "./keys.ts"
@@ -87,7 +88,7 @@ test("the commands are read again for the next command, and a failure says why",
     given(chatOpen),
     Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()]),
     typeInto(role("textbox", { name: "Prompt" }), "/"),
-    Command.resolve(ListCommands, Message.FailedCommands({ address: "t1", reason: "hc did not answer" })),
+    Command.resolve(ListCommands, Message.FailedCommands({ address: "t1", failure: new BridgeError({ kind: "hc", message: "hc did not answer" }) })),
     expect(selector(".slash-note")).toHaveText("The commands cannot be read: hc did not answer"),
     typeInto(role("textbox", { name: "Prompt" }), "hello"),
     expect(selector(".slash-note")).not.toExist(),

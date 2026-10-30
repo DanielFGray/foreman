@@ -17,6 +17,7 @@ import { toBridgeError } from "./hcError.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { type WorktreeError, Worktrees } from "./Worktrees.ts"
 import { LiveTerminals } from "./LiveTerminals.ts"
+import { OpenCodeServer } from "./opencode/Server.ts"
 import { ScreenCells } from "./ScreenCells.ts"
 import { Usage } from "./usage/Usage.ts"
 
@@ -41,6 +42,7 @@ const Handlers = Api.toLayer(
       watch: () => fleet.changes,
       chat: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "chat"), ({ terminal, implementation }) => implementation(terminal))),
       model: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.watch(terminal))),
+      modelChoices: ({ terminal }) => Effect.flatMap(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.choices(terminal)),
       pickModel: ({ terminal, alias }) => Effect.flatMap(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.pick(terminal, alias)),
       send: ({ terminal, text, whileWorking, replaces }) =>
         agents.find(terminal, "inputBox").pipe(
@@ -83,6 +85,7 @@ const Handlers = Api.toLayer(
       renameSpace: ({ space, name }) => app.renameSpace(space, name).pipe(Effect.mapError(toAppError)),
       closeSpace: ({ space }) => app.closeSpace(space).pipe(Effect.asVoid, Effect.mapError(toAppError)),
       commands: ({ terminal }) => Effect.flatMap(agents.use(terminal, "commands"), ({ terminal, implementation }) => implementation(terminal)),
+      pair: ({ terminal }) => Effect.flatMap(agents.use(terminal, "pairing"), ({ terminal, implementation }) => implementation(terminal)),
       worktrees: ({ space }) => worktrees.list(space).pipe(Effect.mapError(toAppError)),
       newWorktree: ({ space, branch, program }) => worktrees.create(space, branch, program).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
       openWorktree: ({ space, path }) => worktrees.open(space, path).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
@@ -113,7 +116,7 @@ const Bridge = Layer.unwrap(
 ).pipe(
   Layer.provide([
     // The agents paste into the box through the live terminals.
-    Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer]), Layer.provideMerge(LiveTerminals.layer)),
+    Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer, OpenCodeServer.layer]), Layer.provideMerge(LiveTerminals.layer)),
     Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
