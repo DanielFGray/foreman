@@ -11,7 +11,7 @@ import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Fleet, type Layout, type Size, type Space, type StatusState, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
-import { agentsIn, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalsIn } from "./group.ts"
+import { agentsIn, locate, type MachineRow, sidebarOf, spaceRowOf, spacesOf, type SpaceRow, terminalLabel, terminalNote, terminalsIn } from "./group.ts"
 import { Bot, Columns2, Folder, icon, type IconNode, MessageSquare, Monitor, PanelLeft, Rows2, Server, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { AgentList, fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
@@ -440,6 +440,9 @@ const isClaudeCode = (model: Model, address: string) =>
     Option.exists(status, ({ app }) => Option.contains(app, CLAUDE_CODE)),
   )
 
+// A pane can outlive its terminal until herdr-app's layout catches up.
+const labelAt = (model: Model, address: string) => Option.match(findTerminal(model, address), { onNone: () => "closed terminal", onSome: terminalLabel })
+
 const findTerminal = (model: Model, address: string) =>
   Option.flatMap(lastFleet(model.bridge), ({ terminals }) => Array.findFirst(terminals, (terminal) => terminal.address === address))
 
@@ -771,7 +774,7 @@ const agentRowView = (terminal: Terminal, model: Model, h: HtmlBuilder<Message>)
         [
           icon(Bot, h),
           h.span([h.Class("name")], [terminalLabel(terminal)]),
-          h.span([h.Class("msg")], [statusText(terminal)]),
+          h.span([h.Class("msg")], [terminalNote(terminal)]),
           statusDot(stateOf(terminal), h),
         ],
       ),
@@ -793,11 +796,6 @@ const statusMark = (maybeState: Option.Option<StatusState>, h: HtmlBuilder<Messa
 
 const stateOf = ({ status }: Terminal) => Option.map(status, ({ state }) => state)
 
-const statusText = (terminal: Terminal) =>
-  Option.match(terminal.status, {
-    onNone: () => terminal.cwd,
-    onSome: ({ state, msg, kind }) => Option.getOrElse(Option.orElse(msg, () => kind), () => state),
-  })
 
 const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
@@ -853,7 +851,7 @@ const focusChipsView = (model: Model, h: HtmlBuilder<Message>): Html => {
               h.Class(Option.contains(maybeFocus(model), address) ? "chip on" : "chip"),
               h.OnClick(Message.FocusedPane({ address })),
             ],
-            [Option.match(findTerminal(model, address), { onNone: () => address, onSome: terminalLabel })],
+            [labelAt(model, address)],
           ),
         )
       : [],
@@ -900,8 +898,8 @@ const paneView = (
         [h.Class("pane-head"), h.OnClick(Message.FocusedPane({ address }))],
         [
           ...Option.match(maybeTerminal, { onNone: () => [], onSome: (terminal) => [statusDot(stateOf(terminal), h)] }),
-          h.span([h.Class("name")], [Option.match(maybeTerminal, { onNone: () => address, onSome: terminalLabel })]),
-          h.span([h.Class("msg")], [Option.match(maybeTerminal, { onNone: () => "gone", onSome: statusText })]),
+          h.span([h.Class("name")], [labelAt(model, address)]),
+          ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
           // A permission dialog shows only in the terminal, so a chat can switch to it.
           ...(isClaudeCode(model, address)
             ? Array.map(ViewName.literals, (name) =>
@@ -999,7 +997,7 @@ const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html
   Option.match(maybeFocus(model), {
     onNone: () => [],
     onSome: (address) => {
-      const target = Option.match(findTerminal(model, address), { onNone: () => address, onSome: terminalLabel })
+      const target = labelAt(model, address)
       const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
       return [
         h.div(

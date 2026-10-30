@@ -2,6 +2,7 @@
 // them, in herdr-app's own order of spaces, tabs and panes.
 import { Array, HashMap, HashSet, Match, Option, Order, pipe, String } from "effect"
 import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
+import { harnessOf } from "./harness.ts"
 
 export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal> }>
 
@@ -78,17 +79,27 @@ export const locate = (fleet: Fleet, address: string): Option.Option<Readonly<{ 
     Array.findFirst(({ tab }) => Array.contains(terminalsIn(tab.root), address)),
   )
 
-/** A terminal whose program reports a status (OSC 7501), which is what agents do. */
-export const isAgent = (terminal: Terminal) => Option.isSome(terminal.status)
+/** A terminal whose program reports a status (OSC 7501), or a known agent's program. */
+export const isAgent = (terminal: Terminal) => Option.isSome(terminal.status) || Option.isSome(harnessOf(terminal))
 
-/** The terminal's name, else its title, else its foreground program, else its address. */
+/**
+ * What the user calls the terminal: its name, else its agent, else its
+ * foreground program. The address is hc's id, which the user never sees.
+ */
 export const terminalLabel = (terminal: Terminal) =>
   pipe(
-    terminal.name,
-    Option.orElse(() => terminal.title),
-    Option.orElse(() => Option.map(terminal.foreground, ({ name }) => name)),
-    Option.filter(String.isNonEmpty),
-    Option.getOrElse(() => terminal.address),
+    Option.filter(terminal.name, String.isNonEmpty),
+    Option.orElse(() => harnessOf(terminal)),
+    Option.orElse(() => Option.filter(Option.map(terminal.foreground, ({ name }) => name), String.isNonEmpty)),
+    Option.getOrElse(() => "terminal"),
+  )
+
+/** What the terminal's program is doing: its status message, else its title (an agent's conversation), else its state or folder. */
+export const terminalNote = (terminal: Terminal) =>
+  pipe(
+    Option.flatMap(terminal.status, ({ msg, kind }) => Option.orElse(msg, () => kind)),
+    Option.orElse(() => Option.filter(terminal.title, String.isNonEmpty)),
+    Option.getOrElse(() => Option.match(terminal.status, { onNone: () => terminal.cwd, onSome: ({ state }) => state })),
   )
 
 // herdr-app leaves names empty until the user sets one. It then calls a

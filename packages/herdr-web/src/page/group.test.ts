@@ -1,15 +1,15 @@
 import { describe, expect, test } from "vitest"
 import { Option } from "effect"
 import type { Fleet, Layout, Machine, StatusState, Terminal } from "../shared/Fleet.ts"
-import { locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
+import { isAgent, locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
 
-const terminal = (address: string, isAgent = true, state: Terminal["state"] = "live"): Terminal => ({
+const terminal = (address: string, hasStatus = true, state: Terminal["state"] = "live"): Terminal => ({
   address,
   name: Option.none(),
   title: Option.none(),
   cwd: "/",
   state,
-  status: isAgent
+  status: hasStatus
     ? Option.some({ state: "idle", app: Option.none(), msg: Option.none(), kind: Option.none(), progress: Option.none() })
     : Option.none(),
   foreground: Option.none(),
@@ -116,10 +116,17 @@ describe("locate", () => {
 })
 
 describe("terminalLabel", () => {
-  test("prefers the name, then the foreground program, then the address", () => {
-    const plain = terminal("t9")
-    expect(terminalLabel({ ...plain, name: Option.some("claude") })).toBe("claude")
-    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "nvim", pid: 1 }) })).toBe("nvim")
-    expect(terminalLabel(plain)).toBe("t9")
+  test("prefers the name, then the agent, then the foreground program, and never shows the address", () => {
+    const plain = { ...terminal("t9", false), title: Option.some("") }
+    const claude = { ...plain, foreground: Option.some({ name: "/usr/bin/Claude", pid: 1 }) }
+    expect(terminalLabel({ ...claude, name: Option.some("build-c8") })).toBe("build-c8")
+    expect(terminalLabel(claude)).toBe("Claude Code")
+    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "zsh", pid: 1 }) })).toBe("zsh")
+    expect(terminalLabel(plain)).toBe("terminal")
+  })
+
+  test("a known agent's program makes an agent without a status report", () => {
+    const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1 }) }
+    expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1 }) })]).toEqual([true, false])
   })
 })
