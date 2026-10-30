@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vitest"
 import { Option } from "effect"
-import { allowedHosts, isAllowed, LOOPBACK } from "./Access.ts"
+import { allowedHosts, isAllowed } from "./Access.ts"
 
-const hosts = allowedHosts(4180, ["box.tailnet.ts.net"])
+const hosts = allowedHosts("100.64.0.7", 4180, ["box.tailnet.ts.net"])
 const allowed = (host: string, origin?: string) => isAllowed(hosts, Option.some(host), Option.fromUndefinedOr(origin))
 
 describe("Access", () => {
-  test("listens on loopback only", () => {
-    expect(LOOPBACK).toBe("127.0.0.1")
+  test("serves the address it listens on", () => {
+    expect(allowed("100.64.0.7:4180", "http://100.64.0.7:4180")).toBe(true)
   })
 
   test("serves loopback hosts, with or without an Origin from one", () => {

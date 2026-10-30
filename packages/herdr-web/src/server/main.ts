@@ -8,7 +8,7 @@ import { RpcSerialization, RpcServer } from "effect/rpc"
 import { Hc } from "../hc/Hc.ts"
 import type { HcFailure } from "../hc/Connection.ts"
 import { Api, BridgeError } from "../shared/Api.ts"
-import { guard, LOOPBACK } from "./Access.ts"
+import { guard, Host } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
@@ -77,6 +77,7 @@ const Port = Config.Int("HERDR_WEB_PORT").pipe(Config.withDefault(4180))
 
 const Bridge = Layer.unwrap(
   Effect.gen(function* () {
+    const host = yield* Host
     const port = yield* Port
     const app = Layer.mergeAll(
       RpcServer.layerHttp({ group: Api, path: "/rpc", protocol: "websocket" }).pipe(
@@ -84,9 +85,9 @@ const Bridge = Layer.unwrap(
       ),
       HttpStaticServer.layer({ root: `${import.meta.dir}/../../dist`, index: "index.html" }),
       FontRoutes,
-      guard(port),
+      guard(host, port),
     )
-    return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: LOOPBACK, port })))
+    return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
   Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
