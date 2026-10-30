@@ -10,7 +10,7 @@ import type { HcFailure } from "../hc/Connection.ts"
 import { Api, BridgeError } from "../shared/Api.ts"
 import { guard, Host } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
-import { keyFor, questionOnScreen } from "./claude/Menu.ts"
+import { asks, keyFor, questionOnScreen } from "./claude/Menu.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
@@ -24,8 +24,8 @@ const toBridgeError = (error: HcFailure) =>
     HcProtocolError: ({ cause }) => new BridgeError({ kind: "protocol", message: `unreadable reply from hc: ${Inspectable.toStringUnknown(cause, 0)}` }),
   })
 
-/** How often, and how many times, a question is read again until its menu is drawn. */
-const MENU_DRAWN = { schedule: Schedule.spaced("200 millis"), times: 10 }
+/** How often, and how many times, a screen is read again while Claude Code redraws it. */
+const REDRAW = { schedule: Schedule.spaced("200 millis"), times: 10 }
 
 const toAppError = ({ message }: HerdrAppError) => new BridgeError({ kind: "herdr-app", message })
 
@@ -67,7 +67,7 @@ const Handlers = Api.toLayer(
       question: ({ terminal }) =>
         hc.screen(terminal).pipe(
           Effect.map(questionOnScreen),
-          Effect.repeat({ ...MENU_DRAWN, until: Option.isSome }),
+          Effect.repeat({ ...REDRAW, until: Option.isSome }),
           Effect.mapError(toBridgeError),
         ),
       answer: ({ terminal, question, choice }) =>
@@ -77,7 +77,14 @@ const Handlers = Api.toLayer(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new BridgeError({ kind: "moved-on", message: "the agent no longer asks this" })),
-              onSome: (key) => hc.keys(terminal, [key]).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+              // Answered once the screen moves on, so the page's next read finds
+              // what the agent asks now. Past the bound the key was still
+              // pressed, so a slow or failed read does not fail the answer.
+              onSome: (key) =>
+                hc.keys(terminal, [key]).pipe(
+                  Effect.mapError(toBridgeError),
+                  Effect.andThen(hc.screen(terminal).pipe(Effect.repeat({ ...REDRAW, until: (screen) => !asks(screen, question) }), Effect.ignore)),
+                ),
             }),
           ),
         ),

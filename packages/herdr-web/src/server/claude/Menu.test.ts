@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { Option } from "effect"
 import { expect, test } from "vitest"
-import { keyFor, questionOnScreen } from "./Menu.ts"
+import { asks, keyFor, questionOnScreen } from "./Menu.ts"
 
 // Screens Claude Code drew, read with `hc read`.
 const screen = (name: string) => readFileSync(`${import.meta.dirname}/fixtures/screens/${name}.txt`, "utf8")
@@ -59,4 +59,11 @@ test("the same question drawn at another width is still the same question", () =
     .replace("don't ask again for rm -f now.txt and date commands in /home/me/project", "don't ask again for rm -f now.txt and date\n      commands in /home/me/project")
   expect(Option.map(questionOnScreen(narrow), ({ text }) => text)).toEqual(Option.some("Do you want to proceed?"))
   expect(Option.flatMap(questionOnScreen(screen("permission")), (asked) => keyFor(narrow, asked, 2))).toEqual(Option.some("2"))
+})
+
+test("an answered question is gone once the screen shows the next one", () => {
+  const stillAsked = (now: string) => Option.exists(questionOnScreen(screen("two")), (asked) => asks(screen(now), asked))
+  expect(stillAsked("two")).toBe(true)
+  expect(stillAsked("submit")).toBe(false)
+  expect(stillAsked("idle")).toBe(false)
 })

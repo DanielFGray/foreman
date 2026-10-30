@@ -35,11 +35,10 @@ export const questionOnScreen = (screen: string): Option.Option<Question> => {
  * shows now: the next question, or its prompt as text.
  */
 export const keyFor = (screen: string, question: Question, choice: number): Option.Option<string> =>
-  pipe(
-    questionOnScreen(screen),
-    Option.filter((shown) => sameQuestion(shown, question) && Array.some(shown.choices, ({ number }) => number === choice)),
-    Option.as(`${choice}`),
-  )
+  asks(screen, question) && Array.some(question.choices, ({ number }) => number === choice) ? Option.some(`${choice}`) : Option.none()
+
+/** Whether the screen still asks `question`. Claude Code redraws a moment after a key, so an answer waits until it does not. */
+export const asks = (screen: string, question: Question) => Option.exists(questionOnScreen(screen), (shown) => sameQuestion(shown, question))
 
 // The same question drawn at another width wraps its lines elsewhere: a label
 // runs on into the line under it, which reads as its detail. So two questions
