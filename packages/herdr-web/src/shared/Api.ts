@@ -41,14 +41,17 @@ export type Direction = typeof Direction.Type
 export const Api = RpcGroup.make(
   /** The fleet now, then after every change. */
   Rpc.make("watch", { success: Fleet, stream: true }),
-  /** The conversation of the Claude Code agent in the terminal: its recent entries, then each batch of new ones. */
+  /** The conversation of the agent in the terminal: its recent entries, then each batch of new ones. */
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
   /** The model the agent in the terminal answers with: the id of its newest reply, such as `claude-opus-5-5`, or the name `/model` switched to, then after each change; none before its first reply. */
   Rpc.make("model", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Schema.String), error: BridgeError, stream: true }),
+  /** Switches the agent in the terminal to a model its picker offers, by alias. It is refused, with kind `working`, while the agent works. */
+  Rpc.make("pickModel", { payload: { terminal: Schema.String, alias: Schema.String }, error: BridgeError }),
   /**
    * Types text and presses Enter. It is refused, with kind `draft`, while the
    * agent's input box holds text typed in the terminal, which the paste would
    * join; and with kind `working` while the agent works, unless `whileWorking`.
+   * An agent whose input box the page cannot read is never refused.
    */
   Rpc.make("send", { payload: { terminal: Schema.String, text: Schema.String, whileWorking: Schema.Boolean }, error: BridgeError }),
   /** What the agent's input box holds now, then after each change, for as long as the page reads. */

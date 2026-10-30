@@ -11,7 +11,7 @@ import type { Answer, Question } from "../shared/Chat.ts"
 import type { Terminal } from "../shared/Fleet.ts"
 import { AnswerQuestion } from "./commands.ts"
 import { type Asked, Asking, Message, type Model, type UpdateReturn } from "./model.ts"
-import { lastFleet, openAs } from "./selection.ts"
+import { lastFleet, openAs, supportsAt } from "./selection.ts"
 
 /** One read of a blocked agent's question. */
 export const QuestionRead = Schema.Struct({ address: Schema.String, statusMs: Schema.Int, reads: Schema.Int })
@@ -20,7 +20,7 @@ export type QuestionRead = typeof QuestionRead.Type
 /** The reads the shown chats need: one per blocked agent, and one more after each answer. */
 export const questionReads = (model: Model): ReadonlyArray<QuestionRead> =>
   Array.getSomes(
-    Array.map(openAs(model, "Chat"), (address) =>
+    Array.map(Array.filter(openAs(model, "Chat"), (address) => supportsAt(model, address, "questions")), (address) =>
       Option.map(blockedSince(model, address), (statusMs) => ({
         address,
         statusMs,

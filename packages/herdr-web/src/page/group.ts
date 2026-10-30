@@ -2,7 +2,7 @@
 // them, in herdr-app's own order of spaces, tabs and panes.
 import { Array, HashMap, HashSet, Match, Option, Order, pipe, Result, String } from "effect"
 import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
-import { harnessOf } from "./harness.ts"
+import { harnessOf } from "../shared/Harness.ts"
 import { type Program, programOf } from "./programs.ts"
 
 /** `program` is what runs in the tab's first pane, for its icon. */

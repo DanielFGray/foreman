@@ -13,7 +13,7 @@ import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
-import { isClaudeCode, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, tabAfterClosing, whenFocused, withView } from "./selection.ts"
+import { lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
@@ -699,17 +699,17 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   inputBoxes: entry(
     { addresses: Schema.Array(Schema.String) },
     {
-      modelToDependencies: (model) => ({ addresses: watchedBoxes(model, openAs(model, "Chat")) }),
+      modelToDependencies: (model) => ({ addresses: Array.filter(watchedBoxes(model, openAs(model, "Chat")), (address) => supportsAt(model, address, "inputBox")) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, inputBoxStream), { concurrency: "unbounded" }),
     },
   ),
 
-  // The model of each shown Claude Code agent. A failed read shows no tag, and
+  // The model of each shown agent that names one. A failed read shows no tag, and
   // is tried again after a pause.
   models: entry(
     { addresses: Schema.Array(Schema.String) },
     {
-      modelToDependencies: (model) => ({ addresses: Array.filter(shownTerminals(model), (address) => isClaudeCode(model, address)) }),
+      modelToDependencies: (model) => ({ addresses: Array.filter(shownTerminals(model), (address) => supportsAt(model, address, "model")) }),
       dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, modelStream), { concurrency: "unbounded" }),
     },
   ),

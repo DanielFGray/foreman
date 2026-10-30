@@ -235,14 +235,14 @@ export const RemoveWorktree = Command.define("RemoveWorktree", {
     }).pipe(reportFailure((reason) => Message.FailedCheckoutAction({ reason }))),
 })
 
-/** Types `/model <alias>` into the agent, as a person would; Claude Code refuses it while the agent works. */
+/** Switches the agent to a model its picker offers; the agent may refuse while it works. */
 export const PickModel = Command.define("PickModel", {
   args: { address: Schema.String, alias: Schema.String },
   messages: [Message.SucceededPickModel, Message.FailedPaneAction],
   execute: ({ address, alias }) =>
     Effect.gen(function* () {
       const client = yield* BridgeClient
-      yield* client.send({ terminal: address, text: `/model ${alias}`, whileWorking: false })
+      yield* client.pickModel({ terminal: address, alias })
       return Message.SucceededPickModel()
     }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
 })

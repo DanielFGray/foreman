@@ -3,7 +3,7 @@
 // table, and anything else by its own name.
 import { Array, HashMap, Option, pipe, String } from "effect"
 import type { Terminal } from "../shared/Fleet.ts"
-import { harnessOf } from "./harness.ts"
+import { harnessOf } from "../shared/Harness.ts"
 import { Activity, Bot, BookOpen, FlaskConical, GitBranch, Hammer, type IconNode, KeyRound, Play, SquarePen, SquareTerminal } from "./icons.ts"
 
 export type Program = Readonly<{ name: string; icon: IconNode }>
@@ -12,7 +12,7 @@ export type Program = Readonly<{ name: string; icon: IconNode }>
 export const programOf = (terminal: Terminal): Option.Option<Program> =>
   pipe(
     harnessOf(terminal),
-    Option.map((name): Program => ({ name, icon: Bot })),
+    Option.map(({ name }): Program => ({ name, icon: Bot })),
     Option.orElse(() =>
       Option.flatMap(terminal.foreground, ({ name, argv }) => {
         const program = lastSegment(name)

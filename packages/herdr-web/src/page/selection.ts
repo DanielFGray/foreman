@@ -3,11 +3,9 @@
 import { Array, Match, Option, Record } from "effect"
 import { modifyFields } from "foldkit/struct"
 import type { Fleet, Space, Tab } from "../shared/Fleet.ts"
+import { type Feature, supports } from "../shared/Harness.ts"
 import { spacesOf, terminalLabel, terminalsIn } from "./group.ts"
 import { Bridge, Conversation, Delivery, type Model, PaneAction, Selection, type UpdateReturn, View, type ViewName } from "./model.ts"
-
-/** The app name hc's status gives a Claude Code agent. */
-const CLAUDE_CODE = "claude-code"
 
 /** The tab to show in place of `tabId` once it closes: the next, else the one before; none unless `tabId` is on show. */
 export const tabAfterClosing = (model: Model, tabId: string): Option.Option<Tab> =>
@@ -106,11 +104,8 @@ export const newView = (name: ViewName) =>
     Match.exhaustive,
   )
 
-/** Whether hc reports a Claude Code agent in the terminal; only those have a chat to read. */
-export const isClaudeCode = (model: Model, address: string) =>
-  Option.exists(findTerminal(model, address), ({ status }) =>
-    Option.exists(status, ({ app }) => Option.contains(app, CLAUDE_CODE)),
-  )
+/** Whether the agent in the terminal has `feature`, such as a chat to read. */
+export const supportsAt = (model: Model, address: string, feature: Feature) => Option.exists(findTerminal(model, address), (terminal) => supports(terminal, feature))
 
 // A pane can outlive its terminal until herdr-app's layout catches up.
 export const labelAt = (model: Model, address: string) => Option.match(findTerminal(model, address), { onNone: () => "closed terminal", onSome: terminalLabel })

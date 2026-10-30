@@ -7,7 +7,7 @@ import { modifyFields } from "foldkit/struct"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { ListCommands } from "./commands.ts"
 import { CommandList, Message, type Model, type UpdateReturn } from "./model.ts"
-import { isClaudeCode, maybeFocus } from "./selection.ts"
+import { maybeFocus, supportsAt } from "./selection.ts"
 
 /** Rows the list shows at most. */
 const MOST = 8
@@ -37,7 +37,7 @@ export const suggestions = (commands: ReadonlyArray<SlashCommand>, prompt: strin
 export const updatedPrompt = (model: Model, text: string): UpdateReturn => {
   const next = modifyFields(model, { prompt: () => text })
   return Option.match(
-    Option.filter(maybeFocus(model), (address) => isClaudeCode(model, address) && Option.isSome(commandTyped(text)) && Option.isNone(commandTyped(model.prompt))),
+    Option.filter(maybeFocus(model), (address) => supportsAt(model, address, "commands") && Option.isSome(commandTyped(text)) && Option.isNone(commandTyped(model.prompt))),
     {
       onNone: () => ({ model: next }),
       onSome: (address) => ({ model: modifyFields(next, { commandList: () => CommandList.Loading({ address }) }), commands: [ListCommands({ address })] }),

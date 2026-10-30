@@ -5,6 +5,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import * as Mount from "foldkit/mount"
 import { modelName } from "../shared/Chat.ts"
 import type { Size } from "../shared/Fleet.ts"
+import { harnessOf } from "../shared/Harness.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
 import { programOf } from "./programs.ts"
@@ -14,7 +15,7 @@ import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { slashView } from "./slash.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
 import { queueView, suggestion } from "./queue.ts"
-import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
+import { findTerminal, labelAt, supportsAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
 import { stateOf, statusDot } from "./status.ts"
 import { ownAnswerPrompt, questionView } from "./question.ts"
@@ -47,7 +48,7 @@ export const paneView = (
           // Before the view chips, so they stay in place as these show and hide.
           ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
           // A question that wants typed text is answered in the terminal, so a chat can switch to it.
-          ...(isClaudeCode(model, address)
+          ...(supportsAt(model, address, "chat")
             ? Array.map(ViewName.literals, (name) =>
                 h.button(
                   [
@@ -225,51 +226,48 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
   )
 
 /**
- * The model a Claude Code agent answers with, as a button that opens the
- * model menu. Its exact id shows on hover.
+ * The model an agent answers with. When the agent offers a picker, the tag
+ * is a button that opens the model menu. Its exact id shows on hover.
  */
 const modelTagView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   Option.toArray(
     Option.map(Record.get(model.models, address), (id) =>
-      h.button(
-        [
-          h.Type("button"),
-          h.Class(isPickingModel(model, address) ? "model-tag on" : "model-tag"),
-          h.Title(id),
-          h.AriaLabel(`model: ${modelName(id)}; pick another`),
-          h.AriaExpanded(isPickingModel(model, address)),
-          h.OnClick(Message.ClickedModelTag({ address })),
-        ],
-        [modelName(id)],
-      ),
+      Option.isNone(pickerAt(model, address))
+        ? h.span([h.Class("model-tag"), h.Title(id)], [modelName(id)])
+        : h.button(
+            [
+              h.Type("button"),
+              h.Class(isPickingModel(model, address) ? "model-tag on" : "model-tag"),
+              h.Title(id),
+              h.AriaLabel(`model: ${modelName(id)}; pick another`),
+              h.AriaExpanded(isPickingModel(model, address)),
+              h.OnClick(Message.ClickedModelTag({ address })),
+            ],
+            [modelName(id)],
+          ),
     ),
   )
 
-/** The models `/model` takes by alias, newest family first; each alias picks that family's latest. */
-const MODELS = [
-  { alias: "fable", name: "Fable" },
-  { alias: "opus", name: "Opus" },
-  { alias: "sonnet", name: "Sonnet" },
-  { alias: "haiku", name: "Haiku" },
-]
-
 const modelMenuView = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
-  isPickingModel(model, address)
-    ? [
-        h.div(
-          [h.Class("model-menu"), h.Role("menu"), h.AriaLabel("models")],
-          [
-            ...Array.map(MODELS, ({ alias, name }) => {
-              const isCurrent = Option.exists(Record.get(model.models, address), (id) => String.startsWith(`${name} `)(modelName(id)))
-              return h.button(
-                [h.Type("button"), h.Class(isCurrent ? "chip on" : "chip"), h.Role("menuitem"), h.AriaCurrent(isCurrent ? "true" : "false"), h.OnClick(Message.PickedModel({ address, alias }))],
-                [name],
-              )
-            }),
-            h.span([h.Class("note")], ["Claude Code may also keep the pick for its new sessions."]),
-          ],
-        ),
-      ]
-    : []
+  Option.match(Option.filter(pickerAt(model, address), () => isPickingModel(model, address)), {
+    onNone: () => [],
+    onSome: ({ choices, note }) => [
+      h.div(
+        [h.Class("model-menu"), h.Role("menu"), h.AriaLabel("models")],
+        [
+          ...Array.map(choices, ({ alias, name }) => {
+            const isCurrent = Option.exists(Record.get(model.models, address), (id) => String.startsWith(`${name} `)(modelName(id)))
+            return h.button(
+              [h.Type("button"), h.Class(isCurrent ? "chip on" : "chip"), h.Role("menuitem"), h.AriaCurrent(isCurrent ? "true" : "false"), h.OnClick(Message.PickedModel({ address, alias }))],
+              [name],
+            )
+          }),
+          h.span([h.Class("note")], [note]),
+        ],
+      ),
+    ],
+  })
+
+const pickerAt = (model: Model, address: string) => Option.flatMap(Option.flatMap(findTerminal(model, address), harnessOf), ({ picker }) => picker)
 
 const isPickingModel = (model: Model, address: string) => model.paneAction._tag === "PickingModel" && model.paneAction.address === address
