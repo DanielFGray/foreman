@@ -1,6 +1,6 @@
 // Claude Code's adapter: its chat and model from its transcript, its input
 // box and questions from its screen, and its slash commands from its folders.
-import { Effect, Match, Option, Schedule, Schema, Stream, String } from "effect"
+import { Effect, Match, Option, Schedule, Schema, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
@@ -11,7 +11,7 @@ import { LiveTerminals } from "../LiveTerminals.ts"
 import { ScreenCells } from "../ScreenCells.ts"
 import { ClaudeChat, type NoTranscript } from "./ClaudeChat.ts"
 import { ClaudeCommands } from "./Commands.ts"
-import { boxOnScreen, clearingKeys, inputBoxOf, refusal } from "./InputBox.ts"
+import { boxOnScreen, inputBoxOf, refusal, replacing } from "./InputBox.ts"
 import { asks, keyFor, questionOnScreen } from "./Menu.ts"
 
 export const claudeCode = Effect.gen(function* () {
@@ -39,10 +39,8 @@ export const claudeCode = Effect.gen(function* () {
     if (Option.isNone(rows)) {
       return yield* new BridgeError({ kind: "draft", message: "the agent's input box is taller than its screen, so the page cannot empty it" })
     }
-    yield* Effect.mapError(hc.keys(terminal.address, clearingKeys(rows.value)), toBridgeError)
-    if (String.isNonEmpty(text)) {
-      yield* Effect.mapError(live.paste(terminal.address, terminal, text), toBridgeError)
-    }
+    // One input, typed at once: hc's keys would wait about 3 s after each earlier write.
+    yield* Effect.mapError(live.type(terminal.address, terminal, replacing(rows.value, text)), toBridgeError)
     return yield* Effect.mapError(inputBox(terminal), toBridgeError).pipe(
       Effect.repeat({ ...REDRAW, until: (after) => after._tag === "Partial" || Option.exists(typedText(after), (typed) => sameTyped(typed, text)) }),
     )

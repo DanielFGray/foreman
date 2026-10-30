@@ -1,7 +1,7 @@
 // The page: its start, how each message changes the model, what it watches,
 // and the layout of sidebar, edge and workspace.
 import { Array, Clock, Effect, Equivalence, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
-import { Subscription, Update } from "foldkit"
+import { Subscription } from "foldkit"
 import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
@@ -22,7 +22,7 @@ import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey,
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
-import { boxRead, emptied, failedWrite, paused, pendingEdit, promptOf, submitted, wrote, writeDue } from "./mirror.ts"
+import { boxRead, emptied, failedWrite, paused, pendingEdit, promptOf, submitted, wrote } from "./mirror.ts"
 import { clocked, settled } from "./waiting.ts"
 import { isPaletteKey, PALETTE_INPUT_ID, PaletteTarget, withRecent } from "./palette.ts"
 import { answered, chose, QuestionRead, questionReads, readQuestion, typedAnswer } from "./question.ts"
@@ -340,7 +340,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     PausedTyping: ({ address, text }) => paused(model, address, text),
 
-    WroteInputBox: ({ address, text, box }) => Update.combine(model, [(now) => wrote(now, address, text, box), (now) => reconsidered(model, now)]),
+    WroteInputBox: ({ address, text, box }) => reconsidered(model, wrote(model, address, text, box)),
 
     FailedWriteInputBox: ({ address, reason }) => ({ model: failedWrite(model, address, reason) }),
 
@@ -365,7 +365,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         },
       }),
 
-    SucceededSendPrompt: ({ address, id }) => Update.combine(emptied(model, address), [(now) => delivered(now, address, id), (now) => writeDue(now, address)]),
+    SucceededSendPrompt: ({ address, id }) => delivered(emptied(model, address), address, id),
 
     FailedSendPrompt: ({ address, id, reason }) => ({ model: held(model, address, id, reason) }),
 

@@ -61,20 +61,16 @@ export class LiveTerminals extends Context.Service<LiveTerminals>()("herdr-web/s
       resize: (id: number, cols: number, rows: number) =>
         session(id).pipe(Effect.flatMap(({ resize }) => resize(cols, rows))),
       /**
-       * Pastes `text` as a person's paste, with no Enter after it. hc's own
-       * send always presses Enter, so the paste goes through an attach of its
-       * own, at the terminal's size so that nothing is resized.
+       * Writes `text` to the terminal as typed input, escape sequences and
+       * all, through an attach of its own at the terminal's size, so that
+       * nothing is resized. Unlike hc's send and keys, it does not wait
+       * until nobody has typed for about 3 s; and hc counts it as typing, so
+       * their next call waits that long.
        */
-      paste: (terminal: string, size: Size, text: string) =>
-        Effect.scoped(
-          Effect.flatMap(attach(path, { terminal, ...size }), ({ input }) => input(new TextEncoder().encode(`${PASTE_START}${text}${PASTE_END}`))),
-        ),
+      type: (terminal: string, size: Size, text: string) =>
+        Effect.scoped(Effect.flatMap(attach(path, { terminal, ...size }), ({ input }) => input(new TextEncoder().encode(text)))),
     }
   }),
 }) {
   static readonly layer = Layer.effect(this, this.make)
 }
-
-// Bracketed paste: the program takes what is between as pasted text, line breaks and all.
-const PASTE_START = "\x1b[200~"
-const PASTE_END = "\x1b[201~"

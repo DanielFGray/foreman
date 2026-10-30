@@ -180,12 +180,13 @@ describe("the queue", () => {
     )
   })
 
-  test("waits while the agent's input box holds a draft, and says so", () => {
+  test("waits while the agent's input box holds text the page did not write, and says so", () => {
     scene(
       { update, view },
-      given({ ...chatOpen([]), boxes: { t1: { _tag: "Draft", text: "half a thought" } } }),
+      given(chatOpen([])),
       Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()]),
-      expect(selector(".queue-draft")).toContainText("half a thought"),
+      Subscription.emit(Message.ReceivedInputBox({ address: "t1", box: { _tag: "Partial", text: "[Pasted text #1 +40 lines]" } })),
+      expect(selector(".queue-draft")).toContainText("[Pasted text #1 +40 lines]"),
       typeInto(role("textbox", { name: "Prompt" }), "hello"),
       click(role("button", { name: "send" })),
       expect(selector(".queued")).toContainText("waits for the agent's input box to empty"),
