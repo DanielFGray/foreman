@@ -1,8 +1,8 @@
-// The settings page: this browser's fonts, text sizes and agent list.
+// The settings page: this browser's fonts, text sizes, agent list, and the view agents open in.
 import { Array, Option, Result, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { FontCatalog, Message, type Model } from "./model.ts"
-import { AgentList, fontStack, MAX_SIZE, MIN_SIZE, Surface, type TextStyle } from "./settings.ts"
+import { AgentList, AgentView, fontStack, MAX_SIZE, MIN_SIZE, Surface, type TextStyle } from "./settings.ts"
 
 export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.section(
@@ -12,7 +12,12 @@ export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.p([h.Class("note")], ["This browser keeps its own settings, so a phone and a desk can differ."]),
       textStyleView("chat", model.settings.chat, model, h),
       textStyleView("terminal", model.settings.terminal, model, h),
-      agentListView(model.settings.agents, h),
+      choicesView({ legend: "Sidebar agents", choices: AgentList.literals, text: AGENT_LIST_TEXT, current: model.settings.agents, picked: (agents) => Message.PickedAgentList({ agents }) }, h),
+      choicesView(
+        { legend: "Agent panes open as", choices: AgentView.literals, text: AGENT_VIEW_TEXT, current: model.settings.agentView, picked: (agentView) => Message.PickedAgentView({ agentView }) },
+        h,
+      ),
+      h.p([h.Class("note")], ["A pane on screen keeps its view; this applies when a pane comes on screen."]),
       ...FontCatalog.match(model.fontCatalog, {
         Loading: () => [h.p([h.Class("note")], ["Asking the bridge for its fonts…"])],
         Loaded: () => [],
@@ -23,24 +28,34 @@ export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 const AGENT_LIST_TEXT = { below: "Below the spaces", nested: "Under each space" } satisfies Record<AgentList, string>
 
-const agentListView = (agents: AgentList, h: HtmlBuilder<Message>): Html =>
+const AGENT_VIEW_TEXT = {
+  run: "The view last picked for that agent",
+  space: "The view last picked in its space",
+  chat: "Always the chat",
+} satisfies Record<AgentView, string>
+
+/** A setting with a few named choices, as radio buttons. */
+const choicesView = <A extends string>(
+  { legend, choices, text, current, picked }: Readonly<{ legend: string; choices: ReadonlyArray<A>; text: Record<A, string>; current: A; picked: (choice: A) => Message }>,
+  h: HtmlBuilder<Message>,
+): Html =>
   h.fieldset(
     [h.Class("setting choices")],
     [
-      h.legend([], ["Sidebar agents"]),
-      ...Array.map(AgentList.literals, (choice) =>
+      h.legend([], [legend]),
+      ...Array.map(choices, (choice) =>
         h.label(
           [],
           [
             h.input([
               h.Type("radio"),
-              h.Name("agents"),
+              h.Name(legend),
               h.Value(choice),
-              h.Checked(choice === agents),
+              h.Checked(choice === current),
               // A browser fires click on a radio for a key press too.
-              h.OnClick(Message.PickedAgentList({ agents: choice })),
+              h.OnClick(picked(choice)),
             ]),
-            AGENT_LIST_TEXT[choice],
+            text[choice],
           ],
         ),
       ),

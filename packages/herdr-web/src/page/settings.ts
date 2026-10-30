@@ -18,11 +18,20 @@ export type TextStyle = typeof TextStyle.Type
 export const AgentList = Schema.Literals(["below", "nested"])
 export type AgentList = typeof AgentList.Type
 
+/**
+ * The view an agent's pane opens in when it comes on screen: the one last
+ * picked for that run of the agent, the one last picked in its space, or the
+ * chat. See openingView.ts.
+ */
+export const AgentView = Schema.Literals(["run", "space", "chat"])
+export type AgentView = typeof AgentView.Type
+
 export const Settings = Schema.Struct({
   chat: TextStyle,
   terminal: TextStyle,
   // Settings saved before this choice existed keep their fonts.
   agents: AgentList.pipe(Schema.withDecodingDefaultKey(Effect.succeed("below"))),
+  agentView: AgentView.pipe(Schema.withDecodingDefaultKey(Effect.succeed("run"))),
 })
 export type Settings = typeof Settings.Type
 
@@ -30,6 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chat: { font: Option.none(), size: 14 },
   terminal: { font: Option.none(), size: 13 },
   agents: "below",
+  agentView: "run",
 }
 
 export const MIN_SIZE = 8

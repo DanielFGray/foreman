@@ -8,7 +8,7 @@ import { Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 import { LiveTerminal } from "./terminal.ts"
 
-const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model, selection: Selection.Loose({ address: "t7" }) }
+const focused = { ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, selection: Selection.Loose({ address: "t7" }) }
 
 test("a link tapped in a terminal shows its whole address; Open is a link to it, and Copy copies it", () => {
   scene(

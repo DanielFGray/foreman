@@ -19,7 +19,7 @@ const terminalSettings = (font: Option.Option<string>, size: number) => ({
 test("settings offer the bridge's fonts, and a terminal only the monospaced ones", () => {
   scene(
     { update, view },
-    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model),
+    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model),
     click(role("button", { name: "Settings" })),
     expect(selector(".fleet")).toHaveClass("folded"),
     expect(selector(".settings")).toContainText("Asking the bridge for its fonts"),
@@ -43,7 +43,7 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
 test("a size steps from the current settings and stops at its limit", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model }),
+    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model }),
     click(role("button", { name: "larger terminal text" })),
     Command.expectExact(SaveSettings({ settings: terminalSettings(Option.none(), MAX_SIZE) })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
@@ -52,17 +52,21 @@ test("a size steps from the current settings and stops at its limit", () => {
   )
 })
 
-test("the agent list choice saves, and settings saved before it existed keep their fonts", () => {
+test("the agent choices save, and settings saved before they existed keep their fonts", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model }),
     click(label("Under each space")),
     Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested" } })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
     expect(label("Under each space")).toBeChecked(),
+    click(label("Always the chat")),
+    Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested", agentView: "chat" } })),
+    Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
+    expect(label("Always the chat")).toBeChecked(),
   )
   const saved = { chat: { font: "Inter", size: 15 }, terminal: { font: null, size: 13 } }
   expectValue(Schema.decodeOption(Settings)(saved)).toEqual(
-    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below" }),
+    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run" }),
   )
 })

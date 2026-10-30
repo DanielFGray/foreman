@@ -63,7 +63,7 @@ const size: Question = { text: "Which size?", choices: [choice(1, "Small"), choi
 const picked = (choice: number) => ({ _tag: "Picked" as const, choice })
 
 const chatOpen = (terminal: Terminal): Model => ({
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, chatRuns: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model,
   bridge: Bridge.Watching({ fleet: fleetWith(terminal) }),
   views: { t1: View.Chat({ conversation: Conversation.Shown({ entries: [] }) }) },
 })

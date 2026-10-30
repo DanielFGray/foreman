@@ -16,7 +16,7 @@ import { SlashCommand } from "../shared/SlashCommand.ts"
 import { Modifier, Modifiers, SheetModifier, SheetModifiers, SoftKey } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
-import { AgentList, loadSettings, Settings, Surface } from "./settings.ts"
+import { AgentList, AgentView, loadSettings, Settings, Surface } from "./settings.ts"
 import { loadSidebarWidth } from "./sidebarWidth.ts"
 import { loadKept, loadStored } from "./stored.ts"
 import { Link } from "./terminal.ts"
@@ -25,7 +25,7 @@ export const SELECTION_KEY = "herdr-web.selection"
 export const RECENT_KEY = "herdr-web.recent"
 export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
 export const ZOOM_KEY = "herdr-web.zoom"
-export const CHAT_RUNS_KEY = "herdr-web.chat-runs"
+export const VIEW_PICKS_KEY = "herdr-web.view-picks"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -50,6 +50,13 @@ export type View = typeof View.Type
 
 export const ViewName = Schema.Literals(["Chat", "Terminal"])
 export type ViewName = typeof ViewName.Type
+
+/**
+ * A view picked for an agent's pane, and where it holds: `run:<address>:<pid>`
+ * for one run of an agent, or `space:<machine>:<space id>` for a space.
+ */
+export const ViewPick = Schema.Struct({ scope: Schema.String, view: ViewName })
+export type ViewPick = typeof ViewPick.Type
 
 /** The last soft key press: taken, or refused with the bridge's reason. */
 export const Delivery = defineTaggedUnion({
@@ -284,11 +291,8 @@ export const Model = Schema.Struct({
   isFleetFolded: Schema.Boolean,
   /** The focused pane fills the window: the sidebar, the bars over and under the panes, and the other panes hide. */
   isZoomed: Schema.Boolean,
-  /**
-   * The agent runs shown as a chat when last picked, newest first, each as
-   * `<address>:<pid of the agent>`; see `viewOf`.
-   */
-  chatRuns: Schema.Array(Schema.String),
+  /** The views picked for agents' panes, newest first; see openingView.ts. */
+  viewPicks: Schema.Array(ViewPick),
   selection: Selection,
   /** The view of each shown terminal; a terminal not in it shows its default view. */
   views: Schema.Record(Schema.String, View),
@@ -351,7 +355,7 @@ export const Flags = Schema.Struct({
   /** The soft-key row this browser keeps; none for the default row. */
   softKeys: Schema.Option(Schema.Array(SoftKey)),
   isZoomed: Schema.Boolean,
-  chatRuns: Schema.Array(Schema.String),
+  viewPicks: Schema.Array(ViewPick),
 })
 export type Flags = typeof Flags.Type
 
@@ -362,7 +366,7 @@ export const loadFlags = Effect.all({
   recent: loadStored(RECENT_KEY, Schema.Array(Schema.String), []),
   softKeys: loadKept(SOFT_KEYS_KEY, Schema.Array(SoftKey)),
   isZoomed: loadStored(ZOOM_KEY, Schema.Boolean, false),
-  chatRuns: loadStored(CHAT_RUNS_KEY, Schema.Array(Schema.String), []),
+  viewPicks: loadStored(VIEW_PICKS_KEY, Schema.Array(ViewPick), []),
 })
 
 // MESSAGE
@@ -429,6 +433,7 @@ export const Message = defineMessageUnion({
   PickedFont: { surface: Surface, font: Schema.Option(Schema.String) },
   SteppedSize: { surface: Surface, step: Schema.Int },
   PickedAgentList: { agents: AgentList },
+  PickedAgentView: { agentView: AgentView },
   CompletedSaveSettings: {},
   CompletedSaveSelection: {},
   ReceivedFonts: { families: Schema.Array(FontFamily) },
@@ -494,7 +499,7 @@ export const Message = defineMessageUnion({
   CompletedSaveSidebarWidth: {},
   ClickedZoom: {},
   CompletedSaveZoom: {},
-  CompletedSaveChatRuns: {},
+  CompletedSaveViewPicks: {},
   PressedPaletteKey: {},
   ClosedPalette: {},
   UpdatedPaletteQuery: { text: Schema.String },

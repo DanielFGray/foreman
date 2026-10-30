@@ -5,7 +5,7 @@ import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, ZOOM_KEY, CHAT_RUNS_KEY } from "./model.ts"
+import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -169,10 +169,10 @@ export const SaveRecent = Command.define("SaveRecent", {
   execute: ({ recent }) => saveStored(RECENT_KEY, Schema.Array(Schema.String), recent).pipe(Effect.as(Message.CompletedSaveRecent())),
 })
 
-export const SaveChatRuns = Command.define("SaveChatRuns", {
-  args: { chatRuns: Schema.Array(Schema.String) },
-  messages: [Message.CompletedSaveChatRuns],
-  execute: ({ chatRuns }) => saveStored(CHAT_RUNS_KEY, Schema.Array(Schema.String), chatRuns).pipe(Effect.as(Message.CompletedSaveChatRuns())),
+export const SaveViewPicks = Command.define("SaveViewPicks", {
+  args: { viewPicks: Schema.Array(ViewPick) },
+  messages: [Message.CompletedSaveViewPicks],
+  execute: ({ viewPicks }) => saveStored(VIEW_PICKS_KEY, Schema.Array(ViewPick), viewPicks).pipe(Effect.as(Message.CompletedSaveViewPicks())),
 })
 
 export const SaveZoom = Command.define("SaveZoom", {

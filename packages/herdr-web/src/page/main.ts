@@ -11,13 +11,14 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveChatRuns, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
-import { chatRunsAfter, lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
+import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
+import { pickedView, withOpeningViews } from "./openingView.ts"
 import { clickedPair, failedPair, succeededPair } from "./pairing.ts"
 import { closedLinkSheet, copiedLink, notedLink, pointedAtLink } from "./linkSheet.ts"
 import { CHOOSING_START, choosing, movedSoftKey, pinnedSheetKey, removedSoftKey, restoredSoftKeys, sentSheetKey, withSheet } from "./keySheet.ts"
@@ -43,13 +44,13 @@ const TYPING_PAUSE = "500 millis"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, chatRuns }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
     isFleetFolded: selection._tag !== "Nothing",
     isZoomed,
-    chatRuns,
+    viewPicks,
     selection,
     views: {},
     prompts: {},
@@ -92,7 +93,13 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
 
 // UPDATE
 
-export const update = (model: Model, message: Message): UpdateReturn =>
+/** Every change ends by giving a view to each pane that came on screen with it; see openingView.ts. */
+export const update = (model: Model, message: Message): UpdateReturn => {
+  const result = respond(model, message)
+  return { ...result, model: withOpeningViews(result.model) }
+}
+
+const respond = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     ReceivedFleet: ({ fleet }) => reconsidered(model, modifyFields(model, { bridge: () => Bridge.Watching({ fleet }) })),
 
@@ -136,11 +143,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
     SelectedView: ({ address, view }) => {
-      const chatRuns = chatRunsAfter(model, address, view)
-      return { model: modifyFields(withView(model, address, () => newView(view)), { chatRuns: () => chatRuns }), commands: [SaveChatRuns({ chatRuns })] }
+      const next = pickedView(model, address, view)
+      return { model: next, commands: [SaveViewPicks({ viewPicks: next.viewPicks })] }
     },
 
-    CompletedSaveChatRuns: () => ({ model }),
+    CompletedSaveViewPicks: () => ({ model }),
 
     ReceivedChat: ({ address, update }) => ({
       model: settled(
@@ -338,6 +345,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SteppedSize: ({ surface, step }) => settingsChanged(model, restyle(model.settings, surface, (style) => stepSize(style, step))),
 
     PickedAgentList: ({ agents }) => settingsChanged(model, { ...model.settings, agents }),
+    PickedAgentView: ({ agentView }) => settingsChanged(model, { ...model.settings, agentView }),
     CompletedSaveSettings: () => ({ model }),
 
     CompletedSaveSelection: () => ({ model }),

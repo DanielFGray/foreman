@@ -1,6 +1,6 @@
 // What the selection puts on show: the tab, its terminals, the focused one,
 // and each terminal's view.
-import { Array, Match, Option, Record, String } from "effect"
+import { Array, Match, Option, Record } from "effect"
 import { modifyFields } from "foldkit/struct"
 import type { Fleet, Space, Tab } from "../shared/Fleet.ts"
 import { type Feature, supports } from "../shared/Harness.ts"
@@ -79,35 +79,8 @@ export const selected = (model: Model, selection: Selection) => {
   return modifyFields(next, { views: (views) => Record.filter(views, (_, address) => Array.contains(shown, address)) })
 }
 
-/**
- * The terminal's view: the one picked for it while on show, else the chat
- * when it was last picked for the agent that runs there now, else the
- * terminal itself. A run is the agent's process, so an agent started again,
- * or started from a shell, opens as a terminal.
- */
-export const viewOf = (model: Model, address: string) =>
-  Option.getOrElse(Record.get(model.views, address), () =>
-    newView(Option.exists(runOf(model, address), (run) => Array.contains(model.chatRuns, run)) && supportsAt(model, address, "chat") ? "Chat" : "Terminal"),
-  )
-
-/** The run of the agent in a terminal: its address and its foreground process. */
-export const runOf = (model: Model, address: string) =>
-  Option.map(Option.flatMap(findTerminal(model, address), ({ foreground }) => foreground), ({ pid }) => `${address}:${pid}`)
-
-/**
- * The chat runs after `name` was picked for the terminal at `address`. One
- * run per terminal is kept, the newest, and at most CHAT_RUNS_KEPT of them.
- */
-export const chatRunsAfter = (model: Model, address: string, name: ViewName) =>
-  Array.take(
-    [
-      ...(name === "Chat" ? Option.toArray(runOf(model, address)) : []),
-      ...Array.filter(model.chatRuns, (run) => !String.startsWith(`${address}:`)(run)),
-    ],
-    CHAT_RUNS_KEPT,
-  )
-
-const CHAT_RUNS_KEPT = 100
+/** The terminal's view: the one it got when it came on screen (see openingView.ts), else the terminal itself. */
+export const viewOf = (model: Model, address: string) => Option.getOrElse(Record.get(model.views, address), () => newView("Terminal"))
 
 /** The shown terminals whose view is `name`. */
 export const openAs = (model: Model, name: ViewName) =>
