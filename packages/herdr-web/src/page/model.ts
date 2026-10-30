@@ -13,6 +13,7 @@ import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
 import { SlashCommand } from "../shared/SlashCommand.ts"
+import { TodoItem } from "../shared/Todo.ts"
 import { Modifier, Modifiers, SheetModifier, SheetModifiers, SoftKey } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
@@ -305,6 +306,8 @@ export const Model = Schema.Struct({
   boxes: Schema.Record(Schema.String, InputBox),
   /** The model each shown agent answers with, by address, as the bridge's `model` call names it. */
   models: Schema.Record(Schema.String, Schema.String),
+  /** The todo list of each watched agent that has one, by address (see todos.ts). */
+  todos: Schema.Record(Schema.String, Schema.Array(TodoItem)),
   /** The prompts the chats show as faded bubbles until the agent records them. */
   waiting: Schema.Array(Waiting),
   /** The question each blocked agent in a chat waits on, by address. */
@@ -453,6 +456,7 @@ export const Message = defineMessageUnion({
   FailedWriteInputBox: { address: Schema.String, reason: Schema.String },
   FailedInputBox: { address: Schema.String },
   ReceivedModel: { address: Schema.String, model: Schema.Option(Schema.String) },
+  ReceivedTodos: { address: Schema.String, todos: Schema.Array(TodoItem) },
   ClickedModelTag: { address: Schema.String },
   ReceivedModelChoices: { address: Schema.String, choices: ModelChoices },
   FailedModelChoices: { address: Schema.String, failure: BridgeError },

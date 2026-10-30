@@ -18,6 +18,7 @@ import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, op
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
+import { receivedTodos, watchedTodos } from "./todos.ts"
 import { pickedView, withOpeningViews } from "./openingView.ts"
 import { clickedPair, failedPair, succeededPair } from "./pairing.ts"
 import { closedLinkSheet, copiedLink, notedLink, pointedAtLink } from "./linkSheet.ts"
@@ -58,6 +59,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     queued: [],
     boxes: {},
     models: {},
+    todos: {},
     viewport: Option.none(),
     waiting: [],
     questions: {},
@@ -399,6 +401,8 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     ReceivedModel: ({ address, model: name }) => ({
       model: modifyFields(model, { models: (all) => Option.match(name, { onNone: () => Record.remove(all, address), onSome: (one) => Record.set(all, address, one) }) }),
     }),
+
+    ReceivedTodos: ({ address, todos }) => ({ model: receivedTodos(model, address, todos) }),
 
     ClickedModelTag: ({ address }) => clickedModelTag(model, address),
 
@@ -768,6 +772,16 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
+  // The todo list of each live agent that keeps one, for its chat and its sidebar row.
+  // A failed read shows no list, and is tried again after a pause.
+  todos: entry(
+    { addresses: Schema.Array(Schema.String) },
+    {
+      modelToDependencies: (model) => ({ addresses: watchedTodos(model) }),
+      dependenciesToStream: ({ addresses }) => Stream.mergeAll(Array.map(addresses, todosStream), { concurrency: "unbounded" }),
+    },
+  ),
+
   // Each shown chat, live. When a call fails the page shows why and calls
   // again after a pause; the bridge then sends the whole recent chat again.
   chat: entry(
@@ -810,6 +824,16 @@ const modelStream = (address: string) =>
       Stream.map((model) => Message.ReceivedModel({ address, model })),
       Stream.tapCause((cause) => Effect.logWarning("the bridge's model watch failed", cause)),
       Stream.catchCause(() => Stream.make(Message.ReceivedModel({ address, model: Option.none() }))),
+    )
+  }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
+
+const todosStream = (address: string) =>
+  Effect.gen(function* () {
+    const client = yield* BridgeClient
+    return client.todos({ terminal: address }).pipe(
+      Stream.map((todos) => Message.ReceivedTodos({ address, todos })),
+      Stream.tapCause((cause) => Effect.logWarning("the bridge's todo list watch failed", cause)),
+      Stream.catchCause(() => Stream.make(Message.ReceivedTodos({ address, todos: [] }))),
     )
   }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
 

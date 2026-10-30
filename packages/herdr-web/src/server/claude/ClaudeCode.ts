@@ -1,5 +1,6 @@
-// Claude Code's adapter: its chat and model from its transcript, its input
-// box and questions from its screen, and its slash commands from its folders.
+// Claude Code's adapter: its chat and model from its transcript, its todo
+// list from its task files, its input box and questions from its screen, and
+// its slash commands from its folders.
 import { Array, Effect, Match, Option, Schedule, Schema, Stream, String } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Hc } from "../../hc/Hc.ts"
@@ -55,6 +56,7 @@ export const claudeCode = Effect.gen(function* () {
 
   return {
     chat: (terminal: Terminal) => fromTranscript(terminal, claude.chat),
+    todos: (terminal: Terminal) => fromTranscript(terminal, claude.todos),
     model: {
       watch: (terminal: Terminal) => fromTranscript(terminal, claude.model),
       // The current choice is the one whose family names the model of the newest reply.

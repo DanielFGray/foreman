@@ -5,6 +5,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import { agentsIn, byState, type Children, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, spaceBadge, terminalLabel, terminalNote } from "./group.ts"
 import { Bot, FolderPlus, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
+import { todoCountView } from "./todos.ts"
 import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
 import { lastFleet, maybeFocus, selectedTab } from "./selection.ts"
@@ -231,6 +232,7 @@ const agentRowView = ({ terminal, space }: ListedAgent, children: Children, mode
           icon(Option.match(programOf(terminal), { onNone: () => Bot, onSome: (program) => program.icon }), h),
           h.span([h.Class("name")], [Option.getOrElse(space, () => terminalLabel(terminal))]),
           h.span([h.Class("msg")], [`${Option.isSome(space) ? "· " : ""}${terminalNote(terminal)}`]),
+          ...todoCountView(model, terminal.address, h),
           ...Option.toArray(Option.map(timeInState(terminal, model.now), (time) => h.span([h.Class("time")], [time]))),
           statusDot(stateOf(terminal), h),
         ],

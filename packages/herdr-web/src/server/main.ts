@@ -42,6 +42,7 @@ const Handlers = Api.toLayer(
       watch: () => fleet.changes,
       chat: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "chat"), ({ terminal, implementation }) => implementation(terminal))),
       model: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.watch(terminal))),
+      todos: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "todos"), ({ terminal, implementation }) => implementation(terminal))),
       modelChoices: ({ terminal }) => Effect.flatMap(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.choices(terminal)),
       pickModel: ({ terminal, alias }) => Effect.flatMap(agents.use(terminal, "model"), ({ terminal, implementation }) => implementation.pick(terminal, alias)),
       send: ({ terminal, text, whileWorking, replaces }) =>

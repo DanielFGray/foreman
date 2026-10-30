@@ -1,8 +1,6 @@
-// OpenCode's adapter. Its chat, and the model each session asks for, come from
-// OpenCode's database, read with `sqlite3` on the terminal's machine. hc
-// reports no event when OpenCode writes, so the bridge reads the database
-// again each time hc's report of the terminal changes, and on each poll while
-// OpenCode works. The models it may switch to and its commands come from
+// OpenCode's adapter. Its chat, its todo list, and the model each session asks
+// for come from OpenCode's database, read with `sqlite3` on the terminal's
+// machine. The models it may switch to and its commands come from
 // OpenCode's server, which the bridge reaches on its own machine once paired
 // (see Server.ts).
 import { Array, Effect, Option, Schedule, Schema, Stream } from "effect"
@@ -12,12 +10,14 @@ import { type ChatUpdate, Entry } from "../../shared/Chat.ts"
 import { Terminal } from "../../shared/Fleet.ts"
 import type { ModelChoices } from "../../shared/Harness.ts"
 import type { SlashCommand } from "../../shared/SlashCommand.ts"
+import { sameTodos, type TodoItem } from "../../shared/Todo.ts"
 import { toBridgeError } from "../hcError.ts"
 import { localOf } from "../HerdrApp.ts"
 import { DATABASE_PATH } from "./Database.ts"
 import { Messages, messagesQuery, toEntries } from "./Messages.ts"
 import { OpenCodeServer } from "./Server.ts"
 import { ModelRef, type SessionSummary, Sessions, sessionsQuery, shownSession } from "./Session.ts"
+import { TodoRow, todosOf, todosQuery } from "./Todos.ts"
 
 export const openCode = Effect.gen(function* () {
   const hc = yield* Hc
@@ -53,33 +53,40 @@ export const openCode = Effect.gen(function* () {
       Effect.catchTag("NoSuchElementError", () => Effect.fail(new BridgeError({ kind: "session", message: "which OpenCode session this terminal shows is not known yet" }))),
     )
 
-  /** Reads one session's chat with `query`. */
-  const reader = (query: Query) => {
-    const sessionIn = (terminal: Terminal, before: Option.Option<string>) =>
-      Effect.map(sessionsOf(query, terminal), (sessions) => shownSession(terminal, sessions, before))
+  /**
+   * What `read` gives for the session the terminal shows, each time a read is
+   * due: hc's report of the terminal changed, or OpenCode works. hc reports no
+   * event when OpenCode writes, and only OpenCode's work changes the session.
+   * The session is looked up again only when the report changed, since the
+   * title and the records are what point to it. None while it is not known.
+   */
+  const fromShown = <A>(terminal: Terminal, read: (query: Query, session: string) => Effect.Effect<A, BridgeError>) =>
+    Stream.unwrap(
+      Effect.map(databaseOf(terminal), (query) =>
+        Stream.fromEffectSchedule(Effect.mapError(hc.get(terminal.address), toBridgeError), Schedule.spaced(POLL)).pipe(
+          Stream.mapAccumEffect((): Seen => ({ terminal: Option.none(), session: Option.none() }), dueSession(query)),
+          Stream.mapEffect((session) => Effect.transposeOption(Option.map(session, (id) => read(query, id)))),
+        ),
+      ),
+    )
 
-    const entriesOf = (session: string) => query(messagesQuery(session, MESSAGES)).pipe(Effect.flatMap(decodeMessages), Effect.map((messages) => toEntries(Array.reverse(messages))))
-
-    /**
-     * Reads the chat again when it is due: the report changed, or OpenCode
-     * works. The session is looked up again only when the report changed,
-     * since the title and the records are what point to it.
-     */
-    return Effect.fnUntraced(function* (seen: Seen, terminal: Terminal) {
+  /** The session to read when a read is due, and none sent when it is not. */
+  const dueSession = (query: Query) =>
+    Effect.fnUntraced(function* (seen: Seen, terminal: Terminal) {
       const isChanged = !Option.exists(seen.terminal, (before) => sameTerminal(before, terminal))
       const isWorking = Option.exists(terminal.status, ({ state }) => state === "working")
       if (!isChanged && !isWorking) {
         return [seen, []] as const
       }
-      const session = isChanged || Option.isNone(seen.session) ? yield* sessionIn(terminal, seen.session) : seen.session
-      if (Option.isNone(session)) {
-        return yield* chatError("which OpenCode session this terminal shows is not known yet; it shows once OpenCode works on it")
-      }
-      const entries = yield* entriesOf(session.value)
-      const update: ReadonlyArray<ChatUpdate> = Option.exists(seen.entries, (before) => sameEntries(before, entries)) ? [] : [{ _tag: "Reset", entries }]
-      return [{ terminal: Option.some(terminal), session, entries: Option.some(entries) }, update] as const
+      const session =
+        isChanged || Option.isNone(seen.session) ? yield* Effect.map(sessionsOf(query, terminal), (sessions) => shownSession(terminal, sessions, seen.session)) : seen.session
+      return [{ terminal: Option.some(terminal), session }, [session]] as const
     })
-  }
+
+  const entriesOf = (query: Query, session: string) =>
+    query(messagesQuery(session, MESSAGES)).pipe(Effect.flatMap(decodeMessages), Effect.map((messages) => toEntries(Array.reverse(messages))))
+
+  const todosIn = (query: Query, session: string) => Effect.map(Effect.flatMap(query(todosQuery(session)), decodeTodoRows), todosOf)
 
   // OpenCode's server listens on its own machine's loopback address, so the bridge reaches only the one on its own.
   const onServer = <A>(terminal: Terminal, call: Effect.Effect<A, BridgeError>) =>
@@ -91,12 +98,15 @@ export const openCode = Effect.gen(function* () {
 
   return {
     chat: (terminal: Terminal) =>
-      Stream.unwrap(
-        Effect.map(databaseOf(terminal), (query) =>
-          Stream.fromEffectSchedule(Effect.mapError(hc.get(terminal.address), toBridgeError), Schedule.spaced(POLL)).pipe(
-            Stream.mapAccumEffect((): Seen => ({ terminal: Option.none(), session: Option.none(), entries: Option.none() }), reader(query)),
-          ),
+      fromShown(terminal, entriesOf).pipe(
+        Stream.mapEffect(
+          Option.match({
+            onNone: () => Effect.fail(chatError("which OpenCode session this terminal shows is not known yet; it shows once OpenCode works on it")),
+            onSome: Effect.succeed,
+          }),
         ),
+        Stream.changesWith(sameEntries),
+        Stream.map((entries): ChatUpdate => ({ _tag: "Reset", entries })),
       ),
     model: {
       // Polled: a pick in the TUI or the page writes the session's row, and hc reports no event for it.
@@ -144,6 +154,11 @@ export const openCode = Effect.gen(function* () {
           ),
         ),
       ),
+    todos: (terminal: Terminal) =>
+      fromShown(terminal, todosIn).pipe(
+        Stream.map(Option.getOrElse((): ReadonlyArray<TodoItem> => [])),
+        Stream.changesWith(sameTodos),
+      ),
     pairing: (terminal: Terminal) => onServer(terminal, server.pair),
   }
 })
@@ -184,8 +199,8 @@ const ModelList = Schema.Struct({ data: Schema.Array(Schema.Struct({ ...ModelRef
 const CommandList = Schema.Struct({ data: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.OptionFromOptionalKey(Schema.String) })) })
 
 const SwitchModel = Schema.Struct({ model: ModelRef })
-/** What the chat read last: the terminal as hc reported it, its session, and the entries sent. */
-type Seen = Readonly<{ terminal: Option.Option<Terminal>; session: Option.Option<string>; entries: Option.Option<ReadonlyArray<Entry>> }>
+/** What a read of the shown session saw last: the terminal as hc reported it, and its session. */
+type Seen = Readonly<{ terminal: Option.Option<Terminal>; session: Option.Option<string> }>
 
 const POLL = "1 second"
 
@@ -204,6 +219,9 @@ const chatError = (message: string) => new BridgeError({ kind: "transcript", mes
 
 const decodeSessions = (text: string) =>
   Schema.decodeEffect(Schema.fromJsonString(Sessions))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's sessions cannot be read: ${message}`)))
+
+const decodeTodoRows = (text: string) =>
+  Schema.decodeEffect(Schema.fromJsonString(Schema.Array(TodoRow)))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's todo list cannot be read: ${message}`)))
 
 const decodeMessages = (text: string) =>
   Schema.decodeEffect(Schema.fromJsonString(Messages))(text).pipe(Effect.mapError(({ message }) => chatError(`OpenCode's messages cannot be read: ${message}`)))

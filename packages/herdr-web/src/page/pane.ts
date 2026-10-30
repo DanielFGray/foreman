@@ -11,6 +11,7 @@ import { Columns2, icon, type IconNode, Maximize2, MessageSquare, Minimize2, Row
 import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { modelMenuView, modelTagView } from "./modelMenu.ts"
+import { todoListView } from "./todos.ts"
 import { slashView } from "./slash.ts"
 import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName } from "./model.ts"
 import { promptOf } from "./mirror.ts"
@@ -72,6 +73,7 @@ export const paneView = (
           h.div(
             [h.Class("chat-view"), h.OnClick(Message.FocusedPane({ address }))],
             [
+              ...todoListView(model, address, h),
               Conversation.match(conversation, {
                 Loading: () => h.p([h.Class("chat note")], ["reading the conversation…"]),
                 Shown: ({ entries }) => chatView(entries, waitingAt(model, address), questionView(model, address, h), h),

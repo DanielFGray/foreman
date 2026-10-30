@@ -7,6 +7,7 @@ import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
+import { TodoItem } from "./Todo.ts"
 import { RepoCheckouts } from "./Worktree.ts"
 
 /**
@@ -51,6 +52,8 @@ export const Api = RpcGroup.make(
    * the session's own choice, as `<provider>/<model>`.
    */
   Rpc.make("model", { payload: { terminal: Schema.String }, success: Schema.OptionFromNullOr(Schema.String), error: BridgeError, stream: true }),
+  /** The agent's todo list, then after each change; empty while it has none. */
+  Rpc.make("todos", { payload: { terminal: Schema.String }, success: Schema.Array(TodoItem), error: BridgeError, stream: true }),
   /**
    * The models the agent in the terminal may switch to, and the one it uses
    * now. An agent that lists them from its own server fails with kind

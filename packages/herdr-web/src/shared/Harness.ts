@@ -12,10 +12,10 @@ import type { Terminal } from "./Fleet.ts"
 /**
  * What the page offers for an agent beyond its terminal: its chat, its model
  * and the models it may switch to, its input box (which tells when it takes a
- * message), the questions it asks, its slash commands, and pairing: a sign-in
- * to the agent's own server, which some of the others need.
+ * message), the questions it asks, its slash commands, its todo list, and
+ * pairing: a sign-in to the agent's own server, which some of the others need.
  */
-export type Feature = "chat" | "model" | "inputBox" | "questions" | "commands" | "pairing"
+export type Feature = "chat" | "model" | "inputBox" | "questions" | "commands" | "todos" | "pairing"
 
 /** A model the agent may switch to: what the agent takes, and what the page calls it. */
 export const ModelChoice = Schema.Struct({ alias: Schema.String, name: Schema.String })
@@ -52,7 +52,7 @@ export const HARNESSES = [
     id: "claude-code",
     name: "Claude Code",
     programs: ["claude"],
-    features: ["chat", "model", "inputBox", "questions", "commands"],
+    features: ["chat", "model", "inputBox", "questions", "commands", "todos"],
   },
   terminalOnly("codex", "Codex", ["codex"]),
   terminalOnly("gemini", "Gemini", ["gemini"]),
@@ -62,7 +62,7 @@ export const HARNESSES = [
   terminalOnly("cline", "Cline", [".cline"]),
   terminalOnly("omp", "omp", ["omp"]),
   terminalOnly("mastracode", "Mastra Code", ["mastra-code"]),
-  { id: "opencode", name: "OpenCode", programs: ["opencode2", "open-code"], features: ["chat", "model", "commands", "pairing"] },
+  { id: "opencode", name: "OpenCode", programs: ["opencode2", "open-code"], features: ["chat", "model", "commands", "todos", "pairing"] },
   terminalOnly("copilot", "Copilot", ["github-copilot", "ghcs"]),
   terminalOnly("kimi", "Kimi", ["kimi-code"]),
   terminalOnly("kiro", "Kiro", ["kiro-cli"]),

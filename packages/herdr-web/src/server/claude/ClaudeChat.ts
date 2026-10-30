@@ -1,4 +1,5 @@
-// A Claude Code agent's chat, followed live from its transcript.
+// A Claude Code agent's chat, followed live from its transcript, and its
+// task list (see Tasks.ts), which follows the same session.
 //
 // Claude Code writes `<config>/sessions/<pid>.json` for each running process,
 // naming its session id, and appends the conversation to
@@ -7,6 +8,8 @@
 // does), so watching it moves the chat to the new transcript.
 import { Array, Config, Context, Effect, FileSystem, Layer, Option, Result, Schedule, Schema, Stream } from "effect"
 import type { ChatUpdate } from "../../shared/Chat.ts"
+import { sameTodos } from "../../shared/Todo.ts"
+import { decodeTaskFile, isTaskFile, todosOf } from "./Tasks.ts"
 import { decodeLine, newestModel, splitLines } from "./Transcript.ts"
 
 /** The process has no session record Claude Code can be followed by. */
@@ -92,17 +95,48 @@ export class ClaudeChat extends Context.Service<ClaudeChat>()("herdr-web/server/
     const follow = (path: string) =>
       Stream.merge(Stream.make("start"), fs.watch(path)).pipe(Stream.mapAccumEffect((): Tail => Option.none(), (tail) => next(path)(tail)))
 
+    // The session id of the Claude Code process `pid`, and again each time it starts another session.
+    const sessions = (pid: number) =>
+      Stream.merge(Stream.make("start"), fs.watch(`${configDir}/sessions/${pid}.json`)).pipe(Stream.mapEffect(() => sessionId(pid)), Stream.changes)
+
     // The transcript lines of the Claude Code process `pid`: its recent ones, then each batch of new ones.
-    const lines = (pid: number) =>
-      Stream.merge(Stream.make("start"), fs.watch(`${configDir}/sessions/${pid}.json`)).pipe(
-        Stream.mapEffect(() => sessionId(pid)),
-        Stream.changes,
-        Stream.switchMap(session),
+    const lines = (pid: number) => Stream.switchMap(sessions(pid), session)
+
+    /**
+     * The session's task list now. A list with no folder yet has no tasks, and
+     * a task deleted after the folder was listed is gone. Claude Code may be
+     * writing a file while it is read, so a read that cannot be decoded is
+     * tried again once.
+     */
+    const tasksOf = (pid: number, id: string) => {
+      const folder = `${configDir}/tasks/${id}`
+      const taskIn = (name: string) =>
+        fs.readFileString(`${folder}/${name}`).pipe(
+          Effect.asSome,
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+          Effect.flatMap((text) => Effect.transposeOption(Option.map(text, decodeTaskFile))),
+          Effect.mapError(({ message }) => new NoTranscript({ pid, reason: `unreadable task ${name}: ${message}` })),
+        )
+      return fs.readDirectory(folder).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([])),
+        Effect.flatMap((names) => Effect.forEach(Array.filter(names, isTaskFile), taskIn)),
+        Effect.map((tasks) => todosOf(Array.getSomes(tasks))),
+        Effect.retry({ times: 1, schedule: Schedule.spaced(TORN_READ_WAIT) }),
       )
+    }
 
     return {
       /** The chat of the Claude Code process `pid`: its recent entries, then each batch of new ones. */
       chat: (pid: number) => Stream.filterMap(lines(pid), toUpdate),
+      /**
+       * The task list of the Claude Code process `pid`, then after each change.
+       * Polled: Claude Code makes the list's folder only with its first task.
+       */
+      todos: (pid: number) =>
+        sessions(pid).pipe(
+          Stream.switchMap((id) => Stream.fromEffectSchedule(tasksOf(pid, id), Schedule.spaced(TASKS_POLL))),
+          Stream.changesWith(sameTodos),
+        ),
       /**
        * The id of the model that wrote the newest reply, such as
        * `claude-opus-5-5`, each time it changes. None until the session's first reply.
@@ -136,6 +170,10 @@ const TAIL_BYTES = 4n * 1024n * 1024n
 const NEWLINE = 0x0a
 /** How often a new session is checked for its first transcript line. */
 const TRANSCRIPT_CHECK = "1 second"
+/** How often the task list is read. */
+const TASKS_POLL = "1 second"
+/** How long a task read that cannot be decoded waits before it is tried again. */
+const TORN_READ_WAIT = "100 millis"
 /** Lines read from the transcript; `isReset` when they replace all read before. */
 type Lines = Readonly<{ isReset: boolean; lines: ReadonlyArray<string> }>
 

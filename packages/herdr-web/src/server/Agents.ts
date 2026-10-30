@@ -8,6 +8,7 @@ import type { Answer, ChatUpdate, InputBox, Question } from "../shared/Chat.ts"
 import type { Terminal } from "../shared/Fleet.ts"
 import { type Feature, harnessOf, type HarnessId, type HarnessWith, type ModelChoices } from "../shared/Harness.ts"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
+import type { TodoItem } from "../shared/Todo.ts"
 import { claudeCode } from "./claude/ClaudeCode.ts"
 import { openCode } from "./opencode/OpenCode.ts"
 import { toBridgeError } from "./hcError.ts"
@@ -37,6 +38,8 @@ export type Features = {
     answer: (terminal: Terminal, question: Question, answer: Answer) => Effect.Effect<void, BridgeError>
   }
   commands: (terminal: Terminal) => Effect.Effect<ReadonlyArray<SlashCommand>, BridgeError>
+  /** The todo list, each time it changes; empty while there is none. */
+  todos: (terminal: Terminal) => Stream.Stream<ReadonlyArray<TodoItem>, BridgeError>
   /** Signs the bridge in to the agent's own server; see `pair` in Api.ts. */
   pairing: (terminal: Terminal) => Effect.Effect<void, BridgeError>
 }
@@ -53,6 +56,7 @@ export class Agents extends Context.Service<Agents>()("herdr-web/server/Agents",
       inputBox: { "claude-code": claude.inputBox },
       questions: { "claude-code": claude.questions },
       commands: { "claude-code": claude.commands, opencode: opencode.commands },
+      todos: { "claude-code": claude.todos, opencode: opencode.todos },
       pairing: { opencode: opencode.pairing },
     } satisfies { readonly [F in Feature]: { readonly [Id in HarnessWith<F>]: Features[F] } & { readonly [Id in Exclude<HarnessId, HarnessWith<F>>]?: never } }
 
