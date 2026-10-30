@@ -1,10 +1,12 @@
 // Claude Code's input box, read from the cells of its screen. The box is the
 // rows between the screen's last two rules, the first row starting with `❯`.
 // An empty box may show a suggested prompt or a tip, drawn faint; text the
-// user typed there is drawn plain. As plain text the two read the same.
+// user typed there is drawn plain. As plain text the two read the same. A
+// question or a permission Claude Code asks is drawn in the box's place.
 import { Array, Option, pipe, String } from "effect"
 import type { InputBox } from "../../shared/Chat.ts"
 import type { Status } from "../../shared/Fleet.ts"
+import { questionOnScreen } from "./Menu.ts"
 
 /** One cell of a screen: its character, and the two styles that tell typed text from Claude's own. */
 export type Cell = Readonly<{ char: string; faint: boolean; inverse: boolean }>
@@ -18,14 +20,16 @@ export type Screen = ReadonlyArray<ReadonlyArray<Cell>>
  */
 export const inputBoxOf = (screen: Screen): InputBox => {
   const lines = Array.map(screen, textOf)
-  return Option.match(Array.findLastIndex(lines, isRule), {
-    onNone: (): InputBox => ({ _tag: "Absent" }),
-    onSome: (end) =>
-      Option.match(Array.findLastIndex(Array.take(lines, end), isRule), {
-        onNone: (): InputBox => ({ _tag: "Draft", text: plainText(Array.take(lines, end)) }),
-        onSome: (start) => boxOf(Array.drop(Array.take(screen, end), start + 1)),
-      }),
-  })
+  return Option.isSome(questionOnScreen(Array.join(lines, "\n")))
+    ? { _tag: "Absent" }
+    : Option.match(Array.findLastIndex(lines, isRule), {
+        onNone: (): InputBox => ({ _tag: "Absent" }),
+        onSome: (end) =>
+          Option.match(Array.findLastIndex(Array.take(lines, end), isRule), {
+            onNone: (): InputBox => ({ _tag: "Draft", text: plainText(Array.take(lines, end)) }),
+            onSome: (start) => boxOf(Array.drop(Array.take(screen, end), start + 1)),
+          }),
+      })
 }
 
 const boxOf = (rows: Screen): InputBox =>

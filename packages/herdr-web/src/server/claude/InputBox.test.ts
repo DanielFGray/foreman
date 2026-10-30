@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { Ghostty } from "ghostty-web"
 import { expect, test } from "vitest"
 import { render } from "../ScreenCells.ts"
@@ -61,4 +62,15 @@ test("a box too tall for the screen shows only its bottom rule, and is taken for
 test("a screen with no rules has no box", () => {
   const lines = ["$ ls", "src  package.json"]
   expect(inputBoxOf(render(ghostty.createTerminal(COLS, 2), { cols: COLS, rows: 2 }, lines.join("\r\n")))).toEqual({ _tag: "Absent" })
+})
+
+test("a question or a permission Claude Code asks stands where the box was, so there is no box", () => {
+  // The screens were saved from a terminal 200 columns wide.
+  const saved = (name: string) => {
+    const lines = readFileSync(`${import.meta.dirname}/fixtures/screens/${name}.txt`, "utf8").trimEnd().split("\n")
+    return render(ghostty.createTerminal(200, lines.length), { cols: 200, rows: lines.length }, lines.join("\r\n"))
+  }
+  expect(inputBoxOf(saved("question"))).toEqual({ _tag: "Absent" })
+  expect(inputBoxOf(saved("permission"))).toEqual({ _tag: "Absent" })
+  expect(inputBoxOf(saved("idle"))._tag).not.toBe("Absent")
 })
