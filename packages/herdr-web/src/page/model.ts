@@ -10,6 +10,7 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
+import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
 import { Modifier, Modifiers } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
@@ -65,6 +66,30 @@ export const PaneAction = defineTaggedUnion({
   Refused: { reason: Schema.String },
 })
 export type PaneAction = typeof PaneAction.Type
+
+/** The checkouts on the Worktrees page: being read, read, or not readable. */
+export const CheckoutList = defineTaggedUnion({
+  Loading: {},
+  Listed: { list: RepoCheckouts },
+  Unlisted: { reason: Schema.String },
+})
+export type CheckoutList = typeof CheckoutList.Type
+
+/** What the Worktrees page is doing: nothing, a removal waiting for a second click, a call under way, or git's refusal. */
+export const CheckoutAction = defineTaggedUnion({
+  Idle: {},
+  Confirming: { path: Schema.String },
+  Busy: {},
+  Refused: { reason: Schema.String },
+})
+export type CheckoutAction = typeof CheckoutAction.Type
+
+export const WorktreeField = Schema.Literals(["branch", "program"])
+export type WorktreeField = typeof WorktreeField.Type
+
+/** The Worktrees page: its checkouts, the branch and program typed for a new one, and what it is doing. */
+export const WorktreePage = Schema.Struct({ list: CheckoutList, branch: Schema.String, program: Schema.String, action: CheckoutAction })
+export type WorktreePage = typeof WorktreePage.Type
 
 /** Where the new-space form's last try stands. */
 export const SpaceFormState = defineTaggedUnion({
@@ -123,6 +148,8 @@ export const Selection = defineTaggedUnion({
   Settings: {},
   /** The form that opens a space, in place of a tab. */
   NewSpace: {},
+  /** The checkouts of the repository a space is in, in place of a tab. */
+  Worktrees: { space: Schema.String },
 })
 export type Selection = typeof Selection.Type
 
@@ -193,6 +220,7 @@ export const Model = Schema.Struct({
   paneAction: PaneAction,
   spaceDrag: SpaceDrag,
   spaceForm: SpaceForm,
+  worktreePage: WorktreePage,
   palette: Palette,
   /** The panes opened last, newest first, for the palette's Recent group. */
   recent: Schema.Array(Schema.String),
@@ -270,6 +298,18 @@ export const Message = defineMessageUnion({
   SubmittedSpaceForm: {},
   SucceededNewSpace: { tab: Schema.String },
   FailedNewSpace: { reason: Schema.String },
+  ClickedWorktrees: { space: Schema.String },
+  ReceivedWorktrees: { list: RepoCheckouts },
+  FailedWorktrees: { reason: Schema.String },
+  UpdatedWorktreeField: { field: WorktreeField, value: Schema.String },
+  SubmittedWorktree: {},
+  ClickedOpenCheckout: { checkout: Checkout },
+  ClickedRemoveCheckout: { path: Schema.String },
+  ClickedKeepCheckout: {},
+  ConfirmedRemoveCheckout: { path: Schema.String },
+  SucceededRemoveCheckout: {},
+  SucceededCheckoutSpace: { tab: Schema.String },
+  FailedCheckoutAction: { reason: Schema.String },
   FailedPaneAction: { reason: Schema.String },
   PressedSpace: { space: Schema.String },
   EnteredSpace: { space: Schema.String },

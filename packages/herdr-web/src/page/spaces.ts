@@ -1,13 +1,13 @@
 // Making, renaming and closing herdr-app spaces from the page. A new space
 // is opened from a form in place of a tab; the open space's name in the tab
 // bar renames it and closes it.
-import { Array, Option, String } from "effect"
+import { Array, Option, Record, String } from "effect"
 import type { Machine } from "../shared/Fleet.ts"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import { CloseSpace, FocusField, NewSpace, RenameSpace, SaveSelection } from "./commands.ts"
 import { type SpaceRow, terminalsIn } from "./group.ts"
-import { icon, type IconNode, Pencil, Trash2 } from "./icons.ts"
+import { GitBranch, icon, type IconNode, Pencil, Trash2 } from "./icons.ts"
 import { Message, type Model, PaneAction, Selection, type SpaceForm, type SpaceFormField, SpaceFormState, type UpdateReturn } from "./model.ts"
 import { lastFleet, selected, selectedTab } from "./selection.ts"
 import { stateOf } from "./status.ts"
@@ -77,12 +77,15 @@ export const confirmedCloseSpace = (model: Model, space: string): UpdateReturn =
 }
 
 /**
- * The open space's name in the tab bar, with a pencil that renames it and a
- * bin that closes it. Renaming swaps the name for a text box; Enter keeps the
+ * The open space's name in the tab bar, with a pencil that renames it, a
+ * branch that opens its worktrees when it is in a repository, and a bin that
+ * closes it. Renaming swaps the name for a text box; Enter keeps the
  * new name and Escape the old. Closing first says what it will end.
  */
 export const spaceHeadView = (row: SpaceRow, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
-  const plain = () => namedView(row, h)
+  // The fleet has git state only for a space whose folder is in a repository.
+  const isRepo = Option.exists(lastFleet(model.bridge), ({ git }) => Record.has(git, row.space.id))
+  const plain = () => namedView(row, isRepo, h)
   return PaneAction.match(model.paneAction, {
     Idle: plain,
     Confirming: plain,
@@ -156,12 +159,13 @@ const FOLDERS_ID = "space-folders"
 const FOLDER_ID = "space-folder"
 const RENAME_ID = "space-new-name"
 
-const namedView = ({ space, label }: SpaceRow, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
+const namedView = ({ space, label }: SpaceRow, isRepo: boolean, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
   h.span(
     [h.Class("space-head")],
     [
       h.span([h.Class("space-name")], [label]),
       iconButton(Pencil, `rename space ${label}`, Message.ClickedRenameSpace({ space: space.id }), h),
+      ...(isRepo ? [iconButton(GitBranch, `worktrees of ${label}`, Message.ClickedWorktrees({ space: space.id }), h)] : []),
       iconButton(Trash2, `close space ${label}`, Message.ClickedCloseSpace({ space: space.id }), h),
     ],
   ),

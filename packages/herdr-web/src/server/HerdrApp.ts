@@ -158,13 +158,13 @@ const CONFLICT_RETRIES = 5
 const isConflict = (error: HcFailure | HerdrAppError) => error._tag === "HcError" && error.kind === "conflict"
 
 /** The machine an id is on, none for this one, and the id its machine's document holds. */
-const localOf = (address: string) =>
+export const localOf = (address: string) =>
   Option.match(String.indexOf("/")(address), {
     onNone: () => ({ on: Option.none<string>(), id: address }),
     onSome: (at) => ({ on: Option.some(address.slice(0, at)), id: address.slice(at + 1) }),
   })
 
-const qualified = (on: Option.Option<string>, id: string) => Option.match(on, { onNone: () => id, onSome: (machine) => `${machine}/${id}` })
+export const qualified = (on: Option.Option<string>, id: string) => Option.match(on, { onNone: () => id, onSome: (machine) => `${machine}/${id}` })
 
 /**
  * The terminals that end with `closed`: those, and every terminal started

@@ -11,10 +11,11 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, SaveRecent } from "./commands.ts"
+import { Asking, Bridge, CheckoutAction, CheckoutList, Conversation, Delivery, FontCatalog, Message, type Flags, type Model, Palette, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
+import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { delivered, dropped, held, queued, reconsidered, sentNow, watchedBoxes } from "./queue.ts"
@@ -50,6 +51,7 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     paneAction: PaneAction.Idle(),
     spaceDrag: SpaceDrag.Idle(),
     spaceForm: EMPTY_SPACE_FORM,
+    worktreePage: EMPTY_WORKTREE_PAGE,
     palette: Palette.Closed(),
     recent,
     settings,
@@ -61,7 +63,14 @@ export const init = ({ settings, selection, sidebarWidth, recent }: Flags): Upda
     sidebarWidth,
     sidebarGrip: Option.none(),
   },
-  commands: selection._tag === "Settings" ? [FetchFonts()] : [],
+  commands: Selection.match(selection, {
+    Nothing: () => [],
+    Tab: () => [],
+    Loose: () => [],
+    Settings: () => [FetchFonts()],
+    NewSpace: () => [],
+    Worktrees: ({ space }) => [ListWorktrees({ space })],
+  }),
 })
 
 // UPDATE
@@ -105,6 +114,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         Loose: () => ({ model }),
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
+        Worktrees: () => ({ model }),
       }),
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
@@ -168,6 +178,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         Loose: () => ({ model }),
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
+        Worktrees: () => ({ model }),
       }),
 
     // Closing a pane ends its program, so it takes a second click.
@@ -231,6 +242,34 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededNewSpace: ({ tab }) => remembered(openedSpace(model, tab)),
 
     FailedNewSpace: ({ reason }) => ({ model: refusedSpace(model, reason) }),
+
+    ClickedWorktrees: ({ space }) => openedWorktrees(model, space),
+
+    ReceivedWorktrees: ({ list }) => ({ model: listedWorktrees(model, CheckoutList.Listed({ list })) }),
+
+    FailedWorktrees: ({ reason }) => ({ model: listedWorktrees(model, CheckoutList.Unlisted({ reason })) }),
+
+    UpdatedWorktreeField: ({ field, value }) => ({ model: editedWorktreeField(model, field, value) }),
+
+    SubmittedWorktree: () => submittedWorktree(model),
+
+    ClickedOpenCheckout: ({ checkout }) =>
+      Option.match(checkoutTab(model, checkout), {
+        onSome: (tabId) => update(model, Message.ClickedTab({ tabId })),
+        onNone: () => openedNewCheckout(model, checkout),
+      }),
+
+    ClickedRemoveCheckout: ({ path }) => ({ model: withAction(model, CheckoutAction.Confirming({ path })) }),
+
+    ClickedKeepCheckout: () => ({ model: withAction(model, CheckoutAction.Idle()) }),
+
+    ConfirmedRemoveCheckout: ({ path }) => confirmedRemoveCheckout(model, path),
+
+    SucceededRemoveCheckout: () => removedCheckout(model),
+
+    SucceededCheckoutSpace: ({ tab }) => remembered(openedCheckoutSpace(model, tab)),
+
+    FailedCheckoutAction: ({ reason }) => ({ model: withAction(model, CheckoutAction.Refused({ reason })) }),
 
     // A press while a move is under way waits for the fleet's new order.
     PressedSpace: ({ space }) =>

@@ -190,3 +190,46 @@ export const AnswerQuestion = Command.define("AnswerQuestion", {
       return Message.SucceededAnswer({ address })
     }).pipe(reportFailure((reason) => Message.FailedAnswer({ address, reason }))),
 })
+
+export const ListWorktrees = Command.define("ListWorktrees", {
+  args: { space: Schema.String },
+  messages: [Message.ReceivedWorktrees, Message.FailedWorktrees],
+  execute: ({ space }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      return Message.ReceivedWorktrees({ list: yield* client.worktrees({ space }) })
+    }).pipe(reportFailure((reason) => Message.FailedWorktrees({ reason }))),
+})
+
+export const NewWorktree = Command.define("NewWorktree", {
+  args: { space: Schema.String, branch: Schema.String, program: Schema.Option(Schema.String) },
+  messages: [Message.SucceededCheckoutSpace, Message.FailedCheckoutAction],
+  execute: (at) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { tab } = yield* client.newWorktree(at)
+      return Message.SucceededCheckoutSpace({ tab })
+    }).pipe(reportFailure((reason) => Message.FailedCheckoutAction({ reason }))),
+})
+
+export const OpenWorktree = Command.define("OpenWorktree", {
+  args: { space: Schema.String, path: Schema.String },
+  messages: [Message.SucceededCheckoutSpace, Message.FailedCheckoutAction],
+  execute: (at) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { tab } = yield* client.openWorktree(at)
+      return Message.SucceededCheckoutSpace({ tab })
+    }).pipe(reportFailure((reason) => Message.FailedCheckoutAction({ reason }))),
+})
+
+export const RemoveWorktree = Command.define("RemoveWorktree", {
+  args: { space: Schema.String, path: Schema.String },
+  messages: [Message.SucceededRemoveCheckout, Message.FailedCheckoutAction],
+  execute: (at) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.removeWorktree(at)
+      return Message.SucceededRemoveCheckout()
+    }).pipe(reportFailure((reason) => Message.FailedCheckoutAction({ reason }))),
+})

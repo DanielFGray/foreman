@@ -500,3 +500,23 @@ p.usage-error { margin: 0; }
 .choice-detail { grid-column: 2; color: var(--subtext); font-size: 0.9em; }
 .question-note { margin: 0; }
 .question-own { color: var(--subtext); font-size: 0.9em; }
+
+.checkouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-width: 48rem; }
+.checkout {
+  display: grid;
+  grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+}
+.checkout.on { border-color: var(--accent); }
+.checkout-branch { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkout-branch .badge-word { margin-left: 8px; font-weight: normal; color: var(--subtext); }
+.checkout-path { color: var(--subtext); font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.checkout-actions { display: flex; align-items: center; gap: 6px; }
+.checkout-actions .note { margin: 0; }
+@media (max-width: 640px) {
+  .checkout { grid-template-columns: minmax(0, 1fr); }
+}

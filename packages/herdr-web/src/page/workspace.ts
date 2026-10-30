@@ -10,6 +10,7 @@ import { flexOf, keysView, paneActionView, paneView } from "./pane.ts"
 import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./selection.ts"
 import { settingsView } from "./settingsView.ts"
 import { spaceFormView, spaceHeadView } from "./spaces.ts"
+import { worktreesView } from "./worktrees.ts"
 import { statusMark } from "./status.ts"
 
 /**
@@ -47,6 +48,7 @@ export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
     Settings: () => settingsView(model, h),
     NewSpace: () => spaceFormView(model, h),
+    Worktrees: ({ space }) => worktreesView(space, model, h),
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {

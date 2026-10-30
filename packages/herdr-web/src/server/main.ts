@@ -16,6 +16,7 @@ import { asks, keyFor, questionOnScreen } from "./claude/Menu.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
+import { type WorktreeError, Worktrees } from "./Worktrees.ts"
 import { LiveTerminals } from "./LiveTerminals.ts"
 import { ScreenCells } from "./ScreenCells.ts"
 import { Usage } from "./usage/Usage.ts"
@@ -34,8 +35,12 @@ const INPUT_BOX_POLL = "1 second"
 
 const sameInputBox = Schema.toEquivalence(InputBox)
 
-const toAppError = (error: HerdrAppError | HcFailure) =>
-  error._tag === "HerdrAppError" ? new BridgeError({ kind: "herdr-app", message: error.message }) : toBridgeError(error)
+const toAppError = (error: HerdrAppError | WorktreeError | HcFailure) =>
+  error._tag === "HerdrAppError"
+    ? new BridgeError({ kind: "herdr-app", message: error.message })
+    : error._tag === "WorktreeError"
+      ? new BridgeError({ kind: "git", message: error.message })
+      : toBridgeError(error)
 
 const transcriptFailure = (error: NoTranscript | PlatformError) =>
   Match.valueTags(error, {
@@ -50,6 +55,7 @@ const Handlers = Api.toLayer(
     const claude = yield* ClaudeChat
     const live = yield* LiveTerminals
     const app = yield* HerdrApp
+    const worktrees = yield* Worktrees
     const fonts = yield* Fonts
     const usage = yield* Usage
     const screens = yield* ScreenCells
@@ -125,6 +131,10 @@ const Handlers = Api.toLayer(
         app.newSpace({ on: machine, folder, name, program }).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
       renameSpace: ({ space, name }) => app.renameSpace(space, name).pipe(Effect.mapError(toAppError)),
       closeSpace: ({ space }) => app.closeSpace(space).pipe(Effect.asVoid, Effect.mapError(toAppError)),
+      worktrees: ({ space }) => worktrees.list(space).pipe(Effect.mapError(toAppError)),
+      newWorktree: ({ space, branch, program }) => worktrees.create(space, branch, program).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
+      openWorktree: ({ space, path }) => worktrees.open(space, path).pipe(Effect.map(({ tab }) => ({ tab })), Effect.mapError(toAppError)),
+      removeWorktree: ({ space, path }) => worktrees.remove(space, path).pipe(Effect.mapError(toAppError)),
       fonts: () => Effect.succeed(fonts.families),
       usage: () => usage.changes,
       refreshUsage: ({ provider }) => usage.refresh(provider),
@@ -149,7 +159,7 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: host, port })))
   }),
 ).pipe(
-  Layer.provide([ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
+  Layer.provide([ClaudeChat.layer, LiveTerminals.layer, ScreenCells.layer, Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),

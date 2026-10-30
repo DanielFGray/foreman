@@ -5,10 +5,12 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { FontFamily } from "./Fonts.ts"
 import { ProviderId, Usage } from "./Usage.ts"
+import { RepoCheckouts } from "./Worktree.ts"
 
 /**
  * A call that failed. `kind` is hc's error kind, `lost` or `protocol` for hc
- * itself, or `transcript` when the agent's conversation cannot be read.
+ * itself, `transcript` when the agent's conversation cannot be read, `herdr-app`
+ * when herdr-app's layout refuses the change, or `git` when git refuses.
  */
 export class BridgeError extends Schema.TaggedError<BridgeError, { readonly brand: unique symbol }>()("BridgeError", {
   kind: Schema.String,
@@ -103,6 +105,22 @@ export const Api = RpcGroup.make(
   Rpc.make("renameSpace", { payload: { space: Schema.String, name: Schema.String }, error: BridgeError }),
   /** Closes a space and ends the terminals of all its tabs. */
   Rpc.make("closeSpace", { payload: { space: Schema.String }, error: BridgeError }),
+  /** The checkouts of the repository a space is in, and the space that shows each. */
+  Rpc.make("worktrees", { payload: { space: Schema.String }, success: RepoCheckouts, error: BridgeError }),
+  /**
+   * Checks out a branch of the space's repository, a new one from its HEAD
+   * when it does not exist, and opens it as a space whose pane runs the
+   * program. The new space's first tab.
+   */
+  Rpc.make("newWorktree", {
+    payload: { space: Schema.String, branch: Schema.String, program: Schema.OptionFromOptionalKey(Schema.String) },
+    success: Schema.Struct({ tab: Schema.String }),
+    error: BridgeError,
+  }),
+  /** Opens a checkout of the space's repository as a new space; its first tab. */
+  Rpc.make("openWorktree", { payload: { space: Schema.String, path: Schema.String }, success: Schema.Struct({ tab: Schema.String }), error: BridgeError }),
+  /** Removes a clean checkout, never by force, and closes the spaces that showed it. The branch stays. */
+  Rpc.make("removeWorktree", { payload: { space: Schema.String, path: Schema.String }, error: BridgeError }),
   /** The font families the bridge serves at /fonts.css. */
   Rpc.make("fonts", { success: Schema.Array(FontFamily) }),
   /** Each coding plan's usage now, then after every read; the bridge reads only while a page watches. */
