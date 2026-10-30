@@ -11,8 +11,8 @@ import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Fleet, type Layout, type Size, type Space, type StatusState, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
-import { locate, sidebarOf, type SpaceRow, spaceLabel, type TabRow, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
-import { Bot, Columns2, icon, type IconNode, MessageSquare, PanelLeft, Rows2, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
+import { locate, type MachineRow, sidebarOf, spacesOf, type SpaceRow, spaceLabel, type TabRow, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
+import { Bot, Columns2, icon, type IconNode, MessageSquare, Monitor, PanelLeft, Rows2, Server, Settings as SettingsIcon, SquareTerminal, X } from "./icons.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
@@ -355,8 +355,8 @@ const selectedTab = (model: Model): Option.Option<Readonly<{ space: Space; tab: 
   Selection.match(model.selection, {
     Nothing: () => Option.none(),
     Tab: ({ tabId }) =>
-      Option.flatMap(lastFleet(model.bridge), ({ spaces }) =>
-        Array.findFirst(spaces, (space) =>
+      Option.flatMap(lastFleet(model.bridge), (fleet) =>
+        Array.findFirst(spacesOf(fleet), (space) =>
           Option.map(
             Array.findFirst(space.tabs, (tab) => tab.id === tabId),
             (tab) => ({ space, tab }),
@@ -677,12 +677,14 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
   Option.match(lastFleet(model.bridge), {
     onNone: () => [h.p([h.Class("note")], ["Waiting for the bridge."])],
     onSome: (fleet) => {
-      const { spaces, loose } = sidebarOf(fleet)
+      const { machines, loose } = sidebarOf(fleet)
       const openTab = Option.map(selectedTab(model), ({ tab }) => tab.id)
-      return Array.isReadonlyArrayEmpty(spaces) && Array.isReadonlyArrayEmpty(loose)
+      // With one machine, a heading would only repeat its name.
+      const isHeaded = machines.length > 1
+      return !isHeaded && Array.every(machines, ({ spaces }) => Array.isReadonlyArrayEmpty(spaces)) && Array.isReadonlyArrayEmpty(loose)
         ? [h.p([h.Class("note")], ["No spaces."])]
         : [
-            ...Array.map(spaces, (row) => spaceView(row, openTab, model, h)),
+            ...Array.map(machines, (row) => machineView(row, isHeaded, openTab, model, h)),
             ...(Array.isReadonlyArrayNonEmpty(loose)
               ? [
                   h.keyed("section")(
@@ -698,6 +700,27 @@ const fleetView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =
           ]
     },
   })
+
+const machineView = ({ machine, spaces }: MachineRow, isHeaded: boolean, openTab: Option.Option<string>, model: Model, h: HtmlBuilder<Message>): Html =>
+  h.keyed("div")(
+    machine.name,
+    [h.Class("machine")],
+    [
+      ...(isHeaded
+        ? [
+            h.h2(
+              [h.Class(`machine-head ${machine.state}`)],
+              [
+                icon(machine.isLocal ? Monitor : Server, h),
+                h.span([h.Class("name")], [machine.name]),
+                ...(machine.state === "connected" ? [] : [h.span([h.Class("msg")], [String.replaceAll("_", " ")(machine.state)])]),
+              ],
+            ),
+          ]
+        : []),
+      ...Array.map(spaces, (row) => spaceView(row, openTab, model, h)),
+    ],
+  )
 
 // A space opens on its first tab; a tab lists its agents under it.
 const spaceView = ({ space, label, status, tabs }: SpaceRow, openTab: Option.Option<string>, model: Model, h: HtmlBuilder<Message>): Html =>

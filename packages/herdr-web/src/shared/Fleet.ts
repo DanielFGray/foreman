@@ -97,10 +97,30 @@ export type Space = typeof Space.Type
 /** The value of herdr-app's `herdr-app` document. */
 export const HerdrAppDoc = Schema.Struct({ spaces: Schema.Array(Space) })
 
+/** How hc reaches a machine. This machine is always connected. */
+export const MachineState = Schema.Literals(["connecting", "connected", "needs_login", "unreachable"])
+export type MachineState = typeof MachineState.Type
+
+export const Machine = Schema.Struct({
+  /** What hc calls it: `cynic` in `cynic/t7`. This machine's own name prefixes nothing. */
+  name: Schema.String,
+  isLocal: Schema.Boolean,
+  state: MachineState,
+  /**
+   * Its herdr-app spaces. A space on another machine has its ids, and the
+   * terminals in its layout, prefixed with the machine's name, as herdr-app
+   * itself addresses them; while the machine is away they are the last seen.
+   */
+  spaces: Schema.Array(Space),
+})
+export type Machine = typeof Machine.Type
+
 export const Fleet = Schema.Struct({
   /** False while the bridge has no live subscription to hc; the terminals are then the last ones seen. */
   connected: Schema.Boolean,
+  /** Every connected machine's terminals, addressed `machine/t7` on another machine. */
   terminals: Schema.Array(Terminal),
-  spaces: Schema.Array(Space),
+  /** This machine first, then the others in hc's order. */
+  machines: Schema.Array(Machine),
 })
 export type Fleet = typeof Fleet.Type

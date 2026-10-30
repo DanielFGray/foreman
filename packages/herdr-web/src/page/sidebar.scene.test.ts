@@ -1,7 +1,7 @@
 import { Option } from "effect"
 import { all, click, expect, expectAll, given, inside, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
-import type { Fleet, Terminal } from "../shared/Fleet.ts"
+import type { Fleet, Machine, Terminal } from "../shared/Fleet.ts"
 import { Bridge, init, update, view } from "./main.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
@@ -19,17 +19,24 @@ const blockedAgent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
-  spaces: [
+  machines: [
     {
-      id: "s1",
-      name: "",
-      folder: "/home/dan/build/prog",
-      tabs: [
-        { id: "a", name: "", root: { _tag: "Block", type: "block", id: "p1", size: Option.none(), content: { _tag: "Terminal", terminal: "t1" } } },
-        { id: "b", name: "notes", root: { _tag: "Unknown", type: "browser" } },
+      name: "here",
+      isLocal: true,
+      state: "connected",
+      spaces: [
+        {
+          id: "s1",
+          name: "",
+          folder: "/home/dan/build/prog",
+          tabs: [
+            { id: "a", name: "", root: { _tag: "Block", type: "block", id: "p1", size: Option.none(), content: { _tag: "Terminal", terminal: "t1" } } },
+            { id: "b", name: "notes", root: { _tag: "Unknown", type: "browser" } },
+          ],
+        },
+        { id: "s2", name: "quiet", folder: "/", tabs: [{ id: "c", name: "", root: { _tag: "Unknown", type: "browser" } }] },
       ],
     },
-    { id: "s2", name: "quiet", folder: "/", tabs: [{ id: "c", name: "", root: { _tag: "Unknown", type: "browser" } }] },
   ],
   terminals: [blockedAgent],
 }
@@ -49,5 +56,18 @@ test("the sidebar lists every space and tab, marks them by their agents, and ope
     click(role("button", { name: "notes" })),
     expect(role("button", { name: "notes" })).toHaveAttr("aria-current", "page"),
     expect(selector(".tabs .tab.on")).toContainText("notes"),
+    // One machine needs no heading.
+    expect(selector(".machine-head")).not.toExist(),
+  )
+})
+
+test("with another machine, each machine heads its spaces and says when it is away", () => {
+  const away: Machine = { name: "cynic", isLocal: false, state: "needs_login", spaces: [] }
+  scene(
+    { update, view },
+    given({ ...init(DEFAULT_SETTINGS).model, bridge: Bridge.Watching({ fleet: { ...fleet, machines: [...fleet.machines, away] } }) }),
+    expectAll(all.selector(".machine-head")).toHaveCount(2),
+    expect(selector(".machine-head.needs_login")).toContainText("cynic"),
+    expect(selector(".machine-head.needs_login")).toContainText("needs login"),
   )
 })

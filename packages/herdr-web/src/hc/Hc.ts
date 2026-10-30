@@ -3,7 +3,7 @@
 // its own, because once subscribed a plain-mode connection carries only
 // notifications.
 import { Config, Context, Duration, Effect, Layer, Option, RcRef, Schema } from "effect"
-import { HerdrAppDoc, Terminal } from "../shared/Fleet.ts"
+import { HerdrAppDoc, MachineState, Terminal } from "../shared/Fleet.ts"
 import { wireTag } from "../shared/Wire.ts"
 import { connect, method, type Method } from "./Connection.ts"
 
@@ -13,7 +13,13 @@ import { connect, method, type Method } from "./Connection.ts"
  * model fetches it again, so this client depends on no event's payload.
  */
 export const Event = Schema.Union([
-  Schema.Struct({ _tag: wireTag("Doc"), type: Schema.Literal("doc"), data: Schema.Struct({ name: Schema.String }) }),
+  Schema.Struct({
+    _tag: wireTag("Doc"),
+    type: Schema.Literal("doc"),
+    data: Schema.Struct({ name: Schema.String }),
+    /** Set when the document is another machine's. */
+    machine: Schema.OptionFromOptionalKey(Schema.String),
+  }),
   Schema.Struct({ _tag: wireTag("Changed"), type: Schema.String, terminal: Schema.String }),
 ])
 
@@ -43,11 +49,20 @@ const keys = method(
   Schema.Struct({ turn: Schema.Int }),
 )
 
+/** A document here, or on the machine `on` names. */
 const docGet = method(
   "doc.get",
-  Schema.Struct({ name: Schema.String }),
+  Schema.Struct({ name: Schema.String, on: Schema.OptionFromOptionalKey(Schema.String) }),
   Schema.Struct({ value: Schema.OptionFromNullOr(HerdrAppDoc) }),
 )
+
+const machineList = method(
+  "machine.list",
+  Schema.Struct({}),
+  Schema.Struct({ machines: Schema.Array(Schema.Struct({ name: Schema.String, state: MachineState })) }),
+)
+
+const serverStatus = method("server.status", Schema.Struct({}), Schema.Struct({ core: Schema.Struct({ name: Schema.String }) }))
 
 const subscribeMethod = method(
   "events.subscribe",
@@ -79,10 +94,15 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
       get: (terminal: string) => call(get, { terminal }),
       send: (terminal: string, text: string) => call(send, { terminal, text }),
       keys: (terminal: string, names: ReadonlyArray<string>) => call(keys, { terminal, keys: names }),
-      // No document yet means herdr-app has not run: no spaces to show.
-      spaces: call(docGet, { name: HERDR_APP_DOC }).pipe(
-        Effect.map(({ value }) => Option.match(value, { onNone: () => [], onSome: (doc) => doc.spaces })),
-      ),
+      /** herdr-app's spaces here, or on another machine. None yet means herdr-app has not run there. */
+      spaces: (on: Option.Option<string>) =>
+        call(docGet, { name: HERDR_APP_DOC, on }).pipe(
+          Effect.map(({ value }) => Option.match(value, { onNone: () => [], onSome: (doc) => doc.spaces })),
+        ),
+      /** The other machines and how hc reaches each now. */
+      machines: Effect.map(call(machineList, {}), ({ machines }) => machines),
+      /** This machine's name. */
+      name: Effect.map(call(serverStatus, {}), ({ core }) => core.name),
       /**
        * Opens a subscription in the current scope: the terminals now, then
        * notifications. The stream fails with HcLost when hc goes away.

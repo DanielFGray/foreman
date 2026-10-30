@@ -1,25 +1,28 @@
 // How the page files terminals: by the herdr-app layout trees that place
 // them, in herdr-app's own order of spaces, tabs and panes.
 import { Array, HashMap, HashSet, Match, Option, Order, pipe, String } from "effect"
-import type { Fleet, Layout, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
+import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
 
 export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal> }>
 
 export type SpaceRow = Readonly<{ space: Space; label: string; status: Option.Option<StatusState>; tabs: ReadonlyArray<TabRow> }>
 
-/** Every space with its tabs, then the agents that no layout places. */
-export type Sidebar = Readonly<{ spaces: ReadonlyArray<SpaceRow>; loose: ReadonlyArray<Terminal> }>
+export type MachineRow = Readonly<{ machine: Machine; spaces: ReadonlyArray<SpaceRow> }>
+
+/** Every machine with its spaces and their tabs, then the agents that no layout places. */
+export type Sidebar = Readonly<{ machines: ReadonlyArray<MachineRow>; loose: ReadonlyArray<Terminal> }>
 
 /**
- * Every space and tab in herdr-app's order, each marked with its most urgent
- * agent, and under each tab its agents in pane order. hc keeps a terminal
- * after its program exits, so only live ones count. A loose agent is one no
- * space shows, such as a sub-agent; a loose shell belongs to another app.
+ * Every machine, space and tab in hc's and herdr-app's order, each space and
+ * tab marked with its most urgent agent, and under each tab its agents in pane
+ * order. hc keeps a terminal after its program exits, so only live ones
+ * count. A loose agent is one no space shows, such as a sub-agent; a loose
+ * shell belongs to another app.
  */
 export const sidebarOf = (fleet: Fleet): Sidebar => {
   const byAddress = HashMap.fromIterable(Array.map(fleet.terminals, (terminal) => [terminal.address, terminal] as const))
   const isLiveAgent = (terminal: Terminal) => terminal.state === "live" && isAgent(terminal)
-  const spaces = Array.map(fleet.spaces, (space): SpaceRow => {
+  const spaceRow = (space: Space): SpaceRow => {
     const tabs = Array.map(space.tabs, (tab, index): TabRow => {
       const agents = pipe(
         terminalsIn(tab.root),
@@ -30,10 +33,16 @@ export const sidebarOf = (fleet: Fleet): Sidebar => {
       return { tab, label: tabLabel(tab, index), status: mostUrgent(agents), agents }
     })
     return { space, label: spaceLabel(space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
-  })
-  const placed = HashSet.fromIterable(Array.flatMap(fleet.spaces, spaceTerminals))
-  return { spaces, loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)) }
+  }
+  const placed = HashSet.fromIterable(Array.flatMap(spacesOf(fleet), spaceTerminals))
+  return {
+    machines: Array.map(fleet.machines, (machine) => ({ machine, spaces: Array.map(machine.spaces, spaceRow) })),
+    loose: Array.filter(fleet.terminals, (terminal) => isLiveAgent(terminal) && !HashSet.has(placed, terminal.address)),
+  }
 }
+
+/** Every machine's spaces, this machine's first. */
+export const spacesOf = (fleet: Fleet) => Array.flatMap(fleet.machines, ({ spaces }) => spaces)
 
 /** The state that most needs the user: blocked, error, done, working, then idle. */
 export const mostUrgent = (agents: ReadonlyArray<Terminal>): Option.Option<StatusState> =>
@@ -54,7 +63,7 @@ export const terminalsIn = (node: Layout): ReadonlyArray<string> =>
 /** The space and tab whose layout shows the terminal. */
 export const locate = (fleet: Fleet, address: string): Option.Option<Readonly<{ space: Space; tab: Tab }>> =>
   pipe(
-    Array.flatMap(fleet.spaces, (space) => Array.map(space.tabs, (tab) => ({ space, tab }))),
+    Array.flatMap(spacesOf(fleet), (space) => Array.map(space.tabs, (tab) => ({ space, tab }))),
     Array.findFirst(({ tab }) => Array.contains(terminalsIn(tab.root), address)),
   )
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { Option } from "effect"
-import type { Fleet, Layout, StatusState, Terminal } from "../shared/Fleet.ts"
+import type { Fleet, Layout, Machine, StatusState, Terminal } from "../shared/Fleet.ts"
 import { locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
 
 const terminal = (address: string, isAgent = true, state: Terminal["state"] = "live"): Terminal => ({
@@ -26,19 +26,23 @@ const pane = (address: string): Layout => ({
 })
 const split = (type: string, children: ReadonlyArray<Layout>): Layout => ({ _tag: "Split", type, id: type, size: Option.none(), children })
 
+const here = (spaces: Machine["spaces"]): Machine => ({ name: "here", isLocal: true, state: "connected", spaces })
+
 const fleet: Fleet = {
   connected: true,
-  spaces: [
-    {
-      id: "s1",
-      name: "",
-      folder: "/home/dan/build/prog",
-      tabs: [
-        { id: "a", name: "", root: split("row", [pane("t2"), split("column", [pane("t3"), pane("t1")])]) },
-        { id: "b", name: "logs", root: split("row", [pane("t9")]) },
-      ],
-    },
-    { id: "s2", name: "empty", folder: "/", tabs: [{ id: "c", name: "", root: { _tag: "Unknown", type: "browser" } }] },
+  machines: [
+    here([
+      {
+        id: "s1",
+        name: "",
+        folder: "/home/dan/build/prog",
+        tabs: [
+          { id: "a", name: "", root: split("row", [pane("t2"), split("column", [pane("t3"), pane("t1")])]) },
+          { id: "b", name: "logs", root: split("row", [pane("t9")]) },
+        ],
+      },
+      { id: "s2", name: "empty", folder: "/", tabs: [{ id: "c", name: "", root: { _tag: "Unknown", type: "browser" } }] },
+    ]),
   ],
   terminals: [terminal("t1"), terminal("t2"), terminal("t3", false), terminal("t4")],
 }
@@ -48,8 +52,8 @@ const withState = (t: Terminal, state: StatusState): Terminal => ({
   status: Option.map(t.status, (status) => ({ ...status, state })),
 })
 
-const outline = ({ spaces, loose }: Sidebar) => ({
-  spaces: spaces.map(({ label, status, tabs }) => [
+const outline = ({ machines, loose }: Sidebar) => ({
+  spaces: machines.flatMap(({ spaces }) => spaces).map(({ label, status, tabs }) => [
     label,
     Option.getOrNull(status),
     tabs.map(({ label, status, agents }) => [label, Option.getOrNull(status), agents.map(({ address }) => address)]),
@@ -83,6 +87,15 @@ describe("sidebarOf", () => {
       loose: [],
     })
   })
+})
+
+test("sidebarOf keeps each machine's spaces under it, in the fleet's order", () => {
+  const away: Machine = { name: "cynic", isLocal: false, state: "unreachable", spaces: [{ id: "cynic/s9", name: "far", folder: "/", tabs: [] }] }
+  const { machines } = sidebarOf({ ...fleet, machines: [...fleet.machines, away] })
+  expect(machines.map(({ machine, spaces }) => [machine.name, spaces.map(({ label }) => label)])).toEqual([
+    ["here", ["prog", "empty"]],
+    ["cynic", ["far"]],
+  ])
 })
 
 describe("mostUrgent", () => {
