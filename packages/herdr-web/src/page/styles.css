@@ -374,7 +374,7 @@ a.chip { color: inherit; text-decoration: none; }
   .fleet-edge { display: none; }
   .chip.fleet-toggle { display: inline-flex; }
   /* The pane's name needs the room more than the view chips' words. */
-  .view-chip { padding: 4px 8px; }
+  :is(.view-chip, .zoom-chip) { padding: 4px 8px; }
   .view-chip .label { display: none; }
   .fleet.folded { display: none; }
   /* One pane at a time; the chips move the focus. */
@@ -387,6 +387,16 @@ a.chip { color: inherit; text-decoration: none; }
   .layout :is(.pane.focused, .split:has(.pane.focused)) { flex-grow: 1 !important; }
   .split { gap: 0; }
 }
+
+/* Zoom: the focused pane fills the window, at any width. Its pane head stays,
+   with the button that zooms out, and so do the soft keys a terminal needs.
+   The other panes hide by the same rules as on a narrow screen above, and
+   so do the split and close buttons: a new pane would hide behind the zoom. */
+.app.zoomed :is(.fleet, .fleet-edge, .fleet-backdrop, .top-bar, .focus-chips, .usage, .pane-actions) { display: none; }
+.app.zoomed .layout:has(.pane.focused) :is(.pane, .split):not(.focused, :has(.pane.focused)) { display: none; }
+.app.zoomed .layout :is(.pane.focused, .split:has(.pane.focused)) { flex-grow: 1 !important; }
+.app.zoomed .split { gap: 0; }
+.app.zoomed .workspace { gap: 4px; padding: 4px; }
 
 /* The quota bar: a meter per coding plan, and above it the open plan's detail. */
 .usage { position: relative; z-index: 1; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }

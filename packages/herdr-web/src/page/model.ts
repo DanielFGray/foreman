@@ -24,6 +24,7 @@ import { Link } from "./terminal.ts"
 export const SELECTION_KEY = "herdr-web.selection"
 export const RECENT_KEY = "herdr-web.recent"
 export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
+export const ZOOM_KEY = "herdr-web.zoom"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -280,6 +281,8 @@ export const Model = Schema.Struct({
   bridge: Bridge,
   /** On a phone the sidebar folds away once a tab or agent is picked, to give the panes the screen. */
   isFleetFolded: Schema.Boolean,
+  /** The focused pane fills the window: the sidebar, the bars over and under the panes, and the other panes hide. */
+  isZoomed: Schema.Boolean,
   selection: Selection,
   /** The view of each shown terminal; a terminal not in it shows its default view. */
   views: Schema.Record(Schema.String, View),
@@ -341,6 +344,7 @@ export const Flags = Schema.Struct({
   recent: Schema.Array(Schema.String),
   /** The soft-key row this browser keeps; none for the default row. */
   softKeys: Schema.Option(Schema.Array(SoftKey)),
+  isZoomed: Schema.Boolean,
 })
 export type Flags = typeof Flags.Type
 
@@ -350,6 +354,7 @@ export const loadFlags = Effect.all({
   sidebarWidth: loadSidebarWidth,
   recent: loadStored(RECENT_KEY, Schema.Array(Schema.String), []),
   softKeys: loadKept(SOFT_KEYS_KEY, Schema.Array(SoftKey)),
+  isZoomed: loadStored(ZOOM_KEY, Schema.Boolean, false),
 })
 
 // MESSAGE
@@ -479,6 +484,8 @@ export const Message = defineMessageUnion({
   KeyedSidebarEdge: { key: Schema.String },
   ResetSidebarWidth: {},
   CompletedSaveSidebarWidth: {},
+  ClickedZoom: {},
+  CompletedSaveZoom: {},
   PressedPaletteKey: {},
   ClosedPalette: {},
   UpdatedPaletteQuery: { text: Schema.String },

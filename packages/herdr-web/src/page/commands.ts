@@ -5,7 +5,7 @@ import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY } from "./model.ts"
+import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -167,6 +167,12 @@ export const SaveRecent = Command.define("SaveRecent", {
   args: { recent: Schema.Array(Schema.String) },
   messages: [Message.CompletedSaveRecent],
   execute: ({ recent }) => saveStored(RECENT_KEY, Schema.Array(Schema.String), recent).pipe(Effect.as(Message.CompletedSaveRecent())),
+})
+
+export const SaveZoom = Command.define("SaveZoom", {
+  args: { isZoomed: Schema.Boolean },
+  messages: [Message.CompletedSaveZoom],
+  execute: ({ isZoomed }) => saveStored(ZOOM_KEY, Schema.Boolean, isZoomed).pipe(Effect.as(Message.CompletedSaveZoom())),
 })
 
 /** Puts the caret in the palette's search box once it is on the page. */

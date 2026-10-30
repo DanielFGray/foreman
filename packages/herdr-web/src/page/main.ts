@@ -11,7 +11,7 @@ import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
 import { Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, newView, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
@@ -43,11 +43,12 @@ const TYPING_PAUSE = "500 millis"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent, softKeys }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
     isFleetFolded: selection._tag !== "Nothing",
+    isZoomed,
     selection,
     views: {},
     prompts: {},
@@ -507,6 +508,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     CompletedSaveSidebarWidth: () => ({ model }),
 
+    ClickedZoom: () => {
+      const next = modifyFields(model, { isZoomed: (isZoomed) => !isZoomed })
+      return { model: next, commands: [SaveZoom({ isZoomed: next.isZoomed })] }
+    },
+
+    CompletedSaveZoom: () => ({ model }),
+
     PressedPaletteKey: () =>
       Palette.match<UpdateReturn>(model.palette, {
         Closed: () => ({ model: modifyFields(model, { palette: () => Palette.Open({ query: "", highlighted: 0 }) }), commands: [FocusField({ id: PALETTE_INPUT_ID })] }),
@@ -806,7 +814,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   title: "herdr-web",
   body: h.div(
     [
-      h.Class(Option.isSome(model.sidebarGrip) ? "app resizing" : "app"),
+      h.Class(Array.join(["app", ...(Option.isSome(model.sidebarGrip) ? ["resizing"] : []), ...(model.isZoomed ? ["zoomed"] : [])], " ")),
       h.Style({
         "--chat-font": fontStack("chat", model.settings.chat.font),
         "--chat-size": `${model.settings.chat.size}px`,

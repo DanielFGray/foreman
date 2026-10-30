@@ -7,7 +7,7 @@ import type { Size } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
 import { programOf } from "./programs.ts"
-import { Columns2, icon, type IconNode, MessageSquare, Rows2, SquareTerminal, X } from "./icons.ts"
+import { Columns2, icon, type IconNode, Maximize2, MessageSquare, Minimize2, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { modelMenuView, modelTagView } from "./modelMenu.ts"
@@ -47,6 +47,7 @@ export const paneView = (
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
           // Before the view chips, so they stay in place as these show and hide.
           ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
+          zoomButton(model, h),
           // A question that wants typed text is answered in the terminal, so a chat can switch to it.
           ...(supportsAt(model, address, "chat")
             ? Array.map(ViewName.literals, (name) =>
@@ -223,5 +224,13 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
       ]),
       h.button([h.Type("submit")], ["send"]),
     ],
+  )
+
+
+/** Zooms the pane in, or the page out of its zoom; the click also focuses the pane, through its head. */
+const zoomButton = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.button(
+    [h.Type("button"), h.Class(model.isZoomed ? "chip icon-chip zoom-chip on" : "chip icon-chip zoom-chip"), h.Title(model.isZoomed ? "zoom out" : "zoom in: this pane fills the window"), h.AriaLabel("zoom"), h.AriaPressed(model.isZoomed ? "true" : "false"), h.OnClick(Message.ClickedZoom())],
+    [icon(model.isZoomed ? Minimize2 : Maximize2, h)],
   )
 

@@ -1,7 +1,8 @@
 import { Option } from "effect"
-import { all, click, expect, expectAll, given, Mount, role, scene, selector } from "foldkit/scene"
+import { all, click, Command, expect, expectAll, given, Mount, role, scene, selector } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
+import { SaveRecent, SaveSelection, SaveZoom } from "./commands.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, Selection } from "./model.ts"
@@ -61,7 +62,7 @@ const remembered = Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") })
 test("a pane shows its terminal first, and only an agent's pane offers a chat, with the prompt inside it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none() }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -79,6 +80,30 @@ test("a pane shows its terminal first, and only an agent's pane offers a chat, w
 })
 
 test("a reload opens on the remembered tab, and waits for the bridge to show it", () => {
-  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none() })
+  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false })
   scene({ update, view }, given(model), expect(selector(".workspace")).toContainText("Waiting for the bridge."), expect(selector(".fleet")).toHaveClass("folded"))
+})
+
+test("zoom fills the window with the pane whose button was clicked, and the page remembers it", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false }).model, bridge: Bridge.Watching({ fleet }) }),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expect(selector(".app.zoomed")).not.toExist(),
+    click(selector(".pane:not(.focused) .zoom-chip")),
+    Command.expectHas(SaveZoom({ isZoomed: true })),
+    Command.resolveAll([SaveZoom, Message.CompletedSaveZoom()], [SaveSelection, Message.CompletedSaveSelection()], [SaveRecent, Message.CompletedSaveRecent()]),
+    expect(selector(".app.zoomed")).toExist(),
+    // The click reaches the pane head too, so the zoomed pane is the one clicked.
+    expect(selector(".pane.focused .name")).toHaveText("zsh"),
+    expect(role("button", { name: "zoom", pressed: true })).toExist(),
+    click(selector(".pane.focused .zoom-chip")),
+    Command.expectExact(SaveZoom({ isZoomed: false })),
+    Command.resolve(SaveZoom, Message.CompletedSaveZoom()),
+    expect(selector(".app.zoomed")).not.toExist(),
+  )
 })
