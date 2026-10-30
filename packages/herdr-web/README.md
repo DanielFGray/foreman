@@ -7,7 +7,9 @@ A browser view of your [herdr](https://github.com/herdrdev/herdr-app) terminals,
 It shows the spaces, tabs and panes of your herdr-app window, live:
 
 - Type into any terminal, or read a Claude Code agent's conversation as a chat and answer it.
-- See which agents are working, waiting for you, or done, in the sidebar and the tabs.
+- Answer an agent's permission prompts and questions from its chat: tap a choice, or type its number.
+- See which agents are working, waiting for you, or done, and for how long, in the sidebar and the tabs.
+- Open any space, tab, pane or setting by name: press Ctrl+K (Cmd+K on a Mac).
 - Split and close panes, and drag spaces into a new order. herdr-app makes the change, so the window shows it too.
 - Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
 - On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
