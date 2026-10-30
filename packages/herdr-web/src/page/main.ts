@@ -1,4 +1,4 @@
-import { Array, Effect, Match, Option, Record, Result, Schedule, Schema, Stream, String } from "effect"
+import { Array, Clock, Effect, Match, Option, Record, Result, Schedule, Schema, Stream, String } from "effect"
 import { Command, Subscription, type Update } from "foldkit"
 import * as Mount from "foldkit/mount"
 import type { Document, Html, HtmlBuilder } from "foldkit/html"
@@ -8,6 +8,7 @@ import { modifyFields } from "foldkit/struct"
 import { Direction } from "../shared/Api.ts"
 import { ChatUpdate, Entry } from "../shared/Chat.ts"
 import { FontFamily } from "../shared/Fonts.ts"
+import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Fleet, type Layout, type Size, type Space, type Status, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { groupFleet, locate, type SpaceGroup, spaceLabel, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
@@ -15,10 +16,13 @@ import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { fontStack, MAX_SIZE, MIN_SIZE, restyle, saveSettings, Settings, stepSize, Surface, type TextStyle } from "./settings.ts"
 import { KeepTypingFocus, Modifier, Modifiers, modifiersAttribute, NO_MODIFIERS, SOFT_KEYS, withModifiers } from "./keys.ts"
 import { Link, LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
+import { usageBarView } from "./usage.ts"
 
 // CONSTANT
 
 const RECONNECT_DELAY = "2 seconds"
+/** Reset countdowns count in minutes. */
+const CLOCK_TICK = "30 seconds"
 /** The app name hc's status gives a Claude Code agent. */
 const CLAUDE_CODE = "claude-code"
 
@@ -101,6 +105,12 @@ export const Model = Schema.Struct({
   /** Settings take the workspace's place while open. */
   isSettingsOpen: Schema.Boolean,
   fontCatalog: FontCatalog,
+  /** Each coding plan's usage, from the bridge; none before its first reading. */
+  usage: Schema.Option(Usage),
+  /** The plan whose usage panel is open. */
+  usageDetail: Schema.Option(ProviderId),
+  /** The time, for countdowns to a reset. */
+  now: Schema.Finite,
 })
 export type Model = typeof Model.Type
 
@@ -141,6 +151,11 @@ export const Message = defineMessageUnion({
   CompletedKeepTypingFocus: {},
   SucceededPressKeys: { address: Schema.String },
   FailedPressKeys: { address: Schema.String, reason: Schema.String },
+  ReceivedUsage: { usage: Usage },
+  ToggledUsageDetail: { provider: ProviderId },
+  ClickedRefreshUsage: { provider: Schema.Option(ProviderId) },
+  CompletedRefreshUsage: {},
+  TickedClock: { now: Schema.Finite },
 })
 export type Message = typeof Message.Type
 
@@ -160,6 +175,9 @@ export const init = (settings: Settings) => ({
     modifiers: NO_MODIFIERS,
     isSettingsOpen: false,
     fontCatalog: FontCatalog.Loading(),
+    usage: Option.none(),
+    usageDetail: Option.none(),
+    now: 0,
   },
 })
 
@@ -311,6 +329,20 @@ export const update = (model: Model, message: Message) =>
 
     FailedPressKeys: ({ address, reason }) =>
       whenFocused(model, address, () => ({ model: modifyFields(model, { delivery: () => Delivery.Refused({ reason }) }) })),
+
+    ReceivedUsage: ({ usage }) => ({ model: modifyFields(model, { usage: () => Option.some(usage) }) }),
+
+    ToggledUsageDetail: ({ provider }) => ({
+      model: modifyFields(model, {
+        usageDetail: (open) => (Option.contains(open, provider) ? Option.none() : Option.some(provider)),
+      }),
+    }),
+
+    ClickedRefreshUsage: ({ provider }) => ({ model, commands: [RefreshUsage({ provider })] }),
+
+    CompletedRefreshUsage: () => ({ model }),
+
+    TickedClock: ({ now }) => ({ model: modifyFields(model, { now: () => now }) }),
   })
 
 type UpdateReturn = Update.Return<Model, Message, BridgeClient>
@@ -472,6 +504,21 @@ export const SendPrompt = Command.define("SendPrompt", {
     }).pipe(reportFailure((reason) => Message.FailedSendPrompt({ address, reason }))),
 })
 
+// The reading that follows arrives on the usage subscription; a refresh the
+// bridge did not take costs only a stale number, so it is logged.
+export const RefreshUsage = Command.define("RefreshUsage", {
+  args: { provider: Schema.Option(ProviderId) },
+  messages: [Message.CompletedRefreshUsage],
+  execute: ({ provider }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.refreshUsage({ provider })
+    }).pipe(
+      Effect.catch((error) => Effect.logWarning("the bridge did not refresh the usage", failureReason(error))),
+      Effect.as(Message.CompletedRefreshUsage()),
+    ),
+})
+
 export const PressKeys = Command.define("PressKeys", {
   args: { address: Schema.String, keys: Schema.Array(Schema.String) },
   messages: [Message.SucceededPressKeys, Message.FailedPressKeys],
@@ -506,6 +553,32 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
             Stream.concat(Stream.make(Message.LostBridge())),
           )
         }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
+    },
+  ),
+
+  // The usage of each coding plan, for the life of the page, as the fleet.
+  usage: entry(
+    {},
+    {
+      modelToDependencies: () => ({}),
+      dependenciesToStream: () =>
+        Effect.gen(function* () {
+          const client = yield* BridgeClient
+          return client.usage().pipe(
+            Stream.map((usage) => Message.ReceivedUsage({ usage })),
+            Stream.tapCause((cause) => Effect.logWarning("the bridge's usage watch failed", cause)),
+            Stream.catchCause(() => Stream.empty),
+          )
+        }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
+    },
+  ),
+
+  clock: entry(
+    {},
+    {
+      modelToDependencies: () => ({}),
+      dependenciesToStream: () =>
+        Stream.fromEffectSchedule(Clock.currentTimeMillis, Schedule.spaced(CLOCK_TICK)).pipe(Stream.map((now) => Message.TickedClock({ now }))),
     },
   ),
 
@@ -546,6 +619,16 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
           h.nav([h.Class(model.isFleetFolded ? "fleet folded" : "fleet")], fleetView(model, h)),
           model.isSettingsOpen ? settingsView(model, h) : workspaceView(model, h),
         ],
+      ),
+      ...usageBarView(
+        model.usage,
+        model.usageDetail,
+        model.now,
+        {
+          toggled: (provider) => Message.ToggledUsageDetail({ provider }),
+          refreshed: (provider) => Message.ClickedRefreshUsage({ provider }),
+        },
+        h,
       ),
     ],
   ),

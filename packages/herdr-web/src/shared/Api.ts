@@ -4,6 +4,7 @@ import { Rpc, RpcGroup } from "effect/rpc"
 import { ChatUpdate } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { FontFamily } from "./Fonts.ts"
+import { ProviderId, Usage } from "./Usage.ts"
 
 /**
  * A call that failed. `kind` is hc's error kind, `lost` or `protocol` for hc
@@ -60,4 +61,8 @@ export const Api = RpcGroup.make(
   Rpc.make("closePane", { payload: { pane: Schema.String }, error: BridgeError }),
   /** The font families the bridge serves at /fonts.css. */
   Rpc.make("fonts", { success: Schema.Array(FontFamily) }),
+  /** Each coding plan's usage now, then after every read; the bridge reads only while a page watches. */
+  Rpc.make("usage", { success: Usage, stream: true }),
+  /** Reads one provider's usage, or every one's (none), now. */
+  Rpc.make("refreshUsage", { payload: { provider: Schema.OptionFromNullOr(ProviderId) } }),
 )

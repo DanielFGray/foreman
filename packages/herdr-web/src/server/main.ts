@@ -3,7 +3,7 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun"
 import { Config, Effect, Inspectable, Layer, Match, Stream } from "effect"
 import type { PlatformError } from "effect/PlatformError"
-import { HttpRouter, HttpStaticServer } from "effect/http"
+import { FetchHttpClient, HttpRouter, HttpStaticServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
 import { Hc } from "../hc/Hc.ts"
 import type { HcFailure } from "../hc/Connection.ts"
@@ -14,6 +14,7 @@ import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { LiveTerminals } from "./LiveTerminals.ts"
+import { Usage } from "./usage/Usage.ts"
 
 const toBridgeError = (error: HcFailure) =>
   Match.valueTags(error, {
@@ -38,6 +39,7 @@ const Handlers = Api.toLayer(
     const live = yield* LiveTerminals
     const app = yield* HerdrApp
     const fonts = yield* Fonts
+    const usage = yield* Usage
     return {
       watch: () => fleet.changes,
       chat: ({ terminal }) =>
@@ -64,6 +66,8 @@ const Handlers = Api.toLayer(
         app.split(pane, direction).pipe(Effect.map(({ terminal }) => ({ terminal })), Effect.mapError(toAppError)),
       closePane: ({ pane }) => app.close(pane).pipe(Effect.asVoid, Effect.mapError(toAppError)),
       fonts: () => Effect.succeed(fonts.families),
+      usage: () => usage.changes,
+      refreshUsage: ({ provider }) => usage.refresh(provider),
     }
   }),
 )
@@ -84,8 +88,8 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: LOOPBACK, port })))
   }),
 ).pipe(
-  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer, Fonts.layer]),
-  Layer.provide([Hc.layer, BunServices.layer]),
+  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer, Fonts.layer, Usage.layer]),
+  Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),
 )
 
 BunRuntime.runMain(Layer.launch(Bridge))

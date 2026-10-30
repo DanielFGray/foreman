@@ -289,3 +289,60 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .layout :is(.pane.focused, .split:has(.pane.focused)) { flex-grow: 1 !important; }
   .split { gap: 0; }
 }
+
+/* The quota bar: a meter per coding plan, and above it the open plan's detail. */
+.usage { position: relative; background: var(--mantle); border-top: 1px solid var(--surface); font-size: 12px; }
+.usage-bar { display: flex; gap: 4px; padding: 2px 8px; overflow-x: auto; }
+.usage-segment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+}
+.usage-segment:hover, .usage-segment.on { background: var(--surface); }
+.usage-meter { width: 48px; height: 5px; border-radius: 3px; background: var(--surface); overflow: hidden; }
+.usage-meter > span { display: block; height: 100%; border-radius: 3px; background: var(--subtext); }
+.usage-percent { color: var(--subtext); font-variant-numeric: tabular-nums; }
+.usage-error { color: var(--yellow); }
+p.usage-error { margin: 0; }
+
+.usage-detail {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  width: min(22rem, calc(100vw - 16px));
+  max-height: 70dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  background: var(--mantle);
+  border: 1px solid var(--surface);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  font-size: 13px;
+  z-index: 10;
+}
+.usage-title { display: flex; justify-content: space-between; gap: 8px; }
+.usage-title span, .usage-note { color: var(--subtext); font-size: 12px; }
+.usage-window, .usage-section { display: flex; flex-direction: column; gap: 4px; }
+.usage-row { display: flex; justify-content: space-between; gap: 8px; }
+.usage-left { position: relative; height: 6px; border-radius: 3px; background: var(--surface); }
+.usage-left > span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.usage-left > i { position: absolute; top: -2px; width: 2px; height: 10px; background: var(--text); }
+.usage-meter.warning > span, .usage-left.warning > span { background: var(--yellow); }
+.usage-meter.critical > span, .usage-left.critical > span { background: var(--red); }
+.usage-actions { display: flex; align-items: center; gap: 8px; }
+.usage-updated { margin-right: auto; color: var(--subtext); font-size: 12px; }
+.usage-actions a { color: var(--accent); }
+@media (max-width: 600px) {
+  .usage-bar { gap: 0; padding: 2px 4px; }
+  .usage-segment { gap: 4px; padding: 3px 4px; }
+  .usage-meter { width: 16px; }
+}
