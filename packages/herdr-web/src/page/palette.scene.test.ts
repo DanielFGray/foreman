@@ -25,7 +25,7 @@ const agent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
-  git: {},
+  git: { s2: { branch: Option.some("feat/login"), changed: false } },
   terminals: [agent],
   machines: [
     {
@@ -120,5 +120,17 @@ test("a setting is found by a word a user would try, and opens the settings", ()
     Command.expectHas(SaveSelection({ selection: Selection.Settings() })),
     Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
     Command.resolve(FetchFonts, Message.ReceivedFonts({ families: [] })),
+  )
+})
+
+test("a space is found by its git branch", () => {
+  scene(
+    { update, view },
+    given(start),
+    Subscription.emit(Message.PressedPaletteKey()),
+    Command.resolve(FocusPalette, Message.CompletedFocusPalette()),
+    type(box, "login"),
+    expectAll(all.role("option")).toHaveCount(1),
+    expect(role("option", { name: /^quiet/ })).toContainText("feat/login"),
   )
 })

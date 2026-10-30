@@ -1,6 +1,6 @@
 // The command palette's search: every machine's spaces, tabs, panes and
 // agents, and the settings, matched by a typed query and ranked.
-import { Array, Option, Order, pipe, Result, Schema, String } from "effect"
+import { Array, Option, Order, pipe, Record, Result, Schema, String } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
 import type { Fleet, Terminal } from "../shared/Fleet.ts"
 import { locate, spaceRowOf, spacesOf, terminalLabel, terminalNote } from "./group.ts"
@@ -38,8 +38,8 @@ const MAX_RESULTS = 40
 /**
  * The results for a query, grouped in the palette's order. Each word of the
  * query must match a result's title or one of its other fields (folder,
- * program, machine, tab); a title match ranks above a field match, and a
- * match at the start of the title above one in its middle. An empty query
+ * git branch, program, machine, tab); a title match ranks above a field
+ * match, and a match at the start of the title above one in its middle. An empty query
  * lists the recent panes first, then everything.
  */
 export const searchPalette = (fleet: Option.Option<Fleet>, recent: ReadonlyArray<string>, query: string): ReadonlyArray<PaletteResult> => {
@@ -98,13 +98,21 @@ const fleetEntries = (fleet: Option.Option<Fleet>): ReadonlyArray<Entry> =>
           onSome: ({ name }) => name,
         })
       const rows = Array.map(spacesOf(current), spaceRow)
+      const branchOf = (spaceId: string) => Option.flatMap(Record.get(current.git, spaceId), ({ branch }) => branch)
       const spaces = Array.flatMap(rows, ({ space, label, tabs }) =>
         Option.match(Array.head(tabs), {
           onNone: () => [],
           onSome: ({ tab }): ReadonlyArray<Entry> => [
             {
-              result: { key: `space/${space.id}`, group: "Spaces", icon: Folder, title: label, detail: space.folder, target: PaletteTarget.Tab({ tabId: tab.id }) },
-              fields: [space.folder, machineOf(space.id), ...Array.map(tabs, (row) => row.label)],
+              result: {
+                key: `space/${space.id}`,
+                group: "Spaces",
+                icon: Folder,
+                title: label,
+                detail: Option.match(branchOf(space.id), { onNone: () => space.folder, onSome: (branch) => `${space.folder} · ${branch}` }),
+                target: PaletteTarget.Tab({ tabId: tab.id }),
+              },
+              fields: [space.folder, machineOf(space.id), ...Option.toArray(branchOf(space.id)), ...Array.map(tabs, (row) => row.label)],
             },
           ],
         }),
