@@ -1,6 +1,7 @@
 // Messages for an agent, held until it can take them. A message waits while
 // the agent works, waits on a question, or holds text typed into its own
 // input box in the terminal, and goes as soon as none of these is so. The
+// input box counts only for an agent whose box the page reads. The
 // queue lives in the page, so it outlasts a lost connection to the bridge.
 import { Array, Option, Record, Schema, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
@@ -8,7 +9,7 @@ import { modifyFields } from "foldkit/struct"
 import { InputBox } from "../shared/Chat.ts"
 import { SendPrompt } from "./commands.ts"
 import { Message, type Model, type Queued, QueueState, type UpdateReturn } from "./model.ts"
-import { lastFleet } from "./selection.ts"
+import { lastFleet, supportsAt } from "./selection.ts"
 import { refusedPrompt, sentPrompt } from "./waiting.ts"
 
 /** Puts a message at the end of the agent's queue, and sends what may go. */
@@ -132,19 +133,22 @@ const sending = (model: Model, { address, id, text }: Queued): Model =>
 /** What keeps the agent from taking a message now, if anything, in words for the queue. */
 const blocker = (model: Model, address: string): Option.Option<string> => {
   const state = Option.flatMap(terminalAt(model, address), ({ status }) => Option.map(status, ({ state }) => state))
-  const box = Record.get(model.boxes, address)
   return model.bridge._tag !== "Watching"
     ? Option.some("waits for the bridge")
     : Option.contains(state, "working")
       ? Option.some("waits for the agent's turn to end")
       : Option.contains(state, "blocked")
         ? Option.some("waits for the agent's question to be answered")
-        : Option.isNone(box)
-          ? Option.some("waits for a reading of the agent's input box")
-          : Option.exists(box, ({ _tag }) => _tag === "Draft")
-            ? Option.some("waits for the agent's input box to empty")
-            : Option.none()
+        : supportsAt(model, address, "inputBox")
+          ? boxBlocker(Record.get(model.boxes, address))
+          : Option.none()
 }
+
+const boxBlocker = (box: Option.Option<InputBox>): Option.Option<string> =>
+  Option.match(box, {
+    onNone: () => Option.some("waits for a reading of the agent's input box"),
+    onSome: ({ _tag }) => (_tag === "Draft" ? Option.some("waits for the agent's input box to empty") : Option.none()),
+  })
 
 // What a held message waits on a change of.
 const Sign = Schema.Struct({ isConnected: Schema.Boolean, statusMs: Schema.Option(Schema.Int), box: Schema.Option(InputBox) })

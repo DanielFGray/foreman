@@ -6,7 +6,7 @@
 // only the program's name, so those stay unknown.
 //
 // Each feature an agent lists here, the bridge implements in that agent's
-// adapter (src/server/agents/Agents.ts); the types hold the two to the same list.
+// adapter (src/server/Agents.ts); the types hold the two to the same list.
 import { Array, HashMap, Option, pipe, String } from "effect"
 import type { Terminal } from "./Fleet.ts"
 
@@ -69,7 +69,7 @@ export const HARNESSES = [
   terminalOnly("cline", "Cline", [".cline"]),
   terminalOnly("omp", "omp", ["omp"]),
   terminalOnly("mastracode", "Mastra Code", ["mastra-code"]),
-  terminalOnly("opencode", "OpenCode", ["opencode2", "open-code"]),
+  { id: "opencode", name: "OpenCode", programs: ["opencode2", "open-code"], features: ["chat"], picker: Option.none() },
   terminalOnly("copilot", "Copilot", ["github-copilot", "ghcs"]),
   terminalOnly("kimi", "Kimi", ["kimi-code"]),
   terminalOnly("kiro", "Kiro", ["kiro-cli"]),

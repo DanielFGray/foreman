@@ -22,6 +22,7 @@ const agent: Terminal = {
   foreground: Option.some({ name: "claude", pid: 7, argv: ["claude"] }),
   labels: {},
   created_ms: 0,
+  records: Option.none(),
   cols: 80,
   rows: 24,
   parent: Option.none(),

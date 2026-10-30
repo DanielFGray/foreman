@@ -20,6 +20,7 @@ const agent: Terminal = {
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
+  records: Option.none(),
   parent: Option.none(),
   cols: 80,
   rows: 24,

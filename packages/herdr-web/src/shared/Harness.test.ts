@@ -14,6 +14,7 @@ const terminal = (app: Option.Option<string>, program: Option.Option<string>): T
   foreground: Option.map(program, (name) => ({ name, pid: 1, argv: [name] })),
   labels: {},
   created_ms: 0,
+  records: Option.none(),
   cols: 80,
   rows: 24,
   parent: Option.none(),

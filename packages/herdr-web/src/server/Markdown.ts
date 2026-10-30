@@ -6,7 +6,7 @@ import type { PhrasingContent, RootContent } from "mdast"
 import { fromMarkdown } from "mdast-util-from-markdown"
 import { gfmFromMarkdown } from "mdast-util-gfm"
 import { gfm } from "micromark-extension-gfm"
-import type { Block, Inline } from "../../shared/Chat.ts"
+import type { Block, Inline } from "../shared/Chat.ts"
 
 export const parseMarkdown = (text: string): ReadonlyArray<Block> =>
   toBlocks(fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children)

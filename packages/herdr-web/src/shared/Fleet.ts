@@ -34,6 +34,8 @@ export const Terminal = Schema.Struct({
   cwd: Schema.String,
   state: Schema.Literals(["live", "finished"]),
   status: Schema.OptionFromOptionalNullOr(Status),
+  /** The program's other 7501 reports, by their record id, for programs that report on several things at once. */
+  records: Schema.OptionFromOptionalNullOr(Schema.Record(Schema.String, Status)),
   /** When `status` last changed, in milliseconds since the epoch. */
   status_ms: Schema.OptionFromOptionalNullOr(Schema.Int),
   foreground: Schema.OptionFromOptionalNullOr(Foreground),

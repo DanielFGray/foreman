@@ -4,9 +4,9 @@
 // would show every turn twice. Claude Code writes one content block per line,
 // so each block becomes its own entry and no lines need merging.
 import { Array, Match, Option, pipe, Schema, String } from "effect"
-import type { Entry } from "../../shared/Chat.ts"
+import { type Entry, toolSummary } from "../../shared/Chat.ts"
 import { wireTag } from "../../shared/Wire.ts"
-import { parseMarkdown } from "./Markdown.ts"
+import { parseMarkdown } from "../Markdown.ts"
 
 /** The chat entries one transcript line holds; none for a line the chat does not show or cannot read. */
 export const decodeLine = (line: string): ReadonlyArray<Entry> =>
@@ -180,19 +180,8 @@ const assistantEntries = (id: string, block: AssistantBlock): ReadonlyArray<Entr
     }),
   )
 
-const SUMMARY_LENGTH = 160
-
-/** The first line of the most telling input, such as a Bash command's description or a Read's file path. */
-const summarize = (input: ToolInput) =>
-  pipe(
-    [input.description, input.command, input.file_path, input.pattern, input.url, input.query, input.prompt],
-    Array.map(Option.fromUndefinedOr),
-    Array.getSomes,
-    Array.findFirst(String.isNonEmpty),
-    Option.flatMap((value) => Array.head(String.split(value, "\n"))),
-    Option.map((line) => line.slice(0, SUMMARY_LENGTH)),
-    Option.getOrElse(() => ""),
-  )
+/** The most telling input first, such as a Bash command's description or a Read's file path. */
+const summarize = (input: ToolInput) => toolSummary([input.description, input.command, input.file_path, input.pattern, input.url, input.query, input.prompt])
 
 // MODEL
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { Array, Option } from "effect"
 import { type Entry, modelName } from "../../shared/Chat.ts"
-import { parseMarkdown } from "./Markdown.ts"
+import { parseMarkdown } from "../Markdown.ts"
 import { decodeLine, newestModel, splitLines } from "./Transcript.ts"
 
 // Lines shaped like Claude Code's own (fields trimmed to the ones that matter).

@@ -6,7 +6,7 @@ A browser view of your [herdr](https://github.com/herdrdev/herdr-app) terminals,
 
 It shows the spaces, tabs and panes of your herdr-app window, live:
 
-- Type into any terminal, or read a Claude Code agent's conversation as a chat and answer it.
+- Type into any terminal, or read a Claude Code agent's conversation as a chat and answer it. An OpenCode pane shows its conversation as a chat too, read from OpenCode's database with `sqlite3` on the pane's machine; until OpenCode's title or status points to one session, the chat says it does not know which session the pane shows.
 - Answer an agent's permission prompts and questions from its chat: tap a choice, or type its number.
 - Send messages while an agent works: they wait in a queue and go when its turn ends. "Send now" hands one over at once. A message never goes while the agent's input box in its terminal holds text you typed there. When the box is empty, the chat prompt shows the agent's suggested next prompt.
 - Type `/` in a Claude Code chat prompt to see the commands that match: the skills and commands Claude Code reads for the pane's folder (yours, the project's and enabled plugins'), and a few built-ins. A tap writes the command into the prompt and sends nothing. The terminal's own `/` menu has the full list.

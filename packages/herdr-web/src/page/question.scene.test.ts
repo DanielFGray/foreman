@@ -28,6 +28,7 @@ const claude = (status: Status, statusMs: number): Terminal => ({
   labels: {},
   status_ms: Option.some(statusMs),
   created_ms: 0,
+  records: Option.none(),
   parent: Option.none(),
   cols: 80,
   rows: 24,

@@ -21,6 +21,7 @@ const claude: Terminal = {
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
+  records: Option.none(),
   parent: Option.none(),
   cols: 80,
   rows: 24,
@@ -186,6 +187,23 @@ describe("the queue", () => {
       click(role("button", { name: "send" })),
       expect(selector(".queued")).toContainText("waits for the agent's input box to empty"),
       Subscription.emit(Message.ReceivedInputBox({ address: "t1", box: { _tag: "Empty" } })),
+      Command.expectExact(SendPrompt({ address: "t1", id: 0, text: "hello", whileWorking: false })),
+      Command.resolve(SendPrompt, Message.SucceededSendPrompt({ address: "t1", id: 0 })),
+    )
+  })
+
+  test("sends to an idle agent whose input box the page does not read, with no reading of it", () => {
+    const opencode: Terminal = {
+      ...claude,
+      foreground: Option.some({ name: "opencode", pid: 1, argv: [] }),
+      status: Option.map(claude.status, (status) => ({ ...status, app: Option.some("opencode") })),
+    }
+    scene(
+      { update, view },
+      given({ ...chatOpen([]), bridge: Bridge.Watching({ fleet: { ...fleet, terminals: [opencode] } }), boxes: {} }),
+      Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()]),
+      typeInto(role("textbox", { name: "Prompt" }), "hello"),
+      click(role("button", { name: "send" })),
       Command.expectExact(SendPrompt({ address: "t1", id: 0, text: "hello", whileWorking: false })),
       Command.resolve(SendPrompt, Message.SucceededSendPrompt({ address: "t1", id: 0 })),
     )

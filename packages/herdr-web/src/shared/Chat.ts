@@ -1,7 +1,7 @@
 // An agent's conversation as the page shows it: what the user asked, what the
 // agent answered (as Markdown, already parsed), and the tools it ran. The
 // bridge builds these from the agent's own transcript.
-import { Array, Option, Schema, String } from "effect"
+import { Array, Option, pipe, Schema, String } from "effect"
 
 // MARKDOWN
 // A small Markdown vocabulary the page draws with its own elements. Raw HTML
@@ -60,7 +60,7 @@ export const Block: Schema.Codec<Block, BlockEncoded> = Schema.Union([
 
 // ENTRY
 
-/** One thing in the conversation, in transcript order. `id` is the transcript line's uuid. */
+/** One thing in the conversation, in order. `id` is unique within the conversation. */
 export const Entry = Schema.Union([
   /** What the user typed. */
   Schema.TaggedStruct("Prompt", { id: Schema.String, text: Schema.String }),
@@ -79,7 +79,23 @@ export const Entry = Schema.Union([
 ])
 export type Entry = typeof Entry.Type
 
-/** What the chat call streams: the recent entries first (`Reset`), then each batch of new ones. */
+/** A Tool entry's summary: the first line of the first nonempty value, such as a command's description or a file's path. */
+export const toolSummary = (values: ReadonlyArray<string | null | undefined>) =>
+  pipe(
+    Array.getSomes(Array.map(values, Option.fromNullishOr)),
+    Array.findFirst(String.isNonEmpty),
+    Option.flatMap((value) => Array.head(String.split(value, "\n"))),
+    Option.map((line) => line.slice(0, SUMMARY_LENGTH)),
+    Option.getOrElse(() => ""),
+  )
+
+const SUMMARY_LENGTH = 160
+
+/**
+ * What the chat call streams: the recent entries first (`Reset`), then each
+ * batch of new ones. An agent that changes entries in place, such as a reply
+ * it still writes, sends a whole `Reset` again.
+ */
 export const ChatUpdate = Schema.Union([
   Schema.TaggedStruct("Reset", { entries: Schema.Array(Entry) }),
   Schema.TaggedStruct("Appended", { entries: Schema.Array(Entry) }),

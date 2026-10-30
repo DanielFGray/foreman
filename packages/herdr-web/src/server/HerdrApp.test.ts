@@ -14,6 +14,7 @@ const terminal = (address: string, parent: Option.Option<string>, space = ""): T
   labels: space === "" ? {} : { "herdr.space": space },
   status_ms: Option.none(),
   created_ms: 0,
+  records: Option.none(),
   parent,
   cols: 80,
   rows: 24,

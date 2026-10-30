@@ -9,6 +9,7 @@ import type { Terminal } from "../shared/Fleet.ts"
 import { type Feature, harnessOf, type HarnessId, type HarnessWith } from "../shared/Harness.ts"
 import type { SlashCommand } from "../shared/SlashCommand.ts"
 import { claudeCode } from "./claude/ClaudeCode.ts"
+import { openCode } from "./opencode/OpenCode.ts"
 import { toBridgeError } from "./hcError.ts"
 
 /** What each feature takes from an adapter. Each acts on the terminal as hc reported it just now. */
@@ -38,9 +39,10 @@ export class Agents extends Context.Service<Agents>()("herdr-web/server/Agents",
   make: Effect.gen(function* () {
     const hc = yield* Hc
     const claude = yield* claudeCode
+    const opencode = yield* openCode
     // Feature first, so each lists exactly the agents that offer it.
     const adapters: { readonly [F in Feature]: Record.ReadonlyRecord<string, Features[F]> } = {
-      chat: { "claude-code": claude.chat },
+      chat: { "claude-code": claude.chat, opencode: opencode.chat },
       model: { "claude-code": claude.model },
       inputBox: { "claude-code": claude.inputBox },
       questions: { "claude-code": claude.questions },
