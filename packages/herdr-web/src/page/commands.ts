@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
-import { Question } from "../shared/Chat.ts"
+import { Answer, Question } from "../shared/Chat.ts"
 import { ProviderId } from "../shared/Usage.ts"
 import { Message, RECENT_KEY, SELECTION_KEY, Selection } from "./model.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
@@ -146,12 +146,12 @@ export const FocusPalette = Command.define("FocusPalette", {
 })
 
 export const AnswerQuestion = Command.define("AnswerQuestion", {
-  args: { address: Schema.String, question: Question, choice: Schema.Int },
+  args: { address: Schema.String, question: Question, answer: Answer },
   messages: [Message.SucceededAnswer, Message.FailedAnswer],
-  execute: ({ address, question, choice }) =>
+  execute: ({ address, question, answer }) =>
     Effect.gen(function* () {
       const client = yield* BridgeClient
-      yield* client.answer({ terminal: address, question, choice })
+      yield* client.answer({ terminal: address, question, answer })
       return Message.SucceededAnswer({ address })
     }).pipe(reportFailure((reason) => Message.FailedAnswer({ address, reason }))),
 })

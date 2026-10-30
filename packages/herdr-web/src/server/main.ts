@@ -70,9 +70,9 @@ const Handlers = Api.toLayer(
           Effect.repeat({ ...REDRAW, until: Option.isSome }),
           Effect.mapError(toBridgeError),
         ),
-      answer: ({ terminal, question, choice }) =>
+      answer: ({ terminal, question, answer }) =>
         hc.screen(terminal).pipe(
-          Effect.map((screen) => keyFor(screen, question, choice)),
+          Effect.map((screen) => keyFor(screen, question, answer)),
           Effect.mapError(toBridgeError),
           Effect.flatMap(
             Option.match({
@@ -82,6 +82,8 @@ const Handlers = Api.toLayer(
               // pressed, so a slow or failed read does not fail the answer.
               onSome: (key) =>
                 hc.keys(terminal, [key]).pipe(
+                  // The key opened the text field under the menu; the text goes there.
+                  Effect.andThen(Match.valueTags(answer, { Picked: () => Effect.void, Typed: ({ text }) => Effect.asVoid(hc.answer(terminal, text)) })),
                   Effect.mapError(toBridgeError),
                   Effect.andThen(hc.screen(terminal).pipe(Effect.repeat({ ...REDRAW, until: (screen) => !asks(screen, question) }), Effect.ignore)),
                 ),

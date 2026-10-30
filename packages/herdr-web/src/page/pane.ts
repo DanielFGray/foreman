@@ -13,7 +13,7 @@ import { Conversation, Delivery, Message, type Model, PaneAction, View, ViewName
 import { findTerminal, isClaudeCode, labelAt, maybeFocus, viewOf } from "./selection.ts"
 import { fontStack } from "./settings.ts"
 import { stateOf, statusDot } from "./status.ts"
-import { questionView } from "./question.ts"
+import { ownAnswerPrompt, questionView } from "./question.ts"
 import { waitingAt } from "./waiting.ts"
 import { LiveTerminal, MODIFIERS_ATTRIBUTE } from "./terminal.ts"
 
@@ -66,11 +66,10 @@ export const paneView = (
             [
               Conversation.match(conversation, {
                 Loading: () => h.p([h.Class("chat note")], ["reading the conversation…"]),
-                Shown: ({ entries }) => chatView(entries, waitingAt(model, address), h),
+                Shown: ({ entries }) => chatView(entries, waitingAt(model, address), questionView(model, address, h), h),
                 Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
               }),
-              ...questionView(model, address, h),
-              ...(isFocused ? [promptView(model, h)] : []),
+              ...(isFocused ? [promptView(model, address, h)] : []),
             ],
           ),
         Terminal: ({ link }) =>
@@ -185,7 +184,7 @@ const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html 
 }
 
 /** The focused chat's prompt: its text goes to the agent, and Enter after it. */
-const promptView = (model: Model, h: HtmlBuilder<Message>): Html => {
+const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Html => {
   const isSending = Delivery.match(model.delivery, { Ready: () => false, Sending: () => true, Refused: () => false })
   return h.form(
     [h.Class("prompt"), h.OnSubmit(Message.SubmittedPrompt())],
@@ -193,6 +192,7 @@ const promptView = (model: Model, h: HtmlBuilder<Message>): Html => {
       h.textarea([
         h.Value(model.prompt),
         h.AriaLabel("Prompt"),
+        h.Placeholder(Option.getOrElse(ownAnswerPrompt(model, address), () => "")),
         h.OnInput((text) => Message.UpdatedPrompt({ text })),
       ]),
       h.button([h.Type("submit"), h.Disabled(isSending)], [isSending ? "sending…" : "send"]),

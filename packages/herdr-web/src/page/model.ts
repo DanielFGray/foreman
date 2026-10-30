@@ -6,7 +6,7 @@ import type { Update } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
 import { Direction } from "../shared/Api.ts"
-import { ChatUpdate, Entry, Question } from "../shared/Chat.ts"
+import { Answer, ChatUpdate, Entry, Question } from "../shared/Chat.ts"
 import { Fleet } from "../shared/Fleet.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
@@ -115,8 +115,8 @@ export type Waiting = typeof Waiting.Type
 /** What the page knows of the question an agent waits on. */
 export const Asking = defineTaggedUnion({
   Reading: {},
-  /** `sending` is the choice on its way to the agent. */
-  Shown: { question: Question, sending: Schema.Option(Schema.Int) },
+  /** `sending` is the answer on its way to the agent. */
+  Shown: { question: Question, sending: Schema.Option(Answer) },
   /** The agent waits, but its screen shows no menu the page can answer. */
   Unshown: { reason: Schema.Option(Schema.String) },
 })

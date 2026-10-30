@@ -8,7 +8,8 @@ import { Clock, icon } from "./icons.ts"
 import type { WaitingBubble } from "./waiting.ts"
 
 /** The entries, then the prompts sent and not yet recorded, as faded bubbles. */
-export const chatView = <M>(entries: ReadonlyArray<Entry>, waiting: ReadonlyArray<WaitingBubble>, h: HtmlBuilder<M>): Html =>
+/** The conversation, then `after` under its newest entry: the question the agent waits on. */
+export const chatView = <M>(entries: ReadonlyArray<Entry>, waiting: ReadonlyArray<WaitingBubble>, after: ReadonlyArray<Html>, h: HtmlBuilder<M>): Html =>
   // The outer element is a reversed flex column, so it opens at the newest entry.
   h.div(
     [h.Class("chat")],
@@ -21,6 +22,7 @@ export const chatView = <M>(entries: ReadonlyArray<Entry>, waiting: ReadonlyArra
             onNonEmpty: (items) => Array.map(items, (item) => itemView(item, h)),
           }),
           ...Array.map(waiting, (one, index) => waitingView(one, index, h)),
+          ...after,
         ],
       ),
     ],

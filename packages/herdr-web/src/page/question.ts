@@ -4,9 +4,10 @@
 // since a series of questions keeps one status. The card shows only while the
 // agent still waits under the status it was read under, so an answer from the
 // terminal or another device takes it away with the next fleet.
-import { Array, Option, Record, Schema, String } from "effect"
+import { Array, Match, Option, Record, Schema, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
+import type { Answer, Question } from "../shared/Chat.ts"
 import type { Terminal } from "../shared/Fleet.ts"
 import { AnswerQuestion } from "./commands.ts"
 import { type Asked, Asking, Message, type Model, type UpdateReturn } from "./model.ts"
@@ -42,22 +43,15 @@ export const readQuestion = (model: Model, address: string, statusMs: number, as
       ),
   })
 
-/** Sends the choice, while the card shows it and no other choice is on its way. */
-export const chose = (model: Model, address: string, choice: number): UpdateReturn =>
+/** Sends the answer, while the card's question takes it and no other answer is on its way. */
+export const chose = (model: Model, address: string, answer: Answer): UpdateReturn =>
   Option.match(
-    Option.flatMap(asked(model, address), ({ asking }) =>
-      Asking.match(asking, {
-        Shown: ({ question, sending }) =>
-          Option.isNone(sending) && Array.some(question.choices, ({ number }) => number === choice) ? Option.some(question) : Option.none(),
-        Reading: () => Option.none(),
-        Unshown: () => Option.none(),
-      }),
-    ),
+    Option.filter(shownQuestion(model, address), ({ question, sending }) => Option.isNone(sending) && takes(question, answer)),
     {
       onNone: () => ({ model }),
-      onSome: (question) => ({
-        model: withAsking(model, address, Asking.Shown({ question, sending: Option.some(choice) })),
-        commands: [AnswerQuestion({ address, question, choice })],
+      onSome: ({ question }) => ({
+        model: withAsking(model, address, Asking.Shown({ question, sending: Option.some(answer) })),
+        commands: [AnswerQuestion({ address, question, answer })],
       }),
     },
   )
@@ -66,18 +60,27 @@ export const chose = (model: Model, address: string, choice: number): UpdateRetu
 export const answered = (model: Model, address: string, notice: Option.Option<string>): Model =>
   changed(model, address, (one) => ({ ...one, reads: one.reads + 1, notice, asking: Asking.Reading() }))
 
-/** The choice a prompt names when its agent waits on a question: its number alone, such as "2". */
-export const typedChoice = (model: Model, address: string, text: string): Option.Option<number> =>
-  Option.flatMap(asked(model, address), ({ asking }) =>
-    Asking.match(asking, {
-      Shown: ({ question }) =>
-        Option.map(
-          Array.findFirst(question.choices, ({ number }) => `${number}` === String.trim(text)),
-          ({ number }) => number,
-        ),
-      Reading: () => Option.none(),
-      Unshown: () => Option.none(),
-    }),
+/**
+ * The answer a prompt gives when its agent waits on a question: a choice's
+ * number alone, such as "2", picks that choice; other text is an answer of the
+ * user's own, when the question takes one.
+ */
+export const typedAnswer = (model: Model, address: string, text: string): Option.Option<Answer> =>
+  Option.flatMap(shownQuestion(model, address), ({ question }) =>
+    Option.match(
+      Array.findFirst(question.choices, ({ number }) => `${number}` === String.trim(text)),
+      {
+        onSome: ({ number }): Option.Option<Answer> => Option.some({ _tag: "Picked", choice: number }),
+        onNone: () => Option.as(question.ownAnswer, { _tag: "Typed", text: String.trim(text) }),
+      },
+    ),
+  )
+
+/** What the prompt says while the agent at `address` waits on a question that takes an answer of the user's own. */
+export const ownAnswerPrompt = (model: Model, address: string): Option.Option<string> =>
+  Option.as(
+    Option.filter(shownQuestion(model, address), ({ question }) => Option.isSome(question.ownAnswer)),
+    "Your own answer, or a choice's number",
   )
 
 /** The card for the question the agent at `address` waits on, under its chat. */
@@ -87,7 +90,12 @@ export const questionView = (model: Model, address: string, h: HtmlBuilder<Messa
     {
       onNone: () => [],
       onSome: ({ terminal, notice, asking }) => {
-        const about = Option.flatMap(terminal.status, ({ msg }) => msg)
+        // A permission's status names the tool and its input, which the menu
+        // does not; a question's status only says the question again.
+        const about = Option.flatMap(
+          Option.filter(terminal.status, ({ kind }) => Option.contains(kind, "permission")),
+          ({ msg }) => msg,
+        )
         return Asking.match(asking, {
           Reading: () => [],
           Unshown: ({ reason }) => [
@@ -112,7 +120,7 @@ export const questionView = (model: Model, address: string, h: HtmlBuilder<Messa
                         h.Class("choice"),
                         h.AriaLabel(`${number}. ${label}`),
                         h.Disabled(Option.isSome(sending)),
-                        h.AriaBusy(Option.contains(sending, number)),
+                        h.AriaBusy(Option.exists(sending, (answer) => answer._tag === "Picked" && answer.choice === number)),
                         h.OnClick(Message.ClickedChoice({ address, choice: number })),
                       ],
                       [
@@ -123,6 +131,7 @@ export const questionView = (model: Model, address: string, h: HtmlBuilder<Messa
                     ),
                   ),
                 ),
+                ...(Option.isSome(question.ownAnswer) ? [h.p([h.Class("question-own")], ["Or type your own answer below."])] : []),
               ],
             ),
           ],
@@ -134,6 +143,22 @@ export const questionView = (model: Model, address: string, h: HtmlBuilder<Messa
 /** The question of the agent at `address`, while it still waits under the status it was read under. */
 const asked = (model: Model, address: string): Option.Option<Asked> =>
   Option.flatMap(blockedSince(model, address), (statusMs) => current(model, address, statusMs))
+
+const shownQuestion = (model: Model, address: string) =>
+  Option.flatMap(asked(model, address), ({ asking }) =>
+    Asking.match(asking, {
+      Shown: (shown) => Option.some(shown),
+      Reading: () => Option.none(),
+      Unshown: () => Option.none(),
+    }),
+  )
+
+/** Whether `question` takes `answer`: a choice it offers, or text of the user's own when it takes that. */
+const takes = (question: Question, answer: Answer) =>
+  Match.valueTags(answer, {
+    Picked: ({ choice }) => Array.some(question.choices, ({ number }) => number === choice),
+    Typed: ({ text }) => Option.isSome(question.ownAnswer) && String.isNonEmpty(String.trim(text)),
+  })
 
 const current = (model: Model, address: string, statusMs: number) =>
   Option.filter(Record.get(model.questions, address), (one) => one.statusMs === statusMs)

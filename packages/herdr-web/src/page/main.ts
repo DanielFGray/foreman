@@ -18,7 +18,7 @@ import { SECONDS_SHOWN_UNTIL } from "./status.ts"
 import { shownSidebarWidth, sidebarEdgeView, sidebarView } from "./sidebar.ts"
 import { clocked, refusedPrompt, sentPrompt, settled } from "./waiting.ts"
 import { isPaletteKey, PaletteTarget, withRecent } from "./palette.ts"
-import { answered, chose, QuestionRead, questionReads, readQuestion, typedChoice } from "./question.ts"
+import { answered, chose, QuestionRead, questionReads, readQuestion, typedAnswer } from "./question.ts"
 import { paletteResults, paletteView } from "./paletteView.ts"
 import { topBarView, workspaceView } from "./workspace.ts"
 
@@ -141,7 +141,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: readQuestion(model, address, statusMs, Asking.Unshown({ reason: Option.some(reason) })),
     }),
 
-    ClickedChoice: ({ address, choice }) => chose(model, address, choice),
+    ClickedChoice: ({ address, choice }) => chose(model, address, { _tag: "Picked", choice }),
 
     SucceededAnswer: ({ address }) => ({ model: answered(model, address, Option.none()) }),
 
@@ -265,9 +265,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         onSome: (address) =>
           String.isEmpty(String.trim(model.prompt))
             ? { model }
-            : Option.match(typedChoice(model, address, model.prompt), {
-                // While the agent waits on a question, its number answers it.
-                onSome: (choice) => chose(modifyFields(model, { prompt: () => "" }), address, choice),
+            : Option.match(typedAnswer(model, address, model.prompt), {
+                // While the agent waits on a question, the prompt answers it.
+                onSome: (answer) => chose(modifyFields(model, { prompt: () => "" }), address, answer),
                 onNone: () => ({
                   model: sentPrompt(modifyFields(model, { delivery: () => Delivery.Sending() }), address, model.prompt),
                   commands: [SendPrompt({ address, text: model.prompt })],

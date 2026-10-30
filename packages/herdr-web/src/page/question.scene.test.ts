@@ -52,8 +52,10 @@ const fleetWith = (terminal: Terminal): Fleet => ({
 
 const choice = (number: number, label: string) => ({ number, label, detail: Option.none() })
 
-const proceed: Question = { text: "Do you want to proceed?", choices: [choice(1, "Yes"), choice(2, "Yes, and don't ask again"), choice(3, "No")] }
-const size: Question = { text: "Which size?", choices: [choice(1, "Small"), choice(2, "Large")] }
+const proceed: Question = { text: "Do you want to proceed?", choices: [choice(1, "Yes"), choice(2, "Yes, and don't ask again"), choice(3, "No")], ownAnswer: Option.none() }
+const size: Question = { text: "Which size?", choices: [choice(1, "Small"), choice(2, "Large")], ownAnswer: Option.some(3) }
+
+const picked = (choice: number) => ({ _tag: "Picked" as const, choice })
 
 const chatOpen = (terminal: Terminal): Model => ({
   ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [] }).model,
@@ -73,7 +75,7 @@ test("a blocked agent's question shows as a card, and a tap on a choice answers 
     expect(card).toContainText("approve Bash: rm -rf build"),
     expect(card).toContainText("Do you want to proceed?"),
     click(role("button", { name: "3. No" })),
-    Command.expectExact(AnswerQuestion({ address: "t1", question: proceed, choice: 3 })),
+    Command.expectExact(AnswerQuestion({ address: "t1", question: proceed, answer: picked(3) })),
     expect(role("button", { name: "1. Yes" })).toBeDisabled(),
     Command.resolve(AnswerQuestion, Message.SucceededAnswer({ address: "t1" })),
     // The agent moved on, so the card goes until the next read, or for good.
@@ -104,7 +106,7 @@ test("a choice's number typed in the prompt answers the question", () => {
     read(proceed),
     typeInto(role("textbox", { name: "Prompt" }), " 2 "),
     click(role("button", { name: "send" })),
-    Command.expectExact(AnswerQuestion({ address: "t1", question: proceed, choice: 2 })),
+    Command.expectExact(AnswerQuestion({ address: "t1", question: proceed, answer: picked(2) })),
     expect(role("textbox", { name: "Prompt" })).toHaveValue(""),
     Command.resolve(AnswerQuestion, Message.SucceededAnswer({ address: "t1" })),
   )
@@ -132,5 +134,23 @@ test("a question read under an earlier status does not show", () => {
     read(proceed, 100),
     expect(card).not.toExist(),
     expect(selector(".question-note")).not.toExist(),
+  )
+})
+
+test("text typed in the prompt is the answer of your own, when the question takes one", () => {
+  const asking: Status = { ...blocked, kind: Option.some("question"), msg: Option.some("answer: Which size? (Small · Large)") }
+  scene(
+    { update, view },
+    given(chatOpen(claude(asking, 100))),
+    Mount.resolveAll([KeepTypingFocus, Message.CompletedKeepTypingFocus()]),
+    read(size),
+    // A question's status says the question again, so the card leaves it out.
+    expect(card).not.toContainText("answer: Which size?"),
+    expect(card).toContainText("Or type your own answer below."),
+    typeInto(role("textbox", { name: "Prompt" }), " medium, please "),
+    click(role("button", { name: "send" })),
+    Command.expectExact(AnswerQuestion({ address: "t1", question: size, answer: { _tag: "Typed", text: "medium, please" } })),
+    expect(role("textbox", { name: "Prompt" })).toHaveValue(""),
+    Command.resolve(AnswerQuestion, Message.SucceededAnswer({ address: "t1" })),
   )
 })

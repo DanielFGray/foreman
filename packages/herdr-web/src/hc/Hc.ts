@@ -35,10 +35,10 @@ const TerminalParams = Schema.Struct({ terminal: Schema.String })
 
 const get = method("terminal.get", TerminalParams, Terminal)
 
-/** Pastes text and presses Enter once nobody has typed for about 3 s; refused while the program is blocked. */
+/** Pastes text and presses Enter once nobody has typed for about 3 s; refused while the program is blocked, unless `force`. */
 const send = method(
   "terminal.send",
-  Schema.Struct({ terminal: Schema.String, text: Schema.String }),
+  Schema.Struct({ terminal: Schema.String, text: Schema.String, force: Schema.optionalKey(Schema.Boolean) }),
   Schema.Struct({ turn: Schema.Int }),
 )
 
@@ -96,6 +96,8 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
     return {
       get: (terminal: string) => call(get, { terminal }),
       send: (terminal: string, text: string) => call(send, { terminal, text }),
+      /** Types text into the dialog a blocked program shows; the caller first checks that the screen still shows it. */
+      answer: (terminal: string, text: string) => call(send, { terminal, text, force: true }),
       keys: (terminal: string, names: ReadonlyArray<string>) => call(keys, { terminal, keys: names }),
       /** What the terminal shows now, as text. */
       screen: (terminal: string) => Effect.map(call(read, { terminal }), ({ text }) => text),

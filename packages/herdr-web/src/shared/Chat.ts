@@ -96,6 +96,11 @@ export type Choice = typeof Choice.Type
  * A question the agent waits on, as its menu shows it: a permission to run a
  * tool, or a question with set answers. The menu itself is its identity, since
  * the status stays the same from one question of a series to the next.
+ * `ownAnswer` is the number of the choice that takes a typed answer instead.
  */
-export const Question = Schema.Struct({ text: Schema.String, choices: Schema.Array(Choice) })
+export const Question = Schema.Struct({ text: Schema.String, choices: Schema.Array(Choice), ownAnswer: Schema.OptionFromOptionalKey(Schema.Int) })
 export type Question = typeof Question.Type
+
+/** An answer to a question: one of its choices, or text of the user's own. */
+export const Answer = Schema.Union([Schema.TaggedStruct("Picked", { choice: Schema.Int }), Schema.TaggedStruct("Typed", { text: Schema.String })])
+export type Answer = typeof Answer.Type

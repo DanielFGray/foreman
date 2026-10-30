@@ -459,3 +459,4 @@ p.usage-error { margin: 0; }
 .choice-number { color: var(--subtext); font-variant-numeric: tabular-nums; }
 .choice-detail { grid-column: 2; color: var(--subtext); font-size: 0.9em; }
 .question-note { margin: 0; }
+.question-own { color: var(--subtext); font-size: 0.9em; }
