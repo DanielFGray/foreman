@@ -94,7 +94,7 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
       : Queue.offer(notes, message).pipe(Effect.asVoid)
 
   yield* Socket.toStream(socket).pipe(
-    Stream.pipeThroughChannel(Ndjson.decodeSchema(Schema.Union([Success, Failure, notification]))()),
+    Stream.pipeThroughChannel(Ndjson.decodeSchema(Schema.Union([Reply, notification]))()),
     Stream.runForEach(dispatch),
     Effect.matchCauseEffect({
       onSuccess: () => lose("hc closed the connection"),
@@ -110,15 +110,7 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
       MutableHashMap.set(pending, id, (reply) =>
         Deferred.completeWith(
           done,
-          Match.valueTags(reply, {
-            Lost: ({ error }) => Effect.fail(error),
-            Failure: ({ error }) =>
-              Effect.fail(new HcError({ method: m.name, kind: error.data.kind, message: error.message })),
-            Success: ({ result }) =>
-              Schema.decodeUnknownEffect(m.result)(result).pipe(
-                Effect.mapError((cause) => new HcProtocolError({ cause })),
-              ),
-          }),
+          Match.valueTags(reply, { Lost: ({ error }) => Effect.fail(error), Failure: (failure) => settle(m, failure), Success: (success) => settle(m, success) }),
         ).pipe(Effect.asVoid),
       )
       const line = yield* Schema.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
@@ -131,6 +123,14 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
   yield* call(hello, { generation: 1 })
   return { call, notifications: Stream.fromQueue(notes) } satisfies Connection<N>
 })
+
+/** A reply as the call's result, or the error hc gave. */
+export const settle = <P, A, AI>(m: Method<P, A, AI>, reply: Reply): Effect.Effect<A, HcError | HcProtocolError> =>
+  Match.valueTags(reply, {
+    Failure: ({ error }) => Effect.fail(new HcError({ method: m.name, kind: error.data.kind, message: error.message })),
+    Success: ({ result }) =>
+      Schema.decodeUnknownEffect(m.result)(result).pipe(Effect.mapError((cause) => new HcProtocolError({ cause }))),
+  })
 
 const hello = method(
   "hello",
@@ -147,10 +147,12 @@ const Failure = Schema.Struct({
   error: Schema.Struct({ message: Schema.String, data: Schema.Struct({ kind: Schema.String }) }),
 })
 
-type Reply = typeof Success.Type | typeof Failure.Type
+/** A reply to a call, with its result not yet decoded. */
+export const Reply = Schema.Union([Success, Failure])
+export type Reply = typeof Reply.Type
 interface Lost {
   readonly _tag: "Lost"
   readonly error: HcLost
 }
 
-const isReply = Schema.is(Schema.Union([Schema.toType(Success), Schema.toType(Failure)]))
+const isReply = Schema.is(Schema.toType(Reply))

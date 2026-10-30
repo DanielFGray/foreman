@@ -29,12 +29,6 @@ const TerminalParams = Schema.Struct({ terminal: Schema.String })
 
 const get = method("terminal.get", TerminalParams, Terminal)
 
-const read = method(
-  "terminal.read",
-  Schema.Struct({ terminal: Schema.String, lines: Schema.Int }),
-  Schema.Struct({ text: Schema.String, complete: Schema.Boolean }),
-)
-
 /** Pastes text and presses Enter once nobody has typed for about 3 s; refused while the program is blocked. */
 const send = method(
   "terminal.send",
@@ -83,7 +77,6 @@ export class Hc extends Context.Service<Hc>()("herdr-web/hc/Hc", {
 
     return {
       get: (terminal: string) => call(get, { terminal }),
-      read: (terminal: string, lines: number) => call(read, { terminal, lines }),
       send: (terminal: string, text: string) => call(send, { terminal, text }),
       keys: (terminal: string, names: ReadonlyArray<string>) => call(keys, { terminal, keys: names }),
       // No document yet means herdr-app has not run: no spaces to show.

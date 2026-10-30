@@ -11,6 +11,8 @@ import { Api, BridgeError } from "../shared/Api.ts"
 import { guard, LOOPBACK } from "./Access.ts"
 import { ClaudeChat, type NoTranscript } from "./claude/ClaudeChat.ts"
 import { FleetModel } from "./FleetModel.ts"
+import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
+import { LiveTerminals } from "./LiveTerminals.ts"
 
 const toBridgeError = (error: HcFailure) =>
   Match.valueTags(error, {
@@ -18,6 +20,8 @@ const toBridgeError = (error: HcFailure) =>
     HcLost: ({ cause }) => new BridgeError({ kind: "lost", message: `hc is not reachable: ${Inspectable.toStringUnknown(cause, 0)}` }),
     HcProtocolError: ({ cause }) => new BridgeError({ kind: "protocol", message: `unreadable reply from hc: ${Inspectable.toStringUnknown(cause, 0)}` }),
   })
+
+const toAppError = ({ message }: HerdrAppError) => new BridgeError({ kind: "herdr-app", message })
 
 const transcriptFailure = (error: NoTranscript | PlatformError) =>
   Match.valueTags(error, {
@@ -30,13 +34,10 @@ const Handlers = Api.toLayer(
     const hc = yield* Hc
     const fleet = yield* FleetModel
     const claude = yield* ClaudeChat
+    const live = yield* LiveTerminals
+    const app = yield* HerdrApp
     return {
       watch: () => fleet.changes,
-      read: ({ terminal, lines }) =>
-        hc.read(terminal, lines).pipe(
-          Effect.map(({ text }) => ({ text })),
-          Effect.mapError(toBridgeError),
-        ),
       chat: ({ terminal }) =>
         hc.get(terminal).pipe(
           Effect.mapError(toBridgeError),
@@ -54,6 +55,12 @@ const Handlers = Api.toLayer(
         ),
       send: ({ terminal, text }) => hc.send(terminal, text).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
       keys: ({ terminal, keys }) => hc.keys(terminal, keys).pipe(Effect.asVoid, Effect.mapError(toBridgeError)),
+      attach: (request) => live.attach(request).pipe(Stream.mapError(toBridgeError)),
+      input: ({ session, data }) => live.input(session, data).pipe(Effect.mapError(toBridgeError)),
+      resize: ({ session, cols, rows }) => live.resize(session, cols, rows).pipe(Effect.mapError(toBridgeError)),
+      split: ({ pane, direction }) =>
+        app.split(pane, direction).pipe(Effect.map(({ terminal }) => ({ terminal })), Effect.mapError(toAppError)),
+      closePane: ({ pane }) => app.close(pane).pipe(Effect.asVoid, Effect.mapError(toAppError)),
     }
   }),
 )
@@ -73,7 +80,7 @@ const Bridge = Layer.unwrap(
     return HttpRouter.serve(app).pipe(Layer.provide(BunHttpServer.layer({ hostname: LOOPBACK, port })))
   }),
 ).pipe(
-  Layer.provide([FleetModel.layer, ClaudeChat.layer]),
+  Layer.provide([FleetModel.layer, ClaudeChat.layer, LiveTerminals.layer, HerdrApp.layer]),
   Layer.provide([Hc.layer, BunFileSystem.layer]),
 )
 

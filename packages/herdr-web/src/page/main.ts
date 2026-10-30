@@ -1,19 +1,20 @@
 import { Array, Effect, Match, Option, Record, Schedule, Schema, Stream, String } from "effect"
 import { Command, Subscription, type Update } from "foldkit"
+import * as Mount from "foldkit/mount"
 import type { Document, Html, HtmlBuilder } from "foldkit/html"
 import { defineMessageUnion } from "foldkit/message"
 import { defineTaggedUnion } from "foldkit/schema"
 import { modifyFields } from "foldkit/struct"
+import { Direction } from "../shared/Api.ts"
 import { ChatUpdate, Entry } from "../shared/Chat.ts"
 import { Fleet, type Layout, type Size, type Space, type Status, type Tab, type Terminal } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { groupFleet, locate, type SpaceGroup, spaceLabel, tabLabel, terminalLabel, terminalsIn } from "./group.ts"
 import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
+import { Link, LiveTerminal } from "./terminal.ts"
 
 // CONSTANT
 
-const SCREEN_HISTORY_LINES = 200
-const SCREEN_REFRESH = "2 seconds"
 const RECONNECT_DELAY = "2 seconds"
 /** Keys an agent's prompts ask for: menu choices, yes and no, and the ways out. */
 const QUICK_KEYS = ["1", "2", "3", "y", "n", "enter", "esc", "ctrl+c"]
@@ -31,13 +32,6 @@ export const Bridge = defineTaggedUnion({
 })
 export type Bridge = typeof Bridge.Type
 
-export const Screen = defineTaggedUnion({
-  Reading: {},
-  Shown: { text: Schema.String },
-  Unreadable: { reason: Schema.String },
-})
-export type Screen = typeof Screen.Type
-
 export const Conversation = defineTaggedUnion({
   Loading: {},
   Shown: { entries: Schema.Array(Entry) },
@@ -45,14 +39,14 @@ export const Conversation = defineTaggedUnion({
 })
 export type Conversation = typeof Conversation.Type
 
-/** What a pane shows of its terminal: a Claude Code agent's chat, or the screen as text. */
+/** What a pane shows of its terminal: a Claude Code agent's chat, or the terminal itself, live. */
 export const View = defineTaggedUnion({
   Chat: { conversation: Conversation },
-  Screen: { screen: Screen },
+  Terminal: { link: Link },
 })
 export type View = typeof View.Type
 
-const ViewName = Schema.Literals(["Chat", "Screen"])
+const ViewName = Schema.Literals(["Chat", "Terminal"])
 type ViewName = typeof ViewName.Type
 
 export const Delivery = defineTaggedUnion({
@@ -61,6 +55,14 @@ export const Delivery = defineTaggedUnion({
   Refused: { reason: Schema.String },
 })
 export type Delivery = typeof Delivery.Type
+
+/** A split or close of a herdr-app pane: none under way, a close waiting for a second click, or herdr-app's refusal. */
+export const PaneAction = defineTaggedUnion({
+  Idle: {},
+  Confirming: { pane: Schema.String },
+  Refused: { reason: Schema.String },
+})
+export type PaneAction = typeof PaneAction.Type
 
 // The page keeps its own selection: following herdr-app's window would move
 // the page whenever the user works at the desk.
@@ -83,6 +85,7 @@ export const Model = Schema.Struct({
   views: Schema.Record(Schema.String, View),
   prompt: Schema.String,
   delivery: Delivery,
+  paneAction: PaneAction,
 })
 export type Model = typeof Model.Type
 
@@ -99,9 +102,14 @@ export const Message = defineMessageUnion({
   SelectedView: { address: Schema.String, view: ViewName },
   ReceivedChat: { address: Schema.String, update: ChatUpdate },
   FailedChat: { address: Schema.String, reason: Schema.String },
-  TickedScreen: {},
-  SucceededReadScreen: { address: Schema.String, text: Schema.String },
-  FailedReadScreen: { address: Schema.String, reason: Schema.String },
+  ChangedLink: { address: Schema.String, link: Link },
+  ClickedSplit: { pane: Schema.String, direction: Direction },
+  SucceededSplit: { terminal: Schema.String },
+  ClickedClose: { pane: Schema.String },
+  ClickedKeepPane: {},
+  ConfirmedClose: { pane: Schema.String },
+  SucceededClose: {},
+  FailedPaneAction: { reason: Schema.String },
   UpdatedPrompt: { text: Schema.String },
   SubmittedPrompt: {},
   SucceededSendPrompt: { address: Schema.String },
@@ -123,6 +131,7 @@ export const init = () => ({
     views: {},
     prompt: "",
     delivery: Delivery.Ready(),
+    paneAction: PaneAction.Idle(),
   },
 })
 
@@ -155,12 +164,17 @@ export const update = (model: Model, message: Message) =>
     FocusedPane: ({ address }) =>
       Selection.match<UpdateReturn>(model.selection, {
         Nothing: () => ({ model }),
-        Tab: ({ tabId }) => ({ model: selected(model, Selection.Tab({ tabId, maybeFocus: Option.some(address) })) }),
+        // The tab and its views stay; only the prompt's last reply was for the old focus.
+        Tab: ({ tabId }) => ({
+          model: modifyFields(model, {
+            selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(address) }),
+            delivery: () => Delivery.Ready(),
+          }),
+        }),
         Loose: () => ({ model }),
       }),
 
-    // A screen view is read by the screen subscription, which starts again
-    // with a read whenever the set of screens changes.
+    // A terminal view attaches when its pane appears, and lets go when it leaves.
     SelectedView: ({ address, view }) => ({ model: withView(model, address, () => newView(view)) }),
 
     ReceivedChat: ({ address, update }) => ({
@@ -180,15 +194,36 @@ export const update = (model: Model, message: Message) =>
       model: withView(model, address, (view) => withConversation(view, () => Conversation.Unreadable({ reason }))),
     }),
 
-    TickedScreen: () => ({ model, commands: Array.map(openAs(model, "Screen"), (address) => ReadScreen({ address })) }),
-
-    SucceededReadScreen: ({ address, text }) => ({
-      model: withView(model, address, (view) => withScreen(view, Screen.Shown({ text }))),
+    ChangedLink: ({ address, link }) => ({
+      model: withView(model, address, (view) => View.match(view, { Chat: () => view, Terminal: () => View.Terminal({ link }) })),
     }),
 
-    FailedReadScreen: ({ address, reason }) => ({
-      model: withView(model, address, (view) => withScreen(view, Screen.Unreadable({ reason }))),
+    ClickedSplit: ({ pane, direction }) => ({
+      model: modifyFields(model, { paneAction: () => PaneAction.Idle() }),
+      commands: [SplitPane({ pane, direction })],
     }),
+
+    // The new shell takes the focus once the fleet shows it in the tab.
+    SucceededSplit: ({ terminal }) =>
+      Selection.match<UpdateReturn>(model.selection, {
+        Nothing: () => ({ model }),
+        Tab: ({ tabId }) => ({ model: modifyFields(model, { selection: () => Selection.Tab({ tabId, maybeFocus: Option.some(terminal) }) }) }),
+        Loose: () => ({ model }),
+      }),
+
+    // Closing a pane ends its program, so it takes a second click.
+    ClickedClose: ({ pane }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Confirming({ pane }) }) }),
+
+    ClickedKeepPane: () => ({ model: modifyFields(model, { paneAction: () => PaneAction.Idle() }) }),
+
+    ConfirmedClose: ({ pane }) => ({
+      model: modifyFields(model, { paneAction: () => PaneAction.Idle() }),
+      commands: [ClosePane({ pane })],
+    }),
+
+    SucceededClose: () => ({ model }),
+
+    FailedPaneAction: ({ reason }) => ({ model: modifyFields(model, { paneAction: () => PaneAction.Refused({ reason }) }) }),
 
     UpdatedPrompt: ({ text }) => ({ model: modifyFields(model, { prompt: () => text }) }),
 
@@ -207,7 +242,6 @@ export const update = (model: Model, message: Message) =>
     SucceededSendPrompt: ({ address }) =>
       whenFocused(model, address, () => ({
         model: modifyFields(model, { prompt: () => "", delivery: () => Delivery.Ready() }),
-        commands: screenRead(model, address),
       })),
 
     FailedSendPrompt: ({ address, reason }) =>
@@ -220,10 +254,7 @@ export const update = (model: Model, message: Message) =>
       }),
 
     SucceededPressKeys: ({ address }) =>
-      whenFocused(model, address, () => ({
-        model: modifyFields(model, { delivery: () => Delivery.Ready() }),
-        commands: screenRead(model, address),
-      })),
+      whenFocused(model, address, () => ({ model: modifyFields(model, { delivery: () => Delivery.Ready() }) })),
 
     FailedPressKeys: ({ address, reason }) =>
       whenFocused(model, address, () => ({ model: modifyFields(model, { delivery: () => Delivery.Refused({ reason }) }) })),
@@ -279,14 +310,14 @@ const maybeFocus = (model: Model) => {
 // A new selection forgets the views it no longer shows, and any reply to the
 // last prompt.
 const selected = (model: Model, selection: Selection) => {
-  const next = modifyFields(model, { selection: () => selection, delivery: () => Delivery.Ready() })
+  const next = modifyFields(model, { selection: () => selection, delivery: () => Delivery.Ready(), paneAction: () => PaneAction.Idle() })
   const shown = shownTerminals(next)
   return modifyFields(next, { views: (views) => Record.filter(views, (_, address) => Array.contains(shown, address)) })
 }
 
-/** The terminal's view: the one picked for it, else its chat when it has one, else its screen. */
+/** The terminal's view: the one picked for it, else its chat when it has one, else the terminal. */
 const viewOf = (model: Model, address: string) =>
-  Option.getOrElse(Record.get(model.views, address), () => newView(isClaudeCode(model, address) ? "Chat" : "Screen"))
+  Option.getOrElse(Record.get(model.views, address), () => newView(isClaudeCode(model, address) ? "Chat" : "Terminal"))
 
 /** The shown terminals whose view is `name`. */
 const openAs = (model: Model, name: ViewName) =>
@@ -304,17 +335,14 @@ const whenFocused = (model: Model, address: string, apply: () => UpdateReturn): 
   Option.contains(maybeFocus(model), address) ? apply() : { model }
 
 const newView = (name: ViewName) =>
-  name === "Chat" ? View.Chat({ conversation: Conversation.Loading() }) : View.Screen({ screen: Screen.Reading() })
-
-// hc reports status, not screen changes, so a screen is read again after each
-// change the page makes, and on a timer.
-const screenRead = (model: Model, address: string) =>
-  View.match(viewOf(model, address), { Chat: () => [], Screen: () => [ReadScreen({ address })] })
-
-const withScreen = (view: View, screen: Screen) => View.match(view, { Chat: () => view, Screen: () => View.Screen({ screen }) })
+  Match.value(name).pipe(
+    Match.when("Chat", () => View.Chat({ conversation: Conversation.Loading() })),
+    Match.when("Terminal", () => View.Terminal({ link: { _tag: "Connecting" } })),
+    Match.exhaustive,
+  )
 
 const withConversation = (view: View, change: (conversation: Conversation) => Conversation) =>
-  View.match(view, { Chat: ({ conversation }) => View.Chat({ conversation: change(conversation) }), Screen: () => view })
+  View.match(view, { Chat: ({ conversation }) => View.Chat({ conversation: change(conversation) }), Terminal: () => view })
 
 const shownEntries = (conversation: Conversation) =>
   Conversation.match(conversation, { Loading: () => [], Shown: ({ entries }) => entries, Unreadable: () => [] })
@@ -330,15 +358,26 @@ const findTerminal = (model: Model, address: string) =>
 
 // COMMAND
 
-export const ReadScreen = Command.define("ReadScreen", {
-  args: { address: Schema.String },
-  messages: [Message.SucceededReadScreen, Message.FailedReadScreen],
-  execute: ({ address }) =>
+export const SplitPane = Command.define("SplitPane", {
+  args: { pane: Schema.String, direction: Direction },
+  messages: [Message.SucceededSplit, Message.FailedPaneAction],
+  execute: ({ pane, direction }) =>
     Effect.gen(function* () {
       const client = yield* BridgeClient
-      const { text } = yield* client.read({ terminal: address, lines: SCREEN_HISTORY_LINES })
-      return Message.SucceededReadScreen({ address, text })
-    }).pipe(reportFailure((reason) => Message.FailedReadScreen({ address, reason }))),
+      const { terminal } = yield* client.split({ pane, direction })
+      return Message.SucceededSplit({ terminal })
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
+})
+
+export const ClosePane = Command.define("ClosePane", {
+  args: { pane: Schema.String },
+  messages: [Message.SucceededClose, Message.FailedPaneAction],
+  execute: ({ pane }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.closePane({ pane })
+      return Message.SucceededClose()
+    }).pipe(reportFailure((reason) => Message.FailedPaneAction({ reason }))),
 })
 
 export const SendPrompt = Command.define("SendPrompt", {
@@ -366,8 +405,9 @@ export const PressKeys = Command.define("PressKeys", {
 // SUBSCRIPTION
 
 // Foldkit restarts an entry's stream whenever its dependencies change. The
-// chat and screen entries depend on which shown terminals have that view, not
-// on the focus, so moving the focus leaves every chat running.
+// chat entry depends on which shown terminals show their chat, not on the
+// focus, so moving the focus leaves every chat running. A live terminal is
+// not a subscription: its pane holds it (see LiveTerminal).
 export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((entry) => ({
   // The fleet for the whole life of the page. When the watch ends or fails,
   // the page says so and watches again after a pause.
@@ -385,16 +425,6 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
             Stream.concat(Stream.make(Message.LostBridge())),
           )
         }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
-    },
-  ),
-
-  // The first tick comes at once, so a screen shown anew is read straight away.
-  screen: entry(
-    { addresses: Schema.Array(Schema.String) },
-    {
-      modelToDependencies: (model) => ({ addresses: openAs(model, "Screen") }),
-      dependenciesToStream: ({ addresses }) =>
-        Array.isReadonlyArrayNonEmpty(addresses) ? Stream.tick(SCREEN_REFRESH).pipe(Stream.map(() => Message.TickedScreen())) : Stream.empty,
     },
   ),
 
@@ -541,13 +571,19 @@ const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
         onSome: ({ space, tab }) =>
           h.section(
             [h.Class("workspace")],
-            [tabsView(space, tab.id, h), focusChipsView(model, h), h.div([h.Class("layout")], [layoutView(tab.root, model, h)]), ...composerView(model, h)],
+            [
+              tabsView(space, tab.id, h),
+              focusChipsView(model, h),
+              ...paneActionView(model, h),
+              h.div([h.Class("layout")], [layoutView(tab.root, model, h)]),
+              ...composerView(model, h),
+            ],
           ),
       }),
     Loose: ({ address }) =>
       h.section(
         [h.Class("workspace")],
-        [h.div([h.Class("layout")], [paneView(address, Option.none(), model, h)]), ...composerView(model, h)],
+        [h.div([h.Class("layout")], [paneView(address, Option.none(), Option.none(), model, h)]), ...composerView(model, h)],
       ),
   })
 
@@ -592,7 +628,7 @@ const layoutView = (node: Layout, model: Model, h: HtmlBuilder<Message>): Html =
   Match.valueTags(node, {
     Block: ({ id, size, content }) =>
       Match.valueTags(content, {
-        Terminal: ({ terminal }) => paneView(terminal, size, model, h),
+        Terminal: ({ terminal }) => paneView(terminal, Option.some(id), size, model, h),
         Mod: ({ mod }) => h.keyed("div")(id, [h.Class("pane placeholder"), h.Style(flexOf(size))], [`${mod} (a herdr-app mod)`]),
         Unknown: () => h.keyed("div")(id, [h.Class("pane placeholder"), h.Style(flexOf(size))], ["a pane this page cannot show"]),
       }),
@@ -608,8 +644,10 @@ const layoutView = (node: Layout, model: Model, h: HtmlBuilder<Message>): Html =
 /** A node's flex share: its weight, or an even share when herdr-app gives none. */
 const flexOf = (size: Option.Option<Size>) => ({ flex: `${Option.getOrElse(Option.flatMap(size, ({ weight }) => weight), () => 1)} 1 0` })
 
+/** A terminal's pane; `maybePane` is its herdr-app pane, which the split and close buttons act on. */
 const paneView = (
   address: string,
+  maybePane: Option.Option<string>,
   size: Option.Option<Size>,
   model: Model,
   h: HtmlBuilder<Message>,
@@ -626,7 +664,7 @@ const paneView = (
           ...Option.match(maybeTerminal, { onNone: () => [], onSome: ({ status }) => [statusDot(status, h)] }),
           h.span([h.Class("name")], [Option.match(maybeTerminal, { onNone: () => address, onSome: terminalLabel })]),
           h.span([h.Class("msg")], [Option.match(maybeTerminal, { onNone: () => "gone", onSome: statusText })]),
-          // A permission dialog shows only on the screen, so a chat can switch to it.
+          // A permission dialog shows only in the terminal, so a chat can switch to it.
           ...(isClaudeCode(model, address)
             ? Array.map(ViewName.literals, (name) =>
                 h.button(
@@ -635,10 +673,11 @@ const paneView = (
                     h.Class(shown._tag === name ? "chip on" : "chip"),
                     h.OnClick(Message.SelectedView({ address, view: name })),
                   ],
-                  [name === "Chat" ? "chat" : "screen"],
+                  [name === "Chat" ? "chat" : "terminal"],
                 ),
               )
             : []),
+          ...Option.match(maybePane, { onNone: () => [], onSome: (pane) => paneButtons(pane, model, h) }),
         ],
       ),
       View.match(shown, {
@@ -648,16 +687,55 @@ const paneView = (
             Shown: ({ entries }) => chatView(entries, h),
             Unreadable: ({ reason }) => h.p([h.Class("chat note error")], [reason]),
           }),
-        Screen: ({ screen }) =>
-          Screen.match(screen, {
-            Reading: () => h.pre([h.Class("screen")], ["reading…"]),
-            Shown: ({ text }) => h.pre([h.Class("screen")], [h.span([], [text])]),
-            Unreadable: ({ reason }) => h.pre([h.Class("screen error")], [reason]),
-          }),
+        Terminal: ({ link }) =>
+          h.div(
+            [h.Class("live")],
+            [
+              ...Match.valueTags(link, {
+                Connecting: () => [h.p([h.Class("note link-note")], ["connecting…"])],
+                Live: () => [],
+                Lost: ({ reason }) => [h.p([h.Class("note error link-note")], [`${reason}; trying again`])],
+              }),
+              // The emulator owns this element's children, so it has none here.
+              h.div(
+                [
+                  h.Class("terminal"),
+                  h.OnMount(Mount.mapMessage(LiveTerminal({ address }), ({ link }) => Message.ChangedLink({ address, link }))),
+                  h.OnClick(Message.FocusedPane({ address })),
+                ],
+                [],
+              ),
+            ],
+          ),
       }),
     ],
   )
 }
+
+const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+  const button = (label: string, title: string, message: Message) =>
+    h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [label])
+  const isClosing = PaneAction.match(model.paneAction, {
+    Idle: () => false,
+    Confirming: ({ pane: closing }) => closing === pane,
+    Refused: () => false,
+  })
+  return isClosing
+    ? [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())]
+    : [
+        button("⇥", "split right", Message.ClickedSplit({ pane, direction: "right" })),
+        button("⤓", "split down", Message.ClickedSplit({ pane, direction: "down" })),
+        button("✕", "close the pane", Message.ClickedClose({ pane })),
+      ]
+}
+
+/** Why herdr-app refused the last split or close. */
+const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  PaneAction.match(model.paneAction, {
+    Idle: () => [],
+    Confirming: () => [],
+    Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
+  })
 
 /** The keys and prompt for the focused pane; none when no terminal is on show. */
 const composerView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>

@@ -13,15 +13,19 @@ export class BridgeError extends Schema.TaggedError<BridgeError, { readonly bran
   message: Schema.String,
 }) {}
 
+/** The session that the live terminal's input and resize calls name. */
+export const Attached = Schema.TaggedStruct("Attached", { session: Schema.Int })
+/** Bytes the terminal wrote, escape sequences and all; the first are its screen. */
+export const Output = Schema.TaggedStruct("Output", { bytes: Schema.Uint8ArrayFromBase64 })
+export const TerminalUpdate = Schema.Union([Attached, Output])
+export type TerminalUpdate = typeof TerminalUpdate.Type
+
+export const Direction = Schema.Literals(["right", "down"])
+export type Direction = typeof Direction.Type
+
 export const Api = RpcGroup.make(
   /** The fleet now, then after every change. */
   Rpc.make("watch", { success: Fleet, stream: true }),
-  /** The terminal's screen plus `lines` of history, as text. */
-  Rpc.make("read", {
-    payload: { terminal: Schema.String, lines: Schema.Int },
-    success: Schema.Struct({ text: Schema.String }),
-    error: BridgeError,
-  }),
   /** The conversation of the Claude Code agent in the terminal: its recent entries, then each batch of new ones. */
   Rpc.make("chat", { payload: { terminal: Schema.String }, success: ChatUpdate, error: BridgeError, stream: true }),
   /** Types text and presses Enter. */
@@ -31,4 +35,26 @@ export const Api = RpcGroup.make(
     payload: { terminal: Schema.String, keys: Schema.Array(Schema.String) },
     error: BridgeError,
   }),
+  /**
+   * The terminal live, at the page's size: a session, then its output for as
+   * long as the page reads. The terminal takes the size of whichever viewer
+   * typed last, so a page that only watches leaves it as it is.
+   */
+  Rpc.make("attach", {
+    payload: { terminal: Schema.String, cols: Schema.Int, rows: Schema.Int },
+    success: TerminalUpdate,
+    error: BridgeError,
+    stream: true,
+  }),
+  /** Keys typed into a live terminal, as the terminal reads them. */
+  Rpc.make("input", { payload: { session: Schema.Int, data: Schema.String }, error: BridgeError }),
+  Rpc.make("resize", { payload: { session: Schema.Int, cols: Schema.Int, rows: Schema.Int }, error: BridgeError }),
+  /** Opens a shell beside a pane of herdr-app's layout; the new shell's terminal. */
+  Rpc.make("split", {
+    payload: { pane: Schema.String, direction: Direction },
+    success: Schema.Struct({ terminal: Schema.String }),
+    error: BridgeError,
+  }),
+  /** Closes a pane of herdr-app's layout and ends its terminal. */
+  Rpc.make("closePane", { payload: { pane: Schema.String }, error: BridgeError }),
 )

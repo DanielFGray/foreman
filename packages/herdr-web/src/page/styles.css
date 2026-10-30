@@ -144,19 +144,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .focus-chips { display: none; }
 .fleet-toggle { display: none; }
 
-.screen {
-  min-height: 0;
+.live { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.link-note { margin: 0; }
+/* The emulator sizes its canvas to this box, so the box must not grow with it. */
+.terminal {
   flex: 1;
-  margin: 0;
-  padding: 8px;
-  overflow: auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px;
   background: var(--mantle);
   border-radius: 6px;
-  font: 12px/1.3 ui-monospace, monospace;
-  white-space: pre;
-  /* Starts scrolled to the bottom, where the agent's prompt is. */
-  display: flex;
-  flex-direction: column-reverse;
 }
 
 .chat {
@@ -239,6 +237,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .fleet.folded { display: none; }
   /* One pane at a time; the chips move the focus. */
   .focus-chips:not(:empty) { display: flex; gap: 4px; overflow-x: auto; }
-  .layout:has(.pane.focused) .pane:not(.focused) { display: none; }
+  .focus-chips .chip { flex-shrink: 0; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A split with no focused pane in it would keep its share of the room. */
+  .layout:has(.pane.focused) :is(.pane, .split):not(.focused, :has(.pane.focused)) { display: none; }
+  /* Each split then shows one child, which takes all of it: a weight below 1
+     would get only that share. The weights are inline styles. */
+  .layout :is(.pane.focused, .split:has(.pane.focused)) { flex-grow: 1 !important; }
   .split { gap: 0; }
 }
