@@ -2,8 +2,8 @@
 // agents, and the settings, matched by a typed query and ranked.
 import { Array, Option, Order, pipe, Record, Result, Schema as S, String } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
-import type { Fleet, Terminal } from "../shared/Fleet.ts"
-import { locate, spaceRowOf, spacesOf, terminalLabel, terminalNote } from "./group.ts"
+import { type Fleet, folderNow, type Terminal } from "../shared/Fleet.ts"
+import { locate, spaceLabel, spaceRowOf, spacesOf, terminalLabel, terminalNote } from "./group.ts"
 import { Bot, Folder, type IconNode, Settings as SettingsIcon, SquareTerminal } from "./icons.ts"
 import { programOf } from "./programs.ts"
 
@@ -99,7 +99,7 @@ const fleetEntries = (fleet: Option.Option<Fleet>): ReadonlyArray<Entry> =>
         })
       const rows = Array.map(spacesOf(current), spaceRow)
       const branchOf = (spaceId: string) => Option.flatMap(Record.get(current.git, spaceId), ({ branch }) => branch)
-      const spaces = Array.flatMap(rows, ({ space, label, tabs }) =>
+      const spaces = Array.flatMap(rows, ({ space, label, folder, tabs }) =>
         Option.match(Array.head(tabs), {
           onNone: () => [],
           onSome: ({ tab }): ReadonlyArray<Entry> => [
@@ -109,15 +109,15 @@ const fleetEntries = (fleet: Option.Option<Fleet>): ReadonlyArray<Entry> =>
                 group: "Spaces",
                 icon: Folder,
                 title: label,
-                detail: Option.match(branchOf(space.id), { onNone: () => space.folder, onSome: (branch) => `${space.folder} · ${branch}` }),
+                detail: Option.match(branchOf(space.id), { onNone: () => folder, onSome: (branch) => `${folder} · ${branch}` }),
                 target: PaletteTarget.Tab({ tabId: tab.id }),
               },
-              fields: [space.folder, machineOf(space.id), ...Option.toArray(branchOf(space.id)), ...Array.map(tabs, (row) => row.label)],
+              fields: [folder, machineOf(space.id), ...Option.toArray(branchOf(space.id)), ...Array.map(tabs, (row) => row.label)],
             },
           ],
         }),
       )
-      const tabs = Array.flatMap(rows, ({ space, label: spaceName, tabs: tabRows }) =>
+      const tabs = Array.flatMap(rows, ({ space, label: spaceName, folder, tabs: tabRows }) =>
         Array.map(
           tabRows,
           ({ tab, label, program }): Entry => ({
@@ -129,7 +129,7 @@ const fleetEntries = (fleet: Option.Option<Fleet>): ReadonlyArray<Entry> =>
               detail: spaceName,
               target: PaletteTarget.Tab({ tabId: tab.id }),
             },
-            fields: [spaceName, space.folder, machineOf(space.id), ...Option.toArray(Option.map(program, ({ name }) => name))],
+            fields: [spaceName, folder, machineOf(space.id), ...Option.toArray(Option.map(program, ({ name }) => name))],
           }),
         ),
       )
@@ -144,7 +144,7 @@ const fleetEntries = (fleet: Option.Option<Fleet>): ReadonlyArray<Entry> =>
 const paneEntry = (fleet: Fleet, terminal: Terminal): Entry => {
   const place = locate(fleet, terminal.address)
   const program = programOf(terminal)
-  const where = Option.match(place, { onNone: () => [], onSome: ({ space, tab }) => [space.name, space.folder, tab.name] })
+  const where = Option.match(place, { onNone: () => [], onSome: ({ space, tab }) => [spaceLabel(fleet, space), folderNow(fleet.terminals, space), tab.name] })
   return {
     result: {
       key: `pane/${terminal.address}`,
@@ -153,7 +153,7 @@ const paneEntry = (fleet: Fleet, terminal: Terminal): Entry => {
       title: terminalLabel(terminal),
       detail: Option.match(place, {
         onNone: () => terminalNote(terminal),
-        onSome: ({ space, tab }) => `${space.name || space.folder} / ${tab.name || terminalNote(terminal)}`,
+        onSome: ({ space, tab }) => `${spaceLabel(fleet, space)} / ${tab.name || terminalNote(terminal)}`,
       }),
       target: PaletteTarget.Terminal({ address: terminal.address }),
     },

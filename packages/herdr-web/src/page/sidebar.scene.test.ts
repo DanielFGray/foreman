@@ -12,7 +12,7 @@ const blockedAgent: Terminal = {
   address: "t1",
   name: Option.some("claude"),
   title: Option.none(),
-  cwd: "/",
+  cwd: "/src/prog",
   state: "live",
   status: Option.some({ state: "blocked", app: Option.none(), msg: Option.some("needs a yes"), kind: Option.none(), progress: Option.none() }),
   foreground: Option.none(),
@@ -37,7 +37,7 @@ const fleet: Fleet = {
         {
           id: "s1",
           name: "",
-          folder: "/home/dan/build/prog",
+          folder: "/src/prog",
           tabs: [
             { id: "b", name: "notes", root: { _tag: "Unknown", type: "browser" } },
             { id: "a", name: "", root: { _tag: "Block", type: "block", id: "p1", size: Option.none(), content: { _tag: "Terminal", terminal: "t1" } } },
@@ -84,7 +84,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
 })
 
 test("a space row shows its letter badge, coloured by its most urgent agent, and its git branch and changes", () => {
-  const git = { s1: { branch: Option.some("feat/sidebar"), changed: true } }
+  const git = { s1: { top: "/src/prog", branch: Option.some("feat/sidebar"), changed: true } }
   scene(
     { update, view },
     given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git } }) }),
@@ -101,7 +101,7 @@ test("a space row shows its letter badge, coloured by its most urgent agent, and
 })
 
 test("a space with no git state shows no branch, and a clean one shows no changes mark", () => {
-  const clean = { s2: { branch: Option.some("main"), changed: false } }
+  const clean = { s2: { top: "/", branch: Option.some("main"), changed: false } }
   scene(
     { update, view },
     given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),

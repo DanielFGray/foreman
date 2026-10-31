@@ -2,9 +2,9 @@
 // and each terminal's view.
 import { Array, Match, Option, Record } from "effect"
 import { modifyFields } from "foldkit/struct"
-import type { Fleet, Space, Tab } from "../shared/Fleet.ts"
+import { type Fleet, type Space, type Tab, terminalsIn } from "../shared/Fleet.ts"
 import { type Feature, supports } from "../shared/Harness.ts"
-import { spacesOf, terminalLabel, terminalsIn } from "./group.ts"
+import { spacesOf, terminalLabel } from "./group.ts"
 import { Bridge, Conversation, Delivery, type Model, PaneAction, Selection, type UpdateReturn, View, type ViewName } from "./model.ts"
 
 /** The tab to show in place of `tabId` once it closes: the next, else the one before; none unless `tabId` is on show. */

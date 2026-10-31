@@ -30,7 +30,7 @@ const agent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
-  git: { s2: { branch: Option.some("feat/login"), changed: false } },
+  git: { s2: { top: "/srv/web", branch: Option.some("feat/login"), changed: false } },
   terminals: [agent],
   machines: [
     {

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vitest"
 import { HashMap, Option } from "effect"
 import type { Fleet, Layout, Machine, StatusState, Terminal } from "../shared/Fleet.ts"
-import { dropSide, isAgent, locate, mostUrgent, type Sidebar, sidebarOf, terminalLabel } from "./group.ts"
+import { dropSide, isAgent, locate, mostUrgent, type Sidebar, sidebarOf, spaceLabel, terminalLabel } from "./group.ts"
 
 const terminal = (address: string, hasStatus = true, state: Terminal["state"] = "live"): Terminal => ({
   address,
   name: Option.none(),
   title: Option.none(),
-  cwd: "/",
+  cwd: "/src/prog",
   state,
   status: hasStatus
     ? Option.some({ state: "idle", app: Option.none(), msg: Option.none(), kind: Option.none(), progress: Option.none() })
@@ -41,7 +41,7 @@ const fleet: Fleet = {
       {
         id: "s1",
         name: "",
-        folder: "/home/dan/build/prog",
+        folder: "/src/prog",
         tabs: [
           { id: "a", name: "", root: split("row", [pane("t2"), split("column", [pane("t3"), pane("t1")])]) },
           { id: "b", name: "logs", root: split("row", [pane("t9")]) },
@@ -121,19 +121,46 @@ describe("locate", () => {
   })
 })
 
+describe("spaceLabel", () => {
+  const space = { id: "s1", name: "", folder: "/src/shop", tabs: [{ id: "a", name: "", root: split("row", [pane("t1"), pane("t2")]) }] }
+  const at = (folder: string, programFolder: Option.Option<string> = Option.none()): Terminal => ({
+    ...terminal("t1"),
+    cwd: folder,
+    foreground: Option.map(programFolder, (cwd) => ({ name: "claude", pid: 1, argv: ["claude"], cwd })),
+  })
+  const labelOf = (terminals: ReadonlyArray<Terminal>, git: Fleet["git"] = {}, name = "") =>
+    spaceLabel({ ...fleet, terminals, git }, { ...space, name })
+
+  test("an unnamed space is called after the folder its first terminal's program works in now", () => {
+    expect(labelOf([at("/src/shop", Option.some("/src/blog")), at("/src/wiki")])).toBe("blog")
+    expect(labelOf([at("/src/wiki")])).toBe("wiki")
+  })
+
+  test("the checkout that holds the folder names it, once git has read that folder", () => {
+    const inside = [at("/src/shop", Option.some("/src/blog/web"))]
+    expect(labelOf(inside, { s1: { top: "/src/blog", branch: Option.none(), changed: false } })).toBe("blog")
+    expect(labelOf(inside, { s1: { top: "/src/shop", branch: Option.none(), changed: false } })).toBe("web")
+  })
+
+  test("a space's own name wins, and a space with no terminal is called after its folder", () => {
+    expect(labelOf([at("/src/blog")], {}, "store")).toBe("store")
+    expect(labelOf([])).toBe("shop")
+  })
+})
+
 describe("terminalLabel", () => {
   test("prefers the name, then the agent, then the foreground program, and never shows the address", () => {
     const plain = { ...terminal("t9", false), title: Option.some("") }
-    const claude = { ...plain, foreground: Option.some({ name: "/usr/bin/Claude", pid: 1, argv: [] }) }
+    const claude = { ...plain, foreground: Option.some({ name: "/usr/bin/Claude", pid: 1, argv: [], cwd: "/" }) }
     expect(terminalLabel({ ...claude, name: Option.some("build-c8") })).toBe("build-c8")
     expect(terminalLabel(claude)).toBe("Claude Code")
-    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "zsh", pid: 1, argv: [] }) })).toBe("zsh")
+    expect(terminalLabel({ ...plain, foreground: Option.some({ name: "zsh", pid: 1, argv: [], cwd: "/" }) })).toBe("zsh")
     expect(terminalLabel(plain)).toBe("terminal")
   })
 
   test("a known agent's program makes an agent without a status report", () => {
-    const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1, argv: [] }) }
-    expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1, argv: [] }) })]).toEqual([true, false])
+    const codex = { ...terminal("t9", false), foreground: Option.some({ name: "codex", pid: 1, argv: [], cwd: "/" }) }
+    expect([isAgent(codex), isAgent({ ...codex, foreground: Option.some({ name: "zsh", pid: 1, argv: [], cwd: "/" }) })]).toEqual([true, false])
   })
 })
 

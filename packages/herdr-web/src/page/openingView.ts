@@ -6,7 +6,7 @@
 // space, or not at all, when every agent opens as a chat.
 import { Array, Match, Option, pipe, Record, String } from "effect"
 import { modifyFields } from "foldkit/struct"
-import { terminalsIn } from "./group.ts"
+import { terminalsIn } from "../shared/Fleet.ts"
 import type { Model, ViewName, ViewPick } from "./model.ts"
 import { findTerminal, lastFleet, newView, shownTerminals, supportsAt, withView } from "./selection.ts"
 

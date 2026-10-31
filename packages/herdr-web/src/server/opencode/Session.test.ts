@@ -11,7 +11,7 @@ const terminal = (title: string, pending: ReadonlyArray<string> = []): Terminal 
   state: "live",
   status: Option.some(status("idle")),
   status_ms: Option.none(),
-  foreground: Option.some({ name: "opencode", pid: 1, argv: ["opencode"] }),
+  foreground: Option.some({ name: "opencode", pid: 1, argv: ["opencode"], cwd: "/" }),
   labels: {},
   created_ms: 0,
   records: Option.some(Object.fromEntries(pending.map((id) => [id, status("working")]))),

@@ -2,7 +2,7 @@
 // encoded side is hc's own wire shape (its OpenRPC `Terminal` and `Status`
 // components, and the `herdr-app` document), so one Schema decodes hc's reply
 // in the bridge and the bridge's message in the page.
-import { Effect, type Option, Schema as S } from "effect"
+import { Array, Effect, Match, Option, pipe, Schema as S } from "effect"
 import { wireTag } from "./Wire.ts"
 
 /** What the program says it is doing (its OSC 7501 report). */
@@ -24,6 +24,8 @@ export const Foreground = S.Struct({
   pid: S.Int,
   /** The command line, program first; `bun test` tells a test run from another script. */
   argv: S.Array(S.String).pipe(S.withDecodingDefaultKey(Effect.succeed([]))),
+  /** Its working folder now, as the OS has it. */
+  cwd: S.String,
 })
 
 export const Terminal = S.Struct({
@@ -126,8 +128,12 @@ export const Machine = S.Struct({
 })
 export type Machine = typeof Machine.Type
 
-/** A space's folder as git sees it. `branch` is none for a detached head. */
-export const SpaceGit = S.Struct({ branch: S.OptionFromNullOr(S.String), changed: S.Boolean })
+/**
+ * The git state of the folder a space works in now (see folderNow). `top` is
+ * the checkout that holds it, a worktree's own folder; `branch` is none for a
+ * detached head.
+ */
+export const SpaceGit = S.Struct({ top: S.String, branch: S.OptionFromNullOr(S.String), changed: S.Boolean })
 export type SpaceGit = typeof SpaceGit.Type
 
 export const Fleet = S.Struct({
@@ -145,3 +151,25 @@ export const Fleet = S.Struct({
   git: S.Record(S.String, SpaceGit),
 })
 export type Fleet = typeof Fleet.Type
+
+/** The terminals a layout shows, in reading order. */
+export const terminalsIn = (node: Layout): ReadonlyArray<string> =>
+  Match.valueTags(node, {
+    Block: ({ content }) => (content._tag === "Terminal" ? [content.terminal] : []),
+    Split: ({ children }) => Array.flatMap(children, terminalsIn),
+    Unknown: () => [],
+  })
+
+/**
+ * The folder a space works in now: its first terminal's program's folder,
+ * else that terminal's own, else the folder the space was made in. herdr-app
+ * names an unnamed space after it, so a space follows its agent to another
+ * folder; the bridge reads the space's git state there.
+ */
+export const folderNow = (terminals: ReadonlyArray<Terminal>, space: Space) =>
+  pipe(
+    Array.head(Array.flatMap(space.tabs, ({ root }) => terminalsIn(root))),
+    Option.flatMap((address) => Array.findFirst(terminals, (terminal) => terminal.address === address)),
+    Option.map(({ foreground, cwd }) => Option.match(foreground, { onNone: () => cwd, onSome: (program) => program.cwd })),
+    Option.getOrElse(() => space.folder),
+  )

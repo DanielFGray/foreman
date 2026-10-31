@@ -23,7 +23,7 @@ const claude = (status: Status, statusMs: number): Terminal => ({
   title: Option.none(),
   cwd: "/",
   state: "live",
-  foreground: Option.some({ name: "claude", pid: 1, argv: [] }),
+  foreground: Option.some({ name: "claude", pid: 1, argv: [], cwd: "/" }),
   status: Option.some(status),
   labels: {},
   status_ms: Option.some(statusMs),

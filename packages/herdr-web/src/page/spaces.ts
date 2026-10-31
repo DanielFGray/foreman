@@ -2,11 +2,11 @@
 // is opened from a form in place of a tab; the open space's name in the tab
 // bar renames it and closes it.
 import { Array, Option, Record, String } from "effect"
-import type { Machine } from "../shared/Fleet.ts"
+import { type Machine, terminalsIn } from "../shared/Fleet.ts"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import { CloseSpace, FocusField, NewSpace, RenameSpace, SaveSelection } from "./commands.ts"
-import { type SpaceRow, terminalsIn } from "./group.ts"
+import type { SpaceRow } from "./group.ts"
 import { GitBranch, icon, type IconNode, Pencil, Trash2 } from "./icons.ts"
 import { Message, type Model, PaneAction, Selection, type SpaceForm, type SpaceFormField, SpaceFormState, type UpdateReturn } from "./model.ts"
 import { lastFleet, selected, selectedTab } from "./selection.ts"

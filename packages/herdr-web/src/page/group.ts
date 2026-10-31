@@ -1,14 +1,15 @@
 // How the page files terminals: by the herdr-app layout trees that place
 // them, in herdr-app's own order of spaces, tabs and panes.
-import { Array, HashMap, HashSet, Match, Option, Order, pipe, Result, String } from "effect"
-import type { Fleet, Layout, Machine, Space, StatusState, Tab, Terminal } from "../shared/Fleet.ts"
+import { Array, HashMap, HashSet, Option, Order, pipe, Record, Result, String } from "effect"
+import { type Fleet, folderNow, type Machine, type Space, type StatusState, type Tab, type Terminal, terminalsIn } from "../shared/Fleet.ts"
 import { harnessOf } from "../shared/Harness.ts"
 import { type Program, programOf } from "./programs.ts"
 
 /** `program` is what runs in the tab's first pane, for its icon. */
 export type TabRow = Readonly<{ tab: Tab; label: string; status: Option.Option<StatusState>; agents: ReadonlyArray<Terminal>; program: Option.Option<Program> }>
 
-export type SpaceRow = Readonly<{ space: Space; label: string; status: Option.Option<StatusState>; tabs: ReadonlyArray<TabRow> }>
+/** `folder` is the one the space works in now (see folderNow). */
+export type SpaceRow = Readonly<{ space: Space; label: string; folder: string; status: Option.Option<StatusState>; tabs: ReadonlyArray<TabRow> }>
 
 export type MachineRow = Readonly<{ machine: Machine; spaces: ReadonlyArray<SpaceRow> }>
 
@@ -80,7 +81,7 @@ export const spaceRowOf = (fleet: Fleet) => {
       const program = Option.flatMap(Array.head(terminals), programOf)
       return { tab, label: tabLabel(tab, index), status: mostUrgent(agents), agents, program }
     })
-    return { space, label: spaceLabel(space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
+    return { space, label: spaceLabel(fleet, space), folder: folderNow(fleet.terminals, space), status: mostUrgent(Array.flatMap(tabs, ({ agents }) => agents)), tabs }
   }
 }
 
@@ -118,13 +119,6 @@ const URGENCY: ReadonlyArray<StatusState> = ["blocked", "error", "done", "workin
 
 const byUrgency = Order.mapInput(Order.Number, (state: StatusState) => URGENCY.indexOf(state))
 
-/** The terminals a layout shows, in reading order. */
-export const terminalsIn = (node: Layout): ReadonlyArray<string> =>
-  Match.valueTags(node, {
-    Block: ({ content }) => (content._tag === "Terminal" ? [content.terminal] : []),
-    Split: ({ children }) => Array.flatMap(children, terminalsIn),
-    Unknown: () => [],
-  })
 
 /** The space and tab whose layout shows the terminal. */
 export const locate = (fleet: Fleet, address: string): Option.Option<Readonly<{ space: Space; tab: Tab }>> =>
@@ -156,9 +150,15 @@ export const terminalNote = (terminal: Terminal) =>
   )
 
 // herdr-app leaves names empty until the user sets one. It then calls a
-// space after its folder's last segment, and a tab by its number.
-export const spaceLabel = ({ name, folder }: Space) =>
-  nonEmptyOr(name, pipe(String.split(folder, "/"), Array.last, Option.getOrElse(() => folder)))
+// space after the checkout its first terminal works in (see folderNow), else
+// that folder, and a tab by its number. Git is read now and then, so its
+// checkout counts only while it still holds the folder.
+export const spaceLabel = (fleet: Fleet, space: Space) => {
+  const folder = folderNow(fleet.terminals, space)
+  const checkout = Option.filter(Option.map(Record.get(fleet.git, space.id), ({ top }) => top), (top) => folder === top || String.startsWith(`${top}/`)(folder))
+  const named = Option.getOrElse(checkout, () => folder)
+  return nonEmptyOr(space.name, pipe(String.split(named, "/"), Array.last, Option.filter(String.isNonEmpty), Option.getOrElse(() => named)))
+}
 
 /** A space's badge: its label's first letter or digit in capitals, else its 1-based place among its machine's spaces. */
 export const spaceBadge = (label: string, index: number) =>

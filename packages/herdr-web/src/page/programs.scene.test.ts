@@ -15,7 +15,7 @@ const editor: Terminal = {
   cwd: "/",
   state: "live",
   status: Option.none(),
-  foreground: Option.some({ name: "nvim", pid: 1, argv: ["nvim", "notes.md"] }),
+  foreground: Option.some({ name: "nvim", pid: 1, argv: ["nvim", "notes.md"], cwd: "/" }),
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,

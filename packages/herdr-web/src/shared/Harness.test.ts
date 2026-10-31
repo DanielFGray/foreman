@@ -11,7 +11,7 @@ const terminal = (app: Option.Option<string>, program: Option.Option<string>): T
   state: "live",
   status: Option.map(app, (name) => ({ state: "idle", app: Option.some(name), msg: Option.none(), kind: Option.none(), progress: Option.none() })),
   status_ms: Option.none(),
-  foreground: Option.map(program, (name) => ({ name, pid: 1, argv: [name] })),
+  foreground: Option.map(program, (name) => ({ name, pid: 1, argv: [name], cwd: "/" })),
   labels: {},
   created_ms: 0,
   records: Option.none(),

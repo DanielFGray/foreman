@@ -11,7 +11,7 @@
 // hc's snapshot.
 import { Array, Context, Effect, HashSet, Layer, Match, Option, Record, Schedule, Schema as S, Semaphore, Stream, SubscriptionRef } from "effect"
 import { HERDR_APP_DOC, Hc, type Notification } from "../hc/Hc.ts"
-import { Fleet, type Layout, type Machine, type Space, type Terminal } from "../shared/Fleet.ts"
+import { Fleet, folderNow, type Layout, type Machine, type Space, type Terminal } from "../shared/Fleet.ts"
 import { readSpaceGits } from "./SpaceGit.ts"
 
 class FellBehind extends S.TaggedError<FellBehind, { readonly brand: unique symbol }>()("FellBehind", {}) {}
@@ -67,11 +67,11 @@ export class FleetModel extends Context.Service<FleetModel>()("herdr-web/server/
       gitReads
         .withPermits(1)(
           Effect.gen(function* () {
-            const { machines, git: last } = yield* SubscriptionRef.get(fleet)
+            const { machines, terminals, git: last } = yield* SubscriptionRef.get(fleet)
             const connected = Array.filter(machines, ({ state }) => state === "connected")
             const read = Array.filter(connected, isRead)
             const targets = Array.flatMap(read, (machine) =>
-              Array.map(machine.spaces, ({ id, folder }) => ({ id, folder, on: machine.isLocal ? Option.none() : Option.some(machine.name) })),
+              Array.map(machine.spaces, (space) => ({ id: space.id, folder: folderNow(terminals, space), on: machine.isLocal ? Option.none() : Option.some(machine.name) })),
             )
             // Machines not read keep their entries; a machine that is away loses them.
             const skipped = Array.filter(connected, (machine: Machine) => !isRead(machine))

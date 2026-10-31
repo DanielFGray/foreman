@@ -11,7 +11,7 @@ const shell: Terminal = {
   cwd: "/",
   state: "live",
   status: Option.none(),
-  foreground: Option.some({ name: "zsh", pid: 2, argv: ["zsh"] }),
+  foreground: Option.some({ name: "zsh", pid: 2, argv: ["zsh"], cwd: "/" }),
   labels: {},
   status_ms: Option.none(),
   created_ms: 0,
@@ -24,7 +24,7 @@ const shell: Terminal = {
 const agent = (state: StatusState): Terminal => ({
   ...shell,
   address: "t1",
-  foreground: Option.some({ name: "claude", pid: 1, argv: ["claude"] }),
+  foreground: Option.some({ name: "claude", pid: 1, argv: ["claude"], cwd: "/" }),
   status: Option.some({ state, app: Option.some("claude-code"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
 })
 

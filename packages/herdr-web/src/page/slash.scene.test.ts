@@ -18,7 +18,7 @@ const claude: Terminal = {
   title: Option.none(),
   cwd: "/",
   state: "live",
-  foreground: Option.some({ name: "claude", pid: 1, argv: [] }),
+  foreground: Option.some({ name: "claude", pid: 1, argv: [], cwd: "/" }),
   status: Option.some({ state: "idle", app: Option.some("claude-code"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
   labels: {},
   status_ms: Option.none(),

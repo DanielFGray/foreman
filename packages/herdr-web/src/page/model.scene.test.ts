@@ -21,7 +21,7 @@ const agent: Terminal = {
   state: "live",
   status: Option.some({ state: "idle", app: Option.some("claude-code"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
   status_ms: Option.none(),
-  foreground: Option.some({ name: "claude", pid: 7, argv: ["claude"] }),
+  foreground: Option.some({ name: "claude", pid: 7, argv: ["claude"], cwd: "/" }),
   labels: {},
   created_ms: 0,
   records: Option.none(),
@@ -90,7 +90,7 @@ test("the page fits the part of the window a person sees, and the whole window w
 const opencode: Terminal = {
   ...agent,
   status: Option.some({ state: "idle", app: Option.some("opencode"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
-  foreground: Option.some({ name: "opencode", pid: 8, argv: ["opencode"] }),
+  foreground: Option.some({ name: "opencode", pid: 8, argv: ["opencode"], cwd: "/" }),
 }
 
 test("an agent whose server lists its models offers to pair, and reads them again once paired", () => {

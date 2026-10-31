@@ -1,5 +1,6 @@
-// Each space's git state, read from the space's folder on its own machine
-// with `git status --porcelain=v2 --branch`, run through hc's machine.exec.
+// Each space's git state, read on its own machine in the folder the space
+// works in now (see folderNow), with `git rev-parse --show-toplevel` and
+// `git status --porcelain=v2 --branch`, run through hc's machine.exec.
 import { Array, Effect, Option, Record, String } from "effect"
 import type { Hc } from "../hc/Hc.ts"
 import type { SpaceGit } from "../shared/Fleet.ts"
@@ -25,26 +26,31 @@ export const readSpaceGits = (hc: Hc["Service"], targets: ReadonlyArray<GitTarge
   ).pipe(Effect.map((entries) => Record.fromEntries(Array.getSomes(entries))))
 
 /** Git's answer for one folder, or `fallback` when hc could not run it. */
-const readSpaceGit = (hc: Hc["Service"], { id, folder, on }: GitTarget, fallback: Option.Option<SpaceGit>) =>
+const readSpaceGit = (hc: Hc["Service"], { id, folder, on }: GitTarget, fallback: Option.Option<SpaceGit>) => {
+  // A folder that is no repository exits nonzero, and git may be missing: both are ordinary.
+  const git = (args: ReadonlyArray<string>) =>
+    hc
+      .exec({ argv: ["git", ...args], cwd: Option.some(folder), on, timeout: Option.some(TIMEOUT) })
+      .pipe(Effect.map(({ code, timed_out, stdout }) => (!timed_out && Option.contains(code, 0) ? Option.some(stdout) : Option.none())))
   // An empty folder would run git where hc runs, not where the space is.
-  !String.isNonEmpty(folder)
+  return !String.isNonEmpty(folder)
     ? Effect.succeed(Option.none<SpaceGit>())
-    : hc.exec({ argv: ["git", "status", "--porcelain=v2", "--branch"], cwd: Option.some(folder), on, timeout: Option.some(TIMEOUT) }).pipe(
-        // A folder that is no repository exits nonzero, and git may be missing: both are ordinary.
-        Effect.map(({ code, timed_out, stdout }) => (!timed_out && Option.contains(code, 0) ? Option.some(parseStatus(stdout)) : Option.none())),
+    : Effect.all([git(["rev-parse", "--show-toplevel"]), git(["status", "--porcelain=v2", "--branch"])], { concurrency: 2 }).pipe(
+        Effect.map(([top, status]) => Option.zipWith(top, status, (top, status): SpaceGit => ({ top: String.trimEnd(top), ...parseStatus(status) }))),
         Effect.catchTag("HcError", (error) =>
           error.kind === "spawn_failed"
             ? Effect.succeed(Option.none<SpaceGit>())
             : Effect.as(Effect.logWarning(`cannot read git state of ${id}`, error.message), fallback),
         ),
       )
+}
 
 /**
  * Reads `git status --porcelain=v2 --branch`. Header lines start with `#`; any
  * other line is a changed, renamed, unmerged or untracked path. The branch is
  * none for a detached head.
  */
-export const parseStatus = (stdout: string): SpaceGit => {
+export const parseStatus = (stdout: string): Omit<SpaceGit, "top"> => {
   const lines = Array.filter(String.split("\n")(stdout), String.isNonEmpty)
   const head = Array.findFirst(lines, String.startsWith(HEAD))
   return {
