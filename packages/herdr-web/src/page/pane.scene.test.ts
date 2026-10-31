@@ -2,7 +2,7 @@ import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, Mount, role, scene, selector, Subscription } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
-import { SaveRecent, SaveSelection, SaveViewPicks, SaveZoom } from "./commands.ts"
+import { SaveRecent, SaveSelection, SaveViewPicks, SaveZoom, SplitPane } from "./commands.ts"
 import { KeepTypingFocus } from "./keys.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, Selection, type ViewPick } from "./model.ts"
@@ -106,6 +106,33 @@ test("zoom fills the window with the pane whose button was clicked, and the page
     Command.expectExact(SaveZoom({ isZoomed: false })),
     Command.resolve(SaveZoom, Message.CompletedSaveZoom()),
     expect(selector(".app.zoomed")).not.toExist(),
+  )
+})
+
+test("the pane menu holds the pane's tools, closes on a pick, and leaves a close to confirm in the head", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-menu-button")),
+    expect(selector(".pane.focused .pane-tools.open")).toExist(),
+    expect(selector(".pane:not(.focused) .pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-tools [aria-label=\"split right\"]")),
+    Command.expectExact(SplitPane({ pane: "p-t1", direction: "right" })),
+    Command.resolve(SplitPane, Message.FailedPaneAction({ reason: "no room" })),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-menu-button")),
+    click(selector(".pane.focused .pane-tools [aria-label=\"close the pane\"]")),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    expect(selector(".pane.focused .pane-head .pane-actions.confirming")).toContainText("end it"),
+    expect(selector(".pane.focused .pane-tools .pane-actions")).not.toExist(),
+    click(role("button", { name: "keep the pane" })),
+    expect(selector(".pane-actions.confirming")).not.toExist(),
   )
 })
 

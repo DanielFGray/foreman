@@ -97,6 +97,8 @@ export const PaneAction = defineTaggedUnion({
   RenamingSpace: { space: S.String, name: S.String },
   /** The model menu of the agent at `address` is open, with the models it may switch to as far as they are read. */
   PickingModel: { address: S.String, choices: ChoiceList },
+  /** The menu that holds a narrow pane's tools is open, on the pane of the terminal at `address`. */
+  ShowingPaneMenu: { address: S.String },
   Refused: { reason: S.String },
 })
 export type PaneAction = typeof PaneAction.Type
@@ -459,6 +461,8 @@ export const Message = defineMessageUnion({
   ReceivedModel: { address: S.String, model: S.Option(S.String) },
   ReceivedTodos: { address: S.String, todos: S.Array(TodoItem) },
   ClickedModelTag: { address: S.String },
+  ClickedPaneMenu: { address: S.String },
+  ClosedPaneMenu: {},
   ReceivedModelChoices: { address: S.String, choices: ModelChoices },
   FailedModelChoices: { address: S.String, failure: BridgeError },
   PickedModel: { address: S.String, alias: S.String },

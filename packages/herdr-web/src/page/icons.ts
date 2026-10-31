@@ -17,6 +17,7 @@ export {
   Clock,
   CodeXml,
   Columns2,
+  EllipsisVertical,
   ExternalLink,
   FlaskConical,
   Folder,

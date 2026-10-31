@@ -106,6 +106,7 @@ const tabsView = (row: SpaceRow, tabId: string, model: Model, h: HtmlBuilder<Mes
           ConfirmingSpace: () => false,
           RenamingSpace: () => false,
           PickingModel: () => false,
+          ShowingPaneMenu: () => false,
           Refused: () => false,
         })
         return h.keyed("span")(

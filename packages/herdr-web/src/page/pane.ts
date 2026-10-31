@@ -7,7 +7,7 @@ import type { Size } from "../shared/Fleet.ts"
 import { chatView } from "./chatView.ts"
 import { terminalNote } from "./group.ts"
 import { programOf } from "./programs.ts"
-import { Columns2, icon, type IconNode, Maximize2, MessageSquare, Minimize2, Rows2, SquareTerminal, X } from "./icons.ts"
+import { Columns2, EllipsisVertical, icon, type IconNode, Maximize2, MessageSquare, Minimize2, Rows2, SquareTerminal, X } from "./icons.ts"
 import { KeepTypingFocus, keyLabel, modifiersAttribute } from "./keys.ts"
 import { keySheetView, softKeysOf } from "./keySheet.ts"
 import { modelMenuView, modelTagView } from "./modelMenu.ts"
@@ -46,24 +46,7 @@ export const paneView = (
           h.span([h.Class("name")], [labelAt(model, address)]),
           ...modelTagView(address, model, h),
           ...Option.toArray(Option.map(maybeTerminal, (terminal) => h.span([h.Class("msg")], [terminalNote(terminal)]))),
-          // Before the view chips, so they stay in place as these show and hide.
-          ...Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, model, h))),
-          zoomButton(model, h),
-          // A question that wants typed text is answered in the terminal, so a chat can switch to it.
-          ...(supportsAt(model, address, "chat")
-            ? Array.map(ViewName.literals, (name) =>
-                h.button(
-                  [
-                    h.Type("button"),
-                    h.Class(shown._tag === name ? "chip icon-chip view-chip on" : "chip icon-chip view-chip"),
-                    h.AriaLabel(name === "Chat" ? "chat" : "terminal"),
-                    h.AriaPressed(shown._tag === name ? "true" : "false"),
-                    h.OnClick(Message.SelectedView({ address, view: name })),
-                  ],
-                  [icon(name === "Chat" ? MessageSquare : SquareTerminal, h), h.span([h.Class("label")], [name === "Chat" ? "chat" : "terminal"])],
-                ),
-              )
-            : []),
+          ...toolsView(address, maybePane, model, h),
         ],
       ),
       ...modelMenuView(address, model, h),
@@ -139,6 +122,7 @@ export const paneActionView = (model: Model, h: HtmlBuilder<Message>): ReadonlyA
     ConfirmingSpace: () => [],
     RenamingSpace: () => [],
     PickingModel: () => [],
+    ShowingPaneMenu: () => [],
     Refused: ({ reason }) => [h.p([h.Class("note error")], [reason])],
   })
 
@@ -182,32 +166,76 @@ export const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<H
 /** A node's flex share: its weight, or an even share when herdr-app gives none. */
 export const flexOf = (size: Option.Option<Size>) => ({ flex: `${Option.getOrElse(Option.flatMap(size, ({ weight }) => weight), () => 1)} 1 0` })
 
-/** The head shows these under the pointer or keyboard focus; a close waiting for its answer keeps them shown. */
-const paneButtons = (pane: string, model: Model, h: HtmlBuilder<Message>): Html => {
+/**
+ * The pane's tools: split, close, zoom and the view chips. A pane as narrow
+ * as a phone folds them into a menu under its ⋮ button (styles.css), so the
+ * name keeps its room. A close waiting for its answer stays in the head.
+ */
+const toolsView = (address: string, maybePane: Option.Option<string>, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+  const isOpen = model.paneAction._tag === "ShowingPaneMenu" && model.paneAction.address === address
+  const closing = Option.filter(maybePane, (pane) => model.paneAction._tag === "Confirming" && model.paneAction.pane === pane)
+  return [
+    ...Option.toArray(Option.map(closing, (pane) => confirmCloseView(pane, h))),
+    h.button(
+      [h.Type("button"), h.Class(isOpen ? "chip icon-chip pane-menu-button on" : "chip icon-chip pane-menu-button"), h.AriaLabel("pane menu"), h.AriaExpanded(isOpen), h.OnClick(Message.ClickedPaneMenu({ address }))],
+      [icon(EllipsisVertical, h)],
+    ),
+    h.div(
+      [h.Class(isOpen ? "pane-tools open" : "pane-tools"), h.OnClick(Message.ClosedPaneMenu())],
+      [
+        // Before the view chips, so they stay in place as these show and hide.
+        ...(Option.isSome(closing) ? [] : Option.toArray(Option.map(maybePane, (pane) => paneButtons(pane, h)))),
+        zoomButton(model, h),
+        ...viewChips(address, model, h),
+      ],
+    ),
+  ]
+}
+
+const confirmCloseView = (pane: string, h: HtmlBuilder<Message>): Html => {
   const button = (label: string, title: string, message: Message) =>
     h.button([h.Type("button"), h.Class("chip"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [label])
-  const iconButton = (node: IconNode, title: string, message: Message) =>
-    h.button([h.Type("button"), h.Class("chip icon-button"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [icon(node, h)])
-  const isClosing = PaneAction.match(model.paneAction, {
-    Idle: () => false,
-    Confirming: ({ pane: closing }) => closing === pane,
-    ConfirmingTab: () => false,
-    ConfirmingSpace: () => false,
-    RenamingSpace: () => false,
-    PickingModel: () => false,
-    Refused: () => false,
-  })
   return h.span(
-    [h.Class(isClosing ? "pane-actions confirming" : "pane-actions")],
-    isClosing
-      ? [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())]
-      : [
-          iconButton(Columns2, "split right", Message.ClickedSplit({ pane, direction: "right" })),
-          iconButton(Rows2, "split down", Message.ClickedSplit({ pane, direction: "down" })),
-          iconButton(X, "close the pane", Message.ClickedClose({ pane })),
-        ],
+    [h.Class("pane-actions confirming")],
+    [button("end it", "close the pane and end its program", Message.ConfirmedClose({ pane })), button("keep", "keep the pane", Message.ClickedKeepPane())],
   )
 }
+
+/** The head shows these under the pointer or keyboard focus. */
+const paneButtons = (pane: string, h: HtmlBuilder<Message>): Html => {
+  const iconButton = (node: IconNode, title: string, message: Message) =>
+    h.button([h.Type("button"), h.Class("chip icon-button"), h.Title(title), h.AriaLabel(title), h.OnClick(message)], [icon(node, h), menuLabel(title, h)])
+  return h.span(
+    [h.Class("pane-actions")],
+    [
+      iconButton(Columns2, "split right", Message.ClickedSplit({ pane, direction: "right" })),
+      iconButton(Rows2, "split down", Message.ClickedSplit({ pane, direction: "down" })),
+      iconButton(X, "close the pane", Message.ClickedClose({ pane })),
+    ],
+  )
+}
+
+// A question that wants typed text is answered in the terminal, so a chat can switch to it.
+const viewChips = (address: string, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+  const shown = viewOf(model, address)
+  return supportsAt(model, address, "chat")
+    ? Array.map(ViewName.literals, (name) =>
+        h.button(
+          [
+            h.Type("button"),
+            h.Class(shown._tag === name ? "chip icon-chip view-chip on" : "chip icon-chip view-chip"),
+            h.AriaLabel(name === "Chat" ? "chat" : "terminal"),
+            h.AriaPressed(shown._tag === name ? "true" : "false"),
+            h.OnClick(Message.SelectedView({ address, view: name })),
+          ],
+          [icon(name === "Chat" ? MessageSquare : SquareTerminal, h), h.span([h.Class("label")], [name === "Chat" ? "chat" : "terminal"])],
+        ),
+      )
+    : []
+}
+
+/** A tool's name, shown only in the pane menu, where its icon alone would not say enough. */
+const menuLabel = (text: string, h: HtmlBuilder<Message>) => h.span([h.Class("menu-label")], [text])
 
 /**
  * The focused chat's prompt: its text joins the agent's queue, and goes with
@@ -233,6 +261,6 @@ const promptView = (model: Model, address: string, h: HtmlBuilder<Message>): Htm
 const zoomButton = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.button(
     [h.Type("button"), h.Class(model.isZoomed ? "chip icon-chip zoom-chip on" : "chip icon-chip zoom-chip"), h.Title(model.isZoomed ? "zoom out" : "zoom in: this pane fills the window"), h.AriaLabel("zoom"), h.AriaPressed(model.isZoomed ? "true" : "false"), h.OnClick(Message.ClickedZoom())],
-    [icon(model.isZoomed ? Minimize2 : Maximize2, h)],
+    [icon(model.isZoomed ? Minimize2 : Maximize2, h), menuLabel(model.isZoomed ? "zoom out" : "zoom in", h)],
   )
 

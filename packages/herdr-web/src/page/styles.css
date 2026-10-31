@@ -608,3 +608,35 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .todos .in_progress { color: var(--accent); }
 .todos .completed { color: var(--subtext); text-decoration: line-through; }
 .row .todo-count { flex: none; color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* A pane's tools sit in its head; when they would crowd its name, on a phone
+   or in a narrow column on a desk, they fold into a menu under its ⋮ button.
+   paneFit.ts measures the head and marks it data-folded. */
+.pane-head { position: relative; }
+.pane-tools { display: contents; }
+.pane-menu-button, .menu-label { display: none; }
+/* The copy paneFit.ts measures: the tools in a row, as an unfolded head shows them under the pointer. */
+.pane-tools-probe { position: fixed; top: 0; left: 0; visibility: hidden; pointer-events: none; display: flex; gap: 8px; white-space: nowrap; }
+.pane-tools-probe .pane-actions { display: inline-flex; }
+.pane-head[data-folded] {
+  .pane-menu-button { display: inline-flex; }
+  .pane-tools {
+    display: none;
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 4px);
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 6px;
+    background: var(--base);
+    border: 1px solid var(--surface);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.2);
+  }
+  .pane-tools.open { display: flex; }
+  .pane-tools .pane-actions { display: flex; flex-direction: column; gap: 4px; }
+  .pane-tools .chip { justify-content: flex-start; gap: 8px; padding: 6px 10px; }
+  .pane-tools :is(.label, .menu-label) { display: inline; }
+}

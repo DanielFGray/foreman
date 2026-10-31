@@ -217,6 +217,14 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     ClickedKeepPane: () => ({ model: modifyFields(model, { paneAction: () => PaneAction.Idle() }) }),
 
+    ClickedPaneMenu: ({ address }) => ({
+      model: modifyFields(model, {
+        paneAction: (action) => (action._tag === "ShowingPaneMenu" && action.address === address ? PaneAction.Idle() : PaneAction.ShowingPaneMenu({ address })),
+      }),
+    }),
+    // A pick in the menu closes it, unless the pick began another action, such as a close to confirm.
+    ClosedPaneMenu: () => ({ model: modifyFields(model, { paneAction: (action) => (action._tag === "ShowingPaneMenu" ? PaneAction.Idle() : action) }) }),
+
     ConfirmedClose: ({ pane }) => ({
       model: modifyFields(model, { paneAction: () => PaneAction.Idle() }),
       commands: [ClosePane({ pane })],
