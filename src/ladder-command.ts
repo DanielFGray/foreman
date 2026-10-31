@@ -31,9 +31,13 @@ import {
  * models behind it are rows in the herd skill's registry schema.
  */
 
-const list = Command.make("list", {}, () =>
+const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));
+
+const list = Command.make("list", { json }, ({ json }) =>
   Effect.gen(function* () {
-    for (const [index, row] of readStatus(registryPath()).entries()) {
+    const rows = readStatus(registryPath());
+    if (json) return yield* Console.log(JSON.stringify(rows, null, 2));
+    for (const [index, row] of rows.entries()) {
       const record =
         row.slices === 0
           ? "no trials"
@@ -166,10 +170,6 @@ const toggle = (name: "enable" | "disable") =>
     ),
   );
 
-const json = Flag.Boolean("json").pipe(
-  Flag.withDefault(false),
-  Flag.withDescription("Emit the suggestion as JSON"),
-);
 const catalog = Flag.String("catalog").pipe(
   Flag.withDescription("Local models.dev api.json path (offline / tests)"),
   Flag.optional,

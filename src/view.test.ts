@@ -15,6 +15,11 @@ import {
   staleReview,
   statusLine,
 } from "./view.ts";
+import { Published, publishedOf, writePublished } from "./published.ts";
+import { BunServices } from "@effect/platform-bun";
+import { Effect, Schema as S } from "effect";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): Item => ({
   id,
@@ -572,5 +577,40 @@ describe("orphaned workspaces", () => {
   test("opens the attention tab on its own", () => {
     const only = { ...orphaned, decisions: [], yours: [], unreviewed: [], stale: [], held: [] };
     expect(drawn(only)).toContain("attention");
+  });
+});
+
+describe("publishedOf", () => {
+  test("publishes every view's rows with the commands each takes, in a shape its schema reads back", () => {
+    const published = publishedOf(state, true, [{ name: "pty", directory: "/build/pty" }]);
+    expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
+      published,
+    );
+    expect(published.dispatch).toBe("paused");
+    const queued = published.rows.find((row) => row.key === "ts-q1");
+    expect(queued?.view).toBe("queue");
+    // The panel filters to the shown space by this, and a queued row carries
+    // its project only on the task.
+    expect(queued?.project).toBe(state.queue[0]!.project);
+    expect(queued?.actions.length).toBeGreaterThan(0);
+  });
+
+  test("reports no intention from a one-shot read, which has none", () => {
+    expect(publishedOf(state, false, []).dispatch).toBeNull();
+  });
+
+  test("replaces the file whole, leaving no temporary beside it", async () => {
+    const folder = await mkdtemp(`${tmpdir()}/published-`);
+    const path = `${folder}/state.json`;
+    const write = (daemon: boolean) =>
+      Effect.runPromise(
+        writePublished(path, publishedOf(state, daemon, [])).pipe(
+          Effect.provide(BunServices.layer),
+        ),
+      );
+    await write(true);
+    await write(false);
+    expect(JSON.parse(await readFile(path, "utf8")).dispatch).toBeNull();
+    expect(await readdir(folder)).toEqual(["state.json"]);
   });
 });

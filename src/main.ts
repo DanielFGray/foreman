@@ -1,7 +1,17 @@
 #!/usr/bin/env bun
 import { Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import {
+  Console,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  SubscriptionRef,
+} from "effect";
+import { publishedOf, publishedPath, writePublished } from "./published.ts";
 import { type Overrides, settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { authorFor, dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
@@ -274,7 +284,25 @@ const foreman = Command.make("foreman", { slots, running, skill }, ({ slots, run
         // dashboard ends the process: an operator who quits the screen means to
         // stop the fleet, not to leave it dispatching where they cannot see it.
         // A signal ends it through the same race.
-        yield* Effect.forkScoped((yield* Dispatcher).run);
+        const dispatcher = yield* Dispatcher;
+        const config = yield* Settings;
+        yield* Effect.forkScoped(dispatcher.run);
+        // Every reading is published for the panel. A write that fails is
+        // logged and the next reading tries again: the file is a view, and a
+        // stale one says so through its timestamp. The state before the first
+        // read is not a reading: published, it would tell a reader the fleet is
+        // empty, and the previous daemon's file says more until a read lands.
+        yield* Effect.forkScoped(
+          Stream.runForEach(
+            SubscriptionRef.changes(dispatcher.state).pipe(
+              Stream.filter((state) => state.observedAt !== undefined),
+            ),
+            (state) =>
+              writePublished(publishedPath(), publishedOf(state, true, config.projects)).pipe(
+                Effect.catchCause(Effect.logWarning),
+              ),
+          ),
+        );
         yield* Effect.raceFirst(dashboard, signals);
       }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
 ).pipe(

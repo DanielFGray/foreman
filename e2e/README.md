@@ -7,7 +7,7 @@ hand.
 
 ```
 sqlite3 /tmp/foreman-e2e.db < e2e/registry.sql
-FOREMAN_REGISTRY=/tmp/foreman-e2e.db foreman --config e2e/config.jsonc --slots 1
+FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json bun src/main.ts --running --slots 1
 ```
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without

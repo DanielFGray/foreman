@@ -24,17 +24,17 @@ task for you.
 
 Run `foreman <command> --help` for the options.
 
-| Command                                           | Does                                                                              |
-| ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `foreman queue`                                   | Prints ready tasks in dispatch order                                              |
-| `foreman status [--json]`                         | Prints every row the dashboard shows, and the commands each row takes             |
-| `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                 |
-| `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status |
-| `foreman say <id> [--role R] <text>`              | Sends a message to a task's live agent                                            |
-| `foreman correct <id> <findings>`                 | Sends the author a correction round (two at most), and counts it                  |
-| `foreman prompt author\|review <id>`              | Prints the prompt foreman sends that role                                         |
-| `foreman quota`                                   | Prints what each account has left                                                 |
-| `foreman ladder [edit\|enable\|disable\|suggest]` | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder  |
+| Command                                           | Does                                                                                                  |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `foreman queue`                                   | Prints ready tasks in dispatch order                                                                  |
+| `foreman status [--json]`                         | Prints every row and the commands each takes; `--json` is the shape the daemon writes to `state.json` |
+| `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                                     |
+| `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status                     |
+| `foreman say <id> [--role R] <text>`              | Sends a message to a task's live agent                                                                |
+| `foreman correct <id> <findings>`                 | Sends the author a correction round (two at most), and counts it                                      |
+| `foreman prompt author\|review <id>`              | Prints the prompt foreman sends that role                                                             |
+| `foreman quota`                                   | Prints what each account has left                                                                     |
+| `foreman ladder [edit\|enable\|disable\|suggest]` | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder                      |
 
 The dashboard's keys are also commands, and each takes the id of a row in
 `foreman status`:

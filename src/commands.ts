@@ -12,6 +12,8 @@ import { Dispatcher } from "./dispatcher.ts";
 import { Fleet } from "./fleet.ts";
 import { countOf, Prog, ROUNDS } from "./prog.ts";
 import { ACTIONS_LIST, actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
+import { commandName, publishedOf } from "./published.ts";
+import { Settings } from "./config.ts";
 
 /**
  * The lifecycle as one-shot commands.
@@ -35,17 +37,13 @@ const status = Command.make("status", { json }, ({ json }) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
-    const state = yield* SubscriptionRef.get(dispatcher.state);
-    const rows = VIEWS.flatMap((view) =>
-      rowsForView(view, state).map((row) => ({
-        view,
-        key: row.key,
-        label: row.label,
-        detail: row.detail,
-        actions: actionsFor(row.column, row).map(commandName),
-      })),
+    const published = publishedOf(
+      yield* SubscriptionRef.get(dispatcher.state),
+      false,
+      (yield* Settings).projects,
     );
-    if (json) return yield* Console.log(JSON.stringify(rows, null, 2));
+    if (json) return yield* Console.log(JSON.stringify(published, null, 2));
+    const rows = published.rows;
     if (rows.length === 0) return yield* Console.log("nothing queued, working or waiting");
     for (const row of rows) {
       yield* Console.log(
@@ -291,8 +289,4 @@ export class Refused extends Schema.TaggedError<Refused>()("Refused", {
 }
 
 /** What a one-shot command reads. */
-type Services<E> = Layer.Layer<Dispatcher | Fleet | Prog, E>;
-
-/** An action as a command line writes it: `takeOver` is `take-over`. */
-const commandName = (action: Action): string =>
-  action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+type Services<E> = Layer.Layer<Dispatcher | Fleet | Prog | Settings, E>;
