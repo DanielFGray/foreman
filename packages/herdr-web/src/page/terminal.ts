@@ -7,6 +7,7 @@ import * as Mount from "foldkit/mount"
 import { FitAddon, init, Terminal } from "ghostty-web"
 import { applyModifiers, parseModifiersAttribute } from "./keys.ts"
 import { watchLinks } from "./terminalLinks.ts"
+import { scrollByWheelAndTouch } from "./terminalScroll.ts"
 import { BridgeClient, failureReason } from "./rpc.ts"
 import { fontStack } from "./settings.ts"
 
@@ -65,6 +66,8 @@ export const LiveTerminal = Mount.defineStream("LiveTerminal", {
         const viewer = yield* SubscriptionRef.make<"Watching" | "Typing">("Watching")
         // The keys that take the terminal, until the typing session is up.
         const taking = yield* Ref.make(Option.none<ReadonlyArray<string>>())
+        // A scroll the program reads goes out as typed input, without the armed modifiers.
+        yield* scrollByWheelAndTouch(terminal, page, (data) => Queue.offerUnsafe(outgoing, Typed.make({ data })))
         yield* Effect.acquireRelease(
           Effect.sync(() => [
             terminal.onData((data) => {
