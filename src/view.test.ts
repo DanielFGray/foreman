@@ -45,8 +45,6 @@ const ready = (
 
 const worker = (task: string, state: WorkerState): Worker => ({
   task,
-  workspace: `ws-${task}`,
-  pane: `pane-${task}`,
   repository: "/home/dan/build/amux",
   directory: `/tmp/${task}`,
   worktree: `/tmp/wt-${task}`,

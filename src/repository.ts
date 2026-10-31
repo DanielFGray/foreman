@@ -824,7 +824,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * question — and the two mistakes are not the same size. A worktree kept
        * for nothing costs disk; a worktree deleted wrongly costs the work.
        *
-       * Always git: herdr makes these with `git worktree add`, so a worktree is
+       * Always git: `addWorktree` makes these with `git worktree add`, so a worktree is
        * git's whatever the project checkout it came from is.
        */
       holdsWork: (directory: string) =>
@@ -955,6 +955,87 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         git(directory, "branch", "--delete", branch).pipe(
           Effect.map((result) => result.exitCode === 0),
         ),
+
+      /**
+       * Every worktree git has registered for the checkout, with the branch
+       * each one has out.
+       *
+       * Always git: a task worktree is a git worktree in a colocated jj
+       * repository too, and this is the durable record a task's work is found
+       * by once nothing is running in it.
+       */
+      worktrees: (directory: string) =>
+        gitOutput(directory, "worktree", "list", "--porcelain").pipe(Effect.map(worktreesOf)),
+
+      /**
+       * Makes a task's worktree at `path` with `branch` out, cutting the
+       * branch from HEAD when it does not exist yet.
+       *
+       * A branch that already exists is checked out as it is, because its
+       * commits are an earlier attempt's work and the next agent is sent to
+       * read them. Pruning first is what lets a path whose directory was
+       * deleted by hand be made again.
+       */
+      addWorktree: (directory: string, branch: string, path: string) =>
+        Effect.gen(function* () {
+          yield* git(directory, "worktree", "prune");
+          const exists = yield* git(
+            directory,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            `refs/heads/${branch}`,
+          );
+          yield* clearFor(path);
+          yield* gitOutput(
+            directory,
+            ...(exists.exitCode === 0
+              ? ["worktree", "add", path, branch]
+              : ["worktree", "add", "-b", branch, path, "HEAD"]),
+          );
+        }),
+
+      /**
+       * Deletes a task's worktree and its registration, uncommitted edits
+       * included. The branch survives, so what was committed is kept.
+       */
+      removeWorktree: (directory: string, path: string) =>
+        gitOutput(directory, "worktree", "remove", "--force", path).pipe(
+          Effect.andThen(git(directory, "worktree", "prune")),
+          Effect.asVoid,
+        ),
+
+      /**
+       * Puts a task's worktree back on its branch: one at foreman's path that
+       * was left detached or on another branch.
+       *
+       * Refuses when the worktree's HEAD holds commits the branch does not
+       * have, because switching away would leave them reachable from nothing
+       * but the reflog. Uncommitted edits travel with the switch, and git
+       * refuses one they would conflict with.
+       */
+      restoreBranch: (path: string, branch: string) =>
+        Effect.gen(function* () {
+          const exists = yield* git(
+            path,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            `refs/heads/${branch}`,
+          );
+          if (exists.exitCode !== 0) {
+            yield* gitOutput(path, "switch", "--create", branch);
+            return;
+          }
+          const contained = yield* git(path, "merge-base", "--is-ancestor", "HEAD", branch);
+          if (contained.exitCode !== 0) {
+            return yield* new RepositoryError({
+              directory: path,
+              detail: `HEAD holds commits ${branch} does not; move them onto it by hand`,
+            });
+          }
+          yield* gitOutput(path, "switch", branch);
+        }),
 
       /**
        * Makes a fresh worktree usable, and says whether it worked.
@@ -1116,6 +1197,38 @@ export const conflictsOf = (output: string): Stale => {
     modifyDelete: [...stages.values()].some((present) => present.size === 2 && present.has("1")),
   };
 };
+
+/** One worktree git has registered: where it is and which branch it has out. */
+export interface Worktree {
+  readonly path: string;
+
+  /** The short branch name, absent for a detached worktree. */
+  readonly branch: string | undefined;
+
+  /** Registered at a directory that is gone: nothing to adopt or remove. */
+  readonly prunable: boolean;
+}
+
+/**
+ * Reads `git worktree list --porcelain`: one blank-line-separated record per
+ * worktree, the main checkout first.
+ */
+export const worktreesOf = (output: string): ReadonlyArray<Worktree> =>
+  output
+    .split(/\n\s*\n/)
+    .map((record) => record.split("\n"))
+    .flatMap((lines) => {
+      const path = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+      if (path === undefined) return [];
+      const ref = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length);
+      return [
+        {
+          path,
+          branch: ref?.replace(/^refs\/heads\//, ""),
+          prunable: lines.some((line) => line === "prunable" || line.startsWith("prunable ")),
+        },
+      ];
+    });
 
 export class RepositoryError extends Schema.TaggedError<RepositoryError>()("RepositoryError", {
   directory: Schema.String,

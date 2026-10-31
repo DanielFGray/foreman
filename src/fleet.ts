@@ -3,31 +3,24 @@ import { Context, Effect, Schema } from "effect";
 /**
  * The multiplexer, as foreman needs it.
  *
- * One workspace per task, labelled `foreman/<task-id>`, living from dispatch
- * until the task leaves the fleet. Agents come and go inside it; the workspace
- * is the durable thing. That label is also how foreman knows what it is doing:
- * the roster is read back from the multiplexer every tick rather than
- * remembered, so foreman holds no state that a restart could lose.
- *
- * The multiplexer owns the git worktree too. It has to: the worktree and the
- * workspace showing it are one idea, and splitting them across two owners is
- * what put every worker in whichever window happened to be focused.
+ * A task's workspace is its git worktree plus the agents running in it. The
+ * worktree is the durable thing; agents come and go inside it, each one
+ * labelled with its task and role. Those labels are how foreman knows what it
+ * is doing: the roster is read back from the multiplexer every tick rather
+ * than remembered, so foreman holds no state that a restart could lose.
  */
 export class Fleet extends Context.Service<
   Fleet,
   {
     /**
-     * Opens the workspace for a task, resolving in order: a workspace already
-     * carrying this task's label, else a worktree git still has registered for
-     * this task's branch — attaching a fresh workspace to it — else creating
-     * both from the repository's HEAD.
+     * Opens the workspace for a task, resolving in order: a worker already
+     * running for it, else a worktree git still has registered for this
+     * task's branch, else a new worktree with the branch cut from HEAD.
      *
-     * The worktree is the durable identity and the workspace a view onto it.
-     * A workspace dies when its last pane closes, but the worktree and branch
-     * survive, so resolution reads the durable record second. Without that
-     * step, a task whose workspace a keypress destroyed fell through to
-     * `worktree create`, which fails on a directory that already exists — and
-     * retried that same collision forever instead of re-adopting the work.
+     * The worktree is the durable identity, and the agents in it come and go.
+     * Without the second step, a task whose agents all ended fell through to
+     * creating a worktree on a directory that already exists — and retried
+     * that same collision forever instead of re-adopting the work.
      */
     readonly open: (options: OpenOptions) => Effect.Effect<Worker, FleetError>;
 
@@ -44,14 +37,14 @@ export class Fleet extends Context.Service<
      */
     readonly attach: (options: AttachOptions) => Effect.Effect<Worker, FleetError>;
 
-    /** Starts an agent on the workspace's own pane, or a fresh split for a reviewer. */
+    /** Starts an agent for one role, beside any other role's agent on the task. */
     readonly spawn: (
       worker: Worker,
       options: SpawnOptions,
     ) => Effect.Effect<AgentIdentity, FleetError>;
 
     /**
-     * Every workspace labelled `foreman/*`, whatever daemon opened it.
+     * Every task with agents, whatever daemon started them.
      *
      * A label records no ownership, and two daemons against different configs
      * are not competing for the same slots — so the adapter reports everything
@@ -78,28 +71,25 @@ export class Fleet extends Context.Service<
     readonly stop: (worker: Worker, role: AgentRole) => Effect.Effect<void, FleetError>;
 
     /**
-     * Closes a task's workspace, removing the worktree when foreman made one.
+     * Ends a task's agents and removes the worktree when foreman made one.
      * The branch survives either way.
      *
-     * Resolution mirrors `open`: the workspace carrying the task's label, else
-     * a worktree git still has for its branch. The workspace half only needs
-     * the multiplexer; the worktree half re-adopts the worktree to get a
-     * workspace to remove it with — so a worktree whose workspace already
-     * closed, its last pane closed by hand, is removed rather than orphaned.
+     * The worktree is found from git's record of the task's branch, not from
+     * the agents, so a worktree whose agents already ended is removed rather
+     * than orphaned. A worker over the operator's own checkout has no
+     * worktree, and that directory is never removed.
      */
     readonly close: (options: CloseOptions) => Effect.Effect<void, FleetError>;
 
     /**
-     * Notifies the operator, but only when foreman's own workspace is not the
-     * focused one. Telling someone about a thing already on their screen
-     * trains them to dismiss notifications without reading them.
+     * Notifies the operator.
      *
      * Two rules decide what may come through here, and both exist because they
      * were broken at once and the fleet dinged on every poll.
      *
      * **Only what foreman itself did.** An agent that blocked, stopped or
-     * handed off is herdr's event: herdr sees it first and already alerts.
-     * Foreman announces what herdr cannot know — a branch that landed, a task
+     * handed off is the multiplexer's event: it sees it first and already alerts.
+     * Foreman announces what the multiplexer cannot know — a branch that landed, a task
      * that climbed onto the operator, a merge that was undone.
      *
      * **Only on a transition, never on a condition.** A tick reads the whole
@@ -176,8 +166,6 @@ export type AgentRole = Schema.Schema.Type<typeof AgentRole>;
  */
 export interface Worker {
   readonly task: string;
-  readonly workspace: string;
-  readonly pane: string;
   readonly directory: string;
 
   /**

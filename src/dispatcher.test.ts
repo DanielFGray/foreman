@@ -43,8 +43,6 @@ const task = (
 
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   task: id,
-  workspace: "w1",
-  pane: "w1:p1",
   directory: "/tmp/worktree",
   repository: "/home/dan/build/project",
   worktree: "/tmp/worktree",

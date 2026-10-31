@@ -31,8 +31,6 @@ const item = (
 
 const worker = (task: string, role: "author" | "review", state: WorkerState): Worker => ({
   task,
-  workspace: `workspace-${task}`,
-  pane: `pane-${task}`,
   repository: "/home/dan/build/project",
   directory: `/worktree/${task}`,
   worktree: `/worktree/${task}`,
@@ -66,8 +64,6 @@ class World {
         if (current) return current;
         const created: Worker = {
           task: options.task,
-          workspace: `workspace-${options.task}`,
-          pane: `pane-${options.task}`,
           repository: options.repository,
           directory: options.directory,
           worktree: options.directory,
@@ -269,6 +265,11 @@ class World {
     setup: () => Effect.succeed(undefined),
     merge: () => Effect.succeed(this.landing),
     sweepUnpublishedMerges: () => Effect.succeed([]),
+    // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
+    worktrees: () => Effect.die("unused"),
+    addWorktree: () => Effect.die("unused"),
+    removeWorktree: () => Effect.die("unused"),
+    restoreBranch: () => Effect.die("unused"),
   };
 
   private update(id: string, change: (task: Item) => Item): void {

@@ -9,7 +9,7 @@ import { pinnedFirst, pinnedOf } from "./pin.ts";
 import { failuresOf, isOnboarding, needsYou } from "./prog.ts";
 import { dashboard } from "./dashboard.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import { HerdrFleet } from "./herdr.ts";
+import { HcFleet } from "./hc.ts";
 import { logging } from "./log.ts";
 import { Prog } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
@@ -221,7 +221,7 @@ const signals = Effect.callback<NodeJS.Signals>((resume) => {
 );
 
 /**
- * herdr is the only multiplexer foreman speaks to today. Swapping this one line
+ * hc is the only multiplexer foreman speaks to today. Swapping this one line
  * for another adapter is the whole of that migration. The base set supplies
  * Dispatcher with every port it cannot build itself.
  *
@@ -237,7 +237,7 @@ const services = (overrides: Overrides) => {
   return Layer.provideMerge(
     Dispatcher.Default,
     Layer.mergeAll(
-      HerdrFleet,
+      HcFleet,
       config,
       Prog.Default,
       Prompts.Default,

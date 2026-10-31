@@ -843,3 +843,67 @@ describe("Repository.setup", () => {
     expect(result?.output).toContain("no zig toolchain");
   });
 });
+
+// A task's worktree is the durable record of its work once nothing runs in it,
+// so making, finding and removing one is asked of git itself.
+const project = await mkdtemp(join(tmpdir(), "foreman-worktrees-"));
+afterAll(() =>
+  Promise.all(
+    [project, `${project}.tasks`].map((path) => rm(path, { recursive: true, force: true })),
+  ),
+);
+
+describe("Repository worktrees", () => {
+  const branch = "foreman/ts-1";
+  // Nested under a directory that does not exist, like the real
+  // $XDG_STATE_HOME/foreman/worktrees/<project>/<task>.
+  const path = `${project}.tasks/proj/ts-1`;
+  const worktrees = () => run((repository) => repository.worktrees(project));
+
+  test("cuts a new branch from HEAD into a worktree, and finds it again", async () => {
+    await Bun.$`git -C ${project} init -q && git -C ${project} -c user.email=f@t -c user.name=f commit -q --allow-empty -m initial`.quiet();
+    await run((repository) => repository.addWorktree(project, branch, path));
+
+    expect(await worktrees()).toContainEqual({ path, branch, prunable: false });
+  });
+
+  test("checks out a branch that already exists, keeping its commits", async () => {
+    await Bun.$`git -C ${path} -c user.email=f@t -c user.name=f commit -q --allow-empty -m work`.quiet();
+    await run((repository) => repository.removeWorktree(project, path));
+    expect((await worktrees()).map((worktree) => worktree.path)).not.toContain(path);
+
+    await run((repository) => repository.addWorktree(project, branch, path));
+    const log = await Bun.$`git -C ${path} log -1 --format=%s`.text();
+    expect(log.trim()).toBe("work");
+  });
+
+  test("makes a worktree again where its directory was deleted by hand", async () => {
+    await rm(path, { recursive: true, force: true });
+    expect(await worktrees()).toContainEqual({ path, branch, prunable: true });
+
+    await run((repository) => repository.addWorktree(project, branch, path));
+    expect(await worktrees()).toContainEqual({ path, branch, prunable: false });
+  });
+
+  test("puts a worktree left detached back on its branch", async () => {
+    await Bun.$`git -C ${path} switch -q --detach`.quiet();
+    expect(await worktrees()).toContainEqual({ path, branch: undefined, prunable: false });
+
+    await run((repository) => repository.restoreBranch(path, branch));
+    expect(await worktrees()).toContainEqual({ path, branch, prunable: false });
+  });
+
+  test("refuses to switch away from commits the branch does not have", async () => {
+    await Bun.$`git -C ${path} switch -q --detach && git -C ${path} -c user.email=f@t -c user.name=f commit -q --allow-empty -m stray`.quiet();
+
+    const refused = await Effect.runPromise(
+      Repository.use((repository) => repository.restoreBranch(path, branch)).pipe(
+        Effect.flip,
+        Effect.provide(Repository.Default),
+      ),
+    );
+    expect(refused.detail).toContain("holds commits");
+    // Still detached on the stray commit, so nothing was lost.
+    expect((await Bun.$`git -C ${path} log -1 --format=%s`.text()).trim()).toBe("stray");
+  });
+});

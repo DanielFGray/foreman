@@ -366,11 +366,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * reading does not pay for them.
      */
     const observe = Effect.gen(function* () {
-      // The roster is every daemon's: herdr lists every workspace labelled
-      // `foreman/*` whoever opened it, and a label records no ownership — two
+      // The roster is every daemon's: the fleet lists every task's workers
+      // whoever started them, and a label records no ownership — two
       // foremen against different configs are not competing for the same
       // slots. The checkout a workspace's worktree belongs to is what the
-      // config's project set scopes, and herdr reports it, so ownership is
+      // config's project set scopes, and the fleet reports it, so ownership is
       // settled before the store is asked anything. Scoping by the task's
       // project instead means one `prog show` per workspace on the machine
       // before knowing whether any of them is this daemon's — and it cannot
@@ -395,7 +395,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         prog.lookup(worker.task).pipe(
           Effect.map((task) => [{ worker, task }] as const),
           Effect.catch((error) =>
-            Effect.logWarning(`skipped workspace ${worker.workspace}: ${error}`).pipe(
+            Effect.logWarning(`skipped worker ${worker.task}: ${error}`).pipe(
               Effect.as<ReadonlyArray<{ worker: Worker; task: Option.Option<Item> }>>([]),
             ),
           ),
@@ -1428,7 +1428,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
       yield* prog.log(task.id, agentLog("author", rung, agent));
       yield* Effect.logInfo(
-        `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.workspace}`,
+        `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.directory}`,
       );
     });
 
@@ -1695,7 +1695,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Ends every agent on a task's workspace.
      *
-     * herdr cannot end an agent without closing its pane, so a settled agent
+     * Nothing ends a settled agent but closing it, so it
      * holds its model's memory for as long as the pane exists, and a pane
      * already carrying a role is never dispatched into again. Every settle
      * whose record is already in the task store therefore ends here: what the
@@ -1805,7 +1805,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     /**
      * Takes down a task's workspace and, with it, the worktree foreman made.
-     * `fleet.close` resolves the same way `open` does, so a workspace herdr has
+     * `fleet.close` resolves the same way `open` does, so a workspace the fleet has
      * already dropped still leaves its worktree removed rather than orphaned.
      */
     const teardown = (task: { readonly id: string; readonly project: string }) =>
@@ -2483,11 +2483,11 @@ export const reviewable = (
 /**
  * The workspaces this daemon owns, out of a roster that shows every daemon's.
  *
- * herdr lists every workspace labelled `foreman/*` whoever opened it, and the
+ * The fleet lists every task's workers whoever started them, and the
  * label records no ownership — two foremen against different configs are not
  * competing for the same slots, and a workspace opened by hand in the same
  * namespace belongs to neither. The checkout a workspace's worktree belongs to
- * is what the config's project set scopes, and herdr reports it, so this is
+ * is what the config's project set scopes, and the fleet reports it, so this is
  * settled before the store is asked anything.
  *
  * The checkout rather than the task's project, because the checkout is what

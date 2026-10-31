@@ -21,13 +21,13 @@ export interface Rung {
   /** How this rung is named in the config, in labels, and on the dashboard. */
   readonly name: string;
 
-  /** A herdr agent kind: the program that runs. */
+  /** The harness kind: the program that runs (see `harnessLaunch`). */
   readonly harness: string;
 
   /**
    * The model this rung runs. Each harness is told in the way it accepts one —
    * `--model` for claude and codex, a private-server config for opencode — and
-   * that mapping lives in the multiplexer adapter, not here. Absent means the
+   * that mapping lives in `src/harness.ts`, not here. Absent means the
    * harness picks, which is what a rung named after a harness rather than a
    * model wants.
    */

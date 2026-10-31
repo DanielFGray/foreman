@@ -1,6 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Layer, Schema } from "effect";
-import { launchArguments } from "./herdr.ts";
+import { launchArguments } from "./harness.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,7 +275,7 @@ const describeChange = (
 };
 
 /**
- * The arguments a coordinator passes to `herdr agent start` for a rung. opencode
+ * The flags a coordinator starts a rung's harness with. opencode
  * starts through its TUI, so its hint is the picker search rather than a flag.
  */
 const launchHint = (row: RungStatus): string => {
