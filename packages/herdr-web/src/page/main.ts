@@ -126,6 +126,8 @@ const respond = (model: Model, message: Message): UpdateReturn =>
         ),
       ),
 
+    TappedAlert: ({ address }) => tappedAlert(model, address),
+
     ClickedTab: ({ tabId }) =>
       remembered(selected(modifyFields(model, { isFleetFolded: () => true }), Selection.Tab({ tabId, maybeFocus: Option.none() }))),
 
@@ -623,6 +625,12 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
 const closedPalette = (model: Model) => modifyFields(model, { palette: () => Palette.Closed() })
 
+/** A tapped alert opens its terminal while the fleet still has it; one that is gone opens the home view. */
+const tappedAlert = (model: Model, address: string): UpdateReturn =>
+  Option.exists(lastFleet(model.bridge), (fleet) => Array.some(fleet.terminals, (terminal) => terminal.address === address))
+    ? update(model, Message.ClickedTerminal({ address }))
+    : remembered(selected(model, Selection.Nothing()))
+
 /** A palette result opens what the same row in the sidebar opens. */
 const openedTarget = (model: Model, target: PaletteTarget): UpdateReturn =>
   PaletteTarget.match(target, {
@@ -705,8 +713,15 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   // While the page is in front and focused, the bridge holds its push alerts back.
   presence: entry({}, { modelToDependencies: () => ({}), dependenciesToStream: () => presence }),
 
-  // A tapped alert opens its terminal, in the page it opened or in this open one.
-  alertTaps: entry({}, { modelToDependencies: () => ({}), dependenciesToStream: () => alertTaps }),
+  // A tapped alert opens its terminal, in the page it opened or in this open
+  // one. Taps wait for the first fleet, which decides whether the terminal is still there.
+  alertTaps: entry(
+    { isFleetKnown: S.Boolean },
+    {
+      modelToDependencies: (model) => ({ isFleetKnown: Option.isSome(lastFleet(model.bridge)) }),
+      dependenciesToStream: ({ isFleetKnown }) => (isFleetKnown ? alertTaps : Stream.empty),
+    },
+  ),
 
   // Ctrl+K anywhere on the page, a focused terminal included: the listener runs
   // first (capture) and stops the key there, so it is never typed into the

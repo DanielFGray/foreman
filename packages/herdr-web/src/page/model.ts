@@ -399,6 +399,7 @@ export const Message = defineMessageUnion({
   LostBridge: {},
   ClickedFleetToggle: {},
   ClickedTerminal: { address: S.String },
+  TappedAlert: { address: S.String },
   ClickedTab: { tabId: S.String },
   FocusedPane: { address: S.String },
   SelectedView: { address: S.String, view: ViewName },

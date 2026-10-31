@@ -139,3 +139,24 @@ test("a space is found by its git branch", () => {
     expect(role("option", { name: /^quiet/ })).toContainText("feat/login"),
   )
 })
+
+test("a tapped alert opens its terminal while the fleet has it, and the home view once it is gone", () => {
+  scene(
+    { update, view },
+    given(start),
+    Subscription.emit(Message.TappedAlert({ address: "t1" })),
+    Command.expectHas(SaveSelection({ selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }) })),
+    Command.resolve(SaveRecent, Message.CompletedSaveRecent()),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+    ),
+    Subscription.emit(Message.TappedAlert({ address: "t9" })),
+    Command.expectExact(SaveSelection({ selection: Selection.Nothing() })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    expect(selector(".pane-head")).not.toExist(),
+    Mount.expectEnded(LiveTerminal),
+    Mount.expectEnded(KeepTypingFocus),
+  )
+})

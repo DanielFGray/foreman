@@ -137,7 +137,7 @@ export const alertTaps: Stream.Stream<Message> = Stream.concat(
     onSome: (container) =>
       Dom.streamFromEventFilterMap({ target: container, type: "message", filterMapEvent: (event) => Option.map(S.decodeUnknownOption(TappedAlert)(event.data), ({ terminal }) => terminal) }),
   }),
-).pipe(Stream.map((address) => Message.ClickedTerminal({ address })))
+).pipe(Stream.map((address) => Message.TappedAlert({ address })))
 
 /** A browser call that failed, or a subscription it gave without keys. */
 class BrowserRefused extends S.TaggedError<BrowserRefused, { readonly brand: unique symbol }>()("BrowserRefused", { message: S.String }) {}
