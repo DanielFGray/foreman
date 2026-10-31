@@ -5,6 +5,7 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
+import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
 import { TodoItem } from "./Todo.ts"
@@ -175,4 +176,13 @@ export const Api = RpcGroup.make(
   Rpc.make("usage", { success: Usage, stream: true }),
   /** Reads one provider's usage, or every one's (none), now. */
   Rpc.make("refreshUsage", { payload: { provider: S.OptionFromNullOr(ProviderId) } }),
+  /** The public half of the bridge's push key, which a browser subscribes with. */
+  Rpc.make("pushKey", { success: S.String, error: BridgeError }),
+  /** Alerts the device behind the subscription for these events, from now on. */
+  Rpc.make("subscribePush", { payload: { subscription: PushSubscription, events: S.Array(AlertEvent) }, error: BridgeError }),
+  Rpc.make("unsubscribePush", { payload: { endpoint: S.String }, error: BridgeError }),
+  /** Sends a test alert to the device now. */
+  Rpc.make("testPush", { payload: { subscription: PushSubscription }, error: BridgeError }),
+  /** Held open by a page that is in front and focused: no alert goes out meanwhile. It emits nothing. */
+  Rpc.make("present", { success: S.Never, stream: true }),
 )

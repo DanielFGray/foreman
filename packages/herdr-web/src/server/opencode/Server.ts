@@ -6,10 +6,11 @@
 // in the bridge's config folder, which only the user may read. The server
 // refuses a token that expired or that a new password made void; the bridge
 // then deletes it, and the page offers to pair again.
-import { Array, Config, Context, Effect, FileSystem, Layer, Option, Redacted, Schema as S, Semaphore } from "effect"
+import { Array, Context, Effect, FileSystem, Layer, Option, Redacted, Schema as S, Semaphore } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Hc } from "../../hc/Hc.ts"
 import { BridgeError } from "../../shared/Api.ts"
+import { ConfigFolder } from "../configFolder.ts"
 import { toBridgeError } from "../hcError.ts"
 
 export class OpenCodeServer extends Context.Service<OpenCodeServer>()("herdr-web/server/opencode/OpenCodeServer", {
@@ -17,10 +18,7 @@ export class OpenCodeServer extends Context.Service<OpenCodeServer>()("herdr-web
     const hc = yield* Hc
     const fs = yield* FileSystem.FileSystem
     const http = yield* HttpClient.HttpClient
-    const folder = yield* Config.String("XDG_CONFIG_HOME").pipe(
-      Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.config`))),
-      Config.map((config) => `${config}/herdr-web`),
-    )
+    const folder = yield* ConfigFolder
     const file = `${folder}/opencode-pairing.json`
     // Two pages that pair at once would each issue a code; one of them is enough.
     const lock = yield* Semaphore.make(1)
