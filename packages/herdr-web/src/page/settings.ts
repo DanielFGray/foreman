@@ -26,12 +26,17 @@ export type AgentList = typeof AgentList.Type
 export const AgentView = S.Literals(["run", "space", "chat"])
 export type AgentView = typeof AgentView.Type
 
+/** How a phone shows the soft keys: one row that scrolls sideways, or wrapped onto more lines. */
+export const KeyRow = S.Literals(["scroll", "wrap"])
+export type KeyRow = typeof KeyRow.Type
+
 export const Settings = S.Struct({
   chat: TextStyle,
   terminal: TextStyle,
   // Settings saved before this choice existed keep their fonts.
   agents: AgentList.pipe(S.withDecodingDefaultKey(Effect.succeed("below"))),
   agentView: AgentView.pipe(S.withDecodingDefaultKey(Effect.succeed("run"))),
+  keyRow: KeyRow.pipe(S.withDecodingDefaultKey(Effect.succeed("scroll"))),
 })
 export type Settings = typeof Settings.Type
 
@@ -40,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminal: { font: Option.none(), size: 13 },
   agents: "below",
   agentView: "run",
+  keyRow: "scroll",
 }
 
 export const MIN_SIZE = 8

@@ -38,7 +38,7 @@ export const todoListView = (model: Model, address: string, h: HtmlBuilder<Messa
           h.ol(
             [],
             Array.map(todos, (step) =>
-              h.keyed("li")(step.id, [h.Class(step.status)], [h.span([h.Class("mark"), h.Role("img"), h.AriaLabel(statusLabel(step))], [icon(mark(step), h)]), shownText(step)]),
+              h.keyed("li")(step.id, [h.Class(step.status)], [h.span([h.Class("todo-mark"), h.Role("img"), h.AriaLabel(statusLabel(step))], [icon(mark(step), h)]), shownText(step)]),
             ),
           ),
         ],

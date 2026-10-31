@@ -1,8 +1,8 @@
-// The settings page: this browser's fonts, text sizes, agent list, and the view agents open in.
+// The settings page: this browser's fonts, text sizes, agent list, the view agents open in, and the soft key row.
 import { Array, Option, Result, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { FontCatalog, Message, type Model } from "./model.ts"
-import { AgentList, AgentView, fontStack, MAX_SIZE, MIN_SIZE, Surface, type TextStyle } from "./settings.ts"
+import { AgentList, AgentView, fontStack, KeyRow, MAX_SIZE, MIN_SIZE, Surface, type TextStyle } from "./settings.ts"
 
 export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.section(
@@ -18,6 +18,7 @@ export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
         h,
       ),
       h.p([h.Class("note")], ["A pane on screen keeps its view; this applies when a pane comes on screen."]),
+      choicesView({ legend: "Soft keys on a phone", choices: KeyRow.literals, text: KEY_ROW_TEXT, current: model.settings.keyRow, picked: (keyRow) => Message.PickedKeyRow({ keyRow }) }, h),
       ...FontCatalog.match(model.fontCatalog, {
         Loading: () => [h.p([h.Class("note")], ["Asking the bridge for its fonts…"])],
         Loaded: () => [],
@@ -27,6 +28,8 @@ export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   )
 
 const AGENT_LIST_TEXT = { below: "Below the spaces", nested: "Under each space" } satisfies Record<AgentList, string>
+
+const KEY_ROW_TEXT = { scroll: "One row that scrolls sideways", wrap: "Wrapped onto more lines" } satisfies Record<KeyRow, string>
 
 const AGENT_VIEW_TEXT = {
   run: "The view last picked for that agent",

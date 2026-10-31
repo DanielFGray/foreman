@@ -17,7 +17,7 @@ import { TodoItem } from "../shared/Todo.ts"
 import { Modifier, Modifiers, SheetModifier, SheetModifiers, SoftKey } from "./keys.ts"
 import { PaletteTarget } from "./palette.ts"
 import type { BridgeClient } from "./rpc.ts"
-import { AgentList, AgentView, loadSettings, Settings, Surface } from "./settings.ts"
+import { AgentList, AgentView, KeyRow, loadSettings, Settings, Surface } from "./settings.ts"
 import { loadSidebarWidth } from "./sidebarWidth.ts"
 import { loadKept, loadStored } from "./stored.ts"
 import { Link } from "./terminal.ts"
@@ -437,6 +437,7 @@ export const Message = defineMessageUnion({
   SteppedSize: { surface: Surface, step: S.Int },
   PickedAgentList: { agents: AgentList },
   PickedAgentView: { agentView: AgentView },
+  PickedKeyRow: { keyRow: KeyRow },
   CompletedSaveSettings: {},
   CompletedSaveSelection: {},
   ReceivedFonts: { families: S.Array(FontFamily) },

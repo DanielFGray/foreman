@@ -348,6 +348,7 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     PickedAgentList: ({ agents }) => settingsChanged(model, { ...model.settings, agents }),
     PickedAgentView: ({ agentView }) => settingsChanged(model, { ...model.settings, agentView }),
+    PickedKeyRow: ({ keyRow }) => settingsChanged(model, { ...model.settings, keyRow }),
     CompletedSaveSettings: () => ({ model }),
 
     CompletedSaveSelection: () => ({ model }),

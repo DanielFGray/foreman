@@ -64,9 +64,13 @@ test("the agent choices save, and settings saved before they existed keep their 
     Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested", agentView: "chat" } })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
     expect(label("Always the chat")).toBeChecked(),
+    click(label("Wrapped onto more lines")),
+    Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested", agentView: "chat", keyRow: "wrap" } })),
+    Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
+    expect(label("Wrapped onto more lines")).toBeChecked(),
   )
   const saved = { chat: { font: "Inter", size: 15 }, terminal: { font: null, size: 13 } }
   expectValue(S.decodeOption(Settings)(saved)).toEqual(
-    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run" }),
+    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run", keyRow: "scroll" }),
   )
 })

@@ -152,7 +152,7 @@ export const keysView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<H
     onSome: () => [
         ...keySheetView(model, h),
         h.div(
-          [h.Class("keys"), h.OnMount(Mount.mapMessage(KeepTypingFocus(), () => Message.CompletedKeepTypingFocus()))],
+          [h.Class(model.settings.keyRow === "wrap" ? "keys wrap" : "keys"), h.OnMount(Mount.mapMessage(KeepTypingFocus(), () => Message.CompletedKeepTypingFocus()))],
           [...Array.map(softKeysOf(model), (softKey) =>
             Match.valueTags(softKey, {
               Press: ({ key }) =>

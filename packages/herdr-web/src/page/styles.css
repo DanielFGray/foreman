@@ -284,9 +284,11 @@ a.chip { color: inherit; text-decoration: none; }
 
 .mark { align-self: center; font-size: 11px; color: var(--subtext); }
 
-/* A desk has a keyboard; the soft keys show on a phone. */
-.keys { display: none; flex-wrap: wrap; gap: 4px; }
-.keys .chip { min-width: 2.5em; font-family: ui-monospace, monospace; text-align: center; }
+/* A desk has a keyboard; the soft keys show on a phone, as one row that scrolls sideways. */
+.keys { display: none; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.keys::-webkit-scrollbar { display: none; }
+.keys.wrap { flex-wrap: wrap; overflow-x: visible; }
+.keys .chip { flex: none; min-width: 2.5em; font-family: ui-monospace, monospace; text-align: center; }
 
 .prompt { display: flex; gap: 8px; }
 .prompt textarea {
@@ -602,7 +604,7 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .todos summary .now { overflow: hidden; text-overflow: ellipsis; color: var(--subtext); }
 .todos ol { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .todos li { display: flex; align-items: center; gap: 6px; }
-.todos .mark { display: inline-flex; flex: none; }
+.todos .todo-mark { display: inline-flex; flex: none; }
 .todos .in_progress { color: var(--accent); }
 .todos .completed { color: var(--subtext); text-decoration: line-through; }
 .row .todo-count { flex: none; color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
