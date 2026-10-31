@@ -7,8 +7,8 @@
 //
 // No alert goes out while a page is in front and focused somewhere: whoever
 // sits there already sees the change. Such a page holds `present` open.
-import { Array, Context, Effect, FileSystem, Layer, Option, Ref, Schema as S, Stream, SynchronizedRef } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/http"
+import { Array, Context, Effect, FileSystem, Layer, Option, Record, Ref, Schema as S, Stream, SynchronizedRef } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 import webpush from "web-push"
 import { BridgeError } from "../shared/Api.ts"
 import { AlertEvent, PushPayload, PushSubscription } from "../shared/Push.ts"
@@ -76,8 +76,13 @@ export class Push extends Context.Service<Push>()("herdr-web/server/Push", {
         // The endpoint is a capability, so no error names it; only its push service's host.
         const host = new URL(details.endpoint).host
         const response = yield* http
-          .execute(HttpClientRequest.post(details.endpoint).pipe(HttpClientRequest.setHeaders(details.headers), HttpClientRequest.bodyUint8Array(details.body)))
-          .pipe(Effect.timeout(SEND_TIMEOUT), Effect.mapError(pushError(`did not reach ${host}`)))
+          // web-push gives some header values as numbers, and the body as a Buffer.
+          .execute(HttpClientRequest.post(details.endpoint).pipe(HttpClientRequest.setHeaders(Record.map(details.headers, String)), HttpClientRequest.bodyUint8Array(new Uint8Array(details.body))))
+          .pipe(
+            // A push service answers; it never redirects, and a redirect would send the alert elsewhere.
+            Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+            Effect.timeout(SEND_TIMEOUT),
+            Effect.mapError(pushError(`did not reach ${host}`)))
         if (response.status === 404 || response.status === 410) {
           yield* forget(subscription.endpoint)
           return yield* new BridgeError({ kind: "push", message: `${host} no longer knows the device; turn alerts on again there` })

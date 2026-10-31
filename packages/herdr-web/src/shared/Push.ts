@@ -16,7 +16,8 @@ export const DEFAULT_ALERT_EVENTS: ReadonlyArray<AlertEvent> = ["blocked", "done
  * capability: anyone who holds it can send to the device, so it is never logged.
  */
 export const PushSubscription = S.Struct({
-  endpoint: S.String,
+  // Only a push service over HTTPS: the bridge posts to whatever address a page hands it.
+  endpoint: S.String.check(S.isPattern(/^https:\/\//)),
   keys: S.Struct({ p256dh: S.String, auth: S.String }),
 })
 export type PushSubscription = typeof PushSubscription.Type

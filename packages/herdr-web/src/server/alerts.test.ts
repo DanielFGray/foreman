@@ -48,6 +48,13 @@ describe("alertsBetween", () => {
     expect(events(fleet([agent("done"), shell]), fleet([]))).toEqual(["t1 ended"])
   })
 
+  test("an agent on another machine ends only while that machine is still reached", () => {
+    const remote = { ...agent("working"), address: "box/t1" }
+    const on = (state: "connected" | "unreachable"): Fleet => ({ ...fleet([]), machines: [{ name: "box", isLocal: false, state, spaces: [] }] })
+    expect(events({ ...on("connected"), terminals: [remote] }, on("unreachable"))).toEqual([])
+    expect(events({ ...on("connected"), terminals: [remote] }, on("connected"))).toEqual(["box/t1 ended"])
+  })
+
   test("nothing counts across a lost connection to hc", () => {
     expect(events(fleet([agent("working")]), fleet([agent("working")], false))).toEqual([])
     expect(events(fleet([agent("working")], false), fleet([]))).toEqual([])

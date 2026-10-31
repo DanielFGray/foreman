@@ -2,10 +2,12 @@
 // terminal ended. Only terminals that report a status (agents) count, and
 // only changes the bridge saw happen: a terminal's first sighting is not news,
 // and nothing counts across a lost hc connection, whose fresh snapshot would
-// otherwise read every terminal that went away as ended.
+// otherwise read every terminal that went away as ended. A terminal on
+// another machine that goes away with its machine has not ended either.
 import { Array, Duration, Effect, FiberMap, Option, pipe, Stream, String } from "effect"
 import type { Fleet, Terminal } from "../shared/Fleet.ts"
 import type { AlertEvent } from "../shared/Push.ts"
+import { localOf } from "./HerdrApp.ts"
 
 export interface Alert {
   readonly terminal: string
@@ -47,7 +49,8 @@ export const alertsBetween = (previous: Fleet, next: Fleet): ReadonlyArray<Alert
   )
   const gone = Array.filter(
     previous.terminals,
-    (before) => isAgent(before) && before.state === "live" && !Array.some(next.terminals, ({ address }) => address === before.address),
+    (before) =>
+      isAgent(before) && before.state === "live" && isReachable(next, before.address) && !Array.some(next.terminals, ({ address }) => address === before.address),
   )
   return [...changed, ...Array.map(gone, (terminal) => alertOf(terminal, "ended"))]
 }
@@ -56,6 +59,13 @@ const eventBetween = (before: Terminal, after: Terminal): Option.Option<AlertEve
   isAgent(before) && before.state === "live" && after.state === "finished"
     ? Option.some("ended")
     : Option.filter(stateOf(after), (state) => !Option.contains(stateOf(before), state))
+
+/** Whether a terminal that went away could have ended: one on another machine may only have dropped off the network with it. */
+const isReachable = (fleet: Fleet, address: string) =>
+  Option.match(localOf(address).on, {
+    onNone: () => true,
+    onSome: (machine) => Array.some(fleet.machines, ({ name, state }) => name === machine && state === "connected"),
+  })
 
 const isAgent = (terminal: Terminal) => Option.isSome(terminal.status)
 
