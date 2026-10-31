@@ -113,20 +113,20 @@ export const refusal = (box: InputBox, status: Option.Option<Status>, whileWorki
 
 export type Refusal = Readonly<{ kind: "draft" | "working"; message: string }>
 
-/**
- * The input that replaces the text of a box of `rows` rows with `text`,
- * wherever its cursor is. In vim NORMAL mode `i` enters INSERT mode;
- * otherwise it types a letter the rest delete. Down and End take the cursor
- * to the end of the text; each ctrl+u then deletes back to the start of its
- * line, and the next one the line break before it. The text goes as a
- * bracketed paste, so its line breaks do not send it.
- */
-export const replacing = (rows: number, text: string): string =>
-  Array.join(["i", ...Array.replicate(DOWN, rows), END, ...Array.replicate(CTRL_U, 2 * rows + 1), ...(String.isEmpty(text) ? [] : [PASTE_START, text, PASTE_END])], "")
+// The keys go as a terminal sends them with no keyboard mode on, which Claude
+// Code also reads. Claude Code applies a burst of keys to a stale copy of its
+// box: the deletes are lost and the old text stays, so the bridge sends a few
+// keys at a time and reads the box between them.
 
-// As a terminal sends them with no keyboard mode on, which Claude Code also reads.
-const DOWN = "\x1b[B"
-const END = "\x1b[F"
-const CTRL_U = "\x15"
-const PASTE_START = "\x1b[200~"
-const PASTE_END = "\x1b[201~"
+/** In vim NORMAL mode, the key that enters INSERT mode; otherwise a letter the emptying deletes. */
+export const INSERT = "i"
+
+/**
+ * One round of emptying the box: Down and End take the cursor to the end of
+ * the text, and ctrl+u deletes back to the start of its line, or the line
+ * break before it.
+ */
+export const EMPTYING = "\x1b[B\x1b[F\x15"
+
+/** Text as a bracketed paste, so its line breaks do not send it. */
+export const pasted = (text: string) => `\x1b[200~${text}\x1b[201~`

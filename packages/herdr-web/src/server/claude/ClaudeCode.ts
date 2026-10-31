@@ -14,7 +14,7 @@ import { LiveTerminals } from "../LiveTerminals.ts"
 import { ScreenCells } from "../ScreenCells.ts"
 import { ClaudeChat, type NoTranscript } from "./ClaudeChat.ts"
 import { ClaudeCommands } from "./Commands.ts"
-import { boxOnScreen, inputBoxOf, refusal, replacing } from "./InputBox.ts"
+import { boxOnScreen, EMPTYING, INSERT, inputBoxOf, pasted, refusal } from "./InputBox.ts"
 import { asks, keyFor, questionOnScreen } from "./Menu.ts"
 
 export const claudeCode = Effect.gen(function* () {
@@ -30,8 +30,9 @@ export const claudeCode = Effect.gen(function* () {
       Option.map(refusal(box, terminal.status, whileWorking), (why) => new BridgeError(why)),
     )
   /**
-   * Replaces the box's text with `text`, when the box still holds `expected`,
-   * and reads the box again once it shows `text`. A paste Claude Code folds
+   * Replaces the box's text with `text`, when the box still holds `expected`:
+   * empties the box a line per round, reading it after each, then pastes
+   * `text` and reads the box again once it shows. A paste Claude Code folds
    * never shows; the box is then read for as long as it redraws.
    */
   const write = Effect.fnUntraced(function* (terminal: Terminal, expected: string, text: string) {
@@ -42,9 +43,24 @@ export const claudeCode = Effect.gen(function* () {
     if (Option.isNone(rows)) {
       return yield* new BridgeError({ kind: "draft", message: "the agent's input box is taller than its screen, so the page cannot empty it" })
     }
-    // One input, typed at once: hc's keys would wait about 3 s after each earlier write.
-    yield* Effect.mapError(live.type(terminal.address, terminal, replacing(rows.value, text)), toBridgeError)
-    return yield* Effect.mapError(inputBox(terminal), toBridgeError).pipe(
+    // Typed as a viewer types: hc's keys would wait about 3 s after each earlier write.
+    const type = (keys: string) => Effect.mapError(live.type(terminal.address, terminal, keys), toBridgeError)
+    const read = Effect.mapError(inputBox(terminal), toBridgeError)
+    yield* type(INSERT)
+    // A round Claude Code applies to a stale box deletes nothing, so a few rounds spare.
+    const emptied = yield* type(EMPTYING).pipe(
+      Effect.andThen(Effect.sleep(ROUND_GAP)),
+      Effect.andThen(read),
+      Effect.repeat({ until: isEmptyBox, times: 2 * rows.value + SPARE_ROUNDS }),
+    )
+    if (!isEmptyBox(emptied)) {
+      return yield* new BridgeError({ kind: "changed", message: "the page could not empty the agent's input box" })
+    }
+    if (String.isEmpty(text)) {
+      return emptied
+    }
+    yield* type(pasted(text))
+    return yield* read.pipe(
       Effect.repeat({ ...REDRAW, until: (after) => after._tag === "Partial" || Option.exists(typedText(after), (typed) => sameTyped(typed, text)) }),
     )
   })
@@ -130,6 +146,12 @@ const MODEL_CHOICES: ReadonlyArray<ModelChoice> = [
 
 /** How often, and how many times, a screen is read again while Claude Code redraws it. */
 const REDRAW = { schedule: Schedule.spaced("200 millis"), times: 10 }
+
+/** The pause after a round of emptying the box, for Claude Code to apply it before the box is read. */
+const ROUND_GAP = "50 millis"
+const SPARE_ROUNDS = 4
+
+const isEmptyBox = (box: InputBox) => Option.exists(typedText(box), String.isEmpty)
 
 const INPUT_BOX_POLL = "1 second"
 
