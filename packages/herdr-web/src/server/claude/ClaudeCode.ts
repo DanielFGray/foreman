@@ -24,7 +24,14 @@ export const claudeCode = Effect.gen(function* () {
   const screens = yield* ScreenCells
   const live = yield* LiveTerminals
 
-  const inputBox = ({ address }: Terminal) => Effect.map(screens.read(address), inputBoxOf)
+  // While the agent is blocked, a question or permission is drawn in the box's
+  // place, in layouts the menu reader may not know. Claude Code reports it to
+  // hc with the same frame, so the current status rules first; a watch holds
+  // the terminal as it was, so the status is asked again each time.
+  const inputBox = ({ address }: Terminal) =>
+    Effect.flatMap(hc.get(address), ({ status }) =>
+      Option.exists(status, ({ state }) => state === "blocked") ? Effect.succeed<InputBox>({ _tag: "Absent" }) : Effect.map(screens.read(address), inputBoxOf),
+    )
   const refused = (terminal: Terminal, whileWorking: boolean) =>
     Effect.map(Effect.mapError(inputBox(terminal), toBridgeError), (box) =>
       Option.map(refusal(box, terminal.status, whileWorking), (why) => new BridgeError(why)),
