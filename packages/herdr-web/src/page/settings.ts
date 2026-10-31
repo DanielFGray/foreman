@@ -1,6 +1,7 @@
 // The look this browser keeps for itself: a phone and a desk want different
 // sizes, so settings stay on the device, in its local storage.
 import { Effect, Match, Number, Option, Schema as S } from "effect"
+import { AlertEvent, DEFAULT_ALERT_EVENTS } from "../shared/Push.ts"
 import { loadStored, saveStored } from "./stored.ts"
 
 /** Where text appears; a terminal needs a monospaced font. */
@@ -37,6 +38,8 @@ export const Settings = S.Struct({
   agents: AgentList.pipe(S.withDecodingDefaultKey(Effect.succeed("below"))),
   agentView: AgentView.pipe(S.withDecodingDefaultKey(Effect.succeed("run"))),
   keyRow: KeyRow.pipe(S.withDecodingDefaultKey(Effect.succeed("scroll"))),
+  /** What this device is alerted about; the bridge keeps a copy with the subscription, sent again each time the page opens. */
+  alerts: S.Array(AlertEvent).pipe(S.withDecodingDefaultKey(Effect.succeed(DEFAULT_ALERT_EVENTS))),
 })
 export type Settings = typeof Settings.Type
 
@@ -46,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agents: "below",
   agentView: "run",
   keyRow: "scroll",
+  alerts: DEFAULT_ALERT_EVENTS,
 }
 
 export const MIN_SIZE = 8

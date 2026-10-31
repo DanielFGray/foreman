@@ -8,11 +8,12 @@ import { modifyFields } from "foldkit/struct"
 import { dropSide, hasFreshStatus, locate } from "./group.ts"
 import { BridgeClient, failureReason } from "./rpc.ts"
 import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
+import { alertTaps, CheckAlerts, presence, SendTestAlert, SyncAlerts, TurnAlertsOff, TurnAlertsOn } from "./alerts.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
@@ -77,20 +78,25 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     commandList: CommandList.Unread(),
     pairing: Pairing.Idle(),
     fontCatalog: FontCatalog.Loading(),
+    alerts: Alerts.Checking(),
+    alertNote: Option.none(),
     usage: Option.none(),
     usageDetail: Option.none(),
     now: 0,
     sidebarWidth,
     sidebarGrip: Option.none(),
   },
-  commands: Selection.match(selection, {
-    Nothing: () => [],
-    Tab: () => [],
-    Loose: () => [],
-    Settings: () => [FetchFonts()],
-    NewSpace: () => [],
-    Worktrees: ({ space }) => [ListWorktrees({ space })],
-  }),
+  commands: [
+    CheckAlerts({ events: settings.alerts }),
+    ...Selection.match(selection, {
+      Nothing: () => [],
+      Tab: () => [],
+      Loose: () => [],
+      Settings: () => [FetchFonts()],
+      NewSpace: () => [],
+      Worktrees: ({ space }) => [ListWorktrees({ space })],
+    }),
+  ],
 })
 
 // UPDATE
@@ -357,6 +363,40 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     PickedAgentList: ({ agents }) => settingsChanged(model, { ...model.settings, agents }),
     PickedAgentView: ({ agentView }) => settingsChanged(model, { ...model.settings, agentView }),
     PickedKeyRow: ({ keyRow }) => settingsChanged(model, { ...model.settings, keyRow }),
+
+    GotAlerts: ({ alerts, note }) => ({ model: modifyFields(model, { alerts: () => alerts, alertNote: () => note }) }),
+
+    ClickedAlertsOn: () => ({
+      model: modifyFields(model, { alerts: () => Alerts.Checking(), alertNote: () => Option.none() }),
+      commands: [TurnAlertsOn({ events: model.settings.alerts })],
+    }),
+
+    ClickedAlertsOff: () =>
+      Alerts.match<UpdateReturn>(model.alerts, {
+        Checking: () => ({ model }),
+        Unavailable: () => ({ model }),
+        Off: () => ({ model }),
+        Blocked: () => ({ model }),
+        On: ({ subscription }) => ({
+          model: modifyFields(model, { alerts: () => Alerts.Checking(), alertNote: () => Option.none() }),
+          commands: [TurnAlertsOff({ subscription })],
+        }),
+      }),
+
+    ClickedTestAlert: () =>
+      model.alerts._tag === "On" ? { model: modifyFields(model, { alertNote: () => Option.none() }), commands: [SendTestAlert({ subscription: model.alerts.subscription })] } : { model },
+
+    // The bridge keeps a copy of the events with the subscription, so a device with alerts on sends it the new ones.
+    ToggledAlertEvent: ({ event }) => {
+      const alerts = Array.contains(model.settings.alerts, event) ? Array.filter(model.settings.alerts, (other) => other !== event) : [...model.settings.alerts, event]
+      const { model: next, commands } = settingsChanged(model, { ...model.settings, alerts })
+      return {
+        model: next,
+        commands: model.alerts._tag === "On" ? [...commands, SyncAlerts({ subscription: model.alerts.subscription, events: alerts })] : commands,
+      }
+    },
+
+    NotedAlerts: ({ note }) => ({ model: modifyFields(model, { alertNote: () => Option.some(note) }) }),
     CompletedSaveSettings: () => ({ model }),
 
     CompletedSaveSelection: () => ({ model }),
@@ -661,6 +701,12 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
         }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
     },
   ),
+
+  // While the page is in front and focused, the bridge holds its push alerts back.
+  presence: entry({}, { modelToDependencies: () => ({}), dependenciesToStream: () => presence }),
+
+  // A tapped alert opens its terminal, in the page it opened or in this open one.
+  alertTaps: entry({}, { modelToDependencies: () => ({}), dependenciesToStream: () => alertTaps }),
 
   // Ctrl+K anywhere on the page, a focused terminal included: the listener runs
   // first (capture) and stops the key there, so it is never typed into the

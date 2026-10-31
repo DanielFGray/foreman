@@ -10,6 +10,7 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
+import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
 import { SlashCommand } from "../shared/SlashCommand.ts"
@@ -236,6 +237,20 @@ export const FontCatalog = defineTaggedUnion({
 export type FontCatalog = typeof FontCatalog.Type
 
 /**
+ * Push alerts on this device, as its browser tells: checking, not possible
+ * here (and why), off, blocked by its person in the browser, or on with the
+ * subscription the bridge sends to.
+ */
+export const Alerts = defineTaggedUnion({
+  Checking: {},
+  Unavailable: { reason: S.String },
+  Off: {},
+  Blocked: {},
+  On: { subscription: PushSubscription },
+})
+export type Alerts = typeof Alerts.Type
+
+/**
  * A prompt sent to the agent and not yet in its transcript. `seen` is how many
  * prompts with this text the chat held when it was sent. `sentAt` is the
  * clock's first reading after the send: the page learns the time only from
@@ -331,6 +346,9 @@ export const Model = S.Struct({
   commandList: CommandList,
   pairing: Pairing,
   fontCatalog: FontCatalog,
+  alerts: Alerts,
+  /** How the last action on alerts went: a test sent, or why one failed. */
+  alertNote: S.Option(S.String),
   /** Each coding plan's usage, from the bridge; none before its first reading. */
   usage: S.Option(Usage),
   /** The plan whose usage panel is open. */
@@ -440,6 +458,14 @@ export const Message = defineMessageUnion({
   PickedAgentList: { agents: AgentList },
   PickedAgentView: { agentView: AgentView },
   PickedKeyRow: { keyRow: KeyRow },
+  /** What the browser said of alerts on this device, after a check or an action, and how the action went. */
+  GotAlerts: { alerts: Alerts, note: S.Option(S.String) },
+  ClickedAlertsOn: {},
+  ClickedAlertsOff: {},
+  ClickedTestAlert: {},
+  ToggledAlertEvent: { event: AlertEvent },
+  /** How a test alert, or a change of events, went. */
+  NotedAlerts: { note: S.String },
   CompletedSaveSettings: {},
   CompletedSaveSelection: {},
   ReceivedFonts: { families: S.Array(FontFamily) },

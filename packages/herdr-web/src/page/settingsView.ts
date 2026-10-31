@@ -1,7 +1,8 @@
-// The settings page: this browser's fonts, text sizes, agent list, the view agents open in, and the soft key row.
+// The settings page: this browser's fonts, text sizes, agent list, the view agents open in, the soft key row, and its push alerts.
 import { Array, Option, Result, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import { FontCatalog, Message, type Model } from "./model.ts"
+import { AlertEvent, DEFAULT_ALERT_EVENTS } from "../shared/Push.ts"
+import { Alerts, FontCatalog, Message, type Model } from "./model.ts"
 import { AgentList, AgentView, fontStack, KeyRow, MAX_SIZE, MIN_SIZE, Surface, type TextStyle } from "./settings.ts"
 
 export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
@@ -19,6 +20,7 @@ export const settingsView = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
       h.p([h.Class("note")], ["A pane on screen keeps its view; this applies when a pane comes on screen."]),
       choicesView({ legend: "Soft keys on a phone", choices: KeyRow.literals, text: KEY_ROW_TEXT, current: model.settings.keyRow, picked: (keyRow) => Message.PickedKeyRow({ keyRow }) }, h),
+      alertsView(model, h),
       ...FontCatalog.match(model.fontCatalog, {
         Loading: () => [h.p([h.Class("note")], ["Asking the bridge for its fonts…"])],
         Loaded: () => [],
@@ -118,3 +120,39 @@ const textStyleView = (surface: Surface, { font, size }: TextStyle, model: Model
     ],
   )
 }
+
+/** Push alerts on this device: whether it can have them, the switch, a test, and the events it is told of. */
+const alertsView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const button = (label: string, message: Message) => h.button([h.Type("button"), h.Class("chip"), h.OnClick(message)], [label])
+  return h.fieldset(
+    [h.Class("setting alerts")],
+    [
+      h.legend([], ["Alerts on this device"]),
+      ...Alerts.match(model.alerts, {
+        Checking: () => [h.p([h.Class("note")], ["Asking the browser…"])],
+        Unavailable: ({ reason }) => [h.p([h.Class("note")], [`No alerts here: ${reason}.`])],
+        Off: () => [h.div([h.Class("alert-actions")], [button("Turn on alerts", Message.ClickedAlertsOn())])],
+        Blocked: () => [h.p([h.Class("note")], ["This browser blocks alerts from the page. Allow them in its settings for this site, then reload."])],
+        On: () => [h.div([h.Class("alert-actions")], [button("Send a test alert", Message.ClickedTestAlert()), button("Turn off", Message.ClickedAlertsOff())])],
+      }),
+      ...Option.toArray(Option.map(model.alertNote, (note) => h.p([h.Class("note")], [note]))),
+      // The events on by default first, then the busy baseline.
+      ...Array.map([...DEFAULT_ALERT_EVENTS, ...Array.difference(AlertEvent.literals, DEFAULT_ALERT_EVENTS)], (event) =>
+        h.label(
+          [],
+          [h.input([h.Type("checkbox"), h.Checked(Array.contains(model.settings.alerts, event)), h.OnClick(Message.ToggledAlertEvent({ event }))]), ALERT_EVENT_TEXT[event]],
+        ),
+      ),
+      h.p([h.Class("note")], ["An alert waits 10 seconds, and none comes while a herdr page is in front and focused somewhere."]),
+    ],
+  )
+}
+
+const ALERT_EVENT_TEXT = {
+  blocked: "An agent waits for you",
+  done: "An agent finished",
+  error: "An agent failed",
+  ended: "An agent's terminal ended",
+  working: "An agent started working",
+  idle: "An agent went idle",
+} satisfies Record<AlertEvent, string>

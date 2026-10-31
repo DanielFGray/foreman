@@ -3,7 +3,9 @@ import { all, click, Command, change, expect, expectAll, given, inside, label, r
 import { expect as expectValue, test } from "vitest"
 import { FetchFonts, SaveSelection, SaveSettings } from "./commands.ts"
 import { init, update, view } from "./main.ts"
-import { Message, Selection } from "./model.ts"
+import { Alerts, Message, Selection } from "./model.ts"
+import { SendTestAlert, SyncAlerts, TurnAlertsOff, TurnAlertsOn } from "./alerts.ts"
+import { DEFAULT_ALERT_EVENTS } from "../shared/Push.ts"
 import { DEFAULT_SETTINGS, MAX_SIZE, Settings } from "./settings.ts"
 
 const families = [
@@ -71,6 +73,35 @@ test("the agent choices save, and settings saved before they existed keep their 
   )
   const saved = { chat: { font: "Inter", size: 15 }, terminal: { font: null, size: 13 } }
   expectValue(S.decodeOption(Settings)(saved)).toEqual(
-    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run", keyRow: "scroll" }),
+    Option.some({ chat: { font: Option.some("Inter"), size: 15 }, terminal: { font: Option.none(), size: 13 }, agents: "below", agentView: "run", keyRow: "scroll", alerts: DEFAULT_ALERT_EVENTS }),
+  )
+})
+
+const device = { endpoint: "https://push.example/device-1", keys: { p256dh: "key", auth: "secret" } }
+
+test("alerts turn on through the browser, and a device with alerts on tests them and gives the bridge its new events", () => {
+  const opened = init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model
+  scene(
+    { update, view },
+    given({ ...opened, alerts: Alerts.Off() }),
+    click(role("button", { name: "Turn on alerts" })),
+    Command.expectExact(TurnAlertsOn({ events: DEFAULT_ALERT_EVENTS })),
+    expect(selector(".alerts")).toContainText("Asking the browser"),
+    Command.resolve(TurnAlertsOn, Message.GotAlerts({ alerts: Alerts.On({ subscription: device }), note: Option.none() })),
+    click(role("button", { name: "Send a test alert" })),
+    Command.expectExact(SendTestAlert({ subscription: device })),
+    Command.resolve(SendTestAlert, Message.NotedAlerts({ note: "A test alert is on its way." })),
+    expect(selector(".alerts")).toContainText("A test alert is on its way."),
+    click(label("An agent went idle")),
+    Command.expectExact(
+      SaveSettings({ settings: { ...DEFAULT_SETTINGS, alerts: [...DEFAULT_ALERT_EVENTS, "idle"] } }),
+      SyncAlerts({ subscription: device, events: [...DEFAULT_ALERT_EVENTS, "idle"] }),
+    ),
+    Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
+    Command.resolve(SyncAlerts, Message.NotedAlerts({ note: "This device gets the alerts picked." })),
+    click(role("button", { name: "Turn off" })),
+    Command.expectExact(TurnAlertsOff({ subscription: device })),
+    Command.resolve(TurnAlertsOff, Message.GotAlerts({ alerts: Alerts.Off(), note: Option.none() })),
+    expect(role("button", { name: "Turn on alerts" })).toExist(),
   )
 })
