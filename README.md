@@ -46,29 +46,45 @@ and `prog list` together tell you everything foreman knows.
    finished and is blocking whatever depends on it; an unclaimed task has not
    started costing anything yet.
 
-`p` cycles how much work the fleet takes on: **running** → **draining** →
-**paused**, and its label names the state it moves to.
+## What the fleet may do by itself
 
-Pausing stops all tick mutations. A paused foreman observes and reports, but
-does not settle, tidy, reclaim, or fill. Draining is the state in between: it
-skips only the new-work half of fill, so reviews, landings and the branch sweep
-keep running and the pipeline empties itself instead of freezing with approved
-branches unlanded. Drain when you want to aim the fleet by hand.
+Settle, tidy and reclaim run on every tick, because each has one right answer
+and spends nothing. Four steps spend tokens or write to your checkout, and each
+runs only where the policy in `~/.config/foreman/policy.json` (or
+`$FOREMAN_POLICY`) allows it:
 
-Foreman starts paused. Opening the dashboard to drain the fleet is the common
-case, and it should not be a race against the first tick. Press `p` when you
-want it dispatching, or start it with `--running` to skip the keypress. Nothing
-else survives a restart: the command line is the only thing that carries over,
-so a daemon restarted mid-drain comes back paused.
+- **author** starts a task no attempt has touched.
+- **climb** starts a task again after an attempt that did not finish it. The
+  failure is recorded either way; this decides only whether the retry waits
+  for you.
+- **review** sends a reviewer to a finished branch.
+- **land** proves the merge in the proving ground and applies it.
 
-Use `--running` for anything that restarts by itself. `bun --watch` restarts the
-daemon whenever foreman's own source changes — which is what landing a task into
-foreman's own checkout does — and the command line is the only thing a restart
-carries over.
+```json
+{
+  "paused": false,
+  "default": { "author": false, "climb": false, "review": true, "land": false },
+  "grants": [{ "scope": "ep-1234", "steps": ["author", "review"], "remaining": 3, "admitted": [] }]
+}
+```
+
+`default` holds for every task. A grant widens it for one task, or for an epic
+and every task under it. `remaining` counts tasks: the grant takes on at most
+that many, and keeps covering each one until it is finished, so a task it
+authored still gets its review and landing. The daemon records those tasks in
+`admitted` and removes a grant that has nothing left to do. `paused` stops all
+four steps, grants included. `slots` is how many agents may work at once.
+
+Change it with `foreman policy` (`pause`, `resume`, `set <step> on|off`,
+`slots <n>`, `grant <id> <steps...> [--count n]`, `revoke <id>`) or from the
+panel. Both write the file the same way, and the daemon reads it on every
+tick. With no file the fleet takes no step. A file that does not decode pauses
+the fleet, and the panel shows why.
+
+`foreman dispatch` is not gated: it starts the author you asked for.
 
 The poll interval is how long foreman waits to notice something nobody told it
-about. Anything you do in the dashboard — drain, pause, retry, release, adopt —
-ticks at once, so keys never sit waiting out the clock.
+about.
 
 A fresh agent per attempt and review, rather than long-lived workers fed task
 after task: no context bleeds between stages or unrelated projects. The author
@@ -456,25 +472,6 @@ almost entirely at one priority otherwise sorts by age alone, which dispatches
 defects in the order they were discovered, behind whatever feature batch was
 entered first.
 
-## Pinning
-
-Press `alt-p` on a queue, working or review row to pin its task. Pinned work
-leads the queue: the fleet takes it before anything the score would otherwise
-have chosen, and reviews of pinned tasks are dispatched first too.
-
-Pin an epic and you pin every ready task under it, however deep, so two pinned
-epics are one larger set. That is the way to drive an epic to completion without
-narrowing the config to its project.
-
-Nothing is reserved and nothing is serialized. Every free slot fills from the
-head of the queue, so several pinned tasks run at once when they can — which
-ones can is what the plan already says, since `prog ready` only offers unblocked
-work. Order inside the pinned half is the ordinary score; unpinned work keeps
-running behind it, and when nothing pinned is ready the queue is simply the
-ordinary queue.
-
-The pin is a label in prog, so it survives closing the dashboard. Whole-project
-emphasis is still the allowlist: run foreman with one project in the config.
 
 ## Configuration
 
@@ -537,16 +534,11 @@ project foreman touches.
 ## Running it
 
 ```bash
-bun src/main.ts               # from a pane inside the multiplexer
-bun src/main.ts --slots 1     # one at a time, to watch a change land
+bun src/main.ts                 # the daemon; it runs until a signal stops it
+bun src/main.ts policy slots 1  # one agent at a time, to watch a change land
 ```
 
-It comes up paused: it observes and reports, and waits for `p` before it changes
-anything.
-
-`--slots` (`-n`) is the one setting available on the command line, because it is
-the one an operator changes per run. Everything else describes the fleet and
-lives in the config file.
+What it starts by itself is the policy's to say; see above.
 
 foreman opens workspaces in the session it is running in, so it must run inside
 that session.

@@ -4,15 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { Prog } from "./prog.ts";
-import {
-  agentLog,
-  attemptsOf,
-  authoredBy,
-  isApproved,
-  isPinned,
-  reviewedBy,
-  type Item,
-} from "./prog.ts";
+import { agentLog, attemptsOf, authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
 
 const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
   Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default)));
@@ -68,13 +60,6 @@ describe("task attribution", () => {
     expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
       "foreman: author assigned to claude (claude)",
     );
-  });
-});
-
-describe("focus label", () => {
-  test("recognises a focused item", () => {
-    expect(isPinned(item(["pin"]))).toBe(true);
-    expect(isPinned(item(["plan"]))).toBe(false);
   });
 });
 

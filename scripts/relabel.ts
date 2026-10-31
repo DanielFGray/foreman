@@ -125,7 +125,7 @@ const rewrite = (
 BunRuntime.runMain(
   program.pipe(
     Effect.provide(
-      settings({ slots: Option.none(), running: false }).pipe(
+      settings.pipe(
         Layer.provideMerge(BunServices.layer),
       ),
     ),

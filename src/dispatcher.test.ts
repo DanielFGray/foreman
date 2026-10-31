@@ -9,7 +9,6 @@ import {
   handoffExpired,
   isUnread,
   landedColumn,
-  nextDispatch,
   nextFailure,
   recoverable,
   readyToLand,
@@ -21,6 +20,7 @@ import {
 } from "./dispatcher.ts";
 import { authoredBy, diagnosticIntent, reviewedBy, type Item, type TaskStatus } from "./prog.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
+import { DEFAULT_POLICY, type Policy } from "./policy.ts";
 
 const task = (
   id: string,
@@ -315,120 +315,96 @@ describe("work handed back for review", () => {
   });
 });
 
-describe("pinned dispatch", () => {
-  const ready = (id: string, project = "foreman") => ({
+describe("the policy gate on dispatch", () => {
+  const ready = (id: string, labels: ReadonlyArray<string> = []) => ({
     id,
     title: `Task ${id}`,
     priority: 1,
-    project,
-    labels: [],
+    project: "foreman",
+    labels,
   });
 
-  const dispatchState = (overrides: Record<string, unknown> = {}) => ({
-    workers: [],
-    queue: [],
-    pinned: new Set<string>(),
-    held: [],
-    review: [],
-    outOfQuota: new Set<string>(),
+  const allowing = (
+    steps: Partial<Policy["default"]>,
+    overrides: Partial<Policy> = {},
+  ): Policy => ({
+    ...DEFAULT_POLICY,
+    slots: 3,
+    default: { ...DEFAULT_POLICY.default, ...steps },
     ...overrides,
   });
 
-  test("a pinned review is dispatched ahead of an unpinned one", () => {
-    const pinnedReview = active(task("ts-pin", ["by:cheap"]), undefined);
-    const otherReview = active(task("ts-other", ["by:cheap"]), undefined);
-
-    const dispatches = dispatchesFor(
-      dispatchState({
-        pinned: new Set([pinnedReview.task.id]),
-        // Deliberately last in prog's order, so only the pin can lift it.
-        review: [otherReview, pinnedReview],
-      }),
-      1,
-    );
-
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-pin"]);
+  const dispatchState = (policy: Policy, overrides: Record<string, unknown> = {}) => ({
+    workers: [],
+    queue: [],
+    held: [],
+    review: [],
+    outOfQuota: new Set<string>(),
+    policy,
+    scopes: new Map<string, ReadonlySet<string>>(),
+    ...overrides,
   });
 
-  test("reviews still lead authors, pinned or not", () => {
-    const pinnedTask = ready("ts-pin");
-    const review = active(task("ts-review", ["by:cheap"]), undefined);
+  const planned = (dispatches: ReturnType<typeof dispatchesFor>) =>
+    dispatches.map(({ role, task }) => `${role}:${task.id}`);
 
+  test("a paused policy starts nothing, with every slot free", () => {
+    const policy = allowing({ author: true, review: true }, { paused: true });
     const dispatches = dispatchesFor(
-      dispatchState({
-        queue: [pinnedTask],
-        pinned: new Set([pinnedTask.id]),
-        review: [review],
+      dispatchState(policy, {
+        queue: [ready("ts-a")],
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
       }),
-      1,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["review:ts-review"]);
+    expect(dispatches).toEqual([]);
   });
 
-  test("reserves no slot: every free slot fills, pinned or not", () => {
-    // The old focus reserved one slot for its serialized thread. Nothing does
-    // now — which pinned tasks may run together is what prog's blockers say,
-    // and prog.ready has already applied them.
+  test("with authoring off, reviews still drain the pipeline", () => {
     const dispatches = dispatchesFor(
-      dispatchState({
+      dispatchState(allowing({ review: true }), {
+        queue: [ready("ts-a")],
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+      }),
+    );
+
+    expect(planned(dispatches)).toEqual(["review:ts-r"]);
+  });
+
+  test("a task an attempt already failed needs climb, not author", () => {
+    const dispatches = dispatchesFor(
+      dispatchState(allowing({ author: true }), {
+        queue: [ready("ts-retry", ["failed-by:cheap"]), ready("ts-fresh")],
+      }),
+    );
+
+    expect(planned(dispatches)).toEqual(["author:ts-fresh"]);
+  });
+
+  test("the policy's slots bound the pass", () => {
+    const dispatches = dispatchesFor(
+      dispatchState(allowing({ author: true }, { slots: 2 }), {
         queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
-        pinned: new Set(["ts-a", "ts-b"]),
       }),
-      3,
     );
 
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
-      "author:ts-a",
-      "author:ts-b",
-      "author:ts-c",
-    ]);
+    expect(planned(dispatches)).toEqual(["author:ts-a", "author:ts-b"]);
   });
 
-  test("several pinned tasks start together rather than one at a time", () => {
+  test("an epic grant admits its tasks and no others, up to its count in one pass", () => {
+    const policy = allowing(
+      {},
+      { grants: [{ scope: "ep-1", steps: ["author"], remaining: 1, admitted: [] }] },
+    );
     const dispatches = dispatchesFor(
-      dispatchState({
-        queue: [ready("ts-one"), ready("ts-two")],
-        pinned: new Set(["ts-one", "ts-two"]),
+      dispatchState(policy, {
+        queue: [ready("ts-outside"), ready("ts-a"), ready("ts-b")],
+        scopes: new Map([["ep-1", new Set(["ts-a", "ts-b"])]]),
       }),
-      2,
     );
 
-    expect(dispatches).toHaveLength(2);
-  });
-
-  test("a pinned task in flight does not stop unpinned work starting", () => {
-    const writing = active(
-      task("ts-writing", ["by:cheap"], "in_progress"),
-      worker("working", "ts-writing"),
-    );
-
-    const dispatches = dispatchesFor(
-      dispatchState({
-        queue: [ready("ts-other")],
-        pinned: new Set([writing.task.id]),
-        workers: [writing.worker],
-      }),
-      2,
-    );
-
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual(["author:ts-other"]);
-  });
-
-  test("with the scope exhausted the fleet carries on with ordinary work", () => {
-    // A pin is an ordering statement, not a stop. The old focus parked the
-    // whole fleet here and waited for the label to be cleared by hand.
-    const dispatches = dispatchesFor(
-      dispatchState({
-        queue: [ready("ts-ordinary")],
-        pinned: new Set(["ts-landed-already"]),
-      }),
-      1,
-    );
-
-    expect(dispatches.map(({ role, task }) => `${role}:${task.id}`)).toEqual([
-      "author:ts-ordinary",
-    ]);
+    expect(planned(dispatches)).toEqual(["author:ts-a"]);
+    expect(dispatches[0]?.permit).toEqual({ _tag: "Granted", scope: "ep-1", admits: true });
   });
 });
 
@@ -561,14 +537,6 @@ describe("recovering an unread branch", () => {
   });
 });
 
-describe("the operator's dispatch intention", () => {
-  test("cycles from widest to narrowest and back", () => {
-    expect(nextDispatch("running")).toBe("draining");
-    expect(nextDispatch("draining")).toBe("paused");
-    expect(nextDispatch("paused")).toBe("running");
-  });
-});
-
 describe("the quota gate", () => {
   const ready = (id: string, project = "foreman") => ({
     id,
@@ -581,17 +549,21 @@ describe("the quota gate", () => {
   const state = (overrides: Record<string, unknown> = {}) => ({
     workers: [],
     queue: [],
-    pinned: new Set<string>(),
     held: [],
     review: [],
     outOfQuota: new Set<string>(),
+    policy: {
+      ...DEFAULT_POLICY,
+      slots: 3,
+      default: { author: true, climb: true, review: true, land: true },
+    },
+    scopes: new Map<string, ReadonlySet<string>>(),
     ...overrides,
   });
 
   test("passes over a queued task whose rung has no allowance left", () => {
     const dispatches = dispatchesFor(
       state({ queue: [ready("ts-walled"), ready("ts-open")], outOfQuota: new Set(["ts-walled"]) }),
-      3,
     );
 
     expect(dispatches.map((dispatch) => dispatch.task.id)).toEqual(["ts-open"]);
@@ -605,7 +577,6 @@ describe("the quota gate", () => {
         review: [active(task("ts-walled", ["by:cheap"]), undefined)],
         outOfQuota: new Set(["ts-walled"]),
       }),
-      3,
     );
 
     expect(dispatches).toEqual([]);
@@ -618,28 +589,8 @@ describe("the quota gate", () => {
     const walled = ready("ts-walled");
     const current = state({ queue: [walled], outOfQuota: new Set([walled.id]) });
 
-    expect(dispatchesFor(current, 3)).toEqual([]);
+    expect(dispatchesFor(current)).toEqual([]);
     expect(current.queue).toHaveLength(1);
-  });
-
-  test("holds the focused thread's head rather than skipping to its sibling", () => {
-    // The thread is serialized so each task branches off the last one's landed
-    // HEAD. Starting the sibling because the head is walled would break the
-    // only property focus exists for.
-    const head = ready("ts-head");
-    const next = ready("ts-next");
-
-    const dispatches = dispatchesFor(
-      state({
-        focused: true,
-        focus: [head, next],
-        focusScope: new Set([head.id, next.id]),
-        outOfQuota: new Set([head.id]),
-      }),
-      3,
-    );
-
-    expect(dispatches).toEqual([]);
   });
 });
 

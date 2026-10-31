@@ -1,0 +1,274 @@
+/**
+ * The operator's policy: which steps the fleet may take by itself, for which
+ * tasks, and how many agents may work at once.
+ *
+ * Settle, tidy, reclaim and publishing a reading always run, because each has
+ * one right answer and spends nothing. The four steps here spend tokens or
+ * write to the operator's checkout, so each runs only where the policy allows
+ * it:
+ *
+ * - `author` starts a task nobody has tried.
+ * - `climb` starts a task again after an attempt that did not finish it, on
+ *   the next rung or the same one. Its failures are recorded either way; this
+ *   only decides whether the retry waits for the operator.
+ * - `review` sends a reviewer to a finished branch.
+ * - `land` proves the merge in the proving ground and applies it to the
+ *   checkout.
+ *
+ * The policy is an intention, and an intention is the one thing foreman cannot
+ * read back from the world. It lives in a file the operator edits through
+ * `foreman policy` or the panel, so it survives a restart and both front ends
+ * write it through `updatePolicy`. The daemon writes it too, to record which
+ * tasks a grant has admitted.
+ *
+ * Commands the operator gives by hand (`foreman dispatch`, the panel's launch)
+ * are not gated: the operator pressing the key is the permission.
+ */
+import { Effect, FileSystem, Option, Path, Schema as S } from "effect";
+import type { Item } from "./prog.ts";
+
+export const STEPS = ["author", "climb", "review", "land"] as const;
+export type Step = (typeof STEPS)[number];
+
+/**
+ * A widening of the default for one task or epic.
+ *
+ * `remaining` counts tasks, not steps: a grant admits at most that many
+ * distinct tasks, and keeps covering each one it admitted until that task is
+ * finished, so a task it authored is not left without its review or its
+ * landing when the count runs out. Absent means no limit. `admitted` is the
+ * daemon's record of which tasks those are.
+ */
+export const Grant = S.Struct({
+  scope: S.String,
+  steps: S.Array(S.Literals(STEPS)),
+  remaining: S.optional(S.Int.check(S.isGreaterThan(0))),
+  admitted: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+});
+export type Grant = typeof Grant.Type;
+
+export const Policy = S.Struct({
+  /** Suspends every step, grants included, without forgetting them. */
+  paused: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  /** How many agents may be working at once. */
+  slots: S.Int.check(S.isGreaterThan(0)).pipe(S.withDecodingDefault(Effect.succeed(3))),
+  default: S.Struct({
+    author: S.Boolean,
+    climb: S.Boolean,
+    review: S.Boolean,
+    land: S.Boolean,
+  }).pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        author: false,
+        climb: false,
+        review: false,
+        land: false,
+      }),
+    ),
+  ),
+  grants: S.Array(Grant).pipe(S.withDecodingDefault(Effect.succeed([]))),
+});
+export type Policy = typeof Policy.Type;
+
+/** The policy with no file: the fleet takes no step until the operator says so. */
+export const DEFAULT_POLICY: Policy = S.decodeSync(Policy)({});
+
+/** Why a step may or may not run for a task. */
+export type Permit =
+  | { readonly _tag: "Denied" }
+  | { readonly _tag: "Default" }
+  | {
+      readonly _tag: "Granted";
+      readonly scope: string;
+      readonly admits: boolean;
+    };
+
+/**
+ * Whether `step` may run for `task` without the operator.
+ *
+ * `scopes` maps each grant's scope to the unfinished tasks it reaches, which
+ * is the one fact a grant cannot carry itself: an epic's descendants change as
+ * work is filed. `admits` says the grant takes on a task it has not admitted
+ * before, which the caller records with `admit` once the step has run.
+ */
+export const permit = (policy: Policy, scopes: Scopes, task: string, step: Step): Permit => {
+  if (policy.paused) return { _tag: "Denied" };
+  if (policy.default[step]) return { _tag: "Default" };
+  for (const grant of policy.grants) {
+    if (!grant.steps.includes(step)) continue;
+    if (grant.admitted.includes(task))
+      return { _tag: "Granted", scope: grant.scope, admits: false };
+    if (!scopes.get(grant.scope)?.has(task)) continue;
+    if (grant.remaining !== undefined && grant.admitted.length >= grant.remaining) continue;
+    return { _tag: "Granted", scope: grant.scope, admits: true };
+  }
+  return { _tag: "Denied" };
+};
+
+/** The step a dispatch of an author on this task is: a first try or a retry. */
+export const authorStep = (labels: ReadonlyArray<string>): Step =>
+  labels.some((label) => label.startsWith("failed-by:") || label.startsWith("attempt:"))
+    ? "climb"
+    : "author";
+
+/** Each grant's scope, mapped to the unfinished tasks at or under it. */
+export type Scopes = ReadonlyMap<string, ReadonlySet<string>>;
+
+/** Records that the grant on `scope` took on `task`. */
+export const admit = (policy: Policy, scope: string, task: string): Policy => ({
+  ...policy,
+  grants: policy.grants.map((grant) =>
+    grant.scope === scope && !grant.admitted.includes(task)
+      ? { ...grant, admitted: [...grant.admitted, task] }
+      : grant,
+  ),
+});
+
+/**
+ * Drops each grant that can do nothing more: none of its admitted tasks is
+ * still unfinished, and it can admit no new one, because its count is spent or
+ * its scope holds no unfinished task.
+ *
+ * A grant whose scope `scopes` does not name is kept: it was added after the
+ * reading that built the map, so the map says nothing about it.
+ */
+export const expire = (policy: Policy, scopes: Scopes): Policy => ({
+  ...policy,
+  grants: policy.grants.filter((grant) => {
+    const open = scopes.get(grant.scope);
+    if (open === undefined) return true;
+    if (grant.admitted.some((task) => open.has(task))) return true;
+    const spent = grant.remaining !== undefined && grant.admitted.length >= grant.remaining;
+    return !spent && open.size > 0;
+  }),
+});
+
+/**
+ * Adds or widens the grant on `scope`. One grant per scope, so a second grant
+ * on the same item adds its steps rather than starting a second count. A
+ * grant given no count keeps the count it had.
+ */
+export const grant = (
+  policy: Policy,
+  scope: string,
+  steps: ReadonlyArray<Step>,
+  remaining: number | undefined,
+): Policy => {
+  const existing = policy.grants.find((g) => g.scope === scope);
+  const merged: Grant = {
+    scope,
+    steps: STEPS.filter((step) => steps.includes(step) || existing?.steps.includes(step)),
+    ...(remaining === undefined
+      ? existing?.remaining === undefined
+        ? {}
+        : { remaining: existing.remaining }
+      : { remaining }),
+    admitted: existing?.admitted ?? [],
+  };
+  return {
+    ...policy,
+    grants: existing
+      ? policy.grants.map((g) => (g.scope === scope ? merged : g))
+      : [...policy.grants, merged],
+  };
+};
+
+/**
+ * The unfinished tasks at or under `roots`, walking epics through `children`.
+ * A task id names itself; an epic covers every descendant task.
+ */
+export const scopeOf = <E>(
+  roots: ReadonlyArray<Item>,
+  children: (id: string) => Effect.Effect<ReadonlyArray<Item>, E>,
+): Effect.Effect<ReadonlySet<string>, E> =>
+  Effect.gen(function* () {
+    const tasks = new Set<string>();
+    const stack = [...roots];
+    while (stack.length > 0) {
+      const item = stack.pop()!;
+      if (item.type === "epic") stack.push(...(yield* children(item.id)));
+      else if (!FINISHED.has(item.status)) tasks.add(item.id);
+    }
+    return tasks;
+  });
+
+const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
+
+/** Where the policy lives: `$FOREMAN_POLICY`, else beside the config. */
+export const policyPath = (): string =>
+  process.env["FOREMAN_POLICY"] ??
+  `${process.env["XDG_CONFIG_HOME"] ?? `${process.env["HOME"] ?? ""}/.config`}/foreman/policy.json`;
+
+/**
+ * The policy as the file states it.
+ *
+ * A missing file is the default, which takes no step. A file that does not
+ * decode is paused, with the reason, because a policy foreman cannot read is
+ * not permission for anything, and the operator has to see why the fleet
+ * stopped.
+ */
+export const readPolicy = (path: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const text = yield* fs.readFileString(path).pipe(Effect.option);
+    if (Option.isNone(text)) return { policy: DEFAULT_POLICY, error: undefined, text: undefined };
+    return yield* S.decodeEffect(S.fromJsonString(Policy))(text.value).pipe(
+      Effect.map((policy) => ({ policy, error: undefined, text: text.value })),
+      Effect.catch((error) =>
+        Effect.succeed({
+          policy: { ...DEFAULT_POLICY, paused: true },
+          error: `${path} does not decode, so the fleet is paused: ${error.message}`,
+          text: text.value,
+        }),
+      ),
+    );
+  });
+
+/**
+ * Rewrites the policy through `change`, the one way anything writes it.
+ *
+ * The daemon and the operator's commands write the same file from different
+ * processes. So the file is read again just before the rename, and a write
+ * that finds it changed since its own read starts over from the new contents
+ * instead of overwriting them. That narrows the race to the moment between the
+ * second read and the rename; it does not close it, and nothing here holds a
+ * lock. Losing it loses one write: an expiry the daemon makes again next tick,
+ * an admission that lets a grant take on one task more than its count, or an
+ * operator's change that the next reading shows did not happen. A file that does not decode is refused: the
+ * operator's broken edit is theirs to fix, not foreman's to replace.
+ */
+export const updatePolicy = (path: string, change: (policy: Policy) => Policy) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    // One temporary per write: several processes write this file, and two
+    // sharing a name would rename each other's text into place.
+    const temporary = paths.join(
+      paths.dirname(path),
+      `.${paths.basename(path)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+    );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const read = yield* readPolicy(path);
+      if (read.error !== undefined) return yield* new PolicyError({ detail: read.error });
+      const next = change(read.policy);
+      const text = `${JSON.stringify(yield* S.encodeEffect(Policy)(next), null, 2)}\n`;
+      if (text === read.text) return next;
+      yield* fs.makeDirectory(paths.dirname(path), { recursive: true });
+      yield* fs.writeFileString(temporary, text);
+      const now = yield* fs.readFileString(path).pipe(Effect.option);
+      if (Option.getOrUndefined(now) !== read.text) {
+        yield* fs.remove(temporary);
+        continue;
+      }
+      yield* fs.rename(temporary, path);
+      return next;
+    }
+    return yield* new PolicyError({
+      detail: `${path} kept changing under the write`,
+    });
+  });
+
+export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
+  detail: S.String,
+}) {}

@@ -7,7 +7,10 @@ hand.
 
 ```
 sqlite3 /tmp/foreman-e2e.db < e2e/registry.sql
-FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json bun src/main.ts --running --slots 1
+export FOREMAN_POLICY=/tmp/foreman-e2e-policy.json
+bun src/main.ts policy slots 1
+bun src/main.ts policy set author on   # and review, land: what the run should prove
+FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json bun src/main.ts
 ```
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without
@@ -21,5 +24,7 @@ the author's file present, no `foreman/*` branch left and a clean tree.
 
 The busy count is scoped to the rig's own config. Foreman counts only the
 `foreman/*` workspaces whose task lives in a project the running config
-manages, so live workspaces from another daemon do not fill the rig's slots at
-`--slots 1`.
+manages, so live workspaces from another daemon do not fill the rig's one slot.
+
+The policy file is separate from your own: without `FOREMAN_POLICY` the rig
+would read and write `~/.config/foreman/policy.json`.

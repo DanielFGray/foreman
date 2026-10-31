@@ -1,23 +1,12 @@
 #!/usr/bin/env bun
 import { Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import {
-  Console,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-  SubscriptionRef,
-} from "effect";
+import { Console, Effect, FileSystem, Layer, Stream, SubscriptionRef } from "effect";
 import { publishedOf, publishedPath, writePublished } from "./published.ts";
-import { type Overrides, settings, Settings } from "./config.ts";
+import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { authorFor, dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
-import { pinnedFirst, pinnedOf } from "./pin.ts";
 import { failuresOf, isOnboarding, needsYou } from "./prog.ts";
-import { dashboard } from "./dashboard.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { HcFleet } from "./hc.ts";
 import { logging } from "./log.ts";
@@ -28,42 +17,10 @@ import { Repository } from "./repository.ts";
 import { telemetry, VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
 import { Trials } from "./trials.ts";
-import { BOUND_KEYS } from "./view.ts";
-import { fzfScreen } from "./screen.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
-
-/**
- * How many tasks may be in flight at once.
- *
- * On the command line as well as in the config file because it is the one
- * setting an operator changes per run: one slot while watching a change land,
- * more once it is trusted. Everything else describes the fleet itself and
- * belongs only in the file.
- */
-const slots = Flag.Int("slots").pipe(
-  Flag.withAlias("n"),
-  Flag.withDescription("Concurrent workers, overriding the config file"),
-  // Same constraint the config file carries. A fleet of zero is a stopped
-  // daemon written the long way round, and a negative one is a typo.
-  Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
-  Flag.optional,
-);
-
-/**
- * Whether this run starts dispatching, rather than paused.
- *
- * Foreman pauses on start so an operator can drain a fleet without racing the
- * first tick. A restart is not that operator: `bun --watch` restarts the daemon
- * whenever foreman's own source changes — landing a task into foreman's own
- * checkout does exactly that — and the fleet parked itself after every landing.
- * The command line is the only thing a restart inherits, so it is where the
- * answer belongs.
- */
-const running = Flag.Boolean("running").pipe(
-  Flag.withDefault(false),
-  Flag.withDescription("Start dispatching immediately, rather than paused"),
-);
+import { policyCommand } from "./policy-command.ts";
+import { interleave } from "./queue.ts";
 
 /**
  * What every account behind the ladder has left, without starting anything.
@@ -95,7 +52,11 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
         quota.usage(provider).pipe(
           Effect.map((usage) => ({ _tag: "usage", provider, usage }) as const),
           Effect.catchTag("QuotaError", (error) =>
-            Effect.succeed({ _tag: "unreadable", provider, detail: error.detail } as const),
+            Effect.succeed({
+              _tag: "unreadable",
+              provider,
+              detail: error.detail,
+            } as const),
           ),
         ),
       { concurrency: "unbounded" },
@@ -133,11 +94,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
         yield* Console.log(`${reading.provider}  unreadable: ${reading.detail}`);
       }
     }
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(Quota.Default, settings({ slots: Option.none(), running: false })),
-    ),
-  ),
+  }).pipe(Effect.provide(Layer.mergeAll(Quota.Default, settings))),
 ).pipe(
   Command.withDescription(
     "Report how much of each provider's allowance the ladder has left, and which rungs are stopped",
@@ -154,8 +111,9 @@ const statsCommand = Command.make("stats", {}, () => stats).pipe(
  * The dashboard shows the same order, but only while a daemon is up and only
  * inside a terminal it owns. This is the question asked before that: what
  * would the fleet do next. One reading of `prog ready`, ordered by the same
- * rules the dispatcher uses — pinned first, then the ordinary score with its
- * project rotation — so the two never disagree about what is next.
+ * rules the dispatcher uses — the ordinary score with its project rotation —
+ * so the two never disagree about what is next. It does not say which of them
+ * the policy lets the fleet start by itself.
  */
 const queueCommand = Command.make("queue", {}, () =>
   Effect.gen(function* () {
@@ -164,15 +122,11 @@ const queueCommand = Command.make("queue", {}, () =>
 
     const managed = new Set(config.projects.map((project) => project.name));
     const queue = yield* prog.ready();
-    const pinned = yield* pinnedOf(yield* prog.pinned(), managed, (id) => prog.children(id));
 
-    // How close each task's own epic is to done, for the ones whose epic is
-    // not itself pinned — the same map the dispatcher builds, because a pinned
-    // epic's children already lead absolutely.
+    // How close each task's own epic is to done — the same map the dispatcher builds.
     const epicCompletion = new Map<string, number>();
     for (const project of config.projects) {
       for (const epic of yield* prog.inProgressEpics(project.name)) {
-        if (epic.labels.includes("pin")) continue;
         const children = yield* prog.children(epic.id);
         if (children.length === 0) continue;
         const fraction =
@@ -188,31 +142,24 @@ const queueCommand = Command.make("queue", {}, () =>
     const parked = (task: { readonly labels: ReadonlyArray<string> }) =>
       needsYou(task) || authorFor(config.ladder, failuresOf(task))._tag === "Yours";
     const dispatchable = queue.filter((task) => !isOnboarding(task) && !parked(task));
-    const ordered = pinnedFirst(dispatchable, pinned, [...managed], epicFractionOf);
+    const ordered = interleave(dispatchable, [...managed], new Date(), epicFractionOf);
 
     if (ordered.length === 0) {
       yield* Console.log("queue empty");
       return;
     }
     for (const task of ordered) {
-      yield* Console.log(
-        `${task.id} [${task.project}] p${task.priority}${pinned.has(task.id) ? " 📌" : ""} ${task.title}`,
-      );
+      yield* Console.log(`${task.id} [${task.project}] p${task.priority} ${task.title}`);
     }
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(Prog.Default, settings({ slots: Option.none(), running: false })),
-    ),
-  ),
+  }).pipe(Effect.provide(Layer.mergeAll(Prog.Default, settings))),
 ).pipe(
   Command.withDescription("Print the ready queue in the order the next tick would dispatch it"),
 );
 
 /**
  * Waits for SIGINT or SIGTERM, so a stopped daemon says so in its log instead
- * of leaving a gap that reads as a crash. Winning this race ends the program
- * the way an operator closing the screen does: the scope closes, the screen is
- * torn down and the loop is interrupted.
+ * of leaving a gap that reads as a crash. Winning ends the program: the scope
+ * closes and the loop is interrupted.
  */
 const signals = Effect.callback<NodeJS.Signals>((resume) => {
   const handlers: ReadonlyArray<[NodeJS.Signals, NodeJS.SignalsListener]> = [
@@ -242,26 +189,21 @@ const signals = Effect.callback<NodeJS.Signals>((resume) => {
  * If DevTools is ever added it must come *before* the tracing layers, or the
  * tracer it patches is not the one foreman ends up using.
  */
-const services = (overrides: Overrides) => {
-  const config = settings(overrides);
-  return Layer.provideMerge(
-    Dispatcher.Default,
-    Layer.mergeAll(
-      HcFleet,
-      config,
-      Prog.Default,
-      Prompts.Default,
-      Quota.Default,
-      Repository.Default,
-      Trials.Default,
-      logging(),
-      telemetry.pipe(Layer.provide(config)),
-    ),
-  );
-};
-
-/** The daemon's set: every service, and the screen the dashboard draws on. */
-const live = (overrides: Overrides) => Layer.merge(services(overrides), fzfScreen(BOUND_KEYS));
+const services = Layer.provideMerge(
+  Dispatcher.Default,
+  Layer.mergeAll(
+    HcFleet,
+    settings,
+    Prog.Default,
+    Prompts.Default,
+    Quota.Default,
+    Repository.Default,
+    Trials.Default,
+    BunServices.layer,
+    logging(),
+    telemetry.pipe(Layer.provide(settings)),
+  ),
+);
 
 /**
  * How to drive foreman by hand, for an agent coordinating a fleet. Printed
@@ -273,45 +215,48 @@ const skill = Flag.Boolean("skill").pipe(
   Flag.withDescription("Print how to drive foreman's lifecycle by hand, then exit"),
 );
 
-const foreman = Command.make("foreman", { slots, running, skill }, ({ slots, running, skill }) =>
-  skill
-    ? FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) => fs.readFileString(`${import.meta.dir}/skill.md`)),
-        Effect.flatMap(Console.log),
-      )
-    : Effect.gen(function* () {
-        // The loop is forked and the dashboard is parked on, so closing the
-        // dashboard ends the process: an operator who quits the screen means to
-        // stop the fleet, not to leave it dispatching where they cannot see it.
-        // A signal ends it through the same race.
-        const dispatcher = yield* Dispatcher;
-        const config = yield* Settings;
-        yield* Effect.forkScoped(dispatcher.run);
-        // Every reading is published for the panel. A write that fails is
-        // logged and the next reading tries again: the file is a view, and a
-        // stale one says so through its timestamp. The state before the first
-        // read is not a reading: published, it would tell a reader the fleet is
-        // empty, and the previous daemon's file says more until a read lands.
-        yield* Effect.forkScoped(
-          Stream.runForEach(
-            SubscriptionRef.changes(dispatcher.state).pipe(
-              Stream.filter((state) => state.observedAt !== undefined),
-            ),
-            (state) =>
-              writePublished(publishedPath(), publishedOf(state, true, config.projects)).pipe(
-                Effect.catchCause(Effect.logWarning),
-              ),
-          ),
-        );
-        yield* Effect.raceFirst(dashboard, signals);
-      }).pipe(Effect.scoped, Effect.provide(live({ slots, running }))),
+const printSkill = FileSystem.FileSystem.pipe(
+  Effect.flatMap((fs) => fs.readFileString(`${import.meta.dir}/skill.md`)),
+  Effect.flatMap(Console.log),
+);
+
+/** The loop, until a signal ends the process. */
+const daemon = Effect.gen(function* () {
+  const dispatcher = yield* Dispatcher;
+  const config = yield* Settings;
+  yield* Effect.forkScoped(dispatcher.run);
+  // Every reading is published for the panel. A write that fails is logged and
+  // the next reading tries again: the file is a view, and a stale one says so
+  // through its timestamp. The state before the first read is not a reading:
+  // published, it would tell a reader the fleet is empty, and the previous
+  // daemon's file says more until a read lands.
+  yield* Effect.forkScoped(
+    Stream.runForEach(
+      SubscriptionRef.changes(dispatcher.state).pipe(
+        Stream.filter((state) => state.observedAt !== undefined),
+      ),
+      (state) =>
+        writePublished(publishedPath(), publishedOf(state, true, config.projects)).pipe(
+          Effect.catchCause(Effect.logWarning),
+        ),
+    ),
+  );
+  yield* signals;
+}).pipe(Effect.scoped, Effect.provide(services));
+
+const foreman = Command.make("foreman", { skill }, ({ skill }) =>
+  Effect.gen(function* () {
+    if (skill) return yield* printSkill;
+    return yield* daemon;
+  }),
 ).pipe(
   Command.withSubcommands([
     quotaCommand,
     ladderCommand,
     statsCommand,
     queueCommand,
-    ...subcommands(services({ slots: Option.none(), running: false })),
+    policyCommand,
+    ...subcommands(services),
   ]),
 );
 

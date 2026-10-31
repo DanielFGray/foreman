@@ -6,6 +6,13 @@ A right-hand dock that shows the fleet as the daemon last published it in
 ladder's rungs and dispatches to the one you pick. A row that newly appears
 under Landed posts a notification.
 
+The bar under the title is the policy: pause or resume, the four steps the
+fleet takes for every task (author, climb, review, land), the agent limit, and
+each grant with a revoke button. A review row has `allow review` and `allow
+land`, which grant that one step for that one task. Every button runs
+`foreman policy ...`, the same writer as the command line, and the daemon
+reads the change on its next tick.
+
 The panel keeps no state. It reads the file that `src/published.ts` writes, and
 the schema there is the contract. Bump `PUBLISHED_VERSION` and `VERSION` in
 `foreman/main.js` together.
@@ -45,11 +52,12 @@ Both are optional, and are set on the block's `content.props`:
 - `command`: the argv prefix that runs foreman. Default: `["foreman"]`. A mod
   cannot read environment variables, so a daemon with its own registry or
   config is reached through `env`:
-  `["env", "FOREMAN_CONFIG=/abs/config.jsonc", "bun", "/abs/src/main.ts"]`.
+  `["env", "FOREMAN_CONFIG=/abs/config.jsonc", "FOREMAN_POLICY=/abs/policy.json", "bun", "/abs/src/main.ts"]`.
 
 ## What it does not do yet
 
 - `complete` and `intervene` need an answer the panel has no input for. Run
   them from the command line.
-- It shows the daemon's intention (running, draining or paused), but cannot
-  change it. The intention is held in the daemon's process.
+- Grants for an epic, and a count on a grant, are set with
+  `foreman policy grant` from the command line. The panel grants one task
+  one step at a time.

@@ -1,4 +1,4 @@
-import { DateTime, Match } from "effect";
+import { Match } from "effect";
 import type {
   Active,
   Climbing,
@@ -10,7 +10,6 @@ import type {
 } from "./dispatcher.ts";
 import { exhausted, type Allowance } from "./quota.ts";
 import { resetsLabel, usedLabel } from "./format.ts";
-import { nextDispatch } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
 import {
   diagnosticIntent,
@@ -48,28 +47,6 @@ export type ColumnName = (typeof COLUMNS)[number];
 
 export const VIEWS = ["queue", "working", "review", "landed", "quota", "attention"] as const;
 export type ViewName = (typeof VIEWS)[number];
-
-/**
- * The views the cursor follows a tracked task through.
- *
- * A task climbs queue → working → review and the highlight chases it, and a
- * task parked at the operator or needing a decision is still live work, so
- * attention is followed too. Landed is not: a task that landed is finished,
- * and chasing it into history only walks the operator out of the work still to
- * do. Landing ends the follow, and the cursor stays where it was.
- */
-export const FOLLOW_VIEWS = ["queue", "working", "review", "attention"] as const;
-
-/**
- * The non-empty views, which are the only tabs drawn.
- *
- * An empty box is a claim on the screen that pays nothing back: the count in
- * its title is already zero, and a fleet with nothing held, nothing unread and
- * no decision waiting is the ordinary case rather than news. Nothing is
- * reachable that is not drawn, so the cursor and keys follow this too.
- */
-export const drawn = (state: FleetState): ReadonlyArray<ViewName> =>
-  VIEWS.filter((name) => rowsForView(name, state).length > 0);
 
 export type DecisionKind =
   | "author vanished"
@@ -156,7 +133,6 @@ export const ACTIONS_LIST = [
   "release",
   "close",
   "takeOver",
-  "pin",
   "focus",
   "kill",
   "intervene",
@@ -166,13 +142,8 @@ export const ACTIONS_LIST = [
   "adopt",
 ] as const;
 
-/** Something a key does to the selected row. */
+/** Something an operator does to one row. */
 export type Action = (typeof ACTIONS_LIST)[number];
-
-/** Something a key does to the screen, whatever row the cursor is on. */
-export type Global = "quit" | "dispatch" | "log" | "stats" | "viewLeft" | "viewRight";
-
-export type Command = Action | Global;
 
 /**
  * Which keys mean something in which column.
@@ -199,9 +170,9 @@ export type Command = Action | Global;
  * to take it back from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
-  queue: ["pin", "complete", "intervene", "descend", "unassign"],
-  working: ["pin", "focus", "kill", "intervene", "descend", "release"],
-  review: ["pin", "focus", "kill", "intervene", "descend", "release"],
+  queue: ["complete", "intervene", "descend", "unassign"],
+  working: ["focus", "kill", "intervene", "descend", "release"],
+  review: ["focus", "kill", "intervene", "descend", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
   yours: ["intervene", "descend", "unassign"],
@@ -235,90 +206,13 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "dispatch failed": ["retry"],
 };
 
-/**
- * Every key the dashboard interprets, in one table.
- *
- * The screen binds what this lists and reports the key back by name; nothing
- * below this file knows a key's meaning, and nothing above it knows a key's
- * name. Changing a binding is changing one row here.
- *
- * The modifier is the design, not decoration. Letters type: the operator
- * filters by typing a task id, which is how they act on the one you named to
- * them, so no bare letter can also be a command. Two keys therefore cannot be
- * taken however good the mnemonic — `ctrl-c`, which fzf aborts on, and the
- * navigation pair `ctrl-n`/`ctrl-p`, which are how the cursor moves now that
- * `j` and `k` type. Everything else fzf uses for line editing is fair game,
- * because the text being edited here is only ever an id.
- *
- * `also` lists keys bound to the same command and left out of the footer,
- * where a second key is the obvious one but not the one worth advertising.
- */
-const KEYS: Record<Command, Binding> = {
-  complete: { key: "ctrl-d", label: "done" },
-  retry: { key: "ctrl-r", label: "retry" },
-  takeOver: { key: "ctrl-t", label: "take over" },
-  pin: { key: "alt-p", label: "pin" },
-  focus: { key: "ctrl-f", label: "focus" },
-  kill: { key: "ctrl-k", label: "kill" },
-  intervene: { key: "ctrl-e", label: "intervene" },
-  descend: { key: "ctrl-x", label: "descend" },
-  unassign: { key: "ctrl-a", label: "unassign" },
-  release: { key: "ctrl-b", label: "release" },
-  close: { key: "ctrl-w", label: "close" },
-  onboard: { key: "ctrl-o", label: "onboard" },
-  adopt: { key: "ctrl-v", label: "adopt" },
-
-  quit: { key: "ctrl-q", label: "quit" },
-  dispatch: { key: "ctrl-space", label: "dispatch" },
-  log: { key: "f12", label: "log" },
-  stats: { key: "ctrl-g", label: "stats" },
-  viewLeft: { key: "shift-tab", also: ["left"], label: "view" },
-  viewRight: { key: "tab", also: ["right"], label: "view" },
-};
-
-interface Binding {
-  /** The key the footer advertises. */
-  readonly key: string;
-  /** Keys that mean the same thing and are bound without being advertised. */
-  readonly also?: ReadonlyArray<string>;
-  readonly label: string;
-}
-
-/**
- * The keys the screen binds, which is every key foreman interprets.
- *
- * Enter and Escape are on the end because they answer a prompt rather than
- * running a command, and fzf would otherwise accept and abort on them.
- */
-export const BOUND_KEYS: ReadonlyArray<string> = [
-  ...Object.values(KEYS).flatMap((binding) => [binding.key, ...(binding.also ?? [])]),
-  "enter",
-  "esc",
-];
-
-const BY_KEY = new Map<string, Command>(
-  Object.entries(KEYS).flatMap(([command, binding]) =>
-    [binding.key, ...(binding.also ?? [])].map((key) => [key, command as Command] as const),
-  ),
-);
-
-/** What the operator meant by a key, or nothing if it means nothing here. */
-export const commandFor = (key: string): Command | undefined => BY_KEY.get(key);
-
-export const isAction = (command: Command): command is Action =>
-  (ACTIONS_LIST as ReadonlyArray<string>).includes(command);
-
-/** A key as the footer writes it, where `^e` is what an operator reads. */
-export const showKey = (command: Command): string =>
-  KEYS[command].key.replace(/^ctrl-/, "^").replace(/^shift-/, "S-");
-
 /** The commands that are meaningful for this exact row, not just its column. */
 export const actionsFor = (
   column: ColumnName,
   row: ColumnRow | undefined,
 ): ReadonlyArray<Action> => {
   if (!row) return [];
-  if (row.task?.type === "epic") return row.column === "queue" ? ["pin"] : [];
+  if (row.task?.type === "epic") return [];
   const actions =
     column === "decisions" && row.task
       ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
@@ -358,10 +252,6 @@ export const actionsFor = (
           row.ready !== undefined ||
           (row.task !== undefined && row.task.status !== "done" && row.task.status !== "canceled"),
       ),
-      // Any row naming a task can be pinned, claimed or not: a pin says where
-      // the work sits in the queue if it ever returns there, and a rejected
-      // review puts it back.
-      Match.when("pin", () => row.ready !== undefined || row.task !== undefined),
       Match.when("onboard", () => row.project !== undefined && row.reason === "dirty"),
       Match.when("adopt", () => row.unreviewed !== undefined),
       Match.exhaustive,
@@ -372,208 +262,13 @@ export const actionsFor = (
 /** The task a row's corrections and interventions act on, whichever half holds it. */
 export const climbing = (row: ColumnRow): Climbing | undefined => row.task ?? row.ready;
 
-/**
- * The tab strip, as one header line.
- *
- * The view names are single words so a click lands on one: fzf reports the
- * word under the pointer, and that word is the whole address of the tab.
- */
-export const tabs = (state: FleetState, current: ViewName): string =>
-  drawn(state)
-    .map((name) => {
-      const count = rowsForView(name, state).length;
-      return name === current ? `[${name} ${count}]` : ` ${name} ${count} `;
-    })
-    .join(" ");
-
-/**
- * Whether the pipeline is moving, and how stale this reading is.
- *
- * This is the one thing always on screen: with every column empty the fleet
- * still has to say whether it is paused, draining, or simply out of work.
- */
-export const statusLine = (state: FleetState, now: number): string =>
-  [pinnedStatus(state), state.dispatch, readAge(state, now), attentionStatus(state)]
-    .filter((part) => part !== undefined)
-    .join("  ·  ");
-
-/**
- * The keys that do something here: what the selected row takes, and under it
- * what is always available.
- *
- * Two lines because they answer different questions and only the first one
- * changes as the cursor moves — and because one line of both is longer than
- * the list is wide, so the always-available half is what a narrow pane would
- * truncate away.
- *
- * The dispatch key's label names the state it moves to rather than the state
- * it is in, because the three cycle and the operator is choosing where to stop.
- */
-export const keyLine = (actions: ReadonlyArray<Action>, state: FleetState): string =>
-  [
-    actions.map((action) => `${showKey(action)} ${KEYS[action].label}`).join("  "),
-    // Ordered so that a narrow pane truncates the hint rather than a key:
-    // typing is self-evident the moment the operator does it, and the prompt
-    // is right there showing what was typed.
-    [
-      `${showKey("viewLeft")}/${showKey("viewRight")} view`,
-      "^p/^n move",
-      `${showKey("dispatch")} ${nextDispatch(state.dispatch)}`,
-      `${showKey("log")} log`,
-      `${showKey("quit")} quit`,
-      "type to filter",
-    ].join("  "),
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n");
-
-/**
- * Everything known about the selected row, for the preview pane.
- *
- * The pane is off to one side rather than squeezed into the list, so this is
- * free to say the whole of what a row is — including the task's description,
- * which the one-line label never had room for and which is the thing an
- * operator deciding what to do about a row actually wants to read.
- *
- * The description is emitted whole, never truncated: the pane wraps and
- * scrolls, so cutting it here would lose text the terminal could have shown.
- */
-export const previewOf = (row: ColumnRow): string => {
-  const task = row.task ?? row.ready;
-  const lines: Array<string> = [row.key, row.label, ""];
-  if (task) {
-    lines.push(
-      `view      ${viewLabel(sourceView(row.column))}`,
-      `status    ${row.task?.status ?? "ready"}`,
-      `project   ${task.project}`,
-      `priority  ${task.priority}`,
-      `labels    ${task.labels.join(", ") || "none"}`,
-    );
-  }
-  if (row.worker) {
-    lines.push(
-      `worker    ${row.worker.state}`,
-      `worktree  ${row.worker.worktree ?? row.worker.directory}`,
-      `roles     ${[...row.worker.roles].map(([role, state]) => `${role}:${state}`).join(", ")}`,
-    );
-  }
-  if (row.failure !== undefined) lines.push("", `failure   ${row.failure}`);
-  if (row.project !== undefined && !task) lines.push(`project   ${row.project}`);
-  if (row.unreviewed) {
-    lines.push(
-      `project   ${row.unreviewed.project}`,
-      `branch    ${row.unreviewed.branch}`,
-      `task      ${row.unreviewed.task} (${row.unreviewed.status ?? "deleted"})`,
-    );
-  }
-  if (row.stale) {
-    lines.push(
-      `branch    ${row.stale.branch}`,
-      `paths     ${row.stale.paths.join(", ")}`,
-      row.stale.modifyDelete
-        ? "cause     the trunk deleted what this branch patches"
-        : "cause     the trunk moved and the work conflicts",
-    );
-  }
-  // An account's windows read best one per line in the pane that wraps and
-  // scrolls, which is the whole reason they are not squeezed into the row.
-  if (row.provider !== undefined) {
-    lines.push(
-      ...(row.provider.unreadable !== undefined
-        ? [`unreadable  ${row.provider.unreadable}`]
-        : row.provider.allowances.map(
-            (allowance, _, all) =>
-              `  ${allowance.window.padEnd(Math.max(...all.map((a) => a.window.length)))}  ${usedLabel(allowance.usedPercent).padStart(4)}${
-                allowance.resetsAt === undefined
-                  ? ""
-                  : `  resets ${resetsLabel(allowance.resetsAt)}`
-              }`,
-          )),
-    );
-    if (
-      row.provider.unreadable === undefined &&
-      exhausted(row.provider) &&
-      row.provider.rungs.length > 0
-    )
-      lines.push(`stops: ${row.provider.rungs.join(", ")}`);
-  }
-  // Whichever kind of task the row carries: a queued one is read in the same
-  // shape as a claimed one, so the pane says the same thing about both.
-  if (task?.description) lines.push("", task.description);
-  return lines.join("\n");
-};
-
-export const viewLabel = (view: ViewName): string =>
-  view === "attention" ? "Attention" : `${view[0]?.toUpperCase()}${view.slice(1)}`;
-
-export const sourceView = (column: ColumnName): ViewName =>
-  column === "decisions" ||
-  column === "yours" ||
-  column === "held" ||
-  column === "unreviewed" ||
-  column === "stale" ||
-  column === "orphans"
-    ? "attention"
-    : column;
-
-const attentionStatus = (state: FleetState): string => {
-  const count = rowsForView("attention", state).length;
-  return `${count} ${count === 1 ? "needs" : "need"} attention`;
-};
-
-/**
- * How long ago the dispatcher last read the world.
- *
- * Seconds mean a fleet cycling on its poll interval. Minutes mean a tick is
- * inside something long — a landing running a project's test suite is the
- * usual one — and the same reading is what a wedged daemon shows, which is the
- * point: an operator who can see the number can tell those apart by watching
- * it, instead of reading the process tree.
- */
-const readAge = (state: FleetState, now: number): string => {
-  const observedAt = state.observedAt;
-  if (observedAt === undefined) return "starting";
-  const seconds = Math.max(0, Math.round((now - DateTime.toEpochMillis(observedAt)) / 1000));
-  if (seconds < 60) return `read ${seconds}s ago`;
-  if (seconds < 3600) return `read ${Math.floor(seconds / 60)}m ago`;
-  return `read ${Math.floor(seconds / 3600)}h ago`;
-};
-
-/**
- * How much pinned work is left to do, when any is pinned.
- *
- * Counted off the queue rather than the label set: a pinned task that is
- * claimed, under review or finished is not work the fleet still has to reach,
- * and a count that included it would keep saying "3 pinned" while the last one
- * landed.
- */
-const pinnedStatus = (state: FleetState): string | undefined => {
-  if (state.pinned.size === 0) return undefined;
-  const ready = state.queue.filter((task) => state.pinned.has(task.id)).length;
-  return `pinned: ${ready} ready`;
-};
-
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    // A pin leads absolutely, over an epic as much as over ordinary work: an
-    // unpinned epic is context for reading the queue beneath it, and that
-    // context must not outrank the work the operator singled out. So the
-    // epic block splits on its own `pin` label, pinned tasks are pulled out
-    // of `state.queue` (the dispatcher already orders pinned work first
-    // within it), and the four groups stack pinned-epics, pinned-tasks,
-    // unpinned-epics, unpinned-tasks.
-    Match.when("queue", () => {
-      const pinnedEpics = state.epics.filter(({ epic }) => epic.labels.includes("pin"));
-      const unpinnedEpics = state.epics.filter(({ epic }) => !epic.labels.includes("pin"));
-      const pinnedTasks = state.queue.filter((task) => state.pinned.has(task.id));
-      const unpinnedTasks = state.queue.filter((task) => !state.pinned.has(task.id));
-      return [
-        ...pinnedEpics.map(epicRow),
-        ...pinnedTasks.map((task) => readyRow(task, "queue", state)),
-        ...unpinnedEpics.map(epicRow),
-        ...unpinnedTasks.map((task) => readyRow(task, "queue", state)),
-      ];
-    }),
+    // Epics lead as context for reading the queue beneath them.
+    Match.when("queue", () => [
+      ...state.epics.map(epicRow),
+      ...state.queue.map((task) => readyRow(task, "queue", state)),
+    ]),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
@@ -627,7 +322,7 @@ const attentionRow =
 const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState): ColumnRow => ({
   column,
   key: task.id,
-  label: `${state.pinned.has(task.id) ? "📌 " : ""}${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
+  label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
   detail: undefined,
   task: undefined,
   ready: task,
@@ -647,7 +342,7 @@ const epicRow = ({ epic, children }: FleetState["epics"][number]): ColumnRow => 
   return {
     column: "queue",
     key: epic.id,
-    label: `${epic.labels.includes("pin") ? "📌 " : ""}${epic.project}  ${complete}/${children.length}  ${epic.title}`,
+    label: `${epic.project}  ${complete}/${children.length}  ${epic.title}`,
     // No second line: the count is already on the label, and a row costing two
     // lines to say one thing twice pushes the ready work off a short pane.
     detail: undefined,

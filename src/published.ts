@@ -12,10 +12,11 @@
  */
 import { DateTime, Effect, FileSystem, Path, Schema as S } from "effect";
 import type { FleetState } from "./dispatcher.ts";
+import { Policy } from "./policy.ts";
 import { actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 
 /** Bumped whenever a field a reader relies on changes meaning or goes away. */
-export const PUBLISHED_VERSION = 1;
+export const PUBLISHED_VERSION = 2;
 
 export const PublishedRow = S.Struct({
   view: S.Literals(VIEWS),
@@ -30,8 +31,12 @@ export type PublishedRow = typeof PublishedRow.Type;
 
 export const Published = S.Struct({
   version: S.Literal(PUBLISHED_VERSION),
-  /** The daemon's intention; absent from a one-shot read, which has none to report. */
-  dispatch: S.NullOr(S.Literals(["running", "draining", "paused"])),
+  /** Whether a daemon wrote this, rather than a one-shot `status` read. */
+  daemon: S.Boolean,
+  /** The policy the reading decided from; `foreman policy` changes it. */
+  policy: Policy,
+  /** Why the policy file could not be read, which pauses the fleet. */
+  policyError: S.NullOr(S.String),
   /** ISO instant of the reading, or null before the first one completes. */
   observedAt: S.NullOr(S.String),
   /** The managed projects and their checkouts, so a reader can tell which one a folder is in. */
@@ -44,10 +49,15 @@ export type Published = typeof Published.Type;
 export const publishedOf = (
   state: FleetState,
   daemon: boolean,
-  projects: ReadonlyArray<{ readonly name: string; readonly directory: string }>,
+  projects: ReadonlyArray<{
+    readonly name: string;
+    readonly directory: string;
+  }>,
 ): Published => ({
   version: PUBLISHED_VERSION,
-  dispatch: daemon ? state.dispatch : null,
+  daemon,
+  policy: state.policy,
+  policyError: state.policyError ?? null,
   observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
   projects: projects.map(({ name, directory }) => ({ name, directory })),
   rows: VIEWS.flatMap((view) =>

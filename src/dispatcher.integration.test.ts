@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { BunServices } from "@effect/platform-bun";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Effect, Layer, Option } from "effect";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
@@ -122,15 +126,6 @@ class World {
         ) as ReadonlyArray<ReadyTask>,
       ),
     inProgressEpics: () => Effect.succeed([]),
-    pinned: () =>
-      Effect.succeed([...this.tasks.values()].filter((task) => task.labels.includes("pin"))),
-    setPin: (task: string, pinned: boolean) =>
-      Effect.sync(() => {
-        const item = this.tasks.get(task);
-        if (!item) return;
-        const labels = item.labels.filter((label) => label !== "pin");
-        this.tasks.set(task, { ...item, labels: pinned ? [...labels, "pin"] : labels });
-      }),
     awaitingReview: (project: string) =>
       Effect.succeed(
         [...this.tasks.values()].filter(
@@ -291,14 +286,37 @@ const prompts = Layer.succeed(Prompts, {
   diagnose: () => Effect.succeed("diagnose"),
 });
 
+/** A policy that lets the fleet take every step by itself, one agent at a time. */
+const ALLOWED = {
+  slots: 1,
+  default: { author: true, climb: true, review: true, land: true },
+};
+
+/**
+ * Points the dispatcher at a fresh policy file. The path is read from the
+ * environment on every pass, and the tests in a file run one at a time.
+ */
+const policies = mkdtempSync(join(tmpdir(), "foreman-policy-"));
+let written = 0;
+const usePolicy = (policy: object) => {
+  const path = join(policies, `${written++}.json`);
+  writeFileSync(path, JSON.stringify(policy));
+  process.env["FOREMAN_POLICY"] = path;
+};
+beforeEach(() => usePolicy(ALLOWED));
+const operatorPolicy = process.env["FOREMAN_POLICY"];
+afterAll(() => {
+  rmSync(policies, { recursive: true, force: true });
+  if (operatorPolicy === undefined) delete process.env["FOREMAN_POLICY"];
+  else process.env["FOREMAN_POLICY"] = operatorPolicy;
+});
+
 const layerFor = (world: World) =>
   Layer.provideMerge(
     Dispatcher.Default,
     Layer.mergeAll(
       Layer.succeed(Settings, {
         projects: [{ name: "test", directory: "/repo", verify: undefined }],
-        slots: 1,
-        running: true,
         ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
         otlpEndpoint: "http://localhost:4318",
         pollInterval: 60,
@@ -316,6 +334,7 @@ const layerFor = (world: World) =>
       // a ladder foreman cannot read quota for dispatches exactly as before.
       Quota.Default,
       prompts,
+      BunServices.layer,
     ),
   );
 
@@ -656,14 +675,12 @@ describe("quota probing", () => {
     return { layer, calls: () => calls };
   };
 
-  const layerWith = (quota: Layer.Layer<Quota>, running: boolean, world: World) =>
+  const layerWith = (quota: Layer.Layer<Quota>, world: World) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
           projects: [{ name: "test", directory: "/repo", verify: undefined }],
-          slots: 1,
-          running,
           // A rung whose model names its provider is one the gate can ask about.
           ladder: [{ name: "cheap", harness: "test", model: "openai/gpt", provider: undefined }],
           otlpEndpoint: "http://localhost:4318",
@@ -679,54 +696,38 @@ describe("quota probing", () => {
         trialsFor(world),
         quota,
         prompts,
+        BunServices.layer,
       ),
     );
 
   /** Runs `ticks` ticks over one Dispatcher, so the startup probe counts once. */
-  const ticking = (
-    quota: Layer.Layer<Quota>,
-    running: boolean,
-    steps: ReadonlyArray<"tick" | "watch" | "unwatch">,
-  ) =>
-    Effect.runPromise(
+  const ticking = (quota: Layer.Layer<Quota>, paused: boolean, ticks: number) => {
+    usePolicy({ ...ALLOWED, paused });
+    return Effect.runPromise(
       Effect.gen(function* () {
-        for (const step of steps) {
-          if (step === "tick") yield* (yield* Dispatcher).tick;
-          else yield* (yield* Dispatcher).watchQuota(step === "watch");
-        }
-      }).pipe(Effect.provide(layerWith(quota, running, new World()))),
+        for (let n = 0; n < ticks; n++) yield* (yield* Dispatcher).tick;
+      }).pipe(Effect.provide(layerWith(quota, new World()))),
     );
+  };
 
   test("the first tick asks whatever the fleet is doing", async () => {
     // "Never read" and "nothing left" look the same on a dashboard, so a fleet
     // that has just started says which one it is before it stops asking.
     const quota = countingQuota();
-    await ticking(quota.layer, false, ["tick"]);
+    await ticking(quota.layer, true, 1);
     expect(quota.calls()).toBe(1);
   });
 
   test("a paused fleet stops asking after that first one", async () => {
     const quota = countingQuota();
-    await ticking(quota.layer, false, ["tick", "tick", "tick"]);
+    await ticking(quota.layer, true, 3);
     expect(quota.calls()).toBe(1);
   });
 
   test("a running fleet asks every tick, because the gate reads it", async () => {
     const quota = countingQuota();
-    await ticking(quota.layer, true, ["tick", "tick", "tick"]);
+    await ticking(quota.layer, false, 3);
     expect(quota.calls()).toBe(3);
-  });
-
-  test("a paused fleet asks again while the operator is on the quota view", async () => {
-    const quota = countingQuota();
-    await ticking(quota.layer, false, ["tick", "tick", "watch", "tick", "tick"]);
-    expect(quota.calls()).toBe(3);
-  });
-
-  test("leaving the view stops the asking again", async () => {
-    const quota = countingQuota();
-    await ticking(quota.layer, false, ["tick", "watch", "tick", "unwatch", "tick"]);
-    expect(quota.calls()).toBe(2);
   });
 });
 
@@ -745,14 +746,12 @@ describe("a spent account and the reviewer above it", () => {
     });
 
   /** Two rungs on two accounts, so a wall on one leaves the other spendable. */
-  const layerFor = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
+  const layerFor = (world: World, spent: ReadonlyArray<string>) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
           projects: [{ name: "test", directory: "/repo", verify: undefined }],
-          slots,
-          running: true,
           ladder: [
             { name: "cheap", harness: "test", model: "openai/gpt", provider: undefined },
             { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
@@ -770,6 +769,7 @@ describe("a spent account and the reviewer above it", () => {
         trialsFor(world),
         quotaSpending(spent),
         prompts,
+        BunServices.layer,
       ),
     );
 
@@ -787,12 +787,12 @@ describe("a spent account and the reviewer above it", () => {
     return world;
   };
 
-  const tickWith = (world: World, spent: ReadonlyArray<string>, slots = 1) =>
-    Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
-        Effect.provide(layerFor(world, spent, slots)),
-      ),
+  const tickWith = (world: World, spent: ReadonlyArray<string>, slots = 1) => {
+    usePolicy({ ...ALLOWED, slots });
+    return Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world, spent))),
     );
+  };
 
   test("spreads one tick's slots across accounts rather than stacking them", async () => {
     // Every free slot reads the same allowances, so without spreading the whole

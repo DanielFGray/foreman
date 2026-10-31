@@ -1,6 +1,6 @@
 ---
 name: foreman
-description: Drive foreman's task lifecycle by hand — dispatch a task, wait for it, read its prompt, and do anything the dashboard does — from a shell. Use when coordinating agents on a project foreman manages.
+description: Drive foreman's task lifecycle by hand — dispatch a task, wait for it, read its prompt, act on any row, and set what the fleet may do by itself — from a shell. Use when coordinating agents on a project foreman manages.
 ---
 
 # Foreman by hand
@@ -34,12 +34,12 @@ Run `foreman <command> --help` for the options.
 | `foreman correct <id> <findings>`                 | Sends the author a correction round (two at most), and counts it                                      |
 | `foreman prompt author\|review <id>`              | Prints the prompt foreman sends that role                                                             |
 | `foreman quota`                                   | Prints what each account has left                                                                     |
+| `foreman policy <subcommand>`                     | Prints or changes what the daemon may do without you                                                  |
 | `foreman ladder [edit\|enable\|disable\|suggest]` | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder                      |
 
-The dashboard's keys are also commands, and each takes the id of a row in
-`foreman status`:
+Each row action is a command that takes the id of a row in `foreman status`:
 
-`retry`, `release`, `close`, `take-over`, `focus`, `pin`, `descend`,
+`retry`, `release`, `close`, `take-over`, `focus`, `descend`,
 `unassign`, `onboard`, `adopt`, `complete --reason`, `kill [--reason]`,
 `intervene --how continue|diagnose|review [--rung R]`.
 
@@ -75,7 +75,12 @@ ready` reads edges, never the text of a description.
   `reviewing` goes to a reviewer on the daemon's next tick.
 - When an attempt is stuck, use `intervene`. Do not open the worktree and
   edit it yourself.
-- Pause and drain are dashboard keys only: they control one daemon process,
-  and no other process can reach it.
+- `foreman policy` sets what the daemon does without you: `pause`,
+  `resume`, `set <author|climb|review|land> on|off`, `slots <n>`, and
+  `grant <task-or-epic> <steps...> [--count n]` for one task or epic. The
+  daemon reads the file on its next tick. `foreman dispatch` is not gated:
+  it starts the author you asked for.
+- Sending a reviewer to a finished task, and landing an approved branch, both
+  wait for the policy. `foreman policy grant <id> land --count 1` lands one.
 - Use the herd skill instead for work in a checkout that several agents
   share. Foreman gives each task its own worktree.

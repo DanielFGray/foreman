@@ -3,18 +3,8 @@ import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
-import {
-  actionsFor,
-  BOUND_KEYS,
-  commandFor,
-  decisionKind,
-  drawn,
-  keyLine,
-  previewOf,
-  rowsForView,
-  staleReview,
-  statusLine,
-} from "./view.ts";
+import { actionsFor, decisionKind, rowsForView, staleReview } from "./view.ts";
+import { DEFAULT_POLICY } from "./policy.ts";
 import { Published, publishedOf, writePublished } from "./published.ts";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Schema as S } from "effect";
@@ -89,7 +79,6 @@ const state: FleetState = {
   epics: [],
   orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["failed-by:pro"])],
-  pinned: new Set(),
   yours: [ready("ts-y1", ["needs-you"])],
   working: [
     active(
@@ -124,41 +113,11 @@ const state: FleetState = {
     },
   ],
   held: [held("fibrae", "dirty", "uncommitted changes to tracked files")],
-  dispatch: "paused",
+  policy: DEFAULT_POLICY,
+  policyError: undefined,
+  scopes: new Map(),
   observedAt: undefined,
 };
-
-describe("pinned queue", () => {
-  // The dispatcher hands the queue already ordered, so the view's whole job is
-  // marking which rows are pinned and counting what is left.
-  const pinned = {
-    ...state,
-    queue: [ready("ts-pin"), ready("ts-q1"), ready("ts-q2")],
-    pinned: new Set(["ts-pin"]),
-  };
-
-  test("marks the pinned row and leaves the order the dispatcher gave", () => {
-    const rows = rowsForView("queue", pinned);
-
-    expect(rows.map((row) => row.key)).toEqual(["ts-pin", "ts-q1", "ts-q2"]);
-    expect(rows[0]?.label).toStartWith("📌 ");
-    expect(rows[1]?.label).not.toStartWith("📌 ");
-  });
-
-  test("counts remaining pinned work in the status line", () => {
-    expect(statusLine(pinned, Date.now())).toStartWith("pinned: 1 ready  ·  paused");
-  });
-
-  test("says nothing about pins when none are set", () => {
-    expect(statusLine(state, Date.now())).not.toInclude("pinned");
-  });
-
-  test("a pinned task that has left the queue stops being counted", () => {
-    const landed = { ...pinned, queue: [ready("ts-q1")] };
-
-    expect(statusLine(landed, Date.now())).toStartWith("pinned: 0 ready");
-  });
-});
 
 describe("in-progress epics", () => {
   const epic = task("ep-drive", "in_progress", []);
@@ -167,47 +126,11 @@ describe("in-progress epics", () => {
     children: [task("ts-done", "done", []), task("ts-open", "open", [])],
   };
 
-  test("shows epic progress above ready tasks and only allows pinning", () => {
+  test("shows epic progress above ready tasks and takes no action", () => {
     const rows = rowsForView("queue", { ...state, epics: [progress] });
     expect(rows.map((row) => row.key).slice(0, 2)).toEqual(["ep-drive", "ts-q1"]);
     expect(rows[0]?.label).toContain("1/2");
-    expect(actionsFor("queue", rows[0])).toEqual(["pin"]);
-  });
-
-  test("marks the epic from its own persisted pin label", () => {
-    const rows = rowsForView("queue", {
-      ...state,
-      epics: [{ ...progress, epic: { ...progress.epic, labels: ["pin"] } }],
-      pinned: new Set(["ts-open"]),
-    });
-    expect(rows[0]?.label).toStartWith("📌 ");
-  });
-
-  test("a pinned task leads an unpinned epic", () => {
-    const rows = rowsForView("queue", {
-      ...state,
-      epics: [progress],
-      queue: [ready("ts-pin"), ready("ts-q1")],
-      pinned: new Set(["ts-pin"]),
-    });
-    expect(rows.map((row) => row.key)).toEqual(["ts-pin", "ep-drive", "ts-q1"]);
-  });
-
-  test("a pinned epic still leads an unpinned task", () => {
-    const rows = rowsForView("queue", {
-      ...state,
-      epics: [{ ...progress, epic: { ...progress.epic, labels: ["pin"] } }],
-      queue: [ready("ts-q1")],
-    });
-    expect(rows.map((row) => row.key)).toEqual(["ep-drive", "ts-q1"]);
-  });
-
-  test("renders the epic description in its preview", () => {
-    const row = rowsForView("queue", {
-      ...state,
-      epics: [{ ...progress, epic: { ...progress.epic, description: "Release safely." } }],
-    })[0];
-    expect(row && previewOf(row)).toContain("Release safely.");
+    expect(actionsFor("queue", rows[0])).toEqual([]);
   });
 });
 
@@ -242,14 +165,6 @@ describe("staleReview", () => {
 });
 
 describe("views", () => {
-  test("draws only the views with something in them", () => {
-    expect(drawn(state)).toEqual(["queue", "working", "review", "landed", "attention"]);
-    expect(drawn({ ...state, landed: [], review: [] })).toEqual(["queue", "working", "attention"]);
-    expect(
-      drawn({ ...state, decisions: [], yours: [], unreviewed: [], stale: [], held: [] }),
-    ).not.toContain("attention");
-  });
-
   test("orders attention by urgency, and keeps each row's own column", () => {
     const rows = rowsForView("attention", state);
     expect(rows.map((each) => each.column)).toEqual([
@@ -271,9 +186,6 @@ describe("views", () => {
       "cannot land: trunk deleted src/old.ts, src/gone.ts",
     );
     expect(row("attention", "foreman/ts-s1").task?.status).toBe("reviewing");
-    expect(previewOf(row("attention", "foreman/ts-s1"))).toContain(
-      "cause     the trunk deleted what this branch patches",
-    );
   });
 
   // The reason is why the row exists. On its own line it survives a narrow
@@ -373,64 +285,6 @@ describe("actionsFor", () => {
   });
 });
 
-describe("the footer", () => {
-  // Two lines: the keys this row takes, and the keys that are always there.
-  // One line of both is longer than a list column is wide.
-  test("names the row's keys above the ones that never change", () => {
-    const [actions = "", always = ""] = keyLine(
-      actionsFor("working", row("working", "ts-w1")),
-      state,
-    ).split("\n");
-    expect(actions).toBe("alt-p pin  ^f focus  ^k kill  ^e intervene  ^x descend  ^b release");
-    expect(always).toContain("^q quit");
-    expect(always.indexOf("^q quit")).toBeLessThan(always.indexOf("type to filter"));
-    expect(always).toContain("^space running");
-  });
-
-  // Every command is modified so that no bare letter is spoken for: the
-  // operator finds a row by typing its id.
-  test("binds no bare letter, and leaves fzf's abort and navigation alone", () => {
-    const taken = BOUND_KEYS.filter((key) => key.startsWith("ctrl-"));
-    expect(taken).not.toContain("ctrl-c");
-    expect(taken).not.toContain("ctrl-n");
-    expect(taken).not.toContain("ctrl-p");
-    expect(BOUND_KEYS.filter((key) => key.length === 1)).toEqual([]);
-    expect(new Set(BOUND_KEYS).size).toBe(BOUND_KEYS.length);
-  });
-
-  // The screen binds what BOUND_KEYS lists and reports it back by name, so a
-  // key in the list that reads back as nothing is a binding that does nothing.
-  test("reads every bound key back as the command that owns it", () => {
-    const commands = BOUND_KEYS.filter((key) => key !== "enter" && key !== "esc").map(commandFor);
-    expect(commands.filter((command) => command === undefined)).toEqual([]);
-    expect(commands).toContain("focus");
-    expect(commandFor("left")).toBe("viewLeft");
-  });
-
-  test("is the always-there keys alone where the row takes none", () => {
-    expect(keyLine([], state).split("\n")).toHaveLength(1);
-  });
-});
-
-describe("previewOf", () => {
-  test("says what the row is, and what a hold or a branch is behind it", () => {
-    expect(previewOf(row("working", "ts-w1"))).toContain("labels    by:flash, failed-by:flash");
-    expect(previewOf(row("working", "ts-w1"))).toContain("worker    working");
-    expect(previewOf(row("attention", "foreman/ts-u1"))).toContain("branch    foreman/ts-u1");
-    expect(previewOf(row("attention", "fibrae"))).toContain("project   fibrae");
-  });
-
-  test("gives a queued task's description whole, the same as a claimed one's", () => {
-    const preview = previewOf(row("queue", "ts-q1"));
-    for (const line of LONG_DESCRIPTION.split("\n")) expect(preview).toContain(line);
-    expect(preview).toContain("status    ready");
-  });
-
-  test("says nothing where a task has no description", () => {
-    expect(previewOf(row("queue", "ts-q2"))).not.toContain("null");
-  });
-});
-
 describe("quota view and accounts", () => {
   const spent: Usage = {
     provider: "opencode-go",
@@ -504,40 +358,9 @@ describe("quota view and accounts", () => {
     ).toBe(false);
   });
 
-  test("the preview shows each window on its own line", () => {
-    const preview = previewOf(rowsForView("quota", withQuota)[0]!);
-    expect(preview).toContain("rolling");
-    expect(preview).toContain("0%");
-    expect(preview).toContain("resets in 1h");
-    expect(preview).toContain("monthly");
-    expect(preview).toContain("100%");
-    expect(preview).toContain("resets in 2d");
-    expect(preview).toContain("stops: pro, sonnet");
-  });
-
   test("takes no key, because nothing on this row is the fix", () => {
     const row = rowsForView("attention", withQuota).find((each) => each.column === "quota");
     expect(actionsFor("quota", row)).toEqual([]);
-  });
-
-  test("a spent account still opens attention on its own", () => {
-    // A fleet that has stopped dispatching must say so without being searched
-    // for, and a spent account is one of the few things that stops all of it —
-    // while the quota tab is where the account itself is read.
-    const quiet: FleetState = {
-      ...state,
-      queue: [],
-      yours: [],
-      working: [],
-      review: [],
-      landed: [],
-      decisions: [],
-      unreviewed: [],
-      stale: [],
-      held: [],
-      providers: [provider(spent, ["pro"])],
-    };
-    expect(drawn(quiet)).toEqual(["quota", "attention"]);
   });
 });
 
@@ -573,11 +396,6 @@ describe("orphaned workspaces", () => {
     const found = rowsForView("attention", orphaned).find((each) => each.key === "ts-gone");
     expect(found && actionsFor(found.column, found)).toEqual(["close"]);
   });
-
-  test("opens the attention tab on its own", () => {
-    const only = { ...orphaned, decisions: [], yours: [], unreviewed: [], stale: [], held: [] };
-    expect(drawn(only)).toContain("attention");
-  });
 });
 
 describe("publishedOf", () => {
@@ -586,7 +404,8 @@ describe("publishedOf", () => {
     expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
       published,
     );
-    expect(published.dispatch).toBe("paused");
+    expect(published.daemon).toBe(true);
+    expect(published.policy).toEqual(DEFAULT_POLICY);
     const queued = published.rows.find((row) => row.key === "ts-q1");
     expect(queued?.view).toBe("queue");
     // The panel filters to the shown space by this, and a queued row carries
@@ -595,8 +414,8 @@ describe("publishedOf", () => {
     expect(queued?.actions.length).toBeGreaterThan(0);
   });
 
-  test("reports no intention from a one-shot read, which has none", () => {
-    expect(publishedOf(state, false, []).dispatch).toBeNull();
+  test("says a one-shot read is not the daemon's", () => {
+    expect(publishedOf(state, false, []).daemon).toBe(false);
   });
 
   test("replaces the file whole, leaving no temporary beside it", async () => {
@@ -610,7 +429,7 @@ describe("publishedOf", () => {
       );
     await write(true);
     await write(false);
-    expect(JSON.parse(await readFile(path, "utf8")).dispatch).toBeNull();
+    expect(JSON.parse(await readFile(path, "utf8")).daemon).toBe(false);
     expect(await readdir(folder)).toEqual(["state.json"]);
   });
 });

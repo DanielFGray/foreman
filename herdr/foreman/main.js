@@ -1,13 +1,15 @@
 // The foreman panel: the fleet as the daemon last published it, filtered to the
 // shown space's project, with each row's one-shot commands as buttons.
 //
-// It reads state.json and runs `foreman <action> <id>`; it keeps nothing of its
-// own. The file's shape is `Published` in foreman's src/published.ts.
+// It reads state.json and runs `foreman <action> <id>` and `foreman policy ...`;
+// it keeps nothing of its own. The policy is the daemon's to read: a button
+// here rewrites the file through the CLI, and the next reading shows it. The file's shape is `Published` in foreman's src/published.ts.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home } from "herdr";
 
-const VERSION = 1;
+const VERSION = 2;
+const STEPS = ["author", "climb", "review", "land"];
 // Older than this, the reading is no longer the daemon working: it is gone or
 // wedged inside a tick, and the panel says so rather than showing it as live.
 const STALE_MS = 120000;
@@ -120,7 +122,8 @@ export default class Foreman extends View {
     const t = theme(), published = this.published, project = this.project();
     const age = published?.observedAt ? Date.now() - Date.parse(published.observedAt) : null;
     const live = age !== null && age < STALE_MS;
-    const state = !published ? "offline" : !published.dispatch ? "no daemon" : !live ? "stale" : published.dispatch;
+    const policy = published?.policy;
+    const state = !published ? "offline" : !published.daemon ? "no daemon" : !live ? "stale" : policy.paused ? "paused" : Object.values(policy.default).some(Boolean) || policy.grants.length > 0 ? "running" : "idle";
     const rows = (published?.rows ?? []).filter((row) => this.all || project === null || row.project === null || row.project === project);
     const hidden = (published?.rows.length ?? 0) - rows.length;
 
@@ -139,6 +142,9 @@ export default class Foreman extends View {
         .when(actions.length > 0 || launchable, (el) => el.child(h_flex().gap(4).flex_wrap()
           .when(launchable, (el) => el.child(chip(`launch-${r.key}`, this.launching === r.key ? "cancel" : "launch",
             (cx) => { this.launching = this.launching === r.key ? null : r.key; cx.notify(); }, t.working)))
+          .when(r.view === "review", (el) => el.children(["review", "land"].map((step) =>
+            chip(`allow-${step}-${r.key}`, this.busy.has(`policy grant ${r.key} ${step} --count 1`) ? `${step}…` : `allow ${step}`,
+              (cx) => this.act(["policy", "grant", r.key, step, "--count", "1"], cx)))))
           .children(actions.map((action) => {
             const id = `${action} ${r.key}`, armed = this.armed === id;
             const label = this.busy.has(id) ? `${action}…` : armed ? `${action}?` : action;
@@ -161,7 +167,25 @@ export default class Foreman extends View {
         .children(mine.map(row));
     };
 
-    const tone = state === "running" ? t.working : state === "draining" || state === "stale" ? t.blocked : t.muted;
+    const tone = state === "running" ? t.working : state === "stale" ? t.blocked : t.muted;
+
+    // The policy: pause, the steps the fleet takes for every task, and the
+    // agent limit. A grant for one task is the "allow" chip on its row.
+    const controls = !policy ? null : v_flex().px(14).py(6).gap(4).border_b(1).border_color(t.border)
+      .when(Boolean(published.policyError), (el) => el.child(div().text_size(11).text_color(t.blocked).child(published.policyError)))
+      .child(h_flex().gap(4).flex_wrap().items_center()
+        .child(chip("pause", policy.paused ? "resume" : "pause", (cx) => this.act(["policy", policy.paused ? "resume" : "pause"], cx), policy.paused ? t.working : t.blocked))
+        .children(STEPS.map((step) => chip(`step-${step}`, `${policy.default[step] ? "●" : "○"} ${step}`,
+          (cx) => this.act(["policy", "set", step, policy.default[step] ? "off" : "on"], cx), policy.default[step] ? t.foreground : t.muted)))
+        .child(div().flex_1())
+        // One group, so a narrow dock wraps the agent limit whole.
+        .child(h_flex().flex_none().gap(4).items_center()
+          .child(chip("slots-down", "−", (cx) => this.act(["policy", "slots", String(Math.max(1, policy.slots - 1))], cx)))
+          .child(div().text_size(11).text_color(t.muted).child(`${policy.slots} agents`))
+          .child(chip("slots-up", "+", (cx) => this.act(["policy", "slots", String(policy.slots + 1)], cx)))))
+      .when(policy.grants.length > 0, (el) => el.children(policy.grants.map((g) => h_flex().gap(6).items_center().text_size(11).text_color(t.muted)
+        .child(div().flex_1().min_w(0).truncate().child(`${g.scope}: ${g.steps.join(", ")}${g.remaining === undefined ? "" : ` · ${g.admitted.length}/${g.remaining} tasks`}`))
+        .child(chip(`revoke-${g.scope}`, "revoke", (cx) => this.act(["policy", "revoke", g.scope], cx))))));
     return v_flex().id("foreman").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .on_click((_e, cx) => { if (this.armed) { this.armed = null; cx.notify(); } })
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
@@ -170,6 +194,7 @@ export default class Foreman extends View {
         .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
         .child(div().flex_1())
         .child(chip("scope", this.all || project === null ? "all projects" : project, (cx) => { this.all = !this.all; cx.notify(); })))
+      .when(controls !== null, (el) => el.child(controls))
       .child(v_flex().id("foreman-rows").flex_1().min_h(0).overflow_y_scrollbar().px(4).pb(8)
         .when(Boolean(this.problem), (el) => el.child(div().p(12).text_color(t.muted).child(this.problem)))
         .when(!this.problem && rows.length === 0, (el) => el.child(div().p(12).text_color(t.muted)

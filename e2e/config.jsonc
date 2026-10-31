@@ -2,7 +2,6 @@
   // Scratch proof config: only the probe project feeds the queue. The real
   // backlog (foreman, prog, ...) is invisible to a daemon started with this.
   "projects": [{ "name": "foreman-e2e-probe", "verify": "bun test" }],
-  "slots": 3,
   "pollSeconds": 5,
   "staleAfterHours": 24,
   "landedWindowDays": 7,

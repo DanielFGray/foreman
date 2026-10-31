@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun";
-import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
 import { readLadder, RegistryError, registryPath } from "./registry.ts";
 
@@ -17,167 +17,149 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * drops half its work looks identical to a queue that is empty, and the
  * operator would have no reason to look.
  */
-export const settings = (overrides: Overrides): Layer.Layer<Settings, ConfigError> =>
-  Layer.effect(
-    Settings,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
+export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
+  Settings,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
 
-      // A FOREMAN_CONFIG that is relative must be resolved against the working
-      // directory here: it is handed to a dynamic import() below, which treats
-      // a relative string as a module specifier and looks for it beside this
-      // file instead. Absolute paths pass through resolve unchanged.
-      const configured = process.env["FOREMAN_CONFIG"];
-      const file =
-        configured === undefined
-          ? path.join(
-              process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
-              "foreman",
-              "config.jsonc",
-            )
-          : path.resolve(configured);
+    // A FOREMAN_CONFIG that is relative must be resolved against the working
+    // directory here: it is handed to a dynamic import() below, which treats
+    // a relative string as a module specifier and looks for it beside this
+    // file instead. Absolute paths pass through resolve unchanged.
+    const configured = process.env["FOREMAN_CONFIG"];
+    const file =
+      configured === undefined
+        ? path.join(
+            process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
+            "foreman",
+            "config.jsonc",
+          )
+        : path.resolve(configured);
 
-      // Imported rather than read and parsed: Bun's loader accepts comments and
-      // trailing commas in .jsonc, so the config can explain itself without
-      // pulling in a parser or stripping comments by hand — which breaks on the
-      // first "//" inside a string. The loader keys this off the extension, so a
-      // config named .json is parsed strictly and comments in it are an error.
-      const raw = yield* Effect.tryPromise({
-        try: () => import(file).then((module) => module.default as unknown),
-        catch: (cause) => new ConfigError({ detail: `reading ${file}: ${cause}` }),
-      }).pipe(
-        Effect.flatMap((contents) =>
-          Schema.decodeUnknownEffect(ConfigFile)(contents).pipe(
-            Effect.mapError((cause) => new ConfigError({ detail: `parsing ${file}: ${cause}` })),
-          ),
+    // Imported rather than read and parsed: Bun's loader accepts comments and
+    // trailing commas in .jsonc, so the config can explain itself without
+    // pulling in a parser or stripping comments by hand — which breaks on the
+    // first "//" inside a string. The loader keys this off the extension, so a
+    // config named .json is parsed strictly and comments in it are an error.
+    const raw = yield* Effect.tryPromise({
+      try: () => import(file).then((module) => module.default as unknown),
+      catch: (cause) => new ConfigError({ detail: `reading ${file}: ${cause}` }),
+    }).pipe(
+      Effect.flatMap((contents) =>
+        Schema.decodeUnknownEffect(ConfigFile)(contents).pipe(
+          Effect.mapError((cause) => new ConfigError({ detail: `parsing ${file}: ${cause}` })),
         ),
-      );
+      ),
+    );
 
-      // A project's directory is ~/build/<name>. There is no override, because a
-      // project whose name does not match its directory is a naming mistake to
-      // fix at the source — `prog projects rename` exists for exactly that — and
-      // an override field would let the two drift apart forever instead.
-      // A bare string is a project with nothing to say beyond its name, which
-      // is most of them; the object form exists for the few that need to name
-      // a verification command.
-      const projects = yield* Effect.forEach(raw.projects, (entry) =>
-        Effect.gen(function* () {
-          const { name, verify, verificationSkill } =
-            typeof entry === "string"
-              ? { name: entry, verify: undefined, verificationSkill: undefined }
-              : entry;
-          const directory = path.join(home, "build", name);
+    // A project's directory is ~/build/<name>. There is no override, because a
+    // project whose name does not match its directory is a naming mistake to
+    // fix at the source — `prog projects rename` exists for exactly that — and
+    // an override field would let the two drift apart forever instead.
+    // A bare string is a project with nothing to say beyond its name, which
+    // is most of them; the object form exists for the few that need to name
+    // a verification command.
+    const projects = yield* Effect.forEach(raw.projects, (entry) =>
+      Effect.gen(function* () {
+        const { name, verify, verificationSkill } =
+          typeof entry === "string"
+            ? { name: entry, verify: undefined, verificationSkill: undefined }
+            : entry;
+        const directory = path.join(home, "build", name);
+        const exists = yield* fs
+          .exists(directory)
+          .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
+        if (!exists) {
+          return yield* new ConfigError({
+            detail: `project "${name}" has no directory at ${directory} — rename the project to match its directory, or drop it from ${file}`,
+          });
+        }
+        const skill =
+          verificationSkill === undefined
+            ? undefined
+            : verificationSkill.startsWith("/")
+              ? verificationSkill
+              : path.join(directory, verificationSkill);
+        if (skill !== undefined) {
           const exists = yield* fs
-            .exists(directory)
+            .exists(skill)
             .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
           if (!exists) {
             return yield* new ConfigError({
-              detail: `project "${name}" has no directory at ${directory} — rename the project to match its directory, or drop it from ${file}`,
+              detail: `project "${name}" names verification skill ${skill}, but that file does not exist`,
             });
           }
-          const skill =
-            verificationSkill === undefined
-              ? undefined
-              : verificationSkill.startsWith("/")
-                ? verificationSkill
-                : path.join(directory, verificationSkill);
-          if (skill !== undefined) {
-            const exists = yield* fs
-              .exists(skill)
-              .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
-            if (!exists) {
-              return yield* new ConfigError({
-                detail: `project "${name}" names verification skill ${skill}, but that file does not exist`,
-              });
-            }
-          }
-          return { name, directory, verify, verificationSkill: skill } as const;
+        }
+        return { name, directory, verify, verificationSkill: skill } as const;
+      }),
+    );
+
+    // The ladder is the registry's, not the config file's: one copy of the
+    // order, shared with the herd skill and the trial record.
+    const registry = registryPath();
+    const ladder = yield* Effect.try({
+      try: () => readLadder(registry),
+      catch: (cause) =>
+        new ConfigError({
+          detail: cause instanceof RegistryError ? cause.detail : String(cause),
         }),
-      );
+    });
 
-      // The ladder is the registry's, not the config file's: one copy of the
-      // order, shared with the herd skill and the trial record.
-      const registry = registryPath();
-      const ladder = yield* Effect.try({
-        try: () => readLadder(registry),
-        catch: (cause) =>
-          new ConfigError({
-            detail: cause instanceof RegistryError ? cause.detail : String(cause),
-          }),
+    // A duplicate name makes both "the next rung up" and "which rung failed
+    // this task" ambiguous, and the second is durable: tasks record rung
+    // names, so a name that means two things corrupts work already filed.
+    const duplicate = ladder.find(
+      (rung, index) => ladder.findIndex((other) => other.name === rung.name) !== index,
+    );
+    if (duplicate) {
+      return yield* new ConfigError({
+        detail: `two rungs in ${file} are named "${duplicate.name}" — rung names are how tasks record which models have failed them, so they must be unique`,
       });
+    }
+    // A ladder of nothing but retired rungs has ranks and no models. Every
+    // task in the queue would resolve to the operator, which reads as a
+    // backlog that needs a hundred decisions rather than a config with a
+    // line commented out.
+    if (dispatchable(ladder).length === 0) {
+      return yield* new ConfigError({
+        detail: `every rung in ${registry} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
+      });
+    }
 
-      // A duplicate name makes both "the next rung up" and "which rung failed
-      // this task" ambiguous, and the second is durable: tasks record rung
-      // names, so a name that means two things corrupts work already filed.
-      const duplicate = ladder.find(
-        (rung, index) => ladder.findIndex((other) => other.name === rung.name) !== index,
+    // A rung whose account cannot be named is dispatched blind: foreman
+    // cannot ask whether it has room left, so the fleet learns it is out of
+    // quota by spending a run on it. Not an error — a ladder that works
+    // today keeps working — but the operator is the only one who can say
+    // which plan a bare harness is signed in to, so they are told which rung
+    // to write it on. The claude harness is never blind: it always spends
+    // the claude.ai account.
+    const blind = dispatchable(ladder).filter((rung) => providerOf(rung) === undefined);
+    if (blind.length > 0) {
+      yield* Effect.logWarning(
+        `no provider derivable for ${blind
+          .map((rung) => `"${rung.name}"`)
+          .join(
+            ", ",
+          )} in ${registry} — set "provider" on each so foreman can read its remaining quota before dispatching`,
       );
-      if (duplicate) {
-        return yield* new ConfigError({
-          detail: `two rungs in ${file} are named "${duplicate.name}" — rung names are how tasks record which models have failed them, so they must be unique`,
-        });
-      }
-      // A ladder of nothing but retired rungs has ranks and no models. Every
-      // task in the queue would resolve to the operator, which reads as a
-      // backlog that needs a hundred decisions rather than a config with a
-      // line commented out.
-      if (dispatchable(ladder).length === 0) {
-        return yield* new ConfigError({
-          detail: `every rung in ${registry} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
-        });
-      }
+    }
 
-      // A rung whose account cannot be named is dispatched blind: foreman
-      // cannot ask whether it has room left, so the fleet learns it is out of
-      // quota by spending a run on it. Not an error — a ladder that works
-      // today keeps working — but the operator is the only one who can say
-      // which plan a bare harness is signed in to, so they are told which rung
-      // to write it on. The claude harness is never blind: it always spends
-      // the claude.ai account.
-      const blind = dispatchable(ladder).filter((rung) => providerOf(rung) === undefined);
-      if (blind.length > 0) {
-        yield* Effect.logWarning(
-          `no provider derivable for ${blind
-            .map((rung) => `"${rung.name}"`)
-            .join(
-              ", ",
-            )} in ${registry} — set "provider" on each so foreman can read its remaining quota before dispatching`,
-        );
-      }
-
-      return {
-        projects,
-        slots: Option.getOrElse(overrides.slots, () => raw.slots),
-        running: overrides.running,
-        ladder,
-        pollInterval: raw.pollSeconds,
-        // The signal path is appended to this, so a trailing slash would send
-        // every span to a doubled path the collector does not serve.
-        otlpEndpoint: raw.otlpEndpoint.replace(/\/+$/, ""),
-        staleAfter: raw.staleAfterHours,
-        coachWindow: raw.coachWindowMinutes,
-        landedWindow: raw.landedWindowDays,
-        attemptsPerRung: raw.attemptsPerRung,
-      } as const;
-    }),
-  ).pipe(Layer.provide(BunServices.layer));
-
-/**
- * What the command line says: values that stand in for the config file, and
- * values only a single run can have.
- *
- * `running` is the second kind. Whether dispatch is paused is an intention, not
- * a description of the fleet, so it has no place in a file that outlives the
- * run — but it does have to survive a restart, because `bun --watch` restarts
- * the daemon whenever foreman's own source changes and the command line is the
- * only thing a restart inherits.
- */
-export interface Overrides {
-  readonly slots: Option.Option<number>;
-  readonly running: boolean;
-}
+    return {
+      projects,
+      ladder,
+      pollInterval: raw.pollSeconds,
+      // The signal path is appended to this, so a trailing slash would send
+      // every span to a doubled path the collector does not serve.
+      otlpEndpoint: raw.otlpEndpoint.replace(/\/+$/, ""),
+      staleAfter: raw.staleAfterHours,
+      coachWindow: raw.coachWindowMinutes,
+      landedWindow: raw.landedWindowDays,
+      attemptsPerRung: raw.attemptsPerRung,
+    } as const;
+  }),
+).pipe(Layer.provide(BunServices.layer));
 
 interface SettingsShape {
   readonly projects: ReadonlyArray<{
@@ -186,9 +168,6 @@ interface SettingsShape {
     readonly verificationSkill?: string;
     readonly verify: string | undefined;
   }>;
-  readonly slots: number;
-  /** Whether this run starts dispatching, rather than paused. */
-  readonly running: boolean;
   readonly ladder: Ladder;
   readonly pollInterval: number;
   readonly staleAfter: number;
@@ -246,9 +225,6 @@ const ConfigFile = Schema.Struct({
       }),
     ]),
   ),
-
-  /** Concurrent workers. Each claimed task occupies one until it lands. */
-  slots: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(3))),
 
   pollSeconds: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(20))),
 

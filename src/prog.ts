@@ -140,19 +140,6 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       /** All unblocked, unclaimed tasks, highest priority first. */
       ready: () => runJson(S.Array(ReadyTask), "ready", "--json"),
 
-      /**
-       * Every item carrying the focus label — tasks, epics, or a mix.
-       *
-       * The scope a focus defines is derived from these roots each tick: every
-       * ready task at or under any of them. Read from the store rather than
-       * remembered, so the scope survives a restart the way the `by:*` and
-       * `failed-by:*` labels do.
-       */
-      pinned: () => runJson(S.Array(Item), "list", "--label", PIN, "--json"),
-
-      setPin: (task: string, pinned: boolean) =>
-        (pinned ? run("label", task, PIN) : run("unlabel", task, PIN)).pipe(Effect.asVoid),
-
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
 
@@ -520,13 +507,6 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
   item.labels.includes(ONBOARD);
 
 /**
- * A pinned item. The label is the whole scope: put it on a task, an epic, or
- * several items, and every ready task at or under them leads the queue.
- */
-export const isPinned = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(PIN);
-
-/**
  * Which rungs have already failed this task.
  *
  * The durable half of choosing an author: the ladder reads these as a floor and
@@ -646,16 +626,6 @@ export const ONBOARD = "onboard";
 
 /** The label with which a person parks a task in their own column. */
 export const NEEDS_YOU = "needs-you";
-
-/**
- * Marks an item whose ready descendants lead the queue.
- *
- * A label and nothing else. Writing priority instead would overwrite a value
- * that already means something, which then needs the old one stashed somewhere
- * to restore on unpin — and the only place to stash it is prose in a log line,
- * which is a database hidden in a comment field.
- */
-export const PIN = "pin";
 
 /** Prefix of the label counting a rung's unfinished attempts: `attempt:<rung>:<n>`. */
 export const ATTEMPT = "attempt";

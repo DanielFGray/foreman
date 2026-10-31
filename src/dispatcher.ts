@@ -4,10 +4,12 @@ import {
   DateTime,
   Duration,
   Effect,
+  FileSystem,
   Fiber,
   Match,
   Metric,
   Option,
+  Path,
   Queue,
   Ref,
   SubscriptionRef,
@@ -26,7 +28,22 @@ import {
   type Worker,
 } from "./fleet.ts";
 import { Prompts } from "./prompt.ts";
-import { pinnedFirst, pinnedOf } from "./pin.ts";
+import {
+  admit,
+  authorStep,
+  expire,
+  permit,
+  policyPath,
+  readPolicy,
+  scopeOf,
+  updatePolicy,
+  type Permit,
+  type Policy,
+  type Scopes,
+  type Step,
+  DEFAULT_POLICY,
+} from "./policy.ts";
+import { interleave } from "./queue.ts";
 import { phaseOf, type TaskPhase } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
 import { Quota, type Usage, walledRungs } from "./quota.ts";
@@ -51,7 +68,6 @@ import {
   diagnosticIntent,
   type DiagnosticIntent,
   isApproved,
-  isPinned,
   isOnboarding,
   isResearch,
   isSatisfied,
@@ -137,34 +153,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
     };
 
-    // The one piece of genuinely non-derivable state: how much work the
-    // operator has asked foreman to take on. Nothing in the world records an
-    // intention.
-    //
-    // Three states out of one value rather than a boolean and a flag beside
-    // it. `paused` observes and reports the world but does not settle, tidy,
-    // reclaim or fill it. `draining` runs everything except the author pass,
-    // so reviews, landings and the sweep empty the pipeline while nothing new
-    // enters it — which is what aiming the fleet by hand needs, and what a
-    // plain pause cannot give: pause stops landing too, so it strands work a
-    // reviewer already approved.
-    //
-    // It starts paused unless the operator said otherwise on the command line.
-    // The operator who opened the screen to drain the fleet therefore gets a
-    // quiet first tick rather than racing it to pause.
-    //
-    // `--running` is how a restart inherits the answer. Under `bun --watch` the
-    // daemon restarts whenever foreman's own source changes — which includes
-    // landing a task into foreman's own checkout — so pausing by default parked
-    // the fleet after every landing and waited for a person. The command line is
-    // the only thing a restart carries over, which is why the intention is
-    // stated there and nowhere durable: recording it would make foreman
-    // remember, and the operator's last keypress is not a fact about the world.
-    const dispatch = yield* Ref.make<Dispatch>(settings.running ? "running" : "paused");
     const state = yield* SubscriptionRef.make(empty);
 
-    // The second piece of in-process state, kept for the same reason as
-    // `paused`: the world does not record foreman's own attempts. A dispatch
+    // The policy file is read and written from inside the loop, so its file
+    // system is taken once here rather than required of every method.
+    const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+
+    // The one piece of in-process state: the world does not record foreman's own attempts. A dispatch
     // failure is only observed by trying, and the trying is what must stop —
     // the worktree that made `open` fail will still exist next tick, so a
     // second attempt learns nothing. Two identical failures move the task to a
@@ -172,15 +167,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     // costs the daemon two attempts to relearn it; the tasks themselves stay
     // safe in the queue either way.
     const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
-
-    // Whether anyone is reading the accounts. Not a fact about the world and
-    // not an intention either — it is who is listening, which only the screen
-    // in front of the operator knows and nothing durable could record. A
-    // paused fleet with nobody on the quota view has no consumer for an
-    // allowance, and a reading nobody consults is a network request per poll
-    // spent on nothing. It resets to false on a restart, which is correct: no
-    // screen survives the process, so nobody is watching until one says it is.
-    const watchingQuota = yield* Ref.make(false);
 
     // Whether the accounts have been read at all yet. A fleet that has just
     // started has nothing to say about them, and "no reading" and "nothing
@@ -201,6 +187,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /** Runs an operator's command, then lets the loop see what it changed. */
     const commanded = <A, E, R>(command: Effect.Effect<A, E, R>) =>
       command.pipe(Effect.tap(() => nudge));
+
+    /**
+     * Rewrites the policy file. A write that fails is logged and dropped: the
+     * file is the operator's, and the worst a lost write costs is one grant
+     * admitting a task it already admitted, or expiring a pass late.
+     */
+    const writePolicy = (change: (policy: Policy) => Policy) =>
+      updatePolicy(policyPath(), change).pipe(
+        Effect.provideContext(platform),
+        Effect.asVoid,
+        Effect.catchCause(Effect.logWarning),
+      );
+
+    /** Records that a grant took on a task, once the step it allowed has run. */
+    const admitted = (given: Permit, task: string) =>
+      given._tag === "Granted" && given.admits
+        ? writePolicy((policy) => admit(policy, given.scope, task))
+        : Effect.void;
 
     /**
      * Records a dispatch failure against its task, and says so in the log once
@@ -260,13 +264,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Asked at all only where the answer has a consumer. A paused fleet
       // dispatches nothing, so no gate reads an allowance, and the spent
       // accounts in attention are not what stopped it — the operator is, and
-      // the status line already says so. Probing on regardless is a network
-      // request every poll to explain a halt that has another cause. The
-      // operator looking at the quota view is the other consumer, and it says
-      // so through `quota` rather than by being guessed at here.
-      const mode = yield* Ref.get(dispatch);
-      const wanted =
-        mode !== "paused" || (yield* Ref.get(watchingQuota)) || !(yield* Ref.get(everProbed));
+      // the published policy already says so. Probing on regardless is a
+      // network request every poll to explain a halt that has another cause.
+      // The policy is the previous reading's: a pause takes one poll to stop
+      // the probes, and the probe is all that lags.
+      const previousPolicy = (yield* SubscriptionRef.get(state)).policy;
+      const wanted = !previousPolicy.paused || !(yield* Ref.get(everProbed));
       if (wanted) yield* Ref.set(everProbed, true);
       const probing = yield* Effect.forkChild(
         wanted ? readProviders : Effect.succeed<ReadonlyArray<Provider>>([]),
@@ -283,7 +286,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const current = yield* interpret(observation, providers);
       yield* SubscriptionRef.set(state, current);
-      return { mode, current, providers };
+      return { current, providers };
     });
 
     /**
@@ -296,8 +299,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * queue grows a permanent tail of almost-done tasks.
      */
     const tick = Effect.gen(function* () {
-      const { mode, current, providers } = yield* read;
-      if (mode === "paused") return;
+      const { current, providers } = yield* read;
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
@@ -308,7 +310,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // cost a `prog show` per branch and a `git status` per worktree to build.
       // Reading them again here would be work whose one consumer is the
       // discard.
-      yield* fill(yield* readDispatch(providers), mode);
+      yield* fill(yield* readDispatch(providers));
+      // A grant with nothing left to cover is removed, so the file says only
+      // what still holds.
+      if (current.policy.grants.length > 0) {
+        yield* writePolicy((policy) => expire(policy, current.scopes));
+      }
     }).pipe(Effect.withSpan("foreman.tick"));
 
     /**
@@ -412,14 +419,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           Effect.map((result: Hold): ReadonlyArray<Held> =>
             result._tag === "Clean"
               ? []
-              : [{ project: project.name, reason: result.reason, detail: result.detail }],
+              : [
+                  {
+                    project: project.name,
+                    reason: result.reason,
+                    detail: result.detail,
+                  },
+                ],
           ),
           // A checkout foreman cannot read is a checkout it must not merge
           // into either, so an unreadable repository is held rather than free.
           Effect.catch((error: RepositoryError) =>
             Effect.logWarning(`holding ${project.name}: ${error}`).pipe(
               Effect.as<ReadonlyArray<Held>>([
-                { project: project.name, reason: "unreadable", detail: error.detail },
+                {
+                  project: project.name,
+                  reason: "unreadable",
+                  detail: error.detail,
+                },
               ]),
             ),
           ),
@@ -447,12 +464,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // question, so a blocker outside the fleet still holds its dependents.
       const queue = yield* prog.ready();
 
-      // What the operator has pinned. Derived from the `pin` label rather than
-      // remembered: the dashboard writes it into prog, and the dashboard being
-      // the process means a restart must re-read the same label rather than
-      // lose the intention. The scope is every task at or under an item
-      // carrying the label.
-      const pinned = yield* pinnedOf(yield* prog.pinned(), managed, (id) => prog.children(id));
+      // The operator's policy, read every pass so an edit takes effect on the
+      // next one, and what each grant reaches now: an epic's descendants
+      // change as work is filed and finished.
+      const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
+        Effect.provideContext(platform),
+      );
+      const scopes: Scopes = new Map(
+        yield* Effect.forEach(policy.grants, (grant) =>
+          prog.lookup(grant.scope).pipe(
+            Effect.flatMap((item) =>
+              Option.isSome(item)
+                ? scopeOf([item.value], (id) => prog.children(id))
+                : Effect.succeed<ReadonlySet<string>>(new Set()),
+            ),
+            Effect.map((tasks) => [grant.scope, tasks] as const),
+          ),
+        ),
+      );
 
       // Foreman's branches, in every project. One read, three questions: which
       // branches nothing in the pipeline accounts for, whether a task handed
@@ -464,7 +493,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             refs.flatMap((ref) => {
               const task = taskOf(ref.branch);
               return task
-                ? [{ ...ref, project: project.name, directory: project.directory, task }]
+                ? [
+                    {
+                      ...ref,
+                      project: project.name,
+                      directory: project.directory,
+                      task,
+                    },
+                  ]
                 : [];
             }),
           ),
@@ -480,7 +516,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         reviewing,
         epics,
         queue,
-        pinned,
+        policy,
+        policyError,
+        scopes,
         branches,
       } as const;
     });
@@ -510,7 +548,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         reviewing,
         epics,
         queue,
-        pinned,
+        policy,
+        policyError,
+        scopes,
         branches,
       } = observation;
 
@@ -623,27 +663,20 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const autoWork = dispatchable.filter((task) => !isOnboarding(task));
 
-      // How close each task's own epic is to done, for the ones whose epic is
-      // not itself pinned. A pinned epic's children already lead absolutely;
-      // stacking a completion credit on top of that would only reorder a group
-      // that outranks everything else regardless.
+      // How close each task's own epic is to done.
       const epicCompletion = new Map<string, number>();
-      for (const { epic, children } of epics) {
-        if (epic.labels.includes("pin") || children.length === 0) continue;
+      for (const { children } of epics) {
+        if (children.length === 0) continue;
         const fraction =
           children.filter((child) => child.status === "done").length / children.length;
         for (const child of children) epicCompletion.set(child.id, fraction);
       }
       const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
 
-      // Pinned work leads, then everything else, each half ordered by the same
-      // rules the whole queue always used. A pin changes where work sits in
-      // one list; it reserves no slot and stops nothing, so the projects both
-      // halves rotate between stay every managed project.
-      const ordered = pinnedFirst(
+      const ordered = interleave(
         excludeFailedTasks(autoWork, failed),
-        pinned,
         [...managed],
+        new Date(),
         epicFractionOf,
       );
 
@@ -691,7 +724,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         decisions: decisionsOf(claimedActive, reviewingActive, owned).filter(
           (decision) => !failedIds.has(decision.task.id),
         ),
-        pinned,
+        policy,
+        policyError,
+        scopes,
       };
     };
 
@@ -762,7 +797,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               status: undefined,
               activity: undefined,
             })),
-            Effect.map((item) => ({ project, branch, task, merged, ...item })),
+            Effect.map((item) => ({
+              project,
+              branch,
+              task,
+              merged,
+              ...item,
+            })),
           ),
         ).pipe(
           Effect.map((rows) =>
@@ -807,7 +848,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           // grouped by project in config order rather than by when work landed.
           landed: landedColumn(landed, now, settings.landedWindow),
           decisions: [...current.decisions, ...failedDecisions],
-          dispatch: yield* Ref.get(dispatch),
           observedAt: now,
         } satisfies Interpretation;
       });
@@ -856,9 +896,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         minutes: settings.coachWindow,
       });
 
+      // Landing writes to the operator's checkout, so it waits for the policy
+      // like every step that spends: an approved branch stays approved.
       yield* Effect.forEach(
         current.review.filter(({ task, worker }) => readyToLand(task, worker)),
-        ({ task, worker }) => land(task, worker),
+        ({ task, worker }) => {
+          const given = permit(current.policy, current.scopes, task.id, "land");
+          return given._tag === "Denied"
+            ? Effect.void
+            : land(task, worker).pipe(Effect.tap(() => admitted(given, task.id)));
+        },
         { discard: true },
       );
 
@@ -935,7 +982,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const role = reviewedBy(task) ? "review" : "author";
             if (rung) {
               const attributes = runAttributes(task, rung, role);
-              yield* Effect.annotateCurrentSpan({ ...attributes, outcome: phase });
+              yield* Effect.annotateCurrentSpan({
+                ...attributes,
+                outcome: phase,
+              });
               yield* Metric.update(
                 Metric.withAttributes(runOutcomes, {
                   rung: rung.name,
@@ -1296,7 +1346,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Dispatchable, mode: Dispatch) =>
+    const fill = (current: Dispatchable) =>
       Effect.gen(function* () {
         // A task whose dispatch has failed twice is held out of both passes.
         // Its failure is a fact about the world, so a third attempt would
@@ -1309,14 +1359,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // slot in this pass drawing on the one account the reading calls healthy.
         const drawn = new Set<string>();
         yield* Effect.forEach(
-          dispatchesFor(current, settings.slots, mode === "running", failed, stale),
+          dispatchesFor(current, failed, stale),
           (dispatch) =>
             dispatch.role === "review"
               ? dispatchReview(dispatch.task, authoredBy(dispatch.task)).pipe(
+                  Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
                   Effect.tap(() => clearFailure(dispatch.task.id)),
                   Effect.catch((error) => recordFailure(dispatch.task.id, error)),
                 )
               : dispatchAuthor(dispatch.task, drawn).pipe(
+                  Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
                   Effect.tap(() => clearFailure(dispatch.task.id)),
                   Effect.catch((error) => recordFailure(dispatch.task.id, error)),
                 ),
@@ -1525,7 +1577,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // Attached, not a worktree: the work being rescued exists only in this
       // checkout, so a copy of the last commit would show the agent nothing.
-      const worker = yield* fleet.attach({ task: task.id, repository: project.directory });
+      const worker = yield* fleet.attach({
+        task: task.id,
+        repository: project.directory,
+      });
       const prompt = yield* prompts.onboard(task, project.directory);
 
       yield* prog.claim(task.id);
@@ -1838,9 +1893,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
-        const mode = yield* Ref.get(dispatch);
         yield* Effect.logInfo(
-          `foreman up: ${plural(settings.slots, "slot")} over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s, starting ${mode}`,
+          `foreman up: over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
         );
         return yield* tick.pipe(
           Effect.andThen(
@@ -1852,30 +1906,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           Effect.forever,
         );
       }),
-
-      /**
-       * States how much work the fleet may take on. Live workers are never
-       * interrupted by it; narrowing only stops the next dispatch.
-       */
-      setDispatch: (mode: Dispatch) =>
-        commanded(
-          Effect.gen(function* () {
-            const was = yield* Ref.getAndSet(dispatch, mode);
-            // The key cycles even against no change; only a real move is news.
-            if (was !== mode) yield* Effect.logInfo(`dispatch: ${was} -> ${mode}`);
-          }),
-        ),
-
-      /**
-       * States whether the accounts are being read, so a paused fleet can stop
-       * asking about them.
-       *
-       * Turning it on nudges the loop, so opening the view fills it on the
-       * next tick rather than at the next poll. A dashboard that exits without
-       * turning it off costs one probe per poll until the process ends, which
-       * is the same process the screen was in.
-       */
-      watchQuota: (watching: boolean) => commanded(Ref.set(watchingQuota, watching)),
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
@@ -2097,27 +2127,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ),
 
       /**
-       * Pins a task to the front of the queue, or takes the pin off.
-       *
-       * The task is re-read before the label is flipped, because the view's
-       * reading is up to a poll interval old and a pin the operator already
-       * set from elsewhere would otherwise be cleared by a key meant to set
-       * it.
-       *
-       * A pin on a task, unlike one on an epic, names only itself — the
-       * descendant walk finds nothing under a task. The dashboard lists no
-       * epics, so pinning one is still a `prog label` by hand.
-       */
-      togglePin: (task: string) =>
-        commanded(
-          Effect.gen(function* () {
-            const current = yield* prog.show(task);
-            yield* prog.setPin(task, !isPinned(current));
-            yield* Effect.logInfo(`${isPinned(current) ? "unpinned" : "pinned"} ${task}`);
-          }),
-        ),
-
-      /**
        * Puts an unread branch in front of a reviewer.
        *
        * Nobody can say from the outside whether commits nothing is reading are
@@ -2153,48 +2162,53 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
   static readonly Default = Layer.effect(this, this.make);
 }
 
-/** Selects work for the free slots without performing any dispatch side effects. */
+/**
+ * Selects work for the free slots without performing any dispatch side effects.
+ *
+ * Each dispatch carries the permit the policy gave it, so the caller can
+ * record which grant admitted the task once the dispatch has happened. A task
+ * the policy does not allow is passed over and keeps no slot.
+ */
 export const dispatchesFor = (
   current: DispatchState,
-  slots: number,
-  authors = true,
   failed: ReadonlySet<string> = new Set(),
   stale: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<PlannedDispatch> => {
   const busy = current.workers.filter(isBusy).length;
-  let free = slots - busy;
+  let free = current.policy.slots - busy;
   if (free <= 0) return [];
 
   const dispatches: Array<PlannedDispatch> = [];
+  // Admissions planned in this pass count against a grant's `remaining` at
+  // once, so one pass cannot admit more tasks than the grant allows.
+  let policy = current.policy;
+  const allowed = (task: string, step: Step) => {
+    const given = permit(policy, current.scopes, task, step);
+    if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
+    return given;
+  };
 
-  // A pin leads the review pass as well as the queue. Reviews are filled before
-  // authors either way, so without this a pinned task could sit behind three
-  // other reviews — which is the thing the operator pinned it to stop.
-  const reviews = [
-    ...current.review.filter(({ task }) => current.pinned.has(task.id)),
-    ...current.review.filter(({ task }) => !current.pinned.has(task.id)),
-  ];
-
-  for (const { task, worker } of reviews) {
+  for (const { task, worker } of current.review) {
     if (free <= 0) break;
     if (current.held.some((held) => held.project === task.project)) continue;
     if (reviewedBy(task) !== undefined || failed.has(task.id) || stale.has(task.id)) continue;
     if (current.outOfQuota.has(task.id)) continue;
     if (worker && isBusy(worker)) continue;
-    dispatches.push({ role: "review", task });
+    const given = allowed(task.id, "review");
+    if (given._tag === "Denied") continue;
+    dispatches.push({ role: "review", task, permit: given });
     free -= 1;
   }
 
-  // `queue` already leads with the pinned scope, so authoring needs no notion
-  // of a pin at all. Nothing is reserved and nothing is serialized: which
-  // pinned tasks may run together is what the plan's blockers already say, and
-  // `prog ready` has applied them before foreman sees the queue.
+  // Which ready tasks may run together is what the plan's blockers already
+  // say, and `prog ready` has applied them before foreman sees the queue.
   for (const task of current.queue) {
-    if (!authors) break;
     if (free <= 0) break;
     if (current.held.some((held) => held.project === task.project)) continue;
     if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
-    dispatches.push({ role: "author", task });
+    const given = allowed(task.id, authorStep(task.labels));
+    if (given._tag === "Denied") continue;
+    dispatches.push({ role: "author", task, permit: given });
     free -= 1;
   }
 
@@ -2208,14 +2222,19 @@ interface DispatchState {
   readonly workers: ReadonlyArray<Worker>;
   readonly outOfQuota: ReadonlySet<string>;
   readonly queue: ReadonlyArray<ReadyTask>;
-  readonly pinned: ReadonlySet<string>;
   readonly held: ReadonlyArray<Held>;
   readonly review: ReadonlyArray<Active>;
+  readonly policy: Policy;
+  readonly scopes: Scopes;
 }
 
 type PlannedDispatch =
-  | { readonly role: "review"; readonly task: Item }
-  | { readonly role: "author"; readonly task: ReadyTask };
+  | { readonly role: "review"; readonly task: Item; readonly permit: Permit }
+  | {
+      readonly role: "author";
+      readonly task: ReadyTask;
+      readonly permit: Permit;
+    };
 
 /**
  * A finished branch whose fate is landing rather than the ordinary settle path,
@@ -2337,7 +2356,11 @@ export const nextFailure = (
   const same = prior !== undefined && prior.detail === detail;
   const count = same ? prior.count + 1 : 1;
   const report: FailureReport = !same ? "first" : count === 2 ? "repeat" : "quiet";
-  return { failures: new Map(failures).set(task, { detail, count }), count, report };
+  return {
+    failures: new Map(failures).set(task, { detail, count }),
+    count,
+    report,
+  };
 };
 
 /**
@@ -2470,7 +2493,10 @@ export const landedColumn = (
 export const reviewable = (
   reviewing: ReadonlyArray<Active>,
   committed: ReadonlySet<string>,
-): { readonly review: ReadonlyArray<Active>; readonly unbacked: ReadonlyArray<Active> } => {
+): {
+  readonly review: ReadonlyArray<Active>;
+  readonly unbacked: ReadonlyArray<Active>;
+} => {
   const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
   const readable = ({ task }: Active) =>
     committed.has(task.id) || isSatisfied(task) || isResearch(task);
@@ -2518,7 +2544,10 @@ export const ours = (
 export const scopeRoster = (
   roster: ReadonlyArray<Worker>,
   tasks: ReadonlyMap<string, Item>,
-): { readonly owned: ReadonlyArray<Owned>; readonly workers: ReadonlyArray<Worker> } => {
+): {
+  readonly owned: ReadonlyArray<Owned>;
+  readonly workers: ReadonlyArray<Worker>;
+} => {
   const owned: Array<Owned> = [];
   const kept = new Set<string>();
   for (const worker of roster) {
@@ -2556,44 +2585,12 @@ const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => (
   role,
 });
 
-/**
- * How much work the fleet may take on, which is the operator's intention and
- * so the one thing foreman holds in memory rather than reading back.
- *
- * `draining` is the state between the other two, and it is the useful one for
- * aiming the fleet by hand: the author pass is skipped while reviews,
- * landings, settles and the sweep all continue, so the pipeline empties itself
- * instead of freezing with approved branches unlanded.
- */
-export type Dispatch = "running" | "draining" | "paused";
-
-/**
- * The next state the operator's key gives them, narrowest last.
- *
- * One key rather than one per state, because the three are one continuum —
- * how much the fleet is taking on — and a second key would have to say which
- * of the two it overrides.
- */
-export const nextDispatch = (mode: Dispatch): Dispatch =>
-  mode === "running" ? "draining" : mode === "draining" ? "paused" : "running";
-
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
   /** In-progress epics and their direct-child progress, shown above queue tasks. */
   readonly epics: ReadonlyArray<EpicProgress>;
-  /** Ready work in dispatch order: the pinned scope first, then everything else. */
+  /** Ready work in dispatch order. */
   readonly queue: ReadonlyArray<ReadyTask>;
-
-  /**
-   * The task ids the operator has pinned, including those reached through a
-   * pinned epic.
-   *
-   * One set beside one queue rather than two lists, because everything a
-   * caller wants — which rows to mark, how many are ready, where the pinned
-   * run ends — is derivable from the two, and a second list is a second thing
-   * to keep in step.
-   */
-  readonly pinned: ReadonlySet<string>;
 
   /**
    * Tasks parked at the operator's rung, above the last model in the ladder.
@@ -2665,7 +2662,12 @@ export interface FleetState {
    * numbers it stopped on.
    */
   readonly providers: ReadonlyArray<Provider>;
-  readonly dispatch: Dispatch;
+  /** The operator's policy as this reading found it. */
+  readonly policy: Policy;
+  /** Why the policy file could not be read, which is why the fleet is paused. */
+  readonly policyError: string | undefined;
+  /** Each grant's scope, mapped to the unfinished tasks it reaches. */
+  readonly scopes: Scopes;
 
   /**
    * When this reading of the world was taken.
@@ -2807,13 +2809,12 @@ interface Interpretation extends FleetState {
   }>;
 }
 
-/** `1 slot`, `2 slots`. The supervised run AGENTS.md recommends is `--slots 1`. */
+/** `1 project`, `2 projects`. */
 const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 const empty: FleetState = {
   epics: [],
   queue: [],
-  pinned: new Set(),
   yours: [],
   working: [],
   review: [],
@@ -2826,9 +2827,9 @@ const empty: FleetState = {
   orphans: [],
   held: [],
   providers: [],
-  // Before the first tick has read anything, and the state foreman starts in
-  // unless the command line said otherwise.
-  dispatch: "paused",
+  policy: DEFAULT_POLICY,
+  policyError: undefined,
+  scopes: new Map(),
   observedAt: undefined,
 };
 

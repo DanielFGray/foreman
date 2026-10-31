@@ -72,8 +72,6 @@ export const perform = (
     case "takeOver":
     case "focus":
       return row.worker ? dispatcher.focus(row.worker) : undefined;
-    case "pin":
-      return target ? dispatcher.togglePin(target.id) : undefined;
     case "descend":
       return target ? dispatcher.descend(target) : undefined;
     case "unassign":
@@ -110,7 +108,6 @@ export const ACTION_HELP: Record<Action, string> = {
   release: "Hand a claimed task back to the queue and take its workspace down",
   close: "Take down a workspace whose task nothing owns",
   takeOver: "Focus a vanished worker's pane so you can continue by hand",
-  pin: "Toggle the pin that puts a task or epic at the head of the queue",
   focus: "Focus the pane of a task's live agent",
   kill: "Stop a live attempt, log why, and requeue the task on the same rung",
   intervene: "Resume a task at a rung, or send an agent to diagnose or review its last attempt",

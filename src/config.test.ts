@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -12,14 +12,14 @@ const load = () =>
   Effect.gen(function* () {
     const config = yield* Settings;
     return config.projects;
-  }).pipe(Effect.provide(settings({ slots: Option.none(), running: false })), Effect.runPromise);
+  }).pipe(Effect.provide(settings), Effect.runPromise);
 
 /** The whole Settings, for the fields `projects` alone does not carry. */
 const loadLadder = () =>
   Effect.gen(function* () {
     const config = yield* Settings;
     return config.ladder;
-  }).pipe(Effect.provide(settings({ slots: Option.none(), running: false })), Effect.runPromise);
+  }).pipe(Effect.provide(settings), Effect.runPromise);
 
 describe("settings", () => {
   const savedCwd = process.cwd();
