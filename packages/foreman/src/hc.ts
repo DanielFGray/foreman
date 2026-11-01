@@ -242,6 +242,11 @@ export function hcFleetOver() {
                   .restoreBranch(resolution.path, options.branch)
                   .pipe(Effect.mapError(fail("open")));
                 break;
+              case "switch":
+                yield* repository
+                  .checkoutBranch(options.repository, options.branch)
+                  .pipe(Effect.mapError(fail("open")));
+                break;
               case "create":
                 yield* repository
                   .addWorktree(options.repository, options.branch, options.directory)
@@ -387,8 +392,12 @@ export function hcFleetOver() {
             // A worker over the operator's own checkout has no worktree, and
             // that directory is never foreman's to delete.
             if (worker !== undefined && worker.worktree === undefined) return;
+            // The checkout itself is listed for the branch in branch mode, and
+            // it is the operator's, so it is never the worktree removed.
             const worktree = worktreeFor(yield* repository.worktrees(home), labelFor(options.task));
-            if (worktree) yield* repository.removeWorktree(home, worktree.path);
+            if (worktree && worktree.path !== home) {
+              yield* repository.removeWorktree(home, worktree.path);
+            }
           }).pipe(Effect.ignore),
 
         /**
@@ -449,13 +458,19 @@ const idle = (task: string, directory: string, repository: string): Worker => ({
  * foreman's and only needs putting back on the branch, else a new one. Only a
  * path git has no worktree registered at is a create; anything else collides
  * with `git worktree add` on every attempt.
+ *
+ * A directory that is the repository itself (branch mode) is a `switch`: the
+ * operator's checkout is put on the branch rather than a worktree being made.
+ * Once it has the branch out, git lists the checkout for it like any worktree,
+ * so a later open adopts it.
  */
 export const resolveOpen = (
   worktrees: ReadonlyArray<Worktree>,
-  options: { readonly branch: string; readonly directory: string },
-): { readonly kind: "adopt" | "restore" | "create"; readonly path: string } => {
+  options: { readonly branch: string; readonly directory: string; readonly repository: string },
+): { readonly kind: "adopt" | "restore" | "create" | "switch"; readonly path: string } => {
   const onBranch = worktreeFor(worktrees, options.branch);
   if (onBranch) return { kind: "adopt", path: onBranch.path };
+  if (options.directory === options.repository) return { kind: "switch", path: options.directory };
   const atPath = worktrees.find(
     (worktree) => worktree.path === options.directory && !worktree.prunable,
   );

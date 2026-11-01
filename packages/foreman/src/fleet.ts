@@ -15,7 +15,9 @@ export class Fleet extends Context.Service<
     /**
      * Opens the workspace for a task, resolving in order: a worker already
      * running for it, else a worktree git still has registered for this
-     * task's branch, else a new worktree with the branch cut from HEAD.
+     * task's branch, else a new worktree with the branch cut from HEAD. A
+     * `directory` that is the repository itself puts the operator's checkout
+     * on the branch instead of making a worktree (branch mode).
      *
      * The worktree is the durable identity, and the agents in it come and go.
      * Without the second step, a task whose agents all ended fell through to

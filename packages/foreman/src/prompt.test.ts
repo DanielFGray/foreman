@@ -51,6 +51,21 @@ describe("Prompts", () => {
     expect(prompt).toContain("do not read another task's worktree");
   });
 
+  test("an author and reviewer in the operator's checkout are told it is theirs, not forbidden", async () => {
+    const author = await run((prompts) =>
+      prompts.author(ready, "/tmp/repository", "/tmp/repository"),
+    );
+    expect(author).toContain("This is the operator's own checkout");
+    expect(author).toContain("git diff @{upstream}...HEAD");
+    expect(author).not.toContain("Never enter /tmp/repository");
+
+    const review = await run((prompts) =>
+      prompts.review(item, "/tmp/repository", "/tmp/repository", "abc123", undefined),
+    );
+    expect(review).toContain("the operator's own checkout, which has the task's branch out");
+    expect(review).not.toContain("Never run git in /tmp/repository");
+  });
+
   // A pre-existing failure is filed once per author that hits it, reworded each
   // time, and each duplicate costs the fleet a full suite run. The whole dedup
   // is this block: the search command renders the project, and the instruction

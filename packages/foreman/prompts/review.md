@@ -11,9 +11,15 @@ Repository: {{ repository }}
 
 ## Rules
 
+{% if (worktree === repository) { %}
+- Run every command in {{ worktree }}: the operator's own checkout, which has the
+  task's branch out. No landing runs here until this task lands. Never switch
+  branches, and never stash, reset or clean. Do not read another task's worktree.
+{% } else { %}
 - Run every command in {{ worktree }}. Never run git in {{ repository }}: foreman
   merges there, and a git command of yours mid-merge fails the landing. Do not read
   another task's worktree.
+{% } %}
 - If you repair the worktree by hand, add the step to `scripts/worktree-setup.sh` and
   commit it; reject a setup step that is not safe to run twice.
 - Log each decision with `prog log {{ task }} "Decision. ... Evidence. ... Result. ..."`.

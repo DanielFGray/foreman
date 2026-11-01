@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
 import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
+import { directoryFor, Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
 import { kindOf, Prog, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
-import { Repository, type Branch, type Landing } from "./repository.ts";
+import { Repository, type Branch, type Hold, type Landing } from "./repository.ts";
 import { Trials, type Trial } from "./trials.ts";
 
 const now = new Date();
@@ -65,6 +65,12 @@ class World {
   /** The name of every write any fake made, in order. */
   readonly writes: string[] = [];
   clean: "clean" | "held" = "clean";
+  /** The task branch the project's checkout has out (branch mode), if any. */
+  checkedOut: string | undefined = undefined;
+  /** Whether the checkout has uncommitted changes, which a branch-mode start refuses. */
+  treeDirty = false;
+  /** The directory of every workspace `open` was asked for, in order. */
+  readonly opened: string[] = [];
   landing: Landing = { _tag: "Merged", verified: false };
   /** The commit message each landing passed to `Repository.merge`. */
   readonly mergeMessages: string[] = [];
@@ -76,13 +82,14 @@ class World {
   readonly fleet = {
     open: (options: { task: string; repository: string; branch: string; directory: string }) =>
       this.write("fleet.open", () => {
+        this.opened.push(options.directory);
         const current = this.workers.get(options.task);
         if (current) return current;
         const created: Worker = {
           task: options.task,
           repository: options.repository,
           directory: options.directory,
-          worktree: options.directory,
+          worktree: options.directory === options.repository ? undefined : options.directory,
           state: "gone",
           roles: new Map(),
         };
@@ -274,11 +281,15 @@ class World {
   readonly repository = {
     checkoutOf: (folder: string) => Effect.succeed<string | undefined>(folder),
     verifyOf: () => Effect.succeed<string | undefined>(undefined),
-    isFree: () =>
-      Effect.succeed(
-        this.clean === "clean"
-          ? ({ _tag: "Clean" } as const)
-          : ({ _tag: "Held", reason: "dirty", detail: "held" } as const),
+    isFree: (_directory: string, cleanTree = false) =>
+      Effect.succeed<Hold>(
+        this.clean === "held"
+          ? { _tag: "Held", reason: "dirty", detail: "held" }
+          : this.checkedOut !== undefined
+            ? { _tag: "Held", reason: "busy", detail: "busy", branch: this.checkedOut }
+            : cleanTree && this.treeDirty
+              ? { _tag: "Held", reason: "dirty", detail: "not clean" }
+              : { _tag: "Clean" },
       ),
     holdsWork: (directory: string) => Effect.sync(() => this.dirty.has(directory)),
     commitWork: (directory: string, message: string) =>
@@ -311,6 +322,7 @@ class World {
     addWorktree: () => Effect.die("unused"),
     removeWorktree: () => Effect.die("unused"),
     restoreBranch: () => Effect.die("unused"),
+    checkoutBranch: () => Effect.die("unused"),
   };
 
   /**
@@ -1383,5 +1395,99 @@ describe("a policy change", () => {
     );
 
     expect(waited).toBeLessThan(1000);
+  });
+});
+
+describe("where a project's agents work", () => {
+  const BRANCH = { ...ALLOWED, slots: 2, projects: { test: { checkout: "branch" } } };
+  const unmerged = (task: string): Branch => ({
+    branch: `foreman/${task}`,
+    merged: false,
+    empty: false,
+    stale: undefined,
+  });
+  const reading = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.tick.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+  test("a worktree project's author works in a worktree of its own", async () => {
+    const task = item("ts-tree", "open", []);
+    const world = new World(task);
+
+    await tick(world);
+
+    expect(world.opened).toEqual([directoryFor("test", task.id)]);
+    expect(world.workers.get(task.id)?.worktree).toBe(directoryFor("test", task.id));
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("a branch project's author works in the operator's checkout, which teardown leaves alone", async () => {
+    usePolicy(BRANCH);
+    const task = item("ts-branch", "open", []);
+    const world = new World(task);
+
+    await tick(world);
+
+    expect(world.opened).toEqual(["/build/test"]);
+    expect(world.workers.get(task.id)?.worktree).toBeUndefined();
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("a dirty checkout holds a branch project's start, with the reason", async () => {
+    usePolicy(BRANCH);
+    const task = item("ts-dirty", "open", []);
+    const world = new World(task);
+    world.treeDirty = true;
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(state.held).toEqual([{ project: "test", reason: "dirty", detail: "not clean" }]);
+  });
+
+  test("a worktree project ignores a dirty checkout at dispatch", async () => {
+    const task = item("ts-tree-dirty", "open", []);
+    const world = new World(task);
+    world.treeDirty = true;
+
+    await tick(world);
+
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("a task branch out in the checkout holds every other task, and not its own review", async () => {
+    usePolicy(BRANCH);
+    const own = item("ts-own", "reviewing", ["by:cheap"]);
+    const other = item("ts-other", "open", []);
+    const world = new World(own, other);
+    world.checkedOut = `foreman/${own.id}`;
+    world.branches.set(`foreman/${own.id}`, unmerged(own.id));
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([[own.id, "review"]]);
+    expect(world.opened).toEqual(["/build/test"]);
+    expect(world.tasks.get(other.id)?.status).toBe("open");
+    expect(state.held).toEqual([
+      { project: "test", reason: "busy", detail: "busy", branch: `foreman/${own.id}` },
+    ]);
+  });
+
+  test("an approved branch-mode task lands and completes like a worktree one", async () => {
+    usePolicy(BRANCH);
+    const task = item("ts-land-branch", "reviewing", ["by:cheap", "review-by:cheap", "approved"]);
+    const world = new World(task);
+    world.checkedOut = `foreman/${task.id}`;
+    world.branches.set(`foreman/${task.id}`, unmerged(task.id));
+
+    await tick(world);
+
+    expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+    expect(world.closed).toContain(task.id);
   });
 });

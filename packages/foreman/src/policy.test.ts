@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   admit,
-  checkoutOf,
+  checkoutFor,
   clearProject,
   authorStep,
   DEFAULT_POLICY,
@@ -351,11 +351,11 @@ describe("per-project settings", () => {
   });
 
   test("a project's checkout is worktree unless set, and setting worktree drops the entry", () => {
-    expect(checkoutOf(DEFAULT_POLICY, "alpha")).toBe("worktree");
+    expect(checkoutFor(DEFAULT_POLICY, "alpha")).toBe("worktree");
     const branch = setProjectCheckout(DEFAULT_POLICY, "alpha", "branch");
     expect(branch.projects).toEqual({ alpha: { checkout: "branch" } });
-    expect(checkoutOf(branch, "alpha")).toBe("branch");
-    expect(checkoutOf(branch, "beta")).toBe("worktree");
+    expect(checkoutFor(branch, "alpha")).toBe("branch");
+    expect(checkoutFor(branch, "beta")).toBe("worktree");
     expect(setProjectCheckout(branch, "alpha", "worktree").projects).toEqual({});
   });
 

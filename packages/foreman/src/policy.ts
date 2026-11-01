@@ -398,7 +398,7 @@ export const setProjectStep = (
   editProject(policy, project, (entry) => ({ ...entry, steps: { ...entry.steps, [step]: mode } }));
 
 /** Where a project's next author works. */
-export const checkoutOf = (policy: Policy, project: string): Checkout =>
+export const checkoutFor = (policy: Policy, project: string): Checkout =>
   policy.projects[project]?.checkout ?? "worktree";
 
 /** Sets where one project's agents work. `worktree` is the default, so it removes the field. */

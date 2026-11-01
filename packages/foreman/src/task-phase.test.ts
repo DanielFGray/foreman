@@ -5,7 +5,7 @@ const input = (overrides: Partial<TaskPhaseInput> = {}): TaskPhaseInput => ({
   status: "in_progress",
   reviewer: undefined,
   worker: "settled" as const,
-  worktree: true,
+  attached: false,
   committed: false,
   holdsWork: false,
   handoffExpired: false,
@@ -22,7 +22,7 @@ describe("task phases", () => {
   test("distinguishes vanished work from an empty worktree", () => {
     expect(phaseOf(input({ worker: "gone", committed: true }))).toBe("VanishedWithWork");
     expect(phaseOf(input({ worker: "gone" }))).toBe("VanishedEmpty");
-    expect(phaseOf(input({ worker: "gone", worktree: false }))).toBe("VanishedAttached");
+    expect(phaseOf(input({ worker: "gone", attached: true }))).toBe("VanishedAttached");
   });
 
   test("keeps blocked and waiting work untouched", () => {

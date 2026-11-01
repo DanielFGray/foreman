@@ -21,9 +21,17 @@ Repository checkout: {{ repository }}
 
 ## Rules
 
+{% if (worktree === repository) { %}
+- Work only in {{ worktree }}, on {{ branch }}. This is the operator's own checkout,
+  put on your branch for this task; no other agent or landing runs here until it
+  lands. Never switch branches, and never stash, reset or clean: foreman checks the
+  operator's branch out again when it lands, from a clean tree. To see trunk, use
+  `git log @{upstream}` and `git diff @{upstream}...HEAD`.
+{% } else { %}
 - Work only in {{ worktree }}, on {{ branch }}. Never enter {{ repository }} or switch
   branches, and do not read another task's worktree. To see trunk, find its commit with
   `git worktree list --porcelain` and use `git show` or `git diff` from here.
+{% } %}
 - If you repair this worktree by hand, add the step to `scripts/worktree-setup.sh`
   and commit it. Foreman runs that script before every dispatch, so each step must be
   safe to run twice.
