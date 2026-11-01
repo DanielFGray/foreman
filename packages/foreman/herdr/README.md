@@ -54,7 +54,10 @@ together.
    panel in that stack. So clone it, point your layout's `tabs` block at the
    clone, and in the clone's `main.js` add `"foreman"` to `enabled` and a
    `panelButton("foreman", "Foreman", "mods/foreman/foreman.svg")` child
-   after the Changes one:
+   after the Changes one. To keep the panel open or closed across spaces,
+   which suits a fleet-wide view, also delete the clone's `syncPanel` method,
+   its call in `render`, and the `panels` it reads in `init`: they restore a
+   per-space choice on every space switch.
 
    ```sh
    herdr-app do mod.clone '{"name":"tabs","as":"tabs-dfg"}'
