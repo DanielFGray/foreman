@@ -24,7 +24,7 @@ together.
 1. Link the mod into the app's home, so it stays versioned with the schema:
 
    ```sh
-   ln -s ~/build/foreman/herdr/foreman ~/.config/herdr-app/mods/foreman
+   ln -s ~/build/foreman/packages/foreman/herdr/foreman ~/.config/herdr-app/mods/foreman
    ```
 
 2. Add the panel to your own layout (not a shipped one, which herdr-app
