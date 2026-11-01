@@ -19,10 +19,7 @@ export type Hold =
   | { readonly _tag: "Clean" }
   | { readonly _tag: "Held"; readonly reason: HoldReason; readonly detail: string };
 
-/** The dirty-tree hold under jj, whose `jj new` rewrites the whole working copy. */
-const DIRTY_JJ = "uncommitted changes in the working copy";
-
-/** A checkout with no branch for a landing to move, under git. */
+/** A checkout with no branch for a landing to move, so there is no branch to land on. */
 const DETACHED = "no checked-out branch (detached HEAD)";
 
 /**
@@ -57,7 +54,7 @@ const VERIFY_SCRIPT = "scripts/verify.sh";
  * Foreman shares this directory with the operator, who edits in it while the
  * fleet runs. It is the one place where agents and a person can collide, so
  * foreman asks the checkout itself whether the operator is presently working
- * there, and lands through whichever tool records that checkout's history.
+ * there, and lands through git.
  */
 export class Repository extends Context.Service<Repository>()("Repository", {
   make: Effect.gen(function* () {
@@ -96,7 +93,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       ).pipe(Effect.mapError((cause) => new RepositoryError({ directory, detail: String(cause) })));
 
     const git = (directory: string, ...args: Array<string>) => run(directory, "git", args);
-    const jj = (directory: string, ...args: Array<string>) => run(directory, "jj", args);
 
     /** The trimmed output of a command that must succeed. */
     const output = (
@@ -129,11 +125,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         ),
       );
 
-    const jjOutput = (directory: string, ...args: Array<string>) =>
-      jj(directory, ...args).pipe(
-        Effect.flatMap((result) => output(directory, "jj", result, args[0] ?? "")),
-      );
-
     const lines = (directory: string, ...args: Array<string>) =>
       gitOutput(directory, ...args).pipe(
         Effect.map((text) => text.split("\n").filter((line) => line.trim() !== "")),
@@ -147,10 +138,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * `branches` reports as `merged`, asked about one branch instead of all of
      * them.
      *
-     * Always git, as `branches` is: a colocated jj keeps real git refs, and
-     * git's HEAD follows the working copy's parent, so this is what the
-     * checkout holds under either tool. It reads no index and takes no lock,
-     * which is what lets it run ahead of everything else in a landing.
+     * Always git. It reads no index and takes no lock, which is what lets it run
+     * ahead of everything else in a landing.
      *
      * git exits 1 for a plain "no" and something else when it could not
      * answer — an unreadable ref is not evidence the branch is absent, and
@@ -241,82 +230,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
     const reproduced = (directory: string, command: string, output: string) =>
       check(directory, command).pipe(Effect.map((retry) => (retry.passed ? undefined : output)));
 
-    /** One value per revision, on its own line and nothing else. */
-    const template = (expression: string) => ["--no-graph", "-T", `${expression} ++ "\\n"`];
-
-    const revision = (directory: string, revset: string) =>
-      jjOutput(directory, "log", "-r", revset, ...template("commit_id"));
-
-    /**
-     * The bookmark foreman would land on, or why there is not exactly one.
-     *
-     * Zero means the operator is standing somewhere no bookmark names; more
-     * than one means foreman would have to guess which. The candidates are
-     * kept even when there is not exactly one, because they are the fix:
-     * deleting the stray bookmark is what unholds the project.
-     *
-     * Foreman's own branches are cut from the trunk's tip, so an author that
-     * has not committed yet leaves its bookmark on the very commit being asked
-     * about. It is never a landing target, and counting it would hold the
-     * project for as long as anyone is working in it. The names must be
-     * filtered before `heads`: a working copy that comes to rest on a foreman
-     * bookmark makes `heads` drop the trunk behind it as already-merged, and a
-     * post-filter then removes the only name left. The trunk is still nameable:
-     * it is the non-foreman bookmark that is the head behind the working copy.
-     */
-    type Trunk =
-      | { readonly _tag: "One"; readonly name: string }
-      | { readonly _tag: "None"; readonly names: ReadonlyArray<string> };
-
-    const trunkOf = (directory: string): Effect.Effect<Trunk, RepositoryError> =>
-      jjOutput(
-        directory,
-        "log",
-        "-r",
-        "::@ & bookmarks()",
-        ...template('commit_id ++ "|" ++ bookmarks'),
-      ).pipe(
-        Effect.flatMap((text): Effect.Effect<Trunk, RepositoryError> => {
-          const candidates = text.split("\n").flatMap((line) => {
-            const [commit, ...rawNames] = line.split("|");
-            const names = rawNames
-              .join("|")
-              .split(/\s+/)
-              .filter((name) => name !== "")
-              // jj suffixes a bookmark whose git ref has drifted from it.
-              .map((name) => name.replace(/\*$/, ""));
-            return commit && names.some((name) => !name.startsWith(ours)) ? [commit] : [];
-          });
-          if (candidates.length === 0) {
-            return Effect.succeed({ _tag: "None", names: [] } satisfies Trunk);
-          }
-
-          return jjOutput(
-            directory,
-            "log",
-            "-r",
-            `heads(${candidates.join(" | ")})`,
-            ...template("bookmarks"),
-          ).pipe(
-            Effect.map((heads) => {
-              const names = heads
-                .split(/\s+/)
-                .filter((name) => name !== "")
-                .map((name) => name.replace(/\*$/, ""))
-                .filter((name) => !name.startsWith(ours));
-              return names.length === 1
-                ? ({ _tag: "One", name: names[0] as string } as const)
-                : ({ _tag: "None", names } as const);
-            }),
-          );
-        }),
-      );
-
-    const noTrunk = (names: ReadonlyArray<string>): string =>
-      names.length === 0
-        ? "no bookmark behind the working copy"
-        : `${names.length} bookmark candidates behind the working copy: ${names.join(", ")}`;
-
     /**
      * What proving a landing somewhere disposable concluded.
      *
@@ -336,9 +249,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * the ground's own path free for the tool to create.
      *
      * Foreman's job, not the tool's: `git worktree add` makes the path it is
-     * given along with everything above it, and `jj workspace add` refuses one
-     * whose parent is missing. Doing it here means neither ground depends on
-     * which of the two it got.
+     * given along with everything above it, so the parent is made before the
+     * ground is added and the tool can create the rest. Doing it here means the
+     * ground depends on nothing but the tool's own rules.
      */
     const clearFor = (proving: string) =>
       fs.makeDirectory(path.dirname(proving), { recursive: true }).pipe(Effect.ignore);
@@ -555,325 +468,28 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           }
           return { _tag: "Merged", verified: proof.verified } as const;
         }),
-
-      /**
-       * The git path has no landing litter: `git merge` commits onto the
-       * checked-out branch in one atomic command, so an interruption either
-       * happens before anything or after everything.
-       */
-      sweepUnpublishedMerges: (_directory: string) => Effect.succeed<ReadonlyArray<string>>([]),
     };
-
-    const messageFor = (branch: string) => `Merge branch '${branch}'`;
-
-    /**
-     * The name jj knows the proving ground's workspace by. A workspace is
-     * named in the repository, not by its path, so recreating one at a path
-     * that was removed means forgetting the old name first.
-     */
-    const GROUND = "foreman-verify";
-
-    /**
-     * A jj workspace of the project kept for proving landings in, sitting on
-     * `base`.
-     *
-     * Re-derived like the git one. Resetting is `jj new <base>` followed by
-     * abandoning the working copy it left, which is always a merge foreman
-     * itself made and has already finished with. The tick sweep leaves it
-     * alone in the meantime, because it excludes every workspace's working
-     * copy — including this one.
-     */
-    const jjGround = (proving: string, directory: string, base: string) =>
-      Effect.gen(function* () {
-        const registered = yield* fs
-          .exists(`${proving}/.jj`)
-          .pipe(Effect.orElseSucceed(() => false));
-        if (!registered) {
-          yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
-          yield* clearFor(proving);
-          yield* jj(directory, "workspace", "forget", GROUND).pipe(Effect.ignore);
-          const added = yield* jj(
-            directory,
-            "workspace",
-            "add",
-            "--name",
-            GROUND,
-            "--revision",
-            base,
-            proving,
-          );
-          if (added.exitCode !== 0) {
-            return {
-              _tag: "Held",
-              detail: added.stderr.trim() || `jj workspace add exited ${added.exitCode}`,
-            } as const;
-          }
-          return yield* prepare(proving);
-        }
-
-        const moved = yield* jj(proving, "new", base);
-        if (moved.exitCode !== 0) {
-          return {
-            _tag: "Held",
-            detail: moved.stderr.trim() || `jj new exited ${moved.exitCode}`,
-          } as const;
-        }
-        // The commit just stepped off is not abandoned here. A proof that was
-        // applied is what the trunk now points at, and one that was not is
-        // ordinary unpublished litter — which is exactly what the tick sweep
-        // already knows how to tell apart.
-        return yield* prepare(proving);
-      });
-
-    /**
-     * The jj half of proving a landing, and the shape is the same as git's.
-     *
-     * The one difference is that jj never refuses a merge: it records the
-     * conflict and writes markers into the files, so asking `@` whether it is
-     * conflicted is the whole verdict, and a non-zero exit can only be the
-     * machine.
-     */
-    const jjProve = (
-      proving: string,
-      directory: string,
-      branch: string,
-      verify: string | undefined,
-      base: string,
-    ): Effect.Effect<Proof, RepositoryError> =>
-      Effect.gen(function* () {
-        const ready = yield* jjGround(proving, directory, base);
-        if (ready) return ready;
-
-        const merged = yield* jj(proving, "new", base, branch, "-m", messageFor(branch));
-        if (merged.exitCode !== 0) {
-          return { _tag: "Held", detail: merged.stderr.trim() || "jj new failed" } as const;
-        }
-
-        const conflicts = yield* jjOutput(proving, "log", "-r", "@", ...template("conflict"));
-        if (conflicts === "true") {
-          return {
-            _tag: "Rejected",
-            detail: `merging ${branch} into ${base} conflicts`,
-          } as const;
-        }
-
-        const commit = yield* revision(proving, "@");
-
-        if (!verify) return { _tag: "Proven", commit, verified: false } as const;
-
-        const after = yield* check(proving, verify);
-        if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
-
-        const broke = yield* reproduced(proving, verify, after.output);
-        if (broke === undefined) {
-          yield* Effect.logWarning(
-            `${verify} failed then passed in ${proving}; a flaky verification is green`,
-          );
-          return { _tag: "Proven", commit, verified: true } as const;
-        }
-
-        const restored = yield* jjGround(proving, directory, base);
-        if (restored) return restored;
-        const before = yield* check(proving, verify);
-        return before.passed
-          ? ({ _tag: "Broke", output: broke } as const)
-          : ({ _tag: "Proven", commit, verified: false } as const);
-      });
-
-    /**
-     * Landing through jj, in a checkout jj is colocated with git.
-     *
-     * jj has no checked-out branch, so the bookmark to land on is derived the
-     * same way git derives it — the branch the operator is standing on, which
-     * here means the nearest bookmark behind the working copy. `heads` drops
-     * the ones already merged into it, including foreman's own.
-     *
-     * The working copy is a commit, so "clean" is `@` being empty. That counts
-     * a new file git would call untracked, unlike the git checkout above,
-     * because under jj it is not untracked: it is already part of the
-     * working-copy commit, and a project somebody is mid-edit in is held for
-     * the same reason it is under git.
-     *
-     * Landing publishes the commit the proving ground already built and
-     * verified: the working copy steps onto it, and then the bookmark names
-     * it. Never the other way round — a working copy stranded behind its own
-     * trunk has no trunk to find, and holds the project with nothing in the
-     * fleet able to clear it.
-     */
-    const jjCheckout = {
-      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
-        Effect.all([
-          trunkOf(directory),
-          jjOutput(directory, "log", "-r", "@", ...template("empty")),
-        ]).pipe(
-          Effect.map(([trunk, empty]) =>
-            trunk._tag === "None"
-              ? ({ _tag: "Held", reason: "noBranch", detail: noTrunk(trunk.names) } as const)
-              : empty === "true"
-                ? ({ _tag: "Clean" } as const)
-                : ({ _tag: "Held", reason: "dirty", detail: DIRTY_JJ } as const),
-          ),
-        ),
-
-      merge: (
-        directory: string,
-        branch: string,
-        verify: string | undefined,
-        proving: string,
-      ): Effect.Effect<Landing, RepositoryError> =>
-        Effect.gen(function* () {
-          const trunk = yield* trunkOf(directory);
-          if (trunk._tag === "None") {
-            return { _tag: "Held", reason: "noBranch", detail: noTrunk(trunk.names) } as const;
-          }
-
-          // The bookmark names a moving target; the proof is about one commit.
-          const base = yield* revision(directory, trunk.name);
-
-          const proof = yield* jjProve(proving, directory, branch, verify, base);
-          if (proof._tag !== "Proven") return proof;
-
-          const tip = yield* revision(directory, trunk.name);
-          if (tip !== base) {
-            return {
-              _tag: "Held",
-              detail: `${trunk.name} moved while ${branch} was being verified`,
-            } as const;
-          }
-
-          // Asked again, and here rather than only at the gate, because `jj new`
-          // below rewrites the operator's directory unconditionally. Their work
-          // is a commit and survives, but it leaves their screen — and a proof
-          // takes as long as the project's suite, which is long enough to start
-          // typing in. The git path needs no such recheck: a fast-forward
-          // refuses rather than overwrites.
-          const gate = yield* jjCheckout.isFree(directory);
-          if (gate._tag !== "Clean") return gate;
-
-          // The merge already exists, in the ground, and a jj workspace shares
-          // the repository — so both of these only ever name it.
-          //
-          // The working copy moves first, and that order is the whole safety of
-          // the step. `trunkOf` reads the nearest bookmark behind `@`, so a
-          // working copy left behind a bookmark that moved past it has no trunk
-          // at all: the project holds, every later tick asks the same question,
-          // and nothing in the fleet can undo it. Publishing second cannot
-          // reach that state. An interruption between the two leaves `@` on an
-          // unpublished merge whose ancestors still include the trunk, which
-          // holds nothing up — the next tick lands the branch again and the
-          // sweep takes the merge nobody named.
-          const moved = yield* jj(directory, "new", proof.commit);
-          if (moved.exitCode !== 0) {
-            return {
-              _tag: "Held",
-              detail: moved.stderr.trim() || `jj new exited ${moved.exitCode}`,
-            } as const;
-          }
-
-          const applied = yield* jj(directory, "bookmark", "set", trunk.name, "-r", proof.commit);
-          if (applied.exitCode !== 0) {
-            return {
-              _tag: "Held",
-              detail: applied.stderr.trim() || `jj bookmark set exited ${applied.exitCode}`,
-            } as const;
-          }
-          return { _tag: "Merged", verified: proof.verified } as const;
-        }),
-
-      /**
-       * Abandons the merges a landing killed mid-flight leaves behind.
-       *
-       * A jj landing is three steps — `jj new` creates the merge and moves the
-       * working copy onto it, verify runs, and only then does `bookmark set`
-       * publish it. Killed between the first and the last — by a restart of
-       * the process that hosts the dispatcher —
-       * the merge sits as an anonymous head whose parents are the trunk and a
-       * foreman branch, and nothing ever names it. The retry lands the branch
-       * honestly, so the leftover commit is pure litter.
-       *
-       * Only that shape is touched: an anonymous head that is a clean merge of
-       * exactly two parents and whose description is the one `merge` writes.
-       * Abandoning it loses nothing — an empty merge's tree is derived from its
-       * parents, and the branch still holds the work — so the guard is about
-       * leaving the operator's own anonymous merges alone, not about keeping
-       * anything that would be lost. The working copy is excluded outright: it
-       * is the one anonymous head a person may be standing on, and abandoning
-       * it would move the ground under their checkout.
-       */
-      sweepUnpublishedMerges: (directory: string) =>
-        Effect.gen(function* () {
-          const heads = yield* jjOutput(
-            directory,
-            "log",
-            "-r",
-            "heads(all()) & ~bookmarks() & ~working_copies()",
-            ...template(
-              'commit_id ++ "|" ++ parents.len() ++ "|" ++ empty ++ "|" ++ description.first_line()',
-            ),
-          );
-          const litter = heads.split("\n").flatMap((line) => {
-            const [id, parents, empty, description] = line.split("|");
-            return id &&
-              parents === "2" &&
-              empty === "true" &&
-              description?.startsWith("Merge branch 'foreman/")
-              ? [id]
-              : [];
-          });
-
-          yield* Effect.forEach(
-            litter,
-            (id) =>
-              jj(directory, "abandon", id).pipe(
-                Effect.flatMap((result) =>
-                  result.exitCode === 0
-                    ? Effect.void
-                    : Effect.fail(
-                        new RepositoryError({
-                          directory,
-                          detail:
-                            result.stderr.trim() || `jj abandon ${id} exited ${result.exitCode}`,
-                        }),
-                      ),
-                ),
-              ),
-            { discard: true },
-          );
-          return litter;
-        }),
-    };
-
-    /**
-     * Which tool is keeping this checkout's history, read from the directory
-     * rather than configured.
-     *
-     * A colocated repository has both, and the difference is not cosmetic: git
-     * commands still read it correctly — the refs and worktrees are real — but
-     * a `git merge` into it commits onto a HEAD jj detaches, leaving the
-     * operator's bookmark behind. So the reads stay on git and only the two
-     * questions that depend on where the operator is standing change hands.
-     */
-    const checkoutAt = (directory: string) =>
-      fs.exists(`${directory}/.jj`).pipe(
-        Effect.map((colocated) => (colocated ? jjCheckout : gitCheckout)),
-        Effect.mapError((cause) => new RepositoryError({ directory, detail: String(cause) })),
-      );
 
     return {
       /**
        * Whether the checkout is free for foreman to work against, and if not,
        * why.
        *
-       * Busy means the checkout has no branch for a landing to move — under
-       * git a detached HEAD, under jj no bookmark behind the working copy — or,
-       * under jj only, the operator is mid-edit: a non-empty working-copy
-       * commit, which `jj new` would carry away. Uncommitted work under git
-       * holds only the landings that would write the same paths, which `merge`
-       * asks per branch. `detail` names the cause, so the operator can see
-       * whether the hold clears itself or needs a hand-run command.
+       * Busy means the checkout has no branch for a landing to move — a
+       * detached HEAD — or the operator is mid-edit: a non-empty working tree,
+       * which a landing would carry away. Uncommitted work under git holds
+       * only the landings that would write the same paths, which `merge` asks
+       * per branch. `detail` names the cause, so the operator can see whether
+       * the hold clears itself or needs a hand-run command.
        */
-      isFree: (directory: string) =>
-        checkoutAt(directory).pipe(Effect.flatMap((checkout) => checkout.isFree(directory))),
+      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
+        git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
+          Effect.map((head) =>
+            head.exitCode === 0
+              ? ({ _tag: "Clean" } as const)
+              : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
+          ),
+        ),
 
       /**
        * Whether a task worktree holds anything the agent that lived in it made.
@@ -908,8 +524,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        *
        * A commit rather than the trunk's name, because the operator's branch
        * moves while a review runs, and the question is what this author wrote.
-       * Always git: worktrees are git's whatever records the project, and a
-       * colocated jj keeps real git refs for its bookmarks.
+       * Always git: worktrees are git's whatever records the project.
        */
       base: (directory: string, branch: string) =>
         gitOutput(directory, "merge-base", "HEAD", branch).pipe(
@@ -1009,9 +624,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * refuses one a worktree still has checked out — which is picked up on a
        * later tick, once that workspace closes. A refusal is an answer, not a
        * failure, so it comes back as `false` rather than as an error.
-       *
-       * A colocated jj imports git's refs at the start of every command, so a
-       * branch deleted here is a bookmark gone there; it is not resurrected.
        */
       remove: (directory: string, branch: string) =>
         git(directory, "branch", "--delete", branch).pipe(
@@ -1022,9 +634,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Every worktree git has registered for the checkout, with the branch
        * each one has out.
        *
-       * Always git: a task worktree is a git worktree in a colocated jj
-       * repository too, and this is the durable record a task's work is found
-       * by once nothing is running in it.
+       * Always git: a task worktree is a git worktree, and this is the durable
+       * record a task's work is found by once nothing is running in it.
        */
       worktrees: (directory: string) =>
         gitOutput(directory, "worktree", "list", "--porcelain").pipe(Effect.map(worktreesOf)),
@@ -1180,24 +791,10 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // long as the operator kept editing.
           if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
 
-          const checkout = yield* checkoutAt(directory);
-          const gate = yield* checkout.isFree(directory);
+          const gate = yield* gitCheckout.isFree(directory);
           if (gate._tag !== "Clean") return gate;
-          return yield* checkout.merge(directory, branch, verify, proving);
+          return yield* gitCheckout.merge(directory, branch, verify, proving);
         }),
-
-      /**
-       * Clears the jj commits a landing interrupted before publishing left
-       * behind, in every colocated checkout. Nothing to do in a checkout git
-       * is keeping: its merge is atomic, so no landing ever leaves an orphan
-       * there. Called every tick, like the branch sweep — the litter appears
-       * whenever a restart kills the dispatcher mid-merge, and only the world
-       * records where.
-       */
-      sweepUnpublishedMerges: (directory: string) =>
-        checkoutAt(directory).pipe(
-          Effect.flatMap((checkout) => checkout.sweepUnpublishedMerges(directory)),
-        ),
     } as const;
   }),
 }) {
