@@ -12,6 +12,7 @@ import {
   Path,
   Queue,
   Ref,
+  Stream,
   SubscriptionRef,
   Layer,
 } from "effect";
@@ -220,6 +221,51 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         Effect.catchCause(Effect.logWarning),
       );
 
+    /**
+     * Puts the policy file's current contents into the published reading, and
+     * says whether that changed it. A tick spends seconds reading the world,
+     * and the operator's click should not wait for it: the policy is one local
+     * file, so it is published on its own. The tick still reads the file itself
+     * for the decisions it makes.
+     */
+    const publishPolicy = Effect.gen(function* () {
+      const { policy, error } = yield* readPolicy(policyPath()).pipe(
+        Effect.provideContext(platform),
+      );
+      const text = (p: Policy, e: string | undefined) => JSON.stringify([p, e]);
+      const before = yield* SubscriptionRef.get(state);
+      if (text(before.policy, before.policyError) === text(policy, error)) return false;
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        policy,
+        policyError: error,
+      }));
+      return true;
+    });
+
+    /**
+     * Publishes each change to the policy file as it happens, then wakes the
+     * loop so the next tick acts on it. The directory is watched, not the
+     * file, because `updatePolicy` replaces the file by rename. A watcher that
+     * cannot start is logged and costs only the delay: the poll still reads
+     * the file.
+     */
+    const watchPolicy = Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const paths = yield* Path.Path;
+      const file = policyPath();
+      yield* fs.makeDirectory(paths.dirname(file), { recursive: true });
+      yield* fs.watch(paths.dirname(file)).pipe(
+        Stream.filter((event) => paths.basename(event.path) === paths.basename(file)),
+        Stream.runForEach(() =>
+          publishPolicy.pipe(Effect.flatMap((changed) => (changed ? nudge : Effect.void))),
+        ),
+      );
+    }).pipe(
+      Effect.provideContext(platform),
+      Effect.catchCause((cause) => Effect.logWarning("policy watcher stopped", cause)),
+    );
+
     /** Records that a grant took on a task, once the step it allowed has run. */
     const admitted = (given: Permit, task: string) =>
       given._tag === "Granted" && given.admits
@@ -306,6 +352,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const current = yield* interpret(observation, providers);
       yield* SubscriptionRef.set(state, current);
+      // The file may have changed after this reading took its copy; the
+      // watcher already published that change, and this set replaced it.
+      yield* publishPolicy;
       return { current, providers };
     });
 
@@ -2031,6 +2080,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* Effect.logInfo(
           `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
         );
+        yield* Effect.forkScoped(watchPolicy);
         return yield* tick.pipe(
           Effect.andThen(
             Effect.raceFirst(

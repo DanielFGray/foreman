@@ -60,7 +60,9 @@ included; slots stay fleet-wide. `foreman policy` and the panel write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
-restart of the host is not an operator.
+restart of the host is not an operator. The dispatcher also watches the file
+and publishes a change at once, outside the tick, because a tick can take
+seconds and the operator's click should show in the reading before it ends.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything

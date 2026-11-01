@@ -3,7 +3,8 @@ import { BunServices } from "@effect/platform-bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, Option, SubscriptionRef } from "effect";
+import { Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
+import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
@@ -1351,5 +1352,36 @@ describe("a usage wall", () => {
     expect(world.tasks.get("ts-quoted")?.labels.some((label) => label.startsWith("walled:"))).toBe(
       false,
     );
+  });
+});
+
+describe("a policy change", () => {
+  test("is published within a second, not at the next poll", async () => {
+    usePolicy({ ...ALLOWED, paused: true });
+    const waited = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dispatcher = yield* Dispatcher;
+          yield* Effect.forkScoped(dispatcher.run);
+          const read = SubscriptionRef.get(dispatcher.state);
+          // The first tick has published once the reading carries a time; the
+          // next one is a full poll interval (60 s) away.
+          yield* read.pipe(
+            Effect.filterOrFail((s) => s.observedAt !== undefined),
+            Effect.retry(Schedule.spaced("20 millis")),
+          );
+          const started = Date.now();
+          yield* updatePolicy(policyPath(), (policy) => ({ ...policy, slots: 7 }));
+          yield* read.pipe(
+            Effect.filterOrFail((s) => s.policy.slots === 7),
+            Effect.retry(Schedule.spaced("20 millis")),
+            Effect.timeout("3 seconds"),
+          );
+          return Date.now() - started;
+        }),
+      ).pipe(Effect.provide(layerFor(new World()))),
+    );
+
+    expect(waited).toBeLessThan(1000);
   });
 });
