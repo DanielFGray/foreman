@@ -6,7 +6,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect
 const ours = "foreman/";
 
 /** Why a checkout is not free to work against. */
-export type HoldReason = "dirty" | "noBranch" | "unreadable" | "ambiguous";
+export type HoldReason = "dirty" | "noBranch" | "busy" | "unreadable" | "ambiguous";
 
 /**
  * Whether a checkout is free to work against, and if not, why.
@@ -17,7 +17,16 @@ export type HoldReason = "dirty" | "noBranch" | "unreadable" | "ambiguous";
  */
 export type Hold =
   | { readonly _tag: "Clean" }
-  | { readonly _tag: "Held"; readonly reason: HoldReason; readonly detail: string };
+  | {
+      readonly _tag: "Held";
+      readonly reason: HoldReason;
+      readonly detail: string;
+      /**
+       * For a `busy` hold, the task branch the checkout has out. The hold is
+       * that task's own workspace, so it holds every task but that one.
+       */
+      readonly branch?: string;
+    };
 
 /** A checkout with no branch for a landing to move, so there is no branch to land on. */
 const DETACHED = "no checked-out branch (detached HEAD)";
@@ -170,6 +179,31 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               } as const);
         }),
       );
+
+    /** The short name of the branch HEAD names, or undefined for a detached HEAD. */
+    const headBranch = (directory: string) =>
+      git(directory, "symbolic-ref", "--quiet", "--short", "HEAD").pipe(
+        Effect.map((head) => (head.exitCode === 0 ? head.stdout.trim() : undefined)),
+      );
+
+    /**
+     * The revision a checkout's work lands on: HEAD, unless the checkout has a
+     * task's branch out.
+     *
+     * A project in branch mode checks `foreman/<id>` out in the operator's
+     * checkout, so for that whole run HEAD is the task's own work. Read as the
+     * trunk, it makes the task's branch read as merged and empty and gives its
+     * reviewer an empty diff. The branch it lands on is the task branch's
+     * upstream, which `checkoutBranch` set, so git records it and foreman
+     * remembers nothing. A task branch with no upstream fails here: the
+     * checkout was put on it by hand, and foreman cannot say where it lands.
+     */
+    const trunkOf = (directory: string) =>
+      Effect.gen(function* () {
+        const head = yield* headBranch(directory);
+        if (head === undefined || !head.startsWith(ours)) return "HEAD";
+        return yield* gitOutput(directory, "rev-parse", "--abbrev-ref", `${head}@{upstream}`);
+      });
 
     const contains = (directory: string, branch: string) =>
       git(directory, "merge-base", "--is-ancestor", branch, "HEAD").pipe(
@@ -469,15 +503,35 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * edits stop exactly the branches that change the same files, and `merge`
      * finds those per branch. `detail` names the cause, so the operator can see
      * whether the hold clears itself or needs a hand-run command.
+     *
+     * A checkout with a task's branch out is `busy`: that task works in the
+     * checkout itself (branch mode), so no other agent starts there and no
+     * other landing moves it, until its own landing checks the operator's
+     * branch out again. `clean` asks for an empty tree as well, which a
+     * branch-mode author needs: its first act is to switch branches, and git
+     * carries uncommitted edits across a switch into the agent's commits.
      */
-    const isFree = (directory: string): Effect.Effect<Hold, RepositoryError> =>
-      git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
-        Effect.map((head) =>
-          head.exitCode === 0
-            ? ({ _tag: "Clean" } as const)
-            : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
-        ),
-      );
+    const isFree = (directory: string, clean = false): Effect.Effect<Hold, RepositoryError> =>
+      Effect.gen(function* () {
+        const head = yield* headBranch(directory);
+        if (head === undefined) return { _tag: "Held", reason: "noBranch", detail: DETACHED };
+        if (head.startsWith(ours)) {
+          return {
+            _tag: "Held",
+            reason: "busy",
+            branch: head,
+            detail: `${head} is checked out here; other work waits until it lands`,
+          };
+        }
+        if (clean && (yield* status(directory, "all")) !== "") {
+          return {
+            _tag: "Held",
+            reason: "dirty",
+            detail: "uncommitted changes; a branch-mode task starts only from a clean checkout",
+          };
+        }
+        return { _tag: "Clean" };
+      });
 
     return {
       isFree,
@@ -530,7 +584,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Always git: worktrees are git's whatever records the project.
        */
       base: (directory: string, branch: string) =>
-        gitOutput(directory, "merge-base", "HEAD", branch).pipe(
+        trunkOf(directory).pipe(
+          Effect.flatMap((trunk) => gitOutput(directory, "merge-base", trunk, branch)),
           Effect.map((sha) => (sha === "" ? undefined : sha)),
           Effect.orElseSucceed(() => undefined),
         ),
@@ -565,6 +620,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        */
       branches: (directory: string) =>
         Effect.gen(function* () {
+          const onto = yield* trunkOf(directory);
           const refs = yield* lines(
             directory,
             "for-each-ref",
@@ -575,12 +631,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             yield* lines(
               directory,
               "for-each-ref",
-              "--merged=HEAD",
+              `--merged=${onto}`,
               "--format=%(refname:short)",
               `refs/heads/${ours}`,
             ),
           );
-          const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", "HEAD"));
+          const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", onto));
 
           const overtaken = yield* Effect.forEach(
             refs.flatMap((ref) => {
@@ -588,7 +644,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               return tip && branch && !merged.has(branch) && !trunk.has(tip) ? [branch] : [];
             }),
             (branch) =>
-              git(directory, "merge-tree", "--write-tree", "HEAD", branch).pipe(
+              git(directory, "merge-tree", "--write-tree", onto, branch).pipe(
                 // 0 is a clean merge and 1 is conflicts; anything else means
                 // merge-tree could not answer, which is not evidence the branch
                 // would merge — but it is not a conflict either, so it reads as
@@ -669,6 +725,47 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               ? ["worktree", "add", path, branch]
               : ["worktree", "add", "-b", branch, path, "HEAD"]),
           );
+        }),
+
+      /**
+       * Puts the operator's checkout itself on a task's branch, for a project
+       * in branch mode, cutting the branch from HEAD when it does not exist.
+       *
+       * The branch HEAD was on becomes the task branch's upstream. That is how
+       * every later step finds where the task lands (`trunkOf`), and how
+       * landing returns the checkout to it, with nothing kept outside git.
+       * Refuses a dirty tree, because git would carry the operator's edits
+       * onto the task's branch and into the agent's commits.
+       */
+      checkoutBranch: (directory: string, branch: string) =>
+        Effect.gen(function* () {
+          const onto = yield* headBranch(directory);
+          if (onto === undefined || onto.startsWith(ours)) {
+            return yield* new RepositoryError({
+              directory,
+              detail: `cannot put the checkout on ${branch}: it is on ${onto ?? "no branch"}`,
+            });
+          }
+          if ((yield* status(directory, "all")) !== "") {
+            return yield* new RepositoryError({
+              directory,
+              detail: `cannot put the checkout on ${branch}: it has uncommitted changes`,
+            });
+          }
+          const exists = yield* git(
+            directory,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            `refs/heads/${branch}`,
+          );
+          yield* gitOutput(
+            directory,
+            ...(exists.exitCode === 0
+              ? ["checkout", "--quiet", branch]
+              : ["checkout", "--quiet", "-b", branch]),
+          );
+          yield* gitOutput(directory, "branch", "--quiet", `--set-upstream-to=${onto}`, branch);
         }),
 
       /**
@@ -798,6 +895,22 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         message: string,
       ) =>
         Effect.gen(function* () {
+          // A branch-mode task has its branch out in this checkout. Landing it
+          // starts by checking the operator's branch out again, so every step
+          // below runs against the operator's branch exactly as for a
+          // worktree. The switch needs a clean tree: git would carry leftover
+          // edits onto the operator's branch.
+          if ((yield* headBranch(directory)) === branch) {
+            if ((yield* status(directory, "all")) !== "") {
+              return {
+                _tag: "Held",
+                reason: "dirty",
+                detail: `uncommitted changes on ${branch}, which must be checked out of this checkout to land`,
+              } as const;
+            }
+            yield* gitOutput(directory, "checkout", "--quiet", yield* trunkOf(directory));
+          }
+
           // Asked before the clean gate, because a checkout that already has
           // the commits is not going to be written to and its cleanliness is
           // beside the point. Holding here would strand the task exactly as

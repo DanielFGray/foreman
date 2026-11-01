@@ -645,3 +645,97 @@ describe("Repository's git", () => {
     }
   });
 });
+
+describe("Repository in branch mode", () => {
+  const task = "foreman/ts-branch";
+
+  /** A fresh checkout on `trunk` with one commit, and a git runner for it. */
+  const checkout = async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-branch-mode-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    await sh("init", "-q", "-b", "trunk");
+    await writeFile(join(here, "a.txt"), "a\n");
+    await sh("add", "a.txt");
+    await sh("commit", "-qm", "initial");
+    const head = async () => (await sh("symbolic-ref", "--short", "HEAD")).stdout.toString().trim();
+    return { here, sh, head };
+  };
+
+  const ofCheckout = (here: string) => ({
+    checkoutBranch: () => run((repository) => repository.checkoutBranch(here, task)),
+    isFree: (cleanTree = false) => run((repository) => repository.isFree(here, cleanTree)),
+    base: () => run((repository) => repository.base(here, task)),
+    branches: () => run((repository) => repository.branches(here)),
+    merge: () =>
+      run((repository) =>
+        repository.merge(here, task, undefined, `${here}.grounds/verify`, `Merge ${task}`),
+      ),
+  });
+
+  test("a dirty checkout holds a branch-mode start, and refuses the checkout with a reason", async () => {
+    const { here, head } = await checkout();
+    const repo = ofCheckout(here);
+    try {
+      await writeFile(join(here, "notes.md"), "operator's\n");
+      expect(await repo.isFree()).toEqual(clean);
+      expect(await repo.isFree(true)).toMatchObject({ _tag: "Held", reason: "dirty" });
+      await expect(repo.checkoutBranch()).rejects.toThrow(/uncommitted changes/);
+      expect(await head()).toBe("trunk");
+    } finally {
+      await rm(here, { recursive: true, force: true });
+    }
+  });
+
+  test("the task branch holds the project busy, reads as work, and lands back onto the operator's branch", async () => {
+    const { here, sh, head } = await checkout();
+    const repo = ofCheckout(here);
+    try {
+      const fork = (await sh("rev-parse", "HEAD")).stdout.toString().trim();
+      await repo.checkoutBranch();
+      expect(await head()).toBe(task);
+      expect(await repo.isFree()).toEqual({
+        _tag: "Held",
+        reason: "busy",
+        branch: task,
+        detail: `${task} is checked out here; other work waits until it lands`,
+      });
+
+      await writeFile(join(here, "b.txt"), "b\n");
+      await sh("add", "b.txt");
+      await sh("commit", "-qm", "work");
+
+      // HEAD is the task's own work; the trunk is its upstream.
+      expect(await repo.base()).toBe(fork);
+      expect(await repo.branches()).toEqual([
+        { branch: task, merged: false, empty: false, stale: undefined },
+      ]);
+
+      expect(await repo.merge()).toEqual({ _tag: "Merged", verified: false });
+      expect(await head()).toBe("trunk");
+      expect(await repo.isFree()).toEqual(clean);
+      expect((await sh("log", "-1", "--format=%s")).stdout.toString().trim()).toBe(
+        `Merge ${task}`,
+      );
+    } finally {
+      await rm(here, { recursive: true, force: true });
+      await rm(`${here}.grounds`, { recursive: true, force: true });
+    }
+  });
+
+  test("a landing holds while the task branch has uncommitted edits, and stays on it", async () => {
+    const { here, sh, head } = await checkout();
+    const repo = ofCheckout(here);
+    try {
+      await repo.checkoutBranch();
+      await writeFile(join(here, "b.txt"), "b\n");
+      await sh("add", "b.txt");
+      await sh("commit", "-qm", "work");
+      await writeFile(join(here, "left.txt"), "leftover\n");
+      expect(await repo.merge()).toMatchObject({ _tag: "Held", reason: "dirty" });
+      expect(await head()).toBe(task);
+    } finally {
+      await rm(here, { recursive: true, force: true });
+    }
+  });
+});
