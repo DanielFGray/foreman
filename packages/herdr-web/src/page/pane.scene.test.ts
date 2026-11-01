@@ -1,0 +1,207 @@
+import { Option } from "effect"
+import { all, click, Command, expect, expectAll, given, Mount, role, scene, selector, Subscription } from "foldkit/scene"
+import { test } from "vitest"
+import type { Fleet, Layout, Terminal } from "../shared/Fleet.ts"
+import { SaveRecent, SaveSelection, SaveViewPicks, SaveZoom, SplitPane } from "./commands.ts"
+import { KeepTypingFocus } from "./keys.ts"
+import { init, update, view } from "./main.ts"
+import { Bridge, Message, Selection, type ViewPick } from "./model.ts"
+import { type AgentView, DEFAULT_SETTINGS } from "./settings.ts"
+import { LiveTerminal } from "./terminal.ts"
+
+const shell: Terminal = {
+  address: "t2",
+  name: Option.none(),
+  title: Option.none(),
+  cwd: "/",
+  state: "live",
+  status: Option.none(),
+  foreground: Option.some({ name: "zsh", pid: 2, argv: ["zsh"], cwd: "/" }),
+  labels: {},
+  status_ms: Option.none(),
+  created_ms: 0,
+  records: Option.none(),
+  parent: Option.none(),
+  cols: 80,
+  rows: 24,
+}
+
+const claude: Terminal = {
+  ...shell,
+  address: "t1",
+  foreground: Option.some({ name: "claude", pid: 1, argv: ["claude"], cwd: "/" }),
+  status: Option.some({ state: "idle", app: Option.some("claude-code"), msg: Option.none(), kind: Option.none(), progress: Option.none() }),
+}
+
+const block = (terminal: string): Layout =>
+  ({ _tag: "Block", type: "block", id: `p-${terminal}`, size: Option.none(), content: { _tag: "Terminal", terminal } })
+
+const fleet: Fleet = {
+  connected: true,
+  git: {},
+  terminals: [claude, shell],
+  machines: [
+    {
+      name: "here",
+      isLocal: true,
+      state: "connected",
+      spaces: [
+        {
+          id: "s1",
+          name: "work",
+          folder: "/",
+          tabs: [{ id: "a", name: "", root: { _tag: "Split", type: "row", id: "r", size: Option.none(), children: [block("t1"), block("t2")] } }],
+        },
+      ],
+    },
+  ],
+}
+
+const remembered = Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") })
+
+test("a pane shows its terminal first, and only an agent's pane offers a chat, with the prompt inside it", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expectAll(all.selector(".terminal")).toHaveCount(2),
+    expect(role("textbox", { name: "Prompt" })).not.toExist(),
+    expectAll(all.role("button", { name: "chat" })).toHaveCount(1),
+    click(role("button", { name: "chat" })),
+    Command.resolve(SaveViewPicks, Message.CompletedSaveViewPicks()),
+    // The chat takes the terminal's place, which lets go of it.
+    Mount.expectEnded(LiveTerminal),
+    expect(selector(".chat-view .prompt")).toExist(),
+    expectAll(all.selector(".terminal")).toHaveCount(1),
+  )
+})
+
+test("a reload opens on the remembered tab, and waits for the bridge to show it", () => {
+  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] })
+  scene({ update, view }, given(model), expect(selector(".workspace")).toContainText("Waiting for the bridge."), expect(selector(".fleet")).toHaveClass("folded"))
+})
+
+test("zoom fills the window with the pane whose button was clicked, and the page remembers it", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expect(selector(".app.zoomed")).not.toExist(),
+    click(selector(".pane:not(.focused) .zoom-chip")),
+    Command.expectHas(SaveZoom({ isZoomed: true })),
+    Command.resolveAll([SaveZoom, Message.CompletedSaveZoom()], [SaveSelection, Message.CompletedSaveSelection()], [SaveRecent, Message.CompletedSaveRecent()]),
+    expect(selector(".app.zoomed")).toExist(),
+    // The click reaches the pane head too, so the zoomed pane is the one clicked.
+    expect(selector(".pane.focused .name")).toHaveText("zsh"),
+    expect(role("button", { name: "zoom", pressed: true })).toExist(),
+    click(selector(".pane.focused .zoom-chip")),
+    Command.expectExact(SaveZoom({ isZoomed: false })),
+    Command.resolve(SaveZoom, Message.CompletedSaveZoom()),
+    expect(selector(".app.zoomed")).not.toExist(),
+  )
+})
+
+test("the pane menu holds the pane's tools, closes on a pick, and leaves a close to confirm in the head", () => {
+  scene(
+    { update, view },
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    Mount.resolveAll(
+      [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+      [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
+      [LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })],
+    ),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-menu-button")),
+    expect(selector(".pane.focused .pane-tools.open")).toExist(),
+    expect(selector(".pane:not(.focused) .pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-tools [aria-label=\"split right\"]")),
+    Command.expectExact(SplitPane({ pane: "p-t1", direction: "right" })),
+    Command.resolve(SplitPane, Message.FailedPaneAction({ reason: "no room" })),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    click(selector(".pane.focused .pane-menu-button")),
+    click(selector(".pane.focused .pane-tools [aria-label=\"close the pane\"]")),
+    expect(selector(".pane-tools.open")).not.toExist(),
+    expect(selector(".pane.focused .pane-head .pane-actions.confirming")).toContainText("end it"),
+    expect(selector(".pane.focused .pane-tools .pane-actions")).not.toExist(),
+    click(role("button", { name: "keep the pane" })),
+    expect(selector(".pane-actions.confirming")).not.toExist(),
+  )
+})
+
+const opened = (agentView: AgentView, viewPicks: ReadonlyArray<ViewPick>) => init({ settings: { ...DEFAULT_SETTINGS, agentView }, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks }).model
+
+/** The fleet as the bridge sends it, after the page opens. */
+const arrived = (terminals: ReadonlyArray<Terminal>) => Subscription.emit(Message.ReceivedFleet({ fleet: { ...fleet, terminals } }))
+
+const live = (...addresses: ReadonlyArray<string>) =>
+  Mount.resolveAll(
+    [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
+    ...addresses.map((address) => [LiveTerminal, Message.ChangedLink({ address, link: { _tag: "Live" } })] as const),
+  )
+
+// `claude` started again in the same terminal: another process.
+const restarted: Terminal = { ...claude, foreground: Option.some({ name: "claude", pid: 9, argv: ["claude"], cwd: "/" }) }
+
+test("a view picked for an agent is kept for its run and for its space", () => {
+  scene(
+    { update, view },
+    given(opened("run", [])),
+    arrived([claude, shell]),
+    live("t1", "t2"),
+    click(role("button", { name: "chat" })),
+    Command.expectHas(
+      SaveViewPicks({
+        viewPicks: [
+          { scope: "run:t1:1", view: "Chat" },
+          { scope: "space:here:s1", view: "Chat" },
+        ],
+      }),
+    ),
+    Command.resolve(SaveViewPicks, Message.CompletedSaveViewPicks()),
+    Mount.expectEnded(LiveTerminal),
+    click(role("button", { name: "terminal", pressed: false })),
+    Command.expectHas(
+      SaveViewPicks({
+        viewPicks: [
+          { scope: "run:t1:1", view: "Terminal" },
+          { scope: "space:here:s1", view: "Terminal" },
+        ],
+      }),
+    ),
+    Command.resolve(SaveViewPicks, Message.CompletedSaveViewPicks()),
+    Mount.resolve(LiveTerminal, Message.ChangedLink({ address: "t2", link: { _tag: "Live" } })),
+    expectAll(all.selector(".terminal")).toHaveCount(2),
+  )
+})
+
+test("by run, a reloaded page shows the chat picked for the agent that still runs, and the terminal for a new run", () => {
+  const picks = [{ scope: "run:t1:1", view: "Chat" }] as const
+  scene({ update, view }, given(opened("run", picks)), arrived([claude, shell]), live("t2"), expect(selector(".chat-view")).toExist())
+  scene({ update, view }, given(opened("run", picks)), arrived([restarted, shell]), live("t1", "t2"), expect(selector(".chat-view")).not.toExist())
+})
+
+test("by space, every agent in the space opens in the view last picked there", () => {
+  scene({ update, view }, given(opened("space", [{ scope: "space:here:s1", view: "Chat" }])), arrived([restarted, shell]), live("t2"), expect(selector(".chat-view")).toExist())
+  scene({ update, view }, given(opened("space", [{ scope: "space:here:s9", view: "Chat" }])), arrived([restarted, shell]), live("t1", "t2"), expect(selector(".chat-view")).not.toExist())
+})
+
+test("always chat opens every agent as a chat, and a shell on screen stays a terminal when an agent starts in it", () => {
+  scene({ update, view }, given(opened("chat", [])), arrived([claude, shell]), live("t2"), expect(selector(".chat-view")).toExist())
+  scene(
+    { update, view },
+    given(opened("chat", [])),
+    arrived([{ ...shell, address: "t1" }, shell]),
+    live("t1", "t2"),
+    Subscription.emit(Message.ReceivedFleet({ fleet: { ...fleet, terminals: [claude, shell] } })),
+    expect(selector(".chat-view")).not.toExist(),
+    expectAll(all.selector(".terminal")).toHaveCount(2),
+  )
+})

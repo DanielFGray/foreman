@@ -1,0 +1,99 @@
+# herdr-web
+
+A browser view of your [herdr](https://github.com/herdrdev/herdr-app) terminals, for a desk or a phone.
+
+![herdr-web on a desk: the spaces sidebar, a Claude Code pane and the quota bar](docs/screenshot.png)
+
+It shows the spaces, tabs and panes of your herdr-app window, live:
+
+- Type into any terminal, or read a Claude Code agent's conversation as a chat and answer it. An OpenCode pane shows its conversation as a chat too, read from OpenCode's database with `sqlite3` on the pane's machine; until OpenCode's title or status points to one session, the chat says it does not know which session the pane shows.
+- Answer an agent's permission prompts and questions from its chat: tap a choice, or type its number.
+- Send messages while an agent works: they wait in a queue and go when its turn ends. "Send now" hands one over at once. A message never goes while the agent's input box in its terminal holds text you typed there. When the box is empty, the chat prompt shows the agent's suggested next prompt.
+- Type `/` in a Claude Code chat prompt to see the commands that match: the skills and commands Claude Code reads for the pane's folder (yours, the project's and enabled plugins'), and a few built-ins. A tap writes the command into the prompt and sends nothing. The terminal's own `/` menu has the full list.
+- See which agents are working, waiting for you, or done, and for how long, in the sidebar and the tabs.
+- Open any space, tab, pane or setting by name: press Ctrl+K (Cmd+K on a Mac).
+- Split and close panes, open and close tabs, and drag spaces into a new order, with the herdr-app window open or closed. The bridge writes the change to herdr-app's layout in herdr-core, so an open window shows it too.
+- Open a space in a folder on any machine, with a program such as `claude` in its first pane. Rename a space, or close it after the page says what it ends.
+- From a space in a git repository, check out a new or existing branch as a new space, open its other checkouts, or remove a clean one. Checkouts go in `~/.herdr/worktrees`, where herdr-app puts its own; removal never forces and keeps the branch.
+- Each Claude Code pane names the model it answers with, such as "Opus 5.5", from its transcript. A click on the name picks another model through `/model`.
+- On a phone, the ⋯ soft key opens a Send keys sheet: any key hc can send (Esc, Tab, arrows, F1–F12, one character) with Ctrl, Alt, Shift or Super, shown before it goes. Pin a key to the soft-key row, then reorder, remove or restore the row; each browser keeps its own.
+- A tap on a web address in a terminal, or a Ctrl or Cmd click, shows the whole address first, with Open and Copy. Only http and https addresses open.
+- Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
+- Run the foreman fleet from **Foreman** at the bottom of the sidebar. It shows the same reading as foreman's herdr-app panel. Pause or resume the fleet, choose which steps it takes by itself and how many agents may work, and revoke grants. Launch a queued task on a rung you pick, allow one review or landing, and run each task's own commands. Kill, close and release take a second click. The bridge runs the `foreman` on its PATH. It reads the fleet again after each command, so a change shows even when no daemon runs.
+- On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
+
+herdr-web is a bridge, a small Bun server on the computer that runs herdr. The page talks to the bridge, and the bridge talks to herdr-core, which also keeps herdr-app's layout.
+
+## Requirements
+
+- [Bun](https://bun.sh) 1.4 or later.
+- [herdr-app](https://github.com/herdrdev/herdr-app) and [herdr-core](https://github.com/herdrdev/herdr-core), running on the same computer. The herdr-app installer also installs herdr-core.
+- Linux. The bridge finds herdr-core's socket in `$XDG_RUNTIME_DIR`.
+- Optional: fontconfig (`fc-list`), so that a phone can use the desktop's fonts.
+
+## Setup
+
+```sh
+git clone https://github.com/DanielFGray/herdr-web
+cd herdr-web
+bun install
+bun run build
+bun run start
+```
+
+Open http://127.0.0.1:4180.
+
+`bun run build` builds the page into `dist/`, and the bridge serves it from there. Build again after you change the page.
+
+## Use it from your phone with Tailscale
+
+The bridge listens only on `127.0.0.1`. There is no login, and the bridge can type into your shells, so do not put it on a network that other people use. [Tailscale](https://tailscale.com) gives your own devices a private way in.
+
+1. Let Tailscale serve the bridge over HTTPS to your tailnet only:
+
+   ```sh
+   tailscale serve --bg --https=8443 http://127.0.0.1:4180
+   ```
+
+   `tailscale serve status` shows the address, such as `https://my-computer.my-tailnet.ts.net:8443`.
+
+2. Start the bridge, and tell it to accept that name:
+
+   ```sh
+   HERDR_WEB_HOSTS=my-computer.my-tailnet.ts.net:8443 bun run start
+   ```
+
+   The bridge refuses a request that names a host it does not know. This stops a web page from reaching it through DNS rebinding, a trick where a page gets a request sent to your computer under the page's own name.
+
+3. Open `https://my-computer.my-tailnet.ts.net:8443` on any device on your tailnet.
+
+`tailscale serve --bg` keeps the rule after a reboot. To remove it, run `tailscale serve --https=8443 off`.
+
+## Settings
+
+The bridge reads these environment variables:
+
+| Variable | Default | Use |
+| --- | --- | --- |
+| `HERDR_WEB_PORT` | `4180` | The port the bridge listens on. |
+| `HOST` | `127.0.0.1` | The address the bridge listens on. Anything other than loopback opens it to that network. |
+| `HERDR_WEB_HOSTS` | none | More host names a request may use, separated by commas, each with its port, such as a Tailscale name. |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Where Claude Code keeps its conversations and login. |
+| `CODEX_HOME` | `~/.codex` | Where Codex keeps its login. |
+
+Each browser keeps its own page settings: fonts, text sizes, how the agent list shows, the sidebar's width and the last tab you opened. Set them under **Settings** at the bottom of the sidebar.
+
+## About the quota bar
+
+To show what is left of each plan, the bridge reads each tool's own login from your disk and asks that provider for your usage, as the tool itself does. The logins stay on your computer, and the bridge sends each one only to its own provider. These usage endpoints are not public APIs, so a provider can change them and break that part of the bar.
+
+## Development
+
+```sh
+bun run build:watch   # build the page again on each change
+bun run typecheck
+bun run lint
+bun run test
+```
+
+The page uses [Foldkit](https://github.com/foldkit/foldkit) and the bridge uses [Effect](https://effect.website). The page and the bridge share the API in `src/shared/Api.ts`, as Effect RPC over a WebSocket.

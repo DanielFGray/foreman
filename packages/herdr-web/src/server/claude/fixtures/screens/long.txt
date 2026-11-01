@@ -1,0 +1,46 @@
+  rows. A wide character, such as a Chinese ideograph or many emoji,
+  takes two cells. If it does not fit in the last cell, the terminal
+  usually leaves that cell blank and moves the character to the next
+  row.
+
+  Resizing the window changes the column count, so stored rows may no
+  longer fit. Some terminals reflow the history, which means they
+  rewrap stored text to the new width. Others keep each row as it was
+  and cut or pad it. Full-screen programs do not depend on the
+  terminal to reflow. The terminal sends them a SIGWINCH signal, a
+  notice that the window size changed, and the program draws the
+  screen again.
+─────────────────────────────────────────────────────────────────────
+←  ☐ Wrap algo  ☐ Wide chars  ☐ On resize  ✔ Submit  →
+
+│ Terminals break a line at the screen edge, and the app can choose a
+│ better break first. Which wrapping algorithm should the chat use
+│ when a message line is wider than the window?
+
+❯ 1. Word wrap (Recommended)
+     Break each long line at the last space before the edge, so words
+     stay whole. If one word is wider than the window, split that
+     word by character as a fallback. This keeps prose and code
+     comments easy to read, and the work per line is small for
+     chat-sized output.
+  2. Character wrap
+     Break every line at the exact edge column, even in the middle of
+     a word. This is the simplest method, and it matches what the
+     terminal does by itself. Words can split across rows, which
+     makes prose harder to scan.
+  3. Optimal paragraph wrap
+     Choose the break points for a whole paragraph at once so that
+     line lengths even out, as the Knuth-Plass method does. The
+     output looks the most balanced for long prose. It needs the full
+     paragraph in memory, so it does not suit output that streams in
+     piece by piece.
+  4. No app wrapping
+     Send lines unbroken and let the terminal wrap them at the edge.
+     The app does no layout work, and the stored text stays exactly
+     as the model wrote it. The app gives up control of the layout,
+     so word splits and ragged edges are left to the terminal.
+  5. Type something.
+─────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
