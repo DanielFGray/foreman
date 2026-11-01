@@ -1234,29 +1234,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const tidy = (current: Interpretation) =>
       Effect.gen(function* () {
-        // A landing killed mid-merge leaves an unpublished merge commit in a
-        // colocated checkout, and a restart of the process that hosts the
-        // dispatcher is what kills it. The branch still holds the work, so the retry re-lands it
-        // honestly and the leftover head is swept here, beside the branch
-        // sweep, where every tick's cleanup lives.
-        yield* Effect.forEach(
-          current.projects,
-          (project) =>
-            repository.sweepUnpublishedMerges(project.directory).pipe(
-              Effect.flatMap((litter) =>
-                Effect.forEach(
-                  litter,
-                  (id) => Effect.logInfo(`abandoned ${id.slice(0, 8)} in ${project.name}`),
-                  { discard: true },
-                ),
-              ),
-              Effect.catch((error) =>
-                Effect.logWarning(`sweeping landing litter in ${project.name} failed: ${error}`),
-              ),
-            ),
-          { discard: true },
-        );
-
         yield* Effect.forEach(
           current.prunable,
           (entry) =>

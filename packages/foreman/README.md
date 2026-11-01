@@ -36,8 +36,7 @@ and `prog list` together tell you everything foreman knows.
    change nothing — approvals stay human.
 2. **Tidy.** Foreman's merged branches are deleted from every project. `-d`
    refuses anything the checkout does not already have, so only redundant refs
-   go. In a jj checkout it also abandons the unpublished merge commits a landing
-   interrupted by a restart leaves behind.
+   go.
 3. **Reclaim.** A claim with no live worker and no activity for a day goes back
    to the queue. Ownership decides this, not age: a task with a live workspace
    is never touched.
@@ -113,29 +112,16 @@ does one thing and exits, so it works with or without the dispatcher running.
 ## Projects you are working in
 
 You share each project's checkout with the fleet: every task ends by landing
-into it. Under git, your uncommitted edits hold only the landings that would
-write the same files. Such a landing waits, named in the dashboard, until you
-commit or stash those files. Work elsewhere in the checkout lands around you,
-and your edits stay as they were. Under jj, any change in the working copy holds
-the whole project, because a landing moves the working copy.
+into it. Your uncommitted edits hold only the landings that would write the
+same files. Such a landing waits, named in the dashboard, until you commit or
+stash those files. Work elsewhere in the checkout lands around you, and your
+edits stay as they were.
 
-A checkout with no branch is held, because a landing has nothing to
-move: under git that is a detached `HEAD`, and under jj it is a working copy
-with no bookmark behind it.
+A checkout with no branch is held, because a landing has nothing to move: that
+is a detached `HEAD`.
 
 The held row says which cause it is. An uncommitted change clears itself; a
 missing landing target never does, and needs a hand-run command instead.
-
-### jj projects
-
-A project colocated with jj lands through jj. Foreman moves the bookmark you are
-standing on — the nearest one behind your working copy — rather than merging
-into a branch, because jj has no checked-out branch to merge into. Two things
-follow. A working copy that is not empty holds the project, including files git
-would call untracked, since jj already counts them as yours. And a conflicting
-branch never reaches your directory at all: jj records conflicts instead of
-refusing them, so foreman finds them where it proves the merge and returns the
-task to the queue.
 
 ### Onboarding a held project
 
@@ -318,9 +304,9 @@ Proving happens somewhere disposable: a scratch checkout of the project under
 `$XDG_STATE_HOME/foreman/verify/`, reset to your current tip. The merge is made
 there and the project's `verify` command runs there, so no test suite ever runs
 in a directory you are working in, and nothing has to be undone in yours when
-one fails. What then lands in your checkout is that same commit — git
-fast-forwards onto it, jj moves the bookmark to it — so you get the exact tree
-that was verified, and only if your tip has not moved meanwhile.
+one fails. What then lands in your checkout is that same commit, fast-forwarded
+onto, so you get the exact tree that was verified, and only if your tip has not
+moved meanwhile.
 
 A branch that turns a green project red never lands, and the task goes back to
 the queue carrying the failure output — the next author's whole job is that
@@ -553,7 +539,7 @@ minute; the server keeps serving meanwhile. After each reading the server
 writes `state.json` for the panel.
 
 The server's PATH must hold every program the dispatcher runs: `prog`, `hc`,
-`git`, `jj` and each rung's harness. The command line stays for one-shot
+`git` and each rung's harness. The command line stays for one-shot
 commands:
 
 ```bash
