@@ -562,6 +562,7 @@ p.usage-error { margin: 0; }
 .foreman-section.attention .foreman-section-toggle { color: var(--red); }
 .foreman-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .foreman-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px solid var(--surface); border-radius: 6px; }
+.foreman-children { margin: 4px 0 0 4px; padding-left: 10px; border-left: 2px solid var(--surface); }
 .foreman-row-head { display: flex; gap: 8px; min-width: 0; }
 .foreman-key { flex-shrink: 0; color: var(--subtext); font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; }
 .foreman-label { min-width: 0; overflow-wrap: anywhere; }

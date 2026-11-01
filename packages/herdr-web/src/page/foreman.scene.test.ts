@@ -15,6 +15,8 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
   label,
   detail: Option.none(),
   project: Option.some(project),
+  parent: Option.none(),
+  epic: false,
   actions,
 })
 
@@ -93,6 +95,20 @@ test("kill takes a second click, a review can be allowed once, and the needs-inp
     click(role("button", { name: "allow review for ts-r1 once" })),
     Command.expectExact(RunForeman({ command: { _tag: "Allow", key: "ts-r1", step: "review" } })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "policy grant ts-r1 review --count 1" })),
+  )
+})
+
+test("an epic leads its queued tasks and takes no launch", () => {
+  const epic = { ...row("queue", "ep-1", "Ship exports", []), epic: true }
+  const child = { ...row("queue", "ts-q3", "Export as CSV", ["complete"]), parent: Option.some("ep-1") }
+  const grouped = { ...state, reading: Option.some({ ...reading, rows: [epic, child, ...reading.rows] }) }
+  scene(
+    { update, view },
+    given({ ...open, foreman: Option.some(grouped) }),
+    click(role("button", { name: "Queue 4" })),
+    expect(role("button", { name: "launch ep-1" })).not.toExist(),
+    expect(role("list", { name: "tasks under ep-1" })).toContainText("Export as CSV"),
+    expect(role("button", { name: "launch ts-q3" })).toExist(),
   )
 })
 

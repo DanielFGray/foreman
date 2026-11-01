@@ -10,7 +10,7 @@ const published = (fields: { daemon: boolean; observedAt: string | null }) =>
     policy: { paused: false, slots: 3, default: { author: false, climb: false, review: false, land: false }, grants: [] },
     policyError: null,
     projects: [{ name: "app", directory: "/src/app" }],
-    rows: [{ view: "queue", key: "ts-1", label: "Write the export", detail: null, project: "app", actions: ["complete"] }],
+    rows: [{ view: "queue", key: "ts-1", label: "Write the export", detail: null, project: "app", parent: null, epic: false, actions: ["complete"] }],
   })
 
 const reading = (fields: { daemon: boolean; observedAt: string | null }) => Result.getOrThrow(readingOf(published(fields)))

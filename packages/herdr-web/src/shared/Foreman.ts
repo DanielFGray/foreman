@@ -39,6 +39,10 @@ export const ForemanRow = S.Struct({
   label: S.String,
   detail: S.OptionFromNullOr(S.String),
   project: S.OptionFromNullOr(S.String),
+  /** The epic the row's task sits under. */
+  parent: S.OptionFromNullOr(S.String),
+  /** An epic has no branch and no worker, so it takes no launch. */
+  epic: S.Boolean,
   actions: S.Array(S.String),
 })
 export type ForemanRow = typeof ForemanRow.Type
