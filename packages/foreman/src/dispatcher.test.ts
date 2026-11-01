@@ -339,7 +339,7 @@ describe("the policy gate on dispatch", () => {
     dispatches.map(({ role, task }) => `${role}:${task.id}`);
 
   test("a paused policy starts nothing, with every slot free", () => {
-    const policy = allowing({ author: true, review: true }, { paused: true });
+    const policy = allowing({ author: "on", review: "on" }, { paused: true });
     const dispatches = dispatchesFor(
       dispatchState(policy, {
         queue: [ready("ts-a")],
@@ -352,7 +352,7 @@ describe("the policy gate on dispatch", () => {
 
   test("with authoring off, reviews still drain the pipeline", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ review: true }), {
+      dispatchState(allowing({ review: "on" }), {
         queue: [ready("ts-a")],
         review: [active(task("ts-r", ["by:cheap"]), undefined)],
       }),
@@ -363,7 +363,7 @@ describe("the policy gate on dispatch", () => {
 
   test("a task an attempt already failed needs climb, not author", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ author: true }), {
+      dispatchState(allowing({ author: "on" }), {
         queue: [ready("ts-retry", ["failed-by:cheap"]), ready("ts-fresh")],
       }),
     );
@@ -373,7 +373,7 @@ describe("the policy gate on dispatch", () => {
 
   test("the policy's slots bound the pass", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ author: true }, { slots: 2 }), {
+      dispatchState(allowing({ author: "on" }, { slots: 2 }), {
         queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
       }),
     );
@@ -545,7 +545,7 @@ describe("the quota gate", () => {
     policy: {
       ...DEFAULT_POLICY,
       slots: 3,
-      default: { author: true, climb: true, review: true, land: true },
+      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     },
     scopes: new Map<string, ReadonlySet<string>>(),
     ...overrides,

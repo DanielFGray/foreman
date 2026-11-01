@@ -316,7 +316,7 @@ const prompts = Layer.succeed(Prompts, {
 /** A policy that lets the fleet take every step by itself, one agent at a time. */
 const ALLOWED = {
   slots: 1,
-  default: { author: true, climb: true, review: true, land: true },
+  default: { author: "on", climb: "on", review: "on", land: "on" } as const,
 };
 
 /**
@@ -744,7 +744,7 @@ describe("a fleet that is not running", () => {
 
   const everything = {
     slots: 5,
-    default: { author: true, climb: true, review: true, land: true },
+    default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     grants: [{ scope: "ts-nowhere", steps: ["land"] }],
   };
 
