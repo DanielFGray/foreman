@@ -3,7 +3,7 @@ import { DateTime } from "effect";
 import {
   awaitingLanding,
   decisionsOf,
-  dispatchesFor,
+  dispatchesFor as plan,
   failedTasks,
   handoffExpired,
   isUnread,
@@ -305,6 +305,8 @@ describe("work handed back for review", () => {
   });
 });
 
+const dispatchesFor = (...args: Parameters<typeof plan>) => plan(...args).dispatches;
+
 describe("the policy gate on dispatch", () => {
   const ready = (id: string, labels: ReadonlyArray<string> = []) => ({
     id,
@@ -395,6 +397,42 @@ describe("the policy gate on dispatch", () => {
 
     expect(planned(dispatches)).toEqual(["author:ts-a"]);
     expect(dispatches[0]?.permit).toEqual({ _tag: "Granted", scope: "ep-1", admits: true });
+  });
+
+  test("a review step set to ask is listed with the author's rung, and not dispatched", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ review: "ask" }), {
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+      }),
+    );
+
+    expect(dispatches).toEqual([]);
+    expect(asks.map(({ task, step, rung }) => [task.id, step, rung])).toEqual([
+      ["ts-r", "review", "cheap"],
+    ]);
+  });
+
+  test("an author ask lists at most the free slots", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ author: "ask" }, { slots: 2 }), {
+        queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
+      }),
+    );
+
+    expect(dispatches).toEqual([]);
+    expect(asks.map(({ task }) => task.id)).toEqual(["ts-a", "ts-b"]);
+  });
+
+  test("an asked review holds its slot, so the author behind it is one slot short", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ review: "ask", author: "on" }, { slots: 2 }), {
+        queue: [ready("ts-a"), ready("ts-b")],
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+      }),
+    );
+
+    expect(planned(dispatches)).toEqual(["author:ts-a"]);
+    expect(asks.map(({ task, step }) => `${step}:${task.id}`)).toEqual(["review:ts-r"]);
   });
 });
 

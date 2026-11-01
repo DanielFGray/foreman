@@ -126,6 +126,7 @@ const state: FleetState = {
   policy: DEFAULT_POLICY,
   policyError: undefined,
   scopes: new Map(),
+  asks: [],
   observedAt: undefined,
 };
 

@@ -707,6 +707,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           .map(({ task }) => task.id),
       ]);
 
+      // Planned here, from the reading the gates read, so the asks a reading
+      // shows and the dispatches fill makes are the same plan by construction.
+      const gates: DispatchState = {
+        workers,
+        outOfQuota,
+        queue: ordered,
+        held,
+        review: reviews.review,
+        policy,
+        scopes,
+      };
+      const plan = dispatchesFor(gates, failedIds, new Set(stale.map((row) => row.task.id)));
+
       return {
         projects,
         workers,
@@ -719,6 +732,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yours,
         working: claimedActive,
         ...reviews,
+        dispatches: plan.dispatches,
+        asks: [...plan.asks, ...landAsks(gates)],
         committed,
         prunable,
         stale,
@@ -914,9 +929,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         current.review.filter(({ task, worker }) => readyToLand(task, worker)),
         ({ task, worker }) => {
           const given = permit(current.policy, current.scopes, task.id, "land");
-          return given._tag === "Denied"
-            ? Effect.void
-            : land(task, worker).pipe(Effect.tap(() => admitted(given, task.id)));
+          switch (given._tag) {
+            case "Denied":
+            case "Ask":
+              return Effect.void;
+            case "Default":
+            case "Granted":
+              return land(task, worker).pipe(Effect.tap(() => admitted(given, task.id)));
+          }
         },
         { discard: true },
       );
@@ -1365,15 +1385,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // A task whose dispatch has failed twice is held out of both passes.
         // Its failure is a fact about the world, so a third attempt would
         // repeat the second; the operator clears the cause and retries.
-        const failed = new Set(failedTasks(yield* Ref.get(dispatchFailures)).map(([task]) => task));
-
-        const stale = new Set(current.stale.map((row) => row.task.id));
         // This tick's burst, not a memory: one set per fill pass, read by the
         // author pass only, and discarded with it. Its whole job is to stop every
         // slot in this pass drawing on the one account the reading calls healthy.
         const drawn = new Set<string>();
         yield* Effect.forEach(
-          dispatchesFor(current, failed, stale),
+          current.dispatches,
           (dispatch) =>
             dispatch.role === "review"
               ? dispatchReview(dispatch.task, authoredBy(dispatch.task)).pipe(
@@ -2187,17 +2204,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
  * Each dispatch carries the permit the policy gave it, so the caller can
  * record which grant admitted the task once the dispatch has happened. A task
  * the policy does not allow is passed over and keeps no slot.
+ *
+ * A task whose step is set to `ask` keeps its slot in this plan and is listed
+ * in `asks` instead of dispatched. So an ask holds back the work behind it
+ * exactly as the dispatch it stands for would, and approving it frees the
+ * same slot for the same task on the next tick.
  */
 export const dispatchesFor = (
   current: DispatchState,
   failed: ReadonlySet<string> = new Set(),
   stale: ReadonlySet<string> = new Set(),
-): ReadonlyArray<PlannedDispatch> => {
+): Plan => {
   const busy = current.workers.filter(isBusy).length;
   let free = current.policy.slots - busy;
-  if (free <= 0) return [];
+  if (free <= 0) return { dispatches: [], asks: [] };
 
   const dispatches: Array<PlannedDispatch> = [];
+  const asks: Array<Ask> = [];
   // Admissions planned in this pass count against a grant's `remaining` at
   // once, so one pass cannot admit more tasks than the grant allows.
   let policy = current.policy;
@@ -2214,8 +2237,17 @@ export const dispatchesFor = (
     if (current.outOfQuota.has(task.id)) continue;
     if (worker && isBusy(worker)) continue;
     const given = allowed(task.id, "review");
-    if (given._tag === "Denied") continue;
-    dispatches.push({ role: "review", task, permit: given });
+    switch (given._tag) {
+      case "Denied":
+        continue;
+      case "Ask":
+        asks.push({ task, step: "review", rung: authoredBy(task) });
+        break;
+      case "Default":
+      case "Granted":
+        dispatches.push({ role: "review", task, permit: given });
+        break;
+    }
     free -= 1;
   }
 
@@ -2225,14 +2257,36 @@ export const dispatchesFor = (
     if (free <= 0) break;
     if (current.held.some((held) => held.project === task.project)) continue;
     if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
-    const given = allowed(task.id, authorStep(task.labels));
-    if (given._tag === "Denied") continue;
-    dispatches.push({ role: "author", task, permit: given });
+    const step = authorStep(task.labels);
+    const given = allowed(task.id, step);
+    switch (given._tag) {
+      case "Denied":
+        continue;
+      case "Ask":
+        asks.push({ task, step, rung: undefined });
+        break;
+      case "Default":
+      case "Granted":
+        dispatches.push({ role: "author", task, permit: given });
+        break;
+    }
     free -= 1;
   }
 
-  return dispatches;
+  return { dispatches, asks };
 };
+
+/**
+ * The landings the policy holds for one approval: an approved review whose
+ * reviewer has stopped, and whose `land` step is `ask` with no grant yet.
+ *
+ * Landing takes no slot, so this list is not bounded by `slots`.
+ */
+export const landAsks = (current: DispatchState): ReadonlyArray<Ask> =>
+  current.review
+    .filter(({ task, worker }) => readyToLand(task, worker))
+    .filter(({ task }) => permit(current.policy, current.scopes, task.id, "land")._tag === "Ask")
+    .map(({ task }) => ({ task, step: "land", rung: reviewedBy(task) }));
 
 const isBusy = (worker: Worker): boolean =>
   worker.state === "working" || worker.state === "blocked";
@@ -2245,6 +2299,26 @@ interface DispatchState {
   readonly review: ReadonlyArray<Active>;
   readonly policy: Policy;
   readonly scopes: Scopes;
+}
+
+/** What one tick would start, and what it holds for the operator's approval. */
+interface Plan {
+  readonly dispatches: ReadonlyArray<PlannedDispatch>;
+  readonly asks: ReadonlyArray<Ask>;
+}
+
+/**
+ * A step the policy holds for one approval. Derived from each reading and
+ * stored nowhere: once the world no longer calls for the step, the ask is gone.
+ *
+ * `rung` is the rung the decision turns on: the author's for a review, the
+ * reviewer's for a landing. An author's rung is chosen at dispatch, so it is
+ * absent here.
+ */
+export interface Ask {
+  readonly task: Pick<Item, "id" | "title" | "project">;
+  readonly step: Step;
+  readonly rung: string | undefined;
 }
 
 type PlannedDispatch =
@@ -2678,6 +2752,8 @@ export interface FleetState {
   readonly policyError: string | undefined;
   /** Each grant's scope, mapped to the unfinished tasks it reaches. */
   readonly scopes: Scopes;
+  /** Steps the policy holds for one approval; see `Ask`. */
+  readonly asks: ReadonlyArray<Ask>;
 
   /**
    * When this reading of the world was taken.
@@ -2833,5 +2909,6 @@ export const EMPTY_FLEET: FleetState = {
   policy: DEFAULT_POLICY,
   policyError: undefined,
   scopes: new Map(),
+  asks: [],
   observedAt: undefined,
 };
