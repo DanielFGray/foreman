@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { dirname } from "node:path";
 import type { Fleet } from "./fleet.ts";
 import type { Repository } from "./repository.ts";
 
@@ -66,6 +67,14 @@ export const projectSet = (
 };
 
 const nameOf = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() ?? directory;
+
+/**
+ * The project a git common directory belongs to. Every checkout and linked
+ * worktree of one repository shares that directory, so `/build/foo/.git` is
+ * project `foo`, and a space inside a task's worktree names its checkout's
+ * project. Same rule as `Repository.checkoutOf`, which gives the checkout folder.
+ */
+export const projectOf = (commonDir: string) => nameOf(dirname(commonDir));
 
 /** The checkouts the operator's open spaces sit in: the projects that take new work. */
 export const openCheckouts = (fleet: Fleet["Service"], repository: Repository["Service"]) =>
