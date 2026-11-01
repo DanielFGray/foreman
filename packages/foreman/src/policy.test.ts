@@ -33,15 +33,27 @@ describe("modeOf", () => {
 
   test("one default step or one grant makes it running", () => {
     expect(
-      modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: true } }),
+      modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: "on" } }),
     ).toBe("running");
     expect(modeOf(withGrants(solo))).toBe("running");
   });
 
+  test("an ask step makes the fleet running, since it reports work", () => {
+    expect(modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "ask" } })).toBe(
+      "running",
+    );
+  });
+
+  test("an off step is not a running step", () => {
+    expect(modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "off" } })).toBe(
+      "idle",
+    );
+  });
+
   test("a pause wins over every step and grant", () => {
-    const everything = {
+    const everything: Policy = {
       ...withGrants(solo),
-      default: { author: true, climb: true, review: true, land: true },
+      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     };
     expect(modeOf({ ...everything, paused: true })).toBe("paused");
   });
@@ -54,16 +66,50 @@ describe("permit", () => {
   });
 
   test("a step on in the default is allowed for every task", () => {
-    const policy = { ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: true } };
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      default: { ...DEFAULT_POLICY.default, review: "on" },
+    };
     expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Default");
     expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
+  });
+
+  test("a step set to ask is Ask for every task no grant covers", () => {
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      default: { ...DEFAULT_POLICY.default, review: "ask" },
+    };
+    expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Ask");
+    expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
+  });
+
+  test("a grant covering an asked step takes effect before the ask", () => {
+    const policy: Policy = {
+      ...withGrants({ scope: "ts-solo", steps: ["review"], remaining: 1, admitted: [] }),
+      default: { ...DEFAULT_POLICY.default, review: "ask" },
+    };
+    expect(permit(policy, scopes, "ts-solo", "review")).toEqual({
+      _tag: "Granted",
+      scope: "ts-solo",
+      admits: true,
+    });
+    expect(permit(policy, scopes, "ts-other", "review")._tag).toBe("Ask");
+  });
+
+  test("pause denies an asked step too", () => {
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      paused: true,
+      default: { ...DEFAULT_POLICY.default, review: "ask" },
+    };
+    expect(permit(policy, scopes, "ts-a", "review")._tag).toBe("Denied");
   });
 
   test("pause denies every step, the default and grants alike", () => {
     const policy: Policy = {
       ...withGrants({ scope: "ep-1", steps: ["author"], admitted: [] }),
       paused: true,
-      default: { author: true, climb: true, review: true, land: true },
+      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     };
     expect(permit(policy, scopes, "ts-a", "author")._tag).toBe("Denied");
     expect(permit(policy, scopes, "ts-x", "review")._tag).toBe("Denied");

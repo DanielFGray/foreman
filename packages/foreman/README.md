@@ -60,12 +60,16 @@ it:
 ```json
 {
   "paused": false,
-  "default": { "author": false, "climb": false, "review": true, "land": false },
+  "default": { "author": "off", "climb": "off", "review": "on", "land": "off" },
   "grants": [{ "scope": "ep-1234", "steps": ["author", "review"], "remaining": 3, "admitted": [] }]
 }
 ```
 
-`default` holds for every task. A grant widens it for one task, or for an epic
+`default` holds for every task, and each step is one of three modes: `on` runs
+it, `ask` makes the dispatcher report the task and wait for one approval, and
+`off` does nothing. `foreman approve <id>` gives one approval: it writes a grant
+for that task and that step, once. `foreman wait --asks` returns when a new ask
+appears. A grant widens `default` for one task, or for an epic
 and every task under it. `remaining` counts tasks: the grant takes on at most
 that many, and keeps covering each one until it is finished, so a task it
 authored still gets its review and landing. The dispatcher records those
@@ -75,17 +79,17 @@ is how many agents may work at once.
 The policy also says whether a tick acts at all. The dispatcher is in one of
 three states:
 
-- **running**: a step or a grant is on. Each tick settles, tidies, reclaims,
+- **running**: a step is `on` or `ask`, or a grant exists. Each tick settles, tidies, reclaims,
   recovers and fills.
 - **paused**: `paused` is set. Grants are kept for later.
-- **idle**: no step is on and no grant exists.
+- **idle**: every step is `off` and no grant exists.
 
 A paused or idle tick reads the world and publishes the reading, and writes
 nothing: no prog change, no git change, no workspace opened, stopped or
 closed, no policy change. Settle, tidy, reclaim and recover wait too, so a
 workspace whose agent stopped stays open until the fleet runs again.
 
-Change it with `foreman policy` (`pause`, `resume`, `set <step> on|off`,
+Change it with `foreman policy` (`pause`, `resume`, `set <step> on|ask|off`,
 `slots <n>`, `grant <id> <steps...> [--count n]`, `revoke <id>`) or from the
 panel. Both write the file the same way, and the dispatcher reads it on every
 tick. With no file the fleet takes no step. A file that does not decode pauses

@@ -126,6 +126,7 @@ const state: FleetState = {
   policy: DEFAULT_POLICY,
   policyError: undefined,
   scopes: new Map(),
+  asks: [],
   observedAt: undefined,
 };
 
@@ -479,5 +480,32 @@ describe("publishedOf", () => {
     await write(Option.none());
     expect(JSON.parse(await readFile(path, "utf8")).dispatcher).toBeNull();
     expect(await readdir(folder)).toEqual(["state.json"]);
+  });
+});
+
+describe("asks", () => {
+  const askState: FleetState = {
+    ...state,
+    asks: [
+      { task: task("ts-k1", "reviewing", ["by:cheap", "approved"]), step: "land", rung: "cheap" },
+    ],
+  };
+
+  test("an ask is an attention row after the decisions and before the needs-you row", () => {
+    const columns = rowsForView("attention", askState).map((each) => each.column);
+
+    expect(columns.indexOf("asks")).toBeGreaterThan(columns.indexOf("decisions"));
+    expect(columns.indexOf("asks")).toBeLessThan(columns.indexOf("yours"));
+  });
+
+  test("the row says what approving starts, and takes approve and nothing else", () => {
+    const ask = rowsForView("attention", askState).find((each) => each.key === "ts-k1");
+
+    expect(ask?.detail).toBe("reviewed by cheap and approved; approve to land it");
+    expect(ask && actionsFor(ask.column, ask)).toEqual(["approve"]);
+  });
+
+  test("a row without an ask takes no approve", () => {
+    expect(actionsFor("asks", row("attention", "ts-d1"))).toEqual([]);
   });
 });

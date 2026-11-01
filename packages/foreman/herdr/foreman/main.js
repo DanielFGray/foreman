@@ -12,8 +12,10 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home } from "herdr";
 
-const VERSION = 4;
+const VERSION = 5;
 const STEPS = ["author", "climb", "review", "land"];
+// A step cycles through its modes: on runs it, ask waits for one approval per task, off does nothing.
+const NEXT_MODE = { on: "ask", ask: "off", off: "on" };
 // Older than this, the reading is no longer the dispatcher working: its host is
 // gone or it is wedged inside a tick, and the panel says so rather than showing
 // it as live.
@@ -303,8 +305,8 @@ export default class Foreman extends View {
       .when(dispatcher?.state === "failed", (el) => el.child(div().text_size(11).text_color(t.blocked).child(`dispatcher failed, restarting: ${dispatcher.detail}`)))
       .child(h_flex().gap(4).flex_wrap().items_center()
         .child(chip("pause", policy.paused ? "resume" : "pause", (cx) => this.act(["policy", policy.paused ? "resume" : "pause"], cx), policy.paused ? t.working : t.blocked))
-        .children(STEPS.map((step) => chip(`step-${step}`, `${policy.default[step] ? "●" : "○"} ${step}`,
-          (cx) => this.act(["policy", "set", step, policy.default[step] ? "off" : "on"], cx), policy.default[step] ? t.foreground : t.muted)))
+        .children(STEPS.map((step) => chip(`step-${step}`, `${step} ${policy.default[step]}`,
+          (cx) => this.act(["policy", "set", step, NEXT_MODE[policy.default[step]]], cx), policy.default[step] === "off" ? t.muted : t.foreground)))
         .child(div().flex_1())
         // One group, so a narrow dock wraps the agent limit whole.
         .child(h_flex().flex_none().gap(4).items_center()

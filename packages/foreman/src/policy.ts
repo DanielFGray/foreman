@@ -35,6 +35,17 @@ export const STEPS = ["author", "climb", "review", "land"] as const;
 export type Step = (typeof STEPS)[number];
 
 /**
+ * What the fleet does with a step by itself.
+ *
+ * - `on`: the dispatcher takes the step as soon as a task reaches it.
+ * - `ask`: the dispatcher takes no action and reports the task as waiting for
+ *   one approval; `foreman approve` writes a one-task grant for the step.
+ * - `off`: nothing happens, and the step is not reported.
+ */
+export const STEP_MODES = ["on", "ask", "off"] as const;
+export type StepMode = (typeof STEP_MODES)[number];
+
+/**
  * A widening of the default for one task or epic.
  *
  * `remaining` counts tasks, not steps: a grant admits at most that many
@@ -57,17 +68,17 @@ export const Policy = S.Struct({
   /** How many agents may be working at once. */
   slots: S.Int.check(S.isGreaterThan(0)).pipe(S.withDecodingDefault(Effect.succeed(3))),
   default: S.Struct({
-    author: S.Boolean,
-    climb: S.Boolean,
-    review: S.Boolean,
-    land: S.Boolean,
+    author: S.Literals(STEP_MODES),
+    climb: S.Literals(STEP_MODES),
+    review: S.Literals(STEP_MODES),
+    land: S.Literals(STEP_MODES),
   }).pipe(
     S.withDecodingDefault(
       Effect.succeed({
-        author: false,
-        climb: false,
-        review: false,
-        land: false,
+        author: "off",
+        climb: "off",
+        review: "off",
+        land: "off",
       }),
     ),
   ),
@@ -94,7 +105,7 @@ export type Mode = (typeof MODES)[number];
 export const modeOf = (policy: Policy): Mode =>
   policy.paused
     ? "paused"
-    : STEPS.some((step) => policy.default[step]) || policy.grants.length > 0
+    : STEPS.some((step) => policy.default[step] !== "off") || policy.grants.length > 0
       ? "running"
       : "idle";
 
@@ -102,6 +113,8 @@ export const modeOf = (policy: Policy): Mode =>
 export type Permit =
   | { readonly _tag: "Denied" }
   | { readonly _tag: "Default" }
+  /** The step waits for one approval: its default is `ask` and no grant covers the task. */
+  | { readonly _tag: "Ask" }
   | {
       readonly _tag: "Granted";
       readonly scope: string;
@@ -118,7 +131,7 @@ export type Permit =
  */
 export const permit = (policy: Policy, scopes: Scopes, task: string, step: Step): Permit => {
   if (policy.paused) return { _tag: "Denied" };
-  if (policy.default[step]) return { _tag: "Default" };
+  if (policy.default[step] === "on") return { _tag: "Default" };
   for (const grant of policy.grants) {
     if (!grant.steps.includes(step)) continue;
     if (grant.admitted.includes(task))
@@ -127,7 +140,7 @@ export const permit = (policy: Policy, scopes: Scopes, task: string, step: Step)
     if (grant.remaining !== undefined && grant.admitted.length >= grant.remaining) continue;
     return { _tag: "Granted", scope: grant.scope, admits: true };
   }
-  return { _tag: "Denied" };
+  return policy.default[step] === "ask" ? { _tag: "Ask" } : { _tag: "Denied" };
 };
 
 /** The step a dispatch of an author on this task is: a first try or a retry. */

@@ -21,15 +21,16 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
 })
 
 const reading: ForemanReading = {
-  version: 4,
+  version: 5,
   dispatcher: { state: "running" },
-  policy: { paused: false, slots: 2, default: { author: false, climb: false, review: true, land: false }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
+  policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
   projects: [{ name: "app", directory: "/src/app" }, { name: "lib", directory: "/src/lib" }],
   rows: [
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),
+    row("attention", "ts-k1", "review  Land the export", ["approve"]),
   ],
 }
 
@@ -67,10 +68,13 @@ test("the page says the dispatcher runs, and the policy's buttons run foreman's 
     // A command under way is not sent twice.
     expect(role("button", { name: "pause the fleet" })).toBeDisabled(),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "policy pause" })),
-    click(role("button", { name: "stop review for every task" })),
-    Command.expectExact(RunForeman({ command: { _tag: "SetStep", step: "review", on: false } })),
+    click(role("button", { name: "off review for every task" })),
+    Command.expectExact(RunForeman({ command: { _tag: "SetStep", step: "review", setting: "off" } })),
     Command.resolve(RunForeman, Message.FailedForemanCommand({ line: "policy set review off", reason: "the policy file is not writable" })),
     expect(role("alert")).toHaveText("the policy file is not writable"),
+    click(role("button", { name: "approve ts-k1" })),
+    Command.expectExact(RunForeman({ command: { _tag: "Act", action: "approve", key: "ts-k1" } })),
+    Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "approve ts-k1" })),
     click(role("button", { name: "one agent fewer" })),
     Command.expectExact(RunForeman({ command: { _tag: "SetSlots", slots: 1 } })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "policy slots 1" })),
@@ -136,7 +140,7 @@ test("the queue starts folded, and a queued task launches on a picked rung", () 
     given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: ["haiku", "sonnet"] } } }),
     expect(role("list", { name: "Queue" })).not.toExist(),
     click(role("button", { name: "Queue 2" })),
-    expectAll(all.selector(".foreman-row")).toHaveCount(4),
+    expectAll(all.selector(".foreman-row")).toHaveCount(5),
     click(role("button", { name: "lib" })),
     expectAll(all.selector(".foreman-row")).toHaveCount(1),
     click(role("button", { name: "All projects" })),

@@ -314,7 +314,7 @@ const prompts = Layer.succeed(Prompts, {
 /** A policy that lets the fleet take every step by itself, one agent at a time. */
 const ALLOWED = {
   slots: 1,
-  default: { author: true, climb: true, review: true, land: true },
+  default: { author: "on", climb: "on", review: "on", land: "on" } as const,
 };
 
 /**
@@ -742,7 +742,7 @@ describe("a fleet that is not running", () => {
 
   const everything = {
     slots: 5,
-    default: { author: true, climb: true, review: true, land: true },
+    default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     grants: [{ scope: "ts-nowhere", steps: ["land"] }],
   };
 
@@ -1086,5 +1086,125 @@ describe("a spent account and the reviewer above it", () => {
     const labels = world.tasks.get(task.id)?.labels ?? [];
     expect(labels).toContain("failed-by:cheap");
     expect(labels.filter((label) => label.startsWith("failed-by:"))).toEqual(["failed-by:cheap"]);
+  });
+});
+
+/**
+ * Ticks once, then reads back the asks that tick published. Asks are part of
+ * the reading, so the test sees what `foreman approve` and the panel would.
+ */
+const asksAfter = (world: World) =>
+  Effect.runPromise(
+    Dispatcher.use((dispatcher) =>
+      dispatcher.tick.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+    ).pipe(Effect.provide(layerFor(world))),
+  ).then((state) => state.asks.map(({ task, step, rung }) => ({ task: task.id, step, rung })));
+
+/**
+ * The writes a step makes. `tidy` runs on every running tick and records its
+ * unpublished-merge sweep even when nothing is merged, so an assertion that a
+ * step took no action must not count that no-op.
+ */
+const stepWrites = (world: World) =>
+  world.writes.filter((write) => write !== "repository.sweepUnpublishedMerges");
+
+describe("a step set to ask", () => {
+  const off = { author: "off", climb: "off", review: "off", land: "off" } as const;
+  const unmerged = (task: string): Branch => ({
+    branch: `foreman/${task}`,
+    merged: false,
+    empty: false,
+    stale: undefined,
+  });
+
+  test("a review ask writes nothing and reports the reviewer it is waiting on", async () => {
+    usePolicy({ slots: 1, default: { ...off, review: "ask" } });
+    const task = item("ts-ask-review", "reviewing", ["by:cheap"]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, unmerged(task.id));
+
+    const asks = await asksAfter(world);
+
+    expect(asks).toEqual([{ task: task.id, step: "review", rung: "cheap" }]);
+    expect(world.spawned).toEqual([]);
+    expect(stepWrites(world)).toEqual([]);
+  });
+
+  test("approving a review ask starts exactly that review on the next tick", async () => {
+    const task = item("ts-approve-review", "reviewing", ["by:cheap"]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, unmerged(task.id));
+    usePolicy({
+      slots: 1,
+      default: { ...off, review: "ask" },
+      grants: [{ scope: task.id, steps: ["review"], remaining: 1, admitted: [] }],
+    });
+
+    await asksAfter(world);
+
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+    expect(world.writes).not.toContain("repository.merge");
+  });
+
+  test("a land ask writes nothing until its approval grant lands the task", async () => {
+    usePolicy({ slots: 1, default: { ...off, land: "ask" } });
+    const task = item("ts-ask-land", "reviewing", ["by:cheap", "review-by:cheap", "approved"]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, unmerged(task.id));
+
+    const asks = await asksAfter(world);
+
+    expect(asks).toEqual([{ task: task.id, step: "land", rung: "cheap" }]);
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+    expect(stepWrites(world)).toEqual([]);
+
+    usePolicy({
+      slots: 1,
+      default: { ...off, land: "ask" },
+      grants: [{ scope: task.id, steps: ["land"], remaining: 1, admitted: [] }],
+    });
+    await asksAfter(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+  });
+
+  test("an author ask lists at most the free slots and starts nothing", async () => {
+    usePolicy({ slots: 1, default: { ...off, author: "ask" } });
+    const world = new World(item("ts-a", "open", []), item("ts-b", "open", []));
+
+    const asks = await asksAfter(world);
+
+    expect(asks.map(({ task }) => task)).toEqual(["ts-a"]);
+    expect(world.spawned).toEqual([]);
+    expect(stepWrites(world)).toEqual([]);
+  });
+});
+
+describe("approving an ask", () => {
+  test("writes the grant the next tick takes, and only for the asked step", async () => {
+    usePolicy({ slots: 1, default: { author: "off", climb: "off", review: "ask", land: "ask" } });
+    const task = item("ts-approve-real", "reviewing", ["by:cheap"]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    const [ask] = await asksAfter(world).then((asks) => asks);
+    expect(ask).toEqual({ task: task.id, step: "review", rung: "cheap" });
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.approve({ task, step: "review", rung: "cheap" }),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+    expect(JSON.parse(readFileSync(process.env["FOREMAN_POLICY"] ?? "", "utf8")).grants).toEqual([
+      { scope: task.id, steps: ["review"], remaining: 1, admitted: [] },
+    ]);
+    await tick(world);
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
   });
 });

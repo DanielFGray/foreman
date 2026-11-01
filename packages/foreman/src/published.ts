@@ -29,7 +29,7 @@ import {
  * Two readers check it: the herdr-app panel (`herdr/foreman/main.js`) and
  * herdr-web's Foreman page (`src/shared/Foreman.ts` there).
  */
-export const PUBLISHED_VERSION = 4;
+export const PUBLISHED_VERSION = 5;
 
 /**
  * The views the file carries: foreman's own. The queue is not one of them.

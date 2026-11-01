@@ -5,6 +5,7 @@ import {
   Policy,
   policyPath,
   readPolicy,
+  STEP_MODES,
   STEPS,
   updatePolicy,
   type Policy as PolicyType,
@@ -30,14 +31,18 @@ const change = (name: string, description: string, edit: (policy: PolicyType) =>
   Command.make(name, {}, () => write(edit)).pipe(Command.withDescription(description));
 
 const step = Argument.Literals("step", STEPS);
-const setting = Argument.Literals("setting", ["on", "off"] as const);
+const setting = Argument.Literals("setting", STEP_MODES);
 
 const set = Command.make("set", { step, setting }, ({ step, setting }) =>
   write((policy) => ({
     ...policy,
-    default: { ...policy.default, [step]: setting === "on" },
+    default: { ...policy.default, [step]: setting },
   })),
-).pipe(Command.withDescription("Allow or stop one step for every task"));
+).pipe(
+  Command.withDescription(
+    "Set one step for every task: on runs it, ask waits for one approval per task, off does nothing",
+  ),
+);
 
 const count = Argument.Int("count").pipe(
   Argument.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),

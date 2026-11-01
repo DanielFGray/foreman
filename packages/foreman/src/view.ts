@@ -1,6 +1,7 @@
 import { Match } from "effect";
 import type {
   Active,
+  Ask,
   Climbing,
   FleetState,
   Held,
@@ -37,6 +38,7 @@ const COLUMNS = [
   "review",
   "landed",
   "decisions",
+  "asks",
   "yours",
   "held",
   "unreviewed",
@@ -120,6 +122,8 @@ export interface ColumnRow {
   readonly unreviewed: Unreviewed | undefined;
   /** The overtaken branch behind a stale row, whose review could not land. */
   readonly stale: StaleRow | undefined;
+  /** The step an asks row is waiting for approval; see `Ask`. */
+  readonly ask: Ask | undefined;
   /** The account behind a quota row, whose every window the preview reads. */
   readonly provider: Provider | undefined;
   /** The error behind a dispatch-failed decision row. */
@@ -141,6 +145,7 @@ export const ACTIONS_LIST = [
   "unassign",
   "onboard",
   "adopt",
+  "approve",
 ] as const;
 
 /** Something an operator does to one row. */
@@ -176,6 +181,9 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   review: ["focus", "kill", "intervene", "descend", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
+  // Approval is the only answer an ask takes. Release and kill stay on the
+  // column the work is in, where they already apply.
+  asks: ["approve"],
   yours: ["intervene", "descend", "unassign"],
   held: ["onboard"],
   unreviewed: ["adopt"],
@@ -256,6 +264,7 @@ export const actionsFor = (
       ),
       Match.when("onboard", () => row.project !== undefined && row.reason === "dirty"),
       Match.when("adopt", () => row.unreviewed !== undefined),
+      Match.when("approve", () => row.ask !== undefined),
       Match.exhaustive,
     ),
   );
@@ -271,6 +280,7 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
     Match.when("decisions", () => state.decisions.map((active) => decisionRow(active, state))),
+    Match.when("asks", () => state.asks.map(askRow)),
     Match.when("yours", () => state.yours.map((task) => yoursRow(task, state))),
     Match.when("held", () => state.held.map(heldRow)),
     Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
@@ -299,6 +309,7 @@ export const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<Co
   if (view !== "attention") return rowsFor(view, state);
   return [
     ...rowsFor("decisions", state),
+    ...rowsFor("asks", state),
     ...rowsFor("yours", state).map(attentionRow("needs you")),
     ...rowsFor("stale", state),
     ...rowsFor("unreviewed", state),
@@ -348,6 +359,7 @@ export const queueRow = (task: ReadyTask): ColumnRow => ({
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: false,
@@ -367,6 +379,7 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: false,
@@ -402,6 +415,7 @@ const activeRow = (
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
@@ -420,6 +434,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: state.resumable.has(task.id),
@@ -449,6 +464,7 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure,
   provider: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
@@ -463,6 +479,37 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
  * what the operator has to look in to decide: nothing else records what the
  * worktree still holds.
  */
+/**
+ * A step the policy holds for approval. The detail says what approving starts,
+ * because the operator is deciding whether that work should run, not whether
+ * the task exists.
+ */
+const askRow = (ask: Ask): ColumnRow => ({
+  column: "asks",
+  key: ask.task.id,
+  label: `${ask.step}  ${ask.task.title}`,
+  detail: askDetail(ask),
+  task: undefined,
+  ready: undefined,
+  worker: undefined,
+  project: ask.task.project,
+  reason: undefined,
+  unreviewed: undefined,
+  stale: undefined,
+  ask,
+  failure: undefined,
+  provider: undefined,
+  hasWork: false,
+  committed: false,
+});
+
+const askDetail = ({ step, rung }: Ask): string =>
+  step === "land"
+    ? `reviewed by ${rung ?? "?"} and approved; approve to land it`
+    : step === "review"
+      ? `authored by ${rung ?? "?"}; approve to start the review`
+      : `approve to start the ${step}`;
+
 const orphanRow = (worker: Worker): ColumnRow => ({
   column: "orphans",
   key: worker.task,
@@ -475,6 +522,7 @@ const orphanRow = (worker: Worker): ColumnRow => ({
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: false,
@@ -495,6 +543,7 @@ const heldRow = (held: Held): ColumnRow => ({
   reason: held.reason,
   unreviewed: undefined,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: false,
@@ -531,6 +580,7 @@ const quotaRow = (provider: Provider): ColumnRow => {
     reason: undefined,
     unreviewed: undefined,
     stale: undefined,
+    ask: undefined,
     failure: undefined,
     provider,
     hasWork: false,
@@ -555,6 +605,7 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   reason: undefined,
   unreviewed: branch,
   stale: undefined,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: true,
@@ -578,6 +629,7 @@ const staleRow = (branch: StaleRow): ColumnRow => ({
   reason: undefined,
   unreviewed: undefined,
   stale: branch,
+  ask: undefined,
   failure: undefined,
   provider: undefined,
   hasWork: true,

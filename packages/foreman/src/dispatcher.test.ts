@@ -3,7 +3,7 @@ import { DateTime } from "effect";
 import {
   awaitingLanding,
   decisionsOf,
-  dispatchesFor,
+  dispatchesFor as plan,
   failedTasks,
   handoffExpired,
   isUnread,
@@ -305,6 +305,8 @@ describe("work handed back for review", () => {
   });
 });
 
+const dispatchesFor = (...args: Parameters<typeof plan>) => plan(...args).dispatches;
+
 describe("the policy gate on dispatch", () => {
   const ready = (id: string, labels: ReadonlyArray<string> = []) => ({
     id,
@@ -339,7 +341,7 @@ describe("the policy gate on dispatch", () => {
     dispatches.map(({ role, task }) => `${role}:${task.id}`);
 
   test("a paused policy starts nothing, with every slot free", () => {
-    const policy = allowing({ author: true, review: true }, { paused: true });
+    const policy = allowing({ author: "on", review: "on" }, { paused: true });
     const dispatches = dispatchesFor(
       dispatchState(policy, {
         queue: [ready("ts-a")],
@@ -352,7 +354,7 @@ describe("the policy gate on dispatch", () => {
 
   test("with authoring off, reviews still drain the pipeline", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ review: true }), {
+      dispatchState(allowing({ review: "on" }), {
         queue: [ready("ts-a")],
         review: [active(task("ts-r", ["by:cheap"]), undefined)],
       }),
@@ -363,7 +365,7 @@ describe("the policy gate on dispatch", () => {
 
   test("a task an attempt already failed needs climb, not author", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ author: true }), {
+      dispatchState(allowing({ author: "on" }), {
         queue: [ready("ts-retry", ["failed-by:cheap"]), ready("ts-fresh")],
       }),
     );
@@ -373,7 +375,7 @@ describe("the policy gate on dispatch", () => {
 
   test("the policy's slots bound the pass", () => {
     const dispatches = dispatchesFor(
-      dispatchState(allowing({ author: true }, { slots: 2 }), {
+      dispatchState(allowing({ author: "on" }, { slots: 2 }), {
         queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
       }),
     );
@@ -395,6 +397,42 @@ describe("the policy gate on dispatch", () => {
 
     expect(planned(dispatches)).toEqual(["author:ts-a"]);
     expect(dispatches[0]?.permit).toEqual({ _tag: "Granted", scope: "ep-1", admits: true });
+  });
+
+  test("a review step set to ask is listed with the author's rung, and not dispatched", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ review: "ask" }), {
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+      }),
+    );
+
+    expect(dispatches).toEqual([]);
+    expect(asks.map(({ task, step, rung }) => [task.id, step, rung])).toEqual([
+      ["ts-r", "review", "cheap"],
+    ]);
+  });
+
+  test("an author ask lists at most the free slots", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ author: "ask" }, { slots: 2 }), {
+        queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
+      }),
+    );
+
+    expect(dispatches).toEqual([]);
+    expect(asks.map(({ task }) => task.id)).toEqual(["ts-a", "ts-b"]);
+  });
+
+  test("an asked review holds its slot, so the author behind it is one slot short", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(allowing({ review: "ask", author: "on" }, { slots: 2 }), {
+        queue: [ready("ts-a"), ready("ts-b")],
+        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+      }),
+    );
+
+    expect(planned(dispatches)).toEqual(["author:ts-a"]);
+    expect(asks.map(({ task, step }) => `${step}:${task.id}`)).toEqual(["review:ts-r"]);
   });
 });
 
@@ -545,7 +583,7 @@ describe("the quota gate", () => {
     policy: {
       ...DEFAULT_POLICY,
       slots: 3,
-      default: { author: true, climb: true, review: true, land: true },
+      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     },
     scopes: new Map<string, ReadonlySet<string>>(),
     ...overrides,
