@@ -63,11 +63,29 @@ export const Grant = S.Struct({
 export type Grant = typeof Grant.Type;
 
 /**
+ * Where a project's agents work.
+ *
+ * - `worktree`: each task gets its own git worktree, and any number run at once.
+ * - `branch`: the agent checks out `foreman/<id>` in the operator's checkout
+ *   itself, for a project whose tooling cannot run in a second directory. One
+ *   such task runs at a time, and it needs a clean tree to start. Landing
+ *   checks the operator's branch out again and merges into it.
+ *
+ * Read only when an author is dispatched. After that, git records the mode:
+ * the checkout has the task's branch out, and the branch's upstream names the
+ * branch it lands on.
+ */
+export const CHECKOUTS = ["worktree", "branch"] as const;
+export type Checkout = (typeof CHECKOUTS)[number];
+
+/**
  * One project's own settings. A step set here replaces the fleet default for
  * that project's tasks; a paused project takes no step, grants included.
  */
 export const ProjectPolicy = S.Struct({
   paused: S.optional(S.Boolean),
+  /** Where this project's agents work; absent is `worktree`. */
+  checkout: S.optional(S.Literals(CHECKOUTS)),
   steps: S.optional(
     S.Struct({
       author: S.optional(S.Literals(STEP_MODES)),
@@ -357,7 +375,10 @@ const editProject = (
 ): Policy => {
   const next = edit(policy.projects[project] ?? {});
   const { [project]: _dropped, ...others } = policy.projects;
-  const empty = next.paused === undefined && Object.keys(next.steps ?? {}).length === 0;
+  const empty =
+    next.paused === undefined &&
+    next.checkout === undefined &&
+    Object.keys(next.steps ?? {}).length === 0;
   return { ...policy, projects: empty ? others : { ...others, [project]: next } };
 };
 
@@ -375,6 +396,16 @@ export const setProjectStep = (
   mode: StepMode,
 ): Policy =>
   editProject(policy, project, (entry) => ({ ...entry, steps: { ...entry.steps, [step]: mode } }));
+
+/** Where a project's next author works. */
+export const checkoutOf = (policy: Policy, project: string): Checkout =>
+  policy.projects[project]?.checkout ?? "worktree";
+
+/** Sets where one project's agents work. `worktree` is the default, so it removes the field. */
+export const setProjectCheckout = (policy: Policy, project: string, checkout: Checkout): Policy =>
+  editProject(policy, project, ({ checkout: _was, ...rest }) =>
+    checkout === "worktree" ? rest : { ...rest, checkout },
+  );
 
 /** Drops a project's entry, so it follows the fleet default again. */
 export const clearProject = (policy: Policy, project: string): Policy =>

@@ -1,9 +1,11 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
 import {
+  CHECKOUTS,
   clearProject,
   grant,
   pauseProject,
+  setProjectCheckout,
   setProjectStep,
   Policy,
   policyPath,
@@ -73,6 +75,16 @@ const clear = Command.make("clear", { project: Flag.String("project") }, ({ proj
   write((policy) => clearProject(policy, project)),
 ).pipe(Command.withDescription("Drop a project's own settings, so it follows the default again"));
 
+const checkout = Command.make(
+  "checkout",
+  { where: Argument.Literals("where", CHECKOUTS), project: Flag.String("project") },
+  ({ where, project }) => write((policy) => setProjectCheckout(policy, project, where)),
+).pipe(
+  Command.withDescription(
+    "Choose where a project's agents work: worktree gives each task its own directory; branch checks out foreman/<id> in the operator's checkout, one task at a time, from a clean tree",
+  ),
+);
+
 const count = Argument.Int("count").pipe(
   Argument.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
 );
@@ -124,6 +136,7 @@ export const policyCommand = Command.make("policy", {}).pipe(
     pauseOrResume("resume"),
     set,
     clear,
+    checkout,
     slots,
     grantCommand,
     revoke,

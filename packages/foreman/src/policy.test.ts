@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   admit,
+  checkoutOf,
   clearProject,
   authorStep,
   DEFAULT_POLICY,
@@ -16,6 +17,7 @@ import {
   permit,
   Policy,
   readPolicy,
+  setProjectCheckout,
   setProjectStep,
   updatePolicy,
 } from "./policy.ts";
@@ -346,6 +348,15 @@ describe("per-project settings", () => {
     expect(pauseProject(policy, "alpha", false).projects["alpha"]?.paused).toBeUndefined();
     expect(clearProject(policy, "alpha").projects).toEqual({});
     expect(pauseProject(DEFAULT_POLICY, "alpha", false).projects).toEqual({});
+  });
+
+  test("a project's checkout is worktree unless set, and setting worktree drops the entry", () => {
+    expect(checkoutOf(DEFAULT_POLICY, "alpha")).toBe("worktree");
+    const branch = setProjectCheckout(DEFAULT_POLICY, "alpha", "branch");
+    expect(branch.projects).toEqual({ alpha: { checkout: "branch" } });
+    expect(checkoutOf(branch, "alpha")).toBe("branch");
+    expect(checkoutOf(branch, "beta")).toBe("worktree");
+    expect(setProjectCheckout(branch, "alpha", "worktree").projects).toEqual({});
   });
 
   test("a policy file without projects decodes with none", async () => {
