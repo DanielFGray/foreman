@@ -45,6 +45,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
         render("author", {
           task: task.id,
           title: task.title,
+          labels: task.labels,
           project: task.project,
           worktree,
           repository,
@@ -88,14 +89,15 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
         render("review", {
           task: item.id,
           title: item.title,
+          labels: item.labels,
           project: item.project,
           worktree,
           branch: labelFor(item.id),
           repository,
           base,
           verification: verify
-            ? `Foreman runs \`${verify}\` in ${repository} immediately before and after it merges this branch, and undoes a merge that turns a green checkout red. That is the mechanical gate and it does not need your help: do not spend a full suite run repeating it. Several agents share this machine, and a redundant run starves the ones doing new work.`
-            : `Foreman lands this branch on git's exit code alone: ${item.project} keeps no \`scripts/verify.sh\`. The full run is yours — nothing downstream will do it.`,
+            ? `Foreman runs \`${verify}\` in ${repository} before and after it merges, and undoes a merge that turns it red, so do not spend a full suite run repeating it: other agents share this machine.`
+            : `Foreman lands this branch on git's exit code alone: ${item.project} keeps no \`scripts/verify.sh\`. The full run is yours.`,
         }),
 
       diagnose: (item: Item, worktree: string, repository: string, intent: DiagnosticIntent) =>

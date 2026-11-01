@@ -3,8 +3,12 @@ import { Effect } from "effect";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./prog.ts";
 
-const run = <A, E>(f: (prompts: Prompts["Service"]) => Effect.Effect<A, E>) =>
-  Effect.runPromise(Prompts.use(f).pipe(Effect.provide(Prompts.Default)));
+// Prompts are prose wrapped at about 85 columns; the tests check what a rule says,
+// not where a line happens to break, so whitespace runs read as one space.
+const run = (f: (prompts: Prompts["Service"]) => Effect.Effect<string, unknown>) =>
+  Effect.runPromise(Prompts.use(f).pipe(Effect.provide(Prompts.Default))).then((prompt) =>
+    prompt.replace(/\s+/g, " "),
+  );
 
 const item: Item = {
   id: "ts-123456",
@@ -43,7 +47,7 @@ describe("Prompts", () => {
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("prog done ts-123456");
     expect(prompt).toContain("git worktree list --porcelain");
-    expect(prompt).toContain("Never\nenter /tmp/repository to inspect it");
+    expect(prompt).toContain("Never enter /tmp/repository");
     expect(prompt).toContain("do not read another task's worktree");
   });
 
@@ -137,6 +141,37 @@ describe("Prompts", () => {
     expect(prompt).toContain("git -C /tmp/repository checkout -b foreman/ts-123456");
     // The whole safety of the run rests on the operator's branch ending where
     // they left it, so the instruction to return to it is asserted, not assumed.
-    expect(prompt).toContain("git -C /tmp/repository checkout -\n");
+    expect(prompt).toContain("git -C /tmp/repository checkout - ");
+  });
+
+  // A rare case reaches only the agents whose task carries its label, so every
+  // other prompt stays short; the rule itself must still arrive where it applies.
+  test("gives the research and satisfied rules only to tasks with those labels", async () => {
+    const plainAuthor = await run((prompts) =>
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
+    );
+    const researchAuthor = await run((prompts) =>
+      prompts.author({ ...ready, labels: ["research"] }, "/tmp/worktree", "/tmp/repository"),
+    );
+    expect(plainAuthor).not.toContain("labelled `research`");
+    expect(researchAuthor).toContain("labelled `research`: the deliverable is a report");
+
+    const review = (labels: ReadonlyArray<string>) =>
+      run((prompts) =>
+        prompts.review(
+          { ...item, labels: [...labels] },
+          "/tmp/worktree",
+          "/tmp/repository",
+          "abc1234",
+          "bun test",
+        ),
+      );
+    const plain = await review([]);
+    expect(plain).not.toContain("labelled this task `satisfied`");
+    expect(plain).not.toContain("labelled `research`");
+    expect(await review(["satisfied"])).toContain("labelled this task `satisfied`");
+    expect(await review(["research"])).toContain(
+      "labelled `research`: the deliverable is the report",
+    );
   });
 });
