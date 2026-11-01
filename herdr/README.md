@@ -27,23 +27,27 @@ together.
    ln -s ~/build/foreman/herdr/foreman ~/.config/herdr-app/mods/foreman
    ```
 
-2. Add the dock to your own layout (not a shipped one, which herdr-app
-   replaces on start), as the last child of the `work-body` row:
+2. Add the panel to your own layout (not a shipped one, which herdr-app
+   replaces on start), as the last child of the `panel-body` stack, beside
+   Files and Changes:
 
    ```json
-   { "id": "foreman", "type": "block", "size": { "px": 400 }, "min": 300, "max": 800,
-     "content": { "mod": "foreman" } }
+   { "id": "foreman", "type": "block", "content": { "mod": "foreman" } }
    ```
 
-   The dock sits beside the Files/Changes stack, not inside it. The shipped
-   `tabs` mod hides any panel in that stack except Files and Changes when the
-   space changes.
+3. Give the tab bar a Foreman button. The shipped `tabs` mod draws buttons
+   for Files and Changes only, and when the space changes it hides any other
+   panel in that stack. So clone it, point your layout's `tabs` block at the
+   clone, and in the clone's `main.js` add `"foreman"` to `enabled` and a
+   `panelButton("foreman", "Foreman", "mods/foreman/foreman.svg")` child
+   after the Changes one:
 
-3. Bind a key to show and hide it, in `keys.json` under `global`:
-
-   ```json
-   "ctrl-shift-f": "layout.toggle:foreman"
+   ```sh
+   herdr-app do mod.clone '{"name":"tabs","as":"tabs-dfg"}'
    ```
+
+   The button then opens and closes the panel, and each space remembers it,
+   the same as Files and Changes.
 
 ## Props
 
