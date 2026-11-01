@@ -224,15 +224,71 @@ const waitRole = Flag.Literals("role", ["author", "review"] as const).pipe(
   Flag.optional,
 );
 
-const wait = Command.make("wait", { id, interval, role: waitRole }, (args) =>
+/**
+ * Blocks until the reading holds an ask that was not there when the wait
+ * began, then prints it. A coordinator agent runs this in the background to
+ * learn that the policy is holding a step for its approval.
+ *
+ * Each poll re-reads the world, so a step the operator has already approved
+ * is gone from the next reading and cannot satisfy the wait.
+ */
+const waitForAsks = (interval: number) =>
   Effect.gen(function* () {
-    const fleet = yield* Fleet;
-    const prog = yield* Prog;
-    const working = fleet.roster.pipe(
-      Effect.map((roster) =>
-        roster.some(
-          (worker) =>
-            worker.task === args.id &&
+    const dispatcher = yield* Dispatcher;
+    const reading = Effect.gen(function* () {
+      yield* dispatcher.read;
+      return (yield* SubscriptionRef.get(dispatcher.state)).asks;
+    });
+    const key = (ask: { readonly task: { readonly id: string }; readonly step: string }) =>
+      `${ask.task.id} ${ask.step}`;
+    const before = new Set((yield* reading).map(key));
+    while (true) {
+      yield* Effect.sleep(Duration.seconds(interval));
+      const fresh = (yield* reading).filter((ask) => !before.has(key(ask)));
+      if (fresh.length === 0) continue;
+      for (const ask of fresh) {
+        yield* Console.log(
+          `${ask.task.id}: ${ask.step} waits for approval; foreman approve ${ask.task.id}`,
+        );
+      }
+      return;
+    }
+  });
+
+const asksFlag = Flag.Boolean("asks").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Wait for a step the policy is holding for approval to appear, instead of a task's agents",
+  ),
+);
+
+const optionalId = Argument.String("id").pipe(
+  Argument.withDescription("A task id; required unless --asks"),
+  Argument.optional,
+);
+
+const wait = Command.make(
+  "wait",
+  { id: optionalId, interval, role: waitRole, asks: asksFlag },
+  (args) =>
+    Effect.gen(function* () {
+      if (args.asks) {
+        if (Option.isSome(args.id)) {
+          return yield* new Refused({ detail: "--asks waits for any task, so it takes no id" });
+        }
+        return yield* waitForAsks(args.interval);
+      }
+      if (Option.isNone(args.id)) {
+        return yield* new Refused({ detail: "wait needs a task id, or --asks" });
+      }
+      const taskId = args.id.value;
+      const fleet = yield* Fleet;
+      const prog = yield* Prog;
+      const working = fleet.roster.pipe(
+        Effect.map((roster) =>
+          roster.some(
+            (worker) =>
+              worker.task === taskId &&
             Option.match(args.role, {
               onNone: () => worker.state === "working",
               onSome: (role) => worker.roles.get(role) === "working",
@@ -245,10 +301,14 @@ const wait = Command.make("wait", { id, interval, role: waitRole }, (args) =>
       quiet = (yield* working) ? 0 : quiet + 1;
       if (quiet < 2) yield* Effect.sleep(Duration.seconds(args.interval));
     }
-    const task = yield* prog.show(args.id);
-    yield* Console.log(`${args.id}: ${task.status}`);
-  }),
-).pipe(Command.withDescription("Wait until a task's agents stop working, then print its status"));
+      const task = yield* prog.show(taskId);
+      yield* Console.log(`${taskId}: ${task.status}`);
+    }),
+).pipe(
+  Command.withDescription(
+    "Wait until a task's agents stop working, then print its status; --asks waits for a step to need approval",
+  ),
+);
 
 /**
  * Every one-shot command, each given the services it reads. Provided per

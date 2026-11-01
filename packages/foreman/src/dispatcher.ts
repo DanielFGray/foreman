@@ -34,6 +34,7 @@ import {
   expire,
   modeOf,
   permit,
+  grant,
   policyPath,
   readPolicy,
   scopeOf,
@@ -2176,6 +2177,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * A branch whose task is gone is skipped: it has no id to dispatch
        * against, so it stays on the list until a person deals with it.
        */
+      /**
+       * Answers an ask with one grant: the step it holds, on that one task,
+       * counted once. The grant is an ordinary one, so the next tick takes the
+       * step as it would for any granted task. It keeps covering the task until
+       * the task is finished, so a rejected review's rerun is not asked again.
+       */
+      approve: (ask: Ask) =>
+        commanded(
+          updatePolicy(policyPath(), (policy) => grant(policy, ask.task.id, [ask.step], 1)).pipe(
+            Effect.provideContext(platform),
+            Effect.asVoid,
+          ),
+        ),
       adopt: (branch: Unreviewed) =>
         commanded(
           branch.status === undefined

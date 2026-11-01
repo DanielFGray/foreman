@@ -1181,3 +1181,32 @@ describe("a step set to ask", () => {
     expect(stepWrites(world)).toEqual([]);
   });
 });
+
+describe("approving an ask", () => {
+  test("writes the grant the next tick takes, and only for the asked step", async () => {
+    usePolicy({ slots: 1, default: { author: "off", climb: "off", review: "ask", land: "ask" } });
+    const task = item("ts-approve-real", "reviewing", ["by:cheap"]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    const [ask] = await asksAfter(world).then((asks) => asks);
+    expect(ask).toEqual({ task: task.id, step: "review", rung: "cheap" });
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.approve({ task, step: "review", rung: "cheap" }),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+    expect(JSON.parse(readFileSync(process.env["FOREMAN_POLICY"] ?? "", "utf8")).grants).toEqual([
+      { scope: task.id, steps: ["review"], remaining: 1, admitted: [] },
+    ]);
+    await tick(world);
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+  });
+});

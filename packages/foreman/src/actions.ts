@@ -78,6 +78,8 @@ export const perform = (
       return row.project ? dispatcher.onboard(row.project) : undefined;
     case "adopt":
       return row.unreviewed ? dispatcher.adopt(row.unreviewed) : undefined;
+    case "approve":
+      return row.ask ? dispatcher.approve(row.ask) : undefined;
   }
 };
 
@@ -113,4 +115,5 @@ export const ACTION_HELP: Record<Action, string> = {
   unassign: "Clear a review-by label that no reviewer is behind",
   onboard: "Send an agent to salvage the uncommitted work holding a project",
   adopt: "Put an unread branch in front of a reviewer",
+  approve: "Allow the step a task is waiting on, once, for that task alone",
 };
