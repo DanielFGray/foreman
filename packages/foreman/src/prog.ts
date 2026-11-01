@@ -254,6 +254,10 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * last time, and leaving it behind would let a task lowered back onto
        * that rung inherit a verdict it has not earned again.
        */
+      /** Records that the task's agent stopped on this account's usage wall. */
+      markWall: (task: string, provider: string) =>
+        run("label", task, `${WALLED}:${provider}`).pipe(Effect.asVoid),
+
       markFailure: (task: string, rung: string) =>
         removeAttempts(task, rung).pipe(
           Effect.andThen(run("label", task, `${FAILED_BY}:${rung}`)),
@@ -388,7 +392,10 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       children,
 
       /** Marks work complete after foreman has landed its branch. */
-      complete: (task: string) => run("done", task).pipe(Effect.asVoid),
+      // Done first, so a task that cannot be completed fails on `done` itself.
+      // A wall label left on a done task is inert: nothing dispatches it.
+      complete: (task: string) =>
+        run("done", task).pipe(Effect.andThen(removeKinds(task, [WALLED])), Effect.asVoid),
     } as const;
   }),
 }) {
@@ -686,6 +693,18 @@ export const SATISFIED = "satisfied";
  * author that wrote nothing.
  */
 export const RESEARCH = "research";
+
+/**
+ * The account a task's agent stopped on, one label per provider. A stop on a
+ * usage wall says nothing about the model, so the task is not failed; the label
+ * only keeps rungs on that account off the task's next dispatch. Cleared when
+ * the task completes, because the wall describes the account at that time.
+ */
+export const WALLED = "walled";
+
+/** The accounts a task's agents have stopped on a usage wall. */
+export const walledBy = (item: { readonly labels: ReadonlyArray<string> }): ReadonlyArray<string> =>
+  valuesOfKind(item.labels, WALLED);
 
 export type DiagnosticIntent = "diagnose" | "review";
 

@@ -498,6 +498,18 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
 
       /**
+       * Commits everything a stopped agent left in its worktree onto the branch
+       * the worktree holds, so the work outlives the agent and the next author
+       * starts from it. Called only in a worktree foreman made: an attached
+       * checkout is the operator's, and is never committed to.
+       */
+      commitWork: (directory: string, message: string) =>
+        git(directory, "add", "--all").pipe(
+          Effect.andThen(git(directory, "commit", "--quiet", "-m", message)),
+          Effect.asVoid,
+        ),
+
+      /**
        * The commit a task's branch was cut from, so a reviewer can read the
        * author's work without going near the operator's checkout.
        *
