@@ -10,7 +10,7 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
-import { ForemanCommand, ForemanState, ForemanView } from "../shared/Foreman.ts"
+import { ForemanCommand, ForemanRow, ForemanState, ForemanView } from "../shared/Foreman.ts"
 import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -175,6 +175,18 @@ export const RungList = defineTaggedUnion({
 })
 export type RungList = typeof RungList.Type
 
+/**
+ * The queue as last read for the picked project. A read for the project picked
+ * before may show until the next arrives; the rows are filtered by project
+ * like the fleet's, so it never shows another project's tasks.
+ */
+export const ForemanQueue = defineTaggedUnion({
+  Unread: {},
+  Listed: { rows: S.Array(ForemanRow) },
+  Unlisted: { reason: S.String },
+})
+export type ForemanQueue = typeof ForemanQueue.Type
+
 /** The Foreman page's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
 export const ForemanPage = S.Struct({
   rungs: RungList,
@@ -190,6 +202,7 @@ export const ForemanPage = S.Struct({
   project: S.Option(S.String),
   /** The sections folded to their heading. */
   folded: S.Array(ForemanView),
+  queue: ForemanQueue,
 })
 export type ForemanPage = typeof ForemanPage.Type
 
@@ -481,6 +494,8 @@ export const Message = defineMessageUnion({
   ReceivedForeman: { state: ForemanState },
   ReceivedRungs: { rungs: S.Array(S.String) },
   FailedRungs: { reason: S.String },
+  ReceivedForemanQueue: { rows: S.Array(ForemanRow) },
+  FailedForemanQueue: { reason: S.String },
   ClickedForemanCommand: { command: ForemanCommand },
   SucceededForemanCommand: { line: S.String },
   FailedForemanCommand: { line: S.String, reason: S.String },

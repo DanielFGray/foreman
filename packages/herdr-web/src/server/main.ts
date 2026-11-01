@@ -102,6 +102,7 @@ const Handlers = Api.toLayer(
       runForeman: ({ command }) => foreman.run(command),
       refreshForeman: () => foreman.refresh,
       foremanRungs: () => foreman.rungs,
+      foremanQueue: ({ project }) => foreman.queue(project),
       pushKey: () => push.publicKey,
       subscribePush: ({ subscription, events }) => push.subscribe(subscription, events),
       unsubscribePush: ({ endpoint }) => push.unsubscribe(endpoint),

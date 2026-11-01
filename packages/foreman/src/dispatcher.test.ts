@@ -4,7 +4,6 @@ import {
   awaitingLanding,
   decisionsOf,
   dispatchesFor,
-  excludeFailedTasks,
   failedTasks,
   handoffExpired,
   isUnread,
@@ -261,16 +260,6 @@ describe("dispatch failures", () => {
     const otherOnce = nextFailure(twice.failures, "ts-2", "spawn");
 
     expect(failedTasks(otherOnce.failures).map(([task]) => task)).toEqual(["ts-1"]);
-  });
-
-  test("a twice-failed task is not ordinary queue work", () => {
-    const first = nextFailure(new Map(), "ts-1", "open");
-    const twice = nextFailure(first.failures, "ts-1", "open");
-    const queued = [task("ts-1", [], "open"), task("ts-2", [], "open")];
-
-    expect(excludeFailedTasks(queued, failedTasks(twice.failures)).map(({ id }) => id)).toEqual([
-      "ts-2",
-    ]);
   });
 });
 

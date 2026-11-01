@@ -5,7 +5,7 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
-import { ForemanCommand, ForemanState } from "./Foreman.ts"
+import { ForemanCommand, ForemanName, ForemanRow, ForemanState } from "./Foreman.ts"
 import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -187,6 +187,8 @@ export const Api = RpcGroup.make(
   Rpc.make("refreshForeman", {}),
   /** The rungs a queued task can be launched on. */
   Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),
+  /** The queue foreman would dispatch, for one project or (none) every open one. */
+  Rpc.make("foremanQueue", { payload: { project: S.OptionFromNullOr(ForemanName) }, success: S.Array(ForemanRow), error: BridgeError }),
 
   Rpc.make("pushKey", { success: S.String, error: BridgeError }),
   /** Alerts the device behind the subscription for these events, from now on. */

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { epicCompletionCredit, interleave } from "./queue.ts";
-import type { ReadyTask } from "./prog.ts";
+import type { Ladder } from "./ladder.ts";
+import { epicCompletionCredit, interleave, queueFrom } from "./queue.ts";
+import type { Item, ReadyTask } from "./prog.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
 
@@ -140,5 +141,77 @@ describe("epicCompletionCredit", () => {
     expect(epicCompletionCredit(0.5)).toBeCloseTo(0.5, 5);
     expect(epicCompletionCredit(0.99)).toBeCloseTo(1.9602, 3);
     expect(epicCompletionCredit(1)).toBeCloseTo(2, 5);
+  });
+});
+
+describe("queueFrom", () => {
+  const rung = (name: string): Ladder[number] => ({
+    name,
+    harness: "opencode",
+    model: undefined,
+    provider: undefined,
+  });
+  const ladder: Ladder = [rung("cheap"), rung("top")];
+  const reading = (ready: ReadonlyArray<ReadyTask>, failed: ReadonlyArray<string> = []) => ({
+    ready,
+    ladder,
+    projects: ["a"],
+    epics: [],
+    failed: new Set(failed),
+    now,
+  });
+  const ids = (tasks: ReadonlyArray<ReadyTask>) => tasks.map(({ id }) => id);
+
+  test("parks a task every rung has failed, and one marked needs-you", () => {
+    const split = queueFrom(
+      reading([
+        task("spent", "a", 1, now, ["failed-by:cheap", "failed-by:top"]),
+        task("asked", "a", 1, now, ["needs-you"]),
+        task("ready", "a", 1, now, ["failed-by:cheap"]),
+      ]),
+    );
+    expect(ids(split.queue)).toEqual(["ready"]);
+    expect(ids(split.yours)).toEqual(["spent", "asked"]);
+  });
+
+  test("keeps onboarding and twice-failed dispatches out of the queue", () => {
+    const split = queueFrom(
+      reading(
+        [task("salvage", "a", 1, now, ["onboard"]), task("broken", "a", 1), task("ok", "a", 1)],
+        ["broken"],
+      ),
+    );
+    expect(ids(split.queue)).toEqual(["ok"]);
+    expect(split.yours).toEqual([]);
+  });
+
+  test("leaves out projects that take no new work", () => {
+    const split = queueFrom(
+      reading([task("elsewhere", "b", 1), task("asked", "b", 1, now, ["needs-you"])]),
+    );
+    expect(split.queue).toEqual([]);
+    expect(split.yours).toEqual([]);
+  });
+
+  test("ranks a task under a nearly done epic ahead of its band", () => {
+    const child = (id: string, status: Item["status"]): Item => ({
+      id,
+      title: id,
+      status,
+      project: "a",
+      type: "task",
+      priority: 2,
+      labels: [],
+      description: null,
+      last_activity_at: now,
+      created_at: now,
+      parent: "ep",
+    });
+    const epic = { ...child("ep", "in_progress"), type: "epic", parent: null };
+    const split = queueFrom({
+      ...reading([task("plain", "a", 2), task("last", "a", 2)]),
+      epics: [{ epic, children: [child("done", "done"), child("last", "open")] }],
+    });
+    expect(ids(split.queue)).toEqual(["last", "plain"]);
   });
 });

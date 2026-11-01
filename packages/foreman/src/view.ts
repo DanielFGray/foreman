@@ -212,7 +212,6 @@ export const actionsFor = (
   row: ColumnRow | undefined,
 ): ReadonlyArray<Action> => {
   if (!row) return [];
-  if (row.task?.type === "epic") return [];
   const actions =
     column === "decisions" && row.task
       ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
@@ -264,16 +263,12 @@ export const climbing = (row: ColumnRow): Climbing | undefined => row.task ?? ro
 
 const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow> =>
   Match.value(column).pipe(
-    // Epics lead as context for reading the queue beneath them.
-    Match.when("queue", () => [
-      ...state.epics.map(epicRow),
-      ...state.queue.map((task) => readyRow(task, "queue", state)),
-    ]),
+    Match.when("queue", () => state.queue.map(queueRow)),
     Match.when("working", () => state.working.map((active) => activeRow(active, "working", state))),
     Match.when("review", () => state.review.map((active) => activeRow(active, "review", state))),
     Match.when("landed", () => state.landed.map((task) => landedRow(task, state))),
     Match.when("decisions", () => state.decisions.map((active) => decisionRow(active, state))),
-    Match.when("yours", () => state.yours.map((task) => readyRow(task, "yours", state))),
+    Match.when("yours", () => state.yours.map((task) => yoursRow(task, state))),
     Match.when("held", () => state.held.map(heldRow)),
     Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
     Match.when("stale", () => state.stale.map(staleRow)),
@@ -314,15 +309,18 @@ const attentionRow =
   (kind: string) =>
   (row: ColumnRow): ColumnRow => ({ ...row, label: `${kind}  ${row.label}` });
 
-// A queued task with a branch behind it is not new work, it is a resumption:
-// an earlier author committed and the task came back here. Marked rather than
-// listed apart, because it is still ordinary queue work and the queue's own
-// order decides when it goes out. Marked rather than counted, because the
-// commit count is a read per branch per tick to say what "resume" already says.
-const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState): ColumnRow => ({
-  column,
+/**
+ * A ready task as a row, from the task alone.
+ *
+ * `foreman queue` builds these with no reading of the fleet behind it, so the
+ * row knows nothing about branches: whether a queued task resumes earlier
+ * commits is a git read per task, which a client asking every few seconds
+ * cannot afford.
+ */
+export const queueRow = (task: ReadyTask): ColumnRow => ({
+  column: "queue",
   key: task.id,
-  label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
+  label: `${task.project}  ${task.title}`,
   detail: undefined,
   task: undefined,
   ready: task,
@@ -333,32 +331,20 @@ const readyRow = (task: ReadyTask, column: "queue" | "yours", state: FleetState)
   stale: undefined,
   failure: undefined,
   provider: undefined,
+  hasWork: false,
+  committed: false,
+});
+
+// A parked task with a branch behind it is a resumption: an earlier author
+// committed and the task came back. Marked rather than counted, because the
+// commit count is a read per branch per tick to say what "resume" already says.
+const yoursRow = (task: ReadyTask, state: FleetState): ColumnRow => ({
+  ...queueRow(task),
+  column: "yours",
+  label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
-
-const epicRow = ({ epic, children }: FleetState["epics"][number]): ColumnRow => {
-  const complete = children.filter((child) => child.status === "done").length;
-  return {
-    column: "queue",
-    key: epic.id,
-    label: `${epic.project}  ${complete}/${children.length}  ${epic.title}`,
-    // No second line: the count is already on the label, and a row costing two
-    // lines to say one thing twice pushes the ready work off a short pane.
-    detail: undefined,
-    task: epic,
-    ready: undefined,
-    worker: undefined,
-    project: undefined,
-    reason: undefined,
-    unreviewed: undefined,
-    stale: undefined,
-    failure: undefined,
-    provider: undefined,
-    hasWork: false,
-    committed: false,
-  };
-};
 
 // The kind is shown rather than the project: in the middle columns the question
 // is which model is on the work, and the project is already visible upstream.

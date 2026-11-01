@@ -1,3 +1,7 @@
+import { Effect } from "effect";
+import type { Fleet } from "./fleet.ts";
+import type { Repository } from "./repository.ts";
+
 /**
  * The projects foreman works in, derived from the world every tick.
  *
@@ -62,3 +66,13 @@ export const projectSet = (
 };
 
 const nameOf = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() ?? directory;
+
+/** The checkouts the operator's open spaces sit in: the projects that take new work. */
+export const openCheckouts = (fleet: Fleet["Service"], repository: Repository["Service"]) =>
+  Effect.gen(function* () {
+    const folders = yield* fleet.spaces;
+    const checkouts = yield* Effect.forEach(folders, (folder) => repository.checkoutOf(folder), {
+      concurrency: "unbounded",
+    });
+    return checkouts.filter((checkout) => checkout !== undefined);
+  });

@@ -1,10 +1,10 @@
 import { Option } from "effect"
-import { all, click, Command, expect, expectAll, given, role, scene, selector } from "foldkit/scene"
+import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription } from "foldkit/scene"
 import { test } from "vitest"
 import type { ForemanReading, ForemanRow, ForemanState } from "../shared/Foreman.ts"
 import { ListRungs, RefreshForeman, RunForeman, SaveSelection } from "./commands.ts"
 import { init, update, view } from "./main.ts"
-import { Message, Selection } from "./model.ts"
+import { ForemanQueue, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const NOW = Date.parse("2026-10-30T01:00:00Z")
@@ -15,8 +15,6 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
   label,
   detail: Option.none(),
   project: Option.some(project),
-  parent: Option.none(),
-  epic: false,
   actions,
 })
 
@@ -29,17 +27,20 @@ const reading: ForemanReading = {
   rows: [
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),
-    row("queue", "ts-q1", "Write the export", ["complete", "intervene", "descend"]),
-    row("queue", "ts-q2", "Speed up the build", ["complete"], "lib"),
   ],
 }
+
+// The queue comes from `foreman queue`, not from the reading.
+const queue = ForemanQueue.Listed({
+  rows: [row("queue", "ts-q1", "Write the export", ["complete", "intervene", "descend"]), row("queue", "ts-q2", "Speed up the build", ["complete"], "lib")],
+})
 
 // The daemon last wrote ten minutes ago; the reading shown is the bridge's own, newer one.
 const state: ForemanState = { reading: Option.some(reading), daemonAt: Option.some(NOW - 600e3), problem: Option.none(), isReading: false }
 
 const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model
 
-const open = { ...start, selection: Selection.Foreman(), foreman: Option.some(state), now: NOW }
+const open = { ...start, selection: Selection.Foreman(), foreman: Option.some(state), foremanPage: { ...start.foremanPage, queue }, now: NOW }
 
 test("the sidebar opens the page, which reads the ladder's rungs", () => {
   scene(
@@ -98,20 +99,6 @@ test("kill takes a second click, a review can be allowed once, and the needs-inp
   )
 })
 
-test("an epic leads its queued tasks and takes no launch", () => {
-  const epic = { ...row("queue", "ep-1", "Ship exports", []), epic: true }
-  const child = { ...row("queue", "ts-q3", "Export as CSV", ["complete"]), parent: Option.some("ep-1") }
-  const grouped = { ...state, reading: Option.some({ ...reading, rows: [epic, child, ...reading.rows] }) }
-  scene(
-    { update, view },
-    given({ ...open, foreman: Option.some(grouped) }),
-    click(role("button", { name: "Queue 4" })),
-    expect(role("button", { name: "launch ep-1" })).not.toExist(),
-    expect(role("list", { name: "tasks under ep-1" })).toContainText("Export as CSV"),
-    expect(role("button", { name: "launch ts-q3" })).toExist(),
-  )
-})
-
 test("the queue starts folded, and a queued task launches on a picked rung", () => {
   scene(
     { update, view },
@@ -127,5 +114,15 @@ test("the queue starts folded, and a queued task launches on a picked rung", () 
     Command.expectExact(RunForeman({ command: { _tag: "Launch", key: "ts-q1", rung: "sonnet" } })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "dispatch ts-q1 --rung sonnet" })),
     expect(role("button", { name: "launch ts-q1 on sonnet" })).not.toExist(),
+  )
+})
+
+test("the queue says why foreman could not rank it", () => {
+  scene(
+    { update, view },
+    given(open),
+    Subscription.emit(Message.FailedForemanQueue({ reason: "the task store did not answer" })),
+    expect(selector(".foreman .note.error")).toHaveText("the task store did not answer"),
+    expect(role("button", { name: /^Queue/ })).not.toExist(),
   )
 })

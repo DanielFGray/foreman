@@ -1,6 +1,6 @@
-// The Foreman page: foreman's fleet as the bridge last read it, the policy
-// that says what the fleet may do by itself, and each row's one-shot commands
-// as buttons. The page keeps nothing of foreman's: every button runs a
+// The Foreman page: foreman's fleet as the bridge last read it, the queue as
+// foreman ranks it, the policy that says what the fleet may do by itself, and
+// each row's one-shot commands as buttons. The page keeps nothing of foreman's: every button runs a
 // foreman command through the bridge, and the reading that follows shows what
 // it did.
 import { Array, Option, Result, Schema as S } from "effect"
@@ -19,7 +19,7 @@ import {
   type ForemanView,
 } from "../shared/Foreman.ts"
 import { ListRungs, RunForeman, SaveSelection } from "./commands.ts"
-import { type ForemanPage, Message, type Model, RungList, Selection, type UpdateReturn } from "./model.ts"
+import { ForemanQueue, type ForemanPage, Message, type Model, RungList, Selection, type UpdateReturn } from "./model.ts"
 import { selected } from "./selection.ts"
 import { ago } from "./usage.ts"
 
@@ -32,6 +32,7 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   refusal: Option.none(),
   project: Option.none(),
   folded: ["queue", "landed"],
+  queue: ForemanQueue.Unread(),
 }
 
 /** Opens the page and reads the ladder's rungs again; the page's own choices stay. */
@@ -69,7 +70,7 @@ export const toggledSection = (model: Model, view: ForemanView): Model =>
     folded: Array.contains(page.folded, view) ? Array.filter(page.folded, (other) => other !== view) : [...page.folded, view],
   }))
 
-/** The page: a heading that says whether the daemon runs, the policy, and the fleet's rows by section. */
+/** The page: a heading that says whether the daemon runs, the policy, and the fleet's and the queue's rows by section. */
 export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const page = model.foremanPage
   return h.section(
@@ -80,9 +81,14 @@ export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
         headingView(state, model.now, h),
         ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
         ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),
+        ...ForemanQueue.match(page.queue, {
+          Unread: () => [],
+          Listed: () => [],
+          Unlisted: ({ reason }) => [h.p([h.Class("note error")], [reason])],
+        }),
         ...Option.match(state.reading, {
           onNone: () => (state.isReading ? [h.p([h.Class("note")], ["Reading the fleet…"])] : []),
-          onSome: (reading) => [policyView(reading, page, h), projectsView(reading, page, h), ...sectionsView(reading, page, h)],
+          onSome: (reading) => [policyView(reading, page, h), projectsView(reading, page, h), ...sectionsView([...reading.rows, ...queueRows(page.queue)], page, h)],
         }),
       ],
     }),
@@ -201,7 +207,7 @@ const projectsView = ({ projects }: ForemanReading, page: ForemanPage, h: HtmlBu
 }
 
 // A row with no project is the fleet's own, such as an account, and shows under every project.
-const sectionsView = ({ rows }: ForemanReading, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+const sectionsView = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const shown = Option.match(page.project, {
     onNone: () => rows,
     onSome: (project) => Array.filter(rows, (row) => Option.match(row.project, { onNone: () => true, onSome: (own) => own === project })),
@@ -228,28 +234,19 @@ const sectionView = (view: ForemanView, title: string, rows: ReadonlyArray<Forem
           ),
         ],
       ),
-      ...(isOpen ? [h.ul([h.Class("foreman-rows"), h.AriaLabel(title)], groupedRows(rows, page, h))] : []),
+      ...(isOpen ? [h.ul([h.Class("foreman-rows"), h.AriaLabel(title)], Array.map(rows, (row) => rowView(row, page, h)))] : []),
     ],
   )
 }
 
-// Each epic row leads its own tasks, in a list nested under it. A task whose
-// epic has no row in the section stays at the top level, in the published order.
-const groupedRows = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
-  const epics = new Set(Array.filterMap(rows, (row) => (row.epic ? Result.succeed(row.key) : Result.failVoid)))
-  const underShownEpic = (row: ForemanRow) => Option.exists(row.parent, (parent) => epics.has(parent))
-  return Array.filterMap(rows, (row) =>
-    underShownEpic(row)
-      ? Result.failVoid
-      : Result.succeed(rowView(row, Array.filter(rows, (child) => Option.contains(child.parent, row.key)), page, h)),
-  )
-}
+const queueRows = (queue: ForemanQueue): ReadonlyArray<ForemanRow> =>
+  ForemanQueue.match(queue, { Unread: () => [], Listed: ({ rows }) => rows, Unlisted: () => [] })
 
-const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
+const rowView = (row: ForemanRow, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
   const isLaunching = Option.contains(page.launching, row.key)
   const actions = Array.filter(row.actions, S.is(ForemanAction))
   const buttons = [
-    ...(row.view === "queue" && !row.epic
+    ...(row.view === "queue"
       ? [h.button([h.Type("button"), h.Class(isLaunching ? "chip on" : "chip"), h.AriaExpanded(isLaunching), h.AriaLabel(`launch ${row.key}`), h.OnClick(Message.ClickedLaunch({ key: row.key }))], ["launch"])]
       : []),
     ...(row.view === "review"
@@ -265,9 +262,6 @@ const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: For
       ...Option.match(row.detail, { onNone: () => [], onSome: (detail) => [h.div([h.Class("foreman-detail"), h.Title(detail)], [detail])] }),
       ...(Array.isReadonlyArrayNonEmpty(buttons) ? [h.div([h.Class("foreman-actions")], buttons)] : []),
       ...(isLaunching ? [rungsView(row.key, page, h)] : []),
-      ...(Array.isReadonlyArrayNonEmpty(children)
-        ? [h.ul([h.Class("foreman-rows foreman-children"), h.AriaLabel(`tasks under ${row.key}`)], Array.map(children, (child) => rowView(child, [], page, h)))]
-        : []),
     ],
   )
 }

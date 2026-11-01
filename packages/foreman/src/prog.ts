@@ -66,31 +66,43 @@ export class Prog extends Context.Service<Prog>()("Prog", {
      * itself — a missing item exits non-zero with empty stdout — so this is the
      * one command that reads the exit status rather than the output alone.
      */
-    const lookup = (task: string) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const process = yield* spawner.spawn(ChildProcess.make("prog", ["show", task, "--json"]));
-          const [exitCode, stdout] = yield* Effect.all(
-            [process.exitCode, Stream.decodeText(process.stdout).pipe(Stream.mkString)],
-            { concurrency: 2 },
-          );
-          return { exitCode: Number(exitCode), stdout };
-        }),
-      ).pipe(
-        Effect.mapError(
-          (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
-        ),
-        Effect.flatMap((result) =>
-          result.exitCode === 0
-            ? S.decodeUnknownEffect(S.fromJsonString(Item))(result.stdout).pipe(
-                Effect.mapError(
-                  (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
-                ),
-                Effect.map(Option.some),
-              )
-            : Effect.succeedNone,
-        ),
-      );
+    const showAs =
+      <A, I>(schema: S.Codec<A, I>) =>
+      (task: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const process = yield* spawner.spawn(
+              ChildProcess.make("prog", ["show", task, "--json"]),
+            );
+            const [exitCode, stdout] = yield* Effect.all(
+              [process.exitCode, Stream.decodeText(process.stdout).pipe(Stream.mkString)],
+              { concurrency: 2 },
+            );
+            return { exitCode: Number(exitCode), stdout };
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
+          ),
+          Effect.flatMap((result) =>
+            result.exitCode === 0
+              ? S.decodeUnknownEffect(S.fromJsonString(schema))(result.stdout).pipe(
+                  Effect.mapError(
+                    (cause) => new ProgError({ command: `show ${task}`, detail: String(cause) }),
+                  ),
+                  Effect.map(Option.some),
+                )
+              : Effect.succeedNone,
+          ),
+        );
+
+    /** The items that belong to one epic. */
+    const children = (epic: string) => runJson(S.Array(Item), "list", "--parent", epic, "--json");
+
+    const lookup = showAs(Item);
+
+    /** A task with its log and definition of done, for a reader showing it whole. */
+    const detail = showAs(TaskDetail);
 
     /** Full detail for one task, failing when the store has no such task. */
     const show = (task: string) =>
@@ -136,25 +148,40 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     return {
       show,
       lookup,
+      detail,
 
-      /** All unblocked, unclaimed tasks, highest priority first. */
-      ready: () => runJson(S.Array(ReadyTask), "ready", "--json"),
+      /** Unblocked, unclaimed tasks, in every project or in one. */
+      ready: (project: Option.Option<string>) =>
+        runJson(
+          S.Array(ReadyTask),
+          "ready",
+          ...Option.match(project, { onNone: () => [], onSome: (name) => ["-p", name] }),
+          "--json",
+        ),
 
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
 
-      /** Epics currently being driven, with their progress read separately by the caller. */
-      inProgressEpics: (project: string) =>
-        runJson(
-          S.Array(Item),
-          "list",
-          "-p",
-          project,
-          "--status",
-          "in_progress",
-          "--type",
-          "epic",
-          "--json",
+      /**
+       * The epics being driven that these tasks sit under, each with its
+       * direct children.
+       *
+       * Only an epic with a task in hand can change that task's rank, so the
+       * children of every other epic are not read: one read per epic is most
+       * of what ranking the queue costs.
+       */
+      epicsOver: (tasks: ReadonlyArray<{ readonly parent: string | null }>) =>
+        runJson(S.Array(Item), "list", "--status", "in_progress", "--type", "epic", "--json").pipe(
+          Effect.flatMap((epics) =>
+            Effect.forEach(
+              epics.filter((epic) => tasks.some((task) => task.parent === epic.id)),
+              (epic) =>
+                children(epic.id).pipe(
+                  Effect.map((items): EpicProgress => ({ epic, children: items })),
+                ),
+              { concurrency: "unbounded" },
+            ),
+          ),
         ),
 
       /**
@@ -358,8 +385,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => run("log", task, message).pipe(Effect.asVoid),
 
-      /** The items that belong to one epic. */
-      children: (epic: string) => runJson(S.Array(Item), "list", "--parent", epic, "--json"),
+      children,
 
       /** Marks work complete after foreman has landed its branch. */
       complete: (task: string) => run("done", task).pipe(Effect.asVoid),
@@ -443,6 +469,20 @@ export const Item = S.Struct({
   parent: S.NullOr(S.String),
 });
 export type Item = typeof Item.Type;
+
+/** An epic being driven, and its direct children: how close it is to done. */
+export interface EpicProgress {
+  readonly epic: Item;
+  readonly children: ReadonlyArray<Item>;
+}
+
+/** One task as a reader shows it whole: the item, what done means, and its log. */
+export const TaskDetail = S.Struct({
+  ...Item.fields,
+  definition_of_done: S.NullOr(S.String),
+  logs: S.Array(S.Struct({ message: S.String, created_at: S.String })),
+});
+export type TaskDetail = typeof TaskDetail.Type;
 
 /** Which kind of agent authored the work, if foreman recorded it. */
 export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>

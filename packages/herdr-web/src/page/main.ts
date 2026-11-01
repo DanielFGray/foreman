@@ -6,14 +6,14 @@ import * as Dom from "foldkit/dom"
 import type { Document, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import { dropSide, hasFreshStatus, locate } from "./group.ts"
-import { BridgeClient, failureReason } from "./rpc.ts"
+import { BridgeClient, failureReason, reportFailure } from "./rpc.ts"
 import { fontStack, restyle, type Settings, stepSize } from "./settings.ts"
 import { alertTaps, CheckAlerts, presence, SendTestAlert, SyncAlerts, TurnAlertsOff, TurnAlertsOn } from "./alerts.ts"
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent, ListRungs, RefreshForeman } from "./commands.ts"
-import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, ForemanQueue, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
@@ -38,6 +38,8 @@ import { topBarView, workspaceView } from "./workspace.ts"
 // CONSTANT
 
 const RECONNECT_DELAY = "2 seconds"
+// The queue is read again this often while the Foreman page is open.
+const QUEUE_INTERVAL = "5 seconds"
 /** Reset countdowns count in minutes. */
 const CLOCK_TICK = "30 seconds"
 /** While a prompt waits, or an agent changed state under a minute ago, so their clocks show on time. */
@@ -305,6 +307,10 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     ReceivedRungs: ({ rungs }) => ({ model: withPage(model, (page) => ({ ...page, rungs: RungList.Listed({ rungs }) })) }),
 
     FailedRungs: ({ reason }) => ({ model: withPage(model, (page) => ({ ...page, rungs: RungList.Unlisted({ reason }) })) }),
+
+    ReceivedForemanQueue: ({ rows }) => ({ model: withPage(model, (page) => ({ ...page, queue: ForemanQueue.Listed({ rows }) })) }),
+
+    FailedForemanQueue: ({ reason }) => ({ model: withPage(model, (page) => ({ ...page, queue: ForemanQueue.Unlisted({ reason }) })) }),
 
     ClickedForemanCommand: ({ command }) => clickedForemanCommand(model, command),
 
@@ -756,6 +762,22 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
                 Stream.catchCause(() => Stream.empty),
               )
             }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
+          : Stream.empty,
+    },
+  ),
+
+  // The queue is no part of the fleet's reading: foreman ranks it from the task
+  // store on each ask, for the picked project, so the page asks again on a timer.
+  foremanQueue: entry(
+    { isOpen: S.Boolean, project: S.Option(S.String) },
+    {
+      modelToDependencies: (model) => ({ isOpen: model.selection._tag === "Foreman", project: model.foremanPage.project }),
+      dependenciesToStream: ({ isOpen, project }) =>
+        isOpen
+          ? Effect.gen(function* () {
+              const client = yield* BridgeClient
+              return Message.ReceivedForemanQueue({ rows: yield* client.foremanQueue({ project }) })
+            }).pipe(reportFailure((reason) => Message.FailedForemanQueue({ reason })), Stream.fromEffect, Stream.repeat(Schedule.spaced(QUEUE_INTERVAL)))
           : Stream.empty,
     },
   ),

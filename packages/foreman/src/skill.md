@@ -26,7 +26,8 @@ Run `foreman <command> --help` for the options.
 
 | Command                                           | Does                                                                                                  |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `foreman queue`                                   | Prints ready tasks in dispatch order                                                                  |
+| `foreman queue [--project P] [--json]`            | Prints ready tasks in dispatch order, from the task store only; no daemon needed                      |
+| `foreman show <id> [--json]`                      | Prints one task with its definition of done and its log                                               |
 | `foreman status [--json]`                         | Prints every row and the commands each takes; `--json` is the shape the daemon writes to `state.json` |
 | `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                                     |
 | `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status                     |
@@ -71,7 +72,7 @@ ready` reads edges, never the text of a description.
 - Pick work with `foreman queue`, start it with `foreman dispatch`, and run
   `foreman wait` in the background. The ladder chooses the model, so you do
   not choose launch flags.
-- When `wait` returns, read the result with `prog show <id>`. A task in
+- When `wait` returns, read the result with `foreman show <id>`. A task in
   `reviewing` goes to a reviewer on the daemon's next tick.
 - When an attempt is stuck, use `intervene`. Do not open the worktree and
   edit it yourself.

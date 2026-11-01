@@ -1,14 +1,18 @@
-// The foreman panel: the fleet as the daemon last published it, filtered to the
-// shown space's project, with each row's one-shot commands as buttons.
+// The foreman panel: the fleet as the daemon last published it and the queue
+// as foreman ranks it, filtered to the shown space's project, with each row's
+// one-shot commands as buttons.
 //
-// It reads state.json and runs `foreman <action> <id>` and `foreman policy ...`;
-// it keeps nothing of its own. The policy is the daemon's to read: a button
-// here rewrites the file through the CLI, and the next reading shows it. The file's shape is `Published` in foreman's src/published.ts.
+// It reads state.json, asks `foreman queue` and `foreman show` for the queue
+// and a task's record, and runs `foreman <action> <id>` and `foreman policy ...`.
+// It keeps nothing of its own and never speaks to the task store itself. The
+// policy is the daemon's to read: a button here rewrites the file through the
+// CLI, and the next reading shows it. The file's shape is `Published` in
+// foreman's src/published.ts; a queue row has the shape of one of its rows.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home } from "herdr";
 
-const VERSION = 2;
+const VERSION = 3;
 const STEPS = ["author", "climb", "review", "land"];
 // Older than this, the reading is no longer the daemon working: it is gone or
 // wedged inside a tick, and the panel says so rather than showing it as live.
@@ -31,6 +35,8 @@ const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b/;
 // An open row shows this many of its task's newest log entries.
 const LOGS_SHOWN = 3;
 const PENDING = Symbol("pending");
+// The queue's scope while the panel shows every project.
+const ALL = Symbol("all");
 
 export default class Foreman extends View {
   init(_props, cx) {
@@ -39,18 +45,22 @@ export default class Foreman extends View {
     this.command = p.command ?? ["foreman"];
     this.published = null; this.problem = null; this.all = false;
     this.launching = null; this.rungs = []; this.busy = new Set(); this.landed = null;
-    // The row shown whole, and each task's prog record as last read, by task id.
+    // The row shown whole, and each task's record as last read, by task id.
     this.opened = null; this.tasks = new Map();
     // Each space folder's project: a name, null for a folder in no checkout,
     // or PENDING while git is asked.
     this.checkouts = new Map();
+    // The queue as last read: the scope it was read for (a project name, or
+    // ALL), and its rows or why they could not be read.
+    this.queue = null;
     this.reload(cx);
     this.loadRungs(cx);
     this.watch(cx);
     this.resolveCheckouts(cx);
-    // The age line counts up between readings, and a watch that failed is
-    // tried again: the folder does not exist until a daemon first publishes.
-    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.resolveCheckouts(cx); cx.notify(); });
+    // The age line counts up between readings, a watch that failed is tried
+    // again (the folder does not exist until a daemon first publishes), and
+    // the queue is read again, since no daemon publishes it.
+    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.resolveCheckouts(cx); this.loadQueue(cx); cx.notify(); });
   }
 
   watch(cx) {
@@ -101,18 +111,43 @@ export default class Foreman extends View {
     });
   }
 
-  // Opens a row whole, and reads its task from prog again each time it opens:
-  // the reading only carries a title, and a log grows while the task is worked.
+  // What the queue shows: every project, the shown space's, or nothing for a
+  // space in no project.
+  queueScope() {
+    return this.all ? ALL : this.project();
+  }
+
+  // Reads the queue for the scope shown now, one read at a time. The timer, a
+  // resolved space, a toggled scope and a finished command ask again.
+  loadQueue(cx) {
+    const scope = this.queueScope();
+    if (scope === null) { this.queue = null; return; }
+    if (this.queueReading) return;
+    this.queueReading = true;
+    cx.spawn(async (cx) => {
+      const result = await this.foreman(["queue", ...(scope === ALL ? [] : ["--project", scope]), "--json"]);
+      this.queueReading = false;
+      try {
+        this.queue = { scope, ...(result.code === 0 ? { rows: JSON.parse(result.stdout) } : { error: (result.stderr || result.stdout).trim().slice(-400) }) };
+      } catch (error) { this.queue = { scope, error: `foreman queue's answer is not JSON: ${error.message}` }; }
+      // The scope moved while this read ran, so read for the one shown now.
+      if (this.queueScope() !== scope) this.loadQueue(cx);
+      cx.notify();
+    });
+  }
+
+  // Opens a row whole, and reads its task again each time it opens: the
+  // reading only carries a title, and a log grows while the task is worked.
   toggleDetail(key, cx) {
     this.opened = this.opened === key ? null : key;
     cx.notify();
     const id = this.opened && key.match(TASK_ID)?.[0];
     if (!id) return;
     cx.spawn(async (cx) => {
-      const result = await exec("prog", ["show", id, "--json"]);
+      const result = await this.foreman(["show", id, "--json"]);
       try {
         this.tasks.set(id, result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() });
-      } catch (error) { this.tasks.set(id, { error: `prog's answer is not JSON: ${error.message}` }); }
+      } catch (error) { this.tasks.set(id, { error: `foreman show's answer is not JSON: ${error.message}` }); }
       cx.notify();
     });
   }
@@ -122,8 +157,9 @@ export default class Foreman extends View {
     return exec(program, [...rest, ...args]);
   }
 
-  // Runs one command for a row, then reads the file again: a one-shot command
-  // changes the world, not the daemon, so its effect shows on the next tick.
+  // Runs one command for a row, then reads the file and the queue again: a
+  // one-shot command changes the world, not the daemon, so its effect on the
+  // file shows on the next tick.
   act(args, cx) {
     const id = args.join(" ");
     if (this.busy.has(id)) return;
@@ -133,6 +169,7 @@ export default class Foreman extends View {
       this.busy.delete(id);
       if (result.code !== 0) notify({ title: `foreman ${id} failed`, body: (result.stderr || result.stdout).trim().slice(-400), level: "error" });
       this.reload(cx);
+      this.loadQueue(cx);
     });
   }
 
@@ -161,6 +198,7 @@ export default class Foreman extends View {
         const checkout = common.slice(0, common.lastIndexOf("/"));
         this.checkouts.set(space.folder, checkout ? checkout.slice(checkout.lastIndexOf("/") + 1) : null);
       }
+      this.loadQueue(cx);
       cx.notify();
     });
   }
@@ -171,8 +209,12 @@ export default class Foreman extends View {
     const live = age !== null && age < STALE_MS;
     const policy = published?.policy;
     const state = !published ? "offline" : !published.daemon ? "no daemon" : !live ? "stale" : policy.paused ? "paused" : Object.values(policy.default).some(Boolean) || policy.grants.length > 0 ? "running" : "idle";
-    const rows = (published?.rows ?? []).filter((row) => this.all || row.project === null || row.project === project);
-    const hidden = (published?.rows.length ?? 0) - rows.length;
+    const fleet = (published?.rows ?? []).filter((row) => this.all || row.project === null || row.project === project);
+    const hidden = (published?.rows.length ?? 0) - fleet.length;
+    // A queue read for another scope is not shown: the space changed, and the
+    // read for this one is on its way.
+    const queue = this.queue?.scope === this.queueScope() ? this.queue : null;
+    const rows = [...fleet, ...(queue?.rows ?? [])];
 
     const chip = (id, label, onClick, tone) => div().id(id).px(6).py(1).rounded(5).text_size(11).cursor_pointer()
       .bg(t.raised).text_color(tone ?? t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -180,7 +222,7 @@ export default class Foreman extends View {
 
     const row = (r) => {
       const actions = r.actions.filter((action) => !NEEDS_INPUT.has(action));
-      const launchable = r.view === "queue" && !r.epic;
+      const launchable = r.view === "queue";
       const open = this.opened === r.key;
       return v_flex().id(`row-${r.view}-${r.key}`).px(10).py(6).gap(3).rounded(7).cursor_pointer()
         .when(open, (el) => el.bg(t.raised)).hover((s) => s.bg(t.hover))
@@ -209,7 +251,7 @@ export default class Foreman extends View {
         .when(open, (el) => el.child(taskView(r.key)));
     };
 
-    // The open row's task as prog records it; a row with no task id shows only its whole title and detail.
+    // The open row's task as the task store records it; a row with no task id shows only its whole title and detail.
     const taskView = (key) => {
       const id = key.match(TASK_ID)?.[0];
       const task = id ? this.tasks.get(id) : undefined;
@@ -226,7 +268,7 @@ export default class Foreman extends View {
         .children(logs.map((log, i) => v_flex().id(`log-${id}-${i}`).gap(1)
           .child(note(log.created_at.slice(0, 16).replace("T", " "), t.dim))
           .child(div().text_size(11).child(log.message))))
-        .when(task.logs.length > LOGS_SHOWN, (el) => el.child(note(`${task.logs.length - LOGS_SHOWN} older log entries: prog show ${id}`, t.dim)));
+        .when(task.logs.length > LOGS_SHOWN, (el) => el.child(note(`${task.logs.length - LOGS_SHOWN} older log entries: foreman show ${id}`, t.dim)));
     };
 
     const section = ([view, title]) => {
@@ -235,17 +277,7 @@ export default class Foreman extends View {
       return v_flex().gap(1).pt(8)
         .child(h_flex().px(10).gap(6).text_size(11).text_color(view === "attention" ? t.blocked : t.dim)
           .child(title.toUpperCase()).child(String(mine.length)))
-        .children(grouped(mine));
-    };
-
-
-    // Each epic row leads its own tasks, indented under it. A task whose epic
-    // has no row in the view stays at the top level, in the published order.
-    const grouped = (mine) => {
-      const epics = new Set(mine.filter((r) => r.epic).map((r) => r.key));
-      return mine.filter((r) => !epics.has(r.parent)).map((r) => !r.epic ? row(r)
-        : v_flex().id(`group-${r.key}`).child(row(r)).child(v_flex().ml(14).pl(4).border_l(1).border_color(t.border)
-          .children(mine.filter((child) => child.parent === r.key).map(row))));
+        .children(mine.map(row));
     };
 
     const tone = state === "running" ? t.working : state === "stale" ? t.blocked : t.muted;
@@ -274,10 +306,11 @@ export default class Foreman extends View {
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(tone).child(state))
         .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
         .child(div().flex_1())
-        .child(chip("scope", this.all ? "all projects" : (project ?? "no project"), (cx) => { this.all = !this.all; cx.notify(); })))
+        .child(chip("scope", this.all ? "all projects" : (project ?? "no project"), (cx) => { this.all = !this.all; this.loadQueue(cx); cx.notify(); })))
       .when(controls !== null, (el) => el.child(controls))
       .child(v_flex().id("foreman-rows").flex_1().min_h(0).overflow_y_scrollbar().px(4).pb(8)
         .when(Boolean(this.problem), (el) => el.child(div().p(12).text_color(t.muted).child(this.problem)))
+        .when(Boolean(queue?.error), (el) => el.child(div().p(12).text_color(t.blocked).child(queue.error)))
         .when(!this.problem && rows.length === 0, (el) => el.child(div().p(12).text_color(t.muted)
           .child(hidden > 0 ? `nothing for ${project ?? "this space"}; ${hidden} rows in other projects` : "nothing queued, working or waiting")))
         .children(SECTIONS.map(section).filter(Boolean)));

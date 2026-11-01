@@ -19,6 +19,7 @@ import { Trials } from "./trials.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { policyCommand } from "./policy-command.ts";
+import { queueCommand, showCommand } from "./store-commands.ts";
 
 /**
  * What every account behind the ladder has left, without starting anything.
@@ -104,29 +105,6 @@ const statsCommand = Command.make("stats", {}, () => stats).pipe(
 );
 
 /**
- * The queue as the next tick would dispatch it, without starting anything.
- *
- * The dashboard shows the same order, but only while a daemon is up and only
- * inside a terminal it owns. This is the question asked before that: what
- * would the fleet do next. It is the dispatcher's own reading of the queue,
- * so the two cannot disagree about what is next. It does not say which of them
- * the policy lets the fleet start by itself.
- */
-const queueCommand = Command.make("queue", {}, () =>
-  Effect.gen(function* () {
-    const dispatcher = yield* Dispatcher;
-    yield* dispatcher.read;
-    const { queue } = yield* SubscriptionRef.get(dispatcher.state);
-    if (queue.length === 0) return yield* Console.log("queue empty");
-    for (const task of queue) {
-      yield* Console.log(`${task.id} [${task.project}] p${task.priority} ${task.title}`);
-    }
-  }),
-).pipe(
-  Command.withDescription("Print the ready queue in the order the next tick would dispatch it"),
-);
-
-/**
  * Waits for SIGINT or SIGTERM, so a stopped daemon says so in its log instead
  * of leaving a gap that reads as a crash. Winning ends the program: the scope
  * closes and the loop is interrupted.
@@ -173,6 +151,15 @@ const services = Layer.provideMerge(
     logging(),
     telemetry.pipe(Layer.provide(settings)),
   ),
+);
+
+/** What the store commands read: the task store, and the open spaces for the queue's projects. */
+const storeServices = Layer.mergeAll(
+  Prog.Default,
+  settings,
+  HcFleet,
+  Repository.Default,
+  BunServices.layer,
 );
 
 /**
@@ -223,7 +210,8 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     quotaCommand,
     ladderCommand,
     statsCommand,
-    Command.provide(queueCommand, services),
+    Command.provide(queueCommand, storeServices),
+    Command.provide(showCommand, storeServices),
     policyCommand,
     ...subcommands(services),
   ]),

@@ -1,10 +1,12 @@
-// What foreman publishes about its fleet, and the commands the page may ask
-// the bridge to run. The reading is a copy of foreman's own `Published`
-// (src/published.ts there), version 2, holding the fields this page reads.
+// What foreman publishes about its fleet, the queue it ranks, and the commands
+// the page may ask the bridge to run. The reading is a copy of foreman's own
+// `Published` (src/published.ts there), version 3, holding the fields this
+// page reads. A queue row, from `foreman queue --json`, has the same shape as
+// a published row.
 import { Match, Schema as S } from "effect"
 
 /** The version of foreman's published shape this page reads. */
-export const FOREMAN_VERSION = 2
+export const FOREMAN_VERSION = 3
 
 export const FOREMAN_STEPS = ["author", "climb", "review", "land"] as const
 export const ForemanStep = S.Literals(FOREMAN_STEPS)
@@ -39,10 +41,6 @@ export const ForemanRow = S.Struct({
   label: S.String,
   detail: S.OptionFromNullOr(S.String),
   project: S.OptionFromNullOr(S.String),
-  /** The epic the row's task sits under. */
-  parent: S.OptionFromNullOr(S.String),
-  /** An epic has no branch and no worker, so it takes no launch. */
-  epic: S.Boolean,
   actions: S.Array(S.String),
 })
 export type ForemanRow = typeof ForemanRow.Type
@@ -85,19 +83,19 @@ export const DESTRUCTIVE_ACTIONS: ReadonlyArray<ForemanAction> = ["kill", "close
 
 // A name goes to foreman as one argument. One that starts with a dash would be
 // read as an option, so a name starts with a letter or digit.
-const Name = S.String.check(S.isPattern(/^[A-Za-z0-9][\w.:@/-]*$/))
+export const ForemanName = S.String.check(S.isPattern(/^[A-Za-z0-9][\w.:@/-]*$/))
 
 export const ForemanCommand = S.Union([
-  S.TaggedStruct("Act", { action: ForemanAction, key: Name }),
+  S.TaggedStruct("Act", { action: ForemanAction, key: ForemanName }),
   /** Starts a queued task on a picked rung; the operator's click is the permission, so the policy does not gate it. */
-  S.TaggedStruct("Launch", { key: Name, rung: Name }),
+  S.TaggedStruct("Launch", { key: ForemanName, rung: ForemanName }),
   /** Lets the fleet take one step for one task, once. */
-  S.TaggedStruct("Allow", { key: Name, step: ForemanStep }),
+  S.TaggedStruct("Allow", { key: ForemanName, step: ForemanStep }),
   S.TaggedStruct("Pause", {}),
   S.TaggedStruct("Resume", {}),
   S.TaggedStruct("SetStep", { step: ForemanStep, on: S.Boolean }),
   S.TaggedStruct("SetSlots", { slots: S.Int.check(S.isGreaterThan(0)) }),
-  S.TaggedStruct("Revoke", { scope: Name }),
+  S.TaggedStruct("Revoke", { scope: ForemanName }),
 ])
 export type ForemanCommand = typeof ForemanCommand.Type
 

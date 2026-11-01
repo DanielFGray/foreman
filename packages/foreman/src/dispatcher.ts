@@ -43,7 +43,7 @@ import {
   type Step,
   DEFAULT_POLICY,
 } from "./policy.ts";
-import { interleave } from "./queue.ts";
+import { queueFrom } from "./queue.ts";
 import { phaseOf, type TaskPhase } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
 import { Quota, type Usage, walledRungs } from "./quota.ts";
@@ -80,7 +80,7 @@ import {
   reviewedBy,
 } from "./prog.ts";
 import { Trials, trialFor } from "./trials.ts";
-import { type Project, projectSet } from "./projects.ts";
+import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
   description: "Time foreman spends dispatching one run, in milliseconds.",
@@ -459,22 +459,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const reviewing = yield* eachProject(projects, (project) =>
         prog.awaitingReview(project.name),
       );
-      const epics = yield* eachProject(projects, (project) =>
-        prog
-          .inProgressEpics(project.name)
-          .pipe(
-            Effect.flatMap((items) =>
-              Effect.forEach(items, (epic) =>
-                prog.children(epic.id).pipe(Effect.map((children) => ({ epic, children }))),
-              ),
-            ),
-          ),
-      );
       // One query, gated by prog: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
       // allowlist is applied afterwards, to prog's answer rather than to the
       // question, so a blocker outside the fleet still holds its dependents.
-      const queue = yield* prog.ready();
+      const queue = yield* prog.ready(Option.none());
+      const epics = yield* prog.epicsOver(queue);
 
       // The operator's policy, read every pass so an edit takes effect on the
       // next one, and what each grant reaches now: an epic's descendants
@@ -646,18 +636,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // Work waiting on the operator is ready by every measure prog knows and
       // still must not be dispatched: it is waiting on a decision no agent can
-      // make. Split here rather than in fill, so the dashboard can say where it
+      // make. Split here rather than in fill, so a reader can say where it
       // went instead of leaving it to look like a queue that stopped moving.
-      //
-      // A task waiting on an allowance is not one of these. That is a fact
-      // about a wallet, it clears itself when the account resets, and handing
-      // it to the operator would ask them to decide something no decision
-      // changes — so it stays in the queue, marked, and `outOfQuota` holds it
-      // back from a dispatch.
-      const parked = (task: { readonly labels: ReadonlyArray<string> }) =>
-        needsYou(task) || choiceFor(task)._tag === "Yours";
-      const dispatchable = queue.filter((task) => !parked(task));
+      // A task waiting on an allowance stays in the queue, and `outOfQuota`
+      // holds it back from a dispatch.
       const failedIds = new Set(failed.map(([task]) => task));
+      const { queue: ordered, yours } = queueFrom({
+        ready: queue,
+        ladder: settings.ladder,
+        projects: [...open],
+        epics,
+        failed: failedIds,
+        now: new Date(),
+      });
 
       const active = (items: ReadonlyArray<Item>) =>
         items.map(
@@ -674,25 +665,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // arrays rather than mapping the lists a second time.
       const claimedActive = active(claimed);
       const reviewingActive = active(reviewing);
-
-      const autoWork = dispatchable.filter((task) => !isOnboarding(task));
-
-      // How close each task's own epic is to done.
-      const epicCompletion = new Map<string, number>();
-      for (const { children } of epics) {
-        if (children.length === 0) continue;
-        const fraction =
-          children.filter((child) => child.status === "done").length / children.length;
-        for (const child of children) epicCompletion.set(child.id, fraction);
-      }
-      const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
-
-      const ordered = interleave(
-        excludeFailedTasks(autoWork, failed),
-        [...open],
-        new Date(),
-        epicFractionOf,
-      );
 
       // Which tasks their next agent could not be paid for. A task's rung
       // depends on the column it is in — an author's is the cheapest available
@@ -722,11 +694,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         orphans,
         providers,
         outOfQuota,
-        // Salvage runs stand in a directory a person is using, so they start
-        // when that person asks and never because a slot came free.
         queue: ordered,
-        epics,
-        yours: queue.filter((task) => parked(task) && open.has(task.project)),
+        yours,
         working: claimedActive,
         ...reviews,
         committed,
@@ -1733,15 +1702,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const resolveProjects = (everyone: ReadonlyArray<Worker>) =>
       Effect.gen(function* () {
-        const folders = yield* fleet.spaces;
-        const open = yield* Effect.forEach(folders, (folder) => repository.checkoutOf(folder));
+        const open = yield* openCheckouts(fleet, repository);
         const running = everyone.flatMap((worker) =>
           worker.repository === undefined ? [] : [worker.repository],
         );
-        const { projects, ambiguous } = projectSet(
-          open.filter((checkout) => checkout !== undefined),
-          running,
-        );
+        const { projects, ambiguous } = projectSet(open, running);
         const verified = yield* Effect.forEach(projects, (project) =>
           repository
             .verifyOf(project.directory)
@@ -2392,15 +2357,6 @@ export const failedTasks = (
 ): ReadonlyArray<readonly [string, DispatchFailure]> =>
   [...failures].filter(([, failure]) => failure.count >= 2);
 
-/** Keeps a failed task in decisions, not in the ordinary queue. */
-export const excludeFailedTasks = <Task extends { readonly id: string }>(
-  tasks: ReadonlyArray<Task>,
-  failures: ReadonlyArray<readonly [string, DispatchFailure]>,
-): ReadonlyArray<Task> => {
-  const failedIds = new Set(failures.map(([task]) => task));
-  return tasks.filter((task) => !failedIds.has(task.id));
-};
-
 /**
  * The statuses from which a task still reaches an agent on its own.
  *
@@ -2607,8 +2563,6 @@ const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => (
 export interface FleetState {
   /** The projects this reading covers; see `src/projects.ts`. */
   readonly projects: ReadonlyArray<Project>;
-  /** In-progress epics and their direct-child progress, shown above queue tasks. */
-  readonly epics: ReadonlyArray<EpicProgress>;
   /** Ready work in dispatch order. */
   readonly queue: ReadonlyArray<ReadyTask>;
 
@@ -2776,11 +2730,6 @@ export interface Active {
   readonly failure?: string;
 }
 
-export interface EpicProgress {
-  readonly epic: Item;
-  readonly children: ReadonlyArray<Item>;
-}
-
 export interface InterventionTarget {
   readonly task: Item | ReadyTask;
   readonly worker: Worker | undefined;
@@ -2831,7 +2780,6 @@ interface Interpretation extends FleetState {
 
 const empty: FleetState = {
   projects: [],
-  epics: [],
   queue: [],
   yours: [],
   working: [],

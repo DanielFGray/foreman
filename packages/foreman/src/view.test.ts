@@ -3,9 +3,9 @@ import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
-import { actionsFor, decisionKind, rowsForView, staleReview } from "./view.ts";
+import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
-import { Published, publishedOf, writePublished } from "./published.ts";
+import { Published, publishedOf, publishedRow, writePublished } from "./published.ts";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Schema as S } from "effect";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
@@ -79,7 +79,6 @@ const LONG_DESCRIPTION = [
 const state: FleetState = {
   projects: [],
   providers: [],
-  epics: [],
   orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["failed-by:pro"])],
   yours: [ready("ts-y1", ["needs-you"])],
@@ -121,21 +120,6 @@ const state: FleetState = {
   scopes: new Map(),
   observedAt: undefined,
 };
-
-describe("in-progress epics", () => {
-  const epic = task("ep-drive", "in_progress", []);
-  const progress = {
-    epic: { ...epic, type: "epic", title: "Drive the release" },
-    children: [task("ts-done", "done", []), task("ts-open", "open", [])],
-  };
-
-  test("shows epic progress above ready tasks and takes no action", () => {
-    const rows = rowsForView("queue", { ...state, epics: [progress] });
-    expect(rows.map((row) => row.key).slice(0, 2)).toEqual(["ep-drive", "ts-q1"]);
-    expect(rows[0]?.label).toContain("1/2");
-    expect(actionsFor("queue", rows[0])).toEqual([]);
-  });
-});
 
 const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
   const found = rowsForView(view, state).find((candidate) => candidate.key === key);
@@ -415,25 +399,24 @@ describe("publishedOf", () => {
     );
     expect(published.daemon).toBe(true);
     expect(published.policy).toEqual(DEFAULT_POLICY);
-    const queued = published.rows.find((row) => row.key === "ts-q1");
-    expect(queued?.view).toBe("queue");
-    // The panel filters to the shown space by this, and a queued row carries
+    // The queue is read with `foreman queue`, not published.
+    expect(published.rows.some((row) => row.view === "queue")).toBe(false);
+    const parked = published.rows.find((row) => row.key === "ts-y1");
+    expect(parked?.view).toBe("attention");
+    // The panel filters to the shown space by this, and a ready task carries
     // its project only on the task.
-    expect(queued?.project).toBe(state.queue[0]!.project);
-    expect(queued?.actions.length).toBeGreaterThan(0);
+    expect(parked?.project).toBe(state.yours[0]!.project);
   });
 
-  test("says which rows are epics and which epic a task sits under", () => {
-    const epic = { ...task("ep-drive", "in_progress", []), type: "epic" };
-    const child = { ...state.queue[0]!, parent: "ep-drive" };
-    const rows = publishedOf(
-      { ...state, epics: [{ epic, children: [] }], queue: [child] },
-      true,
-    ).rows;
-    expect(rows.find((row) => row.key === "ep-drive")).toMatchObject({ epic: true, parent: null });
-    expect(rows.find((row) => row.key === child.id)).toMatchObject({
-      epic: false,
-      parent: "ep-drive",
+  test("prints a queued task with the commands its queue row takes", () => {
+    const failed = state.queue[1]!;
+    expect(publishedRow("queue")(queueRow(failed))).toEqual({
+      view: "queue",
+      key: failed.id,
+      label: `${failed.project}  ${failed.title}`,
+      detail: null,
+      project: failed.project,
+      actions: ["complete", "intervene", "descend"],
     });
   });
 

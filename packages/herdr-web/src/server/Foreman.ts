@@ -7,11 +7,12 @@
 // also runs `foreman status --json` when a page starts watching, after each
 // command and on request: a command changes the world and not the daemon, so
 // with no daemon running nothing else would show what it did. The page sees
-// the newer of the two.
+// the newer of the two. The queue is not in the reading: the page asks
+// for it with `foreman queue`, for the project it shows.
 import { Array, Config, Context, Duration, Effect, FileSystem, Layer, Option, Path, RcRef, Result, Schema as S, Semaphore, Stream, SubscriptionRef } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { BridgeError } from "../shared/Api.ts"
-import { argvOf, FOREMAN_VERSION, type ForemanCommand, ForemanReading, type ForemanState } from "../shared/Foreman.ts"
+import { argvOf, FOREMAN_VERSION, type ForemanCommand, ForemanReading, ForemanRow, type ForemanState } from "../shared/Foreman.ts"
 
 export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Foreman", {
   make: Effect.gen(function* () {
@@ -91,6 +92,19 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
         ),
         Effect.map((rungs) => Array.filterMap(rungs, ({ rung, state }) => (state === "disabled" ? Result.failVoid : Result.succeed(rung)))),
       ),
+      /**
+       * The queue in the order the fleet would dispatch it, for one project or
+       * every one an open space sits in. foreman reads the task store, so the
+       * bridge never speaks to it; no daemon need run.
+       */
+      queue: (project: Option.Option<string>) =>
+        foreman(["queue", ...Option.match(project, { onNone: () => [], onSome: (name) => ["--project", name] }), "--json"]).pipe(
+          Effect.flatMap((text) =>
+            S.decodeEffect(S.fromJsonString(S.Array(ForemanRow)))(text).pipe(
+              Effect.mapError((error) => new BridgeError({ kind: "foreman", message: `foreman's queue does not match this page: ${error.message}` })),
+            ),
+          ),
+        ),
     }
   }),
 }) {

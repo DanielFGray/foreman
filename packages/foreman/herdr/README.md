@@ -3,7 +3,11 @@
 A right-hand dock that shows the fleet as the daemon last published it in
 `state.json`, filtered to the shown space's project: the folder name of the git
 checkout the space sits in, which the panel asks git for, so the filter holds
-while no daemon runs. Each row's buttons run
+while no daemon runs. The Queue section is not in `state.json`: the panel runs
+`foreman queue --project <name> --json` (or `foreman queue --json` for every
+project) every 5 seconds and when the project changes, so it shows while no
+daemon runs. Clicking a row runs `foreman show <id> --json` for the task's
+description and log. The panel never runs `prog`. Each row's buttons run
 `foreman <action> <id>`. A queued row also has `launch`, which shows the
 ladder's rungs and dispatches to the one you pick. A row that newly appears
 under Landed posts a notification.
@@ -16,7 +20,8 @@ land`, which grant that one step for that one task. Every button runs
 reads the change on its next tick.
 
 The panel keeps no state. It reads the file that `src/published.ts` writes, and
-the schema there is the contract. herdr-web's Foreman page reads the same file,
+the schema there is the contract; a row from `foreman queue --json` has the
+shape of a published row. herdr-web's Foreman page reads the same file,
 through its own copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in
 `foreman/main.js`, and `FOREMAN_VERSION` in herdr-web's `src/shared/Foreman.ts`
 together.

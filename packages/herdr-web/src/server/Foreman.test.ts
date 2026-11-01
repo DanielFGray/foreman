@@ -5,12 +5,12 @@ import { EMPTY_STATE, readingOf, withReading } from "./Foreman.ts"
 
 const published = (fields: { daemon: boolean; observedAt: string | null }) =>
   JSON.stringify({
-    version: 2,
+    version: 3,
     ...fields,
     policy: { paused: false, slots: 3, default: { author: false, climb: false, review: false, land: false }, grants: [] },
     policyError: null,
     projects: [{ name: "app", directory: "/src/app" }],
-    rows: [{ view: "queue", key: "ts-1", label: "Write the export", detail: null, project: "app", parent: null, epic: false, actions: ["complete"] }],
+    rows: [{ view: "attention", key: "ts-1", label: "Write the export", detail: null, project: "app", actions: ["complete"] }],
   })
 
 const reading = (fields: { daemon: boolean; observedAt: string | null }) => Result.getOrThrow(readingOf(published(fields)))
@@ -23,7 +23,7 @@ describe("readingOf", () => {
   })
 
   test("refuses a version it does not read, by name", () => {
-    expect(readingOf(JSON.stringify({ version: 3 }))).toEqual(Result.fail("foreman publishes version 3; this page reads version 2"))
+    expect(readingOf(JSON.stringify({ version: 2 }))).toEqual(Result.fail("foreman publishes version 2; this page reads version 3"))
   })
 
   test("refuses text that is not JSON", () => {

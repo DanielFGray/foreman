@@ -208,8 +208,10 @@ author eventually sent to it resumes the work rather than reading it.
 Foreman therefore asks git directly for its own branches the checkout has not
 taken, and sets aside every task that still reaches an agent on its own. A task
 in the queue with commits behind it is not abandoned — it is next in line, and
-the queue already works oldest first; its row says `resume` so you can see the
-branch is there. The same goes for a claim and for anything in `reviewing`.
+the queue already works oldest first. The same goes for a claim and for
+anything in `reviewing`. A queue row does not show the branch, because
+`foreman queue` reads the task store only; a parked row under Needs you shows
+it as `resume`.
 
 What is left has fallen out of every mechanism foreman has: a task marked done
 whose branch never landed, one canceled with commits still on it, one deleted
@@ -466,6 +468,18 @@ ever earn, so defects lead their priority band on arrival: a backlog filed
 almost entirely at one priority otherwise sorts by age alone, which dispatches
 defects in the order they were discovered, behind whatever feature batch was
 entered first.
+
+Some ready tasks never enter the queue. One labelled `needs-you`, or one every rung
+has failed, parks under Needs you; one labelled `onboard` is held for the
+project's onboarding. A task whose dispatch failed twice in a row is held out
+by the daemon for as long as it runs; that count lives in the daemon's memory
+only. One function, `queueFrom` in `src/queue.ts`, makes this split for both
+the daemon and `foreman queue`.
+
+The queue is not in `state.json`. The panel and herdr-web run
+`foreman queue --project <name> --json`, which reads only the task store and
+the open spaces, with no agent roster and no branch checks, so it answers in
+under a second and needs no daemon.
 
 
 ## Configuration
