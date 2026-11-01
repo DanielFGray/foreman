@@ -13,8 +13,7 @@
     "typecheck": "bunx tsc --noEmit",
     "lint": "oxlint --type-aware src",
     "format": "oxfmt --write src",
-    "format:check": "oxfmt --check src",
-    "prepare": "effect-tsgo patch --typescript --oxlint"
+    "format:check": "oxfmt --check src"
   },
   "dependencies": {
     "@effect/platform-bun": "4.1.0",

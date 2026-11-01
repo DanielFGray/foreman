@@ -4,6 +4,12 @@
   "workspaces": {
     "": {
       "name": "foreman-workspace",
+      "devDependencies": {
+        "@effect/tsgo": "0.63.0",
+        "oxlint": "1.90.0",
+        "oxlint-tsgolint": "7.0.2005",
+        "typescript": "7.0.2",
+      },
     },
     "packages/foreman": {
       "name": "foreman",

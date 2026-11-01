@@ -1,10 +1,19 @@
 {
   "name": "foreman-workspace",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "bun run --filter '*' test",
     "typecheck": "bun run --filter '*' typecheck",
-    "lint": "bun run --filter '*' lint"
+    "lint": "bun run --filter '*' lint",
+    "prepare": "effect-tsgo patch --typescript --oxlint"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.63.0",
+    "typescript": "7.0.2",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005"
   }
 }

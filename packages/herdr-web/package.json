@@ -3,7 +3,6 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "prepare": "effect-tsgo patch --typescript --oxlint",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware",
     "test": "bun --bun vitest run",
