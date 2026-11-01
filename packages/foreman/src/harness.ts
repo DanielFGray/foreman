@@ -3,6 +3,8 @@
  * and first prompt. Pure: the fleet adapter runs what this returns.
  */
 
+import { Option } from "effect";
+
 /** A program to start: its argv and the environment it needs on top. */
 export interface Launch {
   readonly argv: ReadonlyArray<string>;
@@ -119,3 +121,48 @@ export const opencodeConfig = (options: {
  * The same `~/build/<name>` the settings derive a project's directory from.
  */
 const checkoutRoot = (): string => `${process.env["HOME"] ?? ""}/build`;
+
+/**
+ * The literal text each harness prints when its account has no allowance left.
+ *
+ * Only strings read out of the harness's own binary are listed. Empty means
+ * the text is not confirmed, so a run that stops on that harness is never read
+ * as a wall: it stays an ordinary unfinished ending.
+ *
+ * Claude's session limit is built from a template in its binary, so only its
+ * literal spend-limit and shared-budget messages are listed. Cursor's text was
+ * not found in its binary.
+ */
+const wallTexts = (kind: string): ReadonlyArray<string> => {
+  switch (kind) {
+    case "opencode":
+      return ["Free usage limit reached"];
+    case "codex":
+      return ["You've hit your usage limit"];
+    case "claude":
+      return ["You've hit your monthly spend limit", "You've hit your team's shared budget"];
+    default:
+      return [];
+  }
+};
+
+/**
+ * How many non-blank lines at the bottom of a screen are read for a wall. A
+ * harness prints its stop as its last message, so the screen's history above
+ * is not searched: an agent's own prompt quotes these strings, and a match in
+ * that history would wall a run that merely read about walls.
+ */
+const WALL_WINDOW_LINES = 12;
+
+/**
+ * The wall text a screen ends on, or none. Matches literal substrings only,
+ * in the tail of the screen named by `WALL_WINDOW_LINES`.
+ */
+export const hitWall = (kind: string, screen: string): Option.Option<string> => {
+  const tail = screen
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .slice(-WALL_WINDOW_LINES)
+    .join("\n");
+  return Option.fromNullishOr(wallTexts(kind).find((text) => tail.includes(text)));
+};

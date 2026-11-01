@@ -1,6 +1,6 @@
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer, Schema as S, Stream } from "effect";
+import { Effect, Layer, Option, Schema as S, Stream } from "effect";
 import {
   type AgentRole,
   AgentRole as AgentRoleSchema,
@@ -266,6 +266,19 @@ export const HcFleet = Layer.effect(
           yield* call(S.Unknown, "say", "terminal.send", { terminal: target.address, text });
         }),
 
+      screen: (worker: Worker, role: AgentRole, lines: number) =>
+        Effect.gen(function* () {
+          const target = (yield* ofTask(worker.task)).find(
+            (terminal) => terminal.labels[ROLE] === role,
+          );
+          if (!target) return Option.none<string>();
+          const read = yield* call(ScreenText, "screen", "terminal.read", {
+            terminal: target.address,
+            lines,
+          });
+          return Option.some(read.text);
+        }),
+
       stop: (worker: Worker, role: AgentRole) =>
         ofTask(worker.task).pipe(
           Effect.flatMap((all) =>
@@ -479,6 +492,9 @@ const LayoutDoc = S.Struct({
 });
 
 const Started = S.Struct({ address: S.String, pid: S.Finite });
+
+/** What `terminal.read` returns: the screen and history above it, as one text. */
+const ScreenText = S.Struct({ text: S.String });
 
 const Reply = S.Struct({
   result: S.optional(S.Unknown),

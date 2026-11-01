@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
 
 /**
  * The multiplexer, as foreman needs it.
@@ -71,6 +71,20 @@ export class Fleet extends Context.Service<
       role: AgentRole,
       text: string,
     ) => Effect.Effect<void, FleetError>;
+
+    /**
+     * The last `lines` of history above a role's screen, as text, or none when
+     * the role has no terminal to read.
+     *
+     * How a stopped agent is read for the message its harness printed on the
+     * way out, since a harness that runs out of allowance exits with no error the
+     * multiplexer can see.
+     */
+    readonly screen: (
+      worker: Worker,
+      role: AgentRole,
+      lines: number,
+    ) => Effect.Effect<Option.Option<string>, FleetError>;
 
     /** Brings a task's workspace to the front so a human can take over. */
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { harnessLaunch, launchArguments } from "./harness.ts";
+import { Option } from "effect";
+import { harnessLaunch, hitWall, launchArguments } from "./harness.ts";
 
 describe("launchArguments", () => {
   test("spells the thinking level the way each harness takes it", () => {
@@ -65,5 +66,29 @@ describe("harnessLaunch", () => {
     expect(config.model).toBe("m");
     // Last match wins, so the worktree's own allow must follow the checkouts' deny.
     expect(Object.entries(config.permission.edit).at(-1)).toEqual(["/w/t1/**", "allow"]);
+  });
+});
+
+describe("hitWall", () => {
+  test("reads opencode's free-allowance stop off the bottom of its screen", () => {
+    const screen = [
+      "Build  Free usage limit reached. Connect a provider or subscribe to OpenCode Go to",
+      "continue.",
+      "",
+      "  ctrl+p commands",
+    ].join("\n");
+    expect(Option.getOrUndefined(hitWall("opencode", screen))).toBe("Free usage limit reached");
+  });
+
+  test("does not read a wall quoted higher up the screen than the stop", () => {
+    const quoted = "Free usage limit reached is the message foreman looks for.";
+    const screen = [quoted, ...Array.from({ length: 20 }, (_, i) => `working line ${i}`)].join(
+      "\n",
+    );
+    expect(Option.isNone(hitWall("opencode", screen))).toBe(true);
+  });
+
+  test("reads no wall for a harness whose text is not confirmed", () => {
+    expect(Option.isNone(hitWall("cursor", "Free usage limit reached"))).toBe(true);
   });
 });
