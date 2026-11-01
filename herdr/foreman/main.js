@@ -25,6 +25,11 @@ const SECTIONS = [
 const NEEDS_INPUT = new Set(["complete", "intervene"]);
 // These end an agent or give up a claim, so a first click only arms them.
 const DESTRUCTIVE = new Set(["kill", "close", "release"]);
+// A row's key is a task id, a workspace label that holds one (`foreman/<id>`),
+// or a project or account name, which has no task to show.
+const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b/;
+// An open row shows this many of its task's newest log entries.
+const LOGS_SHOWN = 3;
 
 export default class Foreman extends View {
   init(_props, cx) {
@@ -33,6 +38,8 @@ export default class Foreman extends View {
     this.command = p.command ?? ["foreman"];
     this.published = null; this.problem = null; this.all = false;
     this.launching = null; this.rungs = []; this.busy = new Set(); this.landed = null;
+    // The row shown whole, and each task's prog record as last read, by task id.
+    this.opened = null; this.tasks = new Map();
     this.reload(cx);
     this.loadRungs(cx);
     this.watch(cx);
@@ -89,6 +96,22 @@ export default class Foreman extends View {
     });
   }
 
+  // Opens a row whole, and reads its task from prog again each time it opens:
+  // the reading only carries a title, and a log grows while the task is worked.
+  toggleDetail(key, cx) {
+    this.opened = this.opened === key ? null : key;
+    cx.notify();
+    const id = this.opened && key.match(TASK_ID)?.[0];
+    if (!id) return;
+    cx.spawn(async (cx) => {
+      const result = await exec("prog", ["show", id, "--json"]);
+      try {
+        this.tasks.set(id, result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() });
+      } catch (error) { this.tasks.set(id, { error: `prog's answer is not JSON: ${error.message}` }); }
+      cx.notify();
+    });
+  }
+
   foreman(args) {
     const [program, ...rest] = this.command;
     return exec(program, [...rest, ...args]);
@@ -134,11 +157,14 @@ export default class Foreman extends View {
     const row = (r) => {
       const actions = r.actions.filter((action) => !NEEDS_INPUT.has(action));
       const launchable = r.view === "queue";
-      return v_flex().id(`row-${r.view}-${r.key}`).px(10).py(6).gap(3).rounded(7).hover((s) => s.bg(t.hover))
-        .child(h_flex().gap(8).items_center().min_w(0)
+      const open = this.opened === r.key;
+      return v_flex().id(`row-${r.view}-${r.key}`).px(10).py(6).gap(3).rounded(7).cursor_pointer()
+        .when(open, (el) => el.bg(t.raised)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.armed = null; this.toggleDetail(r.key, cx); })
+        .child(h_flex().gap(8).items_start().min_w(0)
           .child(div().flex_none().text_size(11).text_color(t.dim).child(r.key))
-          .child(div().flex_1().min_w(0).truncate().child(r.label)))
-        .when(Boolean(r.detail), (el) => el.child(div().text_size(11).text_color(t.muted).truncate().child(r.detail)))
+          .child(div().flex_1().min_w(0).when(!open, (el) => el.truncate()).child(r.label)))
+        .when(Boolean(r.detail), (el) => el.child(div().text_size(11).text_color(t.muted).when(!open, (el) => el.truncate()).child(r.detail)))
         .when(actions.length > 0 || launchable, (el) => el.child(h_flex().gap(4).flex_wrap()
           .when(launchable, (el) => el.child(chip(`launch-${r.key}`, this.launching === r.key ? "cancel" : "launch",
             (cx) => { this.launching = this.launching === r.key ? null : r.key; cx.notify(); }, t.working)))
@@ -155,7 +181,28 @@ export default class Foreman extends View {
           }))))
         .when(this.launching === r.key, (el) => el.child(h_flex().gap(4).flex_wrap()
           .children(this.rungs.map((rung) => chip(`rung-${r.key}-${rung.rung}`, rung.rung,
-            (cx) => this.act(["dispatch", r.key, "--rung", rung.rung], cx), t.foreground)))));
+            (cx) => this.act(["dispatch", r.key, "--rung", rung.rung], cx), t.foreground)))))
+        .when(open, (el) => el.child(taskView(r.key)));
+    };
+
+    // The open row's task as prog records it; a row with no task id shows only its whole title and detail.
+    const taskView = (key) => {
+      const id = key.match(TASK_ID)?.[0];
+      const task = id ? this.tasks.get(id) : undefined;
+      const note = (text, tone) => div().text_size(11).text_color(tone ?? t.muted).child(text);
+      if (!id) return div();
+      if (!task) return note("reading the task…");
+      if (task.error) return note(task.error, t.blocked);
+      const facts = [task.type === "epic" ? "epic" : null, task.status, `priority ${task.priority}`, task.project, task.parent ? `under ${task.parent}` : null, ...task.labels].filter(Boolean);
+      const logs = task.logs.slice(-LOGS_SHOWN).reverse();
+      return v_flex().gap(6).pt(4).border_t(1).border_color(t.border)
+        .child(note(facts.join(" · ")))
+        .when(Boolean(task.description), (el) => el.child(div().text_size(12).child(task.description)))
+        .when(Boolean(task.definition_of_done), (el) => el.child(note(`Done when: ${task.definition_of_done}`)))
+        .children(logs.map((log, i) => v_flex().id(`log-${id}-${i}`).gap(1)
+          .child(note(log.created_at.slice(0, 16).replace("T", " "), t.dim))
+          .child(div().text_size(11).child(log.message))))
+        .when(task.logs.length > LOGS_SHOWN, (el) => el.child(note(`${task.logs.length - LOGS_SHOWN} older log entries: prog show ${id}`, t.dim)));
     };
 
     const section = ([view, title]) => {
