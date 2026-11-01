@@ -766,9 +766,6 @@ Nothing above that file knows which endpoint or which client says so.
 `Screen` (`src/screen.ts`) is the whole terminal surface — a list of rows with a
 preview each, and the keys the operator pressed. fzf is one implementation.
 
-**prog itself is not ours.** It is Byron's. Keep edits there minimal and file
-in-house replacements in the backlog rather than patching it.
-
 ## The dashboard
 
 Built over `Dispatcher.state`, a `SubscriptionRef<FleetState>`, in three parts
