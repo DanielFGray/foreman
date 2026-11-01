@@ -13,7 +13,8 @@ ladder's rungs and dispatches to the one you pick. A row that newly appears
 under Landed posts a notification.
 
 The bar under the title is the policy: pause or resume, the four steps the
-fleet takes for every task (author, climb, review, land), the agent limit, and
+fleet takes for every task (author, climb, review, land; each chip cycles
+on, ask, off), the agent limit, and
 each grant with a revoke button. A review row has `allow review` and `allow
 land`, which grant that one step for that one task. Every button runs
 `foreman policy ...`, the same writer as the command line, and the dispatcher

@@ -7,9 +7,10 @@
 import { Match, Schema as S } from "effect"
 
 /** The version of foreman's published shape this page reads. */
-export const FOREMAN_VERSION = 4
+export const FOREMAN_VERSION = 5
 
 export const FOREMAN_STEPS = ["author", "climb", "review", "land"] as const
+export const FOREMAN_STEP_MODES = ["on", "ask", "off"] as const
 export const ForemanStep = S.Literals(FOREMAN_STEPS)
 export type ForemanStep = typeof ForemanStep.Type
 
@@ -22,11 +23,18 @@ export const ForemanGrant = S.Struct({
 })
 export type ForemanGrant = typeof ForemanGrant.Type
 
+/**
+ * What the fleet does with a step by itself: `on` runs it, `ask` waits for one
+ * approval per task, `off` does nothing.
+ */
+export const ForemanStepMode = S.Literals(FOREMAN_STEP_MODES)
+export type ForemanStepMode = typeof ForemanStepMode.Type
+
 /** Which steps the fleet takes by itself, and how many agents may work at once. */
 export const ForemanPolicy = S.Struct({
   paused: S.Boolean,
   slots: S.Int,
-  default: S.Struct({ author: S.Boolean, climb: S.Boolean, review: S.Boolean, land: S.Boolean }),
+  default: S.Struct({ author: ForemanStepMode, climb: ForemanStepMode, review: ForemanStepMode, land: ForemanStepMode }),
   grants: S.Array(ForemanGrant),
 })
 export type ForemanPolicy = typeof ForemanPolicy.Type
@@ -85,7 +93,7 @@ export const ForemanState = S.Struct({
 export type ForemanState = typeof ForemanState.Type
 
 /** The row actions the page can run: foreman's own, less the two that need a typed answer (`complete`, `intervene`). */
-export const ForemanAction = S.Literals(["retry", "release", "close", "take-over", "focus", "kill", "descend", "unassign", "onboard", "adopt"])
+export const ForemanAction = S.Literals(["retry", "release", "close", "take-over", "focus", "kill", "descend", "unassign", "onboard", "adopt", "approve"])
 export type ForemanAction = typeof ForemanAction.Type
 
 /** The actions that end an agent or give up a claim. */
@@ -103,7 +111,7 @@ export const ForemanCommand = S.Union([
   S.TaggedStruct("Allow", { key: ForemanName, step: ForemanStep }),
   S.TaggedStruct("Pause", {}),
   S.TaggedStruct("Resume", {}),
-  S.TaggedStruct("SetStep", { step: ForemanStep, on: S.Boolean }),
+  S.TaggedStruct("SetStep", { step: ForemanStep, setting: ForemanStepMode }),
   S.TaggedStruct("SetSlots", { slots: S.Int.check(S.isGreaterThan(0)) }),
   S.TaggedStruct("Revoke", { scope: ForemanName }),
 ])
@@ -117,7 +125,7 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
     Allow: ({ key, step }) => ["policy", "grant", key, step, "--count", "1"],
     Pause: () => ["policy", "pause"],
     Resume: () => ["policy", "resume"],
-    SetStep: ({ step, on }) => ["policy", "set", step, on ? "on" : "off"],
+    SetStep: ({ step, setting }) => ["policy", "set", step, setting],
     SetSlots: ({ slots }) => ["policy", "slots", String(slots)],
     Revoke: ({ scope }) => ["policy", "revoke", scope],
   })

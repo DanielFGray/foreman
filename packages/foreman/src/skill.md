@@ -24,19 +24,21 @@ stopped, paused or idle, nothing reviews or lands the task for you.
 
 Run `foreman <command> --help` for the options.
 
-| Command                                           | Does                                                                                        |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `foreman queue [--project P] [--json]`            | Prints ready tasks in dispatch order, from the task store only                              |
-| `foreman show <id> [--json]`                      | Prints one task with its definition of done and its log                                     |
-| `foreman status [--json]`                         | Prints every row and the commands each takes; `--json` is the shape written to `state.json` |
-| `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                           |
-| `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status           |
-| `foreman say <id> [--role R] <text>`              | Sends a message to a task's live agent                                                      |
-| `foreman correct <id> <findings>`                 | Sends the author a correction round (two at most), and counts it                            |
-| `foreman prompt author\|review <id>`              | Prints the prompt foreman sends that role                                                   |
-| `foreman quota`                                   | Prints what each account has left                                                           |
-| `foreman policy <subcommand>`                     | Prints or changes what the dispatcher may do without you                                    |
-| `foreman ladder [edit\|enable\|disable\|suggest]` | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder            |
+| Command                                           | Does                                                                                          |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `foreman queue [--project P] [--json]`            | Prints ready tasks in dispatch order, from the task store only                                |
+| `foreman show <id> [--json]`                      | Prints one task with its definition of done and its log                                       |
+| `foreman status [--json]`                         | Prints every row and the commands each takes; `--json` is the shape written to `state.json`   |
+| `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                             |
+| `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status             |
+| `foreman wait --asks`                             | Blocks until a new step waits for your approval, then prints its task and the approve command |
+| `foreman approve <id>`                            | Lets the step that task waits on run once, for that task alone                                |
+| `foreman say <id> [--role R] <text>`              | Sends a message to a task's live agent                                                        |
+| `foreman correct <id> <findings>`                 | Sends the author a correction round (two at most), and counts it                              |
+| `foreman prompt author\|review <id>`              | Prints the prompt foreman sends that role                                                     |
+| `foreman quota`                                   | Prints what each account has left                                                             |
+| `foreman policy <subcommand>`                     | Prints or changes what the dispatcher may do without you                                      |
+| `foreman ladder [edit\|enable\|disable\|suggest]` | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder              |
 
 Each row action is a command that takes the id of a row in `foreman status`:
 
@@ -77,12 +79,14 @@ ready` reads edges, never the text of a description.
 - When an attempt is stuck, use `intervene`. Do not open the worktree and
   edit it yourself.
 - `foreman policy` sets what the dispatcher does without you: `pause`,
-  `resume`, `set <author|climb|review|land> on|off`, `slots <n>`, and
+  `resume`, `set <author|climb|review|land> on|ask|off`, `slots <n>`, and
   `grant <task-or-epic> <steps...> [--count n]` for one task or epic. The
   dispatcher reads the file on its next tick. A paused fleet, or one with no
   step on and no grant, writes nothing at all. `foreman dispatch` is not gated:
   it starts the author you asked for.
 - Sending a reviewer to a finished task, and landing an approved branch, both
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
+- A step set to `ask` stops at its task and waits. `foreman wait --asks` tells
+  you when one is waiting; `foreman approve <id>` lets that step run once.
 - Use the herd skill instead for work in a checkout that several agents
   share. Foreman gives each task its own worktree.

@@ -39,15 +39,15 @@ describe("modeOf", () => {
   });
 
   test("an ask step makes the fleet running, since it reports work", () => {
-    expect(
-      modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "ask" } }),
-    ).toBe("running");
+    expect(modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "ask" } })).toBe(
+      "running",
+    );
   });
 
   test("an off step is not a running step", () => {
-    expect(
-      modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "off" } }),
-    ).toBe("idle");
+    expect(modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, land: "off" } })).toBe(
+      "idle",
+    );
   });
 
   test("a pause wins over every step and grant", () => {
@@ -66,13 +66,19 @@ describe("permit", () => {
   });
 
   test("a step on in the default is allowed for every task", () => {
-    const policy: Policy = { ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: "on" } };
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      default: { ...DEFAULT_POLICY.default, review: "on" },
+    };
     expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Default");
     expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
   });
 
   test("a step set to ask is Ask for every task no grant covers", () => {
-    const policy: Policy = { ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: "ask" } };
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      default: { ...DEFAULT_POLICY.default, review: "ask" },
+    };
     expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Ask");
     expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
   });

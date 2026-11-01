@@ -289,18 +289,18 @@ const wait = Command.make(
           roster.some(
             (worker) =>
               worker.task === taskId &&
-            Option.match(args.role, {
-              onNone: () => worker.state === "working",
-              onSome: (role) => worker.roles.get(role) === "working",
-            }),
+              Option.match(args.role, {
+                onNone: () => worker.state === "working",
+                onSome: (role) => worker.roles.get(role) === "working",
+              }),
+          ),
         ),
-      ),
-    );
-    let quiet = 0;
-    while (quiet < 2) {
-      quiet = (yield* working) ? 0 : quiet + 1;
-      if (quiet < 2) yield* Effect.sleep(Duration.seconds(args.interval));
-    }
+      );
+      let quiet = 0;
+      while (quiet < 2) {
+        quiet = (yield* working) ? 0 : quiet + 1;
+        if (quiet < 2) yield* Effect.sleep(Duration.seconds(args.interval));
+      }
       const task = yield* prog.show(taskId);
       yield* Console.log(`${taskId}: ${task.status}`);
     }),

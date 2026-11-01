@@ -486,7 +486,9 @@ describe("publishedOf", () => {
 describe("asks", () => {
   const askState: FleetState = {
     ...state,
-    asks: [{ task: task("ts-k1", "reviewing", ["by:cheap", "approved"]), step: "land", rung: "cheap" }],
+    asks: [
+      { task: task("ts-k1", "reviewing", ["by:cheap", "approved"]), step: "land", rung: "cheap" },
+    ],
   };
 
   test("an ask is an attention row after the decisions and before the needs-you row", () => {

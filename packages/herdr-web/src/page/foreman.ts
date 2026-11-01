@@ -10,6 +10,7 @@ import {
   argvOf,
   DESTRUCTIVE_ACTIONS,
   FOREMAN_STEPS,
+  FOREMAN_STEP_MODES,
   ForemanAction,
   type ForemanCommand,
   type ForemanDispatcher,
@@ -173,7 +174,15 @@ const policyView = ({ policy, policyError }: ForemanReading, page: ForemanPage, 
             ? commandButton("Resume", "resume the fleet", { _tag: "Resume" }, page, h)
             : commandButton("Pause", "pause the fleet", { _tag: "Pause" }, page, h),
           ...Array.map(FOREMAN_STEPS, (step) =>
-            commandButton(step, `${policy.default[step] ? "stop" : "allow"} ${step} for every task`, { _tag: "SetStep", step, on: !policy.default[step] }, page, h, policy.default[step]),
+            h.span(
+              [h.Class("foreman-step")],
+              [
+                h.span([], [step]),
+                ...Array.map(FOREMAN_STEP_MODES, (mode) =>
+                  commandButton(mode, `${mode} ${step} for every task`, { _tag: "SetStep", step, setting: mode }, page, h, policy.default[step] === mode),
+                ),
+              ],
+            ),
           ),
           slotsView(policy, page, h),
         ],
