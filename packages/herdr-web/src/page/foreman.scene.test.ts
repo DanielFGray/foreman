@@ -1,11 +1,11 @@
 import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription } from "foldkit/scene"
-import { test } from "vitest"
+import { describe, test } from "vitest"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import type { ForemanReading, ForemanRow, ForemanState } from "../shared/Foreman.ts"
-import { ListRungs, RefreshForeman, RunForeman, SaveSelection } from "./commands.ts"
+import { ListRungs, LoadForemanEpic, RefreshForeman, RunForeman, SaveOpenEpics, SaveSelection } from "./commands.ts"
 import { init, update, view } from "./main.ts"
-import { Bridge, ForemanQueue, Message, Selection } from "./model.ts"
+import { Bridge, EpicRecord, ForemanQueue, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const NOW = Date.parse("2026-10-30T01:00:00Z")
@@ -44,7 +44,7 @@ const queue = ForemanQueue.Listed({
 
 const state: ForemanState = { reading: Option.some(reading), problem: Option.none() }
 
-const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model
+const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
 
 // Three spaces: app and lib are each in a project, notes is in none.
 // The sidebar names a space by its checkout's folder, so each space's checkout is its own folder.
@@ -205,6 +205,11 @@ test("an epic leads its queued tasks and takes no launch", () => {
     // The epic and its child, and app's own queued task; lib's task is out of the app space's scope.
     click(role("button", { name: "Queue 3" })),
     expect(role("button", { name: "launch ep-1" })).not.toExist(),
+    click(role("button", { name: "expand ep-1" })),
+    Command.expectExact(SaveOpenEpics({ openEpics: ["ep-1"] }), LoadForemanEpic({ key: "ep-1" })),
+    Command.resolve(SaveOpenEpics, Message.CompletedSaveOpenEpics()),
+    Command.resolve(LoadForemanEpic, Message.ReceivedForemanEpic({ key: "ep-1", description: Option.none() })),
+    expect(selector(".foreman-description")).toHaveText("No description."),
     expect(role("list", { name: "tasks under ep-1" })).toContainText("Export as CSV"),
     expect(role("button", { name: "launch ts-q3" })).toExist(),
   )
@@ -235,4 +240,62 @@ test("the queue says why foreman could not rank it", () => {
     expect(selector(".foreman .note.error")).toHaveText("the task store did not answer"),
     expect(role("button", { name: /^Queue/ })).not.toExist(),
   )
+})
+
+describe("an epic row", () => {
+  const epic = { ...row("queue", "ep-1", "Ship exports", []), epic: true }
+  const child = { ...row("queue", "ts-q3", "Export as CSV", ["complete"]), parent: Option.some("ep-1") }
+  const withEpic = { ...open, foremanPage: { ...open.foremanPage, queue: ForemanQueue.Listed({ rows: [epic, child, ...queue.rows] }) } }
+
+  test("starts collapsed with its subtask count, expands to its description and subtasks, and collapses again", () => {
+    scene(
+      { update, view },
+      given(withEpic),
+      click(role("button", { name: "Queue 3" })),
+      expect(selector(".foreman-count")).toHaveText("1 subtask"),
+      expect(role("list", { name: "tasks under ep-1" })).not.toExist(),
+      expect(role("button", { name: "expand ep-1" })).toHaveText("+"),
+      click(role("button", { name: "expand ep-1" })),
+      Command.expectExact(SaveOpenEpics({ openEpics: ["ep-1"] }), LoadForemanEpic({ key: "ep-1" })),
+      Command.resolve(SaveOpenEpics, Message.CompletedSaveOpenEpics()),
+      Command.resolve(LoadForemanEpic, Message.ReceivedForemanEpic({ key: "ep-1", description: Option.some("Let people export their data.") })),
+      expect(selector(".foreman-description")).toHaveText("Let people export their data."),
+      expect(role("list", { name: "tasks under ep-1" })).toContainText("Export as CSV"),
+      expect(selector(".foreman-count")).not.toExist(),
+      expect(role("button", { name: "collapse ep-1" })).toHaveText("−"),
+      click(role("button", { name: "collapse ep-1" })),
+      Command.expectExact(SaveOpenEpics({ openEpics: [] })),
+      Command.resolve(SaveOpenEpics, Message.CompletedSaveOpenEpics()),
+      expect(selector(".foreman-description")).not.toExist(),
+      expect(role("list", { name: "tasks under ep-1" })).not.toExist(),
+      expect(selector(".foreman-count")).toHaveText("1 subtask"),
+    )
+  })
+
+  test("an expanded epic stays expanded when the space changes", () => {
+    const expanded = { ...withEpic, foremanPage: { ...withEpic.foremanPage, openEpics: ["ep-1"], epicRecords: { "ep-1": EpicRecord.Read({ description: Option.some("Let people export their data.") }) } } }
+    scene(
+      { update, view },
+      given(expanded),
+      click(role("button", { name: "Queue 3" })),
+      expect(selector(".foreman-description")).toHaveText("Let people export their data."),
+      click(role("button", { name: /^lib/ })),
+      Command.expectExact(SaveSelection({ selection: onTab("tab-s2") })),
+      Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+      click(role("button", { name: "All projects" })),
+      expect(selector(".foreman-description")).toHaveText("Let people export their data."),
+      expect(role("button", { name: "collapse ep-1" })).toExist(),
+    )
+  })
+
+  test("says why the description could not be read", () => {
+    scene(
+      { update, view },
+      given({ ...withEpic, foremanPage: { ...withEpic.foremanPage, openEpics: ["ep-1"] } }),
+      click(role("button", { name: "Queue 3" })),
+      expect(selector(".foreman-row .note")).toHaveText("Reading the epic…"),
+      Subscription.emit(Message.FailedForemanEpic({ key: "ep-1", reason: "no task ep-1" })),
+      expect(selector(".foreman-row .note.error")).toHaveText("no task ep-1"),
+    )
+  })
 })

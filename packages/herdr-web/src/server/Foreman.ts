@@ -112,6 +112,15 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
         ),
         Effect.map((rungs) => Array.filterMap(rungs, ({ rung, state }) => (state === "disabled" ? Result.failVoid : Result.succeed(rung)))),
       ),
+      /** One task as foreman records it, read in a process of its own like every one-shot command. */
+      task: (key: string) =>
+        foreman(["show", key, "--json"]).pipe(
+          Effect.flatMap((text) =>
+            S.decodeEffect(S.fromJsonString(S.Struct({ description: S.OptionFromNullOr(S.String) })))(text).pipe(
+              Effect.mapError((error) => new BridgeError({ kind: "foreman", message: `foreman's record of ${key} is unreadable: ${error.message}` })),
+            ),
+          ),
+        ),
       /**
        * The queue in the order the fleet would dispatch it, for one project or
        * every one an open space sits in, read by the running dispatcher's own

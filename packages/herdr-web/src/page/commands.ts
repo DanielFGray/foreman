@@ -6,7 +6,7 @@ import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
 import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
+import { Message, OPEN_EPICS_KEY, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -361,4 +361,22 @@ export const RefreshForeman = Command.define("RefreshForeman", {
     Effect.catch((error) => Effect.logWarning("the bridge did not read foreman again", failureReason(error))),
     Effect.as(Message.CompletedRefreshForeman()),
   ),
+})
+
+export const SaveOpenEpics = Command.define("SaveOpenEpics", {
+  args: { openEpics: S.Array(S.String) },
+  messages: [Message.CompletedSaveOpenEpics],
+  execute: ({ openEpics }) => saveStored(OPEN_EPICS_KEY, S.Array(S.String), openEpics).pipe(Effect.as(Message.CompletedSaveOpenEpics())),
+})
+
+/** Reads one epic's description from foreman. */
+export const LoadForemanEpic = Command.define("LoadForemanEpic", {
+  args: { key: S.String },
+  messages: [Message.ReceivedForemanEpic, Message.FailedForemanEpic],
+  execute: ({ key }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { description } = yield* client.foremanTask({ key })
+      return Message.ReceivedForemanEpic({ key, description })
+    }).pipe(reportFailure((reason) => Message.FailedForemanEpic({ key, reason }))),
 })

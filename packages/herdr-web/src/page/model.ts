@@ -29,6 +29,7 @@ export const RECENT_KEY = "herdr-web.recent"
 export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
 export const ZOOM_KEY = "herdr-web.zoom"
 export const VIEW_PICKS_KEY = "herdr-web.view-picks"
+export const OPEN_EPICS_KEY = "herdr-web.foreman-open-epics"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -187,6 +188,13 @@ export const ForemanQueue = defineTaggedUnion({
 })
 export type ForemanQueue = typeof ForemanQueue.Type
 
+/** One epic as foreman last recorded it: its description, or why foreman could not say. */
+export const EpicRecord = defineTaggedUnion({
+  Read: { description: S.Option(S.String) },
+  Unread: { reason: S.String },
+})
+export type EpicRecord = typeof EpicRecord.Type
+
 /** The Foreman column's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
 export const ForemanPage = S.Struct({
   rungs: RungList,
@@ -204,6 +212,10 @@ export const ForemanPage = S.Struct({
   all: S.Boolean,
   /** The sections folded to their heading. */
   folded: S.Array(ForemanView),
+  /** The epics shown expanded, in every space; any other epic shows its row alone. */
+  openEpics: S.Array(S.String),
+  /** What foreman recorded of each opened epic, by key. A key still absent is being read. */
+  epicRecords: S.Record(S.String, EpicRecord),
   queue: ForemanQueue,
 })
 export type ForemanPage = typeof ForemanPage.Type
@@ -424,6 +436,8 @@ export const Flags = S.Struct({
   softKeys: S.Option(S.Array(SoftKey)),
   isZoomed: S.Boolean,
   viewPicks: S.Array(ViewPick),
+  /** The Foreman column's expanded epics. */
+  openEpics: S.Array(S.String),
 })
 export type Flags = typeof Flags.Type
 
@@ -435,6 +449,7 @@ export const loadFlags = Effect.all({
   softKeys: loadKept(SOFT_KEYS_KEY, S.Array(SoftKey)),
   isZoomed: loadStored(ZOOM_KEY, S.Boolean, false),
   viewPicks: loadStored(VIEW_PICKS_KEY, S.Array(ViewPick), []),
+  openEpics: loadStored(OPEN_EPICS_KEY, S.Array(S.String), []),
 })
 
 // MESSAGE
@@ -495,6 +510,10 @@ export const Message = defineMessageUnion({
   ReceivedRungs: { rungs: S.Array(S.String) },
   FailedRungs: { reason: S.String },
   ReceivedForemanQueue: { rows: S.Array(ForemanRow) },
+  ToggledForemanEpic: { key: S.String },
+  ReceivedForemanEpic: { key: S.String, description: S.Option(S.String) },
+  FailedForemanEpic: { key: S.String, reason: S.String },
+  CompletedSaveOpenEpics: {},
   FailedForemanQueue: { reason: S.String },
   ClickedForemanCommand: { command: ForemanCommand },
   SucceededForemanCommand: { line: S.String },

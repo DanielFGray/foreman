@@ -47,7 +47,7 @@ const fleet: Fleet = {
 }
 
 const chatOpen: Model = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model,
   bridge: Bridge.Watching({ fleet }),
   views: { t1: View.Chat({ conversation: Conversation.Shown({ entries: [] }) }) },
   boxes: { t1: { _tag: "Empty" } },

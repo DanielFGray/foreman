@@ -189,6 +189,8 @@ export const Api = RpcGroup.make(
   Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),
   /** The queue foreman would dispatch, for one project or (none) every open one. */
   Rpc.make("foremanQueue", { payload: { project: S.OptionFromNullOr(ForemanName) }, success: S.Array(ForemanRow), error: BridgeError }),
+  /** What foreman records of one task: its description, for an epic row that expands. */
+  Rpc.make("foremanTask", { payload: { key: ForemanName }, success: S.Struct({ description: S.OptionFromNullOr(S.String) }), error: BridgeError }),
 
   Rpc.make("pushKey", { success: S.String, error: BridgeError }),
   /** Alerts the device behind the subscription for these events, from now on. */

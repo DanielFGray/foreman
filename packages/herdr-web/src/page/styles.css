@@ -576,6 +576,9 @@ p.usage-error { margin: 0; }
 .foreman-row-head { display: flex; gap: 8px; min-width: 0; }
 .foreman-key { flex-shrink: 0; color: var(--subtext); font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; }
 .foreman-label { min-width: 0; overflow-wrap: anywhere; }
+.foreman-epic-toggle { flex-shrink: 0; min-width: 22px; padding: 0 6px; }
+.foreman-count { flex-shrink: 0; margin-left: auto; }
+.foreman-description { margin: 0; color: var(--subtext); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* A failed landing lists every file it touched; three lines say what went wrong, and the title holds the rest. */
 .foreman-detail { color: var(--subtext); font-size: 12px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 
