@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { Repository } from "./repository.ts";
 
 const run = <A, E>(f: (repository: Repository["Service"]) => Effect.Effect<A, E>) =>
@@ -277,6 +277,78 @@ describe("Repository", () => {
     await writeFile(join(directory, "tracked.txt"), "operator edit\n");
     expect(await merge(directory, "twice", "true")).toEqual({ _tag: "Present" });
     await git("checkout", "--", "tracked.txt");
+  });
+
+  // The host process can restart at any point of a landing. The proof runs in
+  // foreman's own ground, so a landing cut off there has touched nothing of the
+  // operator's, and the next landing must start the proof over.
+  test("lands on the next try after a landing is cut off during verify", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "cut-off");
+    await writeFile(join(directory, "cut-off.txt"), "fine\n");
+    await git("add", "cut-off.txt");
+    await git("commit", "-qm", "cut-off work");
+    await git("checkout", "-q", base);
+    const before = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+
+    const cut = await Effect.runPromise(
+      Repository.use((repository) =>
+        repository.merge(directory, "cut-off", "sleep 30", groundFor(directory)),
+      ).pipe(Effect.timeoutOption("500 millis"), Effect.provide(Repository.Default)),
+    );
+    expect(cut).toEqual(Option.none());
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(before);
+
+    expect(await merge(directory, "cut-off", "true")).toEqual({ _tag: "Merged", verified: true });
+    expect(await Bun.file(join(directory, "cut-off.txt")).text()).toBe("fine\n");
+  });
+
+  // A git killed mid-command leaves its index.lock, and every later git in that
+  // worktree refuses to start. The ground is foreman's own, so foreman makes
+  // it again rather than holding every landing until someone looks.
+  test("makes the ground again when a killed git left its lock there", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "locked-ground");
+    await writeFile(join(directory, "locked-ground.txt"), "fine\n");
+    await git("add", "locked-ground.txt");
+    await git("commit", "-qm", "locked-ground work");
+    await git("checkout", "-q", base);
+
+    // The landings above made the ground. Its .git file names the folder
+    // where git keeps that worktree's index, and so its lock.
+    const pointer = await Bun.file(join(groundFor(directory), ".git")).text();
+    const admin = pointer.replace(/^gitdir: /, "").trim();
+    await writeFile(join(admin, "index.lock"), "");
+
+    expect(await merge(directory, "locked-ground", "true")).toEqual({
+      _tag: "Merged",
+      verified: true,
+    });
+  });
+
+  // The fast-forward is the one write to the operator's checkout. A lock there
+  // may be the operator's own git at work, so foreman never removes it: the
+  // landing holds, says why, and lands once the lock is gone.
+  test("holds a landing on a lock in the checkout, and lands once it is gone", async () => {
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "locked-checkout");
+    await writeFile(join(directory, "locked-checkout.txt"), "fine\n");
+    await git("add", "locked-checkout.txt");
+    await git("commit", "-qm", "locked-checkout work");
+    await git("checkout", "-q", base);
+
+    const lock = join(directory, ".git", "index.lock");
+    await writeFile(lock, "");
+    expect(await merge(directory, "locked-checkout", "true")).toMatchObject({
+      _tag: "Held",
+      detail: expect.stringContaining("index.lock"),
+    });
+
+    await rm(lock);
+    expect(await merge(directory, "locked-checkout", "true")).toEqual({
+      _tag: "Merged",
+      verified: true,
+    });
   });
 
   test("tells an untouched branch from one whose work already landed", async () => {

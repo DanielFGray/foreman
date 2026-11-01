@@ -363,18 +363,27 @@ export class Repository extends Context.Service<Repository>()("Repository", {
     /**
      * A worktree of the project kept for proving landings in, held at `base`.
      *
-     * It is re-derived, never remembered: a directory git has no worktree
-     * registered for is removed and remade, and one it does have is reset to
-     * the commit being proved against. What survives between landings is only
-     * what a package manager installed, which is the whole reason it is not a
-     * fresh directory each time.
+     * It is re-derived, never remembered: one git has registered is reset to
+     * the commit being proved against, and any other is removed and remade.
+     * What survives between landings is only what a package manager installed,
+     * which is the whole reason it is not a fresh directory each time.
+     *
+     * A ground that will not reset is remade too. The usual cause is an
+     * `index.lock` left by a git that was killed there, by a restart of the
+     * process mid-proof or by a test suite under verify. Nothing but a
+     * landing works in the ground, and a landing runs one at a time, so the lock
+     * is stale, and holding instead would hold every landing until someone
+     * looked.
      */
     const gitGround = (proving: string, directory: string, base: string) =>
       Effect.gen(function* () {
         const registered = yield* fs
           .exists(`${proving}/.git`)
           .pipe(Effect.orElseSucceed(() => false));
-        if (!registered) {
+        const reset = registered
+          ? (yield* git(proving, "reset", "--hard", base)).exitCode === 0
+          : false;
+        if (!reset) {
           yield* fs.remove(proving, { recursive: true, force: true }).pipe(Effect.ignore);
           yield* clearFor(proving);
           // A worktree git still lists at a path that is gone would make `add`
@@ -387,15 +396,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               detail: added.stderr.trim() || `git worktree add exited ${added.exitCode}`,
             } as const;
           }
-          return yield* prepare(proving);
-        }
-
-        const reset = yield* git(proving, "reset", "--hard", base);
-        if (reset.exitCode !== 0) {
-          return {
-            _tag: "Held",
-            detail: reset.stderr.trim() || `git reset exited ${reset.exitCode}`,
-          } as const;
         }
         return yield* prepare(proving);
       });
@@ -782,9 +782,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        *
        * A jj landing is three steps — `jj new` creates the merge and moves the
        * working copy onto it, verify runs, and only then does `bookmark set`
-       * publish it. Killed between the first and the last — which is exactly
-       * what happens when the daemon lands into its own checkout under
-       * `bun --watch`, where writing the merged files restarts the process —
+       * publish it. Killed between the first and the last — by a restart of
+       * the process that hosts the dispatcher —
        * the merge sits as an anonymous head whose parents are the trunk and a
        * foreman branch, and nothing ever names it. The retry lands the branch
        * honestly, so the leftover commit is pure litter.
@@ -1189,7 +1188,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * behind, in every colocated checkout. Nothing to do in a checkout git
        * is keeping: its merge is atomic, so no landing ever leaves an orphan
        * there. Called every tick, like the branch sweep — the litter appears
-       * whenever a restart kills the daemon mid-merge, and only the world
+       * whenever a restart kills the dispatcher mid-merge, and only the world
        * records where.
        */
       sweepUnpublishedMerges: (directory: string) =>
