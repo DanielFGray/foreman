@@ -61,31 +61,45 @@ const STORED: ReadonlyArray<TaskState> = STATUSES.filter(
   (status): status is TaskState => status !== "blocked",
 );
 
-const fromEvery = (to: TaskState): Partial<Record<TaskState, TaskState>> =>
-  Object.fromEntries(STORED.map((state) => [state, to]));
-
 /**
- * A task's status, as prog moves it.
+ * A task's status, and the moves between statuses.
  *
- * Every event but `review` is accepted in every state: prog checks nothing else,
- * and this machine states that rather than tightening it in passing. `review` is
- * the one guarded move, because a reviewer is dispatched off it and a review of
- * work nobody started reads nothing.
+ * - A proposal (nobody authorised it) and a draft (still being scoped) become
+ *   open work, and open work can go back to either.
+ * - Only open work starts, and only started work goes to review.
+ * - Started or reviewed work returns to `open`: a release, a rejection, a
+ *   landing that conflicted.
+ * - Reviewed work is done when it lands. Open or started work can be closed by
+ *   hand, when the trunk already does what it asked. A proposal or a draft
+ *   cannot be done: nobody agreed to do it, so it is canceled instead.
+ * - Anything unfinished can be canceled, and done or canceled work reopens.
  */
 export const TASK_MACHINE: Machine<TaskState, TaskEvent> = {
   id: "task",
   states: STORED,
   events: TASK_EVENTS,
   initial: ["open", "draft", "proposed"],
-  final: ["done", "canceled"],
   on: {
-    propose: fromEvery("proposed"),
-    draft: fromEvery("draft"),
-    open: fromEvery("open"),
-    start: fromEvery("in_progress"),
+    propose: { draft: "proposed", open: "proposed" },
+    draft: { proposed: "draft", open: "draft" },
+    open: {
+      proposed: "open",
+      draft: "open",
+      in_progress: "open",
+      reviewing: "open",
+      done: "open",
+      canceled: "open",
+    },
+    start: { open: "in_progress" },
     review: { in_progress: "reviewing" },
-    done: fromEvery("done"),
-    cancel: fromEvery("canceled"),
+    done: { open: "done", in_progress: "done", reviewing: "done" },
+    cancel: {
+      proposed: "canceled",
+      draft: "canceled",
+      open: "canceled",
+      in_progress: "canceled",
+      reviewing: "canceled",
+    },
   },
 };
 
