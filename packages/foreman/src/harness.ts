@@ -138,7 +138,9 @@ const wallTexts = (kind: string): ReadonlyArray<string> => {
     case "opencode":
       return ["Free usage limit reached"];
     case "codex":
-      return ["You've hit your usage limit"];
+      // The binary prints U+2019, not an ASCII apostrophe; a literal with the
+      // ASCII mark never matches the screen.
+      return ["You’ve hit your usage limit"];
     case "claude":
       return ["You've hit your monthly spend limit", "You've hit your team's shared budget"];
     default:

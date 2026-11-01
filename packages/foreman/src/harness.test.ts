@@ -88,6 +88,11 @@ describe("hitWall", () => {
     expect(Option.isNone(hitWall("opencode", screen))).toBe(true);
   });
 
+  test("reads codex's usage wall with its curly apostrophe as printed", () => {
+    const screen = "Usage limit reached.\nYou’ve hit your usage limit. Try again later.";
+    expect(Option.getOrUndefined(hitWall("codex", screen))).toBe("You’ve hit your usage limit");
+  });
+
   test("reads no wall for a harness whose text is not confirmed", () => {
     expect(Option.isNone(hitWall("cursor", "Free usage limit reached"))).toBe(true);
   });
