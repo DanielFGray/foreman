@@ -21,8 +21,8 @@ import {
   type ForemanState,
   type ForemanView,
 } from "../shared/Foreman.ts"
-import { ListRungs, RunForeman } from "./commands.ts"
-import { ForemanQueue, type ForemanPage, Message, type Model, RungList, type UpdateReturn } from "./model.ts"
+import { ListRungs, LoadForemanEpic, RunForeman, SaveOpenEpics } from "./commands.ts"
+import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, RungList, type UpdateReturn } from "./model.ts"
 import { lastFleet, selectedTab } from "./selection.ts"
 import { ago } from "./usage.ts"
 
@@ -36,6 +36,8 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   shown: false,
   all: false,
   folded: ["queue", "landed"],
+  openEpics: [],
+  epicRecords: {},
   queue: ForemanQueue.Unread(),
 }
 
@@ -49,7 +51,7 @@ export const toggledColumn = (model: Model): UpdateReturn => {
   if (!shown) return { model: withPage(model, (page) => ({ ...page, shown })) }
   return {
     model: withPage(modifyFields(model, { isFleetFolded: () => true }), (page) => ({ ...page, shown, rungs: RungList.Loading() })),
-    commands: [ListRungs()],
+    commands: [ListRungs(), ...Array.map(model.foremanPage.openEpics, (key) => LoadForemanEpic({ key }))],
   }
 }
 
@@ -109,6 +111,24 @@ export const toggledSection = (model: Model, view: ForemanView): Model =>
     ...page,
     folded: Array.contains(page.folded, view) ? Array.filter(page.folded, (other) => other !== view) : [...page.folded, view],
   }))
+
+/**
+ * Expands or collapses one epic, in every space and project filter, and keeps
+ * the choice. Expanding reads the epic's description again, since it may have
+ * changed while the epic was collapsed.
+ */
+export const toggledEpic = (model: Model, key: string): UpdateReturn => {
+  const isOpen = Array.contains(model.foremanPage.openEpics, key)
+  const openEpics = isOpen ? Array.filter(model.foremanPage.openEpics, (other) => other !== key) : [...model.foremanPage.openEpics, key]
+  return {
+    model: withPage(model, (page) => ({ ...page, openEpics, epicRecords: Record.remove(page.epicRecords, key) })),
+    commands: [SaveOpenEpics({ openEpics }), ...(isOpen ? [] : [LoadForemanEpic({ key })])],
+  }
+}
+
+/** Keeps what foreman said of an epic, unless it was collapsed while the read ran. */
+export const recordedEpic = (model: Model, key: string, record: EpicRecord): Model =>
+  withPage(model, (page) => (Array.contains(page.openEpics, key) ? { ...page, epicRecords: { ...page.epicRecords, [key]: record } } : page))
 
 /** The column beside the workspace, when it is on show: a heading that says what the dispatcher is doing, the policy, and the rows of the scope by section. */
 export const foremanColumnView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
@@ -323,6 +343,7 @@ const groupedRows = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: Html
 
 const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
   const isLaunching = Option.contains(page.launching, row.key)
+  const isOpen = Array.contains(page.openEpics, row.key)
   const actions = Array.filter(row.actions, S.is(ForemanAction))
   const buttons = [
     ...(row.view === "queue" && !row.epic
@@ -337,11 +358,20 @@ const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: For
     `${row.view}/${row.key}`,
     [h.Class("foreman-row")],
     [
-      h.div([h.Class("foreman-row-head")], [h.span([h.Class("foreman-key")], [row.key]), h.span([h.Class("foreman-label")], [row.label])]),
+      h.div(
+        [h.Class("foreman-row-head")],
+        [
+          ...(row.epic ? [epicToggle(row.key, isOpen, h)] : []),
+          h.span([h.Class("foreman-key")], [row.key]),
+          h.span([h.Class("foreman-label")], [row.label]),
+          ...(row.epic && !isOpen ? [h.span([h.Class("note foreman-count")], [children.length === 1 ? "1 subtask" : `${children.length} subtasks`])] : []),
+        ],
+      ),
+      ...(row.epic && isOpen ? [epicBodyView(page.epicRecords[row.key], h)] : []),
       ...Option.match(row.detail, { onNone: () => [], onSome: (detail) => [h.div([h.Class("foreman-detail"), h.Title(detail)], [detail])] }),
       ...(Array.isReadonlyArrayNonEmpty(buttons) ? [h.div([h.Class("foreman-actions")], buttons)] : []),
       ...(isLaunching ? [rungsView(row.key, page, h)] : []),
-      ...(Array.isReadonlyArrayNonEmpty(children)
+      ...(isOpen && Array.isReadonlyArrayNonEmpty(children)
         ? [h.ul([h.Class("foreman-rows foreman-children"), h.AriaLabel(`tasks under ${row.key}`)], Array.map(children, (child) => rowView(child, [], page, h)))]
         : []),
     ],
@@ -357,3 +387,18 @@ const rungsView = (key: string, page: ForemanPage, h: HtmlBuilder<Message>): Htm
       Listed: ({ rungs }) => Array.map(rungs, (rung) => commandButton(rung, `launch ${key} on ${rung}`, { _tag: "Launch", key, rung }, page, h)),
     }),
   )
+
+/** The control that leads an epic row: "+" while it is collapsed, "−" while it is expanded. */
+const epicToggle = (key: string, isOpen: boolean, h: HtmlBuilder<Message>): Html =>
+  h.button(
+    [h.Type("button"), h.Class("chip foreman-epic-toggle"), h.AriaExpanded(isOpen), h.AriaLabel(`${isOpen ? "collapse" : "expand"} ${key}`), h.OnClick(Message.ToggledForemanEpic({ key }))],
+    [isOpen ? "−" : "+"],
+  )
+
+/** An expanded epic's description, or what stands in its place while it is read or when it could not be. */
+const epicBodyView = (record: EpicRecord | undefined, h: HtmlBuilder<Message>): Html =>
+  record === undefined
+    ? h.p([h.Class("note")], ["Reading the epic…"])
+    : record._tag === "Unread"
+      ? h.p([h.Class("note error")], [record.reason])
+      : h.p([h.Class("foreman-description")], [Option.getOrElse(record.description, () => "No description.")])

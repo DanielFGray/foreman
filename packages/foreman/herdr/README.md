@@ -12,6 +12,12 @@ description and log. The panel never runs `prog`. Each row's buttons run
 ladder's rungs and dispatches to the one you pick. A row that newly appears
 under Landed posts a notification.
 
+An epic row leads with a "+" or "−" control. Collapsed (the default), the row
+stands alone with its subtask count; expanded, it shows the epic's description
+(read with `foreman show <id> --json` on each expand) and its subtasks. The
+choice is per epic, holds across spaces and project filters, and is kept in the
+mod's own `localStorage`.
+
 The bar under the title is the policy: pause or resume, the four steps the
 fleet takes for every task (author, climb, review, land; each chip cycles
 on, ask, off), the agent limit, and

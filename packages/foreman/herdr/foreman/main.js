@@ -37,6 +37,9 @@ const DESTRUCTIVE = new Set(["kill", "close", "release"]);
 const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b/;
 // An open row shows this many of its task's newest log entries.
 const LOGS_SHOWN = 3;
+// The epics shown expanded, kept in the mod's own storage so they stay open
+// across restarts and spaces. An epic not listed is collapsed.
+const EXPANDED_KEY = "expanded-epics";
 const PENDING = Symbol("pending");
 // The queue's scope while the panel shows every project.
 const ALL = Symbol("all");
@@ -50,6 +53,8 @@ export default class Foreman extends View {
     this.launching = null; this.rungs = []; this.busy = new Set(); this.landed = null;
     // The row shown whole, and each task's record as last read, by task id.
     this.opened = null; this.tasks = new Map();
+    // The epics shown expanded, and each one's record as last read, by task id.
+    this.expanded = new Set(this.storedExpanded()); this.epics = new Map();
     // Each space folder's project: a name, null for a folder in no checkout,
     // or PENDING while git is asked.
     this.checkouts = new Map();
@@ -57,6 +62,7 @@ export default class Foreman extends View {
     // ALL), and its rows or why they could not be read.
     this.queue = null;
     this.reload(cx);
+    for (const key of this.expanded) this.loadEpic(key, cx);
     this.loadRungs(cx);
     this.watch(cx);
     this.resolveCheckouts(cx);
@@ -155,6 +161,34 @@ export default class Foreman extends View {
     });
   }
 
+  storedExpanded() {
+    try {
+      const kept = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]");
+      return Array.isArray(kept) ? kept.filter((key) => typeof key === "string") : [];
+    } catch { return []; }
+  }
+
+  // Expands or collapses one epic, in every space and project filter. Expanding
+  // reads the epic's description again, since it may have changed while collapsed.
+  toggleEpic(key, cx) {
+    if (this.expanded.delete(key)) this.epics.delete(key);
+    else { this.expanded.add(key); this.loadEpic(key, cx); }
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...this.expanded]));
+    cx.notify();
+  }
+
+  loadEpic(key, cx) {
+    cx.spawn(async (cx) => {
+      const result = await this.foreman(["show", key, "--json"]);
+      let epic;
+      try {
+        epic = result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() };
+      } catch (error) { epic = { error: `foreman show's answer is not JSON: ${error.message}` }; }
+      // Collapsed while the read ran: nothing shows it.
+      if (this.expanded.has(key)) { this.epics.set(key, epic); cx.notify(); }
+    });
+  }
+
   foreman(args) {
     const [program, ...rest] = this.command;
     return exec(program, [...rest, ...args]);
@@ -227,7 +261,24 @@ export default class Foreman extends View {
       .bg(t.raised).text_color(tone ?? t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(label);
 
-    const row = (r) => {
+    // The control that leads an epic row: "+" when collapsed, "−" when expanded.
+    const epicToggle = (r) => div().id(`epic-toggle-${r.key}`).flex_none().w(16).text_size(13).text_color(t.muted).cursor_pointer()
+      .hover((s) => s.text_color(t.foreground))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.toggleEpic(r.key, cx); })
+      .child(this.expanded.has(r.key) ? "−" : "+");
+
+    // An expanded epic shows its description under its title.
+    const epicBody = (r) => {
+      const epic = this.epics.get(r.key);
+      const note = (text, tone) => div().text_size(12).text_color(tone ?? t.muted).child(text);
+      if (!epic) return note("reading the epic…");
+      if (epic.error) return note(epic.error, t.blocked);
+      return epic.description ? div().text_size(12).child(epic.description) : note("no description");
+    };
+
+    // childCount is given for an epic row only: its subtasks in this section.
+    const row = (r, childCount) => {
+      const isEpic = childCount !== undefined;
       const actions = r.actions.filter((action) => !NEEDS_INPUT.has(action));
       const launchable = r.view === "queue" && !r.epic;
       const open = this.opened === r.key;
@@ -235,8 +286,12 @@ export default class Foreman extends View {
         .when(open, (el) => el.bg(t.raised)).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); this.armed = null; this.toggleDetail(r.key, cx); })
         .child(h_flex().gap(8).items_start().min_w(0)
+          .when(isEpic, (el) => el.child(epicToggle(r)))
           .child(div().flex_none().text_size(11).text_color(t.dim).child(r.key))
-          .child(div().flex_1().min_w(0).when(!open, (el) => el.truncate()).child(r.label)))
+          .child(div().flex_1().min_w(0).when(!open, (el) => el.truncate()).child(r.label))
+          .when(isEpic && !this.expanded.has(r.key), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim)
+            .child(childCount === 1 ? "1 subtask" : `${childCount} subtasks`))))
+        .when(isEpic && this.expanded.has(r.key), (el) => el.child(epicBody(r)))
         .when(Boolean(r.detail), (el) => el.child(div().text_size(11).text_color(t.muted).when(!open, (el) => el.truncate()).child(r.detail)))
         .when(actions.length > 0 || launchable, (el) => el.child(h_flex().gap(4).flex_wrap()
           .when(launchable, (el) => el.child(chip(`launch-${r.key}`, this.launching === r.key ? "cancel" : "launch",
@@ -287,13 +342,18 @@ export default class Foreman extends View {
         .children(grouped(mine));
     };
 
-    // Each epic row leads its own tasks, indented under it. A task whose epic
-    // has no row in the view stays at the top level, in the given order.
+    // Each epic row leads its own tasks, indented under it while the epic is
+    // expanded. A task whose epic has no row in the view stays at the top
+    // level, in the given order.
     const grouped = (mine) => {
       const epics = new Set(mine.filter((r) => r.epic).map((r) => r.key));
-      return mine.filter((r) => !epics.has(r.parent)).map((r) => !r.epic ? row(r)
-        : v_flex().id(`group-${r.key}`).child(row(r)).child(v_flex().ml(14).pl(4).border_l(1).border_color(t.border)
-          .children(mine.filter((child) => child.parent === r.key).map(row))));
+      return mine.filter((r) => !epics.has(r.parent)).map((r) => {
+        if (!r.epic) return row(r);
+        const children = mine.filter((child) => child.parent === r.key);
+        return v_flex().id(`group-${r.key}`).child(row(r, children.length))
+          .when(this.expanded.has(r.key) && children.length > 0, (el) => el.child(v_flex().ml(14).pl(4).border_l(1).border_color(t.border)
+            .children(children.map((child) => row(child)))));
+      });
     };
 
     const tone = state === "running" ? t.working : state === "stale" || state === "failed" ? t.blocked : t.muted;

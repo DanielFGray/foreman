@@ -13,11 +13,11 @@ import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
 import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent, RefreshForeman } from "./commands.ts"
-import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, ForemanQueue, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, EpicRecord, ForemanQueue, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
-import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, toggledColumn, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
+import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -49,7 +49,7 @@ const TYPING_PAUSE = "500 millis"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks, openEpics }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -72,7 +72,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     spaceForm: EMPTY_SPACE_FORM,
     worktreePage: EMPTY_WORKTREE_PAGE,
     foreman: Option.none(),
-    foremanPage: EMPTY_FOREMAN_PAGE,
+    foremanPage: { ...EMPTY_FOREMAN_PAGE, openEpics },
     palette: Palette.Closed(),
     recent,
     settings,
@@ -320,6 +320,14 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     ToggledForemanAll: () => ({ model: withPage(model, (page) => ({ ...page, all: !page.all })) }),
 
     ToggledForemanSection: ({ view }) => ({ model: toggledSection(model, view) }),
+
+    ToggledForemanEpic: ({ key }) => toggledEpic(model, key),
+
+    ReceivedForemanEpic: ({ key, description }) => ({ model: recordedEpic(model, key, EpicRecord.Read({ description })) }),
+
+    FailedForemanEpic: ({ key, reason }) => ({ model: recordedEpic(model, key, EpicRecord.Unread({ reason })) }),
+
+    CompletedSaveOpenEpics: () => ({ model }),
 
     ClickedRefreshForeman: () => ({ model, commands: [RefreshForeman()] }),
 
