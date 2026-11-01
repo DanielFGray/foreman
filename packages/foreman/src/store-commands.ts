@@ -7,7 +7,7 @@ import { openCheckouts, projectSet } from "./projects.ts";
 import { PublishedRow, publishedRow } from "./published.ts";
 import { queueFrom } from "./queue.ts";
 import { Repository } from "./repository.ts";
-import { queueRow } from "./view.ts";
+import { queueRows } from "./view.ts";
 import { Refused } from "./commands.ts";
 
 /**
@@ -55,7 +55,7 @@ export const queueCommand = Command.make("queue", { json, project }, (args) =>
       now: new Date(),
     });
     if (args.json) {
-      const rows = queue.map((task) => publishedRow("queue")(queueRow(task)));
+      const rows = queueRows(queue, epics).map(publishedRow("queue"));
       return yield* Console.log(
         JSON.stringify(yield* Schema.encodeEffect(Schema.Array(PublishedRow))(rows)),
       );

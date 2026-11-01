@@ -3,7 +3,7 @@ import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
-import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
+import { actionsFor, decisionKind, queueRow, queueRows, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { Published, publishedOf, publishedRow, writePublished } from "./published.ts";
 import { BunServices } from "@effect/platform-bun";
@@ -416,8 +416,31 @@ describe("publishedOf", () => {
       label: `${failed.project}  ${failed.title}`,
       detail: null,
       project: failed.project,
+      parent: null,
+      epic: false,
       actions: ["complete", "intervene", "descend"],
     });
+  });
+
+  test("leads each queued epic's first task with the epic, keeping the tasks' order", () => {
+    const epic = {
+      ...task("ep-drive", "in_progress", []),
+      type: "epic",
+      title: "Drive the release",
+    };
+    const [first, second] = state.queue;
+    const queue = [
+      { ...first!, parent: null },
+      { ...second!, parent: "ep-drive" },
+      { ...first!, id: "ts-q9", parent: "ep-drive" },
+    ];
+    const rows = queueRows(queue, [
+      { epic, children: [task("ts-done", "done", []), task("ts-open", "open", [])] },
+    ]).map(publishedRow("queue"));
+    expect(rows.map((row) => row.key)).toEqual([first!.id, "ep-drive", second!.id, "ts-q9"]);
+    expect(rows[1]).toMatchObject({ epic: true, parent: null, actions: [] });
+    expect(rows[1]?.label).toContain("1/2");
+    expect(rows[2]).toMatchObject({ epic: false, parent: "ep-drive" });
   });
 
   test("says a one-shot read is not the daemon's", () => {

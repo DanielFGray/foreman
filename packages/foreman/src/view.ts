@@ -16,6 +16,7 @@ import {
   failuresOf,
   needsYou,
   reviewedBy,
+  type EpicProgress,
   type Item,
   type ReadyTask,
 } from "./prog.ts";
@@ -212,6 +213,8 @@ export const actionsFor = (
   row: ColumnRow | undefined,
 ): ReadonlyArray<Action> => {
   if (!row) return [];
+  // An epic has no branch and no worker, so every action is meaningless on it.
+  if (row.task?.type === "epic") return [];
   const actions =
     column === "decisions" && row.task
       ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
@@ -317,6 +320,22 @@ const attentionRow =
  * commits is a git read per task, which a client asking every few seconds
  * cannot afford.
  */
+/**
+ * The queue as `foreman queue` prints it. Each epic with a queued task leads
+ * as a row of its own, just before the first of its tasks, so a reader can
+ * group the tasks under it and the tasks keep their dispatch order.
+ */
+export const queueRows = (
+  queue: ReadonlyArray<ReadyTask>,
+  epics: ReadonlyArray<EpicProgress>,
+): ReadonlyArray<ColumnRow> =>
+  queue.flatMap((task, index) => {
+    const progress = epics.find(({ epic }) => epic.id === task.parent);
+    const leads =
+      progress !== undefined && queue.findIndex((other) => other.parent === task.parent) === index;
+    return leads ? [epicRow(progress), queueRow(task)] : [queueRow(task)];
+  });
+
 export const queueRow = (task: ReadyTask): ColumnRow => ({
   column: "queue",
   key: task.id,
@@ -324,6 +343,25 @@ export const queueRow = (task: ReadyTask): ColumnRow => ({
   detail: undefined,
   task: undefined,
   ready: task,
+  worker: undefined,
+  project: undefined,
+  reason: undefined,
+  unreviewed: undefined,
+  stale: undefined,
+  failure: undefined,
+  provider: undefined,
+  hasWork: false,
+  committed: false,
+});
+
+// The label carries the done/total count, so the row needs no second line.
+const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
+  column: "queue",
+  key: epic.id,
+  label: `${epic.project}  ${children.filter((child) => child.status === "done").length}/${children.length}  ${epic.title}`,
+  detail: undefined,
+  task: epic,
+  ready: undefined,
   worker: undefined,
   project: undefined,
   reason: undefined,

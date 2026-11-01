@@ -43,6 +43,10 @@ export const PublishedRow = S.Struct({
   label: S.String,
   detail: S.NullOr(S.String),
   project: S.NullOr(S.String),
+  /** The epic the row's task sits under, so a reader can group a queue by it. */
+  parent: S.NullOr(S.String),
+  /** Whether the row is an epic, which takes no launch: an epic has no branch and no worker. */
+  epic: S.Boolean,
   /** The one-shot subcommands this row takes: `foreman <action> <key>`. */
   actions: S.Array(S.String),
 });
@@ -84,6 +88,8 @@ export const publishedRow =
     label: row.label,
     detail: row.detail ?? null,
     project: row.project ?? row.task?.project ?? row.ready?.project ?? null,
+    parent: row.task?.parent ?? row.ready?.parent ?? null,
+    epic: row.task?.type === "epic",
     actions: actionsFor(row.column, row).map(commandName),
   });
 

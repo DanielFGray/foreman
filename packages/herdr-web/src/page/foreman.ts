@@ -234,7 +234,7 @@ const sectionView = (view: ForemanView, title: string, rows: ReadonlyArray<Forem
           ),
         ],
       ),
-      ...(isOpen ? [h.ul([h.Class("foreman-rows"), h.AriaLabel(title)], Array.map(rows, (row) => rowView(row, page, h)))] : []),
+      ...(isOpen ? [h.ul([h.Class("foreman-rows"), h.AriaLabel(title)], groupedRows(rows, page, h))] : []),
     ],
   )
 }
@@ -242,11 +242,23 @@ const sectionView = (view: ForemanView, title: string, rows: ReadonlyArray<Forem
 const queueRows = (queue: ForemanQueue): ReadonlyArray<ForemanRow> =>
   ForemanQueue.match(queue, { Unread: () => [], Listed: ({ rows }) => rows, Unlisted: () => [] })
 
-const rowView = (row: ForemanRow, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
+// Each epic row leads its own tasks, in a list nested under it. A task whose
+// epic has no row in the section stays at the top level, in the given order.
+const groupedRows = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+  const epics = new Set(Array.filterMap(rows, (row) => (row.epic ? Result.succeed(row.key) : Result.failVoid)))
+  const underShownEpic = (row: ForemanRow) => Option.exists(row.parent, (parent) => epics.has(parent))
+  return Array.filterMap(rows, (row) =>
+    underShownEpic(row)
+      ? Result.failVoid
+      : Result.succeed(rowView(row, Array.filter(rows, (child) => Option.contains(child.parent, row.key)), page, h)),
+  )
+}
+
+const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
   const isLaunching = Option.contains(page.launching, row.key)
   const actions = Array.filter(row.actions, S.is(ForemanAction))
   const buttons = [
-    ...(row.view === "queue"
+    ...(row.view === "queue" && !row.epic
       ? [h.button([h.Type("button"), h.Class(isLaunching ? "chip on" : "chip"), h.AriaExpanded(isLaunching), h.AriaLabel(`launch ${row.key}`), h.OnClick(Message.ClickedLaunch({ key: row.key }))], ["launch"])]
       : []),
     ...(row.view === "review"
@@ -262,6 +274,9 @@ const rowView = (row: ForemanRow, page: ForemanPage, h: HtmlBuilder<Message>): H
       ...Option.match(row.detail, { onNone: () => [], onSome: (detail) => [h.div([h.Class("foreman-detail"), h.Title(detail)], [detail])] }),
       ...(Array.isReadonlyArrayNonEmpty(buttons) ? [h.div([h.Class("foreman-actions")], buttons)] : []),
       ...(isLaunching ? [rungsView(row.key, page, h)] : []),
+      ...(Array.isReadonlyArrayNonEmpty(children)
+        ? [h.ul([h.Class("foreman-rows foreman-children"), h.AriaLabel(`tasks under ${row.key}`)], Array.map(children, (child) => rowView(child, [], page, h)))]
+        : []),
     ],
   )
 }
