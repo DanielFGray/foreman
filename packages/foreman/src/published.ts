@@ -47,7 +47,7 @@ export const Published = S.Struct({
   policyError: S.NullOr(S.String),
   /** ISO instant of the reading, or null before the first one completes. */
   observedAt: S.NullOr(S.String),
-  /** The managed projects and their checkouts, so a reader can tell which one a folder is in. */
+  /** The managed projects and their checkouts, for a reader that offers a choice of project. */
   projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
   rows: S.Array(PublishedRow),
 });

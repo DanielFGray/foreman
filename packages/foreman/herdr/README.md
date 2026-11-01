@@ -1,7 +1,9 @@
 # The foreman panel for herdr-app
 
 A right-hand dock that shows the fleet as the daemon last published it in
-`state.json`, filtered to the shown space's project. Each row's buttons run
+`state.json`, filtered to the shown space's project: the folder name of the git
+checkout the space sits in, which the panel asks git for, so the filter holds
+while no daemon runs. Each row's buttons run
 `foreman <action> <id>`. A queued row also has `launch`, which shows the
 ladder's rungs and dispatches to the one you pick. A row that newly appears
 under Landed posts a notification.

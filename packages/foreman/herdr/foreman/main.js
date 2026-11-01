@@ -30,6 +30,7 @@ const DESTRUCTIVE = new Set(["kill", "close", "release"]);
 const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b/;
 // An open row shows this many of its task's newest log entries.
 const LOGS_SHOWN = 3;
+const PENDING = Symbol("pending");
 
 export default class Foreman extends View {
   init(_props, cx) {
@@ -40,12 +41,16 @@ export default class Foreman extends View {
     this.launching = null; this.rungs = []; this.busy = new Set(); this.landed = null;
     // The row shown whole, and each task's prog record as last read, by task id.
     this.opened = null; this.tasks = new Map();
+    // Each space folder's project: a name, null for a folder in no checkout,
+    // or PENDING while git is asked.
+    this.checkouts = new Map();
     this.reload(cx);
     this.loadRungs(cx);
     this.watch(cx);
+    this.resolveCheckouts(cx);
     // The age line counts up between readings, and a watch that failed is
     // tried again: the folder does not exist until a daemon first publishes.
-    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); cx.notify(); });
+    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.resolveCheckouts(cx); cx.notify(); });
   }
 
   watch(cx) {
@@ -131,16 +136,33 @@ export default class Foreman extends View {
     });
   }
 
-  // The managed project whose checkout the shown space is in: its folder at or
-  // under the checkout, the rule foreman places a task's tab by. A space's name
-  // is only a label, and a renamed one would hide every row. A space in no
-  // published project shows only the rows that belong to no project: another
-  // project's tasks are never this space's, and "all projects" is a click away.
+  // The project the shown space is in, by the rule foreman uses: the folder
+  // name of the main checkout the space's folder sits in, so a space on a
+  // task's worktree reads as its project. Asked of git, not of the reading, so
+  // it holds with no daemon running. A space's name is only a label. A space in
+  // no checkout shows only the rows that belong to no project.
   project() {
     const folder = spaces().find((space) => space.active)?.folder;
-    if (!folder) return null;
-    const found = (this.published?.projects ?? []).find((p) => folder === p.directory || folder.startsWith(`${p.directory}/`));
-    return found?.name ?? null;
+    const name = folder ? this.checkouts.get(folder) : null;
+    return typeof name === "string" ? name : null;
+  }
+
+  // Asks git once for each space folder not yet resolved. Runs on the timer:
+  // render runs on every change to herdr's live data and starts no work.
+  resolveCheckouts(cx) {
+    const unresolved = spaces().filter((space) => space.folder && !this.checkouts.has(space.folder));
+    if (unresolved.length === 0) return;
+    for (const space of unresolved) this.checkouts.set(space.folder, PENDING);
+    cx.spawn(async (cx) => {
+      for (const space of unresolved) {
+        // on: a space on another machine runs git there.
+        const result = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: space.folder, on: space.machine });
+        const common = result.code === 0 ? result.stdout.trim() : "";
+        const checkout = common.slice(0, common.lastIndexOf("/"));
+        this.checkouts.set(space.folder, checkout ? checkout.slice(checkout.lastIndexOf("/") + 1) : null);
+      }
+      cx.notify();
+    });
   }
 
   render(cx) {
