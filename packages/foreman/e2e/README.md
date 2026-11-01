@@ -1,7 +1,7 @@
 # The end-to-end rig
 
 `config.jsonc` points foreman at one scratch project and nothing else, so a
-daemon started with it cannot see the real backlog. That is the whole point:
+dispatcher started with it cannot see the real backlog. That is the whole point:
 two earlier verification runs claimed real tasks that had to be unwound by
 hand.
 
@@ -10,8 +10,13 @@ sqlite3 /tmp/foreman-e2e.db < e2e/registry.sql
 export FOREMAN_POLICY=/tmp/foreman-e2e-policy.json
 bun src/main.ts policy slots 1
 bun src/main.ts policy set author on   # and review, land: what the run should prove
-FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json bun src/main.ts
+export FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=$PWD/e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json
+HERDR_WEB_PORT=4181 bun ../herdr-web/src/server/main.ts
 ```
+
+The dispatcher runs only inside herdr-web's server, so the rig starts a second
+server on a spare port with the rig's variables. Never point it at the real
+server's port or state file.
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without
 touching the real registry.
@@ -24,7 +29,7 @@ the author's file present, no `foreman/*` branch left and a clean tree.
 
 The busy count is scoped to the rig's own config. Foreman counts only the
 `foreman/*` workspaces whose task lives in a project the running config
-manages, so live workspaces from another daemon do not fill the rig's one slot.
+manages, so live workspaces from another dispatcher do not fill the rig's one slot.
 
 The policy file is separate from your own: without `FOREMAN_POLICY` the rig
 would read and write `~/.config/foreman/policy.json`.

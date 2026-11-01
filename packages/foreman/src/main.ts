@@ -1,34 +1,31 @@
 #!/usr/bin/env bun
-import { Command, Flag } from "effect/cli";
+import { CliError, Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer, Stream, SubscriptionRef } from "effect";
-import { publishedOf, publishedPath, writePublished } from "./published.ts";
+import { Console, Effect, FileSystem, Layer } from "effect";
 import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
-import { Dispatcher } from "./dispatcher.ts";
-import { HcFleet } from "./hc.ts";
-import { logging } from "./log.ts";
-import { Prog } from "./prog.ts";
-import { Prompts } from "./prompt.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
-import { Repository } from "./repository.ts";
-import { telemetry, VERSION } from "./telemetry.ts";
+import { VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
-import { Trials } from "./trials.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { policyCommand } from "./policy-command.ts";
 import { queueCommand, showCommand } from "./store-commands.ts";
+import { services, storeServices } from "./host.ts";
+
+/**
+ * The one-shot command line. The dispatcher itself runs inside a host process
+ * (herdr-web's server, through `host.ts`); every command here acts once on the
+ * same world and exits.
+ */
 
 /**
  * What every account behind the ladder has left, without starting anything.
  *
- * The dashboard shows the same reading, but only while a daemon is up and only
- * inside a terminal it owns. This is the question asked before that: whether
- * there is any point starting the fleet today, and which rungs are stopped.
- * One `Quota` behind both — the dashboard row and this are two callers, not two
- * readings.
+ * This is the question asked before starting the fleet: whether there is any
+ * point today, and which rungs are stopped. One `Quota` behind this and the
+ * dispatcher's own reading — two callers, not two readings.
  */
 const json = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
@@ -88,7 +85,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
           ].join("\n"),
         );
       } else {
-        // Unreadable is not spent. The daemon dispatches such a rung anyway,
+        // Unreadable is not spent. The dispatcher dispatches such a rung anyway,
         // so this must say the same thing rather than read as a wall.
         yield* Console.log(`${reading.provider}  unreadable: ${reading.detail}`);
       }
@@ -102,64 +99,6 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
 
 const statsCommand = Command.make("stats", {}, () => stats).pipe(
   Command.withDescription("Render collected fleet metrics as a self-contained HTML report"),
-);
-
-/**
- * Waits for SIGINT or SIGTERM, so a stopped daemon says so in its log instead
- * of leaving a gap that reads as a crash. Winning ends the program: the scope
- * closes and the loop is interrupted.
- */
-const signals = Effect.callback<NodeJS.Signals>((resume) => {
-  const handlers: ReadonlyArray<[NodeJS.Signals, NodeJS.SignalsListener]> = [
-    ["SIGINT", () => resume(Effect.succeed("SIGINT"))],
-    ["SIGTERM", () => resume(Effect.succeed("SIGTERM"))],
-  ];
-  handlers.forEach(([signal, handler]) => process.on(signal, handler));
-  return Effect.forEach(
-    handlers,
-    ([signal, handler]) => Effect.sync(() => process.off(signal, handler)),
-    { discard: true },
-  );
-}).pipe(
-  Effect.tap((signal) => Effect.logWarning(`received ${signal}, stopping`)),
-  Effect.asVoid,
-);
-
-/**
- * hc is the only multiplexer foreman speaks to today. Swapping this one line
- * for another adapter is the whole of that migration. The base set supplies
- * Dispatcher with every port it cannot build itself.
- *
- * `telemetry` reads the endpoint out of the same `Settings` the rest of the set
- * is given, so it is provided that layer rather than merged beside it; one
- * reference means the config is still built once. It sets the tracer for the
- * whole program, which is why it belongs here and not around a single call.
- * If DevTools is ever added it must come *before* the tracing layers, or the
- * tracer it patches is not the one foreman ends up using.
- */
-const services = Layer.provideMerge(
-  Dispatcher.Default,
-  Layer.mergeAll(
-    HcFleet,
-    settings,
-    Prog.Default,
-    Prompts.Default,
-    Quota.Default,
-    Repository.Default,
-    Trials.Default,
-    BunServices.layer,
-    logging(),
-    telemetry.pipe(Layer.provide(settings)),
-  ),
-);
-
-/** What the store commands read: the task store, and the open spaces for the queue's projects. */
-const storeServices = Layer.mergeAll(
-  Prog.Default,
-  settings,
-  HcFleet,
-  Repository.Default,
-  BunServices.layer,
 );
 
 /**
@@ -177,33 +116,10 @@ const printSkill = FileSystem.FileSystem.pipe(
   Effect.flatMap(Console.log),
 );
 
-/** The loop, until a signal ends the process. */
-const daemon = Effect.gen(function* () {
-  const dispatcher = yield* Dispatcher;
-  yield* Effect.forkScoped(dispatcher.run);
-  // Every reading is published for the panel. A write that fails is logged and
-  // the next reading tries again: the file is a view, and a stale one says so
-  // through its timestamp. The state before the first read is not a reading:
-  // published, it would tell a reader the fleet is empty, and the previous
-  // daemon's file says more until a read lands.
-  yield* Effect.forkScoped(
-    Stream.runForEach(
-      SubscriptionRef.changes(dispatcher.state).pipe(
-        Stream.filter((state) => state.observedAt !== undefined),
-      ),
-      (state) =>
-        writePublished(publishedPath(), publishedOf(state, true)).pipe(
-          Effect.catchCause(Effect.logWarning),
-        ),
-    ),
-  );
-  yield* signals;
-}).pipe(Effect.scoped, Effect.provide(services));
-
 const foreman = Command.make("foreman", { skill }, ({ skill }) =>
   Effect.gen(function* () {
     if (skill) return yield* printSkill;
-    return yield* daemon;
+    return yield* new CliError.ShowHelp({ commandPath: ["foreman"], errors: [] });
   }),
 ).pipe(
   Command.withSubcommands([

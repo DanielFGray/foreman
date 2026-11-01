@@ -544,8 +544,9 @@ p.usage-error { margin: 0; }
 .foreman-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .foreman-heading .note { margin: 0; flex: 1; }
 .foreman-badge { padding: 0 6px; border: 1px solid var(--surface); border-radius: 4px; font-size: 12px; color: var(--subtext); }
-.foreman-badge.live { color: var(--green); border-color: var(--green); }
-.foreman-badge.paused { color: var(--yellow); border-color: var(--yellow); }
+.foreman-badge.running { color: var(--green); border-color: var(--green); }
+.foreman-badge.paused, .foreman-badge.stale { color: var(--yellow); border-color: var(--yellow); }
+.foreman-badge.failed { color: var(--red); border-color: var(--red); }
 .foreman-policy { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--surface); }
 .foreman-controls, .foreman-projects, .foreman-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 /* One group, so a narrow window wraps the agent limit whole. */

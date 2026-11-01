@@ -183,7 +183,7 @@ export const Api = RpcGroup.make(
   Rpc.make("foreman", { success: ForemanState, stream: true }),
   /** Runs one foreman command; the fleet as it then reads follows on the `foreman` stream. */
   Rpc.make("runForeman", { payload: { command: ForemanCommand }, error: BridgeError }),
-  /** Reads the fleet again, without waiting for the daemon's next pass. */
+  /** Asks the dispatcher to read the fleet now, without waiting for its next poll. */
   Rpc.make("refreshForeman", {}),
   /** The rungs a queued task can be launched on. */
   Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),

@@ -20,10 +20,10 @@ import { Settings } from "./config.ts";
  *
  * Each command reads the world once, the way a tick begins, and then does one
  * thing a dashboard key or a tick would do. Nothing here holds state between
- * runs, so a command and a running daemon act on the same world without
+ * runs, so a command and the running dispatcher act on the same world without
  * coordinating: whatever one changes, the other reads back on its next look.
- * Pause and drain are absent on purpose — they are the daemon's intention, held
- * only in its process, and a second process has no way to reach it.
+ * Pausing is `foreman policy`, because the pause lives in the policy file,
+ * which every process reads.
  */
 
 const id = Argument.String("id").pipe(
@@ -37,7 +37,7 @@ const status = Command.make("status", { json }, ({ json }) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
-    const published = publishedOf(yield* SubscriptionRef.get(dispatcher.state), false);
+    const published = publishedOf(yield* SubscriptionRef.get(dispatcher.state), Option.none());
     if (json) return yield* Console.log(JSON.stringify(published, null, 2));
     const rows = published.rows;
     if (rows.length === 0) return yield* Console.log("nothing queued, working or waiting");
@@ -263,7 +263,7 @@ const wait = Command.make("wait", { id, interval, role: waitRole }, (args) =>
 /**
  * Every one-shot command, each given the services it reads. Provided per
  * command rather than around the whole program, so `foreman --skill` and the
- * daemon build none of this.
+ * commands that read only the store build none of this.
  */
 export const subcommands = <E>(services: Services<E>) => [
   Command.provide(status, services),

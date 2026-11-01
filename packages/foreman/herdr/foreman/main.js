@@ -1,21 +1,22 @@
-// The foreman panel: the fleet as the daemon last published it and the queue
+// The foreman panel: the fleet as the dispatcher last published it and the queue
 // as foreman ranks it, filtered to the shown space's project, with each row's
 // one-shot commands as buttons.
 //
 // It reads state.json, asks `foreman queue` and `foreman show` for the queue
 // and a task's record, and runs `foreman <action> <id>` and `foreman policy ...`.
 // It keeps nothing of its own and never speaks to the task store itself. The
-// policy is the daemon's to read: a button here rewrites the file through the
+// policy is the dispatcher's to read: a button here rewrites the file through the
 // CLI, and the next reading shows it. The file's shape is `Published` in
 // foreman's src/published.ts; a queue row has the shape of one of its rows.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home } from "herdr";
 
-const VERSION = 3;
+const VERSION = 4;
 const STEPS = ["author", "climb", "review", "land"];
-// Older than this, the reading is no longer the daemon working: it is gone or
-// wedged inside a tick, and the panel says so rather than showing it as live.
+// Older than this, the reading is no longer the dispatcher working: its host is
+// gone or it is wedged inside a tick, and the panel says so rather than showing
+// it as live.
 const STALE_MS = 120000;
 const SECTIONS = [
   ["attention", "Needs you"],
@@ -58,8 +59,8 @@ export default class Foreman extends View {
     this.watch(cx);
     this.resolveCheckouts(cx);
     // The age line counts up between readings, a watch that failed is tried
-    // again (the folder does not exist until a daemon first publishes), and
-    // the queue is read again, since no daemon publishes it.
+    // again (the folder does not exist until a dispatcher first publishes), and
+    // the queue is read again, since no dispatcher publishes it.
     cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.resolveCheckouts(cx); this.loadQueue(cx); cx.notify(); });
   }
 
@@ -82,7 +83,7 @@ export default class Foreman extends View {
   reload(cx) {
     cx.spawn(async (cx) => {
       const text = await readTextFile(this.path);
-      if (text === null) { this.published = null; this.problem = "no foreman daemon has published yet"; cx.notify(); return; }
+      if (text === null) { this.published = null; this.problem = "no foreman dispatcher has published yet"; cx.notify(); return; }
       try {
         const published = JSON.parse(text);
         if (published.version !== VERSION) throw new Error(`state.json is version ${published.version}; this panel reads ${VERSION}`);
@@ -158,8 +159,8 @@ export default class Foreman extends View {
   }
 
   // Runs one command for a row, then reads the file and the queue again: a
-  // one-shot command changes the world, not the daemon, so its effect on the
-  // file shows on the next tick.
+  // one-shot command changes the world, not the dispatcher, so its effect on
+  // the file shows on the next tick.
   act(args, cx) {
     const id = args.join(" ");
     if (this.busy.has(id)) return;
@@ -176,7 +177,7 @@ export default class Foreman extends View {
   // The project the shown space is in, by the rule foreman uses: the folder
   // name of the main checkout the space's folder sits in, so a space on a
   // task's worktree reads as its project. Asked of git, not of the reading, so
-  // it holds with no daemon running. A space's name is only a label. A space in
+  // it holds with no dispatcher running. A space's name is only a label. A space in
   // no checkout shows only the rows that belong to no project.
   project() {
     const folder = spaces().find((space) => space.active)?.folder;
@@ -208,7 +209,11 @@ export default class Foreman extends View {
     const age = published?.observedAt ? Date.now() - Date.parse(published.observedAt) : null;
     const live = age !== null && age < STALE_MS;
     const policy = published?.policy;
-    const state = !published ? "offline" : !published.daemon ? "no daemon" : !live ? "stale" : policy.paused ? "paused" : Object.values(policy.default).some(Boolean) || policy.grants.length > 0 ? "running" : "idle";
+    // The dispatcher names its own state: running, paused, idle (no step on and
+    // no grant) or failed (its host is starting it again). A file a one-shot
+    // `foreman status` wrote names none.
+    const dispatcher = published?.dispatcher;
+    const state = !published ? "offline" : !dispatcher ? "no dispatcher" : dispatcher.state === "failed" ? "failed" : !live ? "stale" : dispatcher.state;
     const fleet = (published?.rows ?? []).filter((row) => this.all || row.project === null || row.project === project);
     const hidden = (published?.rows.length ?? 0) - fleet.length;
     // A queue read for another scope is not shown: the space changed, and the
@@ -289,12 +294,13 @@ export default class Foreman extends View {
           .children(mine.filter((child) => child.parent === r.key).map(row))));
     };
 
-    const tone = state === "running" ? t.working : state === "stale" ? t.blocked : t.muted;
+    const tone = state === "running" ? t.working : state === "stale" || state === "failed" ? t.blocked : t.muted;
 
     // The policy: pause, the steps the fleet takes for every task, and the
     // agent limit. A grant for one task is the "allow" chip on its row.
     const controls = !policy ? null : v_flex().px(14).py(6).gap(4).border_b(1).border_color(t.border)
       .when(Boolean(published.policyError), (el) => el.child(div().text_size(11).text_color(t.blocked).child(published.policyError)))
+      .when(dispatcher?.state === "failed", (el) => el.child(div().text_size(11).text_color(t.blocked).child(`dispatcher failed, restarting: ${dispatcher.detail}`)))
       .child(h_flex().gap(4).flex_wrap().items_center()
         .child(chip("pause", policy.paused ? "resume" : "pause", (cx) => this.act(["policy", policy.paused ? "resume" : "pause"], cx), policy.paused ? t.working : t.blocked))
         .children(STEPS.map((step) => chip(`step-${step}`, `${policy.default[step] ? "●" : "○"} ${step}`,

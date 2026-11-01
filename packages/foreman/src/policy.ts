@@ -2,10 +2,8 @@
  * The operator's policy: which steps the fleet may take by itself, for which
  * tasks, and how many agents may work at once.
  *
- * Settle, tidy, reclaim and publishing a reading always run, because each has
- * one right answer and spends nothing. The four steps here spend tokens or
- * write to the operator's checkout, so each runs only where the policy allows
- * it:
+ * The four steps spend tokens or write to the operator's checkout, so each
+ * runs only where the policy allows it:
  *
  * - `author` starts a task nobody has tried.
  * - `climb` starts a task again after an attempt that did not finish it, on
@@ -15,11 +13,17 @@
  * - `land` proves the merge in the proving ground and applies it to the
  *   checkout.
  *
+ * Settle, tidy, reclaim and recover have one right answer each, so they run
+ * on every tick while the fleet is `running` (see `modeOf`). A `paused` or
+ * `idle` fleet only reads the world and publishes the reading: no step can
+ * run, and a tick that cannot act writes nothing, so the operator can stop
+ * every write the fleet makes with one switch.
+ *
  * The policy is an intention, and an intention is the one thing foreman cannot
  * read back from the world. It lives in a file the operator edits through
  * `foreman policy` or the panel, so it survives a restart and both front ends
- * write it through `updatePolicy`. The daemon writes it too, to record which
- * tasks a grant has admitted.
+ * write it through `updatePolicy`. The dispatcher writes it too, to record
+ * which tasks a grant has admitted.
  *
  * Commands the operator gives by hand (`foreman dispatch`, the panel's launch)
  * are not gated: the operator pressing the key is the permission.
@@ -37,7 +41,7 @@ export type Step = (typeof STEPS)[number];
  * distinct tasks, and keeps covering each one it admitted until that task is
  * finished, so a task it authored is not left without its review or its
  * landing when the count runs out. Absent means no limit. `admitted` is the
- * daemon's record of which tasks those are.
+ * dispatcher's record of which tasks those are.
  */
 export const Grant = S.Struct({
   scope: S.String,
@@ -73,6 +77,26 @@ export type Policy = typeof Policy.Type;
 
 /** The policy with no file: the fleet takes no step until the operator says so. */
 export const DEFAULT_POLICY: Policy = S.decodeSync(Policy)({});
+
+/**
+ * What a tick may do under a policy.
+ *
+ * - `running`: a step or a grant is on, so the tick settles, tidies, reclaims,
+ *   recovers and fills.
+ * - `paused`: the operator stopped the fleet; grants are kept for later.
+ * - `idle`: no step is on and no grant exists, so no step could run.
+ *
+ * Only `running` writes to the world. The other two read and publish.
+ */
+export const MODES = ["running", "paused", "idle"] as const;
+export type Mode = (typeof MODES)[number];
+
+export const modeOf = (policy: Policy): Mode =>
+  policy.paused
+    ? "paused"
+    : STEPS.some((step) => policy.default[step]) || policy.grants.length > 0
+      ? "running"
+      : "idle";
 
 /** Why a step may or may not run for a task. */
 export type Permit =
@@ -228,12 +252,12 @@ export const readPolicy = (path: string) =>
 /**
  * Rewrites the policy through `change`, the one way anything writes it.
  *
- * The daemon and the operator's commands write the same file from different
+ * The dispatcher and the operator's commands write the same file from different
  * processes. So the file is read again just before the rename, and a write
  * that finds it changed since its own read starts over from the new contents
  * instead of overwriting them. That narrows the race to the moment between the
  * second read and the rename; it does not close it, and nothing here holds a
- * lock. Losing it loses one write: an expiry the daemon makes again next tick,
+ * lock. Losing it loses one write: an expiry the dispatcher makes again next tick,
  * an admission that lets a grant take on one task more than its count, or an
  * operator's change that the next reading shows did not happen. A file that does not decode is refused: the
  * operator's broken edit is theirs to fix, not foreman's to replace.

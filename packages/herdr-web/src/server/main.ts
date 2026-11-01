@@ -13,7 +13,7 @@ import { ClaudeChat } from "./claude/ClaudeChat.ts"
 import { ClaudeCommands } from "./claude/Commands.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
-import { Foreman } from "./Foreman.ts"
+import { Foreman, ForemanHost } from "./Foreman.ts"
 import { toBridgeError } from "./hcError.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { type WorktreeError, Worktrees } from "./Worktrees.ts"
@@ -132,7 +132,7 @@ const Bridge = Layer.unwrap(
   Layer.provide([
     // The agents paste into the box through the live terminals.
     Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer, OpenCodeServer.layer]), Layer.provideMerge(LiveTerminals.layer)),
-    Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer, Push.layer, Foreman.layer]),
+    Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer, Push.layer, Foreman.layer.pipe(Layer.provide(ForemanHost.layer))]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),

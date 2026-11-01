@@ -130,7 +130,7 @@ export const interleave = (
  * Ready work split the way the fleet reads it: the queue it may start by
  * itself, in dispatch order, and the tasks parked at the operator.
  *
- * The daemon's tick and `foreman queue` both call this, so the order a client
+ * The dispatcher's tick and `foreman queue` both call this, so the order a client
  * shows and the order the fleet dispatches cannot disagree.
  *
  * - Parked: the task carries `needs-you`, or every configured rung has failed
@@ -139,7 +139,7 @@ export const interleave = (
  * - Onboarding: a salvage run stands in a directory a person is using, so it
  *   starts when that person asks and never because a slot came free.
  * - Failed: tasks whose dispatch failed twice the same way. That tally lives
- *   only in the daemon's process, so a one-shot reader passes none.
+ *   only in the dispatcher's process, so a one-shot reader passes none.
  */
 export const queueFrom = (reading: {
   readonly ready: ReadonlyArray<ReadyTask>;

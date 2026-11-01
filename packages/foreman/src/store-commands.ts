@@ -1,13 +1,8 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
-import { Settings } from "./config.ts";
-import { Fleet } from "./fleet.ts";
 import { Prog, TaskDetail } from "./prog.ts";
-import { openCheckouts, projectSet } from "./projects.ts";
-import { PublishedRow, publishedRow } from "./published.ts";
-import { queueFrom } from "./queue.ts";
-import { Repository } from "./repository.ts";
-import { queueRows } from "./view.ts";
+import { PublishedRow, publishedQueue } from "./published.ts";
+import { queueOf } from "./host.ts";
 import { Refused } from "./commands.ts";
 
 /**
@@ -27,37 +22,17 @@ const project = Flag.String("project").pipe(
 );
 
 /**
- * The queue in the order the fleet would dispatch it.
- *
- * `queueFrom` is the daemon's own split, so this and a tick cannot disagree,
- * with one exception: a task whose dispatch failed twice is held out by the
- * daemon's in-process tally, which a second process cannot see.
+ * The queue in the order the fleet would dispatch it. `queueOf` is the read
+ * herdr-web's server makes in process, so the two print the same rows.
  */
 export const queueCommand = Command.make("queue", { json, project }, (args) =>
   Effect.gen(function* () {
-    const prog = yield* Prog;
-    const projects = yield* Option.match(args.project, {
-      onSome: (name) => Effect.succeed([name]),
-      onNone: () =>
-        Effect.gen(function* () {
-          const open = yield* openCheckouts(yield* Fleet, yield* Repository);
-          return projectSet(open, []).projects.map(({ name }) => name);
-        }),
-    });
-    const ready = yield* prog.ready(args.project);
-    const epics = yield* prog.epicsOver(ready);
-    const { queue } = queueFrom({
-      ready,
-      ladder: (yield* Settings).ladder,
-      projects,
-      epics,
-      failed: new Set(),
-      now: new Date(),
-    });
+    const { queue, epics } = yield* queueOf(args.project);
     if (args.json) {
-      const rows = queueRows(queue, epics).map(publishedRow("queue"));
       return yield* Console.log(
-        JSON.stringify(yield* Schema.encodeEffect(Schema.Array(PublishedRow))(rows)),
+        JSON.stringify(
+          yield* Schema.encodeEffect(Schema.Array(PublishedRow))(publishedQueue(queue, epics)),
+        ),
       );
     }
     if (queue.length === 0) return yield* Console.log("queue empty");

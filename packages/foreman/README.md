@@ -37,8 +37,7 @@ and `prog list` together tell you everything foreman knows.
 2. **Tidy.** Foreman's merged branches are deleted from every project. `-d`
    refuses anything the checkout does not already have, so only redundant refs
    go. In a jj checkout it also abandons the unpublished merge commits a landing
-   interrupted by a restart leaves behind, which is what landing into foreman's
-   own checkout under `bun --watch` does.
+   interrupted by a restart leaves behind.
 3. **Reclaim.** A claim with no live worker and no activity for a day goes back
    to the queue. Ownership decides this, not age: a task with a live workspace
    is never touched.
@@ -48,10 +47,9 @@ and `prog list` together tell you everything foreman knows.
 
 ## What the fleet may do by itself
 
-Settle, tidy and reclaim run on every tick, because each has one right answer
-and spends nothing. Four steps spend tokens or write to your checkout, and each
-runs only where the policy in `~/.config/foreman/policy.json` (or
-`$FOREMAN_POLICY`) allows it:
+Four steps spend tokens or write to your checkout, and each runs only where
+the policy in `~/.config/foreman/policy.json` (or `$FOREMAN_POLICY`) allows
+it:
 
 - **author** starts a task no attempt has touched.
 - **climb** starts a task again after an attempt that did not finish it. The
@@ -71,13 +69,26 @@ runs only where the policy in `~/.config/foreman/policy.json` (or
 `default` holds for every task. A grant widens it for one task, or for an epic
 and every task under it. `remaining` counts tasks: the grant takes on at most
 that many, and keeps covering each one until it is finished, so a task it
-authored still gets its review and landing. The daemon records those tasks in
-`admitted` and removes a grant that has nothing left to do. `paused` stops all
-four steps, grants included. `slots` is how many agents may work at once.
+authored still gets its review and landing. The dispatcher records those
+tasks in `admitted` and removes a grant that has nothing left to do. `slots`
+is how many agents may work at once.
+
+The policy also says whether a tick acts at all. The dispatcher is in one of
+three states:
+
+- **running**: a step or a grant is on. Each tick settles, tidies, reclaims,
+  recovers and fills.
+- **paused**: `paused` is set. Grants are kept for later.
+- **idle**: no step is on and no grant exists.
+
+A paused or idle tick reads the world and publishes the reading, and writes
+nothing: no prog change, no git change, no workspace opened, stopped or
+closed, no policy change. Settle, tidy, reclaim and recover wait too, so a
+workspace whose agent stopped stays open until the fleet runs again.
 
 Change it with `foreman policy` (`pause`, `resume`, `set <step> on|off`,
 `slots <n>`, `grant <id> <steps...> [--count n]`, `revoke <id>`) or from the
-panel. Both write the file the same way, and the daemon reads it on every
+panel. Both write the file the same way, and the dispatcher reads it on every
 tick. With no file the fleet takes no step. A file that does not decode pauses
 the fleet, and the panel shows why.
 
@@ -96,7 +107,7 @@ beside it.
 Every dashboard key is also a subcommand, and so are the steps an agent
 coordinator needs: `foreman status`, `foreman dispatch <id>`, `foreman wait
 <id>`, `foreman prompt author|review <id>`. Each one reads the world once,
-does one thing and exits, so it works with or without a daemon running.
+does one thing and exits, so it works with or without the dispatcher running.
 `foreman --skill` prints how to use them.
 
 ## Projects you are working in
@@ -472,14 +483,15 @@ entered first.
 Some ready tasks never enter the queue. One labelled `needs-you`, or one every rung
 has failed, parks under Needs you; one labelled `onboard` is held for the
 project's onboarding. A task whose dispatch failed twice in a row is held out
-by the daemon for as long as it runs; that count lives in the daemon's memory
-only. One function, `queueFrom` in `src/queue.ts`, makes this split for both
-the daemon and `foreman queue`.
+by the dispatcher for as long as it runs; that count lives in its memory only.
+One function, `queueFrom` in `src/queue.ts`, makes this split for both the
+dispatcher and `foreman queue`.
 
-The queue is not in `state.json`. The panel and herdr-web run
-`foreman queue --project <name> --json`, which reads only the task store and
+The queue is not in `state.json`. The panel runs
+`foreman queue --project <name> --json`, and herdr-web makes the same read in
+its own process (`queueOf` in `src/host.ts`). It reads only the task store and
 the open spaces, with no agent roster and no branch checks, so it answers in
-under a second and needs no daemon.
+under a second.
 
 
 ## Configuration
@@ -533,15 +545,26 @@ project foreman touches.
 
 ## Running it
 
+The dispatcher runs inside herdr-web's server (`packages/herdr-web`): start
+that, and the fleet runs with it. The server supervises the dispatcher. A
+failure is logged, shown on the Foreman page and in the panel as `failed`, and
+the dispatcher starts again after a pause that doubles from a second up to a
+minute; the server keeps serving meanwhile. After each reading the server
+writes `state.json` for the panel.
+
+The server's PATH must hold every program the dispatcher runs: `prog`, `hc`,
+`git`, `jj` and each rung's harness. The command line stays for one-shot
+commands:
+
 ```bash
-bun src/main.ts                 # the daemon; it runs until a signal stops it
 bun src/main.ts policy slots 1  # one agent at a time, to watch a change land
+bun src/main.ts status          # one reading, printed
 ```
 
 What it starts by itself is the policy's to say; see above.
 
-foreman opens workspaces in the session it is running in, so it must run inside
-that session.
+foreman opens workspaces in the session it is running in, so the server must
+run inside that session.
 
 ## Ports
 

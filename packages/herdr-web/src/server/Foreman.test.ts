@@ -1,52 +1,71 @@
-import { Option, Result, Schema as S } from "effect"
-import { describe, expect, test } from "vitest"
-import { ForemanCommand } from "../shared/Foreman.ts"
-import { EMPTY_STATE, readingOf, withReading } from "./Foreman.ts"
+import { BunServices } from "@effect/platform-bun"
+import { DateTime, Effect, Layer, Option, Ref, Result, Schema as S, Stream, SubscriptionRef } from "effect"
+import { TestClock } from "effect/testing"
+import { EMPTY_FLEET, type FleetState } from "foreman"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, describe, expect, test } from "vitest"
+import { ForemanCommand, type ForemanState } from "../shared/Foreman.ts"
+import { Foreman, ForemanHost } from "./Foreman.ts"
 
-const published = (fields: { daemon: boolean; observedAt: string | null }) =>
-  JSON.stringify({
-    version: 3,
-    ...fields,
-    policy: { paused: false, slots: 3, default: { author: false, climb: false, review: false, land: false }, grants: [] },
-    policyError: null,
-    projects: [{ name: "app", directory: "/src/app" }],
-    rows: [{ view: "attention", key: "ts-1", label: "Write the export", detail: null, project: "app", parent: null, epic: false, actions: ["complete"] }],
-  })
-
-const reading = (fields: { daemon: boolean; observedAt: string | null }) => Result.getOrThrow(readingOf(published(fields)))
-
-describe("readingOf", () => {
-  test("reads foreman's published shape", () => {
-    const read = reading({ daemon: true, observedAt: "2026-10-30T01:00:00.000Z" })
-    expect(read.rows[0]?.project).toEqual(Option.some("app"))
-    expect(read.rows[0]?.detail).toEqual(Option.none())
-  })
-
-  test("refuses a version it does not read, by name", () => {
-    expect(readingOf(JSON.stringify({ version: 2 }))).toEqual(Result.fail("foreman publishes version 2; this page reads version 3"))
-  })
-
-  test("refuses text that is not JSON", () => {
-    expect(readingOf("{")).toEqual(Result.fail("foreman's reading is not JSON"))
-  })
+// foreman reads where to publish and where its policy lives from the
+// environment, so each points into a folder of the test's own.
+const folder = mkdtempSync(join(tmpdir(), "herdr-web-foreman-"))
+const saved = { state: process.env["FOREMAN_STATE"], policy: process.env["FOREMAN_POLICY"] }
+process.env["FOREMAN_STATE"] = join(folder, "state.json")
+process.env["FOREMAN_POLICY"] = join(folder, "policy.json")
+afterAll(() => {
+  rmSync(folder, { recursive: true, force: true })
+  const restored: ReadonlyArray<readonly [string, string | undefined]> = [["FOREMAN_STATE", saved.state], ["FOREMAN_POLICY", saved.policy]]
+  for (const [name, value] of restored) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
 })
 
-describe("withReading", () => {
-  const daemon = reading({ daemon: true, observedAt: "2026-10-30T01:00:00.000Z" })
-  const oneShot = reading({ daemon: false, observedAt: "2026-10-30T01:00:30.000Z" })
+/** A dispatcher whose first start dies, and whose second reads the world once and runs on. */
+const failingOnce = Effect.gen(function* () {
+  const starts = yield* Ref.make(0)
+  const state = yield* SubscriptionRef.make<FleetState>(EMPTY_FLEET)
+  const host = {
+    state,
+    run: SubscriptionRef.set(state, { ...EMPTY_FLEET, observedAt: DateTime.makeUnsafe(Date.parse("2026-10-30T01:00:00Z")) }).pipe(Effect.andThen(Effect.never)),
+    wake: Effect.void,
+    queue: () => Effect.succeed([]),
+  }
+  const build = Ref.getAndUpdate(starts, (n) => n + 1).pipe(Effect.flatMap((n) => (n === 0 ? Effect.die("prog: command not found") : Effect.succeed(host))))
+  return Layer.succeed(ForemanHost, { build })
+})
 
-  test("keeps the newer reading, and dates the daemon by its own even when that reading is older", () => {
-    const state = withReading(withReading(EMPTY_STATE, oneShot), daemon)
-    expect(state.reading).toEqual(Option.some(oneShot))
-    expect(state.daemonAt).toEqual(Option.some(Date.parse("2026-10-30T01:00:00.000Z")))
-  })
+const until = (foreman: Foreman["Service"], shown: (state: ForemanState) => boolean) => foreman.changes.pipe(Stream.filter(shown), Stream.runHead)
 
-  test("a one-shot reading leaves the daemon's date alone", () => {
-    expect(withReading(withReading(EMPTY_STATE, daemon), oneShot).daemonAt).toEqual(Option.some(Date.parse("2026-10-30T01:00:00.000Z")))
-  })
+const dispatcherOf = (state: ForemanState) => Option.map(state.reading, ({ dispatcher }) => dispatcher.state)
 
-  test("a reading clears the last problem", () => {
-    expect(withReading({ ...EMPTY_STATE, problem: Option.some("unreadable") }, daemon).problem).toEqual(Option.none())
+describe("the supervised dispatcher", () => {
+  test("a dispatcher that dies shows as failed, starts again after a pause, and the bridge serves throughout", async () => {
+    await Effect.gen(function* () {
+      const host = yield* failingOnce
+      yield* Effect.gen(function* () {
+        const foreman = yield* Foreman
+
+        const failed = yield* until(foreman, (state) => Option.contains(dispatcherOf(state), "failed"))
+        expect(Option.flatMap(failed, ({ reading }) => reading).pipe(Option.map(({ dispatcher }) => dispatcher))).toEqual(
+          Option.some({ state: "failed", detail: expect.stringContaining("prog: command not found") }),
+        )
+        // The panel reads the same state from the file.
+        expect(JSON.parse(readFileSync(join(folder, "state.json"), "utf8")).dispatcher.state).toBe("failed")
+        // While it waits to start again, the queue says so instead of hanging.
+        const queue = yield* Effect.flip(foreman.queue(Option.none()))
+        expect(queue.message).toBe("foreman's dispatcher is not running")
+
+        yield* TestClock.adjust("1 second")
+        // No step is on in a missing policy file, so the restarted dispatcher only reads.
+        yield* until(foreman, (state) => Option.contains(dispatcherOf(state), "idle"))
+        expect(JSON.parse(readFileSync(join(folder, "state.json"), "utf8")).dispatcher.state).toBe("idle")
+        expect(yield* foreman.queue(Option.none())).toEqual([])
+      }).pipe(Effect.provide(Foreman.layer.pipe(Layer.provide([host, BunServices.layer]))))
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise)
   })
 })
 

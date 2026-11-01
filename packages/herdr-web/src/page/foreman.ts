@@ -12,6 +12,7 @@ import {
   FOREMAN_STEPS,
   ForemanAction,
   type ForemanCommand,
+  type ForemanDispatcher,
   type ForemanPolicy,
   type ForemanReading,
   type ForemanRow,
@@ -70,7 +71,7 @@ export const toggledSection = (model: Model, view: ForemanView): Model =>
     folded: Array.contains(page.folded, view) ? Array.filter(page.folded, (other) => other !== view) : [...page.folded, view],
   }))
 
-/** The page: a heading that says whether the daemon runs, the policy, and the fleet's and the queue's rows by section. */
+/** The page: a heading that says what the dispatcher is doing, the policy, and the fleet's and the queue's rows by section. */
 export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const page = model.foremanPage
   return h.section(
@@ -79,6 +80,7 @@ export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
       onNone: () => [h.h2([], ["Foreman"]), h.p([h.Class("note")], ["Asking the bridge…"])],
       onSome: (state) => [
         headingView(state, model.now, h),
+        ...Option.match(failureOf(state), { onNone: () => [], onSome: (detail) => [h.p([h.Class("note error")], [`The dispatcher failed and starts again shortly: ${detail}`])] }),
         ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
         ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),
         ...ForemanQueue.match(page.queue, {
@@ -87,7 +89,7 @@ export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
           Unlisted: ({ reason }) => [h.p([h.Class("note error")], [reason])],
         }),
         ...Option.match(state.reading, {
-          onNone: () => (state.isReading ? [h.p([h.Class("note")], ["Reading the fleet…"])] : []),
+          onNone: () => [h.p([h.Class("note")], ["Waiting for the dispatcher's first reading…"])],
           onSome: (reading) => [policyView(reading, page, h), projectsView(reading, page, h), ...sectionsView([...reading.rows, ...queueRows(page.queue)], page, h)],
         }),
       ],
@@ -104,29 +106,37 @@ const SECTIONS: ReadonlyArray<readonly [ForemanView, string]> = [
   ["landed", "Landed"],
 ]
 
-// Older than this, the daemon's last reading is no longer the daemon working:
-// it stopped, or is stuck inside a pass.
+// Older than this, the last reading is no longer the dispatcher working: it is
+// stuck inside a tick.
 const STALE_MS = 120_000
+
+/**
+ * What the heading says the dispatcher is doing: its own state, or stale when
+ * a running one has not read the world for too long. Failed wins over stale,
+ * since it says why.
+ */
+export const dispatcherStateOf = (reading: ForemanReading, now: number): ForemanDispatcher["state"] | "stale" =>
+  reading.dispatcher.state === "failed" || Option.exists(reading.observedAt, (at) => now - Date.parse(at) < STALE_MS)
+    ? reading.dispatcher.state
+    : "stale"
+
+const failureOf = (state: ForemanState) =>
+  Option.flatMap(state.reading, ({ dispatcher }) => (dispatcher.state === "failed" ? Option.some(dispatcher.detail) : Option.none()))
 
 const lineOf = (command: ForemanCommand) => argvOf(command).join(" ")
 
 const isDestructive = (command: ForemanCommand) => command._tag === "Act" && Array.contains(DESTRUCTIVE_ACTIONS, command.action)
 
 const headingView = (state: ForemanState, now: number, h: HtmlBuilder<Message>): Html => {
-  const isLive = Option.exists(state.daemonAt, (at) => now - at < STALE_MS)
-  const isPaused = Option.exists(state.reading, ({ policy }) => policy.paused)
+  const dispatcher = Option.map(state.reading, (reading) => dispatcherStateOf(reading, now))
   const read = Option.flatMap(state.reading, ({ observedAt }) => observedAt)
   return h.div(
     [h.Class("foreman-heading")],
     [
       h.h2([], ["Foreman"]),
-      h.span([h.Class(isLive ? "foreman-badge live" : "foreman-badge")], [isLive ? "daemon running" : "daemon off"]),
-      ...(isPaused ? [h.span([h.Class("foreman-badge paused")], ["paused"])] : []),
+      ...Option.match(dispatcher, { onNone: () => [], onSome: (shown) => [h.span([h.Class(`foreman-badge ${shown}`)], [shown])] }),
       h.span([h.Class("note")], [Option.match(read, { onNone: () => "", onSome: (at) => `Read ${ago(Date.parse(at), now)} ago` })]),
-      h.button(
-        [h.Type("button"), h.Class("chip"), h.Disabled(state.isReading), h.AriaLabel("read the fleet again"), h.OnClick(Message.ClickedRefreshForeman())],
-        [state.isReading ? "Reading…" : "Refresh"],
-      ),
+      h.button([h.Type("button"), h.Class("chip"), h.AriaLabel("read the fleet again"), h.OnClick(Message.ClickedRefreshForeman())], ["Refresh"]),
     ],
   )
 }

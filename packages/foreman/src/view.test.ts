@@ -3,11 +3,19 @@ import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
-import { actionsFor, decisionKind, queueRow, queueRows, rowsForView, staleReview } from "./view.ts";
+import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
-import { Published, publishedOf, publishedRow, writePublished } from "./published.ts";
+import {
+  Published,
+  publishedOf,
+  publishedQueue,
+  publishedRow,
+  statusOf,
+  writePublished,
+  type DispatcherStatus,
+} from "./published.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Schema as S } from "effect";
+import { Effect, Option, Schema as S } from "effect";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
@@ -392,12 +400,13 @@ describe("publishedOf", () => {
         ...state,
         projects: [{ name: "pty", directory: "/build/pty", verify: undefined, open: true }],
       },
-      true,
+      Option.some(statusOf(state)),
     );
     expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
       published,
     );
-    expect(published.daemon).toBe(true);
+    // No step is on and no grant exists under the default policy.
+    expect(published.dispatcher).toEqual({ state: "idle" });
     expect(published.policy).toEqual(DEFAULT_POLICY);
     // The queue is read with `foreman queue`, not published.
     expect(published.rows.some((row) => row.view === "queue")).toBe(false);
@@ -434,29 +443,41 @@ describe("publishedOf", () => {
       { ...second!, parent: "ep-drive" },
       { ...first!, id: "ts-q9", parent: "ep-drive" },
     ];
-    const rows = queueRows(queue, [
+    const rows = publishedQueue(queue, [
       { epic, children: [task("ts-done", "done", []), task("ts-open", "open", [])] },
-    ]).map(publishedRow("queue"));
+    ]);
     expect(rows.map((row) => row.key)).toEqual([first!.id, "ep-drive", second!.id, "ts-q9"]);
     expect(rows[1]).toMatchObject({ epic: true, parent: null, actions: [] });
     expect(rows[1]?.label).toContain("1/2");
     expect(rows[2]).toMatchObject({ epic: false, parent: "ep-drive" });
   });
 
-  test("says a one-shot read is not the daemon's", () => {
-    expect(publishedOf(state, false).daemon).toBe(false);
+  test("names no dispatcher for a one-shot read", () => {
+    expect(publishedOf(state, Option.none()).dispatcher).toBeNull();
+  });
+
+  test("carries why a dispatcher failed, in a shape its schema reads back", () => {
+    const published = publishedOf(
+      state,
+      Option.some({ state: "failed", detail: "prog: command not found" }),
+    );
+    expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
+      published,
+    );
   });
 
   test("replaces the file whole, leaving no temporary beside it", async () => {
     const folder = await mkdtemp(`${tmpdir()}/published-`);
     const path = `${folder}/state.json`;
-    const write = (daemon: boolean) =>
+    const write = (dispatcher: Option.Option<DispatcherStatus>) =>
       Effect.runPromise(
-        writePublished(path, publishedOf(state, daemon)).pipe(Effect.provide(BunServices.layer)),
+        writePublished(path, publishedOf(state, dispatcher)).pipe(
+          Effect.provide(BunServices.layer),
+        ),
       );
-    await write(true);
-    await write(false);
-    expect(JSON.parse(await readFile(path, "utf8")).daemon).toBe(false);
+    await write(Option.some({ state: "running" }));
+    await write(Option.none());
+    expect(JSON.parse(await readFile(path, "utf8")).dispatcher).toBeNull();
     expect(await readdir(folder)).toEqual(["state.json"]);
   });
 });

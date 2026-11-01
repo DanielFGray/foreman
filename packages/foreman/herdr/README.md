@@ -1,12 +1,12 @@
 # The foreman panel for herdr-app
 
-A right-hand dock that shows the fleet as the daemon last published it in
+A right-hand dock that shows the fleet as the dispatcher last published it in
 `state.json`, filtered to the shown space's project: the folder name of the git
 checkout the space sits in, which the panel asks git for, so the filter holds
-while no daemon runs. The Queue section is not in `state.json`: the panel runs
+while no dispatcher runs. The Queue section is not in `state.json`: the panel runs
 `foreman queue --project <name> --json` (or `foreman queue --json` for every
 project) every 5 seconds and when the project changes, so it shows while no
-daemon runs. Clicking a row runs `foreman show <id> --json` for the task's
+dispatcher runs. Clicking a row runs `foreman show <id> --json` for the task's
 description and log. The panel never runs `prog`. Each row's buttons run
 `foreman <action> <id>`. A queued row also has `launch`, which shows the
 ladder's rungs and dispatches to the one you pick. A row that newly appears
@@ -16,13 +16,19 @@ The bar under the title is the policy: pause or resume, the four steps the
 fleet takes for every task (author, climb, review, land), the agent limit, and
 each grant with a revoke button. A review row has `allow review` and `allow
 land`, which grant that one step for that one task. Every button runs
-`foreman policy ...`, the same writer as the command line, and the daemon
+`foreman policy ...`, the same writer as the command line, and the dispatcher
 reads the change on its next tick.
+
+The title line says what the dispatcher is doing, as the file names it:
+`running`, `paused`, `idle` (no step on and no grant, so it only reads),
+`failed` (herdr-web's server is starting it again, and the reason shows under
+the title), `stale` (no reading for two minutes), `no dispatcher` (the file
+was written by a one-shot `foreman status`) or `offline` (no file).
 
 The panel keeps no state. It reads the file that `src/published.ts` writes, and
 the schema there is the contract; a row from `foreman queue --json` has the
-shape of a published row. herdr-web's Foreman page reads the same file,
-through its own copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in
+shape of a published row. herdr-web's server writes the file, and its Foreman
+page reads the same readings through its own copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in
 `foreman/main.js`, and `FOREMAN_VERSION` in herdr-web's `src/shared/Foreman.ts`
 together.
 
@@ -61,9 +67,10 @@ together.
 Both are optional, and are set on the block's `content.props`:
 
 - `state`: the published file. Default: `~/.local/state/foreman/state.json`,
-  where a daemon with no `XDG_STATE_HOME` or `FOREMAN_STATE` writes it.
+  where herdr-web's server writes it when it has no `XDG_STATE_HOME` or
+  `FOREMAN_STATE`.
 - `command`: the argv prefix that runs foreman. Default: `["foreman"]`. A mod
-  cannot read environment variables, so a daemon with its own registry or
+  cannot read environment variables, so a fleet with its own registry or
   config is reached through `env`:
   `["env", "FOREMAN_CONFIG=/abs/config.jsonc", "FOREMAN_POLICY=/abs/policy.json", "bun", "/abs/src/main.ts"]`.
 

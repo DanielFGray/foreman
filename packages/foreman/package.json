@@ -5,9 +5,10 @@
     "foreman": "./src/main.ts"
   },
   "type": "module",
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
-    "start": "bun src/main.ts",
     "test": "run-s format:check lint typecheck test:unit",
     "test:unit": "bun test",
     "typecheck": "bunx tsc --noEmit",

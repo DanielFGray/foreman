@@ -32,6 +32,7 @@ import {
   admit,
   authorStep,
   expire,
+  modeOf,
   permit,
   policyPath,
   readPolicy,
@@ -154,7 +155,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
     };
 
-    const state = yield* SubscriptionRef.make(empty);
+    const state = yield* SubscriptionRef.make(EMPTY_FLEET);
 
     // The policy file is read and written from inside the loop, so its file
     // system is taken once here rather than required of every method.
@@ -165,16 +166,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     // the worktree that made `open` fail will still exist next tick, so a
     // second attempt learns nothing. Two identical failures move the task to a
     // decision instead of a third attempt. A restart forgets the tally, which
-    // costs the daemon two attempts to relearn it; the tasks themselves stay
+    // costs the dispatcher two attempts to relearn it; the tasks themselves stay
     // safe in the queue either way.
     const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
 
     // Whether the accounts have been read at all yet. A fleet that has just
     // started has nothing to say about them, and "no reading" and "nothing
     // left" are not distinguishable on a dashboard — so the first tick asks
-    // whatever the fleet is doing, and a paused one then stops. One probe per
+    // whatever the fleet is doing, and one that is not running then stops. One probe per
     // process, which is also what makes a restart show the accounts without
-    // the operator having to unpause to see them.
+    // the operator having to start the fleet to see them.
     const everProbed = yield* Ref.make(false);
 
     // The poll interval is how long foreman waits to notice something nobody
@@ -262,15 +263,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // join is before anything interprets it — so nothing is decided from a
       // probe that finished during an earlier tick.
       //
-      // Asked at all only where the answer has a consumer. A paused fleet
-      // dispatches nothing, so no gate reads an allowance, and the spent
-      // accounts in attention are not what stopped it — the operator is, and
-      // the published policy already says so. Probing on regardless is a
+      // Asked at all only where the answer has a consumer. A fleet that is not
+      // running dispatches nothing, so no gate reads an allowance, and the
+      // spent accounts in attention are not what stopped it — the policy is,
+      // and the published reading already says so. Probing on regardless is a
       // network request every poll to explain a halt that has another cause.
       // The policy is the previous reading's: a pause takes one poll to stop
       // the probes, and the probe is all that lags.
       const previousPolicy = (yield* SubscriptionRef.get(state)).policy;
-      const wanted = !previousPolicy.paused || !(yield* Ref.get(everProbed));
+      const wanted = modeOf(previousPolicy) === "running" || !(yield* Ref.get(everProbed));
       if (wanted) yield* Ref.set(everProbed, true);
       const probing = yield* Effect.forkChild(
         wanted ? readProviders : Effect.succeed<ReadonlyArray<Provider>>([]),
@@ -279,8 +280,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // A tick that did not ask carries the last answer rather than publishing
       // an empty set, because "not read" and "no accounts" look identical on a
       // dashboard and only one of them is true. Carried for the view alone:
-      // the gate that reads an allowance runs only when the fleet is not
-      // paused, and a fleet that is not paused probes on every tick, so no
+      // the gate that reads an allowance runs only while the fleet is
+      // running, and a running fleet probes on every tick, so no
       // dispatch is ever decided from a reading this line kept.
       const previous = yield* SubscriptionRef.get(state);
       const providers = wanted ? yield* Fiber.join(probing) : previous.providers;
@@ -293,6 +294,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Reads the whole world and works out what to do about it.
      *
+     * A fleet that is not `running` stops after the reading. Every pass below
+     * can write to the task store, git or the multiplexer, and a paused or
+     * idle fleet must write nothing: the operator stops the fleet to look at
+     * the world without it moving, and a step nobody allowed is not foreman's
+     * to take.
+     *
      * Order matters. Reviews are dispatched before new work because a task
      * waiting to be reviewed is nearly finished and is blocking whatever
      * depends on it, whereas an unclaimed task has not started costing
@@ -301,6 +308,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const tick = Effect.gen(function* () {
       const { current, providers } = yield* read;
+      if (modeOf(current.policy) !== "running") return;
       yield* settle(current);
       yield* tidy(current);
       yield* reclaim(current);
@@ -374,14 +382,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * reading does not pay for them.
      */
     const observe = Effect.gen(function* () {
-      // The roster is every daemon's: the fleet lists every task's workers
+      // The roster is every dispatcher's: the fleet lists every task's workers
       // whoever started them, and a label records no ownership — two
       // foremen against different configs are not competing for the same
       // slots. The checkout a workspace's worktree belongs to is what the
       // config's project set scopes, and the fleet reports it, so ownership is
       // settled before the store is asked anything. Scoping by the task's
       // project instead means one `prog show` per workspace on the machine
-      // before knowing whether any of them is this daemon's — and it cannot
+      // before knowing whether any of them is this dispatcher's — and it cannot
       // classify a workspace whose task has been deleted at all.
       const everyone = yield* fleet.roster;
       const { projects, ambiguous } = yield* resolveProjects(everyone);
@@ -1203,9 +1211,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const tidy = (current: Interpretation) =>
       Effect.gen(function* () {
         // A landing killed mid-merge leaves an unpublished merge commit in a
-        // colocated checkout, and a restart is what kills it — landing into
-        // its own checkout under `bun --watch` restarts the daemon on every
-        // write. The branch still holds the work, so the retry re-lands it
+        // colocated checkout, and a restart of the process that hosts the
+        // dispatcher is what kills it. The branch still holds the work, so the retry re-lands it
         // honestly and the leftover head is swept here, beside the branch
         // sweep, where every tick's cleanup lives.
         yield* Effect.forEach(
@@ -1885,8 +1892,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // failures still position, but offering it would spawn nothing.
       rungs: dispatchableRungs(settings.ladder).map((rung) => rung.name),
 
-      /** Reads and settles the world once. The daemon wraps this in `run`. */
+      /** Reads and settles the world once. `run` repeats it. */
       tick,
+
+      /**
+       * Tells `run` to tick now instead of at the end of its poll interval. A
+       * host calls it after a one-shot command changed the world from another
+       * process, so the next reading shows what the command did.
+       */
+      wake: nudge,
 
       /** Reads the world once without acting on it. */
       read: Effect.asVoid(read),
@@ -2481,7 +2495,7 @@ export const reviewable = (
 };
 
 /**
- * The workspaces this daemon owns, out of a roster that shows every daemon's.
+ * The workspaces this dispatcher owns, out of a roster that shows every dispatcher's.
  *
  * The fleet lists every task's workers whoever started them, and the
  * label records no ownership — two foremen against different configs are not
@@ -2503,8 +2517,8 @@ export const ours = (
   roster.filter((worker) => worker.repository !== undefined && checkouts.has(worker.repository));
 
 /**
- * The workspaces this daemon may act on, split out of a roster that shows
- * every daemon's.
+ * The workspaces this dispatcher may act on, split out of a roster that shows
+ * every dispatcher's.
  *
  * The caller has already scoped the roster to the checkouts the config names,
  * which is the ownership the world records. What is left here is the join to
@@ -2778,7 +2792,8 @@ interface Interpretation extends FleetState {
   }>;
 }
 
-const empty: FleetState = {
+/** The state before the first reading: nothing read, under the default policy. */
+export const EMPTY_FLEET: FleetState = {
   projects: [],
   queue: [],
   yours: [],

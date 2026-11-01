@@ -10,6 +10,7 @@ import {
   DEFAULT_POLICY,
   expire,
   grant,
+  modeOf,
   permit,
   readPolicy,
   updatePolicy,
@@ -22,6 +23,29 @@ const scopes = new Map<string, ReadonlySet<string>>([
   ["ep-1", new Set(["ts-a", "ts-b"])],
   ["ts-solo", new Set(["ts-solo"])],
 ]);
+
+describe("modeOf", () => {
+  const solo = { scope: "ts-solo", steps: ["land" as const], admitted: [] };
+
+  test("a fleet with no step on and no grant is idle", () => {
+    expect(modeOf(DEFAULT_POLICY)).toBe("idle");
+  });
+
+  test("one default step or one grant makes it running", () => {
+    expect(
+      modeOf({ ...DEFAULT_POLICY, default: { ...DEFAULT_POLICY.default, review: true } }),
+    ).toBe("running");
+    expect(modeOf(withGrants(solo))).toBe("running");
+  });
+
+  test("a pause wins over every step and grant", () => {
+    const everything = {
+      ...withGrants(solo),
+      default: { author: true, climb: true, review: true, land: true },
+    };
+    expect(modeOf({ ...everything, paused: true })).toBe("paused");
+  });
+});
 
 describe("permit", () => {
   test("the default policy allows nothing", () => {

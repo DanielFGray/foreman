@@ -43,7 +43,7 @@ export const VERSION = "0.1.0";
 export const telemetry: Layer.Layer<never, never, Settings> = Layer.unwrap(
   Settings.pipe(
     Effect.map((config) => {
-      // Identity, not decoration: several daemons can report to one gateway,
+      // Identity, not decoration: several dispatchers can report to one gateway,
       // and a span nobody can attribute to a machine and a run answers none of
       // the questions the history exists for.
       const resource = {

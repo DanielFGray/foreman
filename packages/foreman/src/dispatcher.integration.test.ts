@@ -1,9 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, SubscriptionRef } from "effect";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
@@ -55,6 +55,8 @@ class World {
   readonly logs: Array<[string, string]> = [];
   /** Trial rows the settle pass appended, in the order it wrote them. */
   readonly trials: Trial[] = [];
+  /** The name of every write any fake made, in order. */
+  readonly writes: string[] = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
 
@@ -64,7 +66,7 @@ class World {
 
   readonly fleet = {
     open: (options: { task: string; repository: string; branch: string; directory: string }) =>
-      Effect.sync(() => {
+      this.write("fleet.open", () => {
         const current = this.workers.get(options.task);
         if (current) return current;
         const created: Worker = {
@@ -89,7 +91,7 @@ class World {
       target: Worker,
       options: { role: AgentRole; kind: string; model: string | undefined; prompt: string },
     ) =>
-      Effect.sync(() => {
+      this.write("fleet.spawn", () => {
         this.spawned.push([target.task, options.role]);
         const roles = new Map(target.roles).set(options.role, "working" as const);
         this.workers.set(target.task, { ...target, roles, state: "working" });
@@ -97,10 +99,10 @@ class World {
       }),
     roster: Effect.sync(() => [...this.workers.values()]),
     spaces: Effect.succeed(["/build/test"]),
-    focus: () => Effect.void,
-    say: () => Effect.void,
+    focus: () => this.write("fleet.focus", () => undefined),
+    say: () => this.write("fleet.say", () => undefined),
     stop: (target: Worker, role: AgentRole) =>
-      Effect.sync(() => {
+      this.write("fleet.stop", () => {
         this.stopped.push([target.task, role]);
         const roles = new Map(target.roles);
         roles.delete(role);
@@ -111,11 +113,12 @@ class World {
         });
       }),
     close: (options: { task: string; repository: string | undefined }) =>
-      Effect.sync(() => {
+      this.write("fleet.close", () => {
         this.closed.push(options.task);
         this.workers.delete(options.task);
       }),
-    notify: (title: string) => Effect.sync(() => void this.notifications.push(title)),
+    notify: (title: string) =>
+      this.write("fleet.notify", () => void this.notifications.push(title)),
   };
 
   readonly prog = {
@@ -148,7 +151,7 @@ class World {
         ),
       ),
     attribute: (id: string, kind: string) =>
-      Effect.sync(() =>
+      this.write("prog.attribute", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -164,7 +167,7 @@ class World {
         })),
       ),
     assignReview: (id: string, kind: string) =>
-      Effect.sync(() =>
+      this.write("prog.assignReview", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -174,7 +177,7 @@ class World {
         })),
       ),
     clearReview: (id: string) =>
-      Effect.sync(() =>
+      this.write("prog.clearReview", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter(
@@ -184,7 +187,7 @@ class World {
         })),
       ),
     markFailure: (id: string, rung: string) =>
-      Effect.sync(() =>
+      this.write("prog.markFailure", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -194,7 +197,7 @@ class World {
         })),
       ),
     markAttempt: (id: string, rung: string, count: number) =>
-      Effect.sync(() =>
+      this.write("prog.markAttempt", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -204,23 +207,23 @@ class World {
         })),
       ),
     clearNeedsYou: (id: string) =>
-      Effect.sync(() =>
+      this.write("prog.clearNeedsYou", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter((label) => label !== "needs-you"),
         })),
       ),
     clearFailure: (id: string, rung: string) =>
-      Effect.sync(() =>
+      this.write("prog.clearFailure", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter((label) => label !== `failed-by:${rung}`),
         })),
       ),
-    markDiagnostic: () => Effect.void,
-    clearDiagnostic: () => Effect.void,
+    markDiagnostic: () => this.write("prog.markDiagnostic", () => undefined),
+    clearDiagnostic: () => this.write("prog.clearDiagnostic", () => undefined),
     release: (id: string) =>
-      Effect.sync(() =>
+      this.write("prog.release", () =>
         this.update(id, (task) => ({
           ...task,
           status: "open",
@@ -231,17 +234,24 @@ class World {
         })),
       ),
     submit: (id: string) =>
-      Effect.sync(() => this.update(id, (task) => ({ ...task, status: "reviewing" }))),
+      this.write("prog.submit", () =>
+        this.update(id, (task) => ({ ...task, status: "reviewing" })),
+      ),
     review: (id: string) =>
-      Effect.sync(() => this.update(id, (task) => ({ ...task, status: "reviewing" }))),
+      this.write("prog.review", () =>
+        this.update(id, (task) => ({ ...task, status: "reviewing" })),
+      ),
     claim: (id: string) =>
-      Effect.sync(() => this.update(id, (task) => ({ ...task, status: "in_progress" }))),
-    log: (id: string, message: string) => Effect.sync(() => void this.logs.push([id, message])),
+      this.write("prog.claim", () =>
+        this.update(id, (task) => ({ ...task, status: "in_progress" })),
+      ),
+    log: (id: string, message: string) =>
+      this.write("prog.log", () => void this.logs.push([id, message])),
     complete: (id: string) =>
-      Effect.sync(() => this.update(id, (task) => ({ ...task, status: "done" }))),
+      this.write("prog.complete", () => this.update(id, (task) => ({ ...task, status: "done" }))),
     add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
-    countRound: () => Effect.succeed(1),
+    countRound: () => this.write("prog.countRound", () => 1),
   };
 
   readonly repository = {
@@ -257,20 +267,32 @@ class World {
     base: () => Effect.succeed("base"),
     branches: () => Effect.succeed([...this.branches.values()]),
     remove: (_directory: string, branch: string) =>
-      Effect.sync(() => {
+      this.write("repository.remove", () => {
         this.removed.push(branch);
         return this.branches.delete(branch);
       }),
     // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
-    setup: () => Effect.succeed(undefined),
-    merge: () => Effect.succeed(this.landing),
-    sweepUnpublishedMerges: () => Effect.succeed([]),
+    setup: () => this.write("repository.setup", () => undefined),
+    merge: () => this.write("repository.merge", () => this.landing),
+    sweepUnpublishedMerges: () =>
+      this.write("repository.sweepUnpublishedMerges", (): ReadonlyArray<string> => []),
     // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
     worktrees: () => Effect.die("unused"),
     addWorktree: () => Effect.die("unused"),
     removeWorktree: () => Effect.die("unused"),
     restoreBranch: () => Effect.die("unused"),
   };
+
+  /**
+   * Every write a fake makes passes through here, so a test can assert that a
+   * tick wrote nothing to the task store, git, the multiplexer or the trials.
+   */
+  write<A>(name: string, body: () => A) {
+    return Effect.sync(() => {
+      this.writes.push(name);
+      return body();
+    });
+  }
 
   private update(id: string, change: (task: Item) => Item): void {
     const task = this.tasks.get(id);
@@ -281,7 +303,7 @@ class World {
 /** The trials table, held in memory so a test can read what a tick appended. */
 const trialsFor = (world: World) =>
   Layer.succeed(Trials, {
-    record: (trial: Trial) => Effect.sync(() => void world.trials.push(trial)),
+    record: (trial: Trial) => world.write("trials.record", () => void world.trials.push(trial)),
   });
 
 const prompts = Layer.succeed(Prompts, {
@@ -665,6 +687,113 @@ describe("Dispatcher tick", () => {
   });
 });
 
+describe("a fleet that is not running", () => {
+  const unmerged = (task: string): Branch => ({
+    branch: `foreman/${task}`,
+    merged: false,
+    empty: false,
+    stale: undefined,
+  });
+
+  /**
+   * A world in which every pass of a running tick has something to write: a
+   * settled author whose branch is empty, an approved task to land, a merged branch to
+   * sweep, a stale claim to release, a done task's branch to recover, and a
+   * queued task to start. The grant names no task, so a running tick would
+   * also expire it.
+   */
+  const busy = () => {
+    const settled = item("ts-settled", "reviewing", ["by:cheap"]);
+    const approved = item("ts-approved", "reviewing", ["by:cheap", "review-by:cheap", "approved"]);
+    const swept = item("ts-swept", "canceled", []);
+    const stale = {
+      ...item("ts-stale", "in_progress", ["by:cheap"]),
+      last_activity_at: new Date(now.getTime() - 48 * 60 * 60 * 1000),
+    };
+    const abandoned = item("ts-abandoned", "done", ["by:cheap"]);
+    const queued = item("ts-queued", "open", []);
+    const world = new World(settled, approved, swept, stale, abandoned, queued);
+    world.workers.set(settled.id, worker(settled.id, "author", "settled"));
+    for (const task of [approved, abandoned]) {
+      world.branches.set(`foreman/${task.id}`, unmerged(task.id));
+    }
+    // Empty, so the settle pass records the run and sends the task back.
+    world.branches.set("foreman/ts-settled", { ...unmerged("ts-settled"), empty: true });
+    world.branches.set("foreman/ts-swept", { ...unmerged("ts-swept"), merged: true });
+    return world;
+  };
+
+  const everything = {
+    slots: 5,
+    default: { author: true, climb: true, review: true, land: true },
+    grants: [{ scope: "ts-nowhere", steps: ["land"] }],
+  };
+
+  const policyText = () => readFileSync(process.env["FOREMAN_POLICY"] ?? "", "utf8");
+
+  test("a paused tick writes nothing, whatever the policy would otherwise allow", async () => {
+    usePolicy({ ...everything, paused: true });
+    const before = policyText();
+    const world = busy();
+
+    await tick(world);
+    await tick(world);
+
+    expect(world.writes).toEqual([]);
+    expect(policyText()).toBe(before);
+  });
+
+  test("an idle tick, with every step off and no grant, writes nothing", async () => {
+    usePolicy({ slots: 5 });
+    const before = policyText();
+    const world = busy();
+
+    await tick(world);
+    await tick(world);
+
+    expect(world.writes).toEqual([]);
+    expect(policyText()).toBe(before);
+  });
+
+  test("a running tick over the same world writes from every pass", async () => {
+    // The control for the two above: without it, a seed that gave no pass any
+    // work would pass them too.
+    usePolicy(everything);
+    const before = policyText();
+    const world = busy();
+
+    await tick(world);
+
+    expect(world.writes).toEqual(
+      expect.arrayContaining([
+        "trials.record",
+        "repository.merge",
+        "repository.remove",
+        "prog.release",
+        "prog.submit",
+        "prog.claim",
+        "fleet.spawn",
+      ]),
+    );
+    expect(policyText()).not.toBe(before);
+  });
+
+  test("still publishes its reading", async () => {
+    usePolicy({ ...everything, paused: true });
+    const world = busy();
+    const state = await Effect.runPromise(
+      Effect.gen(function* () {
+        const dispatcher = yield* Dispatcher;
+        yield* dispatcher.tick;
+        return yield* SubscriptionRef.get(dispatcher.state);
+      }).pipe(Effect.provide(layerFor(world))),
+    );
+
+    expect(state.observedAt).toBeDefined();
+    expect(state.policy.paused).toBe(true);
+  });
+});
+
 describe("quota probing", () => {
   /** A Quota that counts how many times each provider was actually asked. */
   const countingQuota = () => {
@@ -704,8 +833,8 @@ describe("quota probing", () => {
     );
 
   /** Runs `ticks` ticks over one Dispatcher, so the startup probe counts once. */
-  const ticking = (quota: Layer.Layer<Quota>, paused: boolean, ticks: number) => {
-    usePolicy({ ...ALLOWED, paused });
+  const ticking = (quota: Layer.Layer<Quota>, policy: object, ticks: number) => {
+    usePolicy(policy);
     return Effect.runPromise(
       Effect.gen(function* () {
         for (let n = 0; n < ticks; n++) yield* (yield* Dispatcher).tick;
@@ -717,19 +846,25 @@ describe("quota probing", () => {
     // "Never read" and "nothing left" look the same on a dashboard, so a fleet
     // that has just started says which one it is before it stops asking.
     const quota = countingQuota();
-    await ticking(quota.layer, true, 1);
+    await ticking(quota.layer, { ...ALLOWED, paused: true }, 1);
     expect(quota.calls()).toBe(1);
   });
 
   test("a paused fleet stops asking after that first one", async () => {
     const quota = countingQuota();
-    await ticking(quota.layer, true, 3);
+    await ticking(quota.layer, { ...ALLOWED, paused: true }, 3);
+    expect(quota.calls()).toBe(1);
+  });
+
+  test("an idle fleet stops asking too, since no step reads the answer", async () => {
+    const quota = countingQuota();
+    await ticking(quota.layer, { slots: 1 }, 3);
     expect(quota.calls()).toBe(1);
   });
 
   test("a running fleet asks every tick, because the gate reads it", async () => {
     const quota = countingQuota();
-    await ticking(quota.layer, false, 3);
+    await ticking(quota.layer, ALLOWED, 3);
     expect(quota.calls()).toBe(3);
   });
 });

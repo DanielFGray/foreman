@@ -1,7 +1,7 @@
 /**
  * The fleet as other programs read it: one projection of a reading, printed by
- * `foreman status --json` and written by the daemon to `state.json` after
- * every pass.
+ * `foreman status --json` and written to `state.json` by the host that runs
+ * the dispatcher (herdr-web's server) after every reading.
  *
  * A view, not a memory. Nothing in foreman reads the file back, so a restart
  * loses nothing by overwriting it, and a reader that finds it stale is told so
@@ -10,11 +10,13 @@
  * `version` and is encoded through a schema rather than whatever
  * `JSON.stringify` makes of the state.
  */
-import { DateTime, Effect, FileSystem, Path, Schema as S } from "effect";
+import { DateTime, Effect, FileSystem, Option, Path, Schema as S } from "effect";
 import type { FleetState } from "./dispatcher.ts";
-import { Policy } from "./policy.ts";
+import type { EpicProgress, ReadyTask } from "./prog.ts";
+import { MODES, modeOf, Policy } from "./policy.ts";
 import {
   actionsFor,
+  queueRows,
   rowsForView,
   VIEWS,
   type Action,
@@ -27,13 +29,13 @@ import {
  * Two readers check it: the herdr-app panel (`herdr/foreman/main.js`) and
  * herdr-web's Foreman page (`src/shared/Foreman.ts` there).
  */
-export const PUBLISHED_VERSION = 3;
+export const PUBLISHED_VERSION = 4;
 
 /**
  * The views the file carries: foreman's own. The queue is not one of them.
  * It is the task store's ready list as foreman ranks it, read on demand with
- * `foreman queue`, so a reader shows it for the project it is looking at and
- * a daemon need not be running.
+ * `foreman queue` or `queueOf`, so a reader shows it for the project it is
+ * looking at.
  */
 export const PUBLISHED_VIEWS = VIEWS.filter((view) => view !== "queue");
 
@@ -52,10 +54,26 @@ export const PublishedRow = S.Struct({
 });
 export type PublishedRow = typeof PublishedRow.Type;
 
+/**
+ * What the dispatcher is doing: the policy's mode while it runs (`modeOf`), or
+ * `failed` while its host waits to start it again, with why it stopped.
+ */
+export const DispatcherStatus = S.Union([
+  S.Struct({ state: S.Literals(MODES) }),
+  S.Struct({ state: S.Literal("failed"), detail: S.String }),
+]);
+export type DispatcherStatus = typeof DispatcherStatus.Type;
+
+/** The status of a dispatcher that is running, read off its last reading's policy. */
+export const statusOf = (state: FleetState): DispatcherStatus => ({ state: modeOf(state.policy) });
+
 export const Published = S.Struct({
   version: S.Literal(PUBLISHED_VERSION),
-  /** Whether a daemon wrote this, rather than a one-shot `status` read. */
-  daemon: S.Boolean,
+  /**
+   * The dispatcher that made this reading, or null for a one-shot
+   * `foreman status`, which runs none and so cannot say what one is doing.
+   */
+  dispatcher: S.NullOr(DispatcherStatus),
   /** The policy the reading decided from; `foreman policy` changes it. */
   policy: Policy,
   /** Why the policy file could not be read, which pauses the fleet. */
@@ -69,9 +87,12 @@ export const Published = S.Struct({
 export type Published = typeof Published.Type;
 
 /** Every row of every view, with the commands each takes. */
-export const publishedOf = (state: FleetState, daemon: boolean): Published => ({
+export const publishedOf = (
+  state: FleetState,
+  dispatcher: Option.Option<DispatcherStatus>,
+): Published => ({
   version: PUBLISHED_VERSION,
-  daemon,
+  dispatcher: Option.getOrNull(dispatcher),
   policy: state.policy,
   policyError: state.policyError ?? null,
   observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
@@ -93,11 +114,16 @@ export const publishedRow =
     actions: actionsFor(row.column, row).map(commandName),
   });
 
+/** The queue as a reader sees it, each epic before its first task: what `foreman queue --json` prints. */
+export const publishedQueue = (
+  queue: ReadonlyArray<ReadyTask>,
+  epics: ReadonlyArray<EpicProgress>,
+): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue"));
 /** An action as a command line writes it: `takeOver` is `take-over`. */
 export const commandName = (action: Action): string =>
   action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
-/** Where the daemon publishes, beside its log. */
+/** Where the dispatcher's host publishes, beside the log. */
 export const publishedPath = (): string => {
   const stateHome = process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"] ?? ""}/.local/state`;
   return process.env["FOREMAN_STATE"] ?? `${stateHome}/foreman/state.json`;

@@ -1,12 +1,13 @@
 // What foreman publishes about its fleet, the queue it ranks, and the commands
 // the page may ask the bridge to run. The reading is a copy of foreman's own
-// `Published` (src/published.ts there), version 3, holding the fields this
-// page reads. A queue row, from `foreman queue --json`, has the same shape as
-// a published row.
+// `Published` (src/published.ts there), version 4, holding the fields this
+// page reads. A queue row has the same shape as a published row. The page
+// cannot import foreman's schema: it is bundled for the browser, and foreman's
+// modules are not.
 import { Match, Schema as S } from "effect"
 
 /** The version of foreman's published shape this page reads. */
-export const FOREMAN_VERSION = 3
+export const FOREMAN_VERSION = 4
 
 export const FOREMAN_STEPS = ["author", "climb", "review", "land"] as const
 export const ForemanStep = S.Literals(FOREMAN_STEPS)
@@ -49,32 +50,37 @@ export const ForemanRow = S.Struct({
 })
 export type ForemanRow = typeof ForemanRow.Type
 
-/** One reading of the fleet: by the daemon after each pass, or by a one-shot `foreman status --json`. */
+export const FOREMAN_MODES = ["running", "paused", "idle"] as const
+
+/**
+ * What the dispatcher is doing: running, paused, idle (no step on and no
+ * grant, so it only reads), or failed while the bridge starts it again.
+ */
+export const ForemanDispatcher = S.Union([
+  S.Struct({ state: S.Literals(FOREMAN_MODES) }),
+  S.Struct({ state: S.Literal("failed"), detail: S.String }),
+])
+export type ForemanDispatcher = typeof ForemanDispatcher.Type
+
+/** One reading of the fleet, made by the dispatcher the bridge runs. */
 export const ForemanReading = S.Struct({
-  daemon: S.Boolean,
+  version: S.Literal(FOREMAN_VERSION),
+  dispatcher: ForemanDispatcher,
   policy: ForemanPolicy,
   /** Why the policy file could not be read, which pauses the fleet. */
   policyError: S.OptionFromNullOr(S.String),
-  /** ISO instant of the reading. */
+  /** ISO instant of the reading; none when the dispatcher failed before its first. */
   observedAt: S.OptionFromNullOr(S.String),
   projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
   rows: S.Array(ForemanRow),
 })
 export type ForemanReading = typeof ForemanReading.Type
 
-/**
- * What the bridge knows of foreman. The reading is the newest of the daemon's
- * file and the bridge's own one-shot readings, so a policy change shows with
- * no daemon running; whether one runs is told by `daemonAt` alone.
- */
+/** What the bridge knows of foreman: its dispatcher's last reading, none before the first. */
 export const ForemanState = S.Struct({
   reading: S.OptionFromNullOr(ForemanReading),
-  /** When the daemon last published, epoch milliseconds; none when it never has. */
-  daemonAt: S.OptionFromNullOr(S.Finite),
-  /** Why the last reading failed. */
+  /** Why the last reading cannot be shown on this page. */
   problem: S.OptionFromNullOr(S.String),
-  /** A one-shot reading is under way. */
-  isReading: S.Boolean,
 })
 export type ForemanState = typeof ForemanState.Type
 

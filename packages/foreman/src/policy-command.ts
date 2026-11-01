@@ -15,7 +15,7 @@ import {
  *
  * Every subcommand writes through `updatePolicy` and prints the policy that
  * results, so the panel and a person at the shell change the file the same
- * way and see the same answer. The daemon reads the file on its next pass.
+ * way and see the same answer. The dispatcher reads the file on its next tick.
  */
 
 const show = Command.make("show", {}, () =>
@@ -24,7 +24,7 @@ const show = Command.make("show", {}, () =>
     if (read.error !== undefined) yield* Console.error(read.error);
     yield* print(read.policy);
   }),
-).pipe(Command.withDescription("Print the policy the daemon reads"));
+).pipe(Command.withDescription("Print the policy the dispatcher reads"));
 
 const change = (name: string, description: string, edit: (policy: PolicyType) => PolicyType) =>
   Command.make(name, {}, () => write(edit)).pipe(Command.withDescription(description));

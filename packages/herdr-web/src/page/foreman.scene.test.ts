@@ -21,7 +21,8 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
 })
 
 const reading: ForemanReading = {
-  daemon: false,
+  version: 4,
+  dispatcher: { state: "running" },
   policy: { paused: false, slots: 2, default: { author: false, climb: false, review: true, land: false }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
@@ -37,8 +38,7 @@ const queue = ForemanQueue.Listed({
   rows: [row("queue", "ts-q1", "Write the export", ["complete", "intervene", "descend"]), row("queue", "ts-q2", "Speed up the build", ["complete"], "lib")],
 })
 
-// The daemon last wrote ten minutes ago; the reading shown is the bridge's own, newer one.
-const state: ForemanState = { reading: Option.some(reading), daemonAt: Option.some(NOW - 600e3), problem: Option.none(), isReading: false }
+const state: ForemanState = { reading: Option.some(reading), problem: Option.none() }
 
 const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model
 
@@ -56,11 +56,11 @@ test("the sidebar opens the page, which reads the ladder's rungs", () => {
   )
 })
 
-test("the page says the daemon is off, and the policy's buttons run foreman's policy commands", () => {
+test("the page says the dispatcher runs, and the policy's buttons run foreman's policy commands", () => {
   scene(
     { update, view },
     given(open),
-    expect(selector(".foreman-badge")).toHaveText("daemon off"),
+    expect(selector(".foreman-badge")).toHaveText("running"),
     expect(selector(".foreman-heading .note")).toHaveText("Read less than a minute ago"),
     click(role("button", { name: "pause the fleet" })),
     Command.expectExact(RunForeman({ command: { _tag: "Pause" } })),
@@ -81,6 +81,22 @@ test("the page says the daemon is off, and the policy's buttons run foreman's po
     click(role("button", { name: "read the fleet again" })),
     Command.expectExact(RefreshForeman()),
     Command.resolve(RefreshForeman, Message.CompletedRefreshForeman()),
+  )
+})
+
+test("a failed dispatcher says why, and a reading that has stopped coming says it is stale", () => {
+  const failed: ForemanReading = { ...reading, dispatcher: { state: "failed", detail: "prog: command not found" } }
+  scene(
+    { update, view },
+    given({ ...open, foreman: Option.some({ ...state, reading: Option.some(failed) }) }),
+    expect(selector(".foreman-badge")).toHaveText("failed"),
+    expect(selector(".foreman .note.error")).toHaveText("The dispatcher failed and starts again shortly: prog: command not found"),
+  )
+  const old = { ...reading, observedAt: Option.some(new Date(NOW - 600e3).toISOString()) }
+  scene(
+    { update, view },
+    given({ ...open, foreman: Option.some({ ...state, reading: Option.some(old) }) }),
+    expect(selector(".foreman-badge")).toHaveText("stale"),
   )
 })
 

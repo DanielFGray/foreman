@@ -44,9 +44,9 @@ export class Fleet extends Context.Service<
     ) => Effect.Effect<AgentIdentity, FleetError>;
 
     /**
-     * Every task with agents, whatever daemon started them.
+     * Every task with agents, whatever dispatcher started them.
      *
-     * A label records no ownership, and two daemons against different configs
+     * A label records no ownership, and two dispatchers against different configs
      * are not competing for the same slots — so the adapter reports everything
      * and the dispatcher scopes it to the config's project set, which is the
      * only ownership the world records.
@@ -194,7 +194,7 @@ export interface Worker {
    * This is the only ownership the world records that survives the task being
    * deleted. Scoping by the task's project instead means asking the store
    * about every workspace on the machine before knowing whether any of them is
-   * this daemon's, and leaves a workspace whose task is gone unclassifiable.
+   * this dispatcher's, and leaves a workspace whose task is gone unclassifiable.
    */
   readonly repository: string | undefined;
   readonly state: WorkerState;
