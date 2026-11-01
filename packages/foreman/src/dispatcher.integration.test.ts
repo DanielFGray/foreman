@@ -106,6 +106,8 @@ class World {
         return { kind: options.kind, model: options.model };
       }),
     roster: Effect.sync(() => [...this.workers.values()]),
+    // The dispatcher never waits on a turn; only `foreman wait` does.
+    awaitTurn: () => Effect.void,
     spaces: Effect.succeed(["/build/test"]),
     focus: () => this.write("fleet.focus", () => undefined),
     say: () => this.write("fleet.say", () => undefined),
