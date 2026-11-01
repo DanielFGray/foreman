@@ -984,3 +984,43 @@ describe("Repository worktrees", () => {
     expect((await Bun.$`git -C ${path} log -1 --format=%s`.text()).trim()).toBe("stray");
   });
 });
+
+describe("Repository's git", () => {
+  // A host process gives git no identity of its own: the operator's comes from
+  // the environment foreman runs in, ~/.gitconfig or GIT_* variables.
+  test("commits a landing as the identity foreman's own environment names", async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-identity-"));
+    const at = (...args: Array<string>) => Bun.$`git -C ${here} ${args}`.quiet().nothrow();
+    const identity = {
+      GIT_AUTHOR_NAME: "operator",
+      GIT_AUTHOR_EMAIL: "operator@test",
+      GIT_COMMITTER_NAME: "operator",
+      GIT_COMMITTER_EMAIL: "operator@test",
+    };
+    const saved = Object.fromEntries(Object.keys(identity).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, identity);
+    try {
+      await at("init", "-q", "-b", "main");
+      await writeFile(join(here, "a.txt"), "a\n");
+      await at("add", "a.txt");
+      await at("commit", "-qm", "initial");
+      await at("checkout", "-qb", "work");
+      await writeFile(join(here, "b.txt"), "b\n");
+      await at("add", "b.txt");
+      await at("commit", "-qm", "work");
+      await at("checkout", "-q", "main");
+
+      expect(await merge(here, "work")).toEqual({ _tag: "Merged", verified: false });
+      expect((await at("log", "-1", "--format=%ce")).stdout.toString().trim()).toBe(
+        "operator@test",
+      );
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await rm(here, { recursive: true, force: true });
+      await rm(`${here}.grounds`, { recursive: true, force: true });
+    }
+  });
+});

@@ -76,6 +76,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               // Git leaves index.lock behind and later landings cannot merge.
               // Required write locks are not optional and remain enabled.
               env: { GIT_OPTIONAL_LOCKS: "0" },
+              // git reads the operator's identity and config through HOME and
+              // GIT_* variables, so it runs in foreman's own environment.
+              extendEnv: true,
               stdout: "pipe",
               stderr: "pipe",
             }),
