@@ -26,7 +26,7 @@ with a typed record of runs in place of those labels.
 so every project's agents keep running `prog` while foreman moves to `tasks`.
 It follows the rules the Go writer already follows on that file:
 
-- **Connection.** `foreign_keys` on, `busy_timeout` 5000 ms, WAL kept as found.
+- **Connection.** `foreign_keys` on, `busy_timeout` 5000 ms, WAL journal (Go sets WAL on every open, and so does the Effect client).
   A write that fails with BUSY or LOCKED (or READONLY or CANTOPEN while the file
   exists) is retried: three attempts, jittered backoff from 100 ms.
 - **Schema.** Go owns `PRAGMA user_version` and every table it created. `tasks`

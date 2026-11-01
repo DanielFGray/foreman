@@ -17,6 +17,8 @@ describe("the task machine", () => {
     ["open", "done", "done"],
     ["done", "open", "open"],
     ["canceled", "open", "open"],
+    ["done", "submit", "reviewing"],
+    ["canceled", "submit", "reviewing"],
   ])("%s --%s--> %s", (from, event, to) => {
     expect(move(from, event)).toBe(to);
   });
@@ -32,6 +34,8 @@ describe("the task machine", () => {
     ["done", "cancel"],
     ["canceled", "done"],
     ["open", "open"],
+    ["reviewing", "submit"],
+    ["proposed", "submit"],
   ])("refuses %s --%s-->", (from, event) => {
     expect(move(from, event)).toBeUndefined();
   });

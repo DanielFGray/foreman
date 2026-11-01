@@ -229,34 +229,52 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
         return next.value;
       });
 
-    const label = (id: string, name: string) =>
+    /**
+     * Rewrites an item's labels in one transaction: `change` gets the labels it
+     * carries and answers the ones it should, and only the difference is
+     * written. A label new to the item's project is created there, as Go does.
+     * Answers the labels the item carried before.
+     */
+    const relabel = (
+      id: string,
+      change: (labels: ReadonlyArray<string>) => ReadonlyArray<string>,
+    ) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
             const item = yield* require(id);
-            const existing = yield* sql<{
-              id: string;
-            }>`SELECT id FROM labels WHERE name = ${name} AND project = ${item.project}`;
-            const labelId = existing[0]?.id ?? `lbl-${hex(3)}`;
-            if (existing.length === 0) {
-              const now = formatGo(new Date());
-              yield* sql`INSERT INTO labels (id, name, project, created_at, updated_at) VALUES (${labelId}, ${name}, ${item.project}, ${now}, ${now})`;
+            const next = new Set(change(item.labels));
+            const removed = item.labels.filter((name) => !next.has(name));
+            const added = [...next].filter((name) => !item.labels.includes(name));
+            if (removed.length > 0) {
+              yield* sql`DELETE FROM item_labels WHERE item_id = ${id}
+                AND label_id IN (SELECT id FROM labels WHERE project = ${item.project} AND ${sql.in("name", removed)})`;
             }
-            yield* sql`INSERT OR IGNORE INTO item_labels (item_id, label_id) VALUES (${id}, ${labelId})`;
+            for (const name of added) {
+              const existing = yield* sql<{
+                id: string;
+              }>`SELECT id FROM labels WHERE name = ${name} AND project = ${item.project}`;
+              const labelId = existing[0]?.id ?? `lbl-${hex(3)}`;
+              if (existing.length === 0) {
+                const now = formatGo(new Date());
+                yield* sql`INSERT INTO labels (id, name, project, created_at, updated_at) VALUES (${labelId}, ${name}, ${item.project}, ${now}, ${now})`;
+              }
+              yield* sql`INSERT OR IGNORE INTO item_labels (item_id, label_id) VALUES (${id}, ${labelId})`;
+            }
+            return item.labels;
           }),
         )
         .pipe(retrying);
 
+    const label = (id: string, name: string) =>
+      relabel(id, (labels) => [...labels, name]).pipe(Effect.asVoid);
+
     const unlabel = (id: string, name: string) =>
-      retrying(
-        sql`DELETE FROM item_labels WHERE item_id = ${id}
-            AND label_id IN (SELECT l.id FROM labels l JOIN items i ON i.project = l.project WHERE i.id = ${id} AND l.name = ${name})
-            RETURNING item_id`,
-      ).pipe(
-        Effect.flatMap((removed) =>
-          removed.length === 0
-            ? Effect.fail(new TaskError({ id, detail: `item does not have label: ${name}` }))
-            : Effect.void,
+      relabel(id, (labels) => labels.filter((label) => label !== name)).pipe(
+        Effect.flatMap((before) =>
+          before.includes(name)
+            ? Effect.void
+            : Effect.fail(new TaskError({ id, detail: `item does not have label: ${name}` })),
         ),
       );
 
@@ -292,7 +310,19 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
           ),
         );
 
-    return { get, list, ready, dependencies, logs, send, label, unlabel, log, add } as const;
+    return {
+      get,
+      list,
+      ready,
+      dependencies,
+      logs,
+      send,
+      relabel,
+      label,
+      unlabel,
+      log,
+      add,
+    } as const;
   }),
 }) {
   /** The store in one file, for tests and tools that work on a copy. */

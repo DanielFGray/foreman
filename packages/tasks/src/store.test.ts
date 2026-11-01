@@ -2,7 +2,7 @@
  * `Tasks` against the Go `prog` it ports, on two copies of one database.
  *
  * Every case runs the Go command on one copy and the `Tasks` call on the other,
- * then compares what each answered and the rows each left. The fixture is built
+ * then compares what each answered and the rows (and journal mode) each left. The fixture is built
  * by Go `prog` itself, so it holds exactly the layouts Go writes. Skipped where
  * no `prog` is installed.
  */
@@ -71,6 +71,7 @@ const rows = (db: string) => {
         .all(),
       logs: sqlite.query("SELECT item_id, message FROM logs ORDER BY item_id, id").all(),
       deps: sqlite.query("SELECT item_id, depends_on FROM deps ORDER BY 1, 2").all(),
+      journal: sqlite.query("PRAGMA journal_mode").get(),
     };
   } finally {
     sqlite.close();

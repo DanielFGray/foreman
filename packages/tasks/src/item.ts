@@ -52,6 +52,7 @@ export const TASK_EVENTS = [
   "open",
   "start",
   "review",
+  "submit",
   "done",
   "cancel",
 ] as const;
@@ -67,6 +68,10 @@ const STORED: ReadonlyArray<TaskState> = STATUSES.filter(
  * - A proposal (nobody authorised it) and a draft (still being scoped) become
  *   open work, and open work can go back to either.
  * - Only open work starts, and only started work goes to review.
+ * - A branch nobody read is submitted for review from wherever its task stands:
+ *   queued, started, done or canceled. The commits exist, and whether they are
+ *   worth landing is what a reviewer answers. A proposal or a draft has no
+ *   authorised work to submit.
  * - Started or reviewed work returns to `open`: a release, a rejection, a
  *   landing that conflicted.
  * - Reviewed work is done when it lands. Open or started work can be closed by
@@ -92,6 +97,12 @@ export const TASK_MACHINE: Machine<TaskState, TaskEvent> = {
     },
     start: { open: "in_progress" },
     review: { in_progress: "reviewing" },
+    submit: {
+      open: "reviewing",
+      in_progress: "reviewing",
+      done: "reviewing",
+      canceled: "reviewing",
+    },
     done: { open: "done", in_progress: "done", reviewing: "done" },
     cancel: {
       proposed: "canceled",
