@@ -133,7 +133,9 @@ export default class Foreman extends View {
 
   // The managed project whose checkout the shown space is in: its folder at or
   // under the checkout, the rule foreman places a task's tab by. A space's name
-  // is only a label, and a renamed one would hide every row.
+  // is only a label, and a renamed one would hide every row. A space in no
+  // published project shows only the rows that belong to no project: another
+  // project's tasks are never this space's, and "all projects" is a click away.
   project() {
     const folder = spaces().find((space) => space.active)?.folder;
     if (!folder) return null;
@@ -147,7 +149,7 @@ export default class Foreman extends View {
     const live = age !== null && age < STALE_MS;
     const policy = published?.policy;
     const state = !published ? "offline" : !published.daemon ? "no daemon" : !live ? "stale" : policy.paused ? "paused" : Object.values(policy.default).some(Boolean) || policy.grants.length > 0 ? "running" : "idle";
-    const rows = (published?.rows ?? []).filter((row) => this.all || project === null || row.project === null || row.project === project);
+    const rows = (published?.rows ?? []).filter((row) => this.all || row.project === null || row.project === project);
     const hidden = (published?.rows.length ?? 0) - rows.length;
 
     const chip = (id, label, onClick, tone) => div().id(id).px(6).py(1).rounded(5).text_size(11).cursor_pointer()
@@ -250,12 +252,12 @@ export default class Foreman extends View {
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(tone).child(state))
         .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
         .child(div().flex_1())
-        .child(chip("scope", this.all || project === null ? "all projects" : project, (cx) => { this.all = !this.all; cx.notify(); })))
+        .child(chip("scope", this.all ? "all projects" : (project ?? "no project"), (cx) => { this.all = !this.all; cx.notify(); })))
       .when(controls !== null, (el) => el.child(controls))
       .child(v_flex().id("foreman-rows").flex_1().min_h(0).overflow_y_scrollbar().px(4).pb(8)
         .when(Boolean(this.problem), (el) => el.child(div().p(12).text_color(t.muted).child(this.problem)))
         .when(!this.problem && rows.length === 0, (el) => el.child(div().p(12).text_color(t.muted)
-          .child(hidden > 0 ? `nothing for ${project}; ${hidden} rows in other projects` : "nothing queued, working or waiting")))
+          .child(hidden > 0 ? `nothing for ${project ?? "this space"}; ${hidden} rows in other projects` : "nothing queued, working or waiting")))
         .children(SECTIONS.map(section).filter(Boolean)));
   }
 }
