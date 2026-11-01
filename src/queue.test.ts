@@ -17,6 +17,7 @@ const task = (
   title: id,
   labels,
   description: null,
+  parent: null,
   created_at: createdAt,
 });
 

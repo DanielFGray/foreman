@@ -156,7 +156,7 @@ export default class Foreman extends View {
 
     const row = (r) => {
       const actions = r.actions.filter((action) => !NEEDS_INPUT.has(action));
-      const launchable = r.view === "queue";
+      const launchable = r.view === "queue" && !r.epic;
       const open = this.opened === r.key;
       return v_flex().id(`row-${r.view}-${r.key}`).px(10).py(6).gap(3).rounded(7).cursor_pointer()
         .when(open, (el) => el.bg(t.raised)).hover((s) => s.bg(t.hover))
@@ -211,7 +211,17 @@ export default class Foreman extends View {
       return v_flex().gap(1).pt(8)
         .child(h_flex().px(10).gap(6).text_size(11).text_color(view === "attention" ? t.blocked : t.dim)
           .child(title.toUpperCase()).child(String(mine.length)))
-        .children(mine.map(row));
+        .children(grouped(mine));
+    };
+
+
+    // Each epic row leads its own tasks, indented under it. A task whose epic
+    // has no row in the view stays at the top level, in the published order.
+    const grouped = (mine) => {
+      const epics = new Set(mine.filter((r) => r.epic).map((r) => r.key));
+      return mine.filter((r) => !epics.has(r.parent)).map((r) => !r.epic ? row(r)
+        : v_flex().id(`group-${r.key}`).child(row(r)).child(v_flex().ml(14).pl(4).border_l(1).border_color(t.border)
+          .children(mine.filter((child) => child.parent === r.key).map(row))));
     };
 
     const tone = state === "running" ? t.working : state === "stale" ? t.blocked : t.muted;

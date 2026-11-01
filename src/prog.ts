@@ -386,6 +386,8 @@ export const ReadyTask = S.Struct({
    * each cursor movement against the store the dispatcher is already reading.
    */
   description: S.NullOr(S.String),
+  /** The epic the task sits under, which readers of the published fleet group by. */
+  parent: S.NullOr(S.String),
 });
 export type ReadyTask = typeof ReadyTask.Type;
 
@@ -437,6 +439,8 @@ export const Item = S.Struct({
    * has already read in full, so the two must agree about what the queue reads.
    */
   created_at: S.DateFromString,
+  /** The epic the task sits under. */
+  parent: S.NullOr(S.String),
 });
 export type Item = typeof Item.Type;
 

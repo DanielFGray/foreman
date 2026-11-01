@@ -15,6 +15,7 @@ const item: Item = {
   priority: 2,
   labels: ["onboard"],
   description: null,
+  parent: null,
   last_activity_at: new Date(),
   created_at: new Date(),
 };
@@ -26,6 +27,7 @@ const ready = {
   project: "foreman",
   labels: [],
   description: null,
+  parent: null,
   created_at: new Date(),
 } as const;
 

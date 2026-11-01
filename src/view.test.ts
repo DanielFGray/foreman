@@ -20,6 +20,7 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   priority: 1,
   labels,
   description: null,
+  parent: null,
   last_activity_at: new Date(),
   created_at: new Date(),
 });
@@ -35,6 +36,7 @@ const ready = (
   project: "amux",
   labels,
   description,
+  parent: null,
   created_at: new Date(),
 });
 
@@ -412,6 +414,21 @@ describe("publishedOf", () => {
     // its project only on the task.
     expect(queued?.project).toBe(state.queue[0]!.project);
     expect(queued?.actions.length).toBeGreaterThan(0);
+  });
+
+  test("says which rows are epics and which epic a task sits under", () => {
+    const epic = { ...task("ep-drive", "in_progress", []), type: "epic" };
+    const child = { ...state.queue[0]!, parent: "ep-drive" };
+    const rows = publishedOf(
+      { ...state, epics: [{ epic, children: [] }], queue: [child] },
+      true,
+      [],
+    ).rows;
+    expect(rows.find((row) => row.key === "ep-drive")).toMatchObject({ epic: true, parent: null });
+    expect(rows.find((row) => row.key === child.id)).toMatchObject({
+      epic: false,
+      parent: "ep-drive",
+    });
   });
 
   test("says a one-shot read is not the daemon's", () => {

@@ -29,6 +29,7 @@ const item = (
   priority: 1,
   labels: [...labels],
   description: null,
+  parent: null,
   last_activity_at: now,
   created_at: now,
 });
