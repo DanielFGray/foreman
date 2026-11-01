@@ -415,7 +415,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // that clears itself and one that needs a hand-run command must not read
       // the same on the dashboard.
       const held = yield* Effect.forEach(settings.projects, (project) =>
-        repository.isClean(project.directory).pipe(
+        repository.isFree(project.directory).pipe(
           Effect.map((result: Hold): ReadonlyArray<Held> =>
             result._tag === "Clean"
               ? []
@@ -1562,7 +1562,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const id = yield* prog.add(
           project.name,
           `Adopt uncommitted work in ${project.name}`,
-          `Foreman found uncommitted changes in ${project.directory} and held the project. This task is the salvage run: preserve the work on a rescue branch, report what it was doing and what passes, and leave the checkout clean.`,
+          `Foreman found uncommitted changes in ${project.directory}. This task is the salvage run: preserve the work on a rescue branch, report what it was doing and what passes, and leave the checkout clean.`,
           [ONBOARD],
         );
 

@@ -101,16 +101,14 @@ does one thing and exits, so it works with or without a daemon running.
 
 ## Projects you are working in
 
-A project whose checkout has uncommitted changes to tracked files is **held**:
-foreman passes over its tasks and names it in the dashboard, then picks it up
-again on the tick after you commit or stash. You share that checkout with the
-fleet — every task ends by merging into it — so a dispatch there would move your
-branch under you while you edit.
+You share each project's checkout with the fleet: every task ends by landing
+into it. Under git, your uncommitted edits hold only the landings that would
+write the same files. Such a landing waits, named in the dashboard, until you
+commit or stash those files. Work elsewhere in the checkout lands around you,
+and your edits stay as they were. Under jj, any change in the working copy holds
+the whole project, because a landing moves the working copy.
 
-Untracked files do not hold a project. Scratch notes and build output sit in a
-repository for months; counting them would hold it forever.
-
-A checkout with no branch is held as well, because a landing has nothing to
+A checkout with no branch is held, because a landing has nothing to
 move: under git that is a detached `HEAD`, and under jj it is a working copy
 with no bookmark behind it.
 

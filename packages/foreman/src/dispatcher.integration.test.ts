@@ -243,7 +243,7 @@ class World {
   };
 
   readonly repository = {
-    isClean: () =>
+    isFree: () =>
       Effect.succeed(
         this.clean === "clean"
           ? ({ _tag: "Clean" } as const)

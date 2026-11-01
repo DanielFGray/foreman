@@ -19,12 +19,27 @@ export type Hold =
   | { readonly _tag: "Clean" }
   | { readonly _tag: "Held"; readonly reason: HoldReason; readonly detail: string };
 
-/** The dirty-tree holds, one per tool, because git and jj count different files. */
-const DIRTY = "uncommitted changes to tracked files";
+/** The dirty-tree hold under jj, whose `jj new` rewrites the whole working copy. */
 const DIRTY_JJ = "uncommitted changes in the working copy";
 
 /** A checkout with no branch for a landing to move, under git. */
 const DETACHED = "no checked-out branch (detached HEAD)";
+
+/**
+ * Every path `git status --porcelain -z` names. A rename or copy is two
+ * entries, the new path and then the old, and a landing that writes either
+ * collides with it.
+ */
+const dirtyPaths = (status: string): ReadonlyArray<string> => {
+  const entries = status.split("\0").filter((entry) => entry !== "");
+  const paths: Array<string> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < entries.length) paths.push(entries[++i]!);
+  }
+  return paths;
+};
 
 /**
  * The script a project may keep to make a fresh worktree usable. A path rather
@@ -98,6 +113,16 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         Effect.flatMap((result) => output(directory, "git", result, args[0] ?? "")),
       );
 
+    /** The untrimmed output, for `-z` listings whose entries may begin with a space. */
+    const gitRaw = (directory: string, ...args: Array<string>) =>
+      git(directory, ...args).pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.succeed(result.stdout)
+            : output(directory, "git", result, args[0] ?? ""),
+        ),
+      );
+
     const jjOutput = (directory: string, ...args: Array<string>) =>
       jj(directory, ...args).pipe(
         Effect.flatMap((result) => output(directory, "jj", result, args[0] ?? "")),
@@ -125,6 +150,32 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * answer — an unreadable ref is not evidence the branch is absent, and
      * treating it as one would re-land commits the checkout already has.
      */
+    /**
+     * The hold for a landing that would write a path the operator has not
+     * committed, or undefined when it writes none.
+     *
+     * `changes` are `git diff` revisions naming what the landing writes. The
+     * dirty side counts untracked files as well as tracked edits, because a
+     * fast-forward refuses to overwrite either.
+     */
+    const collision = (directory: string, branch: string, ...changes: Array<string>) =>
+      Effect.all([
+        gitRaw(directory, "diff", "--name-only", "-z", ...changes),
+        gitRaw(directory, "status", "--porcelain", "-z", "--untracked-files=all"),
+      ]).pipe(
+        Effect.map(([changed, dirty]) => {
+          const editing = new Set(dirtyPaths(dirty));
+          const overlap = changed.split("\0").filter((path) => editing.has(path));
+          return overlap.length === 0
+            ? undefined
+            : ({
+                _tag: "Held",
+                reason: "dirty",
+                detail: `uncommitted changes to ${overlap.join(", ")}, which ${branch} also changes`,
+              } as const);
+        }),
+      );
+
     const contains = (directory: string, branch: string) =>
       git(directory, "merge-base", "--is-ancestor", branch, "HEAD").pipe(
         Effect.flatMap((result) =>
@@ -433,16 +484,16 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * recovered from the reflog.
      */
     const gitCheckout = {
-      isClean: (directory: string): Effect.Effect<Hold, RepositoryError> =>
-        Effect.all([
-          git(directory, "symbolic-ref", "--quiet", "HEAD"),
-          status(directory, "no"),
-        ]).pipe(
-          Effect.map(([head, changes]) =>
+      // Uncommitted work does not hold a git checkout. Tasks branch from the
+      // committed tip, and a landing is a fast-forward, which git refuses only
+      // when it would overwrite a dirty or untracked path. So the operator's
+      // edits stop exactly the branches that change the same files, and
+      // `merge` finds those by itself.
+      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
+        git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
+          Effect.map((head) =>
             head.exitCode === 0
-              ? changes === ""
-                ? ({ _tag: "Clean" } as const)
-                : ({ _tag: "Held", reason: "dirty", detail: DIRTY } as const)
+              ? ({ _tag: "Clean" } as const)
               : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
           ),
         ),
@@ -454,6 +505,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         proving: string,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
+          // Asked before the proof, which costs a run of the project's suite:
+          // a branch that changes a file the operator is editing cannot land
+          // until they finish, however green it is.
+          const editing = yield* collision(directory, branch, `HEAD...${branch}`);
+          if (editing) return editing;
+
           const base = yield* gitOutput(directory, "rev-parse", "HEAD");
 
           const proof = yield* gitProve(proving, directory, branch, verify, base);
@@ -478,6 +535,10 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // here can only be the machine.
           const applied = yield* git(directory, "merge", "--ff-only", proof.commit);
           if (applied.exitCode !== 0) {
+            // The operator may have begun editing one of the branch's files
+            // during the proof. git refused for that, and it clears itself.
+            const late = yield* collision(directory, branch, "HEAD", proof.commit);
+            if (late) return late;
             return {
               _tag: "Held",
               detail:
@@ -634,7 +695,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * fleet able to clear it.
      */
     const jjCheckout = {
-      isClean: (directory: string): Effect.Effect<Hold, RepositoryError> =>
+      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
         Effect.all([
           trunkOf(directory),
           jjOutput(directory, "log", "-r", "@", ...template("empty")),
@@ -680,7 +741,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // takes as long as the project's suite, which is long enough to start
           // typing in. The git path needs no such recheck: a fast-forward
           // refuses rather than overwrites.
-          const gate = yield* jjCheckout.isClean(directory);
+          const gate = yield* jjCheckout.isFree(directory);
           if (gate._tag !== "Clean") return gate;
 
           // The merge already exists, in the ground, and a jj workspace shares
@@ -798,25 +859,21 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Whether the checkout is free for foreman to work against, and if not,
        * why.
        *
-       * Two ways to be busy. The operator is mid-edit — under git a staged or
-       * unstaged change to a tracked file, under jj a non-empty working-copy
-       * commit — or the checkout has no branch for a landing to move, which
-       * under git means a detached HEAD and under jj means no bookmark behind
-       * the working copy. `detail` names which, so the operator can see whether
-       * the hold clears itself or needs a hand-run command.
-       *
-       * Under git, untracked files do not count. Scratch notes, build output
-       * and editor leavings sit in a repository for months, and holding a
-       * project for one would hold it forever.
+       * Busy means the checkout has no branch for a landing to move — under
+       * git a detached HEAD, under jj no bookmark behind the working copy — or,
+       * under jj only, the operator is mid-edit: a non-empty working-copy
+       * commit, which `jj new` would carry away. Uncommitted work under git
+       * holds only the landings that would write the same paths, which `merge`
+       * asks per branch. `detail` names the cause, so the operator can see
+       * whether the hold clears itself or needs a hand-run command.
        */
-      isClean: (directory: string) =>
-        checkoutAt(directory).pipe(Effect.flatMap((checkout) => checkout.isClean(directory))),
+      isFree: (directory: string) =>
+        checkoutAt(directory).pipe(Effect.flatMap((checkout) => checkout.isFree(directory))),
 
       /**
        * Whether a task worktree holds anything the agent that lived in it made.
        *
-       * The same command as isClean, counting untracked files, because the two
-       * ask about opposite kinds of directory. A shared checkout has collected
+       * Untracked files count, unlike in a shared checkout. A shared checkout has collected
        * untracked build output and scratch notes for months. A task worktree
        * was created empty minutes ago, so anything git does not follow arrived
        * with the agent: a new module it wrote, or the leavings of a test run it
@@ -1091,7 +1148,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
 
           const checkout = yield* checkoutAt(directory);
-          const gate = yield* checkout.isClean(directory);
+          const gate = yield* checkout.isFree(directory);
           if (gate._tag !== "Clean") return gate;
           return yield* checkout.merge(directory, branch, verify, proving);
         }),
