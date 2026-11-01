@@ -52,16 +52,20 @@ instead of orphaning them.
 The policy file (`src/policy.ts`) is the one durable thing foreman holds,
 because nothing in the world records the operator's intention: `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
-— `on` runs it, `ask` holds it for one approval per task, `off` does nothing —
-and grants that widen the default for one task or epic. `foreman policy` and the
-panel write it through `updatePolicy`. The dispatcher reads it every pass, and
+(`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
+grants that widen the default for one task or epic, and `projects`: a
+project's own `paused` and its own mode for any step, which replace the
+default for that project's tasks only. A paused project takes no step, grants
+included; slots stay fleet-wide. `foreman policy` and the panel write it
+through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
 restart of the host is not an operator.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
-operator's stop; `idle` is every step off and no grant; `running` is anything else, so an `ask`
-step runs the fleet: it must read the world to find what to ask about.
+operator's stop; `idle` is every step off and no grant; `running` is anything
+else (a step on by default or for any unpaused project, or a grant), so an
+`ask` step runs the fleet: it must read the world to find what to ask about.
 Only a running tick acts: a paused or idle tick reads the world and publishes
 the reading, and writes nothing to prog, git, hc or the policy file — settle,
 tidy, reclaim and recover wait too. Stopping the fleet must hold the world still
