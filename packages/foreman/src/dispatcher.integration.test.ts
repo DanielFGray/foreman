@@ -55,6 +55,12 @@ class World {
   readonly logs: Array<[string, string]> = [];
   /** Trial rows the settle pass appended, in the order it wrote them. */
   readonly trials: Trial[] = [];
+  /** The worktrees holding uncommitted work, which `holdsWork` reports. */
+  readonly dirty = new Set<string>();
+  /** The commit message of every work commit a tick made, in order. */
+  readonly commits: string[] = [];
+  /** The text each task's author terminal shows, which `screen` reads back. */
+  readonly screens = new Map<string, string>();
   /** The name of every write any fake made, in order. */
   readonly writes: string[] = [];
   clean: "clean" | "held" = "clean";
@@ -101,6 +107,8 @@ class World {
     spaces: Effect.succeed(["/build/test"]),
     focus: () => this.write("fleet.focus", () => undefined),
     say: () => this.write("fleet.say", () => undefined),
+    screen: (target: Worker) =>
+      this.write("fleet.screen", () => Option.fromNullishOr(this.screens.get(target.task))),
     stop: (target: Worker, role: AgentRole) =>
       this.write("fleet.stop", () => {
         this.stopped.push([target.task, role]);
@@ -221,6 +229,10 @@ class World {
         })),
       ),
     markDiagnostic: () => this.write("prog.markDiagnostic", () => undefined),
+    markWall: (id: string, provider: string) =>
+      this.write("prog.markWall", () =>
+        this.update(id, (task) => ({ ...task, labels: [...task.labels, `walled:${provider}`] })),
+      ),
     clearDiagnostic: () => this.write("prog.clearDiagnostic", () => undefined),
     release: (id: string) =>
       this.write("prog.release", () =>
@@ -263,7 +275,12 @@ class World {
           ? ({ _tag: "Clean" } as const)
           : ({ _tag: "Held", reason: "dirty", detail: "held" } as const),
       ),
-    holdsWork: () => Effect.succeed(false),
+    holdsWork: (directory: string) => Effect.sync(() => this.dirty.has(directory)),
+    commitWork: (directory: string, message: string) =>
+      this.write("repository.commitWork", () => {
+        this.commits.push(message);
+        this.dirty.delete(directory);
+      }),
     base: () => Effect.succeed("base"),
     branches: () => Effect.succeed([...this.branches.values()]),
     remove: (_directory: string, branch: string) =>
@@ -1198,5 +1215,126 @@ describe("approving an ask", () => {
     await tick(world);
     expect(world.spawned).toEqual([[task.id, "review"]]);
     expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+  });
+});
+
+describe("a usage wall", () => {
+  /** A free opencode rung, cheapest, then a rung on another account. */
+  const layerFor = (world: World) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          ladder: [
+            {
+              name: "free",
+              harness: "opencode",
+              model: "opencode/free-model",
+              provider: undefined,
+            },
+            { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+          ],
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Repository, world.repository),
+        trialsFor(world),
+        Layer.succeed(Quota, {
+          usage: (provider: string) =>
+            Effect.succeed({ provider, plan: undefined, allowances: [] }),
+        }),
+        prompts,
+        BunServices.layer,
+      ),
+    );
+
+  const tick = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+    );
+
+  /** An author that stopped on the free rung, with its worktree holding edits. */
+  const stoppedOn = (id: string, screen: string, dirty: boolean) => {
+    const task = item(id, "in_progress", ["by:free"]);
+    const world = new World(task);
+    world.workers.set(id, { ...worker(id, "author", "settled"), repository: "/build/test" });
+    if (dirty) world.dirty.add(`/worktree/${id}`);
+    world.screens.set(id, screen);
+    return world;
+  };
+
+  test("hands the task to another account and keeps its work, its attempts and its rung", async () => {
+    const world = stoppedOn(
+      "ts-walled",
+      [
+        "› ship the handoff",
+        "",
+        "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to",
+        "",
+        "  ctrl+p commands",
+      ].join("\n"),
+      true,
+    );
+
+    await tick(world);
+
+    const labels = world.tasks.get("ts-walled")?.labels ?? [];
+    expect(world.commits).toHaveLength(1);
+    expect(world.commits[0]).toContain("stopped on a usage limit before verifying");
+    expect(labels).toContain("walled:opencode");
+    expect(labels.some((label) => label.startsWith("attempt:"))).toBe(false);
+    expect(labels.some((label) => label.startsWith("failed-by:"))).toBe(false);
+    expect(world.trials.at(-1)).toMatchObject({ outcome: "handed-off", notes: "wall" });
+    expect(world.logs.map(([, message]) => message).join("\n")).toContain("opencode");
+    // Settle runs before fill in the same tick, so the next author is already
+    // dispatched onto the rung on the other account.
+    expect(labels).toContain("by:dear");
+    expect(world.spawned).toContainEqual(["ts-walled", "author"]);
+  });
+
+  test("commits nothing when the worktree holds no uncommitted work", async () => {
+    const world = stoppedOn(
+      "ts-walled-clean",
+      "Free usage limit reached. Connect a provider",
+      false,
+    );
+
+    await tick(world);
+
+    expect(world.commits).toHaveLength(0);
+    expect(world.tasks.get("ts-walled-clean")?.labels).toContain("walled:opencode");
+  });
+
+  test("a stop with no wall text on its screen goes through unfinished as before", async () => {
+    const world = stoppedOn("ts-plain", "all done\n  ctrl+p commands", true);
+
+    await tick(world);
+
+    const labels = world.tasks.get("ts-plain")?.labels ?? [];
+    expect(labels).toContain("attempt:free:1");
+    expect(labels.some((label) => label.startsWith("walled:"))).toBe(false);
+    expect(world.commits).toHaveLength(0);
+    expect(world.trials.at(-1)).toMatchObject({ outcome: "handed-off", notes: "Unfinished" });
+  });
+
+  test("a quoted wall higher up the screen than the stop is no wall", async () => {
+    const quoted = "Free usage limit reached is the message foreman looks for.";
+    const world = stoppedOn(
+      "ts-quoted",
+      [quoted, ...Array.from({ length: 20 }, (_, i) => `working line ${i}`)].join("\n"),
+      false,
+    );
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-quoted")?.labels.some((label) => label.startsWith("walled:"))).toBe(
+      false,
+    );
   });
 });
