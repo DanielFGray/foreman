@@ -292,7 +292,7 @@ class World {
               : { _tag: "Clean" },
       ),
     holdsWork: (directory: string) => Effect.sync(() => this.dirty.has(directory)),
-    commitWork: (directory: string, message: string) =>
+    commitWork: (directory: string, _branch: string, message: string) =>
       this.write("repository.commitWork", () => {
         this.commits.push(message);
         this.dirty.delete(directory);
@@ -323,6 +323,7 @@ class World {
     removeWorktree: () => Effect.die("unused"),
     restoreBranch: () => Effect.die("unused"),
     checkoutBranch: () => Effect.die("unused"),
+    leaveBranch: () => Effect.die("unused"),
   };
 
   /**
@@ -1475,6 +1476,22 @@ describe("where a project's agents work", () => {
     expect(state.held).toEqual([
       { project: "test", reason: "busy", detail: "busy", branch: `foreman/${own.id}` },
     ]);
+  });
+
+  test("a canceled branch-mode task's workspace is ended, which hands the checkout back", async () => {
+    usePolicy(BRANCH);
+    const task = item("ts-cancel-branch", "canceled", ["by:cheap"]);
+    const world = new World(task);
+    world.workers.set(task.id, {
+      ...worker(task.id, "author", "gone"),
+      directory: "/build/test",
+      repository: "/build/test",
+      worktree: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.closed).toEqual([task.id]);
   });
 
   test("an approved branch-mode task lands and completes like a worktree one", async () => {

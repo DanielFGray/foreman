@@ -850,7 +850,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             .map((task) => [task.id, task]),
         );
         const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
-          repository.holdsWork(directoryFor(task.project, task.id)).pipe(
+          repository.holdsWork(directoryFor(task.project, task.id), labelFor(task.id)).pipe(
             Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
             Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           ),
@@ -1015,10 +1015,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     ) =>
       Effect.gen(function* () {
         const committed =
-          !isOnboarding(task) && (yield* repository.holdsWork(worker.directory));
+          !isOnboarding(task) && (yield* repository.holdsWork(worker.directory, labelFor(task.id)));
         if (committed) {
           yield* repository.commitWork(
             worker.directory,
+            labelFor(task.id),
             `chore(foreman): WIP from ${task.id}: its agent stopped on a usage limit before verifying it`,
           );
         }
@@ -1129,7 +1130,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const reviewer = reviewedBy(task);
             const holdsWork =
               worker.state === "gone" && !isOnboarding(task)
-                ? yield* repository.holdsWork(worker.directory)
+                ? yield* repository.holdsWork(worker.directory, labelFor(task.id))
                 : false;
             const phase = phaseOf({
               status: task.status,
@@ -1276,7 +1277,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Puts a finished branch into the operator's checkout.
      *
-     * The only code path that writes there. No agent holds merge rights, reviewer
+     * The only code path that moves the operator's branch. No agent holds merge rights, reviewer
      * or author, so every branch passes the same clean-checkout and verification
      * gate.
      */
@@ -1924,7 +1925,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               committed
                 ? Effect.succeed(true)
                 : repository
-                    .holdsWork(directoryFor(task.project, task.id))
+                    .holdsWork(directoryFor(task.project, task.id), labelFor(task.id))
                     .pipe(Effect.orElseSucceed(() => false)),
             ),
           );
@@ -2157,7 +2158,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const task = yield* prog.show(id);
           const project = yield* projectFor(task.project);
           if (!project) return undefined;
-          const worktree = newWorkspace((yield* SubscriptionRef.get(state)).policy, project, task.id);
+          const worktree = newWorkspace(
+            (yield* SubscriptionRef.get(state)).policy,
+            project,
+            task.id,
+          );
           if (role === "author") {
             return yield* prompts.author(task, worktree, project.directory);
           }

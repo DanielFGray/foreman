@@ -389,6 +389,11 @@ export function hcFleetOver() {
             const worker = workersOf(all)[0];
             const home = worker?.repository ?? options.repository;
             if (home === undefined) return;
+            // A branch-mode task's workspace is the checkout with its branch
+            // out, so ending it checks the operator's branch out again; the
+            // branch keeps the commits. A dirty tree stays put, and the busy
+            // hold names the branch the operator has to clear.
+            yield* repository.leaveBranch(home, labelFor(options.task));
             // A worker over the operator's own checkout has no worktree, and
             // that directory is never foreman's to delete.
             if (worker !== undefined && worker.worktree === undefined) return;

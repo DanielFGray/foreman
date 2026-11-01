@@ -520,7 +520,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             _tag: "Held",
             reason: "busy",
             branch: head,
-            detail: `${head} is checked out here; other work waits until it lands`,
+            detail: `${head} is checked out here; other work waits until its task lands or ends`,
           };
         }
         if (clean && (yield* status(directory, "all")) !== "") {
@@ -533,8 +533,44 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         return { _tag: "Clean" };
       });
 
+    /**
+     * Whether a directory's tree is the task's: a linked worktree foreman made
+     * for it, or the operator's checkout while it has the task's branch out.
+     *
+     * The operator's checkout is the task's only while it is on the task's
+     * branch. Landing switches it back before it proves anything, and an
+     * operator can switch by hand, and after either the edits there are the
+     * operator's. Reading them as the agent's work would commit them.
+     */
+    const ownsTree = (directory: string, branch: string) =>
+      Effect.gen(function* () {
+        if ((yield* headBranch(directory)) === branch) return true;
+        const [own, common] = yield* Effect.all([
+          gitOutput(directory, "rev-parse", "--path-format=absolute", "--git-dir"),
+          gitOutput(directory, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        ]);
+        return own !== common;
+      });
+
+    /**
+     * Checks the operator's branch out again in a checkout that has `branch`
+     * out, and says what it found. A checkout on any other branch, or a linked
+     * worktree, is left as it is.
+     *
+     * `dirty` leaves it on the task's branch: git would carry the leftover
+     * edits onto the operator's branch.
+     */
+    const leaveBranch = (directory: string, branch: string) =>
+      Effect.gen(function* () {
+        if ((yield* headBranch(directory)) !== branch) return "elsewhere" as const;
+        if ((yield* status(directory, "all")) !== "") return "dirty" as const;
+        yield* gitOutput(directory, "checkout", "--quiet", yield* trunkOf(directory));
+        return "left" as const;
+      });
+
     return {
       isFree,
+      leaveBranch,
 
       /**
        * Whether a task worktree holds anything the agent that lived in it made.
@@ -550,8 +586,11 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Always git: `addWorktree` makes these with `git worktree add`, so a worktree is
        * git's whatever the project checkout it came from is.
        */
-      holdsWork: (directory: string) =>
-        status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
+      holdsWork: (directory: string, branch: string) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsTree(directory, branch))) return false;
+          return (yield* status(directory, "all")) !== "";
+        }),
 
       /**
        * Commits everything a stopped agent left in its worktree onto the branch
@@ -559,11 +598,17 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * starts from it. Called only in a worktree foreman made: an attached
        * checkout is the operator's, and is never committed to.
        */
-      commitWork: (directory: string, message: string) =>
-        git(directory, "add", "--all").pipe(
-          Effect.andThen(git(directory, "commit", "--quiet", "-m", message)),
-          Effect.asVoid,
-        ),
+      commitWork: (directory: string, branch: string, message: string) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsTree(directory, branch))) {
+            return yield* new RepositoryError({
+              directory,
+              detail: `not committing: the checkout is not on ${branch}`,
+            });
+          }
+          yield* git(directory, "add", "--all");
+          yield* git(directory, "commit", "--quiet", "-m", message);
+        }).pipe(Effect.asVoid),
 
       /**
        * The commit a task's branch was cut from, so a reviewer can read the
@@ -900,15 +945,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // below runs against the operator's branch exactly as for a
           // worktree. The switch needs a clean tree: git would carry leftover
           // edits onto the operator's branch.
-          if ((yield* headBranch(directory)) === branch) {
-            if ((yield* status(directory, "all")) !== "") {
-              return {
-                _tag: "Held",
-                reason: "dirty",
-                detail: `uncommitted changes on ${branch}, which must be checked out of this checkout to land`,
-              } as const;
-            }
-            yield* gitOutput(directory, "checkout", "--quiet", yield* trunkOf(directory));
+          if ((yield* leaveBranch(directory, branch)) === "dirty") {
+            return {
+              _tag: "Held",
+              reason: "dirty",
+              detail: `uncommitted changes on ${branch}, which must be checked out of this checkout to land`,
+            } as const;
           }
 
           // Asked before the clean gate, because a checkout that already has

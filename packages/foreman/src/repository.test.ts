@@ -18,7 +18,8 @@ const detached = {
   detail: "no checked-out branch (detached HEAD)",
 } as const;
 
-const holdsWork = (directory: string) => run((repository) => repository.holdsWork(directory));
+const holdsWork = (directory: string, branch: string) =>
+  run((repository) => repository.holdsWork(directory, branch));
 
 // Nested under a directory that does not exist, because the real ground lives
 // at $XDG_STATE_HOME/foreman/verify/<project> and nothing makes that first.
@@ -478,18 +479,21 @@ describe("Repository", () => {
     await writeFile(join(worktree, "tracked.txt"), "committed\n");
     await there("add", "tracked.txt");
     await there("commit", "-qm", "initial");
+    const branch = (await there("symbolic-ref", "--short", "HEAD")).stdout.toString().trim();
 
-    expect(await holdsWork(worktree)).toBe(false);
+    expect(await holdsWork(worktree, branch)).toBe(false);
 
     // A new file is the most common thing an author makes and the one git says
     // least about. isFree deliberately ignores it; here it is the whole point.
     await writeFile(join(worktree, "new-test.ts"), "expect(1).toBe(1)\n");
-    expect(await holdsWork(worktree)).toBe(true);
+    expect(await holdsWork(worktree, branch)).toBe(true);
     expect(await isFree(worktree)).toEqual(clean);
 
     await rm(join(worktree, "new-test.ts"));
     await writeFile(join(worktree, "tracked.txt"), "half an edit\n");
-    expect(await holdsWork(worktree)).toBe(true);
+    expect(await holdsWork(worktree, branch)).toBe(true);
+    // A main checkout off the task's branch holds the operator's edits, not the task's.
+    expect(await holdsWork(worktree, "foreman/ts-elsewhere")).toBe(false);
 
     await rm(worktree, { recursive: true, force: true });
   });
@@ -698,7 +702,7 @@ describe("Repository in branch mode", () => {
         _tag: "Held",
         reason: "busy",
         branch: task,
-        detail: `${task} is checked out here; other work waits until it lands`,
+        detail: `${task} is checked out here; other work waits until its task lands or ends`,
       });
 
       await writeFile(join(here, "b.txt"), "b\n");
@@ -714,9 +718,7 @@ describe("Repository in branch mode", () => {
       expect(await repo.merge()).toEqual({ _tag: "Merged", verified: false });
       expect(await head()).toBe("trunk");
       expect(await repo.isFree()).toEqual(clean);
-      expect((await sh("log", "-1", "--format=%s")).stdout.toString().trim()).toBe(
-        `Merge ${task}`,
-      );
+      expect((await sh("log", "-1", "--format=%s")).stdout.toString().trim()).toBe(`Merge ${task}`);
     } finally {
       await rm(here, { recursive: true, force: true });
       await rm(`${here}.grounds`, { recursive: true, force: true });
@@ -736,6 +738,97 @@ describe("Repository in branch mode", () => {
       expect(await head()).toBe(task);
     } finally {
       await rm(here, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Repository in branch mode, after the task's run", () => {
+  const task = "foreman/ts-after";
+
+  const checkout = async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-branch-after-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    await sh("init", "-q", "-b", "trunk");
+    await writeFile(join(here, "a.txt"), "a\n");
+    await sh("add", "a.txt");
+    await sh("commit", "-qm", "initial");
+    await run((repository) => repository.checkoutBranch(here, task));
+    await writeFile(join(here, "b.txt"), "b\n");
+    await sh("add", "b.txt");
+    await sh("commit", "-qm", "work");
+    const head = async () => (await sh("symbolic-ref", "--short", "HEAD")).stdout.toString().trim();
+    const tip = async (ref: string) => (await sh("rev-parse", ref)).stdout.toString().trim();
+    return { here, sh, head, tip };
+  };
+  const leave = (here: string) => run((repository) => repository.leaveBranch(here, task));
+  const cleanup = (here: string) =>
+    Promise.all([here, `${here}.grounds`].map((p) => rm(p, { recursive: true, force: true })));
+
+  test("ending the task puts the operator's branch back and keeps the task's commits", async () => {
+    const { here, head, tip } = await checkout();
+    try {
+      const work = await tip(task);
+      expect(await leave(here)).toBe("left");
+      expect(await head()).toBe("trunk");
+      expect(await tip(task)).toBe(work);
+      expect(await run((repository) => repository.isFree(here))).toEqual(clean);
+      // Leaving is idempotent: a checkout on another branch is left alone.
+      expect(await leave(here)).toBe("elsewhere");
+    } finally {
+      await cleanup(here);
+    }
+  });
+
+  test("ending the task with uncommitted edits stays on its branch, still busy", async () => {
+    const { here, head } = await checkout();
+    try {
+      await writeFile(join(here, "half.txt"), "half\n");
+      expect(await leave(here)).toBe("dirty");
+      expect(await head()).toBe(task);
+      expect(await run((repository) => repository.isFree(here))).toMatchObject({
+        reason: "busy",
+        branch: task,
+      });
+    } finally {
+      await cleanup(here);
+    }
+  });
+
+  test("a landing that breaks the project leaves the operator's branch out, and the next author resumes the branch", async () => {
+    const { here, head, tip } = await checkout();
+    try {
+      const work = await tip(task);
+      expect(
+        await run((repository) =>
+          repository.merge(here, task, "test ! -f b.txt", `${here}.grounds/verify`, "Merge"),
+        ),
+      ).toMatchObject({ _tag: "Broke" });
+      expect(await head()).toBe("trunk");
+
+      await run((repository) => repository.checkoutBranch(here, task));
+      expect(await head()).toBe(task);
+      expect(await tip("HEAD")).toBe(work);
+      expect(await tip(`${task}@{upstream}`)).toBe(await tip("trunk"));
+    } finally {
+      await cleanup(here);
+    }
+  });
+
+  test("foreman never commits in the checkout once it is off the task's branch", async () => {
+    const { here, head, tip } = await checkout();
+    try {
+      await leave(here);
+      await writeFile(join(here, "operator.txt"), "mine\n");
+      const before = await tip("trunk");
+      expect(await run((repository) => repository.holdsWork(here, task))).toBe(false);
+      await expect(run((repository) => repository.commitWork(here, task, "WIP"))).rejects.toThrow(
+        /not on foreman\/ts-after/,
+      );
+      expect(await head()).toBe("trunk");
+      expect(await tip("trunk")).toBe(before);
+    } finally {
+      await cleanup(here);
     }
   });
 });
