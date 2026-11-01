@@ -14,8 +14,10 @@ land`, which grant that one step for that one task. Every button runs
 reads the change on its next tick.
 
 The panel keeps no state. It reads the file that `src/published.ts` writes, and
-the schema there is the contract. Bump `PUBLISHED_VERSION` and `VERSION` in
-`foreman/main.js` together.
+the schema there is the contract. herdr-web's Foreman page reads the same file,
+through its own copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in
+`foreman/main.js`, and `FOREMAN_VERSION` in herdr-web's `src/shared/Foreman.ts`
+together.
 
 ## Install
 

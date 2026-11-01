@@ -15,7 +15,11 @@ import type { FleetState } from "./dispatcher.ts";
 import { Policy } from "./policy.ts";
 import { actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 
-/** Bumped whenever a field a reader relies on changes meaning or goes away. */
+/**
+ * Bumped whenever a field a reader relies on changes meaning or goes away.
+ * Two readers check it: the herdr-app panel (`herdr/foreman/main.js`) and
+ * herdr-web's Foreman page (`src/shared/Foreman.ts` there).
+ */
 export const PUBLISHED_VERSION = 2;
 
 export const PublishedRow = S.Struct({
