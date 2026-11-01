@@ -123,6 +123,27 @@ export const opencodeConfig = (options: {
 const checkoutRoot = (): string => `${process.env["HOME"] ?? ""}/build`;
 
 /**
+ * The wall text a screen ends on, or none. Matches literal substrings only,
+ * in the tail of the screen named by `WALL_WINDOW_LINES`.
+ */
+export const hitWall = (kind: string, screen: string): Option.Option<string> => {
+  const tail = screen
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .slice(-WALL_WINDOW_LINES)
+    .join("\n");
+  return Option.fromNullishOr(wallTexts(kind).find((text) => tail.includes(text)));
+};
+
+/**
+ * How many non-blank lines at the bottom of a screen are read for a wall. A
+ * harness prints its stop as its last message, so the screen's history above
+ * is not searched: an agent's own prompt quotes these strings, and a match in
+ * that history would wall a run that merely read about walls.
+ */
+const WALL_WINDOW_LINES = 12;
+
+/**
  * The literal text each harness prints when its account has no allowance left.
  *
  * Only strings read out of the harness's own binary are listed. Empty means
@@ -146,25 +167,4 @@ const wallTexts = (kind: string): ReadonlyArray<string> => {
     default:
       return [];
   }
-};
-
-/**
- * How many non-blank lines at the bottom of a screen are read for a wall. A
- * harness prints its stop as its last message, so the screen's history above
- * is not searched: an agent's own prompt quotes these strings, and a match in
- * that history would wall a run that merely read about walls.
- */
-const WALL_WINDOW_LINES = 12;
-
-/**
- * The wall text a screen ends on, or none. Matches literal substrings only,
- * in the tail of the screen named by `WALL_WINDOW_LINES`.
- */
-export const hitWall = (kind: string, screen: string): Option.Option<string> => {
-  const tail = screen
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .slice(-WALL_WINDOW_LINES)
-    .join("\n");
-  return Option.fromNullishOr(wallTexts(kind).find((text) => tail.includes(text)));
 };

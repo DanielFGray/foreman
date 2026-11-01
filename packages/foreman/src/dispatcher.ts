@@ -970,9 +970,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
         yield* prog.markWall(task.id, wall.provider);
         yield* prog.release(task.id);
-        yield* Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
-          discard: true,
-        });
+        yield* stopAgents(worker);
 
         const labels = [...task.labels, `walled:${wall.provider}`];
         const next = authorFor(
