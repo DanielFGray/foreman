@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -643,5 +643,70 @@ describe("Repository's git", () => {
       await rm(here, { recursive: true, force: true });
       await rm(`${here}.grounds`, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Repository.remove on a branch with a worktree", () => {
+  let root = "";
+  let checkout = "";
+  let worktree = "";
+  const branch = "foreman/ts-1";
+  const sh = (cwd: string, script: string) => Bun.$`sh -c ${script}`.cwd(cwd).quiet().nothrow();
+  const branchExists = async () =>
+    (
+      await Bun.$`git -C ${checkout} rev-parse --verify --quiet refs/heads/${branch}`
+        .quiet()
+        .nothrow()
+    ).exitCode === 0;
+  const worktreeExists = async () =>
+    (await run((repository) => repository.worktrees(checkout))).some(
+      (entry) => entry.path === worktree,
+    );
+  const remove = () => run((repository) => repository.remove(checkout, branch));
+
+  // A branch merged into the checkout whose worktree is still registered, with
+  // a gitignored directory in it the way a bun install leaves one.
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "foreman-remove-"));
+    checkout = join(root, "checkout");
+    worktree = join(root, "tasks", "ts-1");
+    await mkdir(checkout, { recursive: true });
+    await sh(
+      checkout,
+      "git init -q && printf 'node_modules/\\n' > .gitignore && printf 'tracked\\n' > tracked.txt && " +
+        "git add . && git -c user.email=f@t -c user.name=f commit -q -m base",
+    );
+    await run((repository) => repository.addWorktree(checkout, branch, worktree));
+    await sh(
+      worktree,
+      "printf 'work\\n' > work.txt && git add work.txt && " +
+        "git -c user.email=f@t -c user.name=f commit -q -m work && " +
+        "mkdir -p node_modules/pkg && printf 'x\\n' > node_modules/pkg/index.js",
+    );
+    await sh(checkout, `git -c user.email=f@t -c user.name=f merge -q --no-ff ${branch} -m merge`);
+  });
+
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  test("takes a clean merged worktree down with its branch", async () => {
+    expect(await remove()).toBe(true);
+    expect(await worktreeExists()).toBe(false);
+    expect(await branchExists()).toBe(false);
+  });
+
+  test("keeps a merged worktree holding an uncommitted edit", async () => {
+    await sh(worktree, "printf 'edit\\n' >> tracked.txt");
+
+    expect(await remove()).toBe(false);
+    expect(await worktreeExists()).toBe(true);
+    expect(await branchExists()).toBe(true);
+  });
+
+  test("keeps a merged worktree holding an untracked file", async () => {
+    await sh(worktree, "printf 'new\\n' > untracked.txt");
+
+    expect(await remove()).toBe(false);
+    expect(await worktreeExists()).toBe(true);
+    expect(await branchExists()).toBe(true);
   });
 });

@@ -620,18 +620,33 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         }),
 
       /**
-       * Deletes a branch, and says whether git let it go.
+       * Deletes a merged branch and the linked worktree still holding it, and
+       * says whether the branch went.
        *
-       * `--delete` without `--force` is what makes the sweep above it safe:
-       * git refuses a branch holding commits the checkout does not have, and
-       * refuses one a worktree still has checked out — which is picked up on a
-       * later tick, once that workspace closes. A refusal is an answer, not a
-       * failure, so it comes back as `false` rather than as an error.
+       * git refuses to delete a branch a worktree has checked out, and nothing
+       * else takes that worktree down: a landing whose teardown failed leaves
+       * it behind with a merged branch. So the worktree goes first, and only
+       * when it is clean. The non-forced remove refuses uncommitted or untracked
+       * work, which is then kept, and the refusal comes back as `false`.
+       * `--delete` without `--force` still refuses commits the checkout lacks.
+       * A refusal is an answer, not a failure, so it is never an error.
        */
       remove: (directory: string, branch: string) =>
-        git(directory, "branch", "--delete", branch).pipe(
-          Effect.map((result) => result.exitCode === 0),
-        ),
+        Effect.gen(function* () {
+          yield* git(directory, "worktree", "prune");
+          const listed = yield* gitOutput(directory, "worktree", "list", "--porcelain");
+          // The main checkout is always listed first, and git refuses to
+          // remove it, so only the linked worktrees after it are candidates.
+          const linked = worktreesOf(listed)
+            .slice(1)
+            .find((worktree) => worktree.branch === branch);
+          if (linked) {
+            const removed = yield* git(directory, "worktree", "remove", linked.path);
+            if (removed.exitCode !== 0) return false;
+          }
+          const deleted = yield* git(directory, "branch", "--delete", branch);
+          return deleted.exitCode === 0;
+        }),
 
       /**
        * Every worktree git has registered for the checkout, with the branch
