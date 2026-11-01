@@ -81,7 +81,6 @@ import {
   needsYou,
   ONBOARD,
   Prog,
-  type ReadyTask,
   reviewedBy,
   reviewFailedBy,
   walledBy,
@@ -384,7 +383,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // The second reading is narrow, not stale. The passes above write to the
       // store and to git, so what fill decides from has to be read after them —
       // but a dispatch turns on ten fields, and the columns only a person reads
-      // cost a `prog show` per branch and a `git status` per worktree to build.
+      // cost a store read per branch and a `git status` per worktree to build.
       // Reading them again here would be work whose one consumer is the
       // discard.
       yield* fill(yield* readDispatch(providers));
@@ -456,7 +455,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // slots. The checkout a workspace's worktree belongs to is what the
       // config's project set scopes, and the fleet reports it, so ownership is
       // settled before the store is asked anything. Scoping by the task's
-      // project instead means one `prog show` per workspace on the machine
+      // project instead means one store read per workspace on the machine
       // before knowing whether any of them is this dispatcher's — and it cannot
       // classify a workspace whose task has been deleted at all.
       const everyone = yield* fleet.roster;
@@ -686,7 +685,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         })
         .sort(
           (first, second) =>
-            first.task.last_activity_at.getTime() - second.task.last_activity_at.getTime(),
+            first.task.lastActivityAt.getTime() - second.task.lastActivityAt.getTime(),
         );
 
       // What the sweep may delete: a merged ref for work nothing in the
@@ -823,7 +822,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * Everything one observation implies, including what only a person reads.
      *
      * `dispatchFrom` plus the columns a dashboard draws and nothing decides
-     * from — which cost a `prog show` per branch and a `git status` per
+     * from — which cost a store read per branch and a `git status` per
      * worktree, and are why the tick's second reading calls `dispatchFrom`
      * directly instead of coming back through here.
      */
@@ -872,7 +871,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             Effect.map((item) => ({
               title: item.title as string | undefined,
               status: item.status as string | undefined,
-              activity: item.last_activity_at as Date | undefined,
+              activity: item.lastActivityAt as Date | undefined,
             })),
             Effect.orElseSucceed(() => ({
               title: undefined,
@@ -1463,13 +1462,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ].filter(
             ({ task, worker }) =>
               (worker === undefined || worker.state === "gone") &&
-              DateTime.isLessThan(DateTime.fromDateUnsafe(task.last_activity_at), cutoff),
+              DateTime.isLessThan(DateTime.fromDateUnsafe(task.lastActivityAt), cutoff),
           ),
           ({ task, worker }) =>
             Effect.gen(function* () {
               yield* prog.log(
                 task.id,
-                `foreman: claim released — no activity since ${task.last_activity_at.toISOString()}.`,
+                `foreman: claim released — no activity since ${task.lastActivityAt.toISOString()}.`,
               );
               yield* prog.release(task.id);
               // Only a workspace that still exists is taken down. A worker
@@ -1616,7 +1615,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     });
 
     const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (
-      task: ReadyTask,
+      task: Item,
       drawn?: Set<string>,
     ) {
       // The bottom rung by default; higher only where the rungs below have
@@ -1629,10 +1628,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     });
 
     /** Opens the task's workspace, claims it and starts its author on this rung. */
-    const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (
-      task: ReadyTask,
-      rung: Rung,
-    ) {
+    const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (task: Item, rung: Rung) {
       const project = yield* projectFor(task.project);
       if (!project) return;
 
@@ -2162,7 +2158,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const task = yield* prog.show(target.task.id);
             if (task.status === "done" || task.status === "canceled" || !target.worker) return;
             yield* stopAgents(target.worker);
-            yield* prog.release(task.id);
+            if (task.status !== "open") yield* prog.release(task.id);
             yield* prog.log(task.id, killLogLine(reason));
             yield* teardown(task);
           }),
@@ -2186,7 +2182,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * on the one named. A named rung is the operator's choice for this one
        * dispatch and writes no label, so the task's evidence is unchanged.
        */
-      author: (task: ReadyTask, rungName: string | undefined) =>
+      author: (task: Item, rungName: string | undefined) =>
         commanded(
           Effect.gen(function* () {
             const rung =
@@ -2303,7 +2299,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       close: (workspace: CloseOptions) => commanded(fleet.close(workspace)),
 
       /** Closes a queued task without creating a workspace or landing code. */
-      complete: (task: ReadyTask, reason: string) =>
+      complete: (task: Item, reason: string) =>
         commanded(
           prog
             .log(task.id, `foreman: marked done from queue: ${reason}`)
@@ -2454,7 +2450,7 @@ export const dispatchesFor = (
   }
 
   // Which ready tasks may run together is what the plan's blockers already
-  // say, and `prog ready` has applied them before foreman sees the queue.
+  // say, and the store's `ready` has applied them before foreman sees the queue.
   for (const task of current.queue) {
     if (held(task.project)) continue;
     if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
@@ -2493,7 +2489,7 @@ const isBusy = (worker: Worker): boolean =>
 interface DispatchState {
   readonly workers: ReadonlyArray<Worker>;
   readonly outOfQuota: ReadonlySet<string>;
-  readonly queue: ReadonlyArray<ReadyTask>;
+  readonly queue: ReadonlyArray<Item>;
   readonly held: ReadonlyArray<Held>;
   readonly review: ReadonlyArray<Active>;
   readonly policy: Policy;
@@ -2524,7 +2520,7 @@ type PlannedDispatch =
   | { readonly role: "review"; readonly task: Item; readonly permit: Permit }
   | {
       readonly role: "author";
-      readonly task: ReadyTask;
+      readonly task: Item;
       readonly permit: Permit;
     };
 
@@ -2553,7 +2549,7 @@ export const awaitingLanding = (task: Item): boolean =>
  * from the store and foreman still counts nothing of its own.
  */
 export const handoffExpired = (task: Item, cutoff: DateTime.Utc): boolean =>
-  DateTime.isLessThan(DateTime.fromDateUnsafe(task.last_activity_at), cutoff);
+  DateTime.isLessThan(DateTime.fromDateUnsafe(task.lastActivityAt), cutoff);
 
 /**
  * A finished branch foreman may merge on this tick.
@@ -2742,7 +2738,7 @@ export const recoverable = (branch: { readonly status: string | undefined }): bo
  *
  * prog list has no limit and no order foreman can rely on — it comes back
  * grouped by project in config order — so the window is applied here and the
- * survivors are put in landing order. `last_activity_at` is when a done task
+ * survivors are put in landing order. `lastActivityAt` is when a done task
  * was last touched, which for a done task is when it landed.
  */
 export const landedColumn = (
@@ -2752,10 +2748,8 @@ export const landedColumn = (
 ): ReadonlyArray<Item> => {
   const cutoff = DateTime.subtract(now, { days: windowDays });
   return landed
-    .filter((item) =>
-      DateTime.isGreaterThan(DateTime.fromDateUnsafe(item.last_activity_at), cutoff),
-    )
-    .sort((first, second) => second.last_activity_at.getTime() - first.last_activity_at.getTime());
+    .filter((item) => DateTime.isGreaterThan(DateTime.fromDateUnsafe(item.lastActivityAt), cutoff))
+    .sort((first, second) => second.lastActivityAt.getTime() - first.lastActivityAt.getTime());
 };
 
 /**
@@ -2902,7 +2896,7 @@ export interface FleetState {
   /** The projects this reading covers; see `src/projects.ts`. */
   readonly projects: ReadonlyArray<Project>;
   /** Ready work in dispatch order. */
-  readonly queue: ReadonlyArray<ReadyTask>;
+  readonly queue: ReadonlyArray<Item>;
 
   /**
    * Tasks parked at the operator's rung, above the last model in the ladder.
@@ -2913,7 +2907,7 @@ export interface FleetState {
    * way the answer is a person writing the decision into the task and then
    * removing the label.
    */
-  readonly yours: ReadonlyArray<ReadyTask>;
+  readonly yours: ReadonlyArray<Item>;
   readonly working: ReadonlyArray<Active>;
   readonly review: ReadonlyArray<Active>;
   readonly landed: ReadonlyArray<Item>;
@@ -3071,7 +3065,7 @@ export interface Active {
 }
 
 export interface InterventionTarget {
-  readonly task: Item | ReadyTask;
+  readonly task: Item | Item;
   readonly worker: Worker | undefined;
 }
 

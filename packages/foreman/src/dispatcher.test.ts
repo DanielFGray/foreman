@@ -36,10 +36,12 @@ const task = (
   type: "task",
   priority,
   labels,
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
 });
 
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
@@ -116,7 +118,7 @@ describe("landing a reviewed branch", () => {
 });
 
 describe("the author's pane after a handoff", () => {
-  const at = (item: Item, when: Date): Item => ({ ...item, last_activity_at: when });
+  const at = (item: Item, when: Date): Item => ({ ...item, lastActivityAt: when });
   const cutoff = DateTime.fromDateUnsafe(new Date("2026-08-15T12:00:00Z"));
 
   test("keeps a fresh handoff alive for a reviewer to coach", () => {
@@ -677,7 +679,7 @@ describe("the quota gate", () => {
 });
 
 describe("the landed column", () => {
-  const at = (item: Item, when: Date): Item => ({ ...item, last_activity_at: when });
+  const at = (item: Item, when: Date): Item => ({ ...item, lastActivityAt: when });
   const now = DateTime.fromDateUnsafe(new Date("2026-08-21T12:00:00Z"));
 
   test("orders by when each task landed, newest first", () => {

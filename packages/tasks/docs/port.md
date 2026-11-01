@@ -51,10 +51,10 @@ It follows the rules the Go writer already follows on that file:
    copies of one database for every command foreman uses (ready, list, show,
    label, unlabel, start, review, open, done, log, add) and compares the JSON
    and the resulting rows.
-2. **foreman's `Prog` layer runs in process.** The `Prog` service interface stays;
-   only the live layer changes, so the dispatcher's tests need no edits.
-   foreman's `src/queue.ts` and prog's `rank.go` are one ranking; it moves to
-   `tasks` and foreman imports it.
+2. **foreman's `Prog` layer runs in process.** `Prog` keeps its operations and
+   runs them on `Tasks`; each label rewrite is one transaction. foreman uses
+   `tasks`' `Item` directly, so no field mapping sits between them. Its queue
+   ranks with `tasks`' `rank`.
 3. **Runs.** A `runs` table (task, role, rung, start, end, outcome, verdict)
    replaces the dispatcher's labels. Open decision: the trials table in
    `~/.agents/model-trials.db` already records one row per run for the herd

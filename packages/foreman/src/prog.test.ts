@@ -17,10 +17,12 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   type: "task",
   priority: 1,
   labels,
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
 });
 
 describe("task attribution", () => {
@@ -97,7 +99,7 @@ describe("unfinished attempts on a rung", () => {
   });
 });
 
-describe("clearReview against a live store", () => {
+describe("Prog against a scratch store", () => {
   let directory: string;
 
   beforeAll(async () => {
@@ -162,12 +164,22 @@ describe("clearReview against a live store", () => {
 
     expect(after.labels).toEqual([]);
   });
-});
 
-describe("command failures", () => {
-  test("reports a non-zero prog exit status", async () => {
+  test("names the operation a store failure came from", async () => {
     const error = await run((prog) => Effect.flip(prog.complete("ts-does-not-exist")));
 
-    expect(error.command).toContain("done ts-does-not-exist");
+    expect(error.command).toBe("done ts-does-not-exist");
+    expect(error.detail).toContain("not found");
+  });
+
+  test("submits a done task with an unread branch for review", async () => {
+    const id = (await Bun.$`prog add "unread branch" -p foreman -l approved`.text()).trim();
+    await Bun.$`prog done ${id}`.quiet();
+
+    await run((prog) => prog.submit(id));
+    const after = await run((prog) => prog.show(id));
+
+    expect(after.status).toBe("reviewing");
+    expect(after.labels).not.toContain("approved");
   });
 });

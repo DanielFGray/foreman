@@ -2,7 +2,7 @@ import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import template from "lodash/template.js";
 import { labelFor } from "./fleet.ts";
-import type { DiagnosticIntent, Item, ReadyTask } from "./prog.ts";
+import type { DiagnosticIntent, Item } from "./prog.ts";
 
 /**
  * The messages workers receive, rendered from files under prompts/.
@@ -41,7 +41,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       );
 
     return {
-      author: (task: ReadyTask, worktree: string, repository: string) =>
+      author: (task: Item, worktree: string, repository: string) =>
         render("author", {
           task: task.id,
           title: task.title,

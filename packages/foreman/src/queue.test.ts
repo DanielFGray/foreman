@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
-import { epicCompletionCredit, interleave, queueFrom } from "./queue.ts";
-import type { Item, ReadyTask } from "./prog.ts";
+import { interleave, queueFrom } from "./queue.ts";
+import type { Item } from "./prog.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
 
@@ -11,18 +11,23 @@ const task = (
   priority: number,
   createdAt = now,
   labels: ReadonlyArray<string> = [],
-): ReadyTask => ({
+): Item => ({
   id,
   project,
   priority,
   title: id,
   labels,
-  description: null,
-  parent: null,
-  created_at: createdAt,
+  description: "",
+  parent: undefined,
+  createdAt: createdAt,
+  updatedAt: new Date(0),
+  lastActivityAt: new Date(0),
+  definitionOfDone: undefined,
+  type: "task",
+  status: "open",
 });
 
-const bug = (id: string, project: string, priority: number, createdAt = now): ReadyTask =>
+const bug = (id: string, project: string, priority: number, createdAt = now): Item =>
   task(id, project, priority, createdAt, ["bug"]);
 
 const ancient = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
@@ -135,15 +140,6 @@ describe("interleave", () => {
   });
 });
 
-describe("epicCompletionCredit", () => {
-  test("grows quadratically, so it stays small until an epic is nearly done", () => {
-    expect(epicCompletionCredit(0)).toBe(0);
-    expect(epicCompletionCredit(0.5)).toBeCloseTo(0.5, 5);
-    expect(epicCompletionCredit(0.99)).toBeCloseTo(1.9602, 3);
-    expect(epicCompletionCredit(1)).toBeCloseTo(2, 5);
-  });
-});
-
 describe("queueFrom", () => {
   const rung = (name: string): Ladder[number] => ({
     name,
@@ -152,7 +148,7 @@ describe("queueFrom", () => {
     provider: undefined,
   });
   const ladder: Ladder = [rung("cheap"), rung("top")];
-  const reading = (ready: ReadonlyArray<ReadyTask>, failed: ReadonlyArray<string> = []) => ({
+  const reading = (ready: ReadonlyArray<Item>, failed: ReadonlyArray<string> = []) => ({
     ready,
     ladder,
     projects: ["a"],
@@ -160,7 +156,7 @@ describe("queueFrom", () => {
     failed: new Set(failed),
     now,
   });
-  const ids = (tasks: ReadonlyArray<ReadyTask>) => tasks.map(({ id }) => id);
+  const ids = (tasks: ReadonlyArray<Item>) => tasks.map(({ id }) => id);
 
   test("parks a task every rung has failed, and one marked needs-you", () => {
     const split = queueFrom(
@@ -202,12 +198,14 @@ describe("queueFrom", () => {
       type: "task",
       priority: 2,
       labels: [],
-      description: null,
-      last_activity_at: now,
-      created_at: now,
+      description: "",
+      lastActivityAt: now,
+      createdAt: now,
+      updatedAt: new Date(0),
+      definitionOfDone: undefined,
       parent: "ep",
     });
-    const epic = { ...child("ep", "in_progress"), type: "epic", parent: null };
+    const epic = { ...child("ep", "in_progress"), type: "epic" as const, parent: undefined };
     const split = queueFrom({
       ...reading([task("plain", "a", 2), task("last", "a", 2)]),
       epics: [{ epic, children: [child("done", "done"), child("last", "open")] }],

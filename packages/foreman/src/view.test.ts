@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
+import { authoredBy, reviewedBy, type Item, type TaskStatus } from "./prog.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import {
@@ -27,25 +27,28 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   type: "task",
   priority: 1,
   labels,
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
 });
 
-const ready = (
-  id: string,
-  labels: ReadonlyArray<string> = [],
-  description: string | null = null,
-): ReadyTask => ({
+const ready = (id: string, labels: ReadonlyArray<string> = [], description = ""): Item => ({
   id,
   title: `task ${id}`,
   priority: 2,
   project: "amux",
   labels,
   description,
-  parent: null,
-  created_at: new Date(),
+  parent: undefined,
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  lastActivityAt: new Date(0),
+  definitionOfDone: undefined,
+  type: "task",
+  status: "open",
 });
 
 const worker = (task: string, state: WorkerState): Worker => ({
@@ -78,7 +81,7 @@ const provider = (
 // A real description is several paragraphs, and the pane wraps and scrolls
 // rather than truncating, so the assertion is that every line survives.
 const LONG_DESCRIPTION = [
-  "Carry description through ReadyTask and render it whole.",
+  "Carry description through Item and render it whole.",
   "",
   "The pane wraps and scrolls, so nothing here is cut to fit a width the",
   "renderer cannot know.",
@@ -435,12 +438,12 @@ describe("publishedOf", () => {
   test("leads each queued epic's first task with the epic, keeping the tasks' order", () => {
     const epic = {
       ...task("ep-drive", "in_progress", []),
-      type: "epic",
+      type: "epic" as const,
       title: "Drive the release",
     };
     const [first, second] = state.queue;
     const queue = [
-      { ...first!, parent: null },
+      { ...first!, parent: undefined },
       { ...second!, parent: "ep-drive" },
       { ...first!, id: "ts-q9", parent: "ep-drive" },
     ];

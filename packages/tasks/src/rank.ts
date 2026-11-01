@@ -16,7 +16,13 @@ const AGING_PER_DAY = 0.25;
 const AGING_CAP_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ROTATION_WINDOW = 0.5;
+/**
+ * One day more than any task can gain by waiting. At exactly the cap a fully
+ * aged feature would tie a fresh defect, and a tie is decided by the order the
+ * store returned, which is the thing this credit exists to stop deciding.
+ */
 const DEFECT_CREDIT = AGING_PER_DAY * (AGING_CAP_DAYS + 1);
+/** The same ceiling as a defect, so no second constant has to be justified. */
 const EPIC_CLOSE_CREDIT = DEFECT_CREDIT;
 
 export interface Rankable {
@@ -60,7 +66,18 @@ export const rank = <A extends Rankable>(
   return picked;
 };
 
-/** A task's score; lower starts sooner. */
+/**
+ * A task's score; lower starts sooner.
+ *
+ * Age counts from filing, never from the last activity: a note on a task is
+ * someone thinking about it, and an agent's own attempt, release and log all
+ * count as activity, so aging from activity would send the best-understood
+ * work to the back and never age a task the fleet keeps picking up.
+ *
+ * The epic credit grows with the square of the fraction done: a 50% epic earns
+ * a quarter of the ceiling, a 90% epic nine tenths. Linear growth would let a
+ * half-finished epic outrank unrelated priority-1 work.
+ */
 export const scoreOf = (item: Rankable, now: Date, epicDone: number): number => {
   const ageDays = Math.max(0, now.getTime() - item.createdAt.getTime()) / DAY_MS;
   return (

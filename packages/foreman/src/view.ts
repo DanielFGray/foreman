@@ -19,7 +19,6 @@ import {
   reviewedBy,
   type EpicProgress,
   type Item,
-  type ReadyTask,
 } from "./prog.ts";
 
 /**
@@ -113,7 +112,7 @@ export interface ColumnRow {
   /** The full task, for rows that came out of a claimed status. */
   readonly task: Item | undefined;
   /** The queued task, which has never been claimed and so never has a status. */
-  readonly ready: ReadyTask | undefined;
+  readonly ready: Item | undefined;
   readonly worker: Worker | undefined;
   readonly project: string | undefined;
   /** The hold's reason, for rows whose actions depend on what is holding it. */
@@ -337,7 +336,7 @@ const attentionRow =
  * group the tasks under it and the tasks keep their dispatch order.
  */
 export const queueRows = (
-  queue: ReadonlyArray<ReadyTask>,
+  queue: ReadonlyArray<Item>,
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<ColumnRow> =>
   queue.flatMap((task, index) => {
@@ -347,7 +346,7 @@ export const queueRows = (
     return leads ? [epicRow(progress), queueRow(task)] : [queueRow(task)];
   });
 
-export const queueRow = (task: ReadyTask): ColumnRow => ({
+export const queueRow = (task: Item): ColumnRow => ({
   column: "queue",
   key: task.id,
   label: `${task.project}  ${task.title}`,
@@ -389,7 +388,7 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
 // A parked task with a branch behind it is a resumption: an earlier author
 // committed and the task came back. Marked rather than counted, because the
 // commit count is a read per branch per tick to say what "resume" already says.
-const yoursRow = (task: ReadyTask, state: FleetState): ColumnRow => ({
+const yoursRow = (task: Item, state: FleetState): ColumnRow => ({
   ...queueRow(task),
   column: "yours",
   label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,

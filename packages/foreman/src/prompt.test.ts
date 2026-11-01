@@ -18,10 +18,12 @@ const item: Item = {
   type: "task",
   priority: 2,
   labels: ["onboard"],
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
 };
 
 const ready = {
@@ -30,9 +32,14 @@ const ready = {
   priority: 3,
   project: "foreman",
   labels: [],
-  description: null,
-  parent: null,
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  lastActivityAt: new Date(0),
+  definitionOfDone: undefined,
+  type: "task",
+  status: "open",
 } as const;
 
 describe("Prompts", () => {

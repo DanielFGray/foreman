@@ -8,7 +8,7 @@ import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, FleetError, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import { kindOf, Prog, ProgError, type Item, type ReadyTask } from "./prog.ts";
+import { kindOf, Prog, ProgError, type Item } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
@@ -29,10 +29,12 @@ const item = (
   type: "task",
   priority: 1,
   labels: [...labels],
-  description: null,
-  parent: null,
-  last_activity_at: now,
-  created_at: now,
+  description: "",
+  parent: undefined,
+  lastActivityAt: now,
+  createdAt: now,
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
 });
 
 const worker = (task: string, role: "author" | "review", state: WorkerState): Worker => ({
@@ -150,9 +152,7 @@ class World {
     lookup: (id: string) => Effect.succeed(Option.fromNullishOr(this.tasks.get(id))),
     ready: () =>
       Effect.succeed(
-        [...this.tasks.values()].filter(
-          (task) => task.status === "open",
-        ) as ReadonlyArray<ReadyTask>,
+        [...this.tasks.values()].filter((task) => task.status === "open") as ReadonlyArray<Item>,
       ),
     detail: () => Effect.succeedNone,
     epicsOver: () => Effect.succeed([]),
@@ -813,7 +813,7 @@ describe("a fleet that is not running", () => {
     const swept = item("ts-swept", "canceled", []);
     const stale = {
       ...item("ts-stale", "in_progress", ["by:cheap"]),
-      last_activity_at: new Date(now.getTime() - 48 * 60 * 60 * 1000),
+      lastActivityAt: new Date(now.getTime() - 48 * 60 * 60 * 1000),
     };
     const abandoned = item("ts-abandoned", "done", ["by:cheap"]);
     const queued = item("ts-queued", "open", []);
@@ -886,8 +886,8 @@ describe("a fleet that is not running", () => {
   test("a running tick releases a stale claim only when foreman's agent made it", async () => {
     usePolicy(everything);
     const old = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-    const ours = { ...item("ts-ours", "in_progress", ["by:cheap"]), last_activity_at: old };
-    const byHand = { ...item("ts-by-hand", "in_progress", []), last_activity_at: old };
+    const ours = { ...item("ts-ours", "in_progress", ["by:cheap"]), lastActivityAt: old };
+    const byHand = { ...item("ts-by-hand", "in_progress", []), lastActivityAt: old };
     const world = new World(ours, byHand);
 
     await tick(world);

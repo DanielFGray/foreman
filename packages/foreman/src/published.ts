@@ -12,7 +12,7 @@
  */
 import { DateTime, Effect, FileSystem, Option, Path, Schema as S } from "effect";
 import type { FleetState } from "./dispatcher.ts";
-import type { EpicProgress, ReadyTask } from "./prog.ts";
+import type { EpicProgress, Item } from "./prog.ts";
 import { MODES, modeOf, Policy } from "./policy.ts";
 import {
   actionsFor,
@@ -116,7 +116,7 @@ export const publishedRow =
 
 /** The queue as a reader sees it, each epic before its first task: what `foreman queue --json` prints. */
 export const publishedQueue = (
-  queue: ReadonlyArray<ReadyTask>,
+  queue: ReadonlyArray<Item>,
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue"));
 /** An action as a command line writes it: `takeOver` is `take-over`. */
