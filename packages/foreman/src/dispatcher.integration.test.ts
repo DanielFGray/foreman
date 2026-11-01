@@ -682,6 +682,28 @@ describe("Dispatcher tick", () => {
     expect(world.tasks.get(task.id)?.status).toBe("done");
     expect(world.closed).toContain(task.id);
   });
+
+  test("a landing writes the trial rows of the runs it ends", async () => {
+    // The landing takes the task's terminals down, so no later settle sees
+    // them: the rows must be written here or never.
+    const task = item("ts-landed", "reviewing", ["by:cheap", "review-by:cheap", "approved"]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "review", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+    expect(world.trials).toEqual([
+      expect.objectContaining({ task: task.id, work: "build", outcome: "committed" }),
+      expect.objectContaining({ task: task.id, work: "review", outcome: "committed" }),
+    ]);
+  });
 });
 
 describe("a fleet that is not running", () => {

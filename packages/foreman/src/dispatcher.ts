@@ -870,9 +870,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * Nothing happens for a phase that has not ended, or a run whose rung the
      * config no longer names: a row with no model would be a fact about
      * nothing.
+     *
+     * The role is the reviewer where one is recorded, else the author, unless
+     * the caller names it: a landing ends both runs at once.
      */
-    const recordTrial = (task: Item, phase: TaskPhase): Effect.Effect<void> => {
-      const ran = reviewedBy(task) ?? authoredBy(task);
+    const recordTrial = (
+      task: Item,
+      phase: TaskPhase,
+      role: "author" | "review" = reviewedBy(task) ? "review" : "author",
+    ): Effect.Effect<void> => {
+      const ran = role === "review" ? reviewedBy(task) : authoredBy(task);
       const rung = settings.ladder.find((candidate) => candidate.name === ran);
       const row =
         rung === undefined
@@ -883,7 +890,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               harness: rung.harness,
               model: rung.model,
               provider: providerOf(rung),
-              role: reviewedBy(task) ? "review" : "author",
+              role,
               phase,
             });
       return row === undefined ? Effect.void : trials.record(row);
@@ -1201,6 +1208,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
 
         yield* prog.complete(task.id);
+        // The teardown below ends the task's terminals, so no later settle
+        // sees these runs end: the landing writes both their rows.
+        yield* recordTrial(task, "Landed", "author");
+        yield* recordTrial(task, "Landed", "review");
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
       }).pipe(Effect.catch((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
