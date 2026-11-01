@@ -393,7 +393,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       });
 
     /**
-     * Landing through git, in a checkout git alone is keeping.
+     * Lands a branch onto the checkout's HEAD branch, through git.
      *
      * The branch to land on is whichever one HEAD names, which is why a
      * detached HEAD reads as held: `git merge` will happily commit onto no
@@ -403,20 +403,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * recovered from the reflog.
      */
     const gitCheckout = {
-      // Uncommitted work does not hold a git checkout. Tasks branch from the
-      // committed tip, and a landing is a fast-forward, which git refuses only
-      // when it would overwrite a dirty or untracked path. So the operator's
-      // edits stop exactly the branches that change the same files, and
-      // `merge` finds those by itself.
-      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
-        git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
-          Effect.map((head) =>
-            head.exitCode === 0
-              ? ({ _tag: "Clean" } as const)
-              : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
-          ),
-        ),
-
       merge: (
         directory: string,
         branch: string,
@@ -470,32 +456,35 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         }),
     };
 
-    return {
-      /**
-       * Whether the checkout is free for foreman to work against, and if not,
-       * why.
-       *
-       * Busy means the checkout has no branch for a landing to move — a
-       * detached HEAD — or the operator is mid-edit: a non-empty working tree,
-       * which a landing would carry away. Uncommitted work under git holds
-       * only the landings that would write the same paths, which `merge` asks
-       * per branch. `detail` names the cause, so the operator can see whether
-       * the hold clears itself or needs a hand-run command.
-       */
-      isFree: (directory: string): Effect.Effect<Hold, RepositoryError> =>
-        git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
-          Effect.map((head) =>
-            head.exitCode === 0
-              ? ({ _tag: "Clean" } as const)
-              : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
-          ),
+    /**
+     * Whether the checkout is free for foreman to work against, and if not,
+     * why.
+     *
+     * Busy means the checkout has no branch for a landing to move — a
+     * detached HEAD. Uncommitted work does not hold it: tasks branch from the
+     * committed tip, and a landing is a fast-forward, which git refuses only
+     * when it would overwrite a dirty or untracked path. So the operator's
+     * edits stop exactly the branches that change the same files, and `merge`
+     * finds those per branch. `detail` names the cause, so the operator can see
+     * whether the hold clears itself or needs a hand-run command.
+     */
+    const isFree = (directory: string): Effect.Effect<Hold, RepositoryError> =>
+      git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
+        Effect.map((head) =>
+          head.exitCode === 0
+            ? ({ _tag: "Clean" } as const)
+            : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
         ),
+      );
+
+    return {
+      isFree,
 
       /**
        * Whether a task worktree holds anything the agent that lived in it made.
        *
-       * Untracked files count, unlike in a shared checkout. A shared checkout has collected
-       * untracked build output and scratch notes for months. A task worktree
+       * Untracked files count, unlike in the operator's checkout. That checkout
+       * has collected untracked build output and scratch notes for months. A task worktree
        * was created empty minutes ago, so anything git does not follow arrived
        * with the agent: a new module it wrote, or the leavings of a test run it
        * got as far as starting. Either way the agent was working, which is the
@@ -791,7 +780,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // long as the operator kept editing.
           if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
 
-          const gate = yield* gitCheckout.isFree(directory);
+          const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;
           return yield* gitCheckout.merge(directory, branch, verify, proving);
         }),

@@ -490,9 +490,7 @@ describe("Repository", () => {
     await git("checkout", "-q", base);
     expect(await isFree(directory)).toEqual(clean);
   });
-
 });
-
 
 // The setup script is how a project says what a bare worktree is missing.
 // Foreman runs it and reports; it never guesses the command, because the

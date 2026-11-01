@@ -274,8 +274,6 @@ class World {
     // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
     setup: () => this.write("repository.setup", () => undefined),
     merge: () => this.write("repository.merge", () => this.landing),
-    sweepUnpublishedMerges: () =>
-      this.write("repository.sweepUnpublishedMerges", (): ReadonlyArray<string> => []),
     // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
     worktrees: () => Effect.die("unused"),
     addWorktree: () => Effect.die("unused"),

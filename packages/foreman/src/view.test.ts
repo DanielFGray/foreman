@@ -212,7 +212,7 @@ describe("actionsFor", () => {
     expect(actionsFor("held", row("attention", "fibrae"))).toEqual(["onboard"]);
     const clean = {
       ...state,
-      held: [held("amux", "noBranch", "no bookmark behind the working copy")],
+      held: [held("amux", "noBranch", "no checked-out branch (detached HEAD)")],
     };
     const stuck = rowsForView("attention", clean).find((each) => each.key === "amux");
     expect(actionsFor("held", stuck)).toEqual([]);
