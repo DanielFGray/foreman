@@ -63,24 +63,27 @@ export interface Connection<N> {
 
 /**
  * Opens a connection in the current scope and says `hello` (protocol
- * generation 1). Closing the scope closes the socket. When the socket ends,
- * every call in flight and the notification stream fail with HcLost.
+ * generation 1). Closing the scope closes the socket. Once the socket ends,
+ * every call, in flight or made later, and the notification stream fail with
+ * HcLost.
  */
 export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notification: S.Codec<N, NI>) {
   const socket = yield* BunSocket.makeNet({ path })
   const writer = yield* socket.writer
   const nextId = yield* Ref.make(0)
   const notes = yield* Queue.unbounded<N, HcLost>()
+  // Failed when the socket ends. Every call races it, so a call made after
+  // the end fails too, and the caller opens a new connection.
+  const lost = yield* Deferred.make<never, HcLost>()
   // Each call waiting for its reply. The entry decodes the reply into that
   // call's own result type, so nothing undecoded outlives the match.
-  const pending = MutableHashMap.empty<string, (reply: Reply | Lost) => Effect.Effect<void>>()
+  const pending = MutableHashMap.empty<string, (reply: Reply) => Effect.Effect<void>>()
 
   const lose = (cause: unknown) =>
     Effect.gen(function* () {
       const error = new HcLost({ cause })
-      const waiting = Array.from(MutableHashMap.values(pending))
       MutableHashMap.clear(pending)
-      yield* Effect.forEach(waiting, (complete) => complete({ _tag: "Lost", error }), { discard: true })
+      yield* Deferred.fail(lost, error)
       yield* Queue.fail(notes, error)
     })
 
@@ -110,7 +113,7 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
       MutableHashMap.set(pending, id, (reply) =>
         Deferred.completeWith(
           done,
-          Match.valueTags(reply, { Lost: ({ error }) => Effect.fail(error), Failure: (failure) => settle(m, failure), Success: (success) => settle(m, success) }),
+          Match.valueTags(reply, { Failure: (failure) => settle(m, failure), Success: (success) => settle(m, success) }),
         ).pipe(Effect.asVoid),
       )
       const line = yield* S.encodeEffect(m.request)({ jsonrpc: "2.0", id, method: m.name, params }).pipe(
@@ -118,7 +121,10 @@ export const connect = Effect.fnUntraced(function* <N, NI>(path: string, notific
       )
       yield* writer.write(`${line}\n`).pipe(Effect.mapError((cause) => new HcLost({ cause })))
       return yield* Deferred.await(done)
-    }).pipe(Effect.withSpan(`hc.${m.name}`))
+    }).pipe(
+      // A write to a socket that has ended never returns, so the end races the whole call.
+      (calling) => Effect.raceFirst(calling, Deferred.await(lost)),
+      Effect.withSpan(`hc.${m.name}`))
 
   yield* call(hello, { generation: 1 })
   return { call, notifications: Stream.fromQueue(notes) } satisfies Connection<N>
@@ -150,9 +156,5 @@ const Failure = S.Struct({
 /** A reply to a call, with its result not yet decoded. */
 export const Reply = S.Union([Success, Failure])
 export type Reply = typeof Reply.Type
-interface Lost {
-  readonly _tag: "Lost"
-  readonly error: HcLost
-}
 
 const isReply = S.is(S.toType(Reply))
