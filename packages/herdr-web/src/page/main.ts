@@ -12,12 +12,12 @@ import { alertTaps, CheckAlerts, presence, SendTestAlert, SyncAlerts, TurnAlerts
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent, ListRungs, RefreshForeman } from "./commands.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent, RefreshForeman } from "./commands.ts"
 import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, ForemanQueue, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
-import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, openedForeman, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
+import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, toggledColumn, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -38,7 +38,7 @@ import { topBarView, workspaceView } from "./workspace.ts"
 // CONSTANT
 
 const RECONNECT_DELAY = "2 seconds"
-// The queue is read again this often while the Foreman page is open.
+// The queue is read again this often while the Foreman column is on show.
 const QUEUE_INTERVAL = "5 seconds"
 /** Reset countdowns count in minutes. */
 const CLOCK_TICK = "30 seconds"
@@ -100,7 +100,6 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
       Settings: () => [FetchFonts()],
       NewSpace: () => [],
       Worktrees: ({ space }) => [ListWorktrees({ space })],
-      Foreman: () => [ListRungs()],
     }),
   ],
 })
@@ -155,7 +154,6 @@ const respond = (model: Model, message: Message): UpdateReturn =>
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
         Worktrees: () => ({ model }),
-        Foreman: () => ({ model }),
       }),
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
@@ -225,7 +223,6 @@ const respond = (model: Model, message: Message): UpdateReturn =>
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
         Worktrees: () => ({ model }),
-        Foreman: () => ({ model }),
       }),
 
     // Closing a pane ends its program, so it takes a second click.
@@ -300,7 +297,7 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     ClickedWorktrees: ({ space }) => openedWorktrees(model, space),
 
-    ClickedForeman: () => openedForeman(model),
+    ClickedForeman: () => toggledColumn(model),
 
     ReceivedForeman: ({ state }) => ({ model: modifyFields(model, { foreman: () => Option.some(state) }) }),
 
@@ -320,7 +317,7 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     ClickedLaunch: ({ key }) => ({ model: toggledLaunch(model, key) }),
 
-    PickedForemanProject: ({ project }) => ({ model: withPage(model, (page) => ({ ...page, project })) }),
+    ToggledForemanAll: () => ({ model: withPage(model, (page) => ({ ...page, all: !page.all })) }),
 
     ToggledForemanSection: ({ view }) => ({ model: toggledSection(model, view) }),
 
@@ -746,12 +743,12 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
     },
   ),
 
-  // foreman's fleet, while the Foreman page is open: the bridge reads it only
+  // foreman's fleet, while the Foreman column is on show: the bridge reads it only
   // while a page watches.
   foreman: entry(
     { isOpen: S.Boolean },
     {
-      modelToDependencies: (model) => ({ isOpen: model.selection._tag === "Foreman" }),
+      modelToDependencies: (model) => ({ isOpen: model.foremanPage.shown }),
       dependenciesToStream: ({ isOpen }) =>
         isOpen
           ? Effect.gen(function* () {
@@ -771,7 +768,10 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
   foremanQueue: entry(
     { isOpen: S.Boolean, project: S.Option(S.String) },
     {
-      modelToDependencies: (model) => ({ isOpen: model.selection._tag === "Foreman", project: model.foremanPage.project }),
+      modelToDependencies: (model) => {
+        const scope = queueScopeOf(model)
+        return { isOpen: Option.isSome(scope), project: Option.flatten(scope) }
+      },
       dependenciesToStream: ({ isOpen, project }) =>
         isOpen
           ? Effect.gen(function* () {

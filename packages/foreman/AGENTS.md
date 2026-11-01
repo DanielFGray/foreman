@@ -38,7 +38,7 @@ a claim made by hand.
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
 | Who authored this branch? | the task's `by:<rung>` label |
 | Is a reviewer assigned? | the task's `review-by:<rung>` label |
-| Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label |
+| Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels |
 | How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
 | Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
 | Is this task mine to review? | it has a `by:*` label |
@@ -69,12 +69,14 @@ while the operator looks at it. To empty the pipeline without taking on new
 work, turn `author` and `climb` off and leave `review` and `land` on.
 
 An ask is a reading, not a record. `dispatchFrom` plans each tick's dispatches
-and asks together, so an asked task keeps the slot its dispatch would take and
-holds back the work behind it the same way. Landing takes no slot, so land asks
-are not bounded. `foreman approve <id>` answers one with an ordinary one-task
-grant for the asked step, which the next tick takes; nothing else stores
-approvals. `foreman wait --asks` returns when a new ask appears, for a
-coordinator that answers asks while it talks to the operator.
+and asks together. A slot is spent when a step runs, not when it is asked about,
+so an ask holds no slot: review, climb and land asks are listed whatever the free
+count and never hold back a granted task behind them. Author asks are capped at
+`slots`, so an `ask` author step does not list the whole queue. An approved step
+waits for a free slot like any dispatch. `foreman approve <id>`
+answers one with an ordinary one-task grant for the asked step, which the next
+tick takes; nothing else stores approvals. `foreman wait --asks` returns when a
+new ask appears, for a coordinator that answers asks while it talks to the operator.
 
 A grant permits a step. It never reorders the queue: `fill` walks the queue in
 its order and passes over each task no permit covers. Which granted tasks may run
@@ -168,10 +170,16 @@ therefore means the trunk moved afterwards, which no model is stronger at
 avoiding. It returns to the queue at the same rung, with the conflicting paths
 on its log, and the ordinary unfinished count still bounds a task that cannot
 get past it. An agent that merely stopped without
-finishing has said nothing about its model — a crash, a timeout and a usage wall
-all end the same way — so the task stays on the rung and is tried again. The
-count of those endings lives on the task as an `attempt:<rung>:<n>` label,
-because a dispatch days later is exactly what reads it.
+finishing has said nothing about its model — a crash and a timeout end the same
+way — so the task stays on the rung and is tried again. The count of those
+endings lives on the task as an `attempt:<rung>:<n>` label, because a dispatch
+days later is exactly what reads it.
+
+A usage wall is the one stop that says something, and it says it about the
+account, not the model. Each harness's wall text is listed in `src/harness.ts`,
+read from the screen of the stopped author, and matched only at the foot of it.
+A wall writes `walled:<provider>` on the task and no attempt or failure, so the
+next author skips that account. The label clears when the task completes.
 
 ### The operator's checkout is shared, so it is asked about
 

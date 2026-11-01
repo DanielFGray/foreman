@@ -24,8 +24,8 @@ const holdsWork = (directory: string) => run((repository) => repository.holdsWor
 // at $XDG_STATE_HOME/foreman/verify/<project> and nothing makes that first.
 const groundFor = (directory: string) => `${directory}.grounds/verify`;
 
-const merge = (directory: string, branch: string, verify?: string) =>
-  run((repository) => repository.merge(directory, branch, verify, groundFor(directory)));
+const merge = (directory: string, branch: string, verify?: string, message = `Merge ${branch}`) =>
+  run((repository) => repository.merge(directory, branch, verify, groundFor(directory), message));
 
 const setup = (directory: string) => run((repository) => repository.setup(directory));
 
@@ -284,7 +284,7 @@ describe("Repository", () => {
 
     const cut = await Effect.runPromise(
       Repository.use((repository) =>
-        repository.merge(directory, "cut-off", "sleep 30", groundFor(directory)),
+        repository.merge(directory, "cut-off", "sleep 30", groundFor(directory), "Merge cut-off"),
       ).pipe(Effect.timeoutOption("500 millis"), Effect.provide(Repository.Default)),
     );
     expect(cut).toEqual(Option.none());
@@ -362,6 +362,23 @@ describe("Repository", () => {
     // Somebody's own topic branch is never foreman's to read or delete.
     await git("branch", "mine");
     expect(await merge(directory, "foreman/ts-cccccc")).toMatchObject({ _tag: "Merged" });
+
+    // The merge commit is what `git log` shows an operator, so it must name
+    // the task rather than the detached HEAD the proof was made on.
+    await git("branch", "foreman/ts-subject", base);
+    await git("checkout", "-q", "foreman/ts-subject");
+    await writeFile(join(directory, "subject.txt"), "work\n");
+    await git("add", "subject.txt");
+    await git("commit", "-qm", "work for the subject");
+    await git("checkout", "-q", base);
+    const message = "Merge foreman/ts-subject: name the landing merge commit";
+    expect(await merge(directory, "foreman/ts-subject", undefined, message)).toEqual({
+      _tag: "Merged",
+      verified: false,
+    });
+    expect((await git("log", "-1", "--format=%s").text()).trim()).toBe(message);
+    // Left behind, the branch would join the listing the next assertions make.
+    await git("branch", "-D", "foreman/ts-subject");
 
     // The merged branch is the one that used to read as an author who wrote
     // nothing: its commits are in the checkout, so it is not unmerged — and

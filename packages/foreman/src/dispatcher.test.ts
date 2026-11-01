@@ -412,7 +412,7 @@ describe("the policy gate on dispatch", () => {
     ]);
   });
 
-  test("an author ask lists at most the free slots", () => {
+  test("an author ask lists at most the policy's slots", () => {
     const { dispatches, asks } = plan(
       dispatchState(allowing({ author: "ask" }, { slots: 2 }), {
         queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
@@ -423,16 +423,57 @@ describe("the policy gate on dispatch", () => {
     expect(asks.map(({ task }) => task.id)).toEqual(["ts-a", "ts-b"]);
   });
 
-  test("an asked review holds its slot, so the author behind it is one slot short", () => {
+  test("author asks are bounded by slots, not by the free count", () => {
+    const { asks } = plan(
+      dispatchState(allowing({ author: "ask" }, { slots: 2 }), {
+        workers: [worker("working", "ts-w1"), worker("working", "ts-w2")],
+        queue: [ready("ts-a"), ready("ts-b"), ready("ts-c")],
+      }),
+    );
+
+    expect(asks.map(({ task }) => task.id)).toEqual(["ts-a", "ts-b"]);
+  });
+
+  test("with every slot full, a review ask and a climb ask are still listed", () => {
     const { dispatches, asks } = plan(
-      dispatchState(allowing({ review: "ask", author: "on" }, { slots: 2 }), {
-        queue: [ready("ts-a"), ready("ts-b")],
+      dispatchState(allowing({ review: "ask", climb: "ask" }, { slots: 1 }), {
+        workers: [worker("working", "ts-w1")],
+        queue: [ready("ts-c", ["attempt:cheap:1"])],
         review: [active(task("ts-r", ["by:cheap"]), undefined)],
       }),
     );
 
-    expect(planned(dispatches)).toEqual(["author:ts-a"]);
-    expect(asks.map(({ task, step }) => `${step}:${task.id}`)).toEqual(["review:ts-r"]);
+    expect(dispatches).toEqual([]);
+    expect(asks.map(({ task, step }) => `${step}:${task.id}`)).toEqual([
+      "review:ts-r",
+      "climb:ts-c",
+    ]);
+  });
+
+  test("asks ahead in the queue hold no slot from a granted task behind them", () => {
+    const { dispatches, asks } = plan(
+      dispatchState(
+        allowing(
+          { review: "ask", climb: "ask", author: "off" },
+          {
+            slots: 1,
+            grants: [{ scope: "ts-g", steps: ["climb"], remaining: 1, admitted: [] }],
+          },
+        ),
+        {
+          queue: [
+            ready("ts-c1", ["attempt:cheap:1"]),
+            ready("ts-c2", ["attempt:cheap:1"]),
+            ready("ts-g", ["attempt:cheap:1"]),
+          ],
+          review: [active(task("ts-r", ["by:cheap"]), undefined)],
+          scopes: new Map([["ts-g", new Set(["ts-g"])]]),
+        },
+      ),
+    );
+
+    expect(planned(dispatches)).toEqual(["author:ts-g"]);
+    expect(asks.map(({ task }) => task.id)).toEqual(["ts-r", "ts-c1", "ts-c2"]);
   });
 });
 

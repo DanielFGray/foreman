@@ -287,6 +287,26 @@ export const providersOf = (ladder: Ladder): ReadonlyArray<string> => [
 ];
 
 /**
+ * Every rung on any of the named accounts, metered or not.
+ *
+ * A stop on an account's usage wall is the account's own text, not its pool's,
+ * so a promotional rung on that account is kept off too. Walls are per task, so
+ * these rungs are removed from that task's author choice only.
+ */
+export const rungsOnAccounts = (
+  ladder: Ladder,
+  providers: ReadonlyArray<string>,
+): ReadonlySet<string> =>
+  new Set(
+    ladder
+      .filter((rung) => {
+        const provider = providerOf(rung);
+        return provider !== undefined && providers.includes(provider);
+      })
+      .map((rung) => rung.name),
+  );
+
+/**
  * The rungs a spent account stops: the dispatchable ones on it whose room that
  * allowance describes.
  *

@@ -330,6 +330,19 @@ export function hcFleetOver() {
             yield* call(S.Unknown, "say", "terminal.send", { terminal: target.address, text });
           }),
 
+        screen: (worker: Worker, role: AgentRole, lines: number) =>
+          Effect.gen(function* () {
+            const target = (yield* ofTask(worker.task)).find(
+              (terminal) => terminal.labels[ROLE] === role,
+            );
+            if (!target) return Option.none<string>();
+            const read = yield* call(ScreenText, "screen", "terminal.read", {
+              terminal: target.address,
+              lines,
+            });
+            return Option.some(read.text);
+          }),
+
         stop: (worker: Worker, role: AgentRole) =>
           ofTask(worker.task).pipe(
             Effect.flatMap((all) =>
@@ -568,6 +581,9 @@ const WaitError = S.Struct({
 
 export const WaitReply = S.Union([TurnWait, WaitError]);
 export type WaitReply = S.Schema.Type<typeof WaitReply>;
+
+/** What `terminal.read` returns: the screen and history above it, as one text. */
+const ScreenText = S.Struct({ text: S.String });
 
 const Reply = S.Struct({
   result: S.optional(S.Unknown),

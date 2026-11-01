@@ -125,6 +125,8 @@ export const trialFor = (input: {
   readonly provider: string | undefined;
   readonly role: "author" | "review";
   readonly phase: TaskPhase;
+  /** What the row says about the run when the phase alone does not, such as a usage wall. */
+  readonly notes?: string | undefined;
 }): Trial | undefined => {
   if (!closes(input.phase)) return undefined;
   const research = isResearch(input.task);
@@ -143,7 +145,7 @@ export const trialFor = (input: {
     outcome: outcomeOf(input.phase, research),
     source: "live",
     evidence: input.branch,
-    notes: input.phase,
+    notes: input.notes ?? input.phase,
     // `||`, not `??`: the table starts sizes at 1, so a `size:0` label reads as none.
     size: countOf(input.task, SIZE) || null,
     rounds: input.role === "author" ? (countOf(input.task, ROUNDS) ?? null) : null,

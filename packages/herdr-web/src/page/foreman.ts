@@ -1,9 +1,10 @@
-// The Foreman page: foreman's fleet as the bridge last read it, the queue as
-// foreman ranks it, the policy that says what the fleet may do by itself, and
-// each row's one-shot commands as buttons. The page keeps nothing of foreman's: every button runs a
+// The Foreman column: foreman's fleet as the bridge last read it, beside the
+// selected space, the queue as foreman ranks it for that space's project, the
+// policy that says what the fleet may do by itself, and each row's one-shot
+// commands as buttons. The page keeps nothing of foreman's: every button runs a
 // foreman command through the bridge, and the reading that follows shows what
 // it did.
-import { Array, Option, Result, Schema as S } from "effect"
+import { Array, Option, Record, Result, Schema as S } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import {
@@ -20,9 +21,9 @@ import {
   type ForemanState,
   type ForemanView,
 } from "../shared/Foreman.ts"
-import { ListRungs, RunForeman, SaveSelection } from "./commands.ts"
-import { ForemanQueue, type ForemanPage, Message, type Model, RungList, Selection, type UpdateReturn } from "./model.ts"
-import { selected } from "./selection.ts"
+import { ListRungs, RunForeman } from "./commands.ts"
+import { ForemanQueue, type ForemanPage, Message, type Model, RungList, type UpdateReturn } from "./model.ts"
+import { lastFleet, selectedTab } from "./selection.ts"
 import { ago } from "./usage.ts"
 
 /** The queue runs to hundreds of tasks and landed is history, so both start folded to their heading. */
@@ -32,15 +33,52 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   armed: Option.none(),
   busy: [],
   refusal: Option.none(),
-  project: Option.none(),
+  shown: false,
+  all: false,
   folded: ["queue", "landed"],
   queue: ForemanQueue.Unread(),
 }
 
-/** Opens the page and reads the ladder's rungs again; the page's own choices stay. */
-export const openedForeman = (model: Model): UpdateReturn => {
-  const next = selected(withPage(modifyFields(model, { isFleetFolded: () => true }), (page) => ({ ...page, rungs: RungList.Loading() })), Selection.Foreman())
-  return { model: next, commands: [SaveSelection({ selection: next.selection }), ListRungs()] }
+/**
+ * Shows or hides the column. Showing it reads the ladder's rungs again, and
+ * folds the sidebar, as the other rows that open a page do; the page's own
+ * choices stay.
+ */
+export const toggledColumn = (model: Model): UpdateReturn => {
+  const shown = !model.foremanPage.shown
+  if (!shown) return { model: withPage(model, (page) => ({ ...page, shown })) }
+  return {
+    model: withPage(modifyFields(model, { isFleetFolded: () => true }), (page) => ({ ...page, shown, rungs: RungList.Loading() })),
+    commands: [ListRungs()],
+  }
+}
+
+/** The project of the space the selected tab is in: none when no space holds it, or when git says it is in no project. */
+export const selectedProject = (model: Model): Option.Option<string> =>
+  Option.flatMap(selectedTab(model), ({ space }) =>
+    Option.flatMap(lastFleet(model.bridge), (fleet) => Option.flatMap(Record.get(fleet.git, space.id), (git) => git.project)),
+  )
+
+/**
+ * Where the queue is read from: none while the column is hidden or the space is
+ * in no project, every open project for `all`, else the selected space's project.
+ * Foreman reads no project as every open one, so no read is the only way to show none.
+ */
+export const queueScopeOf = (model: Model): Option.Option<Option.Option<string>> => {
+  if (!model.foremanPage.shown) return Option.none()
+  if (model.foremanPage.all) return Option.some(Option.none())
+  return Option.map(selectedProject(model), (project) => Option.some(project))
+}
+
+/**
+ * The rows the column shows: all of them for `all`, else the rows of the selected
+ * space's project and the fleet's own rows, which have no project. A row of
+ * another project never shows, even in a read that has not caught up with a switch.
+ */
+export const visibleRows = (model: Model, rows: ReadonlyArray<ForemanRow>): ReadonlyArray<ForemanRow> => {
+  if (model.foremanPage.all) return rows
+  const project = selectedProject(model)
+  return Array.filter(rows, (row) => Option.match(row.project, { onNone: () => true, onSome: (own) => Option.contains(project, own) }))
 }
 
 /**
@@ -72,29 +110,51 @@ export const toggledSection = (model: Model, view: ForemanView): Model =>
     folded: Array.contains(page.folded, view) ? Array.filter(page.folded, (other) => other !== view) : [...page.folded, view],
   }))
 
-/** The page: a heading that says what the dispatcher is doing, the policy, and the fleet's and the queue's rows by section. */
-export const foremanView = (model: Model, h: HtmlBuilder<Message>): Html => {
+/** The column beside the workspace, when it is on show: a heading that says what the dispatcher is doing, the policy, and the rows of the scope by section. */
+export const foremanColumnView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const page = model.foremanPage
-  return h.section(
-    [h.Class("workspace settings foreman")],
-    Option.match(model.foreman, {
-      onNone: () => [h.h2([], ["Foreman"]), h.p([h.Class("note")], ["Asking the bridge…"])],
-      onSome: (state) => [
-        headingView(state, model.now, h),
-        ...Option.match(failureOf(state), { onNone: () => [], onSome: (detail) => [h.p([h.Class("note error")], [`The dispatcher failed and starts again shortly: ${detail}`])] }),
-        ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
-        ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),
-        ...ForemanQueue.match(page.queue, {
-          Unread: () => [],
-          Listed: () => [],
-          Unlisted: ({ reason }) => [h.p([h.Class("note error")], [reason])],
-        }),
-        ...Option.match(state.reading, {
-          onNone: () => [h.p([h.Class("note")], ["Waiting for the dispatcher's first reading…"])],
-          onSome: (reading) => [policyView(reading, page, h), projectsView(reading, page, h), ...sectionsView([...reading.rows, ...queueRows(page.queue)], page, h)],
-        }),
-      ],
-    }),
+  if (!page.shown) return []
+  return [
+    h.aside(
+      [h.Class("foreman foreman-column"), h.AriaLabel("Foreman")],
+      Option.match(model.foreman, {
+        onNone: () => [h.h2([], ["Foreman"]), h.p([h.Class("note")], ["Asking the bridge…"])],
+        onSome: (state) => [
+          headingView(state, model.now, h),
+          scopeView(model, h),
+          ...Option.match(failureOf(state), { onNone: () => [], onSome: (detail) => [h.p([h.Class("note error")], [`The dispatcher failed and starts again shortly: ${detail}`])] }),
+          ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
+          ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),
+          ...(Option.isSome(queueScopeOf(model))
+            ? ForemanQueue.match(page.queue, {
+                Unread: () => [],
+                Listed: () => [],
+                Unlisted: ({ reason }) => [h.p([h.Class("note error")], [reason])],
+              })
+            : []),
+          ...Option.match(state.reading, {
+            onNone: () => [h.p([h.Class("note")], ["Waiting for the dispatcher's first reading…"])],
+            onSome: (reading) => [policyView(reading, page, h), ...sectionsView(visibleRows(model, [...reading.rows, ...queueRows(page.queue)]), page, h)],
+          }),
+        ],
+      }),
+    ),
+  ]
+}
+
+/** Says which rows show: every project's, or the selected space's project, with the fleet's own rows. */
+const scopeView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const { all } = model.foremanPage
+  const name = all ? "all projects" : Option.match(selectedProject(model), { onNone: () => "no project", onSome: (project) => project })
+  return h.div(
+    [h.Class("foreman-scope")],
+    [
+      h.button(
+        [h.Type("button"), h.Class(all ? "chip on" : "chip"), h.AriaPressed(all ? "true" : "false"), h.OnClick(Message.ToggledForemanAll())],
+        ["All projects"],
+      ),
+      h.span([h.Class("note"), h.AriaLabel("showing")], [name]),
+    ],
   )
 }
 
@@ -217,22 +277,10 @@ const slotsView = (policy: ForemanPolicy, page: ForemanPage, h: HtmlBuilder<Mess
     ],
   )
 
-const projectsView = ({ projects }: ForemanReading, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
-  const chip = (text: string, project: Option.Option<string>) => {
-    const isOn = Option.getOrNull(page.project) === Option.getOrNull(project)
-    return h.button([h.Type("button"), h.Class(isOn ? "chip on" : "chip"), h.AriaPressed(isOn ? "true" : "false"), h.OnClick(Message.PickedForemanProject({ project }))], [text])
-  }
-  return h.div([h.Class("foreman-projects"), h.AriaLabel("Projects")], [chip("All projects", Option.none()), ...Array.map(projects, ({ name }) => chip(name, Option.some(name)))])
-}
-
-// A row with no project is the fleet's own, such as an account, and shows under every project.
+// The rows arrive already scoped by `visibleRows`.
 const sectionsView = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
-  const shown = Option.match(page.project, {
-    onNone: () => rows,
-    onSome: (project) => Array.filter(rows, (row) => Option.match(row.project, { onNone: () => true, onSome: (own) => own === project })),
-  })
   const sections = Array.filterMap(SECTIONS, ([view, title]) => {
-    const mine = Array.filter(shown, (row) => row.view === view)
+    const mine = Array.filter(rows, (row) => row.view === view)
     return Array.isReadonlyArrayNonEmpty(mine) ? Result.succeed(sectionView(view, title, mine, page, h)) : Result.failVoid
   })
   return Array.isReadonlyArrayNonEmpty(sections) ? sections : [h.p([h.Class("note")], ["Nothing queued, working or waiting."])]
