@@ -778,6 +778,22 @@ describe("a fleet that is not running", () => {
     expect(policyText()).not.toBe(before);
   });
 
+  test("a running tick releases a stale claim only when foreman's agent made it", async () => {
+    usePolicy(everything);
+    const old = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const ours = { ...item("ts-ours", "in_progress", ["by:cheap"]), last_activity_at: old };
+    const byHand = { ...item("ts-by-hand", "in_progress", []), last_activity_at: old };
+    const world = new World(ours, byHand);
+
+    await tick(world);
+
+    const released = world.logs
+      .filter(([, line]) => line.startsWith("foreman: claim released"))
+      .map(([id]) => id);
+    expect(released).toEqual([ours.id]);
+    expect(world.tasks.get(byHand.id)?.status).toBe("in_progress");
+  });
+
   test("still publishes its reading", async () => {
     usePolicy({ ...everything, paused: true });
     const world = busy();

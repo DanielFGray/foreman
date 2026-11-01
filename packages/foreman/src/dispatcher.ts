@@ -1256,11 +1256,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Returns claims that nobody is working on any more.
      *
-     * Ownership decides this, not age: a task with a live workspace is being
-     * worked on by definition. Age only guards the claims foreman does not
-     * own, so a claim made by hand in another pane is not stolen from someone
-     * who is still typing — and a claim awaiting an operator's decision is
-     * left alone until it goes properly stale.
+     * Only a claim foreman's own agent made, which its `by:*` label records,
+     * and only once no agent of the task is live and it has gone stale. A
+     * claim made by hand or by another session is that person's to give up:
+     * foreman cannot tell an abandoned one from one whose owner is away.
      */
     const reclaim = (current: Interpretation) =>
       Effect.gen(function* () {
@@ -1269,7 +1268,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
         yield* Effect.forEach(
           [
-            ...current.working,
+            ...current.working.filter(({ task }) => authoredBy(task) !== undefined),
             ...current.review.filter(({ task }) => reviewedBy(task) !== undefined),
           ].filter(
             ({ task, worker }) =>
