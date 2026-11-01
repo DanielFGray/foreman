@@ -73,10 +73,10 @@ and asks together. A slot is spent when a step runs, not when it is asked about,
 so an ask holds no slot: review, climb and land asks are listed whatever the free
 count and never hold back a granted task behind them. Author asks are capped at
 `slots`, so an `ask` author step does not list the whole queue. An approved step
-waits for a free slot like any dispatch. `foreman approve <id>` answers one with an ordinary one-task
-grant for the asked step, which the next tick takes; nothing else stores
-approvals. `foreman wait --asks` returns when a new ask appears, for a
-coordinator that answers asks while it talks to the operator.
+waits for a free slot like any dispatch. `foreman approve <id>`
+answers one with an ordinary one-task grant for the asked step, which the next
+tick takes; nothing else stores approvals. `foreman wait --asks` returns when a
+new ask appears, for a coordinator that answers asks while it talks to the operator.
 
 A grant permits a step. It never reorders the queue: `fill` walks the queue in
 its order and passes over each task no permit covers. Which granted tasks may run
