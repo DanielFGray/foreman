@@ -208,7 +208,7 @@ const sectionView = <M>({ title, facts, windows }: UsageSection, now: number, h:
   )
 
 /** How long ago: "less than a minute", else a countdown of whole minutes. */
-const ago = (at: number, now: number) => {
+export const ago = (at: number, now: number) => {
   const seconds = Math.floor((now - at) / 1000)
   return seconds < 60 ? "less than a minute" : countdown((seconds - (seconds % 60)) * 1000)
 }

@@ -12,6 +12,7 @@ import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./s
 import { settingsView } from "./settingsView.ts"
 import { spaceFormView, spaceHeadView } from "./spaces.ts"
 import { worktreesView } from "./worktrees.ts"
+import { foremanView } from "./foreman.ts"
 import { statusMark } from "./status.ts"
 
 /**
@@ -50,6 +51,7 @@ export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Settings: () => settingsView(model, h),
     NewSpace: () => spaceFormView(model, h),
     Worktrees: ({ space }) => worktreesView(space, model, h),
+    Foreman: () => foremanView(model, h),
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {

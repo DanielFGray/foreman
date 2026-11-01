@@ -41,6 +41,7 @@ export const selectedTab = (model: Model): Option.Option<Readonly<{ space: Space
     Settings: () => Option.none(),
     NewSpace: () => Option.none(),
     Worktrees: () => Option.none(),
+    Foreman: () => Option.none(),
   })
 
 /** The terminals on show, in the layout's reading order. */
@@ -52,6 +53,7 @@ export const shownTerminals = (model: Model): ReadonlyArray<string> =>
     Settings: () => [],
     NewSpace: () => [],
     Worktrees: () => [],
+    Foreman: () => [],
   })
 
 /** The terminal the prompt and keys go to: the chosen pane while it is on show, else the first one. */
@@ -68,6 +70,7 @@ export const maybeFocus = (model: Model) => {
     Settings: () => Option.none<string>(),
     NewSpace: () => Option.none<string>(),
     Worktrees: () => Option.none<string>(),
+    Foreman: () => Option.none<string>(),
   })
 }
 

@@ -4,6 +4,7 @@ import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
+import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
 import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
@@ -328,4 +329,36 @@ export const WriteInputBox = Command.define("WriteInputBox", {
       const box = yield* client.writeInputBox({ terminal: address, expected, text })
       return Message.WroteInputBox({ address, text, box })
     }).pipe(reportFailure((reason) => Message.FailedWriteInputBox({ address, reason }))),
+})
+
+export const RunForeman = Command.define("RunForeman", {
+  args: { command: ForemanCommand },
+  messages: [Message.SucceededForemanCommand, Message.FailedForemanCommand],
+  execute: ({ command }) => {
+    const line = argvOf(command).join(" ")
+    return Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.runForeman({ command })
+      return Message.SucceededForemanCommand({ line })
+    }).pipe(reportFailure((reason) => Message.FailedForemanCommand({ line, reason })))
+  },
+})
+
+export const ListRungs = Command.define("ListRungs", {
+  messages: [Message.ReceivedRungs, Message.FailedRungs],
+  execute: Effect.gen(function* () {
+    const client = yield* BridgeClient
+    return Message.ReceivedRungs({ rungs: yield* client.foremanRungs() })
+  }).pipe(reportFailure((reason) => Message.FailedRungs({ reason }))),
+})
+
+export const RefreshForeman = Command.define("RefreshForeman", {
+  messages: [Message.CompletedRefreshForeman],
+  execute: Effect.gen(function* () {
+    const client = yield* BridgeClient
+    yield* client.refreshForeman()
+  }).pipe(
+    Effect.catch((error) => Effect.logWarning("the bridge did not read foreman again", failureReason(error))),
+    Effect.as(Message.CompletedRefreshForeman()),
+  ),
 })

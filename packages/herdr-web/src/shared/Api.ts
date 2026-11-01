@@ -5,6 +5,7 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
+import { ForemanCommand, ForemanState } from "./Foreman.ts"
 import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -14,7 +15,8 @@ import { RepoCheckouts } from "./Worktree.ts"
 /**
  * A call that failed. `kind` is hc's error kind, `lost` or `protocol` for hc
  * itself, `transcript` when the agent's conversation cannot be read, `herdr-app`
- * when herdr-app's layout refuses the change, or `git` when git refuses.
+ * when herdr-app's layout refuses the change, `git` when git refuses, or
+ * `foreman` when foreman refuses a command or does not run.
  */
 export class BridgeError extends S.TaggedError<BridgeError, { readonly brand: unique symbol }>()("BridgeError", {
   kind: S.String,
@@ -177,6 +179,15 @@ export const Api = RpcGroup.make(
   /** Reads one provider's usage, or every one's (none), now. */
   Rpc.make("refreshUsage", { payload: { provider: S.OptionFromNullOr(ProviderId) } }),
   /** The public half of the bridge's push key, which a browser subscribes with. */
+  /** What the bridge knows of foreman's fleet, now and after each change. */
+  Rpc.make("foreman", { success: ForemanState, stream: true }),
+  /** Runs one foreman command; the fleet as it then reads follows on the `foreman` stream. */
+  Rpc.make("runForeman", { payload: { command: ForemanCommand }, error: BridgeError }),
+  /** Reads the fleet again, without waiting for the daemon's next pass. */
+  Rpc.make("refreshForeman", {}),
+  /** The rungs a queued task can be launched on. */
+  Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),
+
   Rpc.make("pushKey", { success: S.String, error: BridgeError }),
   /** Alerts the device behind the subscription for these events, from now on. */
   Rpc.make("subscribePush", { payload: { subscription: PushSubscription, events: S.Array(AlertEvent) }, error: BridgeError }),

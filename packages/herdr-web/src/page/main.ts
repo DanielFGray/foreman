@@ -12,11 +12,12 @@ import { alertTaps, CheckAlerts, presence, SendTestAlert, SyncAlerts, TurnAlerts
 import { clampSidebarWidth, keyedSidebarWidth } from "./sidebarWidth.ts"
 import { NO_MODIFIERS, withModifiers } from "./keys.ts"
 import { usageBarView } from "./usage.ts"
-import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent } from "./commands.ts"
-import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
+import { FetchFonts, MoveSpace, PressKeys, RefreshUsage, SaveSelection, SaveSettings, SaveSidebarWidth, SaveZoom, SaveViewPicks, SplitPane, ClosePane, NewTab, CloseTab, FocusField, ListWorktrees, PickModel, SaveRecent, ListRungs, RefreshForeman } from "./commands.ts"
+import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conversation, Delivery, FontCatalog, KeySheet, LinkSheet, CommandList, Message, type Flags, type Model, Palette, Pairing, PaneAction, RungList, Selection, SpaceDrag, type UpdateReturn, View } from "./model.ts"
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
+import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, openedForeman, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -68,6 +69,8 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     spaceDrag: SpaceDrag.Idle(),
     spaceForm: EMPTY_SPACE_FORM,
     worktreePage: EMPTY_WORKTREE_PAGE,
+    foreman: Option.none(),
+    foremanPage: EMPTY_FOREMAN_PAGE,
     palette: Palette.Closed(),
     recent,
     settings,
@@ -95,6 +98,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
       Settings: () => [FetchFonts()],
       NewSpace: () => [],
       Worktrees: ({ space }) => [ListWorktrees({ space })],
+      Foreman: () => [ListRungs()],
     }),
   ],
 })
@@ -149,6 +153,7 @@ const respond = (model: Model, message: Message): UpdateReturn =>
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
         Worktrees: () => ({ model }),
+        Foreman: () => ({ model }),
       }),
 
     // A terminal view attaches when its pane appears, and lets go when it leaves.
@@ -218,6 +223,7 @@ const respond = (model: Model, message: Message): UpdateReturn =>
         Settings: () => ({ model }),
         NewSpace: () => ({ model }),
         Worktrees: () => ({ model }),
+        Foreman: () => ({ model }),
       }),
 
     // Closing a pane ends its program, so it takes a second click.
@@ -291,6 +297,30 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     FailedNewSpace: ({ reason }) => ({ model: refusedSpace(model, reason) }),
 
     ClickedWorktrees: ({ space }) => openedWorktrees(model, space),
+
+    ClickedForeman: () => openedForeman(model),
+
+    ReceivedForeman: ({ state }) => ({ model: modifyFields(model, { foreman: () => Option.some(state) }) }),
+
+    ReceivedRungs: ({ rungs }) => ({ model: withPage(model, (page) => ({ ...page, rungs: RungList.Listed({ rungs }) })) }),
+
+    FailedRungs: ({ reason }) => ({ model: withPage(model, (page) => ({ ...page, rungs: RungList.Unlisted({ reason }) })) }),
+
+    ClickedForemanCommand: ({ command }) => clickedForemanCommand(model, command),
+
+    SucceededForemanCommand: ({ line }) => ({ model: finishedForemanCommand(model, line, Option.none()) }),
+
+    FailedForemanCommand: ({ line, reason }) => ({ model: finishedForemanCommand(model, line, Option.some(reason)) }),
+
+    ClickedLaunch: ({ key }) => ({ model: toggledLaunch(model, key) }),
+
+    PickedForemanProject: ({ project }) => ({ model: withPage(model, (page) => ({ ...page, project })) }),
+
+    ToggledForemanSection: ({ view }) => ({ model: toggledSection(model, view) }),
+
+    ClickedRefreshForeman: () => ({ model, commands: [RefreshForeman()] }),
+
+    CompletedRefreshForeman: () => ({ model }),
 
     ReceivedWorktrees: ({ list }) => ({ model: listedWorktrees(model, CheckoutList.Listed({ list })) }),
 
@@ -707,6 +737,26 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
             Stream.catchCause(() => Stream.empty),
           )
         }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY))),
+    },
+  ),
+
+  // foreman's fleet, while the Foreman page is open: the bridge reads it only
+  // while a page watches.
+  foreman: entry(
+    { isOpen: S.Boolean },
+    {
+      modelToDependencies: (model) => ({ isOpen: model.selection._tag === "Foreman" }),
+      dependenciesToStream: ({ isOpen }) =>
+        isOpen
+          ? Effect.gen(function* () {
+              const client = yield* BridgeClient
+              return client.foreman().pipe(
+                Stream.map((state) => Message.ReceivedForeman({ state })),
+                Stream.tapCause((cause) => Effect.logWarning("the bridge's foreman watch failed", cause)),
+                Stream.catchCause(() => Stream.empty),
+              )
+            }).pipe(Stream.unwrap, Stream.repeat(Schedule.spaced(RECONNECT_DELAY)))
+          : Stream.empty,
     },
   ),
 

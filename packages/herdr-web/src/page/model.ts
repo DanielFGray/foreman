@@ -10,6 +10,7 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
+import { ForemanCommand, ForemanState, ForemanView } from "../shared/Foreman.ts"
 import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -166,6 +167,32 @@ export type WorktreeField = typeof WorktreeField.Type
 export const WorktreePage = S.Struct({ list: CheckoutList, branch: S.String, program: S.String, action: CheckoutAction })
 export type WorktreePage = typeof WorktreePage.Type
 
+/** The rungs of foreman's ladder that a queued task can be launched on. */
+export const RungList = defineTaggedUnion({
+  Loading: {},
+  Listed: { rungs: S.Array(S.String) },
+  Unlisted: { reason: S.String },
+})
+export type RungList = typeof RungList.Type
+
+/** The Foreman page's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
+export const ForemanPage = S.Struct({
+  rungs: RungList,
+  /** The queued task whose rung picker is open. */
+  launching: S.Option(S.String),
+  /** A command that ends an agent or gives up a claim, waiting for its second click. */
+  armed: S.Option(S.String),
+  /** The commands under way. */
+  busy: S.Array(S.String),
+  /** Why the last command failed. */
+  refusal: S.Option(S.String),
+  /** The project whose rows show; none shows every project's. */
+  project: S.Option(S.String),
+  /** The sections folded to their heading. */
+  folded: S.Array(ForemanView),
+})
+export type ForemanPage = typeof ForemanPage.Type
+
 /** Where the new-space form's last try stands. */
 export const SpaceFormState = defineTaggedUnion({
   Editing: {},
@@ -225,6 +252,8 @@ export const Selection = defineTaggedUnion({
   NewSpace: {},
   /** The checkouts of the repository a space is in, in place of a tab. */
   Worktrees: { space: S.String },
+  /** foreman's fleet, its policy and its commands, in place of a tab. */
+  Foreman: {},
 })
 export type Selection = typeof Selection.Type
 
@@ -333,6 +362,9 @@ export const Model = S.Struct({
   spaceDrag: SpaceDrag,
   spaceForm: SpaceForm,
   worktreePage: WorktreePage,
+  /** What the bridge knows of foreman's fleet; none before the Foreman page first opens. */
+  foreman: S.Option(ForemanState),
+  foremanPage: ForemanPage,
   palette: Palette,
   /** The panes opened last, newest first, for the palette's Recent group. */
   recent: S.Array(S.String),
@@ -445,6 +477,18 @@ export const Message = defineMessageUnion({
   SucceededRemoveCheckout: {},
   SucceededCheckoutSpace: { tab: S.String },
   FailedCheckoutAction: { reason: S.String },
+  ClickedForeman: {},
+  ReceivedForeman: { state: ForemanState },
+  ReceivedRungs: { rungs: S.Array(S.String) },
+  FailedRungs: { reason: S.String },
+  ClickedForemanCommand: { command: ForemanCommand },
+  SucceededForemanCommand: { line: S.String },
+  FailedForemanCommand: { line: S.String, reason: S.String },
+  ClickedLaunch: { key: S.String },
+  PickedForemanProject: { project: S.Option(S.String) },
+  ToggledForemanSection: { view: ForemanView },
+  ClickedRefreshForeman: {},
+  CompletedRefreshForeman: {},
   FailedPaneAction: { reason: S.String },
   PressedSpace: { space: S.String },
   EnteredSpace: { space: S.String },

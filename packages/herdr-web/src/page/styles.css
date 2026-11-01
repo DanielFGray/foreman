@@ -539,6 +539,35 @@ p.usage-error { margin: 0; }
   .checkout { grid-template-columns: minmax(0, 1fr); }
 }
 
+.foreman { display: flex; flex-direction: column; gap: 10px; }
+.foreman > * { max-width: 48rem; }
+.foreman-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.foreman-heading .note { margin: 0; flex: 1; }
+.foreman-badge { padding: 0 6px; border: 1px solid var(--surface); border-radius: 4px; font-size: 12px; color: var(--subtext); }
+.foreman-badge.live { color: var(--green); border-color: var(--green); }
+.foreman-badge.paused { color: var(--yellow); border-color: var(--yellow); }
+.foreman-policy { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--surface); }
+.foreman-controls, .foreman-projects, .foreman-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+/* One group, so a narrow window wraps the agent limit whole. */
+.foreman-slots { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.foreman-slots .note { margin: 0; }
+.foreman-grants { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--subtext); }
+.foreman-grants li { display: flex; align-items: center; gap: 8px; }
+.foreman .chip:disabled { opacity: 0.6; cursor: default; }
+.foreman .chip.armed { border-color: var(--red); color: var(--red); }
+.foreman-section h3 { margin: 0; font-size: 12px; font-weight: normal; text-transform: uppercase; letter-spacing: 0.04em; }
+.foreman-section-toggle { display: flex; gap: 8px; padding: 4px 0; border: 0; background: transparent; color: var(--subtext); font: inherit; letter-spacing: inherit; cursor: pointer; }
+.foreman-section-toggle::before { content: "▸"; }
+.foreman-section-toggle[aria-expanded="true"]::before { content: "▾"; }
+.foreman-section.attention .foreman-section-toggle { color: var(--red); }
+.foreman-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.foreman-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px solid var(--surface); border-radius: 6px; }
+.foreman-row-head { display: flex; gap: 8px; min-width: 0; }
+.foreman-key { flex-shrink: 0; color: var(--subtext); font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; }
+.foreman-label { min-width: 0; overflow-wrap: anywhere; }
+/* A failed landing lists every file it touched; three lines say what went wrong, and the title holds the rest. */
+.foreman-detail { color: var(--subtext); font-size: 12px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+
 .model-tag {
   flex-shrink: 0;
   background: none;
