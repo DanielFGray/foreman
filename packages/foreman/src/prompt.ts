@@ -41,7 +41,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       );
 
     return {
-      author: (task: ReadyTask, worktree: string, repository: string, verificationSkill?: string) =>
+      author: (task: ReadyTask, worktree: string, repository: string) =>
         render("author", {
           task: task.id,
           title: task.title,
@@ -49,7 +49,6 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
           worktree,
           repository,
           branch: labelFor(task.id),
-          verificationSkill: verificationSkillGuidance(verificationSkill),
         }),
 
       /**
@@ -85,7 +84,6 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
         repository: string,
         base: string,
         verify: string | undefined,
-        verificationSkill?: string,
       ) =>
         render("review", {
           task: item.id,
@@ -97,8 +95,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
           base,
           verification: verify
             ? `Foreman runs \`${verify}\` in ${repository} immediately before and after it merges this branch, and undoes a merge that turns a green checkout red. That is the mechanical gate and it does not need your help: do not spend a full suite run repeating it. Several agents share this machine, and a redundant run starves the ones doing new work.`
-            : `Foreman lands this branch on git's exit code alone: ${item.project} names no verification command. The full run is yours — nothing downstream will do it.`,
-          verificationSkill: verificationSkillGuidance(verificationSkill),
+            : `Foreman lands this branch on git's exit code alone: ${item.project} keeps no \`scripts/verify.sh\`. The full run is yours — nothing downstream will do it.`,
         }),
 
       diagnose: (item: Item, worktree: string, repository: string, intent: DiagnosticIntent) =>
@@ -120,11 +117,6 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
 }) {
   static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
 }
-
-const verificationSkillGuidance = (skill: string | undefined): string =>
-  skill === undefined
-    ? "No project-local verification skill is configured. Prove the behavior with the project's real user-facing interface and record the evidence in the task log."
-    : `Read the project-local verification skill at \`${skill}\` before planning. Use its real user-facing drive and evidence procedure, and record the result in \`prog log\`.`;
 
 /**
  * Jinja-style delimiters rather than lodash's ERB defaults. Prompts are prose

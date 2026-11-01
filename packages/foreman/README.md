@@ -317,11 +317,8 @@ that reproduces is the branch's, and `verify` then runs a second time on the
 pre-merge tree to establish whether it was red already — only after a confirmed
 failure, since that is the only time the question is live. A project that was
 already red still takes the merge, because one broken test would otherwise hold
-every task in the fleet. Name the command per project:
-
-```jsonc
-"projects": ["fibrae", { "name": "foreman", "verify": "bun test" }]
-```
+every task in the fleet. A project names the command by keeping an executable
+`scripts/verify.sh`; without one, a landing rests on the merge alone.
 
 Who reviews whom is derived, not configured: the reviewer is the rung above the
 one that wrote the code. Cheap work gets expensive eyes; the top rung reviews
@@ -457,7 +454,7 @@ foreman itself would have written.
 
 ## The queue
 
-One global `prog ready`, restricted to the allowlisted projects after prog has
+One global `prog ready`, restricted to the open spaces' projects after prog has
 applied dependency gates. Tasks are highest priority first, with ties broken by
 rotating between projects — otherwise one project holding a hundred priority-1
 tasks would own the entire fleet until it ran dry.
@@ -480,13 +477,6 @@ strictly.
 
 ```jsonc
 {
-  // An object can add a project verification command and a user-facing
-  // verification skill. Relative skill paths start at the project root.
-  "projects": [
-    "fibrae",
-    { "name": "pg-sourcerer", "verify": "bun test", "verificationSkill": ".cursor/skills/verify-pg-sourcerer/SKILL.md" },
-    "tsdoctor",
-  ],
   "slots": 3,
   // How many attempts one rung gets before an unfinished task climbs to the
   // next. A crash, a timeout or a usage wall says nothing about the model, so
@@ -499,14 +489,12 @@ strictly.
 }
 ```
 
-There is no path override: a name that does not match its directory is a naming
-mistake, and `prog projects rename` is the fix. Startup fails loudly on a project
-that does not resolve, because a queue that silently drops half its work looks
-exactly like a queue that is empty.
-
-`verificationSkill` points to a project-local skill that explains how to drive
-user-visible behavior and capture evidence. Foreman gives the path to authors and
-reviewers. Foreman still runs `verify` as the mechanical landing gate.
+The projects are not configured. Foreman works in every herdr-app space you
+have open: each space's folder resolves to the git checkout it sits in, and the
+checkout's folder name is the prog project. Open a space to enroll a project;
+close it and the project takes no new work, while what is already running there
+settles and lands. Two checkouts with one folder name are held, named on the
+dashboard, until you close one of their spaces.
 
 ## The log
 

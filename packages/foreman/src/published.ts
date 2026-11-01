@@ -54,20 +54,13 @@ export const Published = S.Struct({
 export type Published = typeof Published.Type;
 
 /** Every row of every view, with the commands each takes. */
-export const publishedOf = (
-  state: FleetState,
-  daemon: boolean,
-  projects: ReadonlyArray<{
-    readonly name: string;
-    readonly directory: string;
-  }>,
-): Published => ({
+export const publishedOf = (state: FleetState, daemon: boolean): Published => ({
   version: PUBLISHED_VERSION,
   daemon,
   policy: state.policy,
   policyError: state.policyError ?? null,
   observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
-  projects: projects.map(({ name, directory }) => ({ name, directory })),
+  projects: state.projects.map(({ name, directory }) => ({ name, directory })),
   rows: VIEWS.flatMap((view) =>
     rowsForView(view, state).map((row) => ({
       view,

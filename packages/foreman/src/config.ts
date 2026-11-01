@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun";
-import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, Layer, Path, Schema } from "effect";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
 import { readLadder, RegistryError, registryPath } from "./registry.ts";
 
@@ -13,14 +13,12 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * anywhere later: one value of each setting exists, and no code downstream has
  * to know an override was ever possible.
  *
- * Resolution fails loudly rather than skipping a project: a queue that silently
- * drops half its work looks identical to a queue that is empty, and the
- * operator would have no reason to look.
+ * The projects are not configured: they are the operator's open spaces, read
+ * every tick (`src/projects.ts`).
  */
 export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
   Settings,
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
 
@@ -52,48 +50,6 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
           Effect.mapError((cause) => new ConfigError({ detail: `parsing ${file}: ${cause}` })),
         ),
       ),
-    );
-
-    // A project's directory is ~/build/<name>. There is no override, because a
-    // project whose name does not match its directory is a naming mistake to
-    // fix at the source — `prog projects rename` exists for exactly that — and
-    // an override field would let the two drift apart forever instead.
-    // A bare string is a project with nothing to say beyond its name, which
-    // is most of them; the object form exists for the few that need to name
-    // a verification command.
-    const projects = yield* Effect.forEach(raw.projects, (entry) =>
-      Effect.gen(function* () {
-        const { name, verify, verificationSkill } =
-          typeof entry === "string"
-            ? { name: entry, verify: undefined, verificationSkill: undefined }
-            : entry;
-        const directory = path.join(home, "build", name);
-        const exists = yield* fs
-          .exists(directory)
-          .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
-        if (!exists) {
-          return yield* new ConfigError({
-            detail: `project "${name}" has no directory at ${directory} — rename the project to match its directory, or drop it from ${file}`,
-          });
-        }
-        const skill =
-          verificationSkill === undefined
-            ? undefined
-            : verificationSkill.startsWith("/")
-              ? verificationSkill
-              : path.join(directory, verificationSkill);
-        if (skill !== undefined) {
-          const exists = yield* fs
-            .exists(skill)
-            .pipe(Effect.mapError((cause) => new ConfigError({ detail: String(cause) })));
-          if (!exists) {
-            return yield* new ConfigError({
-              detail: `project "${name}" names verification skill ${skill}, but that file does not exist`,
-            });
-          }
-        }
-        return { name, directory, verify, verificationSkill: skill } as const;
-      }),
     );
 
     // The ladder is the registry's, not the config file's: one copy of the
@@ -147,7 +103,6 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
     }
 
     return {
-      projects,
       ladder,
       pollInterval: raw.pollSeconds,
       // The signal path is appended to this, so a trailing slash would send
@@ -162,12 +117,6 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
 ).pipe(Layer.provide(BunServices.layer));
 
 interface SettingsShape {
-  readonly projects: ReadonlyArray<{
-    readonly name: string;
-    readonly directory: string;
-    readonly verificationSkill?: string;
-    readonly verify: string | undefined;
-  }>;
   readonly ladder: Ladder;
   readonly pollInterval: number;
   readonly staleAfter: number;
@@ -195,37 +144,6 @@ interface SettingsShape {
 const Positive = Schema.Number.check(Schema.isGreaterThan(0));
 
 const ConfigFile = Schema.Struct({
-  /**
-   * Only these projects feed the queue; everything else stays untouched. A name
-   * is both the prog project and, under ~/build, its directory.
-   */
-  projects: Schema.NonEmptyArray(
-    Schema.Union([
-      Schema.String,
-      Schema.Struct({
-        name: Schema.String,
-
-        /**
-         * The command that decides whether this project works — its test
-         * suite, usually, written as the operator would type it.
-         *
-         * Foreman runs it before and after every landing and undoes a merge
-         * that turns a green checkout red. A project that names none is landed
-         * on git's exit code alone, which says the merge applied and nothing
-         * whatever about whether the code still runs.
-         */
-        verify: Schema.optional(Schema.String),
-
-        /**
-         * Project-local instructions for driving user-visible behavior.
-         * Relative paths start at the project root. Foreman gives this pointer
-         * to authors and reviewers; the skill owns the drive and evidence recipe.
-         */
-        verificationSkill: Schema.optional(Schema.String),
-      }),
-    ]),
-  ),
-
   pollSeconds: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(20))),
 
   /**

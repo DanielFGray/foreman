@@ -80,6 +80,7 @@ import {
   reviewedBy,
 } from "./prog.ts";
 import { Trials, trialFor } from "./trials.ts";
+import { type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
   description: "Time foreman spends dispatching one run, in milliseconds.",
@@ -382,11 +383,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // project instead means one `prog show` per workspace on the machine
       // before knowing whether any of them is this daemon's — and it cannot
       // classify a workspace whose task has been deleted at all.
-      const managed = new Set(settings.projects.map((project) => project.name));
-      const roster = ours(
-        yield* fleet.roster,
-        new Set(settings.projects.map((project) => project.directory)),
-      );
+      const everyone = yield* fleet.roster;
+      const { projects, ambiguous } = yield* resolveProjects(everyone);
+      const open = new Set(projects.filter((project) => project.open).map((p) => p.name));
+      const roster = ours(everyone, new Set(projects.map((project) => project.directory)));
 
       // Every workspace's task, read once. The roster is joined to the store
       // rather than filtered through status queries, because a task leaves a
@@ -414,7 +414,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // project comes back on its own. The reason rides along, because a hold
       // that clears itself and one that needs a hand-run command must not read
       // the same on the dashboard.
-      const held = yield* Effect.forEach(settings.projects, (project) =>
+      const checkouts = yield* Effect.forEach(projects, (project) =>
         repository.isFree(project.directory).pipe(
           Effect.map((result: Hold): ReadonlyArray<Held> =>
             result._tag === "Clean"
@@ -444,10 +444,22 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       ).pipe(
         Effect.map((rows) => rows.reduce<ReadonlyArray<Held>>((all, row) => [...all, ...row], [])),
       );
+      // Tasks name a project, not a directory, so a name two checkouts share
+      // is held rather than guessed at; closing one of the spaces resolves it.
+      const held: ReadonlyArray<Held> = [
+        ...checkouts,
+        ...ambiguous.map((one): Held => ({
+          project: one.name,
+          reason: "ambiguous",
+          detail: `two checkouts are named ${one.name}: ${one.directories.join(", ")}`,
+        })),
+      ];
 
-      const claimed = yield* eachProject((project) => prog.claimed(project.name));
-      const reviewing = yield* eachProject((project) => prog.awaitingReview(project.name));
-      const epics = yield* eachProject((project) =>
+      const claimed = yield* eachProject(projects, (project) => prog.claimed(project.name));
+      const reviewing = yield* eachProject(projects, (project) =>
+        prog.awaitingReview(project.name),
+      );
+      const epics = yield* eachProject(projects, (project) =>
         prog
           .inProgressEpics(project.name)
           .pipe(
@@ -487,7 +499,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // branches nothing in the pipeline accounts for, whether a task handed
       // back for review has anything on it, and which refs the sweep may
       // delete. They were three reads once, and the answers disagreed.
-      const branches = yield* eachProject((project) =>
+      const branches = yield* eachProject(projects, (project) =>
         repository.branches(project.directory).pipe(
           Effect.map((refs) =>
             refs.flatMap((ref) => {
@@ -508,7 +520,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
 
       return {
-        managed,
+        projects,
+        open,
         readings,
         roster,
         held,
@@ -540,7 +553,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       failed: ReadonlyArray<readonly [string, DispatchFailure]>,
     ) => {
       const {
-        managed,
+        projects,
+        open,
         readings,
         roster,
         held,
@@ -675,7 +689,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const ordered = interleave(
         excludeFailedTasks(autoWork, failed),
-        [...managed],
+        [...open],
         new Date(),
         epicFractionOf,
       );
@@ -701,6 +715,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       ]);
 
       return {
+        projects,
         workers,
         owned,
         held,
@@ -711,7 +726,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // when that person asks and never because a slot came free.
         queue: ordered,
         epics,
-        yours: queue.filter((task) => parked(task) && managed.has(task.project)),
+        yours: queue.filter((task) => parked(task) && open.has(task.project)),
         working: claimedActive,
         ...reviews,
         committed,
@@ -749,14 +764,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const failed = failedTasks(yield* Ref.get(dispatchFailures));
         const current = dispatchFrom(observation, providers, failed);
-        const { claimed, reviewing, queue, branches } = observation;
+        const { claimed, reviewing, queue, branches, projects } = observation;
         const { committed } = current;
         const ownedByTask = new Set(current.owned.map((entry) => entry.task.id));
 
         // Everything below is read for a person to look at rather than for a
         // dispatch to turn on, which is why it is here and not in `dispatchFrom`:
         // the tick's second reading skips all of it.
-        const landed = yield* eachProject((project) => prog.landed(project.name));
+        const landed = yield* eachProject(projects, (project) => prog.landed(project.name));
 
         const now = yield* DateTime.now;
 
@@ -1097,7 +1112,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const land = Effect.fn("foreman.land")(function* (task: Item, worker: Worker | undefined) {
       yield* Effect.gen(function* () {
-        const project = projectFor(task.project);
+        const project = yield* projectFor(task.project);
         if (!project) return;
 
         const result = yield* repository.merge(
@@ -1225,7 +1240,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // honestly and the leftover head is swept here, beside the branch
         // sweep, where every tick's cleanup lives.
         yield* Effect.forEach(
-          settings.projects,
+          current.projects,
           (project) =>
             repository.sweepUnpublishedMerges(project.directory).pipe(
               Effect.flatMap((litter) =>
@@ -1452,7 +1467,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: ReadyTask,
       rung: Rung,
     ) {
-      const project = projectFor(task.project);
+      const project = yield* projectFor(task.project);
       if (!project) return;
 
       // The workspace opens before the claim. If it opened after, a task
@@ -1460,12 +1475,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // is indistinguishable from an abandoned claim.
       const worker = yield* workspaceFor(task, project);
 
-      const prompt = yield* prompts.author(
-        task,
-        worker.directory,
-        project.directory,
-        project.verificationSkill,
-      );
+      const prompt = yield* prompts.author(task, worker.directory, project.directory);
       yield* prog.claim(task.id);
       yield* prog.attribute(task.id, rung.name).pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
@@ -1488,7 +1498,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       author: string | undefined,
     ) {
-      const project = projectFor(task.project);
+      const project = yield* projectFor(task.project);
       if (!project) return;
 
       // The fork point is how the reviewer names the author's work from
@@ -1528,7 +1538,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         project.directory,
         base,
         project.verify,
-        project.verificationSkill,
       );
       yield* prog.assignReview(task.id, rung.name);
       const agent = yield* instrumentRun(
@@ -1718,21 +1727,42 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* prog.clearFailure(task.id, highest);
       });
 
-    const projectFor = (name: string) =>
-      settings.projects.find((candidate) => candidate.name === name);
-
-    const branchCommitted = (task: Item) => {
-      const project = projectFor(task.project);
-      if (!project) return Effect.succeed(false);
-      return repository
-        .branches(project.directory)
-        .pipe(
-          Effect.map(
-            (branches) =>
-              branches.find((branch) => branch.branch === labelFor(task.id))?.empty === false,
-          ),
+    /**
+     * The project set for one reading: the checkouts open spaces sit in, and
+     * the checkouts foreman's agents still run in (`src/projects.ts`).
+     */
+    const resolveProjects = (everyone: ReadonlyArray<Worker>) =>
+      Effect.gen(function* () {
+        const folders = yield* fleet.spaces;
+        const open = yield* Effect.forEach(folders, (folder) => repository.checkoutOf(folder));
+        const running = everyone.flatMap((worker) =>
+          worker.repository === undefined ? [] : [worker.repository],
         );
-    };
+        const { projects, ambiguous } = projectSet(
+          open.filter((checkout) => checkout !== undefined),
+          running,
+        );
+        const verified = yield* Effect.forEach(projects, (project) =>
+          repository
+            .verifyOf(project.directory)
+            .pipe(Effect.map((verify): Project => ({ ...project, verify }))),
+        );
+        return { projects: verified, ambiguous };
+      });
+
+    /** A project of the latest reading, which every command and pass follows. */
+    const projectFor = (name: string) =>
+      SubscriptionRef.get(state).pipe(
+        Effect.map(({ projects }) => projects.find((candidate) => candidate.name === name)),
+      );
+
+    const branchCommitted = (task: Item) =>
+      Effect.gen(function* () {
+        const project = yield* projectFor(task.project);
+        if (!project) return false;
+        const branches = yield* repository.branches(project.directory);
+        return branches.find((branch) => branch.branch === labelFor(task.id))?.empty === false;
+      });
 
     const holdsIntervenableWork = (task: Item, worker: Worker | undefined) =>
       worker
@@ -1778,7 +1808,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const task = yield* prog.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
-        const project = projectFor(task.project);
+        const project = yield* projectFor(task.project);
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
 
@@ -1856,7 +1886,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     /** The checkout a project's work lands in, when foreman is configured for it. */
     const repositoryFor = (task: { readonly project: string }) =>
-      projectFor(task.project)?.directory;
+      projectFor(task.project).pipe(Effect.map((project) => project?.directory));
 
     /**
      * Takes down a task's workspace and, with it, the worktree foreman made.
@@ -1864,10 +1894,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * already dropped still leaves its worktree removed rather than orphaned.
      */
     const teardown = (task: { readonly id: string; readonly project: string }) =>
-      fleet.close({ task: task.id, repository: repositoryFor(task) });
+      repositoryFor(task).pipe(
+        Effect.flatMap((repository) => fleet.close({ task: task.id, repository })),
+      );
 
-    const eachProject = <A>(read: (project: Project) => Effect.Effect<ReadonlyArray<A>, Error>) =>
-      Effect.forEach(settings.projects, (project) =>
+    const eachProject = <A>(
+      projects: ReadonlyArray<Project>,
+      read: (project: Project) => Effect.Effect<ReadonlyArray<A>, Error>,
+    ) =>
+      Effect.forEach(projects, (project) =>
         read(project).pipe(
           // One unreadable project must not blind foreman to the other seven.
           Effect.catch((error) =>
@@ -1894,7 +1929,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       /** Runs until interrupted. */
       run: Effect.gen(function* () {
         yield* Effect.logInfo(
-          `foreman up: over ${plural(settings.projects.length, "project")}, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
+          `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
         );
         return yield* tick.pipe(
           Effect.andThen(
@@ -1932,7 +1967,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       onboard: (project: string) =>
         commanded(
           Effect.gen(function* () {
-            const found = projectFor(project);
+            const found = yield* projectFor(project);
             if (found) yield* onboard(found);
           }),
         ),
@@ -1961,27 +1996,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       prompt: (role: AgentRole, id: string) =>
         Effect.gen(function* () {
           const task = yield* prog.show(id);
-          const project = projectFor(task.project);
+          const project = yield* projectFor(task.project);
           if (!project) return undefined;
           const worktree = directoryFor(task.project, task.id);
           if (role === "author") {
-            return yield* prompts.author(
-              task,
-              worktree,
-              project.directory,
-              project.verificationSkill,
-            );
+            return yield* prompts.author(task, worktree, project.directory);
           }
           const base = yield* repository.base(project.directory, labelFor(task.id));
           if (!base) return undefined;
-          return yield* prompts.review(
-            task,
-            worktree,
-            project.directory,
-            base,
-            project.verify,
-            project.verificationSkill,
-          );
+          return yield* prompts.review(task, worktree, project.directory, base, project.verify);
         }),
 
       /** Starts a fresh agent on a task whose worker vanished. */
@@ -1999,7 +2022,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             if (((yield* Ref.get(dispatchFailures)).get(task.id)?.count ?? 0) >= 2) {
               yield* clearFailure(task.id);
               if (isOnboarding(task)) {
-                const project = projectFor(task.project);
+                const project = yield* projectFor(task.project);
                 if (project) {
                   yield* dispatchOnboard(task, project).pipe(
                     Effect.catch((error) => recordFailure(task.id, error)),
@@ -2025,12 +2048,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // author into a worktree would show it a copy of the last commit,
             // which is precisely the state that has none of the work in it.
             if (isOnboarding(task)) {
-              const project = projectFor(task.project);
+              const project = yield* projectFor(task.project);
               if (project) yield* dispatchOnboard(task, project);
               return;
             }
 
-            const project = projectFor(task.project);
+            const project = yield* projectFor(task.project);
             if (!project) return;
             const rung = yield* rungNow(task);
             if (!rung) return;
@@ -2039,12 +2062,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // a retry re-adopts the same directory with its edits instead of
             // losing them.
             const worker = yield* workspaceFor(task, project);
-            const prompt = yield* prompts.author(
-              task,
-              worker.directory,
-              project.directory,
-              project.verificationSkill,
-            );
+            const prompt = yield* prompts.author(task, worker.directory, project.directory);
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             yield* prog.attribute(task.id, rung.name);
             yield* prog.log(task.id, agentLog("author", rung, agent));
@@ -2587,6 +2605,8 @@ const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => (
 
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
+  /** The projects this reading covers; see `src/projects.ts`. */
+  readonly projects: ReadonlyArray<Project>;
   /** In-progress epics and their direct-child progress, shown above queue tasks. */
   readonly epics: ReadonlyArray<EpicProgress>;
   /** Ready work in dispatch order. */
@@ -2809,10 +2829,8 @@ interface Interpretation extends FleetState {
   }>;
 }
 
-/** `1 project`, `2 projects`. */
-const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
-
 const empty: FleetState = {
+  projects: [],
   epics: [],
   queue: [],
   yours: [],
@@ -2832,9 +2850,3 @@ const empty: FleetState = {
   scopes: new Map(),
   observedAt: undefined,
 };
-
-interface Project {
-  readonly name: string;
-  readonly directory: string;
-  readonly verificationSkill?: string;
-}

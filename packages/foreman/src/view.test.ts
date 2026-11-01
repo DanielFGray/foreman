@@ -77,6 +77,7 @@ const LONG_DESCRIPTION = [
 ].join("\n");
 
 const state: FleetState = {
+  projects: [],
   providers: [],
   epics: [],
   orphans: [],
@@ -402,7 +403,13 @@ describe("orphaned workspaces", () => {
 
 describe("publishedOf", () => {
   test("publishes every view's rows with the commands each takes, in a shape its schema reads back", () => {
-    const published = publishedOf(state, true, [{ name: "pty", directory: "/build/pty" }]);
+    const published = publishedOf(
+      {
+        ...state,
+        projects: [{ name: "pty", directory: "/build/pty", verify: undefined, open: true }],
+      },
+      true,
+    );
     expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
       published,
     );
@@ -422,7 +429,6 @@ describe("publishedOf", () => {
     const rows = publishedOf(
       { ...state, epics: [{ epic, children: [] }], queue: [child] },
       true,
-      [],
     ).rows;
     expect(rows.find((row) => row.key === "ep-drive")).toMatchObject({ epic: true, parent: null });
     expect(rows.find((row) => row.key === child.id)).toMatchObject({
@@ -432,7 +438,7 @@ describe("publishedOf", () => {
   });
 
   test("says a one-shot read is not the daemon's", () => {
-    expect(publishedOf(state, false, []).daemon).toBe(false);
+    expect(publishedOf(state, false).daemon).toBe(false);
   });
 
   test("replaces the file whole, leaving no temporary beside it", async () => {
@@ -440,9 +446,7 @@ describe("publishedOf", () => {
     const path = `${folder}/state.json`;
     const write = (daemon: boolean) =>
       Effect.runPromise(
-        writePublished(path, publishedOf(state, daemon, [])).pipe(
-          Effect.provide(BunServices.layer),
-        ),
+        writePublished(path, publishedOf(state, daemon)).pipe(Effect.provide(BunServices.layer)),
       );
     await write(true);
     await write(false);

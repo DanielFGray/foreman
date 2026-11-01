@@ -37,11 +37,7 @@ const status = Command.make("status", { json }, ({ json }) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
-    const published = publishedOf(
-      yield* SubscriptionRef.get(dispatcher.state),
-      false,
-      (yield* Settings).projects,
-    );
+    const published = publishedOf(yield* SubscriptionRef.get(dispatcher.state), false);
     if (json) return yield* Console.log(JSON.stringify(published, null, 2));
     const rows = published.rows;
     if (rows.length === 0) return yield* Console.log("nothing queued, working or waiting");

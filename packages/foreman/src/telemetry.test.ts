@@ -13,7 +13,6 @@ const DEAD = "http://127.0.0.1:1";
 
 const settingsWith = (otlpEndpoint: string) =>
   Layer.succeed(Settings, {
-    projects: [{ name: "test", directory: "/repo", verify: undefined }],
     ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
     otlpEndpoint,
     pollInterval: 60,

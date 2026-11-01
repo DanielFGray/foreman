@@ -6,7 +6,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect
 const ours = "foreman/";
 
 /** Why a checkout is not free to work against. */
-export type HoldReason = "dirty" | "noBranch" | "unreadable";
+export type HoldReason = "dirty" | "noBranch" | "unreadable" | "ambiguous";
 
 /**
  * Whether a checkout is free to work against, and if not, why.
@@ -47,6 +47,9 @@ const dirtyPaths = (status: string): ReadonlyArray<string> => {
  * saying it twice lets the two drift.
  */
 const SETUP_SCRIPT = "scripts/worktree-setup.sh";
+
+/** The script a project keeps to decide whether it works; see `verifyOf`. */
+const VERIFY_SCRIPT = "scripts/verify.sh";
 
 /**
  * The checkout a project's tasks branch from and merge back into.
@@ -1122,6 +1125,34 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           const present = yield* fs.exists(script).pipe(Effect.orElseSucceed(() => false));
           return present ? yield* check(directory, `./${SETUP_SCRIPT}`) : undefined;
         }),
+
+      /**
+       * The command that decides whether the project works, when it keeps one.
+       *
+       * A script in the project for the same reason as `setup`: how a project
+       * is checked is a fact about the project. It is run in the proving
+       * ground, so the copy that runs is the one in the merged tree.
+       */
+      verifyOf: (directory: string) =>
+        fs.exists(`${directory}/${VERIFY_SCRIPT}`).pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.map((present): string | undefined => (present ? `./${VERIFY_SCRIPT}` : undefined)),
+        ),
+
+      /**
+       * The main checkout a folder sits in, or undefined when it is in none.
+       *
+       * The common git directory rather than the top level, because a folder
+       * inside a linked worktree — a task's own space — belongs to the
+       * project's checkout, not to a project of its own.
+       */
+      checkoutOf: (folder: string) =>
+        git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir").pipe(
+          Effect.map((result) =>
+            result.exitCode === 0 ? path.dirname(result.stdout.trim()) : undefined,
+          ),
+          Effect.orElseSucceed(() => undefined),
+        ),
 
       /**
        * Lands a reviewed branch without trusting the reviewer with the shared

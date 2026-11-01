@@ -54,6 +54,14 @@ export class Fleet extends Context.Service<
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
 
     /**
+     * The folders of the operator's open spaces on this machine — where the
+     * projects foreman works in come from (`src/projects.ts`). A multiplexer
+     * that cannot be read is an error, never an empty list: no spaces and an
+     * unanswered question must not look alike.
+     */
+    readonly spaces: Effect.Effect<ReadonlyArray<string>, FleetError>;
+
+    /**
      * Sends a message to one live role's agent, returning once it is working
      * on it. How an agent is steered or sent a correction without anyone
      * looking its pane up by hand.

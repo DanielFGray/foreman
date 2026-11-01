@@ -8,13 +8,6 @@ import { Settings, settings } from "./config.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 
-const load = () =>
-  Effect.gen(function* () {
-    const config = yield* Settings;
-    return config.projects;
-  }).pipe(Effect.provide(settings), Effect.runPromise);
-
-/** The whole Settings, for the fields `projects` alone does not carry. */
 const loadLadder = () =>
   Effect.gen(function* () {
     const config = yield* Settings;
@@ -48,16 +41,16 @@ describe("settings", () => {
     process.chdir(repoRoot);
     scratchRegistry();
     process.env["FOREMAN_CONFIG"] = join("e2e", "config.jsonc");
-    const projects = await load();
-    expect(projects.map((project) => project.name)).toContain("foreman-e2e-probe");
+    const ladder = await loadLadder();
+    expect(ladder.map((rung) => rung.name)).toContain("cheap");
   });
 
   test("reads an absolute FOREMAN_CONFIG from any working directory", async () => {
     scratchRegistry();
     process.chdir("/tmp");
     process.env["FOREMAN_CONFIG"] = join(repoRoot, "e2e", "config.jsonc");
-    const projects = await load();
-    expect(projects.map((project) => project.name)).toContain("foreman-e2e-probe");
+    const ladder = await loadLadder();
+    expect(ladder.map((rung) => rung.name)).toContain("cheap");
   });
 
   test("carries a rung's unmetered flag out of the config", async () => {

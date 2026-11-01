@@ -5,8 +5,7 @@ import { Console, Effect, FileSystem, Layer, Stream, SubscriptionRef } from "eff
 import { publishedOf, publishedPath, writePublished } from "./published.ts";
 import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
-import { authorFor, dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
-import { failuresOf, isOnboarding, needsYou } from "./prog.ts";
+import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { HcFleet } from "./hc.ts";
 import { logging } from "./log.ts";
@@ -20,7 +19,6 @@ import { Trials } from "./trials.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { policyCommand } from "./policy-command.ts";
-import { interleave } from "./queue.ts";
 
 /**
  * What every account behind the ladder has left, without starting anything.
@@ -110,48 +108,20 @@ const statsCommand = Command.make("stats", {}, () => stats).pipe(
  *
  * The dashboard shows the same order, but only while a daemon is up and only
  * inside a terminal it owns. This is the question asked before that: what
- * would the fleet do next. One reading of `prog ready`, ordered by the same
- * rules the dispatcher uses — the ordinary score with its project rotation —
- * so the two never disagree about what is next. It does not say which of them
+ * would the fleet do next. It is the dispatcher's own reading of the queue,
+ * so the two cannot disagree about what is next. It does not say which of them
  * the policy lets the fleet start by itself.
  */
 const queueCommand = Command.make("queue", {}, () =>
   Effect.gen(function* () {
-    const config = yield* Settings;
-    const prog = yield* Prog;
-
-    const managed = new Set(config.projects.map((project) => project.name));
-    const queue = yield* prog.ready();
-
-    // How close each task's own epic is to done — the same map the dispatcher builds.
-    const epicCompletion = new Map<string, number>();
-    for (const project of config.projects) {
-      for (const epic of yield* prog.inProgressEpics(project.name)) {
-        const children = yield* prog.children(epic.id);
-        if (children.length === 0) continue;
-        const fraction =
-          children.filter((child) => child.status === "done").length / children.length;
-        for (const child of children) epicCompletion.set(child.id, fraction);
-      }
-    }
-    const epicFractionOf = (task: { readonly id: string }) => epicCompletion.get(task.id) ?? 0;
-
-    // Work waiting on the operator is ready by every measure prog knows and
-    // still must not be dispatched, so it is not queue. Salvage runs stand in
-    // a directory a person is using and start only when asked, never from here.
-    const parked = (task: { readonly labels: ReadonlyArray<string> }) =>
-      needsYou(task) || authorFor(config.ladder, failuresOf(task))._tag === "Yours";
-    const dispatchable = queue.filter((task) => !isOnboarding(task) && !parked(task));
-    const ordered = interleave(dispatchable, [...managed], new Date(), epicFractionOf);
-
-    if (ordered.length === 0) {
-      yield* Console.log("queue empty");
-      return;
-    }
-    for (const task of ordered) {
+    const dispatcher = yield* Dispatcher;
+    yield* dispatcher.read;
+    const { queue } = yield* SubscriptionRef.get(dispatcher.state);
+    if (queue.length === 0) return yield* Console.log("queue empty");
+    for (const task of queue) {
       yield* Console.log(`${task.id} [${task.project}] p${task.priority} ${task.title}`);
     }
-  }).pipe(Effect.provide(Layer.mergeAll(Prog.Default, settings))),
+  }),
 ).pipe(
   Command.withDescription("Print the ready queue in the order the next tick would dispatch it"),
 );
@@ -223,7 +193,6 @@ const printSkill = FileSystem.FileSystem.pipe(
 /** The loop, until a signal ends the process. */
 const daemon = Effect.gen(function* () {
   const dispatcher = yield* Dispatcher;
-  const config = yield* Settings;
   yield* Effect.forkScoped(dispatcher.run);
   // Every reading is published for the panel. A write that fails is logged and
   // the next reading tries again: the file is a view, and a stale one says so
@@ -236,7 +205,7 @@ const daemon = Effect.gen(function* () {
         Stream.filter((state) => state.observedAt !== undefined),
       ),
       (state) =>
-        writePublished(publishedPath(), publishedOf(state, true, config.projects)).pipe(
+        writePublished(publishedPath(), publishedOf(state, true)).pipe(
           Effect.catchCause(Effect.logWarning),
         ),
     ),
@@ -254,7 +223,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     quotaCommand,
     ladderCommand,
     statsCommand,
-    queueCommand,
+    Command.provide(queueCommand, services),
     policyCommand,
     ...subcommands(services),
   ]),

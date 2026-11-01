@@ -12,7 +12,7 @@ Working directory: {{ worktree }}
 Branch: {{ branch }}
 Repository: {{ repository }}
 
-{{ verificationSkill }}
+Prove the behavior with the project's real user-facing interface and record the evidence in the task log.
 
 Read the `blast-radius` skill before reviewing. Trace changed exports, commands,
 schemas, and side effects to their important consumers. Prove the highest-risk

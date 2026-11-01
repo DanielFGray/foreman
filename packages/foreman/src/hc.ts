@@ -149,6 +149,13 @@ export const HcFleet = Layer.effect(
     return {
       roster,
 
+      // herdr-app keeps its layout as an hc document, and a space's folder is
+      // where its terminals start. Before herdr-app first runs the document is
+      // null, which is no spaces rather than an error.
+      spaces: call(LayoutDoc, "spaces", "doc.get", { name: "herdr-app" }).pipe(
+        Effect.map(({ value }) => (value ?? { spaces: [] }).spaces.map((space) => space.folder)),
+      ),
+
       open: (options: OpenOptions) =>
         Effect.gen(function* () {
           const existing = (yield* roster).find((worker) => worker.task === options.task);
@@ -465,6 +472,11 @@ const Terminal = S.Struct({
 export type Terminal = S.Schema.Type<typeof Terminal>;
 
 const TerminalList = S.Struct({ terminals: S.Array(Terminal) });
+
+/** The part of herdr-app's layout document foreman reads: where each space is. */
+const LayoutDoc = S.Struct({
+  value: S.NullOr(S.Struct({ spaces: S.Array(S.Struct({ folder: S.String })) })),
+});
 
 const Started = S.Struct({ address: S.String, pid: S.Finite });
 

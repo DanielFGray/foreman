@@ -96,6 +96,7 @@ class World {
         return { kind: options.kind, model: options.model };
       }),
     roster: Effect.sync(() => [...this.workers.values()]),
+    spaces: Effect.succeed(["/build/test"]),
     focus: () => Effect.void,
     say: () => Effect.void,
     stop: (target: Worker, role: AgentRole) =>
@@ -243,6 +244,8 @@ class World {
   };
 
   readonly repository = {
+    checkoutOf: (folder: string) => Effect.succeed<string | undefined>(folder),
+    verifyOf: () => Effect.succeed<string | undefined>(undefined),
     isFree: () =>
       Effect.succeed(
         this.clean === "clean"
@@ -317,7 +320,6 @@ const layerFor = (world: World) =>
     Dispatcher.Default,
     Layer.mergeAll(
       Layer.succeed(Settings, {
-        projects: [{ name: "test", directory: "/repo", verify: undefined }],
         ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
         otlpEndpoint: "http://localhost:4318",
         pollInterval: 60,
@@ -436,7 +438,7 @@ describe("Dispatcher tick", () => {
     ] as const) {
       const task = item(id, "in_progress", ["by:cheap"]);
       const world = new World(task);
-      const vanished = { ...worker(task.id, "author", "gone"), repository: "/repo" };
+      const vanished = { ...worker(task.id, "author", "gone"), repository: "/build/test" };
       world.workers.set(task.id, vanished);
       if (branch) world.branches.set(branch.branch, branch);
 
@@ -681,7 +683,6 @@ describe("quota probing", () => {
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
-          projects: [{ name: "test", directory: "/repo", verify: undefined }],
           // A rung whose model names its provider is one the gate can ask about.
           ladder: [{ name: "cheap", harness: "test", model: "openai/gpt", provider: undefined }],
           otlpEndpoint: "http://localhost:4318",
@@ -752,7 +753,6 @@ describe("a spent account and the reviewer above it", () => {
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
-          projects: [{ name: "test", directory: "/repo", verify: undefined }],
           ladder: [
             { name: "cheap", harness: "test", model: "openai/gpt", provider: undefined },
             { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
@@ -901,7 +901,10 @@ describe("a spent account and the reviewer above it", () => {
     // the code, so what lands on the task is that model's failure.
     const task = item("ts-sent-back", "open", ["by:cheap", "review-by:dear"]);
     const world = new World(task);
-    world.workers.set(task.id, { ...worker(task.id, "review", "settled"), repository: "/repo" });
+    world.workers.set(task.id, {
+      ...worker(task.id, "review", "settled"),
+      repository: "/build/test",
+    });
     world.branches.set(`foreman/${task.id}`, {
       branch: `foreman/${task.id}`,
       merged: false,

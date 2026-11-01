@@ -12,7 +12,7 @@ Working directory: {{ worktree }}
 Branch: {{ branch }}
 Repository checkout: {{ repository }}
 
-{{ verificationSkill }}
+Prove the behavior with the project's real user-facing interface and record the evidence in the task log.
 
 For a non-trivial design, read the `architect` skill before writing code. For a
 large, uncertain, or multi-part change, read `figure-it-out` and use its staged
