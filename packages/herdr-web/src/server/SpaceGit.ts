@@ -2,6 +2,7 @@
 // works in now (see folderNow), with `git rev-parse --show-toplevel` and
 // `git status --porcelain=v2 --branch`, run through hc's machine.exec.
 import { Array, Effect, Option, Record, String } from "effect"
+import { projectOf } from "foreman"
 import type { Hc } from "../hc/Hc.ts"
 import type { SpaceGit } from "../shared/Fleet.ts"
 
@@ -18,7 +19,7 @@ const TIMEOUT = 10
  * The git state of every target. A target whose folder git does not answer for
  * has no entry. When hc itself fails for a target, `last` is kept for it.
  */
-export const readSpaceGits = (hc: Hc["Service"], targets: ReadonlyArray<GitTarget>, last: Readonly<Record<string, SpaceGit>>) =>
+export const readSpaceGits = (hc: Pick<Hc["Service"], "exec">, targets: ReadonlyArray<GitTarget>, last: Readonly<Record<string, SpaceGit>>) =>
   Effect.forEach(
     targets,
     (target) => Effect.map(readSpaceGit(hc, target, Record.get(last, target.id)), (git) => Option.map(git, (value) => [target.id, value] as const)),
@@ -26,7 +27,7 @@ export const readSpaceGits = (hc: Hc["Service"], targets: ReadonlyArray<GitTarge
   ).pipe(Effect.map((entries) => Record.fromEntries(Array.getSomes(entries))))
 
 /** Git's answer for one folder, or `fallback` when hc could not run it. */
-const readSpaceGit = (hc: Hc["Service"], { id, folder, on }: GitTarget, fallback: Option.Option<SpaceGit>) => {
+const readSpaceGit = (hc: Pick<Hc["Service"], "exec">, { id, folder, on }: GitTarget, fallback: Option.Option<SpaceGit>) => {
   // A folder that is no repository exits nonzero, and git may be missing: both are ordinary.
   const git = (args: ReadonlyArray<string>) =>
     hc
@@ -35,8 +36,15 @@ const readSpaceGit = (hc: Hc["Service"], { id, folder, on }: GitTarget, fallback
   // An empty folder would run git where hc runs, not where the space is.
   return !String.isNonEmpty(folder)
     ? Effect.succeed(Option.none<SpaceGit>())
-    : Effect.all([git(["rev-parse", "--show-toplevel"]), git(["status", "--porcelain=v2", "--branch"])], { concurrency: 2 }).pipe(
-        Effect.map(([top, status]) => Option.zipWith(top, status, (top, status): SpaceGit => ({ top: String.trimEnd(top), ...parseStatus(status) }))),
+    : Effect.all([git(["rev-parse", "--show-toplevel"]), git(["status", "--porcelain=v2", "--branch"]), git(["rev-parse", "--path-format=absolute", "--git-common-dir"])], { concurrency: 3 }).pipe(
+        // Outside the zip: when the common directory cannot be read, the branch and changed state still show, with no project.
+        Effect.map(([top, status, common]) =>
+          Option.zipWith(top, status, (top, status): SpaceGit => ({
+            top: String.trimEnd(top),
+            ...parseStatus(status),
+            project: Option.map(common, (dir) => projectOf(String.trim(dir))),
+          })),
+        ),
         Effect.catchTag("HcError", (error) =>
           error.kind === "spawn_failed"
             ? Effect.succeed(Option.none<SpaceGit>())
@@ -50,7 +58,7 @@ const readSpaceGit = (hc: Hc["Service"], { id, folder, on }: GitTarget, fallback
  * other line is a changed, renamed, unmerged or untracked path. The branch is
  * none for a detached head.
  */
-export const parseStatus = (stdout: string): Omit<SpaceGit, "top"> => {
+export const parseStatus = (stdout: string): Pick<SpaceGit, "branch" | "changed"> => {
   const lines = Array.filter(String.split("\n")(stdout), String.isNonEmpty)
   const head = Array.findFirst(lines, String.startsWith(HEAD))
   return {

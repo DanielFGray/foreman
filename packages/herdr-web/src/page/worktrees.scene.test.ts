@@ -15,7 +15,7 @@ const block = (terminal: string): Layout =>
 
 const fleet: Fleet = {
   connected: true,
-  git: { s1: { top: "/src/app", branch: Option.some("main"), changed: false } },
+  git: { s1: { top: "/src/app", branch: Option.some("main"), changed: false, project: Option.none() } },
   terminals: [],
   machines: [{ name: "here", isLocal: true, state: "connected", spaces: [{ id: "s1", name: "app", folder: "/src/app", tabs: [{ id: "a", name: "a", root: block("t1") }] }] }],
 }

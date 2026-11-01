@@ -68,8 +68,8 @@ const foremanButton = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.button(
     [
       h.Type("button"),
-      h.Class(model.selection._tag === "Foreman" ? "row settings-row on" : "row settings-row"),
-      h.AriaCurrent(model.selection._tag === "Foreman" ? "page" : "false"),
+      h.Class(model.foremanPage.shown ? "row settings-row on" : "row settings-row"),
+      h.AriaPressed(model.foremanPage.shown ? "true" : "false"),
       h.OnClick(Message.ClickedForeman()),
     ],
     [icon(Factory, h), h.span([h.Class("name")], ["Foreman"])],

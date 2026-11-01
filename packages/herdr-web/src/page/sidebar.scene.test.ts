@@ -84,7 +84,7 @@ test("with another machine, each machine heads its spaces and says when it is aw
 })
 
 test("a space row shows its letter badge, coloured by its most urgent agent, and its git branch and changes", () => {
-  const git = { s1: { top: "/src/prog", branch: Option.some("feat/sidebar"), changed: true } }
+  const git = { s1: { top: "/src/prog", branch: Option.some("feat/sidebar"), changed: true, project: Option.none() } }
   scene(
     { update, view },
     given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet: { ...fleet, git } }) }),
@@ -101,7 +101,7 @@ test("a space row shows its letter badge, coloured by its most urgent agent, and
 })
 
 test("a space with no git state shows no branch, and a clean one shows no changes mark", () => {
-  const clean = { s2: { top: "/", branch: Option.some("main"), changed: false } }
+  const clean = { s2: { top: "/", branch: Option.some("main"), changed: false, project: Option.none() } }
   scene(
     { update, view },
     given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),

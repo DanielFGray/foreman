@@ -539,8 +539,17 @@ p.usage-error { margin: 0; }
   .checkout { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* The workspace and the Foreman column share a row on a desk; the column keeps its own scroll. */
+.body { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.foreman-column { flex: 0 0 min(380px, 40%); min-height: 0; overflow-y: auto; padding: 8px 12px; border-left: 1px solid var(--surface); }
+/* Declared after the base rules above, so these win on a phone. The column stacks under the pane, and the terminals keep the top of the screen. */
+@media (max-width: 720px) {
+  .body { flex-direction: column; }
+  .foreman-column { flex: 0 0 auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--surface); }
+}
 .foreman { display: flex; flex-direction: column; gap: 10px; }
-.foreman > * { max-width: 48rem; }
+.foreman-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.foreman-scope .note { margin: 0; }
 .foreman-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .foreman-heading .note { margin: 0; flex: 1; }
 .foreman-badge { padding: 0 6px; border: 1px solid var(--surface); border-radius: 4px; font-size: 12px; color: var(--subtext); }
@@ -548,7 +557,7 @@ p.usage-error { margin: 0; }
 .foreman-badge.paused, .foreman-badge.stale { color: var(--yellow); border-color: var(--yellow); }
 .foreman-badge.failed { color: var(--red); border-color: var(--red); }
 .foreman-policy { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--surface); }
-.foreman-controls, .foreman-projects, .foreman-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.foreman-controls, .foreman-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 /* One group, so a narrow window wraps the agent limit whole. */
 .foreman-slots { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .foreman-slots .note { margin: 0; }

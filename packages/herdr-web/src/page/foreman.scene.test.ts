@@ -1,10 +1,11 @@
 import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription } from "foldkit/scene"
 import { test } from "vitest"
+import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import type { ForemanReading, ForemanRow, ForemanState } from "../shared/Foreman.ts"
 import { ListRungs, RefreshForeman, RunForeman, SaveSelection } from "./commands.ts"
 import { init, update, view } from "./main.ts"
-import { ForemanQueue, Message, Selection } from "./model.ts"
+import { Bridge, ForemanQueue, Message, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const NOW = Date.parse("2026-10-30T01:00:00Z")
@@ -31,6 +32,8 @@ const reading: ForemanReading = {
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),
     row("attention", "ts-k1", "review  Land the export", ["approve"]),
+    // An account belongs to the fleet, not to a project, so every space shows it.
+    { ...row("quota", "claude", "claude account", []), project: Option.none() },
   ],
 }
 
@@ -43,17 +46,89 @@ const state: ForemanState = { reading: Option.some(reading), problem: Option.non
 
 const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model
 
-const open = { ...start, selection: Selection.Foreman(), foreman: Option.some(state), foremanPage: { ...start.foremanPage, queue }, now: NOW }
+// Three spaces: app and lib are each in a project, notes is in none.
+// The sidebar names a space by its checkout's folder, so each space's checkout is its own folder.
+const gitOf = (name: string, project: Option.Option<string>): SpaceGit => ({ top: `/src/${name}`, branch: Option.some("main"), changed: false, project })
+const spaceOf = (id: string, folder: string) => ({ id, name: "", folder, tabs: [{ id: `tab-${id}`, name: "", root: { _tag: "Unknown" as const, type: "browser" } }] })
+const fleet: Fleet = {
+  connected: true,
+  terminals: [],
+  git: { s1: gitOf("app", Option.some("app")), s2: gitOf("lib", Option.some("lib")), s3: gitOf("notes", Option.none()) },
+  machines: [{ name: "here", isLocal: true, state: "connected", spaces: [spaceOf("s1", "/src/app"), spaceOf("s2", "/src/lib"), spaceOf("s3", "/src/notes")] }],
+}
 
-test("the sidebar opens the page, which reads the ladder's rungs", () => {
+const onTab = (tabId: string) => Selection.Tab({ tabId, maybeFocus: Option.none() })
+
+// The column is on show beside the app space's tab, so its rows are app's and the fleet's own.
+const open = {
+  ...start,
+  selection: onTab("tab-s1"),
+  bridge: Bridge.Watching({ fleet }),
+  foreman: Option.some(state),
+  foremanPage: { ...start.foremanPage, shown: true, queue },
+  now: NOW,
+}
+
+test("the sidebar row shows the column, which reads the ladder's rungs, and hides it again", () => {
   scene(
     { update, view },
-    given(start),
+    given({ ...start, bridge: Bridge.Watching({ fleet }) }),
     click(role("button", { name: "Foreman" })),
-    Command.expectExact(SaveSelection({ selection: Selection.Foreman() }), ListRungs()),
-    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    Command.expectExact(ListRungs()),
     Command.resolve(ListRungs, Message.ReceivedRungs({ rungs: ["sonnet"] })),
     expect(selector(".foreman .note")).toHaveText("Asking the bridge…"),
+    click(role("button", { name: "Foreman" })),
+    expect(selector(".foreman-column")).not.toExist(),
+  )
+})
+
+test("the column shows the selected space's project and the fleet's own rows", () => {
+  scene(
+    { update, view },
+    given(open),
+    expect(selector(".foreman-scope .note")).toHaveText("app"),
+    // The queue starts folded: its rows are app's only, when it opens.
+    expectAll(all.selector(".foreman-row")).toHaveCount(4),
+    click(role("button", { name: "Queue 1" })),
+    expectAll(all.selector(".foreman-row")).toHaveCount(5),
+  )
+})
+
+test("switching space switches the rows the column shows", () => {
+  scene(
+    { update, view },
+    given(open),
+    // The space row's name also carries its branch, so match its start.
+    click(role("button", { name: /^lib/ })),
+    Command.expectExact(SaveSelection({ selection: onTab("tab-s2") })),
+    Command.resolve(SaveSelection, Message.CompletedSaveSelection()),
+    expect(selector(".foreman-scope .note")).toHaveText("lib"),
+    // lib's account row and its one queued task; app's rows are gone.
+    click(role("button", { name: "Queue 1" })),
+    expectAll(all.selector(".foreman-row")).toHaveCount(2),
+    expect(role("button", { name: "launch ts-q2" })).toExist(),
+    expect(role("button", { name: "launch ts-q1" })).not.toExist(),
+  )
+})
+
+test("a space in no project shows only the fleet's own rows, and no queue", () => {
+  scene(
+    { update, view },
+    given({ ...open, selection: onTab("tab-s3") }),
+    expect(selector(".foreman-scope .note")).toHaveText("no project"),
+    expectAll(all.selector(".foreman-row")).toHaveCount(1),
+    expect(role("button", { name: /^Queue/ })).not.toExist(),
+  )
+})
+
+test("all projects widens the column to every project's rows", () => {
+  scene(
+    { update, view },
+    given(open),
+    click(role("button", { name: "All projects" })),
+    expect(selector(".foreman-scope .note")).toHaveText("all projects"),
+    click(role("button", { name: "Queue 2" })),
+    expectAll(all.selector(".foreman-row")).toHaveCount(6),
   )
 })
 
@@ -127,7 +202,8 @@ test("an epic leads its queued tasks and takes no launch", () => {
   scene(
     { update, view },
     given({ ...open, foremanPage: { ...open.foremanPage, queue: ForemanQueue.Listed({ rows: [epic, child, ...queue.rows] }) } }),
-    click(role("button", { name: "Queue 4" })),
+    // The epic and its child, and app's own queued task; lib's task is out of the app space's scope.
+    click(role("button", { name: "Queue 3" })),
     expect(role("button", { name: "launch ep-1" })).not.toExist(),
     expect(role("list", { name: "tasks under ep-1" })).toContainText("Export as CSV"),
     expect(role("button", { name: "launch ts-q3" })).toExist(),
@@ -139,11 +215,10 @@ test("the queue starts folded, and a queued task launches on a picked rung", () 
     { update, view },
     given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: ["haiku", "sonnet"] } } }),
     expect(role("list", { name: "Queue" })).not.toExist(),
-    click(role("button", { name: "Queue 2" })),
+    click(role("button", { name: "Queue 1" })),
     expectAll(all.selector(".foreman-row")).toHaveCount(5),
-    click(role("button", { name: "lib" })),
-    expectAll(all.selector(".foreman-row")).toHaveCount(1),
     click(role("button", { name: "All projects" })),
+    expectAll(all.selector(".foreman-row")).toHaveCount(6),
     click(role("button", { name: "launch ts-q1" })),
     click(role("button", { name: "launch ts-q1 on sonnet" })),
     Command.expectExact(RunForeman({ command: { _tag: "Launch", key: "ts-q1", rung: "sonnet" } })),

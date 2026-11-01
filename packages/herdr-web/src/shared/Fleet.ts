@@ -131,9 +131,10 @@ export type Machine = typeof Machine.Type
 /**
  * The git state of the folder a space works in now (see folderNow). `top` is
  * the checkout that holds it, a worktree's own folder; `branch` is none for a
- * detached head.
+ * detached head. `project` is the prog project the folder's repository is,
+ * none when git cannot say.
  */
-export const SpaceGit = S.Struct({ top: S.String, branch: S.OptionFromNullOr(S.String), changed: S.Boolean })
+export const SpaceGit = S.Struct({ top: S.String, branch: S.OptionFromNullOr(S.String), changed: S.Boolean, project: S.OptionFromNullOr(S.String) })
 export type SpaceGit = typeof SpaceGit.Type
 
 export const Fleet = S.Struct({
