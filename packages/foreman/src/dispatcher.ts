@@ -2196,10 +2196,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
  * record which grant admitted the task once the dispatch has happened. A task
  * the policy does not allow is passed over and keeps no slot.
  *
- * A task whose step is set to `ask` keeps its slot in this plan and is listed
- * in `asks` instead of dispatched. So an ask holds back the work behind it
- * exactly as the dispatch it stands for would, and approving it frees the
- * same slot for the same task on the next tick.
+ * A task whose step is set to `ask` is listed in `asks` and takes no slot: a
+ * slot is spent when a step runs, not when the operator is asked about it. So
+ * review and climb asks are listed whatever the free count, and an ask ahead
+ * in the queue never holds back a granted task behind it. Author asks are
+ * capped at the policy's `slots`, so an `ask` author step does not list the
+ * whole queue. Approving an ask grants the step, and the granted dispatch then
+ * waits for a free slot like any other.
  */
 export const dispatchesFor = (
   current: DispatchState,
@@ -2208,60 +2211,52 @@ export const dispatchesFor = (
 ): Plan => {
   const busy = current.workers.filter(isBusy).length;
   let free = current.policy.slots - busy;
-  if (free <= 0) return { dispatches: [], asks: [] };
+  let authorAsks = 0;
 
   const dispatches: Array<PlannedDispatch> = [];
   const asks: Array<Ask> = [];
   // Admissions planned in this pass count against a grant's `remaining` at
-  // once, so one pass cannot admit more tasks than the grant allows.
+  // once, so one pass cannot admit more tasks than the grant allows. Only a
+  // dispatch that gets a slot admits: a task passed over for want of one
+  // leaves the grant whole for the next tick.
   let policy = current.policy;
-  const allowed = (task: string, step: Step) => {
-    const given = permit(policy, current.scopes, task, step);
+  const held = (project: string) => current.held.some((entry) => entry.project === project);
+  const take = (given: Permit, task: string) => {
     if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
-    return given;
+    free -= 1;
   };
 
   for (const { task, worker } of current.review) {
-    if (free <= 0) break;
-    if (current.held.some((held) => held.project === task.project)) continue;
+    if (held(task.project)) continue;
     if (reviewedBy(task) !== undefined || failed.has(task.id) || stale.has(task.id)) continue;
     if (current.outOfQuota.has(task.id)) continue;
     if (worker && isBusy(worker)) continue;
-    const given = allowed(task.id, "review");
-    switch (given._tag) {
-      case "Denied":
-        continue;
-      case "Ask":
-        asks.push({ task, step: "review", rung: authoredBy(task) });
-        break;
-      case "Default":
-      case "Granted":
-        dispatches.push({ role: "review", task, permit: given });
-        break;
+    const given = permit(policy, current.scopes, task.id, "review");
+    if (given._tag === "Ask") {
+      asks.push({ task, step: "review", rung: authoredBy(task) });
+    } else if (given._tag !== "Denied" && free > 0) {
+      take(given, task.id);
+      dispatches.push({ role: "review", task, permit: given });
     }
-    free -= 1;
   }
 
   // Which ready tasks may run together is what the plan's blockers already
   // say, and `prog ready` has applied them before foreman sees the queue.
   for (const task of current.queue) {
-    if (free <= 0) break;
-    if (current.held.some((held) => held.project === task.project)) continue;
+    if (held(task.project)) continue;
     if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
     const step = authorStep(task.labels);
-    const given = allowed(task.id, step);
-    switch (given._tag) {
-      case "Denied":
-        continue;
-      case "Ask":
-        asks.push({ task, step, rung: undefined });
-        break;
-      case "Default":
-      case "Granted":
-        dispatches.push({ role: "author", task, permit: given });
-        break;
+    const given = permit(policy, current.scopes, task.id, step);
+    if (given._tag === "Ask") {
+      if (step === "author") {
+        if (authorAsks >= current.policy.slots) continue;
+        authorAsks += 1;
+      }
+      asks.push({ task, step, rung: undefined });
+    } else if (given._tag !== "Denied" && free > 0) {
+      take(given, task.id);
+      dispatches.push({ role: "author", task, permit: given });
     }
-    free -= 1;
   }
 
   return { dispatches, asks };

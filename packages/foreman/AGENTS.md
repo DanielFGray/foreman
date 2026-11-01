@@ -69,9 +69,11 @@ while the operator looks at it. To empty the pipeline without taking on new
 work, turn `author` and `climb` off and leave `review` and `land` on.
 
 An ask is a reading, not a record. `dispatchFrom` plans each tick's dispatches
-and asks together, so an asked task keeps the slot its dispatch would take and
-holds back the work behind it the same way. Landing takes no slot, so land asks
-are not bounded. `foreman approve <id>` answers one with an ordinary one-task
+and asks together. A slot is spent when a step runs, not when it is asked about,
+so an ask holds no slot: review, climb and land asks are listed whatever the free
+count and never hold back a granted task behind them. Author asks are capped at
+`slots`, so an `ask` author step does not list the whole queue. An approved step
+waits for a free slot like any dispatch. `foreman approve <id>` answers one with an ordinary one-task
 grant for the asked step, which the next tick takes; nothing else stores
 approvals. `foreman wait --asks` returns when a new ask appears, for a
 coordinator that answers asks while it talks to the operator.
