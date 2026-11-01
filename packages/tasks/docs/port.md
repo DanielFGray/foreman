@@ -45,8 +45,9 @@ It follows the rules the Go writer already follows on that file:
 ## Build order
 
 1. **The `Tasks` service** over `effect/sql` (`@effect/sql-sqlite-bun`): items,
-   deps, labels, logs, ready and rank. The dependency graph uses Effect's
-   `Graph` (cycle check on `blocks`, topological order, Mermaid output).
+   deps, labels, logs, ready and rank. Done, except one open item: the
+   dependency graph on Effect's `Graph` (cycle check on `blocks`, topological
+   order, Mermaid output) arrives with the `blocks` command in step 4.
    Pass criterion: a differential test that runs Go `prog` and `Tasks` on two
    copies of one database for every command foreman uses (ready, list, show,
    label, unlabel, start, review, open, done, log, add) and compares the JSON
