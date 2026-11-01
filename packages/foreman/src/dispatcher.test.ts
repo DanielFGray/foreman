@@ -3,6 +3,7 @@ import { DateTime } from "effect";
 import {
   awaitingLanding,
   decisionsOf,
+  isFleetWork,
   dispatchesFor as plan,
   failedTasks,
   handoffExpired,
@@ -141,6 +142,18 @@ describe("diagnostic intervention", () => {
     expect(diagnosticIntent(task("ts-1", ["by:opencode", "diagnosing:diagnose"]))).toBe("diagnose");
     expect(diagnosticIntent(task("ts-2", ["diagnosing:review"]))).toBe("review");
     expect(diagnosticIntent(task("ts-3", ["by:opencode"]))).toBeUndefined();
+  });
+});
+
+describe("working", () => {
+  // A claim made by hand has no rung and no agent, so listing it as the fleet's
+  // work showed dozens of rows that nobody was running.
+  test("counts a claim as the fleet's only when foreman authored it or holds a worker on it", () => {
+    expect(isFleetWork(active(task("ts-1", [], "in_progress"), undefined))).toBe(false);
+    expect(isFleetWork(active(task("ts-2", ["by:opus"], "in_progress"), undefined))).toBe(true);
+    expect(isFleetWork(active(task("ts-3", [], "in_progress"), worker("working", "ts-3")))).toBe(
+      true,
+    );
   });
 });
 

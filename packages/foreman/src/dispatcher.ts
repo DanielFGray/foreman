@@ -784,7 +784,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         outOfQuota,
         queue: ordered,
         yours,
-        working: claimedActive,
+        working: claimedActive.filter(isFleetWork),
         ...reviews,
         dispatches: plan.dispatches,
         asks: [...plan.asks, ...landAsks(gates)],
@@ -2527,6 +2527,14 @@ export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
  * within the tick, or one that died between opening and spawning, which nothing
  * else clears if the task is never offered again.
  */
+/**
+ * Whether a claimed task is the fleet's: foreman labelled its author, or one of
+ * its workers holds it. Any other claim was made by hand or by another session
+ * and is that person's work in progress, not an agent the fleet is running.
+ */
+export const isFleetWork = (claimed: Active): boolean =>
+  claimed.worker !== undefined || authoredBy(claimed.task) !== undefined;
+
 export const decisionsOf = (
   claimed: ReadonlyArray<Active>,
   reviewing: ReadonlyArray<Active>,
