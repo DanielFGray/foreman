@@ -93,6 +93,19 @@ const runOutcomes = Metric.counter("foreman.run.outcomes", {
 });
 
 /**
+ * The task-log line a kill writes: the attempt note, plus the operator's
+ * reason when one was given.
+ *
+ * Absence is carried as absence, so a kill with no reason writes the bare
+ * attempt line, and a blank one writes it too — only real text earns a suffix.
+ */
+const killLogLine = (reason: Option.Option<string>): string => {
+  const note = Option.getOrElse(reason, () => "").trim();
+  const suffix = note === "" ? "" : `: ${note}`;
+  return `foreman: operator killed this attempt${suffix}`;
+};
+
+/**
  * The loop that replaces the human, and the commands a dashboard can give it.
  *
  * Foreman remembers nothing between ticks. What it is doing is read back every
@@ -1911,15 +1924,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       focus: (worker: Worker) => fleet.focus(worker),
 
       /** Stops a live attempt, records why, and returns the task unchanged to the queue. */
-      kill: (target: InterventionTarget, reason: string) =>
+      kill: (target: InterventionTarget, reason: Option.Option<string>) =>
         commanded(
           Effect.gen(function* () {
             const task = yield* prog.show(target.task.id);
             if (task.status === "done" || task.status === "canceled" || !target.worker) return;
-            const note = reason.trim() || "operator killed this attempt";
             yield* stopAgents(target.worker);
             yield* prog.release(task.id);
-            yield* prog.log(task.id, `foreman: operator killed this attempt: ${note}`);
+            yield* prog.log(task.id, killLogLine(reason));
             yield* teardown(task);
           }),
         ),

@@ -356,7 +356,7 @@ describe("Dispatcher tick", () => {
 
     await Effect.runPromiseExit(
       Dispatcher.use((dispatcher) =>
-        dispatcher.kill({ task, worker: live }, "tests caught the wrong path"),
+        dispatcher.kill({ task, worker: live }, Option.some("tests caught the wrong path")),
       ).pipe(Effect.provide(layerFor(world))),
     );
 
@@ -369,14 +369,14 @@ describe("Dispatcher tick", () => {
     ]);
   });
 
-  test("uses the default kill note and refills the freed slot", async () => {
+  test("writes the bare kill note and refills the freed slot", async () => {
     const task = item("ts-kill-default", "reviewing", ["by:cheap", "attempt:cheap:1"]);
     const world = new World(task);
     const live = worker(task.id, "review", "blocked");
     world.workers.set(task.id, live);
 
     await Effect.runPromiseExit(
-      Dispatcher.use((dispatcher) => dispatcher.kill({ task, worker: live }, "")).pipe(
+      Dispatcher.use((dispatcher) => dispatcher.kill({ task, worker: live }, Option.none())).pipe(
         Effect.provide(layerFor(world)),
       ),
     );
@@ -384,10 +384,7 @@ describe("Dispatcher tick", () => {
 
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
     expect(world.tasks.get(task.id)?.labels).toEqual(["attempt:cheap:1", "by:cheap"]);
-    expect(world.logs).toContainEqual([
-      task.id,
-      "foreman: operator killed this attempt: operator killed this attempt",
-    ]);
+    expect(world.logs).toContainEqual([task.id, "foreman: operator killed this attempt"]);
     expect(world.spawned).toEqual([[task.id, "author"]]);
   });
 
