@@ -198,6 +198,11 @@ describe("reviewerFor", () => {
     expect(reviewerFor(ladder, "cheap", new Set(), ["middle"])?.name).toBe("top");
   });
 
+  test("ignores a failed reviewer no longer on the ladder", () => {
+    expect(reviewerFor(ladder, "top", new Set(), ["removed"])?.name).toBe("top");
+    expect(reviewerFor(ladder, undefined, new Set(), ["removed"])?.name).toBe("top");
+  });
+
   test("has no reviewer once the top rung has stopped, rather than reviewing itself again", () => {
     expect(reviewerFor(ladder, "cheap", new Set(), ["top"])).toBeUndefined();
     expect(reviewerFor(ladder, "top", new Set(), ["top"])).toBeUndefined();

@@ -233,15 +233,18 @@ export const reviewerFor = (
 ): Rung | undefined => {
   // The reviewer must outrank the author and every reviewer that already
   // stopped without a verdict on this task.
-  const ranks = [...(author === undefined ? [] : [author]), ...failed].flatMap((name) => {
+  const rankOfName = (name: string) => {
     const rank = rankOf(ladder, name);
     return rank === undefined ? [] : [rank];
-  });
+  };
+  // A name no longer on the ladder positions nothing, so it cannot exhaust it.
+  const failedRanks = failed.flatMap(rankOfName);
+  const ranks = [...(author === undefined ? [] : rankOfName(author)), ...failedRanks];
   const rank = ranks.length === 0 ? undefined : Math.max(...ranks);
   const above = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
   // An unrecognised author and the top rung both fall back to the top, which
   // reviews itself. A top reviewer that already failed has no one left.
-  const candidates = above.length > 0 ? above : failed.length > 0 ? [] : [topOf(ladder)];
+  const candidates = above.length > 0 ? above : failedRanks.length > 0 ? [] : [topOf(ladder)];
   return candidates.find((rung) => !walled.has(rung.name));
 };
 

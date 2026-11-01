@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
 import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
+import { Fleet, FleetError, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
 import { kindOf, Prog, ProgError, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
@@ -51,6 +51,8 @@ class World {
   readonly closed: string[] = [];
   readonly stopped: Array<[string, string]> = [];
   readonly spawned: Array<[string, string]> = [];
+  /** Tasks whose next spawn fails, as when a harness will not start. */
+  readonly spawnFails = new Set<string>();
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
@@ -100,12 +102,14 @@ class World {
       target: Worker,
       options: { role: AgentRole; kind: string; model: string | undefined; prompt: string },
     ) =>
-      this.write("fleet.spawn", () => {
-        this.spawned.push([target.task, options.role]);
-        const roles = new Map(target.roles).set(options.role, "working" as const);
-        this.workers.set(target.task, { ...target, roles, state: "working" });
-        return { kind: options.kind, model: options.model };
-      }),
+      this.spawnFails.has(target.task)
+        ? Effect.fail(new FleetError({ operation: "spawn", detail: "harness would not start" }))
+        : this.write("fleet.spawn", () => {
+            this.spawned.push([target.task, options.role]);
+            const roles = new Map(target.roles).set(options.role, "working" as const);
+            this.workers.set(target.task, { ...target, roles, state: "working" });
+            return { kind: options.kind, model: options.model };
+          }),
     roster: Effect.sync(() => [...this.workers.values()]),
     // The dispatcher never waits on a turn; only `foreman wait` does.
     awaitTurn: () => Effect.void,
@@ -1522,6 +1526,19 @@ describe("a reviewer that stops without a verdict", () => {
     expect(task?.status).toBe("reviewing");
     expect(task?.labels).toEqual(["by:low", "review-failed-by:mid", "review-by:high"]);
     expect(world.spawned).toEqual([["ts-stopped", "review"]]);
+  });
+
+  test("keeps recorded reviewer failures and the satisfied claim when a spawn fails", async () => {
+    const world = stopped("ts-spawn", ["by:low", "satisfied", "review-by:mid"]);
+    world.spawnFails.add("ts-spawn");
+
+    await tick(world).catch(() => undefined);
+
+    const labels = world.tasks.get("ts-spawn")?.labels ?? [];
+    expect(labels).toContain("review-failed-by:mid");
+    expect(labels).toContain("satisfied");
+    expect(labels.some((label) => label.startsWith("review-by:"))).toBe(false);
+    expect(world.tasks.get("ts-spawn")?.status).toBe("reviewing");
   });
 
   test("hands the task to the operator when no reviewer rung is left", async () => {

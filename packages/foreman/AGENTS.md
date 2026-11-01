@@ -506,7 +506,7 @@ above the author and every recorded reviewer. No attempt is charged to the
 author. When no rung is left the task is released and parked with `needs-you`.
 A reviewer stopped on a usage wall hands off the same way, writing
 `walled:<provider>` and no failure. `review-failed-by:*` goes with the author
-(`attribute`, `release`, `clearReview`).
+(`attribute`, `release`, `clearReview`); a spawn failure ends only `review-by`.
 
 **Whatever ends a review clears `review-by:*`.** A label left behind is read as
 evidence of something that never happened: a reviewer that is over on a task

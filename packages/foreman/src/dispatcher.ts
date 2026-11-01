@@ -1539,7 +1539,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           current.dispatches,
           (dispatch) =>
             dispatch.role === "review"
-              ? dispatchReview(dispatch.task, authoredBy(dispatch.task)).pipe(
+              ? dispatchReview(dispatch.task).pipe(
                   Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
                   Effect.tap(() => clearFailure(dispatch.task.id)),
                   Effect.catch((error) => recordFailure(dispatch.task.id, error)),
@@ -1660,10 +1660,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
     });
 
-    const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
-      task: Item,
-      author: string | undefined,
-    ) {
+    const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (task: Item) {
       const project = yield* projectFor(task.project);
       if (!project) return;
 
@@ -1683,22 +1680,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // reading is the tick's own: `state` is published before any pass runs,
       // and for an operator-triggered dispatch it is the same reading the quota
       // view was showing when they pressed the key.
-      const rung = reviewerFor(
-        settings.ladder,
-        author,
-        authorWalls(
-          settings.ladder,
-          task,
-          walledRungs((yield* SubscriptionRef.get(state)).providers),
-        ),
-        reviewFailedBy(task),
+      const rung = reviewerForTask(
+        task,
+        walledRungs((yield* SubscriptionRef.get(state)).providers),
       );
       if (!rung) {
         // Every rung that could read this diff is spent. The status is
         // untouched, so the task keeps its place and a later tick — or an
         // allowance reset — tries again.
         return yield* Effect.logInfo(
-          `review of ${task.id} deferred: no account with room at or above ${author ?? "the top rung"}`,
+          `review of ${task.id} deferred: no account with room at or above ${authoredBy(task) ?? "the top rung"}`,
         );
       }
       const worker = yield* workspaceFor(task, project);
@@ -1717,7 +1708,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         "review",
         fleet
           .spawn(worker, spawnAs(rung, prompt, "review"))
-          .pipe(Effect.tapError(() => prog.clearReview(task.id))),
+          .pipe(Effect.tapError(() => prog.endReview(task.id))),
       );
       yield* prog.log(task.id, agentLog("review", rung, agent));
       yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${rung.name}`);
@@ -2059,7 +2050,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (reviewedBy(task) !== undefined) yield* prog.clearReview(task.id);
         if (task.status === "open") yield* prog.claim(task.id);
         if (task.status !== "reviewing") yield* prog.review(task.id);
-        yield* dispatchReview(task, authoredBy(task));
+        yield* dispatchReview(task);
       });
 
     /**
@@ -2249,7 +2240,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 return;
               }
               if (task.status === "reviewing") {
-                return yield* dispatchReview(task, authoredBy(task)).pipe(
+                return yield* dispatchReview(task).pipe(
                   Effect.catch((error) => recordFailure(task.id, error)),
                 );
               }
@@ -2259,7 +2250,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             }
 
             if (task.status === "reviewing") {
-              return yield* dispatchReview(task, authoredBy(task));
+              return yield* dispatchReview(task);
             }
 
             // A salvage run that stopped is retried as a salvage run. Sending an
