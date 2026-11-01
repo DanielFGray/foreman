@@ -1138,6 +1138,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           labelFor(task.id),
           project.verify,
           verifyDirectoryFor(project.name),
+          `Merge ${labelFor(task.id)}: ${task.title}`,
         );
         // The verdict is a durable label, so a later tick lands from it with no
         // pane at all — and a project can stay dirty for hours.
