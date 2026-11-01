@@ -3,3 +3,6 @@ export * from "./machine.ts";
 export * from "./rank.ts";
 export * from "./store.ts";
 export * from "./time.ts";
+export * from "./connection.ts";
+export * from "./registry.ts";
+export * from "./migrations.ts";

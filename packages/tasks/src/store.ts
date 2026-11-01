@@ -4,13 +4,12 @@
  * It opens the same SQLite file as the Go `prog` (`PROG_DB`, else
  * `~/.prog/prog.db`), so both front ends see one set of tasks. Go owns the
  * schema of every table it created and `PRAGMA user_version`; this module reads
- * and writes those tables the way Go does and adds none of its own.
+ * and writes those tables the way Go does. The tables `tasks` adds are in
+ * `migrations.ts`.
  */
-import { SqliteClient } from "@effect/sql-sqlite-bun";
 import { Context, Effect, Layer, Option, Schedule, Schema as S } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { connectionAt, storePath } from "./connection.ts";
 import {
   epicStatus,
   type Item,
@@ -327,16 +326,11 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
 }) {
   /** The store in one file, for tests and tools that work on a copy. */
   static readonly layerAt = (filename: string) =>
-    Layer.effect(this, this.make).pipe(
-      Layer.provide(SqliteClient.layer({ filename, busyTimeout: "5 seconds" })),
-    );
+    Layer.effect(this, this.make).pipe(Layer.provide(connectionAt(filename)));
 
   /** The store at `PROG_DB`, else `~/.prog/prog.db`, read when the layer is built. */
   static readonly layer = Layer.suspend(() => Tasks.layerAt(storePath()));
 }
-
-/** The task store's file: `PROG_DB`, else `~/.prog/prog.db`, as the Go `prog` resolves it. */
-export const storePath = (): string => process.env.PROG_DB ?? join(homedir(), ".prog", "prog.db");
 
 type SqlFragment = ReturnType<SqlClient.SqlClient["and"]>;
 
