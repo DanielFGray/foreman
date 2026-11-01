@@ -696,9 +696,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // fleet still accounts for is never swept: the queue will dispatch onto
       // that same branch, and a claim with no worker is already a decision the
       // operator is being asked about.
+      //
+      // An orphan's task is deleted, so it is in none of the lists above, yet
+      // its terminal may still stand in the worktree. The sweep now removes
+      // that worktree, so the orphan's branch is kept for the operator to close.
       const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
+      const orphaned = new Set(orphans.map((worker) => worker.task));
       const prunable = branches.filter(
-        (entry) => entry.merged && !accounted.has(entry.task) && !ownedByTask.has(entry.task),
+        (entry) =>
+          entry.merged &&
+          !accounted.has(entry.task) &&
+          !ownedByTask.has(entry.task) &&
+          !orphaned.has(entry.task),
       );
 
       // Which rungs have no allowance left. An author's rung is chosen from

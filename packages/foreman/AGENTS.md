@@ -629,8 +629,10 @@ the queue, the claims or the review list — so a branch merged by hand disappea
 the same way a landed one does. Both halves are required: sweeping on `merged`
 alone deletes the branch of a task still under review, which is the evidence the
 next tick needs to tell work from nothing. `--delete` without `--force` is the
-backstop, since git refuses to drop commits the checkout does not have and
-refuses a branch a worktree still holds.
+backstop, since git refuses to drop commits the checkout does not have. A clean
+linked worktree still holding the merged branch is removed first, so a landing
+whose teardown failed does not leave the branch pinned forever; one with
+uncommitted or untracked work refuses, and the branch waits.
 
 What is left over is **unreviewed**, and `isUnread` is the whole rule: unmerged,
 and its task in no status that still reaches an agent. `open`, `in_progress` and

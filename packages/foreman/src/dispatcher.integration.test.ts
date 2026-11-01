@@ -8,7 +8,7 @@ import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import { kindOf, Prog, type Item, type ReadyTask } from "./prog.ts";
+import { kindOf, Prog, ProgError, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
@@ -135,7 +135,14 @@ class World {
   };
 
   readonly prog = {
-    show: (id: string) => Effect.succeed(this.tasks.get(id) as Item),
+    // Fails for an absent task, as Prog.show does, so callers that tolerate a
+    // deleted task (the branch read) are exercised against the real contract.
+    show: (id: string) => {
+      const task = this.tasks.get(id);
+      return task === undefined
+        ? Effect.fail(new ProgError({ command: `show ${id}`, detail: "no such task in the store" }))
+        : Effect.succeed(task);
+    },
     lookup: (id: string) => Effect.succeed(Option.fromNullishOr(this.tasks.get(id))),
     ready: () =>
       Effect.succeed(
@@ -524,6 +531,22 @@ describe("Dispatcher tick", () => {
     expect(world.branches.has("foreman/ts-swept")).toBe(false);
     expect(world.branches.has("foreman/ts-kept")).toBe(true);
     expect(world.removed).toEqual(["foreman/ts-swept"]);
+  });
+
+  test("keeps the branch of a merged workspace whose task was deleted", async () => {
+    const world = new World();
+    world.workers.set("ts-orphan", worker("ts-orphan", "author", "working"));
+    world.branches.set("foreman/ts-orphan", {
+      branch: "foreman/ts-orphan",
+      merged: true,
+      empty: false,
+      stale: undefined,
+    });
+
+    await tick(world);
+
+    expect(world.removed).toEqual([]);
+    expect(world.branches.has("foreman/ts-orphan")).toBe(true);
   });
 
   test("appends a trial row for the run that just ended", async () => {
