@@ -44,7 +44,7 @@ a claim made by hand.
 | Is this task mine to review? | it has a `by:*` label |
 | Is this worker mine? | the checkout in its terminals' `fm.repo` label |
 | Which projects are in play? | the git checkouts of the operator's open herdr-app spaces |
-| Is this project free to work in? | `git` or `jj` in its checkout |
+| Is this project free to work in? | `git` in its checkout |
 
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
@@ -173,10 +173,9 @@ cause clears.
 
 The held state carries the reason, not just the name. `isFree` returns a
 `Clean`/`Held` verdict (`Hold`) whose `detail` names which of the causes holds
-the project: a detached HEAD, a jj working copy that is not empty, a jj working
-copy with zero or several bookmark candidates behind it, a checkout foreman
-cannot read (the dispatcher's catch, not the probe's), or an `ambiguous` name.
-The landing gates return the same verdict, so the dispatch gate and the landing
+the project: a detached HEAD, a checkout foreman cannot read (the dispatcher's
+catch, not the probe's), or an `ambiguous` name. The landing gates return the same
+verdict, so the dispatch gate and the landing
 never disagree about why a checkout is busy. The held row shows it, and it is
 what the operator reads to tell a hold that clears itself from one that never
 does.
@@ -209,56 +208,6 @@ foreman's own reads set `GIT_OPTIONAL_LOCKS=0`, and an agent's cannot be made to
 `Repository.base` resolves a branch's fork point so a reviewer can diff
 `<base>..HEAD` inside its own worktree. Onboarding is the one exception, and only
 ever on a project already held.
-
-### jj checkouts land through jj
-
-Most of these projects are jj colocated with git, and jj answers both gate
-questions differently:
-
-- **There is no checked-out branch.** jj bookmarks do not move by being merged
-  into. The bookmark to land on is the nearest one behind the working copy,
-  `heads(::@ & bookmarks())`. `heads` drops bookmarks already merged into that
-  one, and foreman's own names are filtered out of what remains: every author
-  branches from the trunk's tip, so until it commits its bookmark sits on the
-  very commit being asked about, and counting it would hold the project for as
-  long as anyone is working in it. Zero or more than one candidate holds the
-  project rather than guessing, and the hold names the candidates, because they
-  are the fix: deleting the stray bookmark is what unholds the project.
-- **The working copy is a commit**, so clean means `@` is empty. That counts a
-  file git would call untracked, because under jj it is already part of the
-  working-copy commit and landing would carry it out of the operator's directory.
-- **jj never refuses a merge.** A conflict is a recorded state with markers
-  written into the files, so asking `@` whether it is conflicted is the whole
-  verdict and a non-zero exit can only be the machine. The proving ground is
-  where that question is asked, and resetting it is what discards a conflict.
-- **The proving ground is a named workspace**, `foreman-verify`. A workspace is
-  named in the repository rather than by its path, so remaking one at a path
-  that was removed means forgetting the name first. Resetting it is `jj new`
-  onto the tip and abandoning the working copy left behind — always a merge
-  foreman made and has finished with. The tick sweep excludes every workspace's
-  working copy, so a proof in flight is never swept out from under itself.
-- **The working copy moves onto the merge before the bookmark names it.** Both
-  steps only ever name the commit the ground proved. The order is the safety:
-  the trunk is the nearest bookmark behind `@`, so a working copy left behind a
-  bookmark that moved past it has **no trunk at all** — the project holds, every
-  later tick asks the same question and gets the same answer, and nothing in the
-  fleet can clear it. Publishing second cannot reach that state; an interruption
-  between the two leaves `@` on an unpublished merge whose ancestors still
-  include the trunk, so the next tick lands again and the sweep takes the merge
-  nobody named. The sweep is for exactly that, and for a failed proof's leftover
-  in the ground: anonymous heads carrying foreman's landing signature — a clean
-  merge of two parents whose description is the one `merge` writes. Working
-  copies are excluded, because that is the one such head a person may be on.
-- **The clean gate is re-asked immediately before the working copy moves.**
-  `jj new` rewrites the operator's directory whatever is in it; their work
-  survives as a commit but leaves their screen. A proof lasts as long as the
-  project's suite, which is long enough for them to have started typing, so the
-  gate that ran before the proof is not the gate that matters. The git path
-  needs no such recheck — a fast-forward refuses rather than overwrites.
-
-Everything else stays on git. The refs and worktrees in a colocated repository
-are real, and `git branch --delete` keeps the refusal that makes the sweep safe.
-`Repository` reads which kind of checkout it has per call.
 
 ### Onboarding is the one agent inside the operator's checkout
 
@@ -545,16 +494,14 @@ must not outlive the review that wrote it.
 
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
-`verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree or a jj
-workspace reset to the checkout's current tip.
+`verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the
+checkout's current tip.
 
 **What lands is that commit, not a merge remade from the same parents.** The
 ground shares the repository's objects, so the proved commit is addressable from
-the checkout: git fast-forwards onto it, jj points the bookmark at it. The
-checkout therefore takes the exact tree that was verified, and neither apply can
-reconcile anything — which is what makes a refusal there provably about the
-machine. Remaking the merge instead also puts two merges of the same two parents
-in one repository, which the jj path cannot tell apart.
+the checkout, and git fast-forwards onto it. The checkout therefore takes the
+exact tree that was verified, and the fast-forward cannot reconcile anything —
+which is what makes a refusal there provably about the machine.
 
 Every property that makes this the design follows from the operator sharing that
 checkout. A test suite spawns its own processes, and running one in a directory
@@ -577,9 +524,8 @@ in, so the landing holds and a later tick proves and applies the same one.
 
 **A merge that did not happen and a merge that would not happen are different
 answers.** Only the second is about the branch, and only the second may climb a
-rung. So the conflict is **asked about, not inferred** — the same shape as the jj
-path, where a conflict is a recorded state rather than an error. git's exit
-status cannot carry the distinction: it reports a lock it could not take through
+rung. So the conflict is **asked about, not inferred**. git's exit status
+cannot carry the distinction: it reports a lock it could not take through
 the same non-zero codes as content it would not reconcile, and only the
 diagnostic text separates them. An unmerged index entry is the durable fact
 instead — git writes one per conflicting path and nothing else does — so it is
