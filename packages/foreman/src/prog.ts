@@ -200,7 +200,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * correction count goes too: it counts this author's rounds, not the task's.
        */
       attribute: (task: string, kind: string) =>
-        removeKinds(task, [BY, REVIEW_BY, APPROVED, SATISFIED, ROUNDS]).pipe(
+        removeKinds(task, [BY, REVIEW_BY, REVIEW_FAILED, APPROVED, SATISFIED, ROUNDS]).pipe(
           Effect.andThen(run("label", task, `${BY}:${kind}`)),
           Effect.asVoid,
         ),
@@ -236,7 +236,29 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * author, and a reviewer can approve and then return work in the same
        * turn.
        */
-      clearReview: (task: string) => removeKinds(task, [REVIEW_BY, APPROVED, SATISFIED]),
+      clearReview: (task: string) =>
+        removeKinds(task, [REVIEW_BY, REVIEW_FAILED, APPROVED, SATISFIED]),
+
+      /**
+       * Ends a review that gave no verdict, leaving the task in `reviewing` for
+       * the next reviewer. Touches only `review-by`: `satisfied` is the
+       * author's claim and the next reviewer needs it, and the reviewers that
+       * already failed stay recorded.
+       */
+      endReview: (task: string) => removeKinds(task, [REVIEW_BY]).pipe(Effect.asVoid),
+
+      /**
+       * Ends a review whose reviewer stopped without a verdict, and records that
+       * rung so the next reviewer is chosen above it.
+       */
+      failReview: (task: string, rung: string) =>
+        removeKinds(task, [REVIEW_BY]).pipe(
+          Effect.andThen(run("label", task, `${REVIEW_FAILED}:${rung}`)),
+          Effect.asVoid,
+        ),
+
+      /** Parks a task in the operator's column, whatever the ladder would say. */
+      parkForOperator: (task: string) => run("label", task, NEEDS_YOU).pipe(Effect.asVoid),
 
       /**
        * Records that a rung was tried on this task and was not enough.
@@ -357,7 +379,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * clears it.
        */
       release: (task: string) =>
-        removeKinds(task, [APPROVED, REVIEW_BY, SATISFIED]).pipe(
+        removeKinds(task, [APPROVED, REVIEW_BY, REVIEW_FAILED, SATISFIED]).pipe(
           Effect.andThen(run("open", task)),
           Effect.asVoid,
         ),
@@ -498,6 +520,11 @@ export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): st
 /** Which reviewer currently owns a reviewing task, if one was dispatched. */
 export const reviewedBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   valuesOfKind(item.labels, REVIEW_BY)[0];
+
+/** The rungs whose reviewers stopped on this task without a verdict. */
+export const reviewFailedBy = (item: {
+  readonly labels: ReadonlyArray<string>;
+}): ReadonlyArray<string> => valuesOfKind(item.labels, REVIEW_FAILED);
 
 /**
  * Stable audit entry for one agent attempt on a task.
@@ -644,6 +671,13 @@ const attemptFor = (label: string, rung: string): number | undefined => {
 /** Kind of the label naming the rung that authored a task's current branch. */
 export const BY = "by";
 export const REVIEW_BY = "review-by";
+
+/**
+ * Kind of the label naming a rung whose reviewer stopped without a verdict, one
+ * per rung. The next review is chosen above every one of them. They go with the
+ * author, because they describe this branch's reviews, not the task's.
+ */
+export const REVIEW_FAILED = "review-failed-by";
 
 /**
  * How big a slice is, as the coordinator judged it when filing: `size:1` one

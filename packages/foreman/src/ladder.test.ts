@@ -194,6 +194,20 @@ describe("reviewerFor", () => {
     expect(reviewerFor(ladder, "middle", new Set(["top"]))).toBeUndefined();
   });
 
+  test("reads above every reviewer that already stopped without a verdict", () => {
+    expect(reviewerFor(ladder, "cheap", new Set(), ["middle"])?.name).toBe("top");
+  });
+
+  test("ignores a failed reviewer no longer on the ladder", () => {
+    expect(reviewerFor(ladder, "top", new Set(), ["removed"])?.name).toBe("top");
+    expect(reviewerFor(ladder, undefined, new Set(), ["removed"])?.name).toBe("top");
+  });
+
+  test("has no reviewer once the top rung has stopped, rather than reviewing itself again", () => {
+    expect(reviewerFor(ladder, "cheap", new Set(), ["top"])).toBeUndefined();
+    expect(reviewerFor(ladder, "top", new Set(), ["top"])).toBeUndefined();
+  });
+
   test("gives no reviewer when every rung at or above is spent", () => {
     expect(reviewerFor(ladder, "cheap", new Set(["middle", "top"]))).toBeUndefined();
   });

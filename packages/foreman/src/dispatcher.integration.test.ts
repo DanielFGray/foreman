@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
 import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
+import { Fleet, FleetError, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { Settings } from "./config.ts";
 import { kindOf, Prog, ProgError, type Item, type ReadyTask } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
@@ -51,6 +51,8 @@ class World {
   readonly closed: string[] = [];
   readonly stopped: Array<[string, string]> = [];
   readonly spawned: Array<[string, string]> = [];
+  /** Tasks whose next spawn fails, as when a harness will not start. */
+  readonly spawnFails = new Set<string>();
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
@@ -100,12 +102,14 @@ class World {
       target: Worker,
       options: { role: AgentRole; kind: string; model: string | undefined; prompt: string },
     ) =>
-      this.write("fleet.spawn", () => {
-        this.spawned.push([target.task, options.role]);
-        const roles = new Map(target.roles).set(options.role, "working" as const);
-        this.workers.set(target.task, { ...target, roles, state: "working" });
-        return { kind: options.kind, model: options.model };
-      }),
+      this.spawnFails.has(target.task)
+        ? Effect.fail(new FleetError({ operation: "spawn", detail: "harness would not start" }))
+        : this.write("fleet.spawn", () => {
+            this.spawned.push([target.task, options.role]);
+            const roles = new Map(target.roles).set(options.role, "working" as const);
+            this.workers.set(target.task, { ...target, roles, state: "working" });
+            return { kind: options.kind, model: options.model };
+          }),
     roster: Effect.sync(() => [...this.workers.values()]),
     // The dispatcher never waits on a turn; only `foreman wait` does.
     awaitTurn: () => Effect.void,
@@ -179,6 +183,7 @@ class World {
               (label) =>
                 kindOf(label) !== "by" &&
                 kindOf(label) !== "review-by" &&
+                kindOf(label) !== "review-failed-by" &&
                 label !== "approved" &&
                 label !== "satisfied",
             ),
@@ -196,13 +201,37 @@ class World {
           ],
         })),
       ),
+    endReview: (id: string) =>
+      this.write("prog.endReview", () =>
+        this.update(id, (task) => ({
+          ...task,
+          labels: task.labels.filter((label) => kindOf(label) !== "review-by"),
+        })),
+      ),
+    failReview: (id: string, rung: string) =>
+      this.write("prog.failReview", () =>
+        this.update(id, (task) => ({
+          ...task,
+          labels: [
+            ...task.labels.filter((label) => kindOf(label) !== "review-by"),
+            `review-failed-by:${rung}`,
+          ],
+        })),
+      ),
+    parkForOperator: (id: string) =>
+      this.write("prog.parkForOperator", () =>
+        this.update(id, (task) => ({ ...task, labels: [...task.labels, "needs-you"] })),
+      ),
     clearReview: (id: string) =>
       this.write("prog.clearReview", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter(
             (label) =>
-              kindOf(label) !== "review-by" && label !== "approved" && label !== "satisfied",
+              kindOf(label) !== "review-by" &&
+              kindOf(label) !== "review-failed-by" &&
+              label !== "approved" &&
+              label !== "satisfied",
           ),
         })),
       ),
@@ -253,7 +282,10 @@ class World {
           status: "open",
           labels: task.labels.filter(
             (label) =>
-              kindOf(label) !== "review-by" && label !== "approved" && label !== "satisfied",
+              kindOf(label) !== "review-by" &&
+              kindOf(label) !== "review-failed-by" &&
+              label !== "approved" &&
+              label !== "satisfied",
           ),
         })),
       ),
@@ -1337,6 +1369,30 @@ describe("a usage wall", () => {
     expect(world.spawned).toContainEqual(["ts-walled", "author"]);
   });
 
+  test("hands a review to another account without recording a reviewer failure", async () => {
+    const task = item("ts-review-wall", "reviewing", ["by:free", "review-by:free"]);
+    const world = new World(task);
+    world.workers.set(task.id, {
+      ...worker(task.id, "review", "settled"),
+      repository: "/build/test",
+    });
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    world.screens.set(task.id, "Free usage limit reached. Connect a provider");
+
+    await tick(world);
+
+    const found = world.tasks.get(task.id);
+    expect(found?.status).toBe("reviewing");
+    expect(found?.labels).toContain("walled:opencode");
+    expect(found?.labels.some((label) => label.startsWith("review-failed-by:"))).toBe(false);
+    expect(found?.labels).toContain("review-by:dear");
+  });
+
   test("commits nothing when the worktree holds no uncommitted work", async () => {
     const world = stoppedOn(
       "ts-walled-clean",
@@ -1406,5 +1462,93 @@ describe("a policy change", () => {
     );
 
     expect(waited).toBeLessThan(1000);
+  });
+});
+
+describe("a reviewer that stops without a verdict", () => {
+  /** Three rungs on three accounts, so a review has two rungs to climb. */
+  const layerFor = (world: World) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          ladder: [
+            { name: "low", harness: "test", model: "a/low", provider: undefined },
+            { name: "mid", harness: "test", model: "b/mid", provider: undefined },
+            { name: "high", harness: "test", model: "c/high", provider: undefined },
+          ],
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Repository, world.repository),
+        trialsFor(world),
+        Layer.succeed(Quota, {
+          usage: (provider: string) =>
+            Effect.succeed({ provider, plan: undefined, allowances: [] }),
+        }),
+        prompts,
+        BunServices.layer,
+      ),
+    );
+
+  const tick = (world: World) => {
+    usePolicy({ ...ALLOWED, slots: 1 });
+    return Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+    );
+  };
+
+  /** A task whose `reviewer` rung stopped with the pane settled and no verdict. */
+  const stopped = (id: string, labels: ReadonlyArray<string>) => {
+    const world = new World(item(id, "reviewing", labels));
+    world.workers.set(id, { ...worker(id, "review", "settled"), repository: "/build/test" });
+    world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    return world;
+  };
+
+  test("keeps the task in review, charges no attempt, and dispatches a higher reviewer", async () => {
+    const world = stopped("ts-stopped", ["by:low", "review-by:mid"]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-stopped");
+    expect(task?.status).toBe("reviewing");
+    expect(task?.labels).toEqual(["by:low", "review-failed-by:mid", "review-by:high"]);
+    expect(world.spawned).toEqual([["ts-stopped", "review"]]);
+  });
+
+  test("keeps recorded reviewer failures and the satisfied claim when a spawn fails", async () => {
+    const world = stopped("ts-spawn", ["by:low", "satisfied", "review-by:mid"]);
+    world.spawnFails.add("ts-spawn");
+
+    await tick(world).catch(() => undefined);
+
+    const labels = world.tasks.get("ts-spawn")?.labels ?? [];
+    expect(labels).toContain("review-failed-by:mid");
+    expect(labels).toContain("satisfied");
+    expect(labels.some((label) => label.startsWith("review-by:"))).toBe(false);
+    expect(world.tasks.get("ts-spawn")?.status).toBe("reviewing");
+  });
+
+  test("hands the task to the operator when no reviewer rung is left", async () => {
+    const world = stopped("ts-last", ["by:low", "review-failed-by:mid", "review-by:high"]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-last");
+    expect(task?.status).toBe("open");
+    expect(task?.labels).toEqual(["by:low", "needs-you"]);
+    expect(world.spawned).toEqual([]);
   });
 });
