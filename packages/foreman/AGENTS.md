@@ -54,8 +54,9 @@ because nothing in the world records the operator's intention: `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
-project's own `paused` and its own mode for any step, which replace the
-default for that project's tasks only. A paused project takes no step, grants
+project's own `paused`, its own mode for any step, which replace the
+default for that project's tasks only, and its `checkout` (see "Branch mode"
+below). A paused project takes no step, grants
 included; slots stay fleet-wide. `foreman policy` and the panel write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
@@ -118,7 +119,10 @@ under way. Two checkouts with one name are held as `ambiguous`, because a task
 names a project, not a directory. A project's verify command is its own
 `scripts/verify.sh`.
 
-### One worktree per task
+### One workspace per task
+
+The workspace is a worktree of its own unless the project is in branch mode
+(below), where it is the operator's checkout with the branch out.
 
 `foreman/<task-id>` is the git branch. Each of the task's agents runs in an hc
 terminal labelled with the task (`fm.task`) and its role (`fm.role`), in
@@ -226,14 +230,60 @@ check below comes first) and returns `Held`: the landing is not attempted, the
 verdict stays on the task, and a later tick lands it. No prompt is involved,
 because no agent merges.
 
-Agents stay out of that checkout entirely. `git` commands there refresh the
+In worktree mode, agents stay out of that checkout entirely. `git` commands there refresh the
 index, which collides with a landing mid-merge and leaves `index.lock` behind;
 foreman's own reads set `GIT_OPTIONAL_LOCKS=0`, and an agent's cannot be made to.
 `Repository.base` resolves a branch's fork point so a reviewer can diff
-`<base>..HEAD` inside its own worktree. Onboarding is the one exception, and only
-ever on a project already held.
+`<base>..HEAD` inside its own worktree. Branch mode and onboarding are the
+exceptions, and in each the project is held for everything else while the
+agent is there.
 
-### Onboarding is the one agent inside the operator's checkout
+### Branch mode: the task's branch in the operator's checkout
+
+`foreman policy checkout branch --project <name>` sets `projects.<name>.checkout`,
+for a project whose tooling cannot run in a second directory. A new workspace
+for that project is the checkout itself: `Fleet.open` runs
+`Repository.checkoutBranch`, which puts the checkout on `foreman/<id>` and
+sets the branch it left as that branch's upstream.
+
+- **git records the mode, not the task or the policy.** The policy is read only
+  to place a new workspace (`newWorkspace`). After that, git lists the checkout
+  with the task's branch out, so later opens adopt it, and the upstream names
+  the branch it lands on. An operator who changes the policy mid-task does not
+  change how that task lands.
+- **The trunk is the upstream while a task branch is out.** HEAD is then the
+  task's own work, and read as the trunk it makes the branch read as merged and
+  empty and gives the reviewer an empty diff. `trunkOf` in
+  `src/repository.ts` is the one place that answers it, for `base`,
+  `branches` and landing.
+- **One task at a time, from a clean tree.** `isFree` holds a checkout with a
+  `foreman/*` branch out as `busy`, and the hold carries that branch, so it
+  holds every task but its owner, whatever their mode: a worktree landing there
+  would fast-forward the task's branch. A branch-mode project also needs an
+  empty tree to start, because git carries uncommitted edits across the switch
+  into the agent's commits.
+- **Ending the task checks the operator's branch out again**, from a clean tree:
+  landing does it first and then runs the ordinary proving-ground path, and
+  teardown (`leaveBranch`, from `close`) does it for a task that ends any other
+  way. So a landing that breaks the project or conflicts also leaves the
+  operator's branch out, and the next author's `checkoutBranch` resumes the
+  task's branch with its commits. A reviewer's rejection keeps the workspace,
+  so the checkout stays on the task's branch. A dirty tree stays put, and the
+  busy hold names the branch to clear.
+- **The checkout is never removed, and is the task's only while it has the
+  branch out.** Teardown skips the main checkout even when git lists it for the
+  task's branch. Settle tells an onboarding salvage from a branch-mode worker by
+  the `onboard` label, so a stopped branch-mode author's edits are committed onto
+  its branch like a worktree author's. `holdsWork` and `commitWork` take the
+  task's branch and act on a main checkout only while it has that branch out,
+  because after a landing or a hand switch the edits there are the operator's.
+
+A `direct` mode, where the agent commits onto the operator's branch with no
+task branch, is not built. Every read of a task's work is keyed on
+`foreman/<id>`, and an operator commit made during the run cannot be told apart
+from the agent's, so a rejection cannot revert exactly the task's commits.
+
+### Onboarding salvages the operator's checkout
 
 A held project is unheld by salvaging what is in it. `Dispatcher.onboard` files a
 task in that project, calls `Fleet.attach` for a worker on the checkout
@@ -463,8 +513,8 @@ Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is
 most likely to have stubbed. An approving reviewer is the only thing that makes
-a branch landable, and landing is the only code path that writes to the
-operator's checkout, so no prompt gives an agent merge rights.
+a branch landable, and landing is the only code path that moves the
+operator's branch, so no prompt gives an agent merge rights.
 
 The author critiques its own diff before handing off, reading `git diff` rather
 than recalling its intent, because the intent is what wrote any mistake in there.
