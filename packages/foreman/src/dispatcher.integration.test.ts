@@ -65,6 +65,8 @@ class World {
   readonly writes: string[] = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
+  /** The commit message each landing passed to `Repository.merge`. */
+  readonly mergeMessages: string[] = [];
 
   constructor(...items: ReadonlyArray<Item>) {
     for (const task of items) this.tasks.set(task.id, task);
@@ -290,7 +292,17 @@ class World {
       }),
     // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
     setup: () => this.write("repository.setup", () => undefined),
-    merge: () => this.write("repository.merge", () => this.landing),
+    merge: (
+      _directory: string,
+      _branch: string,
+      _verify: string | undefined,
+      _proving: string,
+      message: string,
+    ) =>
+      this.write("repository.merge", () => {
+        this.mergeMessages.push(message);
+        return this.landing;
+      }),
     // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
     worktrees: () => Effect.die("unused"),
     addWorktree: () => Effect.die("unused"),
@@ -714,6 +726,7 @@ describe("Dispatcher tick", () => {
     await tick(world);
 
     expect(world.tasks.get(task.id)?.status).toBe("done");
+    expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
     expect(world.trials).toEqual([
       expect.objectContaining({ task: task.id, work: "build", outcome: "committed" }),
       expect.objectContaining({ task: task.id, work: "review", outcome: "committed" }),

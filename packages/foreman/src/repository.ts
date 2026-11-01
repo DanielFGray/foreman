@@ -341,12 +341,13 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       branch: string,
       verify: string | undefined,
       base: string,
+      message: string,
     ): Effect.Effect<Proof, RepositoryError> =>
       Effect.gen(function* () {
         const ready = yield* gitGround(proving, directory, base);
         if (ready) return ready;
 
-        const merged = yield* git(proving, "merge", "--no-ff", branch);
+        const merged = yield* git(proving, "merge", "--no-ff", "-m", message, branch);
         if (merged.exitCode !== 0) {
           // A conflict is asked about rather than inferred. git reports a lock
           // it could not take through the same non-zero codes as content it
@@ -408,6 +409,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         branch: string,
         verify: string | undefined,
         proving: string,
+        message: string,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           // Asked before the proof, which costs a run of the project's suite:
@@ -418,7 +420,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           const base = yield* gitOutput(directory, "rev-parse", "HEAD");
 
-          const proof = yield* gitProve(proving, directory, branch, verify, base);
+          const proof = yield* gitProve(proving, directory, branch, verify, base, message);
           if (proof._tag !== "Proven") return proof;
 
           // The proof took as long as the project's suite takes, and the
@@ -783,8 +785,18 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * A project that was already red stays landable, because a branch cannot
        * be blamed for damage that predates it, and gating on an absolute pass
        * would freeze the fleet behind one broken test forever.
+       *
+       * `message` is the subject of the merge commit. Without it git names the
+       * commit after the detached HEAD the proof runs on, which reads as noise
+       * in the operator's history.
        */
-      merge: (directory: string, branch: string, verify: string | undefined, proving: string) =>
+      merge: (
+        directory: string,
+        branch: string,
+        verify: string | undefined,
+        proving: string,
+        message: string,
+      ) =>
         Effect.gen(function* () {
           // Asked before the clean gate, because a checkout that already has
           // the commits is not going to be written to and its cleanliness is
@@ -794,7 +806,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;
-          return yield* gitCheckout.merge(directory, branch, verify, proving);
+          return yield* gitCheckout.merge(directory, branch, verify, proving, message);
         }),
     } as const;
   }),
