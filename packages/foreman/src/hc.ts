@@ -29,345 +29,364 @@ import { Repository, type Worktree } from "./repository.ts";
  * Every agent of a task shares one tab, so a reviewer opens beside the author
  * it was sent to read.
  */
-export const HcFleet = Layer.effect(
-  Fleet,
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const repository = yield* Repository;
+export const HcFleet = hcFleetOver().pipe(Layer.provide([Repository.Default, BunServices.layer]));
 
-    /**
-     * Runs one program and reports its exit code and both streams.
-     *
-     * Exit status is the point: a refusal prints to stderr and exits non-zero,
-     * and reading stdout alone turns it into "success with nothing to say".
-     */
-    const exec = (operation: string, program: string, args: ReadonlyArray<string>, input = "") =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const process = yield* spawner.spawn(
-            ChildProcess.make(program, args, {
-              stdin: Stream.make(input).pipe(Stream.encodeText),
-            }),
-          );
-          const [exitCode, stdout, stderr] = yield* Effect.all(
-            [
-              process.exitCode,
-              Stream.decodeText(process.stdout).pipe(Stream.mkString),
-              Stream.decodeText(process.stderr).pipe(Stream.mkString),
-            ],
-            { concurrency: 3 },
-          );
-          return { exitCode: Number(exitCode), stdout, stderr };
-        }),
-      ).pipe(Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })));
-
-    /**
-     * One call to hc's API, through `hc connect`.
-     *
-     * The API rather than the CLI because `hc ls` leaves out the labels and
-     * status a roster is built from, and the API lists them in one call.
-     */
-    const call = <A, I>(
-      schema: S.Codec<A, I>,
-      operation: string,
-      method: string,
-      params: Record<string, unknown>,
-    ) =>
-      exec(
-        operation,
-        "hc",
-        ["connect"],
-        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })}\n`,
-      ).pipe(
-        Effect.flatMap((result) =>
-          S.decodeEffect(S.fromJsonString(Reply))(result.stdout.trim()).pipe(
-            Effect.mapError(
-              () =>
-                new FleetError({
-                  operation,
-                  detail: result.stderr.trim() || `hc connect exited ${result.exitCode}`,
-                }),
-            ),
-          ),
-        ),
-        Effect.flatMap((reply) =>
-          reply.error
-            ? Effect.fail(
-                new FleetError({
-                  operation,
-                  detail: `${method}: ${reply.error.message}${reply.error.data?.kind ? ` (${reply.error.data.kind})` : ""}`,
-                }),
-              )
-            : S.decodeUnknownEffect(schema)(reply.result).pipe(
-                Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })),
-              ),
-        ),
-      );
-
-    /**
-     * Every foreman terminal, finished ones included.
-     *
-     * Finished ones are kept on purpose: an agent that exited is a role that
-     * is `gone`, which is a question for the operator, and only `stop` and
-     * `close` remove the record.
-     */
-    const terminals = call(TerminalList, "roster", "terminal.list", {
-      all: true,
-      labels: { [FLEET]: "foreman" },
-    }).pipe(Effect.map((list) => list.terminals));
-
-    const ofTask = (task: string) =>
-      terminals.pipe(Effect.map((all) => all.filter((terminal) => terminal.labels[TASK] === task)));
-
-    /** Ends a terminal's program if it still runs, then drops its record. */
-    const end = (operation: string, terminal: Pick<Terminal, "address" | "state">) =>
-      (terminal.state === "live"
-        ? call(S.Unknown, operation, "terminal.kill", { terminal: terminal.address })
-        : Effect.void
-      ).pipe(
-        Effect.andThen(call(S.Unknown, operation, "terminal.rm", { terminal: terminal.address })),
-        Effect.asVoid,
-      );
-
-    /**
-     * Where a task's tab goes: the space of a terminal already open on the
-     * task's checkout, so the work appears in the project the operator is in.
-     * With none open, the tab gets a space of its own, which herdr-app nests
-     * under the project's space because its folder is a linked worktree.
-     */
-    const placement = (task: string, checkout: string) =>
-      call(TerminalList, "spawn", "terminal.list", {}).pipe(
-        Effect.map((list) => placementOf(list.terminals, task, checkout)),
-        Effect.orElseSucceed(() => placementOf([], task, checkout)),
-      );
-
-    const roster = terminals.pipe(Effect.map(workersOf));
-
-    const fail = (operation: string) => (cause: { readonly message: string }) =>
-      new FleetError({ operation, detail: cause.message });
-
-    /**
-     * Blocks on one terminal's turn through `hc wait`. A check-in and a
-     * terminal that went away both return normally: the caller's roster read
-     * decides what they mean.
-     *
-     * The answer is read from stdout whatever the exit code, because hc reports
-     * a missing terminal as JSON on stdout with a non-zero exit. Stdout that is
-     * not that JSON is a failure, and its stderr is the reason.
-     */
-    const waitOn = (address: string) =>
-      exec("wait", "hc", ["wait", address, "--json"]).pipe(
-        Effect.flatMap((result) =>
-          Option.match(S.decodeUnknownOption(S.fromJsonString(WaitReply))(result.stdout.trim()), {
-            onNone: () =>
-              Effect.fail(
-                new FleetError({
-                  operation: "wait",
-                  detail: result.stderr.trim() || `hc wait exited ${result.exitCode}`,
-                }),
-              ),
-            onSome: (reply) =>
-              "error" in reply && reply.error.kind !== "not_found"
-                ? Effect.fail(
-                    new FleetError({
-                      operation: "wait",
-                      detail: `${address}: ${reply.error.message}`,
-                    }),
-                  )
-                : Effect.void,
-          }),
-        ),
-      );
-
-    return {
-      roster,
-
-      awaitTurn: (task: string, role: AgentRole | undefined) =>
-        Effect.gen(function* () {
-          const working = (yield* ofTask(task)).filter(
-            (terminal) =>
-              (role === undefined || terminal.labels[ROLE] === role) &&
-              stateOf(terminal) === "working",
-          );
-          if (working.length === 0) return;
-          // The first agent to end its turn ends the wait; the others are
-          // interrupted, which ends their hc processes with them.
-          yield* Effect.raceAll(working.map((terminal) => waitOn(terminal.address)));
-        }),
-
-      // herdr-app keeps its layout as an hc document, and a space's folder is
-      // where its terminals start. Before herdr-app first runs the document is
-      // null, which is no spaces rather than an error.
-      spaces: call(LayoutDoc, "spaces", "doc.get", { name: "herdr-app" }).pipe(
-        Effect.map(({ value }) => (value ?? { spaces: [] }).spaces.map((space) => space.folder)),
-      ),
-
-      open: (options: OpenOptions) =>
-        Effect.gen(function* () {
-          const existing = (yield* roster).find((worker) => worker.task === options.task);
-          if (existing) return existing;
-          const worktrees = yield* repository
-            .worktrees(options.repository)
-            .pipe(Effect.mapError(fail("open")));
-          const resolution = resolveOpen(worktrees, options);
-          switch (resolution.kind) {
-            case "adopt":
-              yield* Effect.logInfo(
-                `adopting ${options.branch} at ${resolution.path}: nothing runs in it but the worktree survives`,
-              );
-              break;
-            case "restore":
-              yield* Effect.logInfo(
-                `putting ${resolution.path} back on ${options.branch}: it was left off its branch`,
-              );
-              yield* repository
-                .restoreBranch(resolution.path, options.branch)
-                .pipe(Effect.mapError(fail("open")));
-              break;
-            case "create":
-              yield* repository
-                .addWorktree(options.repository, options.branch, options.directory)
-                .pipe(Effect.mapError(fail("open")));
-          }
-          return idle(options.task, resolution.path, options.repository);
-        }),
-
-      attach: (options: AttachOptions) =>
-        roster.pipe(
-          Effect.map(
-            (workers) =>
-              workers.find((worker) => worker.task === options.task) ??
-              idle(options.task, options.repository, options.repository),
-          ),
-        ),
-
-      spawn: (worker: Worker, options: SpawnOptions) =>
-        Effect.gen(function* () {
-          // One running agent per role, checked against hc rather than against
-          // anything foreman remembers: two agents in one worktree edit over
-          // each other. A settled one has stopped and nothing will end it on
-          // its own, so it does not refuse; it is ended once the replacement
-          // has started.
-          const held = (yield* ofTask(worker.task)).filter(
-            (terminal) => terminal.labels[ROLE] === options.role,
-          );
-          const live = held.find((terminal) => stillRunning(stateOf(terminal)));
-          if (live) {
-            return yield* new FleetError({
-              operation: "spawn",
-              detail: `${worker.task} already runs a ${options.role} in ${live.address}`,
-            });
-          }
-
-          const launch = harnessLaunch({ ...options, directory: worker.directory });
-          const place = yield* placement(worker.task, worker.repository ?? worker.directory);
-          const started = yield* call(Started, "spawn", "terminal.run", {
-            argv: launch.argv,
-            env: launch.env,
-            cwd: worker.directory,
-            // A worker belongs to the fleet, not to whichever terminal foreman
-            // was started from: ending foreman must not end its agents.
-            no_parent: true,
-            labels: {
-              [FLEET]: "foreman",
-              [TASK]: worker.task,
-              [ROLE]: options.role,
-              ...(worker.repository === undefined ? {} : { [REPOSITORY]: worker.repository }),
-              "herdr.space": place.space,
-              "herdr.tab": place.tab,
-            },
-          });
-          // herdr-app keeps every terminal it shows, so an agent killed by a
-          // signal — the OOM killer's way — is replaced by a shell that looks
-          // live and reports nothing. The pid foreman started is what tells
-          // that shell from the agent; see `stateOf`.
-          yield* call(S.Unknown, "spawn", "terminal.label", {
-            terminal: started.address,
-            labels: { [PID]: String(started.pid) },
-          }).pipe(
-            // An agent this dispatch cannot account for is ended, not left to
-            // work a task the caller is about to hand back.
-            Effect.onError(() =>
-              end("spawn", { address: started.address, state: "live" }).pipe(Effect.ignore),
-            ),
-          );
-
-          yield* Effect.forEach(held, (spent) => end("spawn", spent).pipe(Effect.ignore), {
-            discard: true,
-          });
-          return { kind: options.kind, model: options.model };
-        }),
-
-      say: (worker: Worker, role: AgentRole, text: string) =>
-        Effect.gen(function* () {
-          const target = (yield* ofTask(worker.task)).find(
-            (terminal) => terminal.labels[ROLE] === role && terminal.state === "live",
-          );
-          if (!target) {
-            return yield* new FleetError({
-              operation: "say",
-              detail: `${worker.task} has no live ${role}`,
-            });
-          }
-          yield* call(S.Unknown, "say", "terminal.send", { terminal: target.address, text });
-        }),
-
-      stop: (worker: Worker, role: AgentRole) =>
-        ofTask(worker.task).pipe(
-          Effect.flatMap((all) =>
-            Effect.forEach(
-              all.filter((terminal) => terminal.labels[ROLE] === role),
-              (terminal) => end("stop role", terminal),
-              { discard: true },
-            ),
-          ),
-        ),
-
-      focus: (worker: Worker) =>
-        Effect.gen(function* () {
-          const all = yield* ofTask(worker.task);
-          const shown = all.find((terminal) => terminal.state === "live") ?? all[0];
-          if (!shown) {
-            return yield* new FleetError({
-              operation: "focus",
-              detail: `${worker.task} has no terminal to show`,
-            });
-          }
-          const shownBy = yield* exec("focus", "herdr-app", [
-            "do",
-            "agent.focus",
-            JSON.stringify({ terminal: shown.address }),
-          ]);
-          if (shownBy.exitCode !== 0) {
-            return yield* new FleetError({
-              operation: "focus",
-              detail: shownBy.stderr.trim() || shownBy.stdout.trim() || "herdr-app is not open",
-            });
-          }
-        }),
-
-      close: (options: CloseOptions) =>
-        Effect.gen(function* () {
-          const all = yield* ofTask(options.task);
-          yield* Effect.forEach(all, (terminal) => end("close", terminal), { discard: true });
-          const worker = workersOf(all)[0];
-          const home = worker?.repository ?? options.repository;
-          if (home === undefined) return;
-          // A worker over the operator's own checkout has no worktree, and
-          // that directory is never foreman's to delete.
-          if (worker !== undefined && worker.worktree === undefined) return;
-          const worktree = worktreeFor(yield* repository.worktrees(home), labelFor(options.task));
-          if (worktree) yield* repository.removeWorktree(home, worktree.path);
-        }).pipe(Effect.ignore),
+/**
+ * `HcFleet` without its dependencies, so a test can supply a scripted process
+ * spawner and repository in place of the real ones.
+ */
+export function hcFleetOver() {
+  return Layer.effect(
+    Fleet,
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const repository = yield* Repository;
 
       /**
-       * hc has no notification of its own and the window takes none from
-       * outside, so for now a notice is a log line.
+       * Runs one program and reports its exit code and both streams.
+       *
+       * Exit status is the point: a refusal prints to stderr and exits non-zero,
+       * and reading stdout alone turns it into "success with nothing to say".
        */
-      notify: (title: string, body: string) => Effect.logInfo(`notice: ${title}: ${body}`),
-    };
-  }),
-).pipe(Layer.provide([Repository.Default, BunServices.layer]));
+      const exec = (operation: string, program: string, args: ReadonlyArray<string>, input = "") =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const process = yield* spawner.spawn(
+              ChildProcess.make(program, args, {
+                stdin: Stream.make(input).pipe(Stream.encodeText),
+              }),
+            );
+            const [exitCode, stdout, stderr] = yield* Effect.all(
+              [
+                process.exitCode,
+                Stream.decodeText(process.stdout).pipe(Stream.mkString),
+                Stream.decodeText(process.stderr).pipe(Stream.mkString),
+              ],
+              { concurrency: 3 },
+            );
+            return { exitCode: Number(exitCode), stdout, stderr };
+          }),
+        ).pipe(Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })));
+
+      /**
+       * One call to hc's API, through `hc connect`.
+       *
+       * The API rather than the CLI because `hc ls` leaves out the labels and
+       * status a roster is built from, and the API lists them in one call.
+       */
+      const call = <A, I>(
+        schema: S.Codec<A, I>,
+        operation: string,
+        method: string,
+        params: Record<string, unknown>,
+      ) =>
+        exec(
+          operation,
+          "hc",
+          ["connect"],
+          `${JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })}\n`,
+        ).pipe(
+          Effect.flatMap((result) =>
+            S.decodeEffect(S.fromJsonString(Reply))(result.stdout.trim()).pipe(
+              Effect.mapError(
+                () =>
+                  new FleetError({
+                    operation,
+                    detail: result.stderr.trim() || `hc connect exited ${result.exitCode}`,
+                  }),
+              ),
+            ),
+          ),
+          Effect.flatMap((reply) =>
+            reply.error
+              ? Effect.fail(
+                  new FleetError({
+                    operation,
+                    detail: `${method}: ${reply.error.message}${reply.error.data?.kind ? ` (${reply.error.data.kind})` : ""}`,
+                  }),
+                )
+              : S.decodeUnknownEffect(schema)(reply.result).pipe(
+                  Effect.mapError((cause) => new FleetError({ operation, detail: String(cause) })),
+                ),
+          ),
+        );
+
+      /**
+       * Every foreman terminal, finished ones included.
+       *
+       * Finished ones are kept on purpose: an agent that exited is a role that
+       * is `gone`, which is a question for the operator, and only `stop` and
+       * `close` remove the record.
+       */
+      const terminals = call(TerminalList, "roster", "terminal.list", {
+        all: true,
+        labels: { [FLEET]: "foreman" },
+      }).pipe(Effect.map((list) => list.terminals));
+
+      const ofTask = (task: string) =>
+        terminals.pipe(
+          Effect.map((all) => all.filter((terminal) => terminal.labels[TASK] === task)),
+        );
+
+      /** Ends a terminal's program if it still runs, then drops its record. */
+      const end = (operation: string, terminal: Pick<Terminal, "address" | "state">) =>
+        (terminal.state === "live"
+          ? call(S.Unknown, operation, "terminal.kill", { terminal: terminal.address })
+          : Effect.void
+        ).pipe(
+          Effect.andThen(call(S.Unknown, operation, "terminal.rm", { terminal: terminal.address })),
+          Effect.asVoid,
+        );
+
+      /**
+       * Where a task's tab goes: the space of a terminal already open on the
+       * task's checkout, so the work appears in the project the operator is in.
+       * With none open, the tab gets a space of its own, which herdr-app nests
+       * under the project's space because its folder is a linked worktree.
+       */
+      const placement = (task: string, checkout: string) =>
+        call(TerminalList, "spawn", "terminal.list", {}).pipe(
+          Effect.map((list) => placementOf(list.terminals, task, checkout)),
+          Effect.orElseSucceed(() => placementOf([], task, checkout)),
+        );
+
+      const roster = terminals.pipe(Effect.map(workersOf));
+
+      const fail = (operation: string) => (cause: { readonly message: string }) =>
+        new FleetError({ operation, detail: cause.message });
+
+      /**
+       * Blocks on one terminal's turn through `hc wait`. A check-in and a
+       * terminal that went away both return normally: the caller's roster read
+       * decides what they mean.
+       *
+       * A missing terminal is the one answer read despite a non-zero exit: hc
+       * reports it as error JSON on stdout. A turn reply counts only with exit 0,
+       * and stdout that is not hc's JSON is a failure with stderr as the reason.
+       */
+      const waitOn = (address: string) =>
+        exec("wait", "hc", ["wait", address, "--json"]).pipe(
+          Effect.flatMap((result) =>
+            Option.match(S.decodeUnknownOption(S.fromJsonString(WaitReply))(result.stdout.trim()), {
+              onNone: () =>
+                Effect.fail(
+                  new FleetError({
+                    operation: "wait",
+                    detail: result.stderr.trim() || `hc wait exited ${result.exitCode}`,
+                  }),
+                ),
+              onSome: (reply) =>
+                "error" in reply
+                  ? reply.error.kind === "not_found"
+                    ? Effect.void
+                    : Effect.fail(
+                        new FleetError({
+                          operation: "wait",
+                          detail: `${address}: ${reply.error.message}`,
+                        }),
+                      )
+                  : result.exitCode === 0
+                    ? Effect.void
+                    : Effect.fail(
+                        new FleetError({
+                          operation: "wait",
+                          detail: result.stderr.trim() || `hc wait exited ${result.exitCode}`,
+                        }),
+                      ),
+            }),
+          ),
+        );
+
+      return {
+        roster,
+
+        awaitTurn: (task: string, role: AgentRole | undefined) =>
+          Effect.gen(function* () {
+            const working = (yield* ofTask(task)).filter(
+              (terminal) =>
+                (role === undefined || terminal.labels[ROLE] === role) &&
+                stateOf(terminal) === "working",
+            );
+            if (working.length === 0) return;
+            // The first agent to end its turn ends the wait; the others are
+            // interrupted, which ends their hc processes with them.
+            yield* Effect.raceAll(working.map((terminal) => waitOn(terminal.address)));
+          }),
+
+        // herdr-app keeps its layout as an hc document, and a space's folder is
+        // where its terminals start. Before herdr-app first runs the document is
+        // null, which is no spaces rather than an error.
+        spaces: call(LayoutDoc, "spaces", "doc.get", { name: "herdr-app" }).pipe(
+          Effect.map(({ value }) => (value ?? { spaces: [] }).spaces.map((space) => space.folder)),
+        ),
+
+        open: (options: OpenOptions) =>
+          Effect.gen(function* () {
+            const existing = (yield* roster).find((worker) => worker.task === options.task);
+            if (existing) return existing;
+            const worktrees = yield* repository
+              .worktrees(options.repository)
+              .pipe(Effect.mapError(fail("open")));
+            const resolution = resolveOpen(worktrees, options);
+            switch (resolution.kind) {
+              case "adopt":
+                yield* Effect.logInfo(
+                  `adopting ${options.branch} at ${resolution.path}: nothing runs in it but the worktree survives`,
+                );
+                break;
+              case "restore":
+                yield* Effect.logInfo(
+                  `putting ${resolution.path} back on ${options.branch}: it was left off its branch`,
+                );
+                yield* repository
+                  .restoreBranch(resolution.path, options.branch)
+                  .pipe(Effect.mapError(fail("open")));
+                break;
+              case "create":
+                yield* repository
+                  .addWorktree(options.repository, options.branch, options.directory)
+                  .pipe(Effect.mapError(fail("open")));
+            }
+            return idle(options.task, resolution.path, options.repository);
+          }),
+
+        attach: (options: AttachOptions) =>
+          roster.pipe(
+            Effect.map(
+              (workers) =>
+                workers.find((worker) => worker.task === options.task) ??
+                idle(options.task, options.repository, options.repository),
+            ),
+          ),
+
+        spawn: (worker: Worker, options: SpawnOptions) =>
+          Effect.gen(function* () {
+            // One running agent per role, checked against hc rather than against
+            // anything foreman remembers: two agents in one worktree edit over
+            // each other. A settled one has stopped and nothing will end it on
+            // its own, so it does not refuse; it is ended once the replacement
+            // has started.
+            const held = (yield* ofTask(worker.task)).filter(
+              (terminal) => terminal.labels[ROLE] === options.role,
+            );
+            const live = held.find((terminal) => stillRunning(stateOf(terminal)));
+            if (live) {
+              return yield* new FleetError({
+                operation: "spawn",
+                detail: `${worker.task} already runs a ${options.role} in ${live.address}`,
+              });
+            }
+
+            const launch = harnessLaunch({ ...options, directory: worker.directory });
+            const place = yield* placement(worker.task, worker.repository ?? worker.directory);
+            const started = yield* call(Started, "spawn", "terminal.run", {
+              argv: launch.argv,
+              env: launch.env,
+              cwd: worker.directory,
+              // A worker belongs to the fleet, not to whichever terminal foreman
+              // was started from: ending foreman must not end its agents.
+              no_parent: true,
+              labels: {
+                [FLEET]: "foreman",
+                [TASK]: worker.task,
+                [ROLE]: options.role,
+                ...(worker.repository === undefined ? {} : { [REPOSITORY]: worker.repository }),
+                "herdr.space": place.space,
+                "herdr.tab": place.tab,
+              },
+            });
+            // herdr-app keeps every terminal it shows, so an agent killed by a
+            // signal — the OOM killer's way — is replaced by a shell that looks
+            // live and reports nothing. The pid foreman started is what tells
+            // that shell from the agent; see `stateOf`.
+            yield* call(S.Unknown, "spawn", "terminal.label", {
+              terminal: started.address,
+              labels: { [PID]: String(started.pid) },
+            }).pipe(
+              // An agent this dispatch cannot account for is ended, not left to
+              // work a task the caller is about to hand back.
+              Effect.onError(() =>
+                end("spawn", { address: started.address, state: "live" }).pipe(Effect.ignore),
+              ),
+            );
+
+            yield* Effect.forEach(held, (spent) => end("spawn", spent).pipe(Effect.ignore), {
+              discard: true,
+            });
+            return { kind: options.kind, model: options.model };
+          }),
+
+        say: (worker: Worker, role: AgentRole, text: string) =>
+          Effect.gen(function* () {
+            const target = (yield* ofTask(worker.task)).find(
+              (terminal) => terminal.labels[ROLE] === role && terminal.state === "live",
+            );
+            if (!target) {
+              return yield* new FleetError({
+                operation: "say",
+                detail: `${worker.task} has no live ${role}`,
+              });
+            }
+            yield* call(S.Unknown, "say", "terminal.send", { terminal: target.address, text });
+          }),
+
+        stop: (worker: Worker, role: AgentRole) =>
+          ofTask(worker.task).pipe(
+            Effect.flatMap((all) =>
+              Effect.forEach(
+                all.filter((terminal) => terminal.labels[ROLE] === role),
+                (terminal) => end("stop role", terminal),
+                { discard: true },
+              ),
+            ),
+          ),
+
+        focus: (worker: Worker) =>
+          Effect.gen(function* () {
+            const all = yield* ofTask(worker.task);
+            const shown = all.find((terminal) => terminal.state === "live") ?? all[0];
+            if (!shown) {
+              return yield* new FleetError({
+                operation: "focus",
+                detail: `${worker.task} has no terminal to show`,
+              });
+            }
+            const shownBy = yield* exec("focus", "herdr-app", [
+              "do",
+              "agent.focus",
+              JSON.stringify({ terminal: shown.address }),
+            ]);
+            if (shownBy.exitCode !== 0) {
+              return yield* new FleetError({
+                operation: "focus",
+                detail: shownBy.stderr.trim() || shownBy.stdout.trim() || "herdr-app is not open",
+              });
+            }
+          }),
+
+        close: (options: CloseOptions) =>
+          Effect.gen(function* () {
+            const all = yield* ofTask(options.task);
+            yield* Effect.forEach(all, (terminal) => end("close", terminal), { discard: true });
+            const worker = workersOf(all)[0];
+            const home = worker?.repository ?? options.repository;
+            if (home === undefined) return;
+            // A worker over the operator's own checkout has no worktree, and
+            // that directory is never foreman's to delete.
+            if (worker !== undefined && worker.worktree === undefined) return;
+            const worktree = worktreeFor(yield* repository.worktrees(home), labelFor(options.task));
+            if (worktree) yield* repository.removeWorktree(home, worktree.path);
+          }).pipe(Effect.ignore),
+
+        /**
+         * hc has no notification of its own and the window takes none from
+         * outside, so for now a notice is a log line.
+         */
+        notify: (title: string, body: string) => Effect.logInfo(`notice: ${title}: ${body}`),
+      };
+    }),
+  );
+}
 
 /** Labels foreman writes on a worker's terminal. */
 const FLEET = "fm.fleet";
