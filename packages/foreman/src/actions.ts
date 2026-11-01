@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import type { Dispatcher, FleetState } from "./dispatcher.ts";
 import { actionsFor, rowsForView, VIEWS, type Action, type ColumnRow } from "./view.ts";
 
@@ -14,16 +14,14 @@ export type Request =
   | { readonly action: Exclude<Action, "complete" | "kill" | "intervene"> }
   /** The reason is what the log says instead of a review's verdict. */
   | { readonly action: "complete"; readonly reason: string }
-  | { readonly action: "kill"; readonly reason: string }
+  /** Absent when the operator gave no reason, which writes the bare kill line. */
+  | { readonly action: "kill"; readonly reason: Option.Option<string> }
   | {
       readonly action: "intervene";
       readonly how: Intervention;
       /** Absent only for a review of a committed attempt, which has its own verdict pipeline. */
       readonly rung: string | undefined;
     };
-
-/** What a kill logs when the operator gives no reason. */
-export const KILL_REASON = "operator killed this attempt";
 
 /** The ways an intervention can resume a task, in the order they are offered. */
 export const INTERVENTIONS = ["continue", "diagnose", "review"] as const;

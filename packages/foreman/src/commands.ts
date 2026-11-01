@@ -1,13 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
-import {
-  ACTION_HELP,
-  INTERVENTIONS,
-  KILL_REASON,
-  perform,
-  rowFor,
-  type Request,
-} from "./actions.ts";
+import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./actions.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet } from "./fleet.ts";
 import { countOf, Prog, ROUNDS } from "./prog.ts";
@@ -105,10 +98,7 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
     case "kill":
       return finish(
         Command.make(commandName(action), { id, reason: Flag.optional(reason) }, (args) =>
-          act(action, args.id, {
-            action,
-            reason: Option.getOrElse(args.reason, () => KILL_REASON),
-          }),
+          act(action, args.id, { action, reason: args.reason }),
         ),
       );
     case "intervene":
