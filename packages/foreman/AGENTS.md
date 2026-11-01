@@ -51,7 +51,8 @@ instead of orphaning them.
 
 The policy file (`src/policy.ts`) is the one durable thing foreman holds,
 because nothing in the world records the operator's intention: `paused`,
-`slots`, a default for each spending step (`author`, `climb`, `review`, `land`),
+`slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
+— `on` runs it, `ask` holds it for one approval per task, `off` does nothing —
 and grants that widen the default for one task or epic. `foreman policy` and the
 panel write it through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
@@ -59,12 +60,21 @@ grant's count survives a restart. It is a file, not process state, because a
 restart of the host is not an operator.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
-operator's stop; `idle` is no step on and no grant; `running` is anything else.
+operator's stop; `idle` is every step off and no grant; `running` is anything else, so an `ask`
+step runs the fleet: it must read the world to find what to ask about.
 Only a running tick acts: a paused or idle tick reads the world and publishes
 the reading, and writes nothing to prog, git, hc or the policy file — settle,
 tidy, reclaim and recover wait too. Stopping the fleet must hold the world still
 while the operator looks at it. To empty the pipeline without taking on new
 work, turn `author` and `climb` off and leave `review` and `land` on.
+
+An ask is a reading, not a record. `dispatchFrom` plans each tick's dispatches
+and asks together, so an asked task keeps the slot its dispatch would take and
+holds back the work behind it the same way. Landing takes no slot, so land asks
+are not bounded. `foreman approve <id>` answers one with an ordinary one-task
+grant for the asked step, which the next tick takes; nothing else stores
+approvals. `foreman wait --asks` returns when a new ask appears, for a
+coordinator that answers asks while it talks to the operator.
 
 A grant permits a step. It never reorders the queue: `fill` walks the queue in
 its order and passes over each task no permit covers. Which granted tasks may run

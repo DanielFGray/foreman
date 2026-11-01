@@ -1100,14 +1100,6 @@ const asksAfter = (world: World) =>
     ).pipe(Effect.provide(layerFor(world))),
   ).then((state) => state.asks.map(({ task, step, rung }) => ({ task: task.id, step, rung })));
 
-/**
- * The writes a step makes. `tidy` runs on every running tick and records its
- * unpublished-merge sweep even when nothing is merged, so an assertion that a
- * step took no action must not count that no-op.
- */
-const stepWrites = (world: World) =>
-  world.writes.filter((write) => write !== "repository.sweepUnpublishedMerges");
-
 describe("a step set to ask", () => {
   const off = { author: "off", climb: "off", review: "off", land: "off" } as const;
   const unmerged = (task: string): Branch => ({
@@ -1127,7 +1119,7 @@ describe("a step set to ask", () => {
 
     expect(asks).toEqual([{ task: task.id, step: "review", rung: "cheap" }]);
     expect(world.spawned).toEqual([]);
-    expect(stepWrites(world)).toEqual([]);
+    expect(world.writes).toEqual([]);
   });
 
   test("approving a review ask starts exactly that review on the next tick", async () => {
@@ -1156,7 +1148,7 @@ describe("a step set to ask", () => {
 
     expect(asks).toEqual([{ task: task.id, step: "land", rung: "cheap" }]);
     expect(world.tasks.get(task.id)?.status).toBe("reviewing");
-    expect(stepWrites(world)).toEqual([]);
+    expect(world.writes).toEqual([]);
 
     usePolicy({
       slots: 1,
@@ -1176,7 +1168,7 @@ describe("a step set to ask", () => {
 
     expect(asks.map(({ task }) => task)).toEqual(["ts-a"]);
     expect(world.spawned).toEqual([]);
-    expect(stepWrites(world)).toEqual([]);
+    expect(world.writes).toEqual([]);
   });
 });
 
