@@ -217,6 +217,11 @@ export const rungSpent = (attempts: number, attemptsPerRung: number): boolean =>
  * `undefined` says: every rung that could read this diff is spent, and the tick
  * passes the task over until an allowance resets.
  *
+ * `failed` names rungs whose reviewers already stopped on this task without a
+ * verdict; the search starts above the highest of them and the author. When
+ * none is left the answer is `undefined` however much allowance remains, so a
+ * caller that must tell that from a spent account asks again with no `walled`.
+ *
  * Model rungs only. A person intervening in a review takes the pane over; they
  * are never dispatched into one.
  */
@@ -224,12 +229,19 @@ export const reviewerFor = (
   ladder: Ladder,
   author: string | undefined,
   walled: ReadonlySet<string> = new Set(),
+  failed: ReadonlyArray<string> = [],
 ): Rung | undefined => {
-  const rank = author === undefined ? undefined : rankOf(ladder, author);
-  // An unrecognised author and the top rung both fall back to the top, which
-  // reviews itself.
+  // The reviewer must outrank the author and every reviewer that already
+  // stopped without a verdict on this task.
+  const ranks = [...(author === undefined ? [] : [author]), ...failed].flatMap((name) => {
+    const rank = rankOf(ladder, name);
+    return rank === undefined ? [] : [rank];
+  });
+  const rank = ranks.length === 0 ? undefined : Math.max(...ranks);
   const above = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
-  const candidates = above.length > 0 ? above : [topOf(ladder)];
+  // An unrecognised author and the top rung both fall back to the top, which
+  // reviews itself. A top reviewer that already failed has no one left.
+  const candidates = above.length > 0 ? above : failed.length > 0 ? [] : [topOf(ladder)];
   return candidates.find((rung) => !walled.has(rung.name));
 };
 

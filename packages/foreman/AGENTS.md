@@ -499,6 +499,15 @@ it counts one author's rounds, not the task's. The council review the prompt
 asks for before approving is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
 
+**A reviewer that stops without a verdict is the reviewer's failure, not the
+author's.** The task stays in `reviewing`, `review-by:*` goes, and
+`review-failed-by:<rung>` records the stopped rung; `reviewerFor` then reads
+above the author and every recorded reviewer. No attempt is charged to the
+author. When no rung is left the task is released and parked with `needs-you`.
+A reviewer stopped on a usage wall hands off the same way, writing
+`walled:<provider>` and no failure. `review-failed-by:*` goes with the author
+(`attribute`, `release`, `clearReview`).
+
 **Whatever ends a review clears `review-by:*`.** A label left behind is read as
 evidence of something that never happened: a reviewer that is over on a task
 that is open is exactly the shape a rejection leaves, so the settle loop takes

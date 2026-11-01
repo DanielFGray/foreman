@@ -83,6 +83,7 @@ import {
   Prog,
   type ReadyTask,
   reviewedBy,
+  reviewFailedBy,
   walledBy,
 } from "./prog.ts";
 import { hitWall } from "./harness.ts";
@@ -764,9 +765,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // gate cannot pass over a task the dispatch would have found an agent
         // for, nor the reverse.
         ...reviews.review
-          .filter(
-            ({ task }) => reviewerFor(settings.ladder, authoredBy(task), walled) === undefined,
-          )
+          .filter(({ task }) => reviewerForTask(task, walled) === undefined)
           .map(({ task }) => task.id),
       ]);
 
@@ -981,10 +980,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * usage wall. The screen is the only place a harness shows it. A screen that
      * cannot be read is no wall, so the ordinary unfinished path runs.
      */
-    const onUsageWall = (worker: Worker, rung: Rung): Effect.Effect<Option.Option<UsageWall>> => {
+    const onUsageWall = (
+      worker: Worker,
+      rung: Rung,
+      role: AgentRole,
+    ): Effect.Effect<Option.Option<UsageWall>> => {
       const provider = providerOf(rung);
       if (provider === undefined) return Effect.succeed(Option.none());
-      return fleet.screen(worker, "author", WALL_READ_LINES).pipe(
+      return fleet.screen(worker, role, WALL_READ_LINES).pipe(
         Effect.map((screen) =>
           Option.flatMap(screen, (text) => hitWall(rung.harness, text)).pipe(
             Option.map((wallText) => ({ provider, text: wallText })),
@@ -1150,16 +1153,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const ran = reviewedBy(task) ?? authoredBy(task);
             const rung = settings.ladder.find((candidate) => candidate.name === ran);
             const role = reviewedBy(task) ? "review" : "author";
-            // A stop that ends on a usage wall is an author's, and only one that
-            // stopped without a verdict can be one: a vanished worker with no
-            // worktree has nothing to commit, so it is left to the ordinary path.
+            // Only a stop without a verdict can be a wall: a vanished worker with
+            // no worktree has nothing to commit, so it is left to the ordinary
+            // path.
+            const stoppedAuthor =
+              role === "author" && (phase === "Unfinished" || phase === "VanishedWithWork");
+            const stoppedReviewer = role === "review" && phase === "ReviewStopped";
             const wall =
               rung === undefined ||
-              role !== "author" ||
               worker.worktree === undefined ||
-              (phase !== "Unfinished" && phase !== "VanishedWithWork")
+              !(stoppedAuthor || stoppedReviewer)
                 ? Option.none<UsageWall>()
-                : yield* onUsageWall(worker, rung);
+                : yield* onUsageWall(worker, rung, role);
             if (rung) {
               const attributes = runAttributes(task, rung, role);
               yield* Effect.annotateCurrentSpan({
@@ -1233,15 +1238,22 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               Match.when("ReviewWaiting", () => Effect.void),
               Match.when("ReviewExpired", () => stopAgents(worker)),
               Match.when("ReviewStopped", () =>
-                unfinished(task, `foreman: reviewer ${reviewer} stopped without a verdict.`).pipe(
-                  Effect.andThen(stopAgents(worker)),
-                  Effect.andThen(
-                    fleet.notify(
-                      "Review returned",
-                      `${task.id} reviewer stopped without a verdict — back in the queue`,
-                    ),
-                  ),
-                ),
+                Option.match(wall, {
+                  onNone: () => reviewerStopped(task, worker, reviewer),
+                  onSome: (hit) =>
+                    prog
+                      .endReview(task.id)
+                      .pipe(
+                        Effect.andThen(prog.markWall(task.id, hit.provider)),
+                        Effect.andThen(stopAgents(worker)),
+                        Effect.andThen(
+                          prog.log(
+                            task.id,
+                            `foreman: reviewer ${reviewer} stopped on ${hit.provider}'s usage wall ("${hit.text}"), which is not a failure of its rung. ${task.id} stays in review and will not be read on ${hit.provider} again.`,
+                          ),
+                        ),
+                      ),
+                }),
               ),
               Match.when("Residue", () =>
                 Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
@@ -1674,7 +1686,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const rung = reviewerFor(
         settings.ladder,
         author,
-        walledRungs((yield* SubscriptionRef.get(state)).providers),
+        authorWalls(
+          settings.ladder,
+          task,
+          walledRungs((yield* SubscriptionRef.get(state)).providers),
+        ),
+        reviewFailedBy(task),
       );
       if (!rung) {
         // Every rung that could read this diff is spent. The status is
@@ -1797,6 +1814,49 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           yield* prog.markAttempt(task.id, rung, attempts);
         }
       });
+
+    /**
+     * Hands a task to the next reviewer after one stopped without a verdict.
+     *
+     * The task stays in `reviewing` and the author is not charged: the stop says
+     * nothing about the author's work. The reviewer's rung is recorded so the
+     * next one is chosen above it. With no rung left the review cannot proceed,
+     * and a person decides: the task is released and parked, which also clears
+     * the recorded reviewers for whatever comes next.
+     */
+    const reviewerStopped = (task: Item, worker: Worker, reviewer: string | undefined) =>
+      Effect.gen(function* () {
+        const ran = reviewer ?? "the reviewer";
+        const failed = [...reviewFailedBy(task), ...(reviewer === undefined ? [] : [reviewer])];
+        const next = reviewerFor(settings.ladder, authoredBy(task), new Set(), failed);
+        if (next === undefined) {
+          yield* prog.release(task.id);
+          yield* prog.parkForOperator(task.id);
+          yield* prog.log(
+            task.id,
+            `foreman: reviewer ${ran} stopped without a verdict, and no rung above it is left to read ${task.id}. It is yours now.`,
+          );
+          yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: no reviewer left`);
+        } else {
+          yield* reviewer === undefined
+            ? prog.endReview(task.id)
+            : prog.failReview(task.id, reviewer);
+          yield* prog.log(
+            task.id,
+            `foreman: reviewer ${ran} stopped without a verdict. ${task.id} stays in review; the next reviewer is ${next.name}.`,
+          );
+        }
+        yield* stopAgents(worker);
+      });
+
+    /** The reviewer this task would get now, with the accounts that are spent. */
+    const reviewerForTask = (task: Item, walled: ReadonlySet<string>) =>
+      reviewerFor(
+        settings.ladder,
+        authoredBy(task),
+        authorWalls(settings.ladder, task, walled),
+        reviewFailedBy(task),
+      );
 
     /**
      * The rung whose run has just ended, which is the one a verdict is about.

@@ -179,6 +179,7 @@ class World {
               (label) =>
                 kindOf(label) !== "by" &&
                 kindOf(label) !== "review-by" &&
+                kindOf(label) !== "review-failed-by" &&
                 label !== "approved" &&
                 label !== "satisfied",
             ),
@@ -196,13 +197,37 @@ class World {
           ],
         })),
       ),
+    endReview: (id: string) =>
+      this.write("prog.endReview", () =>
+        this.update(id, (task) => ({
+          ...task,
+          labels: task.labels.filter((label) => kindOf(label) !== "review-by"),
+        })),
+      ),
+    failReview: (id: string, rung: string) =>
+      this.write("prog.failReview", () =>
+        this.update(id, (task) => ({
+          ...task,
+          labels: [
+            ...task.labels.filter((label) => kindOf(label) !== "review-by"),
+            `review-failed-by:${rung}`,
+          ],
+        })),
+      ),
+    parkForOperator: (id: string) =>
+      this.write("prog.parkForOperator", () =>
+        this.update(id, (task) => ({ ...task, labels: [...task.labels, "needs-you"] })),
+      ),
     clearReview: (id: string) =>
       this.write("prog.clearReview", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter(
             (label) =>
-              kindOf(label) !== "review-by" && label !== "approved" && label !== "satisfied",
+              kindOf(label) !== "review-by" &&
+              kindOf(label) !== "review-failed-by" &&
+              label !== "approved" &&
+              label !== "satisfied",
           ),
         })),
       ),
@@ -253,7 +278,10 @@ class World {
           status: "open",
           labels: task.labels.filter(
             (label) =>
-              kindOf(label) !== "review-by" && label !== "approved" && label !== "satisfied",
+              kindOf(label) !== "review-by" &&
+              kindOf(label) !== "review-failed-by" &&
+              label !== "approved" &&
+              label !== "satisfied",
           ),
         })),
       ),
@@ -1337,6 +1365,30 @@ describe("a usage wall", () => {
     expect(world.spawned).toContainEqual(["ts-walled", "author"]);
   });
 
+  test("hands a review to another account without recording a reviewer failure", async () => {
+    const task = item("ts-review-wall", "reviewing", ["by:free", "review-by:free"]);
+    const world = new World(task);
+    world.workers.set(task.id, {
+      ...worker(task.id, "review", "settled"),
+      repository: "/build/test",
+    });
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    world.screens.set(task.id, "Free usage limit reached. Connect a provider");
+
+    await tick(world);
+
+    const found = world.tasks.get(task.id);
+    expect(found?.status).toBe("reviewing");
+    expect(found?.labels).toContain("walled:opencode");
+    expect(found?.labels.some((label) => label.startsWith("review-failed-by:"))).toBe(false);
+    expect(found?.labels).toContain("review-by:dear");
+  });
+
   test("commits nothing when the worktree holds no uncommitted work", async () => {
     const world = stoppedOn(
       "ts-walled-clean",
@@ -1406,5 +1458,80 @@ describe("a policy change", () => {
     );
 
     expect(waited).toBeLessThan(1000);
+  });
+});
+
+describe("a reviewer that stops without a verdict", () => {
+  /** Three rungs on three accounts, so a review has two rungs to climb. */
+  const layerFor = (world: World) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          ladder: [
+            { name: "low", harness: "test", model: "a/low", provider: undefined },
+            { name: "mid", harness: "test", model: "b/mid", provider: undefined },
+            { name: "high", harness: "test", model: "c/high", provider: undefined },
+          ],
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Repository, world.repository),
+        trialsFor(world),
+        Layer.succeed(Quota, {
+          usage: (provider: string) =>
+            Effect.succeed({ provider, plan: undefined, allowances: [] }),
+        }),
+        prompts,
+        BunServices.layer,
+      ),
+    );
+
+  const tick = (world: World) => {
+    usePolicy({ ...ALLOWED, slots: 1 });
+    return Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+    );
+  };
+
+  /** A task whose `reviewer` rung stopped with the pane settled and no verdict. */
+  const stopped = (id: string, labels: ReadonlyArray<string>) => {
+    const world = new World(item(id, "reviewing", labels));
+    world.workers.set(id, { ...worker(id, "review", "settled"), repository: "/build/test" });
+    world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    return world;
+  };
+
+  test("keeps the task in review, charges no attempt, and dispatches a higher reviewer", async () => {
+    const world = stopped("ts-stopped", ["by:low", "review-by:mid"]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-stopped");
+    expect(task?.status).toBe("reviewing");
+    expect(task?.labels).toEqual(["by:low", "review-failed-by:mid", "review-by:high"]);
+    expect(world.spawned).toEqual([["ts-stopped", "review"]]);
+  });
+
+  test("hands the task to the operator when no reviewer rung is left", async () => {
+    const world = stopped("ts-last", ["by:low", "review-failed-by:mid", "review-by:high"]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-last");
+    expect(task?.status).toBe("open");
+    expect(task?.labels).toEqual(["by:low", "needs-you"]);
+    expect(world.spawned).toEqual([]);
   });
 });
