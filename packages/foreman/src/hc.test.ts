@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { placementOf, resolveOpen, stateOf, type Terminal, workersOf } from "./hc.ts";
+import { Schema as S } from "effect";
+import { placementOf, resolveOpen, stateOf, type Terminal, WaitReply, workersOf } from "./hc.ts";
 
 const terminal = (
   overrides: Partial<Terminal> & { labels?: Record<string, string> },
@@ -139,6 +140,55 @@ describe("resolveOpen", () => {
     expect(resolveOpen([worktree("/state/proj/ts-1", "foreman/ts-1", true)], options)).toEqual({
       kind: "create",
       path: "/state/proj/ts-1",
+    });
+  });
+});
+
+describe("decoding hc wait", () => {
+  // The turn end, exit and check-in are copied from `hc wait --json` output
+  // against a live terminal. The blocked one is hand-written: no terminal could
+  // be made to report `blocked` here, so its `reason` is not observed.
+  test("reads a turn that ended", () => {
+    const reply = S.decodeUnknownSync(S.fromJsonString(WaitReply))(
+      '{"children":[],"ended":true,"exit_code":null,"reason":"status","signal":null,"status":"done","terminal":"t12","turn":16}',
+    );
+    expect(reply).toEqual({
+      terminal: "t12",
+      ended: true,
+      reason: "status",
+      status: "done",
+      turn: 16,
+      exit_code: null,
+    });
+  });
+
+  test("reads an agent that is blocked on a person", () => {
+    const reply = S.decodeUnknownSync(S.fromJsonString(WaitReply))(
+      '{"children":[],"ended":true,"exit_code":null,"reason":"status","signal":null,"status":"blocked","terminal":"t12","turn":17}',
+    );
+    expect(reply).toMatchObject({ reason: "status", status: "blocked", ended: true });
+  });
+
+  test("reads a program that exited with its code", () => {
+    const reply = S.decodeUnknownSync(S.fromJsonString(WaitReply))(
+      '{"children":[],"ended":true,"exit_code":7,"reason":"exit","signal":null,"status":null,"terminal":"t69","turn":0}',
+    );
+    expect(reply).toMatchObject({ reason: "exit", exit_code: 7, ended: true });
+  });
+
+  test("reads a check-in as not ended", () => {
+    const reply = S.decodeUnknownSync(S.fromJsonString(WaitReply))(
+      '{"children":[],"ended":false,"exit_code":null,"reason":"timeout","signal":null,"status":null,"terminal":"t8","turn":0}',
+    );
+    expect(reply).toMatchObject({ reason: "timeout", ended: false });
+  });
+
+  test("reads a missing terminal as hc's error, not as a turn", () => {
+    const reply = S.decodeUnknownSync(S.fromJsonString(WaitReply))(
+      '{"error":{"hint":"see `hc ls --all`","kind":"not_found","message":"no terminal \\"tZZZ\\""}}',
+    );
+    expect(reply).toEqual({
+      error: { kind: "not_found", message: 'no terminal "tZZZ"' },
     });
   });
 });

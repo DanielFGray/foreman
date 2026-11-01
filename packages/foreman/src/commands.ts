@@ -2,7 +2,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
 import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./actions.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import { Fleet } from "./fleet.ts";
+import { Fleet, untilNotWorking } from "./fleet.ts";
 import { countOf, Prog, ROUNDS } from "./prog.ts";
 import { ACTIONS_LIST, actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 import { commandName, publishedOf } from "./published.ts";
@@ -207,18 +207,10 @@ const correct = Command.make("correct", { id, text }, (args) =>
 );
 
 const interval = Flag.Int("interval").pipe(
-  Flag.withDescription("Seconds between readings"),
+  Flag.withDescription("Seconds between readings, for --asks"),
   Flag.withDefault(10),
 );
 
-/**
- * Blocks until a task's agents have stopped working.
- *
- * herdr reads an agent's state off its screen, and an agent that pauses mid-turn
- * reads as idle for a moment. So one quiet reading is a candidate and the
- * second, a poll later, is the answer. A blocked agent is not working: it is
- * waiting on a person, which is exactly what the caller needs to hear.
- */
 const waitRole = Flag.Literals("role", ["author", "review"] as const).pipe(
   Flag.withDescription("Wait for this agent only; a reviewer waiting on its author needs this"),
   Flag.optional,
@@ -296,11 +288,7 @@ const wait = Command.make(
           ),
         ),
       );
-      let quiet = 0;
-      while (quiet < 2) {
-        quiet = (yield* working) ? 0 : quiet + 1;
-        if (quiet < 2) yield* Effect.sleep(Duration.seconds(args.interval));
-      }
+      yield* untilNotWorking(working, fleet.awaitTurn(taskId, Option.getOrUndefined(args.role)));
       const task = yield* prog.show(taskId);
       yield* Console.log(`${taskId}: ${task.status}`);
     }),

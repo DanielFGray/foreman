@@ -1,6 +1,6 @@
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer, Schema as S, Stream } from "effect";
+import { Effect, Layer, Option, Schema as S, Stream } from "effect";
 import {
   type AgentRole,
   AgentRole as AgentRoleSchema,
@@ -146,8 +146,54 @@ export const HcFleet = Layer.effect(
     const fail = (operation: string) => (cause: { readonly message: string }) =>
       new FleetError({ operation, detail: cause.message });
 
+    /**
+     * Blocks on one terminal's turn through `hc wait`. A check-in and a
+     * terminal that went away both return normally: the caller's roster read
+     * decides what they mean.
+     *
+     * The answer is read from stdout whatever the exit code, because hc reports
+     * a missing terminal as JSON on stdout with a non-zero exit. Stdout that is
+     * not that JSON is a failure, and its stderr is the reason.
+     */
+    const waitOn = (address: string) =>
+      exec("wait", "hc", ["wait", address, "--json"]).pipe(
+        Effect.flatMap((result) =>
+          Option.match(S.decodeUnknownOption(S.fromJsonString(WaitReply))(result.stdout.trim()), {
+            onNone: () =>
+              Effect.fail(
+                new FleetError({
+                  operation: "wait",
+                  detail: result.stderr.trim() || `hc wait exited ${result.exitCode}`,
+                }),
+              ),
+            onSome: (reply) =>
+              "error" in reply && reply.error.kind !== "not_found"
+                ? Effect.fail(
+                    new FleetError({
+                      operation: "wait",
+                      detail: `${address}: ${reply.error.message}`,
+                    }),
+                  )
+                : Effect.void,
+          }),
+        ),
+      );
+
     return {
       roster,
+
+      awaitTurn: (task: string, role: AgentRole | undefined) =>
+        Effect.gen(function* () {
+          const working = (yield* ofTask(task)).filter(
+            (terminal) =>
+              (role === undefined || terminal.labels[ROLE] === role) &&
+              stateOf(terminal) === "working",
+          );
+          if (working.length === 0) return;
+          // The first agent to end its turn ends the wait; the others are
+          // interrupted, which ends their hc processes with them.
+          yield* Effect.raceAll(working.map((terminal) => waitOn(terminal.address)));
+        }),
 
       // herdr-app keeps its layout as an hc document, and a space's folder is
       // where its terminals start. Before herdr-app first runs the document is
@@ -479,6 +525,30 @@ const LayoutDoc = S.Struct({
 });
 
 const Started = S.Struct({ address: S.String, pid: S.Finite });
+
+/**
+ * What `hc wait <terminal> --json` prints when it ends. `reason` says why:
+ * the turn ended (`status`), the program exited (`exit`), or the wait checked
+ * in (`timeout`). Only `error` is read by foreman; the rest is decoded so the
+ * shape is checked against hc's real output.
+ */
+export const TurnWait = S.Struct({
+  terminal: S.String,
+  ended: S.Boolean,
+  reason: S.String,
+  status: S.NullOr(S.String),
+  turn: S.Finite,
+  exit_code: S.NullOr(S.Finite),
+});
+export type TurnWait = S.Schema.Type<typeof TurnWait>;
+
+/** hc's answer to a wait it could not make: a missing terminal, say. */
+const WaitError = S.Struct({
+  error: S.Struct({ kind: S.String, message: S.String }),
+});
+
+export const WaitReply = S.Union([TurnWait, WaitError]);
+export type WaitReply = S.Schema.Type<typeof WaitReply>;
 
 const Reply = S.Struct({
   result: S.optional(S.Unknown),

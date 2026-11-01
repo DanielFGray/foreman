@@ -54,6 +54,20 @@ export class Fleet extends Context.Service<
     readonly roster: Effect.Effect<ReadonlyArray<Worker>, FleetError>;
 
     /**
+     * Blocks until one of a task's working agents for the role (every role when
+     * undefined) ends its turn, or a check-in passes, or its terminal goes away.
+     * Returns at once when none is working.
+     *
+     * One return is not the end of the work: the caller reads the roster again
+     * and calls this again while any agent still works. A blocked agent is not
+     * working, so this does not wait on it.
+     */
+    readonly awaitTurn: (
+      task: string,
+      role: AgentRole | undefined,
+    ) => Effect.Effect<void, FleetError>;
+
+    /**
      * The folders of the operator's open spaces on this machine — where the
      * projects foreman works in come from (`src/projects.ts`). A multiplexer
      * that cannot be read is an error, never an empty list: no spaces and an
@@ -259,3 +273,16 @@ export const verifyDirectoryFor = (project: string): string =>
 
 const stateDirectory = () =>
   `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman`;
+
+/**
+ * Runs `awaitTurn` until `working` reads false. The reading is taken after
+ * every return, not trusted from the wait: a check-in or a terminal that went
+ * away both return the wait early, and only the roster says the work is done.
+ */
+export const untilNotWorking = <E>(
+  working: Effect.Effect<boolean, E>,
+  awaitTurn: Effect.Effect<void, E>,
+): Effect.Effect<void, E> =>
+  Effect.gen(function* () {
+    while (yield* working) yield* awaitTurn;
+  });
