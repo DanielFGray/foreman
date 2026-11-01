@@ -379,9 +379,6 @@ a.chip { color: inherit; text-decoration: none; }
   .fleet-backdrop { display: block; position: absolute; z-index: 10; inset: 0; background: rgb(0 0 0 / 0.3); }
   .fleet-edge { display: none; }
   .chip.fleet-toggle { display: inline-flex; }
-  /* A phone stacks the column under the pane, so the terminals keep the top of the screen. */
-  .body { flex-direction: column; }
-  .foreman-column { flex: 0 0 auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--surface); }
   /* The pane's name needs the room more than the view chips' words. */
   :is(.view-chip, .zoom-chip) { padding: 4px 8px; }
   .view-chip .label { display: none; }
@@ -545,6 +542,11 @@ p.usage-error { margin: 0; }
 /* The workspace and the Foreman column share a row on a desk; the column keeps its own scroll. */
 .body { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .foreman-column { flex: 0 0 min(380px, 40%); min-height: 0; overflow-y: auto; padding: 8px 12px; border-left: 1px solid var(--surface); }
+/* Declared after the base rules above, so these win on a phone. The column stacks under the pane, and the terminals keep the top of the screen. */
+@media (max-width: 720px) {
+  .body { flex-direction: column; }
+  .foreman-column { flex: 0 0 auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--surface); }
+}
 .foreman { display: flex; flex-direction: column; gap: 10px; }
 .foreman-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .foreman-scope .note { margin: 0; }
