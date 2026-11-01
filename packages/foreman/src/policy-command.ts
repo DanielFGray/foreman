@@ -1,7 +1,10 @@
 import { Argument, Command, Flag } from "effect/cli";
-import { Console, Effect, Schema } from "effect";
+import { Console, Effect, Option, Schema } from "effect";
 import {
+  clearProject,
   grant,
+  pauseProject,
+  setProjectStep,
   Policy,
   policyPath,
   readPolicy,
@@ -27,22 +30,48 @@ const show = Command.make("show", {}, () =>
   }),
 ).pipe(Command.withDescription("Print the policy the dispatcher reads"));
 
-const change = (name: string, description: string, edit: (policy: PolicyType) => PolicyType) =>
-  Command.make(name, {}, () => write(edit)).pipe(Command.withDescription(description));
+const projectFlag = Flag.String("project").pipe(
+  Flag.withDescription("Apply to this project only; the whole fleet when absent"),
+  Flag.optional,
+);
+
+const projectOf = (flag: Option.Option<string>): string | undefined => Option.getOrUndefined(flag);
+
+const pauseOrResume = (name: "pause" | "resume") => {
+  const paused = name === "pause";
+  return Command.make(name, { project: projectFlag }, ({ project }) => {
+    const only = projectOf(project);
+    return write((policy) =>
+      only === undefined ? { ...policy, paused } : pauseProject(policy, only, paused),
+    );
+  }).pipe(
+    Command.withDescription(
+      paused
+        ? "Stop every step, grants included, until resumed; with --project, stop that project only"
+        : "Undo pause; the default and the grants apply again; with --project, resume that project only",
+    ),
+  );
+};
 
 const step = Argument.Literals("step", STEPS);
 const setting = Argument.Literals("setting", STEP_MODES);
 
-const set = Command.make("set", { step, setting }, ({ step, setting }) =>
-  write((policy) => ({
-    ...policy,
-    default: { ...policy.default, [step]: setting },
-  })),
-).pipe(
+const set = Command.make("set", { step, setting, project: projectFlag }, (args) => {
+  const only = projectOf(args.project);
+  return write((policy) =>
+    only === undefined
+      ? { ...policy, default: { ...policy.default, [args.step]: args.setting } }
+      : setProjectStep(policy, only, args.step, args.setting),
+  );
+}).pipe(
   Command.withDescription(
-    "Set one step for every task: on runs it, ask waits for one approval per task, off does nothing",
+    "Set one step for every task, or one project's tasks with --project: on runs it, ask waits for one approval per task, off does nothing",
   ),
 );
+
+const clear = Command.make("clear", { project: Flag.String("project") }, ({ project }) =>
+  write((policy) => clearProject(policy, project)),
+).pipe(Command.withDescription("Drop a project's own settings, so it follows the default again"));
 
 const count = Argument.Int("count").pipe(
   Argument.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -91,15 +120,10 @@ export const policyCommand = Command.make("policy", {}).pipe(
   Command.withDescription(`Read and change what the fleet may do by itself (${policyPath()})`),
   Command.withSubcommands([
     show,
-    change("pause", "Stop every step, grants included, until resumed", (p) => ({
-      ...p,
-      paused: true,
-    })),
-    change("resume", "Undo pause; the default and the grants apply again", (p) => ({
-      ...p,
-      paused: false,
-    })),
+    pauseOrResume("pause"),
+    pauseOrResume("resume"),
     set,
+    clear,
     slots,
     grantCommand,
     revoke,

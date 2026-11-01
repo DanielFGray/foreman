@@ -62,6 +62,23 @@ export const Grant = S.Struct({
 });
 export type Grant = typeof Grant.Type;
 
+/**
+ * One project's own settings. A step set here replaces the fleet default for
+ * that project's tasks; a paused project takes no step, grants included.
+ */
+export const ProjectPolicy = S.Struct({
+  paused: S.optional(S.Boolean),
+  steps: S.optional(
+    S.Struct({
+      author: S.optional(S.Literals(STEP_MODES)),
+      climb: S.optional(S.Literals(STEP_MODES)),
+      review: S.optional(S.Literals(STEP_MODES)),
+      land: S.optional(S.Literals(STEP_MODES)),
+    }),
+  ),
+});
+export type ProjectPolicy = typeof ProjectPolicy.Type;
+
 export const Policy = S.Struct({
   /** Suspends every step, grants included, without forgetting them. */
   paused: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
@@ -83,6 +100,8 @@ export const Policy = S.Struct({
     ),
   ),
   grants: S.Array(Grant).pipe(S.withDecodingDefault(Effect.succeed([]))),
+  /** Per-project overrides of `default` and `paused`, keyed by project name. */
+  projects: S.Record(S.String, ProjectPolicy).pipe(S.withDecodingDefault(Effect.succeed({}))),
 });
 export type Policy = typeof Policy.Type;
 
@@ -102,10 +121,24 @@ export const DEFAULT_POLICY: Policy = S.decodeSync(Policy)({});
 export const MODES = ["running", "paused", "idle"] as const;
 export type Mode = (typeof MODES)[number];
 
+/** What `step` is set to for `project`: its own entry, else the fleet default. */
+export const modeFor = (policy: Policy, project: string, step: Step): StepMode =>
+  policy.projects[project]?.steps?.[step] ?? policy.default[step];
+
+/**
+ * Running when any project could take a step: a default step is on, a project
+ * that is not paused overrides a step to something other than off, or a grant
+ * exists. The global pause wins over all of it.
+ */
 export const modeOf = (policy: Policy): Mode =>
   policy.paused
     ? "paused"
-    : STEPS.some((step) => policy.default[step] !== "off") || policy.grants.length > 0
+    : STEPS.some((step) => policy.default[step] !== "off") ||
+        Object.values(policy.projects).some(
+          (entry) =>
+            !entry.paused && STEPS.some((step) => (entry.steps?.[step] ?? "off") !== "off"),
+        ) ||
+        policy.grants.length > 0
       ? "running"
       : "idle";
 
@@ -129,18 +162,24 @@ export type Permit =
  * work is filed. `admits` says the grant takes on a task it has not admitted
  * before, which the caller records with `admit` once the step has run.
  */
-export const permit = (policy: Policy, scopes: Scopes, task: string, step: Step): Permit => {
-  if (policy.paused) return { _tag: "Denied" };
-  if (policy.default[step] === "on") return { _tag: "Default" };
+export const permit = (
+  policy: Policy,
+  scopes: Scopes,
+  task: { readonly id: string; readonly project: string },
+  step: Step,
+): Permit => {
+  if (policy.paused || policy.projects[task.project]?.paused) return { _tag: "Denied" };
+  const mode = modeFor(policy, task.project, step);
+  if (mode === "on") return { _tag: "Default" };
   for (const grant of policy.grants) {
     if (!grant.steps.includes(step)) continue;
-    if (grant.admitted.includes(task))
+    if (grant.admitted.includes(task.id))
       return { _tag: "Granted", scope: grant.scope, admits: false };
-    if (!scopes.get(grant.scope)?.has(task)) continue;
+    if (!scopes.get(grant.scope)?.has(task.id)) continue;
     if (grant.remaining !== undefined && grant.admitted.length >= grant.remaining) continue;
     return { _tag: "Granted", scope: grant.scope, admits: true };
   }
-  return policy.default[step] === "ask" ? { _tag: "Ask" } : { _tag: "Denied" };
+  return mode === "ask" ? { _tag: "Ask" } : { _tag: "Denied" };
 };
 
 /** The step a dispatch of an author on this task is: a first try or a retry. */
@@ -309,3 +348,34 @@ export const updatePolicy = (path: string, change: (policy: Policy) => Policy) =
 export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
   detail: S.String,
 }) {}
+
+/** Changes one project's entry; an entry left holding nothing is dropped. */
+const editProject = (
+  policy: Policy,
+  project: string,
+  edit: (entry: ProjectPolicy) => ProjectPolicy,
+): Policy => {
+  const next = edit(policy.projects[project] ?? {});
+  const { [project]: _dropped, ...others } = policy.projects;
+  const empty = next.paused === undefined && Object.keys(next.steps ?? {}).length === 0;
+  return { ...policy, projects: empty ? others : { ...others, [project]: next } };
+};
+
+/** Pauses or resumes one project. Resuming removes the flag rather than storing `false`. */
+export const pauseProject = (policy: Policy, project: string, paused: boolean): Policy =>
+  editProject(policy, project, ({ paused: _was, ...rest }) =>
+    paused ? { ...rest, paused } : rest,
+  );
+
+/** Sets one step for one project, replacing the fleet default there. */
+export const setProjectStep = (
+  policy: Policy,
+  project: string,
+  step: Step,
+  mode: StepMode,
+): Policy =>
+  editProject(policy, project, (entry) => ({ ...entry, steps: { ...entry.steps, [step]: mode } }));
+
+/** Drops a project's entry, so it follows the fleet default again. */
+export const clearProject = (policy: Policy, project: string): Policy =>
+  editProject(policy, project, () => ({}));

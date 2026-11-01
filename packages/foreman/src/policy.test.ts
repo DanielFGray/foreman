@@ -1,23 +1,28 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect } from "effect";
+import { Effect, Schema as S } from "effect";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   admit,
+  clearProject,
   authorStep,
   DEFAULT_POLICY,
   expire,
   grant,
   modeOf,
+  pauseProject,
   permit,
+  Policy,
   readPolicy,
+  setProjectStep,
   updatePolicy,
-  type Policy,
 } from "./policy.ts";
 
 const withGrants = (...grants: Policy["grants"]): Policy => ({ ...DEFAULT_POLICY, grants });
+
+const task = (id: string, project = "alpha") => ({ id, project });
 
 const scopes = new Map<string, ReadonlySet<string>>([
   ["ep-1", new Set(["ts-a", "ts-b"])],
@@ -61,8 +66,8 @@ describe("modeOf", () => {
 
 describe("permit", () => {
   test("the default policy allows nothing", () => {
-    expect(permit(DEFAULT_POLICY, scopes, "ts-a", "author")._tag).toBe("Denied");
-    expect(permit(DEFAULT_POLICY, scopes, "ts-a", "land")._tag).toBe("Denied");
+    expect(permit(DEFAULT_POLICY, scopes, task("ts-a"), "author")._tag).toBe("Denied");
+    expect(permit(DEFAULT_POLICY, scopes, task("ts-a"), "land")._tag).toBe("Denied");
   });
 
   test("a step on in the default is allowed for every task", () => {
@@ -70,8 +75,8 @@ describe("permit", () => {
       ...DEFAULT_POLICY,
       default: { ...DEFAULT_POLICY.default, review: "on" },
     };
-    expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Default");
-    expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-anything"), "review")._tag).toBe("Default");
+    expect(permit(policy, scopes, task("ts-anything"), "land")._tag).toBe("Denied");
   });
 
   test("a step set to ask is Ask for every task no grant covers", () => {
@@ -79,8 +84,8 @@ describe("permit", () => {
       ...DEFAULT_POLICY,
       default: { ...DEFAULT_POLICY.default, review: "ask" },
     };
-    expect(permit(policy, scopes, "ts-anything", "review")._tag).toBe("Ask");
-    expect(permit(policy, scopes, "ts-anything", "land")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-anything"), "review")._tag).toBe("Ask");
+    expect(permit(policy, scopes, task("ts-anything"), "land")._tag).toBe("Denied");
   });
 
   test("a grant covering an asked step takes effect before the ask", () => {
@@ -88,12 +93,12 @@ describe("permit", () => {
       ...withGrants({ scope: "ts-solo", steps: ["review"], remaining: 1, admitted: [] }),
       default: { ...DEFAULT_POLICY.default, review: "ask" },
     };
-    expect(permit(policy, scopes, "ts-solo", "review")).toEqual({
+    expect(permit(policy, scopes, task("ts-solo"), "review")).toEqual({
       _tag: "Granted",
       scope: "ts-solo",
       admits: true,
     });
-    expect(permit(policy, scopes, "ts-other", "review")._tag).toBe("Ask");
+    expect(permit(policy, scopes, task("ts-other"), "review")._tag).toBe("Ask");
   });
 
   test("pause denies an asked step too", () => {
@@ -102,7 +107,7 @@ describe("permit", () => {
       paused: true,
       default: { ...DEFAULT_POLICY.default, review: "ask" },
     };
-    expect(permit(policy, scopes, "ts-a", "review")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-a"), "review")._tag).toBe("Denied");
   });
 
   test("pause denies every step, the default and grants alike", () => {
@@ -111,24 +116,24 @@ describe("permit", () => {
       paused: true,
       default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     };
-    expect(permit(policy, scopes, "ts-a", "author")._tag).toBe("Denied");
-    expect(permit(policy, scopes, "ts-x", "review")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-a"), "author")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-x"), "review")._tag).toBe("Denied");
   });
 
   test("an epic grant reaches the tasks under it and no others", () => {
     const policy = withGrants({ scope: "ep-1", steps: ["author"], admitted: [] });
-    expect(permit(policy, scopes, "ts-b", "author")).toEqual({
+    expect(permit(policy, scopes, task("ts-b"), "author")).toEqual({
       _tag: "Granted",
       scope: "ep-1",
       admits: true,
     });
-    expect(permit(policy, scopes, "ts-outside", "author")._tag).toBe("Denied");
-    expect(permit(policy, scopes, "ts-b", "land")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-outside"), "author")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-b"), "land")._tag).toBe("Denied");
   });
 
   test("a task grant reaches that task", () => {
     const policy = withGrants({ scope: "ts-solo", steps: ["land"], remaining: 1, admitted: [] });
-    expect(permit(policy, scopes, "ts-solo", "land")._tag).toBe("Granted");
+    expect(permit(policy, scopes, task("ts-solo"), "land")._tag).toBe("Granted");
   });
 
   test("a spent count admits no new task, and keeps covering the ones it admitted", () => {
@@ -138,9 +143,9 @@ describe("permit", () => {
       remaining: 1,
       admitted: ["ts-a"],
     });
-    expect(permit(policy, scopes, "ts-b", "author")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-b"), "author")._tag).toBe("Denied");
     // ts-a was authored under the grant, so its review and landing still are.
-    expect(permit(policy, scopes, "ts-a", "land")).toEqual({
+    expect(permit(policy, scopes, task("ts-a"), "land")).toEqual({
       _tag: "Granted",
       scope: "ep-1",
       admits: false,
@@ -263,5 +268,90 @@ describe("the policy file", () => {
     const result = await run(Effect.flip(updatePolicy(path, (policy) => policy)));
     expect(result._tag).toBe("PolicyError");
     expect(readFileSync(path, "utf8")).toBe("not json");
+  });
+});
+
+describe("per-project settings", () => {
+  const onFor = (project: string, steps: Policy["projects"][string]["steps"]): Policy => ({
+    ...DEFAULT_POLICY,
+    projects: { [project]: { steps } },
+  });
+
+  test("a project override wins over the default, in both directions", () => {
+    const policy: Policy = {
+      ...onFor("alpha", { author: "on" }),
+      default: { ...DEFAULT_POLICY.default, review: "on" },
+    };
+    expect(permit(policy, scopes, task("ts-x", "alpha"), "author")._tag).toBe("Default");
+    expect(permit(policy, scopes, task("ts-x", "beta"), "author")._tag).toBe("Denied");
+    const quiet = {
+      ...policy,
+      projects: { alpha: { steps: { review: "off" as const } } },
+    };
+    expect(permit(quiet, scopes, task("ts-x", "alpha"), "review")._tag).toBe("Denied");
+    expect(permit(quiet, scopes, task("ts-x", "beta"), "review")._tag).toBe("Default");
+  });
+
+  test("an override to ask holds the project's task for approval", () => {
+    expect(
+      permit(onFor("alpha", { land: "ask" }), scopes, task("ts-x", "alpha"), "land")._tag,
+    ).toBe("Ask");
+  });
+
+  test("an unset project follows the default", () => {
+    const policy: Policy = {
+      ...onFor("alpha", { author: "off" }),
+      default: { ...DEFAULT_POLICY.default, author: "on" },
+    };
+    expect(permit(policy, scopes, task("ts-x", "gamma"), "author")._tag).toBe("Default");
+    expect(permit(policy, scopes, task("ts-x", "alpha"), "climb")._tag).toBe("Denied");
+  });
+
+  test("a paused project denies every step, even with a grant", () => {
+    const policy: Policy = {
+      ...withGrants({ scope: "ts-solo", steps: ["land"], admitted: [] }),
+      default: { ...DEFAULT_POLICY.default, author: "on" },
+      projects: { alpha: { paused: true } },
+    };
+    expect(permit(policy, scopes, task("ts-solo", "alpha"), "land")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-x", "alpha"), "author")._tag).toBe("Denied");
+    expect(permit(policy, scopes, task("ts-solo", "beta"), "land")._tag).toBe("Granted");
+  });
+
+  test("the global pause wins over a project that is running", () => {
+    const policy = { ...onFor("alpha", { author: "on" }), paused: true };
+    expect(permit(policy, scopes, task("ts-x", "alpha"), "author")._tag).toBe("Denied");
+    expect(modeOf(policy)).toBe("paused");
+  });
+
+  test("modeOf is running with only a project override on", () => {
+    expect(modeOf(onFor("alpha", { author: "on" }))).toBe("running");
+    expect(modeOf(onFor("alpha", { author: "ask" }))).toBe("running");
+  });
+
+  test("modeOf is idle when overrides are off or their project is paused", () => {
+    expect(modeOf(onFor("alpha", { author: "off" }))).toBe("idle");
+    expect(
+      modeOf({ ...DEFAULT_POLICY, projects: { alpha: { paused: true, steps: { author: "on" } } } }),
+    ).toBe("idle");
+  });
+
+  test("edits set, pause, resume and clear one project, dropping an emptied entry", () => {
+    let policy = setProjectStep(DEFAULT_POLICY, "alpha", "author", "on");
+    policy = setProjectStep(policy, "alpha", "land", "ask");
+    policy = pauseProject(policy, "alpha", true);
+    expect(policy.projects).toEqual({
+      alpha: { paused: true, steps: { author: "on", land: "ask" } },
+    });
+    expect(pauseProject(policy, "alpha", false).projects["alpha"]?.paused).toBeUndefined();
+    expect(clearProject(policy, "alpha").projects).toEqual({});
+    expect(pauseProject(DEFAULT_POLICY, "alpha", false).projects).toEqual({});
+  });
+
+  test("a policy file without projects decodes with none", async () => {
+    const decoded = await Effect.runPromise(
+      S.decodeEffect(S.fromJsonString(Policy))(JSON.stringify({ slots: 2 })),
+    );
+    expect(decoded.projects).toEqual({});
   });
 });

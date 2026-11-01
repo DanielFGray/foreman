@@ -1008,7 +1008,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       yield* Effect.forEach(
         current.review.filter(({ task, worker }) => readyToLand(task, worker)),
         ({ task, worker }) => {
-          const given = permit(current.policy, current.scopes, task.id, "land");
+          const given = permit(current.policy, current.scopes, task, "land");
           switch (given._tag) {
             case "Denied":
             case "Ask":
@@ -2334,7 +2334,7 @@ export const dispatchesFor = (
     if (reviewedBy(task) !== undefined || failed.has(task.id) || stale.has(task.id)) continue;
     if (current.outOfQuota.has(task.id)) continue;
     if (worker && isBusy(worker)) continue;
-    const given = permit(policy, current.scopes, task.id, "review");
+    const given = permit(policy, current.scopes, task, "review");
     if (given._tag === "Ask") {
       asks.push({ task, step: "review", rung: authoredBy(task) });
     } else if (given._tag !== "Denied" && free > 0) {
@@ -2349,7 +2349,7 @@ export const dispatchesFor = (
     if (held(task.project)) continue;
     if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
     const step = authorStep(task.labels);
-    const given = permit(policy, current.scopes, task.id, step);
+    const given = permit(policy, current.scopes, task, step);
     if (given._tag === "Ask") {
       if (step === "author") {
         if (authorAsks >= current.policy.slots) continue;
@@ -2374,7 +2374,7 @@ export const dispatchesFor = (
 export const landAsks = (current: DispatchState): ReadonlyArray<Ask> =>
   current.review
     .filter(({ task, worker }) => readyToLand(task, worker))
-    .filter(({ task }) => permit(current.policy, current.scopes, task.id, "land")._tag === "Ask")
+    .filter(({ task }) => permit(current.policy, current.scopes, task, "land")._tag === "Ask")
     .map(({ task }) => ({ task, step: "land", rung: reviewedBy(task) }));
 
 const isBusy = (worker: Worker): boolean =>

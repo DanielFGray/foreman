@@ -80,7 +80,9 @@ ready` reads edges, never the text of a description.
   edit it yourself.
 - `foreman policy` sets what the dispatcher does without you: `pause`,
   `resume`, `set <author|climb|review|land> on|ask|off`, `slots <n>`, and
-  `grant <task-or-epic> <steps...> [--count n]` for one task or epic. The
+  `grant <task-or-epic> <steps...> [--count n]` for one task or epic.
+  `pause`, `resume` and `set` take `--project <name>` to apply to one project
+  only, and `clear --project <name>` returns it to the default. The
   dispatcher reads the file on its next tick. A paused fleet, or one with no
   step on and no grant, writes nothing at all. `foreman dispatch` is not gated:
   it starts the author you asked for.
