@@ -208,9 +208,9 @@ export function hcFleetOver() {
                 stateOf(terminal) === "working",
             );
             if (working.length === 0) return;
-            // The first agent to end its turn ends the wait; the others are
-            // interrupted, which ends their hc processes with them.
-            yield* Effect.raceAll(working.map((terminal) => waitOn(terminal.address)));
+            // The first wait to finish ends the call, whether it succeeded or
+            // failed; the others are interrupted, which ends their hc processes.
+            yield* Effect.raceAllFirst(working.map((terminal) => waitOn(terminal.address)));
           }),
 
         // herdr-app keeps its layout as an hc document, and a space's folder is
@@ -548,8 +548,8 @@ const Started = S.Struct({ address: S.String, pid: S.Finite });
 /**
  * What `hc wait <terminal> --json` prints when it ends. `reason` says why:
  * the turn ended (`status`), the program exited (`exit`), or the wait checked
- * in (`timeout`). Only `error` is read by foreman; the rest is decoded so the
- * shape is checked against hc's real output.
+ * in (`timeout`). Foreman reads none of its fields: the reply is decoded so the
+ * shape is checked against hc's real output, and the exit code decides.
  */
 export const TurnWait = S.Struct({
   terminal: S.String,

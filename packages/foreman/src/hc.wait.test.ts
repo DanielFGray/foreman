@@ -5,7 +5,7 @@ import { Fleet, type FleetError } from "./fleet.ts";
 import { hcFleetOver } from "./hc.ts";
 import { Repository } from "./repository.ts";
 
-type Exit = { readonly code: number; readonly stdout: string };
+type Exit = { readonly code: number; readonly stdout: string } | "hang";
 
 const terminal = (address: string, role: string, status: string | null) => ({
   address,
@@ -46,16 +46,18 @@ const runWith = <A>(
     } else {
       out = { code: 0, stdout: JSON.stringify({ result: { terminals } }) };
     }
+    // "hang" is a wait that never answers: no exit, no output.
+    const answer = out === "hang" ? undefined : out;
     return Effect.succeed(
       ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(out.code)),
+        exitCode: answer ? Effect.succeed(ChildProcessSpawner.ExitCode(answer.code)) : Effect.never,
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         stdin: undefined as never,
-        stdout: encode(out.stdout),
+        stdout: answer ? encode(answer.stdout) : Stream.never,
         stderr: encode(""),
-        all: encode(out.stdout),
+        all: answer ? encode(answer.stdout) : Stream.never,
         getInputFd: () => undefined as never,
         getOutputFd: () => encode(""),
         unref: Effect.succeed(Effect.void),
@@ -132,6 +134,17 @@ describe("HcFleet.awaitTurn", () => {
     await expect(
       runWith([terminal("t1", "author", "working")], { t1: { code: 1, stdout } }, (fleet) =>
         fleet.awaitTurn("ts-1", undefined),
+      ),
+    ).rejects.toThrow(/boom/);
+  });
+
+  test("ends on the first wait to fail while another still blocks", async () => {
+    const stdout = JSON.stringify({ error: { kind: "internal", message: "boom" } });
+    await expect(
+      runWith(
+        [terminal("t1", "author", "working"), terminal("t2", "review", "working")],
+        { t1: "hang", t2: { code: 1, stdout } },
+        (fleet) => fleet.awaitTurn("ts-1", undefined),
       ),
     ).rejects.toThrow(/boom/);
   });
