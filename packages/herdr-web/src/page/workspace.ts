@@ -12,7 +12,7 @@ import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./s
 import { settingsView } from "./settingsView.ts"
 import { spaceFormView, spaceHeadView } from "./spaces.ts"
 import { worktreesView } from "./worktrees.ts"
-import { foremanView } from "./foreman.ts"
+import { foremanColumnView } from "./foreman.ts"
 import { statusMark } from "./status.ts"
 
 /**
@@ -46,12 +46,15 @@ export const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
   )
 }
 
+/** What the selection shows, with the Foreman column beside it when that is on show. */
 export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.div([h.Class("body")], [selectionView(model, h), ...foremanColumnView(model, h)])
+
+const selectionView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {
     Settings: () => settingsView(model, h),
     NewSpace: () => spaceFormView(model, h),
     Worktrees: ({ space }) => worktreesView(space, model, h),
-    Foreman: () => foremanView(model, h),
     Nothing: () => h.section([h.Class("workspace empty")], ["Pick a tab or an agent."]),
     Tab: () =>
       Option.match(selectedTab(model), {

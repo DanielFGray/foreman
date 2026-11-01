@@ -537,7 +537,7 @@ project foreman touches.
 
 The dispatcher runs inside herdr-web's server (`packages/herdr-web`): start
 that, and the fleet runs with it. The server supervises the dispatcher. A
-failure is logged, shown on the Foreman page and in the panel as `failed`, and
+failure is logged, shown in the Foreman column and in the panel as `failed`, and
 the dispatcher starts again after a pause that doubles from a second up to a
 minute; the server keeps serving meanwhile. After each reading the server
 writes `state.json` for the panel.

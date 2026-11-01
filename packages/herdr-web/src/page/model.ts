@@ -187,7 +187,7 @@ export const ForemanQueue = defineTaggedUnion({
 })
 export type ForemanQueue = typeof ForemanQueue.Type
 
-/** The Foreman page's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
+/** The Foreman column's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
 export const ForemanPage = S.Struct({
   rungs: RungList,
   /** The queued task whose rung picker is open. */
@@ -198,8 +198,10 @@ export const ForemanPage = S.Struct({
   busy: S.Array(S.String),
   /** Why the last command failed. */
   refusal: S.Option(S.String),
-  /** The project whose rows show; none shows every project's. */
-  project: S.Option(S.String),
+  /** Whether the column is on show beside the workspace. */
+  shown: S.Boolean,
+  /** Whether the column shows every project's rows, not the selected space's. */
+  all: S.Boolean,
   /** The sections folded to their heading. */
   folded: S.Array(ForemanView),
   queue: ForemanQueue,
@@ -265,8 +267,6 @@ export const Selection = defineTaggedUnion({
   NewSpace: {},
   /** The checkouts of the repository a space is in, in place of a tab. */
   Worktrees: { space: S.String },
-  /** foreman's fleet, its policy and its commands, in place of a tab. */
-  Foreman: {},
 })
 export type Selection = typeof Selection.Type
 
@@ -375,7 +375,7 @@ export const Model = S.Struct({
   spaceDrag: SpaceDrag,
   spaceForm: SpaceForm,
   worktreePage: WorktreePage,
-  /** What the bridge knows of foreman's fleet; none before the Foreman page first opens. */
+  /** What the bridge knows of foreman's fleet; none before the Foreman column is first shown. */
   foreman: S.Option(ForemanState),
   foremanPage: ForemanPage,
   palette: Palette,
@@ -500,7 +500,7 @@ export const Message = defineMessageUnion({
   SucceededForemanCommand: { line: S.String },
   FailedForemanCommand: { line: S.String, reason: S.String },
   ClickedLaunch: { key: S.String },
-  PickedForemanProject: { project: S.Option(S.String) },
+  ToggledForemanAll: {},
   ToggledForemanSection: { view: ForemanView },
   ClickedRefreshForeman: {},
   CompletedRefreshForeman: {},
