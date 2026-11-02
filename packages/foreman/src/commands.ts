@@ -3,7 +3,8 @@ import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef 
 import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./actions.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
-import { countOf, Prog, ROUNDS } from "./prog.ts";
+import { roundsOf } from "./lap.ts";
+import { Prog } from "./prog.ts";
 import { ACTIONS_LIST, actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 import { commandName, publishedOf } from "./published.ts";
 import { Settings } from "./config.ts";
@@ -179,7 +180,7 @@ const say = Command.make("say", { id, role: sayRole, text }, (args) =>
 );
 
 /**
- * One correction round to the author, counted on the task.
+ * One correction round to the author, counted on the author's run.
  *
  * A review allows `MAX_ROUNDS`: an author that cannot act on clear mechanical
  * findings by then is telling the reviewer its rung is too low, and only a
@@ -191,7 +192,7 @@ const MAX_ROUNDS = 2;
 const correct = Command.make("correct", { id, text }, (args) =>
   Effect.gen(function* () {
     const prog = yield* Prog;
-    if ((countOf(yield* prog.show(args.id), ROUNDS) ?? 0) >= MAX_ROUNDS) {
+    if (roundsOf(yield* prog.show(args.id)) >= MAX_ROUNDS) {
       return yield* new Refused({
         detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with prog open instead`,
       });

@@ -2,12 +2,30 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import { connectionAt, store } from "tasks";
 import { Prog } from "./prog.ts";
-import { agentLog, attemptsOf, authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
+import { agentLog, attemptsOf, type Item } from "./prog.ts";
+import { authoredBy, isApproved, reviewedBy, roundsOf } from "./lap.ts";
+import { newRunFor } from "./run-record.ts";
+import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
+
+/** The run row a dispatch of `role` on `rung` opens for the task. */
+const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?: string) =>
+  newRunFor({
+    task: { id, title: id, project: "foreman", labels: [] },
+    branch: `foreman/${id}`,
+    harness: "test",
+    model: undefined,
+    rung,
+    provider: undefined,
+    role,
+    node: role,
+    commit,
+  });
 
 const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
-  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default)));
+  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
@@ -17,15 +35,23 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   type: "task",
   priority: 1,
   labels,
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
+  runs: [],
+  tip: undefined,
 });
 
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
-    const task = item(["by:opencode", "review-by:claude", "approved"]);
+    const task = withRuns(
+      authoredOn(item([]), "opencode"),
+      [reviewRun("claude", { ending: "approved", commit: "c1" })],
+      "c1",
+    );
 
     expect(authoredBy(task)).toBe("opencode");
     expect(reviewedBy(task)).toBe("claude");
@@ -67,7 +93,7 @@ describe("task attribution", () => {
 describe("unfinished attempts on a rung", () => {
   test("reads zero for a rung that was never tried", () => {
     expect(attemptsOf(item([]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["by:opencode"]), "deepseek")).toBe(0);
+    expect(attemptsOf(authoredOn(item([]), "opencode"), "deepseek")).toBe(0);
   });
 
   test("reads the count recorded for the named rung", () => {
@@ -97,13 +123,13 @@ describe("unfinished attempts on a rung", () => {
   });
 });
 
-describe("clearReview against a live store", () => {
+describe("Prog against a scratch store", () => {
   let directory: string;
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "foreman-prog-"));
     process.env.PROG_DB = join(directory, "prog.db");
-    await Bun.$`prog init`.quiet();
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.PROG_DB))));
   });
 
   afterAll(async () => {
@@ -111,21 +137,23 @@ describe("clearReview against a live store", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  // A reviewer can approve and then return the work in one turn, and the
-  // settle loop's ReviewReturned path clears the review through this method.
-  // The verdict must go with it, or the task returns to the queue pre-approved
-  // and the next author's handoff lands without anyone having read the new
-  // diff.
-  test("clears the verdict alongside reviewer ownership", async () => {
-    const id = (
-      await Bun.$`prog add "returned approval" -p foreman -l approved -l review-by-x`.text()
-    ).trim();
+  // A reviewer can approve and then return the work in one turn. Releasing the
+  // task closes the review run, so no open run outlives the review that
+  // opened it and the requeued task is not read as still under review.
+  test("release closes the review run and requeues the task", async () => {
+    const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
-    await run((prog) => prog.clearReview(id));
+    await run((prog) => prog.release(id));
     const after = await run((prog) => prog.show(id));
 
-    expect(after.labels).not.toContain("approved");
-    expect(after.labels).not.toContain("review-by:x");
+    expect(after.status).toBe("open");
+    expect(after.runs.map((r) => [r.role, r.open, r.ending])).toEqual([
+      ["author", false, "handed-off"],
+      ["review", false, "released"],
+    ]);
   });
 
   // One status the schema does not name fails the decode of the whole list,
@@ -143,31 +171,40 @@ describe("clearReview against a live store", () => {
 
   // A correction round counts against the author who received it, so the next
   // author's trial row must not inherit it.
-  test("counts correction rounds and resets them for a new author", async () => {
+  test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
     const id = (await Bun.$`prog add "corrected" -p foreman`.text()).trim().split("\n")[0]!;
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
 
     expect(await run((prog) => prog.countRound(id))).toBe(1);
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
     expect(await run((prog) => prog.countRound(id))).toBe(2);
-    await run((prog) => prog.attribute(id, "cheap"));
+    expect(roundsOf(await run((prog) => prog.show(id)))).toBe(2);
+    await run((prog) => prog.release(id));
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
 
     const after = await run((prog) => prog.show(id));
-    expect(after.labels).toEqual(["by:cheap"]);
-  });
-
-  test("leaves a task that never carried the labels untouched", async () => {
-    const id = (await Bun.$`prog add "plain return" -p foreman`.text()).trim();
-
-    await run((prog) => prog.clearReview(id));
-    const after = await run((prog) => prog.show(id));
-
+    expect(roundsOf(after)).toBe(0);
     expect(after.labels).toEqual([]);
+    expect(after.runs.at(-1)).toMatchObject({ role: "author", rung: "cheap", open: true });
   });
-});
 
-describe("command failures", () => {
-  test("reports a non-zero prog exit status", async () => {
-    const error = await run((prog) => Effect.flip(prog.complete("ts-does-not-exist")));
+  test("names the operation a store failure came from", async () => {
+    const error = await run((prog) =>
+      Effect.flip(prog.complete({ id: "ts-does-not-exist", labels: [] })),
+    );
 
-    expect(error.command).toContain("done ts-does-not-exist");
+    expect(error.command).toBe("done ts-does-not-exist");
+    expect(error.detail).toContain("not found");
+  });
+
+  test("submits a done task with an unread branch for review", async () => {
+    const id = (await Bun.$`prog add "unread branch" -p foreman`.text()).trim();
+    await Bun.$`prog done ${id}`.quiet();
+
+    await run((prog) => prog.submit(id));
+    const after = await run((prog) => prog.show(id));
+
+    expect(after.status).toBe("reviewing");
   });
 });

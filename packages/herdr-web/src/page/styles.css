@@ -687,3 +687,49 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
   .pane-tools .chip { justify-content: flex-start; gap: 8px; padding: 6px 10px; }
   .pane-tools :is(.label, .menu-label) { display: inline; }
 }
+
+/* The Pipeline editor: belts drawn left to right, one station card per block. */
+.foreman-column:has(.pipeline-belt) { flex: 1 1 100%; min-width: 0; }
+.pipeline { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--surface); }
+.pipeline-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pipeline-head h3 { margin: 0; font-size: 14px; }
+.pipeline-toolbar, .pipeline-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pipeline-scroll { overflow: auto; border: 1px solid var(--surface); border-radius: 6px; }
+.pipeline-belt { position: relative; }
+.pipeline-wires { position: absolute; inset: 0; pointer-events: none; }
+.pipeline-track { stroke: var(--surface); stroke-width: 9; stroke-linejoin: round; stroke-linecap: butt; }
+.pipeline-flow { stroke: var(--subtext); stroke-width: 3; stroke-dasharray: 3 11; stroke-linejoin: round; animation: pipeline-flow 0.9s linear infinite; }
+@keyframes pipeline-flow { to { stroke-dashoffset: -14; } }
+@media (prefers-reduced-motion: reduce) { .pipeline-flow { animation: none; } }
+.pipeline-grid { position: absolute; inset: 0; display: grid; box-sizing: border-box; pointer-events: none; }
+.pipeline-station { position: relative; pointer-events: auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 8px; border: 1px solid var(--surface); border-left-width: 4px; border-radius: 6px; background: var(--base, transparent); color: inherit; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.pipeline-station.selected { outline: 2px solid var(--green); }
+.pipeline-station.source { border-left-color: var(--green); }
+.pipeline-station.router { border-left-color: var(--yellow); }
+.pipeline-station.gate { border-left-color: var(--subtext); }
+.pipeline-station.agent { border-left-color: var(--blue, var(--green)); }
+.pipeline-station.land { border-left-color: var(--green); }
+.pipeline-station.park { border-left-color: var(--red); }
+.pipeline-kind { font-size: 11px; line-height: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
+.pipeline-summary { font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-add { position: absolute; width: 16px; height: 16px; padding: 0; border: 1px solid var(--subtext); border-radius: 50%; background: var(--base, Canvas); color: inherit; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.pipeline-add.on { background: var(--surface); }
+.pipeline-wire-label { position: absolute; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 10px; line-height: 14px; color: var(--subtext); pointer-events: none; }
+.pipeline-station.chip-block { flex-direction: row; align-items: center; justify-content: center; gap: 6px; padding: 0 8px; border-radius: 14px; }
+.pipeline-icon { font-size: 13px; color: var(--subtext); }
+.pipeline-route { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.pipeline-route-name { flex: 0 0 64px; color: var(--subtext); }
+.pipeline-remove { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 1px solid var(--surface); border-radius: 4px; background: transparent; color: var(--subtext); font: inherit; font-size: 11px; line-height: 1; cursor: pointer; }
+.pipeline-insert { position: absolute; z-index: 1; display: flex; gap: 4px; padding: 4px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base, Canvas); }
+.pipeline-problems { margin: 0; padding-left: 18px; color: var(--red); font-size: 13px; }
+.pipeline-inspector { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--surface); border-radius: 6px; }
+.pipeline-inspector > .chip { align-self: flex-start; }
+.pipeline-inspector h4 { margin: 0; font-size: 13px; }
+.pipeline-field { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pipeline-field > span { flex: 0 0 110px; color: var(--subtext); }
+.pipeline-input { flex: 1; min-width: 0; }
+.pipeline-count { position: absolute; top: -8px; right: -8px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--green); color: var(--base, Canvas); font-size: 11px; line-height: 18px; text-align: center; }
+.pipeline-stopped { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--red); border-radius: 6px; }
+.pipeline-standing { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.pipeline-standing-block > summary { cursor: pointer; }
+.pipeline-standing-block ul { margin: 4px 0 0; padding-left: 18px; }

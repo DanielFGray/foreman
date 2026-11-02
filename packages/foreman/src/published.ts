@@ -12,7 +12,8 @@
  */
 import { DateTime, Effect, FileSystem, Option, Path, Schema as S } from "effect";
 import type { FleetState } from "./dispatcher.ts";
-import type { EpicProgress, ReadyTask } from "./prog.ts";
+import type { EpicProgress, Item } from "./prog.ts";
+import type { Placement } from "./pipeline.ts";
 import { MODES, modeOf, Policy } from "./policy.ts";
 import {
   actionsFor,
@@ -55,6 +56,21 @@ export const PublishedRow = S.Struct({
 export type PublishedRow = typeof PublishedRow.Type;
 
 /**
+ * Where one task stands at a block of its project's pipeline. `state` is the
+ * run's state at a work block, or `parked` at a park block; `gates` are the
+ * gates that hold it before that block, in route order.
+ */
+export const PublishedPlacement = S.Struct({
+  key: S.String,
+  label: S.String,
+  project: S.String,
+  node: S.String,
+  state: S.Literals(["waiting", "running", "ended", "parked"]),
+  gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+});
+export type PublishedPlacement = typeof PublishedPlacement.Type;
+
+/**
  * What the dispatcher is doing: the policy's mode while it runs (`modeOf`), or
  * `failed` while its host waits to start it again, with why it stopped.
  */
@@ -83,6 +99,10 @@ export const Published = S.Struct({
   /** The managed projects and their checkouts, for a reader that offers a choice of project. */
   projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
   rows: S.Array(PublishedRow),
+  /** Each task that stands at a block, by project. A task outside any pipeline is left out. */
+  placements: S.Array(PublishedPlacement),
+  /** The projects whose pipeline cannot run, and why. Such a project places no task. */
+  stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
 });
 export type Published = typeof Published.Type;
 
@@ -98,7 +118,33 @@ export const publishedOf = (
   observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
   projects: state.projects.map(({ name, directory }) => ({ name, directory })),
   rows: PUBLISHED_VIEWS.flatMap((view) => rowsForView(view, state).map(publishedRow(view))),
+  placements: state.placed.flatMap(({ task, placement }) => {
+    const found = placementOf(placement);
+    return found === undefined
+      ? []
+      : [{ key: task.id, label: task.title, project: task.project, ...found }];
+  }),
+  stopped: [...state.pipelines].flatMap(([project, found]) =>
+    found._tag === "Stopped" ? [{ project, problems: [...found.problems] }] : [],
+  ),
 });
+
+const placementOf = (
+  placement: Placement,
+): Pick<PublishedPlacement, "node" | "state" | "gates"> | undefined => {
+  switch (placement._tag) {
+    case "Outside":
+      return undefined;
+    case "Parked":
+      return { node: placement.node, state: "parked", gates: [] };
+    case "At":
+      return {
+        node: placement.node.id,
+        state: placement.state,
+        gates: placement.gates.map(({ id, step }) => ({ id, step })),
+      };
+  }
+};
 
 /** One row as a reader sees it, with the commands it takes. `foreman queue` prints these too. */
 export const publishedRow =
@@ -116,7 +162,7 @@ export const publishedRow =
 
 /** The queue as a reader sees it, each epic before its first task: what `foreman queue --json` prints. */
 export const publishedQueue = (
-  queue: ReadonlyArray<ReadyTask>,
+  queue: ReadonlyArray<Item>,
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue"));
 /** An action as a command line writes it: `takeOver` is `take-over`. */

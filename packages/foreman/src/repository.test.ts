@@ -384,9 +384,27 @@ describe("Repository", () => {
     // nothing: its commits are in the checkout, so it is not unmerged — and
     // reading that as an empty branch sent finished work back to the queue.
     expect(await branches(directory)).toEqual([
-      { branch: "foreman/ts-aaaaaa", merged: false, empty: false, stale: undefined },
-      { branch: "foreman/ts-bbbbbb", merged: true, empty: true, stale: undefined },
-      { branch: "foreman/ts-cccccc", merged: true, empty: false, stale: undefined },
+      {
+        branch: "foreman/ts-aaaaaa",
+        merged: false,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-bbbbbb",
+        merged: true,
+        empty: true,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-cccccc",
+        merged: true,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
     ]);
   });
 
@@ -428,16 +446,58 @@ describe("Repository", () => {
       merged: false,
       empty: false,
       stale: { paths: ["touched.txt"], modifyDelete: true },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     expect(byName("foreman/ts-stale-con")).toEqual({
       branch: "foreman/ts-stale-con",
       merged: false,
       empty: false,
       stale: { paths: ["shared.txt"], modifyDelete: false },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     // A branch the trunk has not moved past still merges, and so reads as
     // not stale rather than as anything worse.
     expect(byName("foreman/ts-aaaaaa")?.stale).toBeUndefined();
+  });
+
+  test("reads a branch's tip as the commit id git names", async () => {
+    const expected = (await git("rev-parse", "foreman/ts-aaaaaa")).stdout.toString().trim();
+
+    expect(await run((repository) => repository.tip(directory, "foreman/ts-aaaaaa"))).toBe(
+      expected,
+    );
+    expect(
+      await run((repository) => repository.tip(directory, "foreman/ts-nowhere")),
+    ).toBeUndefined();
+  });
+
+  // A check judges one commit of a branch that has not landed, so it must see
+  // that commit's tree and leave the operator's checkout as it was.
+  test("checks a branch's commit in the proving ground, against where it was cut", async () => {
+    const check = (commit: string, command: string) =>
+      run((repository) => repository.check(directory, commit, command, groundFor(directory)));
+    const head = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "checked");
+    await writeFile(join(directory, "checked.txt"), "work\n");
+    await git("add", "checked.txt");
+    await git("commit", "-qm", "checked work");
+    const tip = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    await git("checkout", "-q", base);
+    const seen = join(tmpdir(), `foreman-check-${process.pid}.txt`);
+
+    expect(await check(tip, `pwd > ${seen}; test -f checked.txt`)).toEqual({
+      _tag: "Passed",
+      verified: true,
+    });
+    expect((await Bun.file(seen).text()).trim()).not.toBe(directory);
+    expect(await check(tip, "test ! -f checked.txt")).toMatchObject({ _tag: "Failed" });
+    // Red where the branch was cut as well: the branch is not the cause.
+    expect(await check(tip, "false")).toEqual({ _tag: "Passed", verified: false });
+
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(head);
+    expect(await Bun.file(join(directory, "checked.txt")).exists()).toBe(false);
+    await rm(seen, { force: true });
   });
 
   test("deletes a merged branch and refuses one holding the only copy", async () => {

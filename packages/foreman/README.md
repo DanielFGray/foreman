@@ -341,9 +341,8 @@ rating — there are no price or power numbers to drift out of step with the lis
 and no map from author to reviewer, because both "who reads this" and "who tries
 next" fall out of the order.
 
-The ladder is the `ladder` table of the model registry — the trials database the
-herd skill keeps at `~/.agents/model-trials.db` (`$FOREMAN_REGISTRY` points
-elsewhere). Foreman reads it at start and refuses to run without it: a second
+The ladder is the `ladder` table of the model registry, which lives in the task
+store (`~/.prog/prog.db`; `$PROG_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
 copy of the order in a config file would be a copy that can disagree. Each rung
 is a name, a model, and flags; the model's row in the `models` table says which
 harness runs it and at what thinking level, and foreman passes that level at

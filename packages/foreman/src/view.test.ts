@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { authoredBy, reviewedBy, type Item, type ReadyTask, type TaskStatus } from "./prog.ts";
+import { type Item, type TaskStatus } from "./prog.ts";
+import { authoredBy, reviewedBy } from "./lap.ts";
+import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
+import { STANDARD_PIPELINE, type AgentNode } from "./pipeline.ts";
 import {
   Published,
   publishedOf,
@@ -27,25 +30,32 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   type: "task",
   priority: 1,
   labels,
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
+  runs: [],
+  tip: undefined,
 });
 
-const ready = (
-  id: string,
-  labels: ReadonlyArray<string> = [],
-  description: string | null = null,
-): ReadyTask => ({
+const ready = (id: string, labels: ReadonlyArray<string> = [], description = ""): Item => ({
   id,
   title: `task ${id}`,
   priority: 2,
   project: "amux",
   labels,
   description,
-  parent: null,
-  created_at: new Date(),
+  parent: undefined,
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  lastActivityAt: new Date(0),
+  definitionOfDone: undefined,
+  type: "task",
+  status: "open",
+  runs: [],
+  tip: undefined,
 });
 
 const worker = (task: string, state: WorkerState): Worker => ({
@@ -78,7 +88,7 @@ const provider = (
 // A real description is several paragraphs, and the pane wraps and scrolls
 // rather than truncating, so the assertion is that every line survives.
 const LONG_DESCRIPTION = [
-  "Carry description through ReadyTask and render it whole.",
+  "Carry description through Item and render it whole.",
   "",
   "The pane wraps and scrolls, so nothing here is cut to fit a width the",
   "renderer cannot know.",
@@ -92,15 +102,18 @@ const state: FleetState = {
   yours: [ready("ts-y1", ["needs-you"])],
   working: [
     active(
-      task("ts-w1", "in_progress", ["by:flash", "failed-by:flash"]),
+      authoredOn(task("ts-w1", "in_progress", ["failed-by:flash"]), "flash"),
       worker("ts-w1", "working"),
     ),
   ],
   review: [
-    active(task("ts-r1", "reviewing", ["by:flash", "review-by:pro"]), worker("ts-r1", "working")),
+    active(
+      withRuns(authoredOn(task("ts-r1", "reviewing", []), "flash"), [reviewRun("pro")]),
+      worker("ts-r1", "working"),
+    ),
   ],
   landed: [task("ts-l1", "done", [])],
-  decisions: [active(task("ts-d1", "in_progress", ["by:flash"]), undefined)],
+  decisions: [active(authoredOn(task("ts-d1", "in_progress", []), "flash"), undefined)],
   committed: new Set<string>(),
   resumable: new Set<string>(),
   unreviewed: [
@@ -117,7 +130,9 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: task("ts-s1", "reviewing", ["by:flash", "failed-by:flash", "review-by:pro"]),
+      task: withRuns(authoredOn(task("ts-s1", "reviewing", ["failed-by:flash"]), "flash"), [
+        reviewRun("pro"),
+      ]),
       paths: ["src/old.ts", "src/gone.ts"],
       modifyDelete: true,
     },
@@ -125,6 +140,8 @@ const state: FleetState = {
   held: [held("fibrae", "dirty", "uncommitted changes to tracked files")],
   policy: DEFAULT_POLICY,
   policyError: undefined,
+  pipelines: new Map(),
+  placed: [],
   scopes: new Map(),
   asks: [],
   observedAt: undefined,
@@ -138,25 +155,31 @@ const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
 
 describe("decisionKind", () => {
   test("names the kind from the status, and a failure over any of them", () => {
-    expect(decisionKind(task("ts-1", "in_progress", ["by:flash"]))).toBe("author vanished");
-    expect(decisionKind(task("ts-1", "reviewing", ["by:flash"]))).toBe("reviewer vanished");
-    expect(decisionKind(task("ts-1", "done", ["by:flash"]))).toBe("orphaned workspace");
+    expect(decisionKind(authoredOn(task("ts-1", "in_progress", []), "flash"))).toBe(
+      "author vanished",
+    );
+    expect(decisionKind(authoredOn(task("ts-1", "reviewing", []), "flash"))).toBe(
+      "reviewer vanished",
+    );
+    expect(decisionKind(authoredOn(task("ts-1", "done", []), "flash"))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
-    expect(decisionKind(task("ts-1", "open", ["by:flash"]), "no worktree")).toBe("dispatch failed");
+    expect(decisionKind(authoredOn(task("ts-1", "open", []), "flash"), "no worktree")).toBe(
+      "dispatch failed",
+    );
   });
 });
 
 describe("staleReview", () => {
-  test("is a review-by label on an open task with nobody behind it", () => {
-    const label = ["review-by:pro"];
-    expect(staleReview({ labels: label, status: "open" }, undefined)).toBe(true);
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "settled"))).toBe(true);
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "gone"))).toBe(true);
-    // A live review is not stale, and neither is a task with no label.
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "working"))).toBe(false);
-    expect(staleReview({ labels: label, status: "reviewing" }, undefined)).toBe(false);
-    expect(staleReview({ labels: [], status: "open" }, undefined)).toBe(false);
+  test("is an open review run on an open task with nobody behind it", () => {
+    const runs = [reviewRun("pro")];
+    expect(staleReview({ runs, status: "open" }, undefined)).toBe(true);
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "settled"))).toBe(true);
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "gone"))).toBe(true);
+    // A live review is not stale, and neither is a task with no open review run.
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "working"))).toBe(false);
+    expect(staleReview({ runs, status: "reviewing" }, undefined)).toBe(false);
+    expect(staleReview({ runs: [], status: "open" }, undefined)).toBe(false);
   });
 });
 
@@ -229,7 +252,9 @@ describe("actionsFor", () => {
     ]);
     const orphan = {
       ...state,
-      decisions: [active(task("ts-o1", "done", ["by:flash"]), worker("ts-o1", "settled"))],
+      decisions: [
+        active(authoredOn(task("ts-o1", "done", []), "flash"), worker("ts-o1", "settled")),
+      ],
     };
     const left = rowsForView("attention", orphan).find((each) => each.key === "ts-o1");
     // Nothing to intervene in either: the task is finished, and the workspace
@@ -248,7 +273,7 @@ describe("actionsFor", () => {
     expect(actionsFor("working", row("working", "ts-w1"))).toContain("focus");
     const gone = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by:flash"]), undefined)],
+      working: [active(authoredOn(task("ts-w2", "in_progress", []), "flash"), undefined)],
     };
     const alone = rowsForView("working", gone).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("focus");
@@ -263,7 +288,9 @@ describe("actionsFor", () => {
     expect(actionsFor("review", blocked)).toContain("kill");
     const settled = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by:flash"]), worker("ts-w2", "settled"))],
+      working: [
+        active(authoredOn(task("ts-w2", "in_progress", []), "flash"), worker("ts-w2", "settled")),
+      ],
     };
     const alone = rowsForView("working", settled).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("kill");
@@ -418,6 +445,55 @@ describe("publishedOf", () => {
     expect(parked?.project).toBe(state.yours[0]!.project);
   });
 
+  test("publishes where each task stands and which projects are stopped", () => {
+    const author = STANDARD_PIPELINE.nodes.find(
+      (node): node is AgentNode => node.kind === "agent" && node.role === "author",
+    )!;
+    const published = publishedOf(
+      {
+        ...state,
+        pipelines: new Map([["fibrae", { _tag: "Stopped", problems: ["no source"] }]]),
+        placed: [
+          {
+            task: task("ts-a", "open", []),
+            placement: {
+              _tag: "At",
+              node: author,
+              state: "waiting",
+              gates: [{ id: "start", step: "author" }],
+              ahead: 3,
+            },
+          },
+          { task: task("ts-b", "open", []), placement: { _tag: "Parked", node: "attention" } },
+          { task: task("ts-c", "open", []), placement: { _tag: "Outside" } },
+        ],
+      },
+      Option.none(),
+    );
+    expect(published.placements).toEqual([
+      {
+        key: "ts-a",
+        label: "task ts-a",
+        project: "fibrae",
+        node: author.id,
+        state: "waiting",
+        gates: [{ id: "start", step: "author" }],
+      },
+      {
+        key: "ts-b",
+        label: "task ts-b",
+        project: "fibrae",
+        node: "attention",
+        state: "parked",
+        gates: [],
+      },
+    ]);
+    expect(published.stopped).toEqual([{ project: "fibrae", problems: ["no source"] }]);
+    expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
+      published,
+    );
+  });
+
   test("prints a queued task with the commands its queue row takes", () => {
     const failed = state.queue[1]!;
     expect(publishedRow("queue")(queueRow(failed))).toEqual({
@@ -435,12 +511,12 @@ describe("publishedOf", () => {
   test("leads each queued epic's first task with the epic, keeping the tasks' order", () => {
     const epic = {
       ...task("ep-drive", "in_progress", []),
-      type: "epic",
+      type: "epic" as const,
       title: "Drive the release",
     };
     const [first, second] = state.queue;
     const queue = [
-      { ...first!, parent: null },
+      { ...first!, parent: undefined },
       { ...second!, parent: "ep-drive" },
       { ...first!, id: "ts-q9", parent: "ep-drive" },
     ];
@@ -487,7 +563,15 @@ describe("asks", () => {
   const askState: FleetState = {
     ...state,
     asks: [
-      { task: task("ts-k1", "reviewing", ["by:cheap", "approved"]), step: "land", rung: "cheap" },
+      {
+        task: withRuns(
+          authoredOn(task("ts-k1", "reviewing", []), "cheap"),
+          [reviewRun("cheap", { ending: "approved", commit: "c1" })],
+          "c1",
+        ),
+        step: "land",
+        rung: "cheap",
+      },
     ],
   };
 

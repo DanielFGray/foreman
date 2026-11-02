@@ -1,6 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
-import { Prog, TaskDetail } from "./prog.ts";
+import { Prog } from "./prog.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
 import { queueOf } from "./host.ts";
 import { Refused } from "./commands.ts";
@@ -56,14 +56,15 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
       ),
     );
     if (args.json) {
-      return yield* Console.log(JSON.stringify(yield* Schema.encodeEffect(TaskDetail)(task)));
+      return yield* Console.log(JSON.stringify(task));
     }
     yield* Console.log(
       `${task.id} [${task.project}] ${task.status} p${task.priority} ${task.title}`,
     );
     if (task.labels.length > 0) yield* Console.log(task.labels.join(" "));
     if (task.description) yield* Console.log(`\n${task.description}`);
-    if (task.definition_of_done) yield* Console.log(`\nDone when: ${task.definition_of_done}`);
-    for (const log of task.logs) yield* Console.log(`\n${log.created_at}  ${log.message}`);
+    if (task.definitionOfDone) yield* Console.log(`\nDone when: ${task.definitionOfDone}`);
+    for (const log of task.logs)
+      yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);
   }),
 ).pipe(Command.withDescription("Print one task with its definition of done and its log"));

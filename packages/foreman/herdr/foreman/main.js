@@ -326,9 +326,9 @@ export default class Foreman extends View {
       return v_flex().gap(6).pt(4).border_t(1).border_color(t.border)
         .child(note(facts.join(" · ")))
         .when(Boolean(task.description), (el) => el.child(div().text_size(12).child(task.description)))
-        .when(Boolean(task.definition_of_done), (el) => el.child(note(`Done when: ${task.definition_of_done}`)))
+        .when(Boolean(task.definitionOfDone), (el) => el.child(note(`Done when: ${task.definitionOfDone}`)))
         .children(logs.map((log, i) => v_flex().id(`log-${id}-${i}`).gap(1)
-          .child(note(log.created_at.slice(0, 16).replace("T", " "), t.dim))
+          .child(note(log.createdAt.slice(0, 16).replace("T", " "), t.dim))
           .child(div().text_size(11).child(log.message))))
         .when(task.logs.length > LOGS_SHOWN, (el) => el.child(note(`${task.logs.length - LOGS_SHOWN} older log entries: foreman show ${id}`, t.dim)));
     };

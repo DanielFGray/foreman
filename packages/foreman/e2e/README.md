@@ -6,11 +6,14 @@ two earlier verification runs claimed real tasks that had to be unwound by
 hand.
 
 ```
-sqlite3 /tmp/foreman-e2e.db < e2e/registry.sql
+export PROG_DB=/tmp/foreman-e2e.db   # the rig's own task store
+prog init                           # the Go prog's tables
+bun src/main.ts ladder list         # opens the store once, which migrates it
+sqlite3 "$PROG_DB" < e2e/registry.sql
 export FOREMAN_POLICY=/tmp/foreman-e2e-policy.json
 bun src/main.ts policy slots 1
 bun src/main.ts policy set author on   # and review, land: what the run should prove
-export FOREMAN_REGISTRY=/tmp/foreman-e2e.db FOREMAN_CONFIG=$PWD/e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json
+export FOREMAN_CONFIG=$PWD/e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json
 HERDR_WEB_PORT=4181 bun ../herdr-web/src/server/main.ts
 ```
 
@@ -19,7 +22,7 @@ server on a spare port with the rig's variables. Never point it at the real
 server's port or state file.
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without
-touching the real registry.
+touching the real registry; `PROG_DB` keeps the rig's tasks and runs out of the real store too.
 
 The project is `~/build/foreman-e2e-probe`, a git repository with a green
 `bun test`. File a task in the prog project of the same name at priority 2 —
