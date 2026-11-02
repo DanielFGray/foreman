@@ -5,7 +5,7 @@ agents did as labels on the task (`by:<rung>`, `review-by:<rung>`, `approved`,
 and others). A label has no time, no commit and no owner, so every transition
 must remember which labels to remove. The comments on `Prog.release` and
 `clearReview` describe the bugs this has caused. After this step, the task
-store's `runs` table records each agent run, and foreman derives these facts
+store's `runs` table records each agent run and each check, and foreman derives these facts
 from the runs.
 
 ## Scope

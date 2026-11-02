@@ -1,6 +1,6 @@
 # Pipelines: foreman runs a wired graph of blocks
 
-Status: design, under review with the operator. Prototype: branch
+Status: built, and live in `develop` since 2026-11-02. Prototype: branch
 `prototype/pipeline-editor`.
 
 ## What changes

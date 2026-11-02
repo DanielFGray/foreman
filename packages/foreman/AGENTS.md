@@ -58,7 +58,8 @@ the operator's intention. The policy holds `paused`,
 grants that widen the default for one task or epic, and `projects`: a
 project's own `paused` and its own mode for any step, which replace the
 default for that project's tasks only. A paused project takes no step, grants
-included; slots stay fleet-wide. `foreman policy` and the panel write it
+included; slots stay fleet-wide, and an agent block's `slots` caps that block's
+running tasks inside them. `foreman policy` and the panel write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
@@ -299,7 +300,7 @@ that failure is the project's or the machine's, never the task's.
 
 ### Order inside a tick
 
-Settle, tidy, reclaim, recover, then fill — and **the work nearest the end is filled first**: the fewest
+Settle (it lands, then runs checks), tidy, reclaim, recover, then fill — and **the work nearest the end is filled first**: the fewest
 work blocks left, then queue order. In the standard pipeline that is landings,
 then reviews, then new work. A task
 awaiting review is nearly finished and is blocking whatever depends on it,
@@ -534,7 +535,8 @@ approval is refused, and the task goes to review again.
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
 `verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the
-checkout's current tip.
+checkout's current tip. Check blocks run their command there too, at the task's
+tip, after the landings.
 
 **What lands is that commit, not a merge remade from the same parents.** The
 ground shares the repository's objects, so the proved commit is addressable from
@@ -668,7 +670,8 @@ one has no id to dispatch against. Both are shown, and `adopt` submits one by ha
 
 ### One terminal per role
 
-Two roles run agents: `author` and `review`. Each runs in its own hc terminal
+Two roles run agents: `author` and `review`. A check block records a run of
+role `check`, which runs a command, not an agent. Each runs in its own hc terminal
 labelled `fm.role`, and a worker's `roles` map is read back from those labels
 every tick (`workersOf` in `src/hc.ts`), not from foreman's memory. Every agent
 of a task shares one herdr-app tab, so a reviewer opens beside the author it
@@ -740,8 +743,8 @@ A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
 nothing — then finds the row its id keys. It does not talk to the dispatcher:
 the world and the operator's two files are the only channels, so what it changes the
 dispatcher reads on its next tick. **Settle, land and tick have no command.**
-Landings are serialised by the dispatcher's one fiber over one proving ground
-per project; a second process landing races it.
+Landings and checks are serialised by the dispatcher's one fiber over one
+proving ground per project, checks after the landings; a second process landing races it.
 
 `foreman --skill` prints `src/skill.md`, read at runtime like the prompts, so
 the usage an agent reads ships with the binary it describes.
