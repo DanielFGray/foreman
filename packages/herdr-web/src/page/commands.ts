@@ -7,7 +7,7 @@ import { Answer, Question } from "../shared/Chat.ts"
 import { Pipeline } from "foreman/pipeline"
 import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, OPEN_EPICS_KEY, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
+import { CLOSED_PANELS_KEY, Message, OPEN_EPICS_KEY, PipelinePanel, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -368,6 +368,12 @@ export const SaveOpenEpics = Command.define("SaveOpenEpics", {
   args: { openEpics: S.Array(S.String) },
   messages: [Message.CompletedSaveOpenEpics],
   execute: ({ openEpics }) => saveStored(OPEN_EPICS_KEY, S.Array(S.String), openEpics).pipe(Effect.as(Message.CompletedSaveOpenEpics())),
+})
+
+export const SaveClosedPanels = Command.define("SaveClosedPanels", {
+  args: { closedPanels: S.Array(PipelinePanel) },
+  messages: [Message.CompletedSaveClosedPanels],
+  execute: ({ closedPanels }) => saveStored(CLOSED_PANELS_KEY, S.Array(PipelinePanel), closedPanels).pipe(Effect.as(Message.CompletedSaveClosedPanels())),
 })
 
 /** Reads one epic's description from foreman. */

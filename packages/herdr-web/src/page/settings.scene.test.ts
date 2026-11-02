@@ -21,7 +21,7 @@ const terminalSettings = (font: Option.Option<string>, size: number) => ({
 test("settings offer the bridge's fonts, and a terminal only the monospaced ones", () => {
   scene(
     { update, view },
-    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model),
+    given(init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model),
     click(role("button", { name: "Settings" })),
     expect(selector(".fleet")).toHaveClass("folded"),
     expect(selector(".settings")).toContainText("Asking the bridge for its fonts"),
@@ -45,7 +45,7 @@ test("settings offer the bridge's fonts, and a terminal only the monospaced ones
 test("a size steps from the current settings and stops at its limit", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model }),
+    given({ ...init({ settings: terminalSettings(Option.none(), MAX_SIZE - 1), selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model }),
     click(role("button", { name: "larger terminal text" })),
     Command.expectExact(SaveSettings({ settings: terminalSettings(Option.none(), MAX_SIZE) })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
@@ -57,7 +57,7 @@ test("a size steps from the current settings and stops at its limit", () => {
 test("the agent choices save, and settings saved before they existed keep their fonts", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model }),
     click(label("Under each space")),
     Command.expectExact(SaveSettings({ settings: { ...DEFAULT_SETTINGS, agents: "nested" } })),
     Command.resolve(SaveSettings, Message.CompletedSaveSettings()),
@@ -80,7 +80,7 @@ test("the agent choices save, and settings saved before they existed keep their 
 const device = { endpoint: "https://push.example/device-1", keys: { p256dh: "key", auth: "secret" } }
 
 test("alerts turn on through the browser, and a device with alerts on tests them and gives the bridge its new events", () => {
-  const opened = init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
+  const opened = init({ settings: DEFAULT_SETTINGS, selection: Selection.Settings(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
   scene(
     { update, view },
     given({ ...opened, alerts: Alerts.Off() }),

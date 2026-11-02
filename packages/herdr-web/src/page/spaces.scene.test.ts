@@ -23,7 +23,7 @@ const fleet: Fleet = {
 }
 
 const start = (selection: Selection) => ({
-  ...init({ settings: DEFAULT_SETTINGS, selection, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model,
   bridge: Bridge.Watching({ fleet }),
 })
 

@@ -18,7 +18,7 @@ import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, ta
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
-import { clickedReset, clickedRevert, clickedSave, closedPipeline, editedPipeline, failedChange, failedPipeline, openedPipeline, receivedPipeline, succeededChange } from "./pipelinePage.ts"
+import { clickedReset, clickedRevert, clickedSave, closedPipeline, editedPipeline, failedChange, failedPipeline, openedPipeline, receivedPipeline, succeededChange, toggledPanel } from "./pipelinePage.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -50,7 +50,7 @@ const TYPING_PAUSE = "500 millis"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks, openEpics }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks, openEpics, closedPanels }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -73,7 +73,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     spaceForm: EMPTY_SPACE_FORM,
     worktreePage: EMPTY_WORKTREE_PAGE,
     foreman: Option.none(),
-    foremanPage: { ...EMPTY_FOREMAN_PAGE, openEpics },
+    foremanPage: { ...EMPTY_FOREMAN_PAGE, openEpics, closedPanels },
     palette: Palette.Closed(),
     recent,
     settings,
@@ -347,6 +347,8 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     ClickedRevertPipeline: () => ({ model: clickedRevert(model) }),
 
     ClickedResetPipeline: () => clickedReset(model),
+    ToggledPipelinePanel: ({ panel }) => toggledPanel(model, panel),
+    CompletedSaveClosedPanels: () => ({ model }),
 
     SucceededPipelineChange: ({ project }) => succeededChange(model, project),
 

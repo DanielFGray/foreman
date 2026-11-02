@@ -20,6 +20,7 @@ import {
   type ForemanRow,
   type ForemanState,
   type ForemanView,
+  launchableRungs,
 } from "../shared/Foreman.ts"
 import { ListRungs, LoadForemanEpic, RunForeman, SaveOpenEpics } from "./commands.ts"
 import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, PipelineView, RungList, type UpdateReturn } from "./model.ts"
@@ -38,6 +39,7 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   all: false,
   folded: ["queue", "landed"],
   openEpics: [],
+  closedPanels: [],
   epicRecords: {},
   queue: ForemanQueue.Unread(),
   pipeline: PipelineView.Closed(),
@@ -387,7 +389,7 @@ const rungsView = (key: string, page: ForemanPage, h: HtmlBuilder<Message>): Htm
     RungList.match(page.rungs, {
       Loading: () => [h.span([h.Class("note")], ["Reading the ladder…"])],
       Unlisted: ({ reason }) => [h.span([h.Class("note error")], [reason])],
-      Listed: ({ rungs }) => Array.map(rungs, (rung) => commandButton(rung, `launch ${key} on ${rung}`, { _tag: "Launch", key, rung }, page, h)),
+      Listed: ({ rungs }) => Array.map(launchableRungs(rungs), (rung) => commandButton(rung, `launch ${key} on ${rung}`, { _tag: "Launch", key, rung }, page, h)),
     }),
   )
 
