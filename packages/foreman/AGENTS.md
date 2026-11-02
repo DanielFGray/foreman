@@ -688,7 +688,9 @@ queue as empty. A merge landing keeps the first-parent line to the commits the
 checkout held before any branch touched it, but a fast-forward landing puts the
 branch's own commits on it. So `createdAt` reads the oldest reflog entry of the
 branch: a tip on the line that moved since the branch was created holds work. A
-branch with no reflog falls back to the first-parent answer.
+branch whose reflog is gone reads as work: an unknown creation is no evidence
+that nothing was committed, and a reviewer reading an empty diff costs less than
+finished work handed back as empty.
 
 The sweep is not a step inside landing. Every tick, in every project, the
 dispatcher deletes refs that are `merged` **and** whose task no longer appears in

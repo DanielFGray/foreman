@@ -111,6 +111,8 @@ class World {
   checking: Checked = { _tag: "Passed", verified: true };
   /** The commit and command of every check run, in order. */
   readonly checked: Array<[string, string]> = [];
+  /** The base each check run judged its commit against, in order. */
+  readonly checkBases: string[] = [];
   /** The commit message each landing passed to `Repository.merge`. */
   readonly mergeMessages: string[] = [];
 
@@ -374,9 +376,10 @@ class World {
         this.mergeMessages.push(message);
         return this.landing;
       }),
-    check: (_directory: string, commit: string, command: string) =>
+    check: (_directory: string, commit: string, base: string, command: string) =>
       this.write("repository.check", () => {
         this.checked.push([commit, command]);
+        this.checkBases.push(base);
         return this.checking;
       }),
     // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
@@ -1747,6 +1750,34 @@ describe("a route's workspace blocks", () => {
     expect(
       world.logs.some(([id, line]) => id === task.id && line.includes("completed at done")),
     ).toBe(true);
+  });
+
+  test("direct: a check runs on the checkout's HEAD against where the first author started", async () => {
+    draw(
+      DIRECT.flatMap((node): ReadonlyArray<PipelineNode> =>
+        node.kind === "agent" && node.role === "author"
+          ? [
+              { ...node, next: "lint-gate" },
+              { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+              { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+            ]
+          : [node],
+      ),
+    );
+    const task = item("ts-direct-lint", "reviewing", [], "test", [
+      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+    ]);
+    const world = new World(task);
+    world.headCommit = "h1";
+
+    await tick(world);
+
+    expect(world.checked).toEqual([["h1", "bun run lint"]]);
+    expect(world.checkBases).toEqual(["h0"]);
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "check")?.ending).toBe(
+      "passed",
+    );
+    expect(world.spawned).toEqual([[task.id, "review"]]);
   });
 
   test("direct: a commit after the approval stops the task completing, and it goes to review again", async () => {

@@ -1623,15 +1623,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       yield* Effect.gen(function* () {
         const project = yield* projectFor(task.project);
         if (!project) return;
-        const branch = labelFor(task.id);
-        const tip = yield* repository.tip(project.directory, branch);
+        const tip = yield* tipOf(task, project);
         if (tip === undefined) {
-          return yield* Effect.logWarning(`checking ${task.id} at ${block.id}: ${branch} is gone`);
+          return yield* Effect.logWarning(
+            `checking ${task.id} at ${block.id}: ${labelFor(task.id)} is gone`,
+          );
+        }
+        const base = yield* baseOf(task, project);
+        if (base === undefined) {
+          return yield* Effect.logWarning(
+            `checking ${task.id} at ${block.id}: no commit its work started from`,
+          );
         }
 
         const result = yield* repository.check(
           project.directory,
           tip,
+          base,
           block.command,
           verifyDirectoryFor(project.name),
         );
@@ -1640,9 +1648,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             `checking ${task.id} at ${block.id} held: ${result.detail}`,
           );
         }
-        if ((yield* repository.tip(project.directory, branch)) !== tip) {
+        if ((yield* tipOf(task, project)) !== tip) {
           return yield* Effect.logWarning(
-            `checking ${task.id} at ${block.id}: ${branch} moved while ${block.command} ran`,
+            `checking ${task.id} at ${block.id}: its work moved while ${block.command} ran`,
           );
         }
 
@@ -1659,7 +1667,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           if (!result.verified) {
             yield* prog.log(
               task.id,
-              `foreman: \`${block.command}\` fails at the commit ${branch} was cut from as well, so it says nothing about this branch, and the check ${block.id} passes it.`,
+              `foreman: \`${block.command}\` fails at the commit its work started from as well, so it says nothing about this work, and the check ${block.id} passes it.`,
             );
           }
           return;
@@ -1668,7 +1676,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* Effect.logWarning(`${task.id} failed the check ${block.id}`);
         yield* prog.log(
           task.id,
-          `foreman: the check ${block.id} ran \`${block.command}\` on ${branch} at ${tip}, and it failed, so the task is back in the queue.\n\n${result.output}`,
+          `foreman: the check ${block.id} ran \`${block.command}\` at ${tip}, and it failed, so the task is back in the queue.\n\n${result.output}`,
         );
         yield* climb(task);
         yield* prog.release(task.id);
@@ -1841,6 +1849,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => workspaceOf(pipelines, task)));
 
     /**
+     * The commit the task's work stands at now: its branch's tip, or the
+     * checkout's HEAD for a task on the operator's own branch.
+     */
+    const tipOf = (task: Item, project: Project) =>
+      Effect.gen(function* () {
+        return (yield* routeOf(task)) === "none"
+          ? yield* repository.head(project.directory)
+          : yield* repository.tip(project.directory, labelFor(task.id));
+      });
+
+    /**
+     * The commit the task's work started from: its branch's fork point, or
+     * the first direct author's base, since direct work has no undo.
+     */
+    const baseOf = (task: Item, project: Project) =>
+      Effect.gen(function* () {
+        return (yield* routeOf(task)) === "none"
+          ? directBase(task)
+          : yield* repository.base(project.directory, labelFor(task.id));
+      });
+
+    /**
      * The workspace a task's agents run in, with its worktree made usable.
      *
      * Every dispatch goes through here so the setup step cannot drift between
@@ -2010,13 +2040,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // everything since its first author started (it has no undo). The status
       // is untouched, so a later tick tries again.
       const workspace = yield* routeOf(task);
-      const { base, tip } =
-        workspace === "none"
-          ? { base: directBase(task), tip: yield* repository.head(project.directory) }
-          : {
-              base: yield* repository.base(project.directory, labelFor(task.id)),
-              tip: yield* repository.tip(project.directory, labelFor(task.id)),
-            };
+      const base = yield* baseOf(task, project);
+      const tip = yield* tipOf(task, project);
       if (!base || tip === undefined) {
         return yield* Effect.logWarning(
           `review of ${task.id} deferred: no base for its work in ${project.directory}`,

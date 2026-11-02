@@ -482,14 +482,18 @@ export class Repository extends Context.Service<Repository>()("Repository", {
     /**
      * Runs a check block's command on `commit` in the proving ground, so it
      * judges exactly that commit and writes to no tree a person or an agent
-     * uses. Its baseline is the commit the branch was cut from: where `commit`
-     * and the checkout's HEAD last met.
+     * uses. Its baseline is `base`, the commit the work started from.
      */
-    const gitCheck = (proving: string, directory: string, commit: string, command: string) =>
+    const gitCheck = (
+      proving: string,
+      directory: string,
+      commit: string,
+      base: string,
+      command: string,
+    ) =>
       Effect.gen(function* () {
         const ready = yield* gitGround(proving, directory, commit);
         if (ready) return ready;
-        const base = yield* gitOutput(directory, "merge-base", "HEAD", commit);
         return yield* judge(proving, command, gitGround(proving, directory, base));
       });
 
@@ -786,7 +790,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           // A tip on the first-parent line is a branch nobody committed to, or
           // one that landed by fast-forward. The commit git created the branch
-          // at tells them apart: an untouched branch still points at it.
+          // at tells them apart: an untouched branch still points at it. A
+          // branch whose reflog is gone has no such answer, and an unknown
+          // creation is not evidence that nothing was committed.
           const untouched = new Set(
             yield* Effect.forEach(
               refs.flatMap((ref) => {
@@ -795,9 +801,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               }),
               ([tip, branch]) =>
                 createdAt(directory, branch).pipe(
-                  Effect.map((created) =>
-                    created === undefined || created === tip ? [branch] : [],
-                  ),
+                  Effect.map((created) => (created === tip ? [branch] : [])),
                 ),
             ).pipe(Effect.map((found) => found.flat())),
           );
@@ -1088,10 +1092,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Runs a check block's `command` on `commit`, a commit of `directory`'s
        * repository, in the proving ground `proving` that landings use. Writes
        * nothing to `directory`. A flake and a failure the base shares do not
-       * count against the commit, as at a landing.
+       * count against the commit, as at a landing. `base` is the commit the
+       * work started from: a branch's fork point, or a direct task's first
+       * author base.
        */
-      check: (directory: string, commit: string, command: string, proving: string) =>
-        gitCheck(proving, directory, commit, command),
+      check: (directory: string, commit: string, base: string, command: string, proving: string) =>
+        gitCheck(proving, directory, commit, base, command),
     } as const;
   }),
 }) {

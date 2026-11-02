@@ -485,9 +485,9 @@ describe("Repository", () => {
   // A check judges one commit of a branch that has not landed, so it must see
   // that commit's tree and leave the operator's checkout as it was.
   test("checks a branch's commit in the proving ground, against where it was cut", async () => {
-    const check = (commit: string, command: string) =>
-      run((repository) => repository.check(directory, commit, command, groundFor(directory)));
     const head = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    const check = (commit: string, command: string) =>
+      run((repository) => repository.check(directory, commit, head, command, groundFor(directory)));
     const base = (await git("branch", "--show-current")).stdout.toString().trim();
     await git("checkout", "-qb", "checked");
     await writeFile(join(directory, "checked.txt"), "work\n");
@@ -1045,6 +1045,27 @@ describe("Repository landing by fast-forward", () => {
     expect(await out("rev-parse", "HEAD")).toBe(work);
     // The branch that landed by fast-forward holds work, though its tip is now
     // on the trunk's first-parent line.
+    expect(await branchOf(here)).toMatchObject({ merged: true, empty: false });
+  });
+
+  test("a fast-forward-landed branch whose reflog is gone still reads as work", async () => {
+    const { here, sh, out } = await checkout();
+    await sh("checkout", "-q", task);
+    await writeFile(join(here, "b.txt"), "b\n");
+    await sh("add", "b.txt");
+    await sh("commit", "-qm", "work");
+    await sh("checkout", "-q", "trunk");
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    await rm(join(here, ".git", "logs", "refs", "heads", "foreman"), {
+      recursive: true,
+      force: true,
+    });
+    expect((await sh("reflog", "show", `refs/heads/${task}`, "--")).stdout.toString().trim()).toBe(
+      "",
+    );
+
+    // With no record of where the branch was created, nothing proves it is empty.
+    expect(await out("rev-parse", "HEAD")).toBe(await out("rev-parse", task));
     expect(await branchOf(here)).toMatchObject({ merged: true, empty: false });
   });
 
