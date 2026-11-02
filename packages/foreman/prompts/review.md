@@ -83,9 +83,9 @@ git -C {{ worktree }} diff {{ base }} HEAD
 Judge the result again. One more round is allowed; foreman refuses a third. Never send
 a **judgement** finding (wrong approach, misread task): return the task, so foreman
 learns it needs a stronger model. If the author is `blocked` on a question, do not
-answer it: log the question and stop without a verdict.
+answer it: log the question and stop without naming an exit.
 
-## Verdict
+## Exit
 
 Before approving, run the `council` skill's Review over `{{ base }}..HEAD`. A confirmed
 defect is a rejection. Log what council found and what you decided, then close the

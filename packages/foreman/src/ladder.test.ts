@@ -150,7 +150,7 @@ describe("rungSpent", () => {
     expect(rungSpent(4, 2)).toBe(true);
   });
 
-  test("with attemptsPerRung 1, every unfinished run fails the rung", () => {
+  test("with attemptsPerRung 1, every stopped run fails the rung", () => {
     expect(rungSpent(1, 1)).toBe(true);
   });
 });

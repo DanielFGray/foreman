@@ -204,17 +204,17 @@ This is a hint: the editor shows it, but the pipeline runs.
 
 ## The standard pipeline, drawn with exits
 
-- author: `done` → review gate; `already-done` → review gate (today's
+- author: `done` → review gate; `already-done` → review gate (the old
   `satisfied`); `stopped: retry`.
-- review: `approved` → land gate; `returned` → author gate, `fails: author`;
-  `stopped: retry`; `rounds: 2`.
-- check: `passed` → next; `failed` → author gate, `fails: author`.
+- review: `approved` → land gate; `returned` → `queue`, `fails: author`;
+  `stopped: retry`.
+- check: `passed` → next; `failed` → `queue`, `fails: author`.
 
-Today a return goes to the queue and comes back through the retry router. In
-this drawing it goes straight to the author gate, keeps its claim and its
-worktree, and the author block's `ladder` model climbs as before. The cycle is
-valid because `returned` and `failed` have `fails` (rule 5). The store's author
-ending `handed-off` becomes the exit `done`.
+A return goes to the queue and comes back through the retry router, as before
+exits, so the standard pipeline has no cycle. Wiring `returned` and `failed`
+straight back to the author gate, which keeps the claim and the worktree, is a
+later task; it is valid by rule 5, because both exits have `fails`. The store's
+author ending `handed-off` became the exit `done`.
 
 ## Changes to what exists
 

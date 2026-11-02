@@ -317,7 +317,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         replaceAttempts(task, rung, `${FAILED_BY}:${rung}`),
 
       /**
-       * Writes how many times the named rung has ended the task unfinished.
+       * Writes how many times the named rung has stopped on the task without an exit.
        *
        * The rung is named in the label, so a count follows its rung: reading
        * ignores what a rung the task left recorded, and pinning a task by hand
@@ -493,7 +493,7 @@ export const needsYou = (item: { readonly labels: ReadonlyArray<string> }): bool
   item.labels.includes(NEEDS_YOU);
 
 /**
- * How many times the named rung has ended the task unfinished.
+ * How many times the named rung has stopped on the task without an exit.
  *
  * `0` when the rung has never been tried, or when the failure it earned was
  * recorded and its count cleared with it. The label names its rung, so one
@@ -578,7 +578,7 @@ export const ONBOARD = "onboard";
 /** The label with which a person parks a task in their own column. */
 export const NEEDS_YOU = "needs-you";
 
-/** Prefix of the label counting a rung's unfinished attempts: `attempt:<rung>:<n>`. */
+/** Prefix of the label counting a rung's stopped attempts: `attempt:<rung>:<n>`. */
 export const ATTEMPT = "attempt";
 
 /**

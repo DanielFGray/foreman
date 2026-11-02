@@ -91,7 +91,7 @@ describe("task attribution", () => {
   });
 });
 
-describe("unfinished attempts on a rung", () => {
+describe("stopped attempts on a rung", () => {
   test("reads zero for a rung that was never tried", () => {
     expect(attemptsOf(item([]), "deepseek")).toBe(0);
     expect(attemptsOf(authoredOn(item([]), "opencode"), "deepseek")).toBe(0);

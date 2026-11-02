@@ -132,7 +132,7 @@ describe("placement on the standard pipeline", () => {
       { node: "author", state: "waiting", gates: ["climb"], ahead: 2 },
     ],
     [
-      "an unfinished attempt is a climb too",
+      "a stopped attempt is a climb too",
       { attempts: 1 },
       { node: "author", state: "waiting", gates: ["climb"], ahead: 2 },
     ],

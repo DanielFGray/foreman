@@ -192,7 +192,7 @@ export interface Facts {
   readonly labels: ReadonlySet<string>;
   /** The rungs that failed the task. */
   readonly failedBy: ReadonlySet<string>;
-  /** Unfinished attempts recorded against any rung. */
+  /** Stopped attempts recorded against any rung. */
   readonly attempts: number;
   /** The task's tip: its branch tip, or the checkout's HEAD on a route with no branch. */
   readonly tip: string | undefined;

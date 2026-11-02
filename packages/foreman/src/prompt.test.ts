@@ -113,7 +113,7 @@ describe("Prompts", () => {
     expect(prompt).toContain("only when nothing in the backlog describes it");
   });
 
-  test("asks a successful reviewer for a verdict, not a merge", async () => {
+  test("asks a successful reviewer for an exit, not a merge", async () => {
     const prompt = await run((prompts) =>
       prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", "bun test"),
     );

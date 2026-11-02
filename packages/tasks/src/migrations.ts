@@ -235,8 +235,8 @@ const RUNS = `CREATE TABLE runs (
     started_at         TEXT,             -- NULL for runs recorded before starts were kept
     closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
     outcome            TEXT CHECK (outcome IN ('committed', 'dropped', 'handed-off', 'answered')),
-    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip its reviewer reads, moved by a correction round; check: the tip it ran on
-    ending             TEXT,             -- how the run stopped; an agent's verdict may stand on an open run, a settle ending needs a closed one
+    "commit"           TEXT,             -- agent: the tip its exit was named on, or the branch tip when it closed; check: the tip it ran on
+    ending             TEXT,             -- an exit the agent named, which may stand on an open run, or a process ending, which needs a closed one
     rounds             INTEGER,
     report_accurate    INTEGER CHECK (report_accurate IN (0, 1)),
     source             TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live', 'backfill')),

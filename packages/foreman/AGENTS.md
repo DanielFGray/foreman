@@ -857,7 +857,7 @@ alive, so only the operator can say the run is stale. Both write exactly what fo
 `intervene` acts rather than silently editing a rung. Continue stops the live role,
 preserves its worktree and uncommitted edits, and dispatches the rung the
 operator names. Diagnose and Review are offered only where git or a surviving
-worktree proves an attempt left work. Committed Review uses the formal verdict
+worktree proves an attempt left work. Committed Review uses the review agent and its exits
 pipeline; uncommitted Review and Diagnose run a chosen diagnostic agent, which
 may fix trivia and logs findings before foreman resumes the original rung.
 `diagnosing:*` is the durable marker that makes this survive a restart; no

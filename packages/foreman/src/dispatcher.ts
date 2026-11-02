@@ -2296,7 +2296,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * where the next dispatch reads it rather than being lost with the worker.
      * A branch that merely would not merge is not one of them: that is the
      * trunk having moved, which says nothing about the model. An agent that
-     * merely stopped unfinished does not fail its rung until the rung is spent.
+     * merely stopped without an exit does not fail its rung until the rung is spent.
      *
      * What is written is the failure, never the model that comes next: which
      * rung takes it depends on what is configured and paid for at the moment of
@@ -2326,7 +2326,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const failed = ranAt(task);
         yield* prog.markFailure(task.id, failed);
         const next = authorFor(settings.ladder, [...failuresOf(task), failed]);
-        // The durable write, not an unfinished attempt: this annotation records
+        // The durable write, not a stopped attempt: this annotation records
         // exactly the evidence the ladder acted on.
         yield* Effect.annotateCurrentSpan({
           escalation: "true",
