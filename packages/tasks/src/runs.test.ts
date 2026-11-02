@@ -1,17 +1,20 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectionAt } from "./connection.ts";
+import { Tasks } from "./store.ts";
 import {
   addRound,
   closeRun,
   deleteOpenRun,
+  landAuthorRun,
   openRun,
   outcomeOf,
   runsOf,
+  verdict,
   type NewRun,
 } from "./runs.ts";
 
@@ -21,6 +24,15 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 let files = 0;
 const inStore = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
   Effect.runPromise(use.pipe(Effect.provide(connectionAt(join(dir, `store-${++files}.db`)))));
+
+const inTasks = <A, E>(use: Effect.Effect<A, E, SqlClient | Tasks>) =>
+  Effect.runPromise(
+    use.pipe(
+      Effect.provide(
+        Tasks.layerSql.pipe(Layer.provideMerge(connectionAt(join(dir, `store-${++files}.db`)))),
+      ),
+    ),
+  );
 
 const run = (over: Partial<NewRun> = {}): NewRun => ({
   project: "p",
@@ -108,16 +120,109 @@ describe("runs", () => {
     const refused = await inStore(
       Effect.gen(function* () {
         const review = yield* openRun(run({ work: "review" }));
-        return yield* closeRun(review, { ending: "landed" }).pipe(Effect.flip);
+        return yield* closeRun(review, { ending: "satisfied" }).pipe(Effect.flip);
       }),
     );
     expect(refused._tag).toBe("SqlError");
   });
 
-  test("a landing is an answer for research and a commit otherwise", () => {
-    expect(outcomeOf("landed", true)).toBe("answered");
-    expect(outcomeOf("landed", false)).toBe("committed");
-    expect(outcomeOf("canceled", false)).toBe("dropped");
-    expect(outcomeOf("approved", false)).toBe("handed-off");
+  test("only the agent's endings stand on an open run", async () => {
+    const sql = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const id = yield* openRun(run());
+        const settle = yield* sql`UPDATE runs SET ending = 'handed-off' WHERE id = ${id}`.pipe(
+          Effect.flip,
+        );
+        yield* sql`UPDATE runs SET ending = 'satisfied' WHERE id = ${id}`;
+        return settle._tag;
+      }),
+    );
+    expect(sql).toBe("SqlError");
+  });
+
+  test("settle keeps the ending the agent wrote", async () => {
+    const closed = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const id = yield* openRun(run({ work: "review", node: "review", commit: "t" }));
+        yield* sql`UPDATE runs SET ending = 'approved' WHERE id = ${id}`;
+        yield* closeRun(id, { ending: "no-verdict" });
+        return (yield* runsOf(["ts-1"])).get("ts-1");
+      }),
+    );
+    expect(closed?.map((r) => [r.open, r.ending])).toEqual([[false, "approved"]]);
+  });
+
+  test("the outcome follows the ending, and landing sets the author's outcome", async () => {
+    expect(outcomeOf("canceled")).toBe("dropped");
+    expect(outcomeOf("approved")).toBe("handed-off");
+    const outcomes = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const author = yield* openRun(run());
+        yield* closeRun(author, { ending: "handed-off", commit: "x" });
+        yield* landAuthorRun("ts-1", false);
+        return yield* sql<{ outcome: string }>`SELECT outcome FROM runs`;
+      }),
+    );
+    expect(outcomes.map((r) => r.outcome)).toEqual(["committed"]);
+  });
+});
+
+describe("verdict", () => {
+  const filed = Effect.gen(function* () {
+    const tasks = yield* Tasks;
+    const id = yield* tasks.add({ project: "p", title: "t" });
+    return id;
+  });
+
+  test("returned reopens the task, and a second verdict replaces the first", async () => {
+    const [status, endings] = await inTasks(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        yield* tasks.send(id, "review");
+        yield* openRun(run({ task: id, work: "review", node: "review" }));
+        yield* verdict(id, "approved");
+        yield* verdict(id, "returned");
+        const task = yield* tasks.require(id);
+        return [task.status, (yield* runsOf([id])).get(id)?.map((r) => r.ending)] as const;
+      }),
+    );
+    expect(status).toBe("open");
+    expect(endings).toEqual(["returned"]);
+  });
+
+  test("satisfied sends an author's task to review; approved leaves the status", async () => {
+    const statuses = await inTasks(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        yield* openRun(run({ task: id }));
+        yield* verdict(id, "satisfied");
+        const afterAuthor = (yield* tasks.require(id)).status;
+        yield* openRun(run({ task: id, work: "review", node: "review" }));
+        yield* verdict(id, "approved");
+        return [afterAuthor, (yield* tasks.require(id)).status];
+      }),
+    );
+    expect(statuses).toEqual(["reviewing", "reviewing"]);
+  });
+
+  test("a verdict with no open run of its work is refused and moves nothing", async () => {
+    const [refused, status] = await inTasks(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        const refused = yield* verdict(id, "returned").pipe(Effect.flip);
+        return [refused._tag, (yield* tasks.require(id)).status] as const;
+      }),
+    );
+    expect(refused).toBe("TaskError");
+    expect(status).toBe("in_progress");
   });
 });
