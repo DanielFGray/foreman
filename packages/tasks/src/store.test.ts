@@ -350,7 +350,7 @@ const schemaOf = (file: string) => {
   }
 };
 
-/** The registry tables `0001_registry` adds; Go does not create them. */
+/** The registry tables `0002_registry` adds; Go does not create them. */
 const OTHER_TABLES = [
   "providers",
   "pools",

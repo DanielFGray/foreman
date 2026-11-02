@@ -5,7 +5,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 /**
  * The tables of the store, as Effect migrations.
  *
- * `0003_tasks` creates the task and learning tables as Go `prog` leaves them
+ * `0001_tasks` creates the task and learning tables as Go `prog` leaves them
  * after its last migration, so `tasks` can make a store on its own. Every
  * statement is `IF NOT EXISTS`: on a store `prog` already made, it does nothing.
  *
@@ -15,14 +15,14 @@ import { SqlClient } from "effect/sql/SqlClient";
  * `tasks_migrations`.
  */
 export const MIGRATIONS = Migrator.fromRecord({
-  "0003_tasks": Effect.gen(function* () {
+  "0001_tasks": Effect.gen(function* () {
     const sql = yield* SqlClient;
     for (const statement of TASKS) yield* sql.unsafe(statement);
     const version = yield* sql.unsafe<{ user_version: number }>("PRAGMA user_version");
     if (version[0]?.user_version === 0)
       yield* sql.unsafe(`PRAGMA user_version = ${GO_SCHEMA_VERSION}`);
   }),
-  "0001_registry": Effect.gen(function* () {
+  "0002_registry": Effect.gen(function* () {
     const sql = yield* SqlClient;
     for (const statement of REGISTRY) yield* sql.unsafe(statement);
   }),
