@@ -44,6 +44,14 @@ Open http://127.0.0.1:4180.
 
 `bun run start` builds the page into `dist/` and then starts the bridge, which serves it from there, so a restart always serves the checked-out page. `bun run build` builds the page alone; the running bridge serves the new build at the next page load.
 
+The bridge exits by itself when the foreman checkout it runs from gets a new commit, such as a landing foreman made, so that it never dispatches with prompts its code does not know. Run it under a service manager that starts it again, for example as a systemd user service:
+
+```sh
+systemd-run --user --unit herdr-web -p Restart=always -p RestartSec=2 \
+  --working-directory="$PWD" -E HERDR_WEB_HOSTS=my-computer.my-tailnet.ts.net:8443 \
+  "$(command -v bun)" run start
+```
+
 ## Use it from your phone with Tailscale
 
 The bridge listens only on `127.0.0.1`. There is no login, and the bridge can type into your shells, so do not put it on a network that other people use. [Tailscale](https://tailscale.com) gives your own devices a private way in.
