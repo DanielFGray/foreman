@@ -188,19 +188,29 @@ export const removeRoute = (pipeline: Pipeline, router: string, index: number): 
   );
 
 /**
- * Points a wire at another block, which is how a branch joins a belt further
- * on. Refused (none) unless the target is in a later column: the belt's edits
- * draw forward wires only, even when an existing exit closes a cycle.
+ * Points a wire at another block. Refused (none) when the new wire closes a
+ * cycle among forward wires. Existing cycle-closing returns stay in place
+ * without preventing joins between unrelated branches.
  */
 export const rejoin = (
   pipeline: Pipeline,
   wire: Pick<Wire, "from" | "port">,
   to: string,
 ): Option.Option<Pipeline> => {
-  const { cells } = beltOf(pipeline);
-  const from = cells.find((cell) => cell.node.id === wire.from);
-  const target = cells.find((cell) => cell.node.id === to);
-  return from !== undefined && target !== undefined && target.column > from.column
+  const into = forwardInputsOf(
+    wiresOf(pipeline),
+    pipeline.nodes.filter((node) => node.kind === "source").map((node) => node.id),
+  );
+  const seen = new Set<string>();
+  const reaches = (id: string): boolean => {
+    if (id === to) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return (into.get(id) ?? []).some(reaches);
+  };
+  return pipeline.nodes.some((node) => node.id === wire.from) &&
+    pipeline.nodes.some((node) => node.id === to) &&
+    !reaches(wire.from)
     ? Option.some(pruned(retargeted(pipeline, wire, to)))
     : Option.none();
 };

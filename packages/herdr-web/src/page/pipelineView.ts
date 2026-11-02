@@ -344,7 +344,7 @@ const slotsOf = (text: string): number | undefined => {
   return Number.isInteger(slots) && slots > 0 ? slots : undefined
 }
 
-/** Where a wire goes, as a list of the blocks it may be rejoined to; `rejoin` refuses the ones that would loop. */
+/** Targets that create no cycle among forward wires; existing return exits do not prevent a join. */
 const targetView = (wire: Wire, editing: Editing, h: HtmlBuilder<Message>): Html => {
   const ref: WireRef = { from: wire.from, port: wire.port }
   const candidates = editing.draft.nodes.filter((node) => node.id === wire.to || Option.isSome(rejoin(editing.draft, ref, node.id)))

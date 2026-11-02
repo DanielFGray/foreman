@@ -184,6 +184,17 @@ describe("belt edits", () => {
     ).toEqual(Option.none());
   });
 
+  test("a wire can rejoin an acyclic sibling in the same column", () => {
+    expect(at(STANDARD_PIPELINE).climb?.[0]).toBe(at(STANDARD_PIPELINE).start?.[0]);
+    const joined = rejoin(STANDARD_PIPELINE, { from: "climb", port: "next" }, "start");
+    expect(Option.map(joined, (pipeline) => node(pipeline, "climb"))).toEqual(
+      Option.some({ kind: "gate", id: "climb", step: "climb", next: "start" }),
+    );
+    expect(Option.map(joined, (pipeline) => node(pipeline, "review"))).toEqual(
+      Option.some(node(STANDARD_PIPELINE, "review")),
+    );
+  });
+
   test("a new source starts a belt that joins the first one", () => {
     const { pipeline, id } = addSource(STANDARD_PIPELINE, "label:research");
     expect(node(pipeline, id)).toMatchObject({ filter: "label:research", next: "branch" });
