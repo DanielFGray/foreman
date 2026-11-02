@@ -200,7 +200,8 @@ next author skips that account. The label clears when the task completes.
 
 ### The operator's checkout is shared, so it is asked about
 
-Every task ends by merging into the project's main checkout, the one the operator
+Every task with a branch ends by merging into the project's main checkout, and a
+direct task commits there from the start: the checkout is the one the operator
 edits in. `Repository.isFree` is the dispatch gate: a project it answers `Held`
 for is **held**, and `fill` passes over its tasks in both the review and the
 author pass. It is read every tick, so a project frees itself the moment the
@@ -260,11 +261,13 @@ records whether they are passed, so tasks in flight place as before.
   workspace block after an agent or a check: the workspace is set before the
   first agent.
 - **The checkout holds one task at a time.** A task with no worktree, an author
-  run, and still in the pipeline occupies its checkout, derived each tick; it
-  holds every other task in the project, landings included. A dispatch the
+  run, and still in the pipeline occupies its checkout, derived each tick, and
+  shows as a `busy` hold that names it. It holds every other task in the
+  project, landings included. A dispatch the
   planner sends into a free checkout takes it in the same pass, and needs a clean
   tree (`Repository.dirty`), because git carries uncommitted edits into the
-  agent's commits.
+  agent's commits. That dirty tree is not a held row: a row would hold
+  the project's worktree tasks too, which uncommitted work must not do.
 - **Branch only keeps the old branch-mode git code.** `Fleet.open` with the
   checkout as the directory runs `Repository.checkoutBranch`, which sets the
   branch it left as the upstream; `trunkOf` reads that upstream as the trunk while
@@ -518,7 +521,9 @@ has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is
 most likely to have stubbed. An approving reviewer is the only thing that makes
 a branch landable, and landing is the only code path that moves the
-operator's branch, so no prompt gives an agent merge rights.
+operator's branch for a task with a branch, so no prompt gives an agent merge
+rights. A direct route is the operator's choice to let the author commit there,
+and its `done` still waits for an approval.
 
 The author critiques its own diff before handing off, reading `git diff` rather
 than recalling its intent, because the intent is what wrote any mistake in there.

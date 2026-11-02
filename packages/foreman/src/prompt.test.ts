@@ -85,6 +85,7 @@ describe("Prompts", () => {
     expect(author).toContain("git log abc123..HEAD");
     expect(author).toContain("git diff abc123 HEAD");
     expect(author).toContain("not by undoing old ones");
+    expect(author).not.toContain("Foreman merges");
     expect(author).not.toContain("foreman/ts-123456");
 
     const review = await run((prompts) =>

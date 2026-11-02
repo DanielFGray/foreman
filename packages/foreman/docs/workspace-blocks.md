@@ -111,3 +111,17 @@ Each line names the old rule, where it stood, and what replaces it.
 - "every path from a source ends at a land block or a park" and "every path to a
   land passes a review agent" (`docs/pipeline-engine.md`): `done` is a third end,
   and the review and gate rules apply to it as to a land.
+- "Every task ends by merging into the project's main checkout" and "landing is
+  the only code path that moves the operator's branch" (AGENTS.md): both hold for
+  a task with a branch. A direct task commits there from the start, by the
+  operator's choice of route, and its `done` still waits for an approval.
+
+## Open question
+
+A pipeline edit changes the route of tasks already in flight, because the shape
+is read from the pipeline, not from git. A worktree project redrawn as direct
+places its in-flight tasks at `done`, which completes them without landing their
+branches. Validation refuses this shape for a new route ("work on this branch
+never lands"), but not for a task whose branch already exists. One answer is that
+`done` parks a task whose branch holds unmerged commits. This is the operator's
+decision.

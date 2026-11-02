@@ -578,7 +578,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
       // Tasks name a project, not a directory, so a name two checkouts share
       // is held rather than guessed at; closing one of the spaces resolves it.
-      const held: ReadonlyArray<Held> = [
+      const checkoutHolds: ReadonlyArray<Held> = [
         ...checkouts,
         ...ambiguous.map((one): Held => ({
           project: one.name,
@@ -646,6 +646,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // carries the tip its work has in this reading: its branch's, or, for a
       // task on the operator's own branch, the checkout's while it occupies it.
       const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
+      // A task that works in the checkout holds it against every other task
+      // (rule 2 of docs/workspace-blocks.md), as a `busy` hold that names it. A
+      // branch-only task's branch out in the checkout already reads as one.
+      const occupancy: ReadonlyArray<Held> = [...claimed, ...reviewing, ...queue]
+        .filter((task) => occupies(pipelines, task))
+        .filter(
+          (task) =>
+            !checkoutHolds.some(
+              (entry) => entry.project === task.project && entry.branch === labelFor(task.id),
+            ),
+        )
+        .map((task) => ({
+          project: task.project,
+          reason: "busy",
+          detail: `${task.id} works in the checkout until it leaves the pipeline`,
+          branch: labelFor(task.id),
+        }));
+
       const withTip = (task: Item): Item => ({
         ...task,
         tip:
@@ -664,7 +682,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           task: Option.map(task, withTip),
         })),
         roster,
-        held,
+        held: [...checkoutHolds, ...occupancy],
         claimed: claimed.map(withTip),
         reviewing: reviewing.map(withTip),
         epics,
@@ -2790,27 +2808,23 @@ export const planFrom = (
   // step that is taken admits: a task passed over for want of a slot leaves
   // the grant whole for the next tick.
   let policy = current.policy;
-  // The task each checkout holds (rule 2 of docs/workspace-blocks.md). It
-  // holds every other task in its project, and a dispatch planned into a
-  // free checkout takes it at once, so one pass cannot send two tasks there.
-  const occupant = new Map<string, string>(
-    current.placed
-      .filter(({ task }) => occupies(current.pipelines, task))
-      .map(({ task }) => [task.project, task.id] as const),
-  );
   // A busy hold is one task's own workspace, so it holds every task but that one.
-  const held = (task: { readonly id: string; readonly project: string }) =>
-    current.held.some(
-      (entry) => entry.project === task.project && entry.branch !== labelFor(task.id),
-    ) || (occupant.get(task.project) ?? task.id) !== task.id;
-  // A task that works in the checkout starts there only from a clean tree, and
-  // only while no other task holds it.
+  // A dispatch planned into a free checkout takes it at once, so one pass
+  // cannot send two tasks there (rule 2 of docs/workspace-blocks.md).
+  const taken = new Map<string, string>();
+  const holder = (task: Item) => (entry: Held) =>
+    entry.project === task.project && entry.branch === labelFor(task.id);
+  const held = (task: Item) =>
+    current.held.some((entry) => entry.project === task.project && !holder(task)(entry)) ||
+    (taken.get(task.project) ?? task.id) !== task.id;
+  // A task that works in the checkout starts there from a clean tree, unless
+  // it already holds the checkout and the changes are its own.
   const intoCheckout = (task: Item) => {
     const workspace = workspaceOf(current.pipelines, task);
     return workspace !== undefined && workspace !== "worktree";
   };
   const enters = (task: Item) =>
-    !intoCheckout(task) || occupant.has(task.project) || !current.dirty.has(task.project);
+    !intoCheckout(task) || current.held.some(holder(task)) || !current.dirty.has(task.project);
   const admitting = (given: Permit, task: string) => {
     if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
   };
@@ -2834,6 +2848,8 @@ export const planFrom = (
     if ((node.kind === "land" || node.kind === "done") && !readyToLand(pipeline, task, worker)) {
       continue;
     }
+    // A landing moves the operator's branch, which a task working there holds.
+    if ((node.kind === "land" || node.kind === "done") && held(task)) continue;
     if (node.kind === "agent") {
       if (held(task) || !enters(task)) continue;
       if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
@@ -2881,7 +2897,7 @@ export const planFrom = (
       for (const given of permits) admitting(given, task.id);
       free -= 1;
       running.add(task.project, node);
-      if (intoCheckout(task)) occupant.set(task.project, task.id);
+      if (intoCheckout(task)) taken.set(task.project, task.id);
       dispatches.push({ role: node.role, task, permits, block: node });
     }
   }

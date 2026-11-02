@@ -1776,6 +1776,83 @@ describe("a route's workspace blocks", () => {
     });
   }
 
+  const reading = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.tick.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+  test("a task branch out in the checkout holds every other task, and not its own review", async () => {
+    draw(BRANCH_ONLY);
+    const own = item("ts-own", "reviewing", [], "test", [handedOff("cheap", "c1")]);
+    const other = item("ts-other", "open", []);
+    const world = new World(own, other);
+    world.checkedOut = `foreman/${own.id}`;
+    onBranch(world, own.id)();
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([[own.id, "review"]]);
+    expect(world.opened).toEqual(["/build/test"]);
+    expect(world.tasks.get(other.id)?.status).toBe("open");
+    expect(state.held).toEqual([
+      { project: "test", reason: "busy", detail: "busy", branch: `foreman/${own.id}` },
+    ]);
+  });
+
+  test("a direct task in the checkout holds another task's landing, and names itself", async () => {
+    // Tasks labelled `direct` take a route with no branch; the rest take the standard one.
+    draw([
+      { kind: "source", id: "queue", filter: "", next: "which" },
+      {
+        kind: "router",
+        id: "which",
+        routes: [{ when: "label:direct", to: "d-start" }],
+        else: "branch",
+      },
+      ...STANDARD_PIPELINE.nodes.filter((node) => node.kind !== "source"),
+      { kind: "gate", id: "d-start", step: "author", next: "d-author" },
+      { kind: "agent", id: "d-author", role: "author", model: "ladder", next: "d-review-gate" },
+      { kind: "gate", id: "d-review-gate", step: "review", next: "d-review" },
+      { kind: "agent", id: "d-review", role: "review", model: "above", next: "d-land-gate" },
+      { kind: "gate", id: "d-land-gate", step: "land", next: "d-done" },
+      { kind: "done", id: "d-done" },
+    ]);
+    const direct = item("ts-direct", "in_progress", ["direct"], "test", [
+      authorRun("cheap", { base: "h0" }),
+    ]);
+    const approved = item("ts-approved", "reviewing", [], "test", [
+      handedOff("cheap", "c1"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(direct, approved);
+    world.workers.set(direct.id, {
+      ...worker(direct.id, "author", "working"),
+      directory: "/build/test",
+      repository: "/build/test",
+      worktree: undefined,
+    });
+    onBranch(world, approved.id)();
+
+    const state = await reading(world);
+
+    expect(world.merged).toEqual([]);
+    expect(world.tasks.get(approved.id)?.status).toBe("reviewing");
+    expect(state.held).toEqual([
+      {
+        project: "test",
+        reason: "busy",
+        detail: `${direct.id} works in the checkout until it leaves the pipeline`,
+        branch: `foreman/${direct.id}`,
+      },
+    ]);
+
+    await Effect.runPromise(world.prog.complete({ id: direct.id }));
+    await tick(world);
+    expect(world.merged).toEqual(["c1"]);
+  });
+
   test("a dirty checkout holds a start there, and not a worktree start", async () => {
     draw(DIRECT);
     const direct = item("ts-dirty", "open", []);
