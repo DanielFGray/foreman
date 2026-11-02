@@ -2834,13 +2834,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               (yield* SubscriptionRef.get(state)).pipelines,
               task.project,
             );
-            const run = task.runs.findLast(
-              (candidate) => candidate.open && candidate.role !== "check",
-            );
-            const block = pipeline?.nodes.find((node) => node.id === run?.node);
-            if (run === undefined || block?.kind !== "agent") {
-              return { _tag: "NoRun" } as const;
-            }
+            const open = openAgentOf(pipeline, task);
+            if (open === undefined) return { _tag: "NoRun" } as const;
+            const { block } = open;
             const exit = block.exits.find((candidate) => candidate.name === name);
             if (exit === undefined) {
               return {
@@ -3220,22 +3216,26 @@ export const awaitingLanding = (pipeline: Pipeline, task: Item): boolean => {
 };
 
 /** What follows a stop with no exit at the block of the task's open run: `retry` unless it says `park`. */
-const stoppedAt = (pipeline: Pipeline | undefined, task: Item): "retry" | "park" => {
-  const run = task.runs.findLast((candidate) => candidate.open && candidate.role !== "check");
-  const block = pipeline?.nodes.find((node) => node.id === run?.node);
-  return block?.kind === "agent" ? (block.stopped ?? "retry") : "retry";
-};
+const stoppedAt = (pipeline: Pipeline | undefined, task: Item): "retry" | "park" =>
+  openAgentOf(pipeline, task)?.block.stopped ?? "retry";
 
 /**
  * The exit the agent of the task's open run named, as the drawing declares it
  * now: nothing when no agent named one, or the block or exit is gone.
  */
 const openExitOf = (pipeline: Pipeline | undefined, task: Item): Exit | undefined => {
+  const open = openAgentOf(pipeline, task);
+  return open?.block.exits.find((exit) => exit.name === open.run.ending);
+};
+
+/** The task's open agent run and its block in the drawing, while that block is still an agent. */
+const openAgentOf = (
+  pipeline: Pipeline | undefined,
+  task: Item,
+): { readonly run: Run; readonly block: AgentNode } | undefined => {
   const run = task.runs.findLast((candidate) => candidate.open && candidate.role !== "check");
   const block = pipeline?.nodes.find((node) => node.id === run?.node);
-  return block?.kind === "agent"
-    ? block.exits.find((exit) => exit.name === run?.ending)
-    : undefined;
+  return run !== undefined && block?.kind === "agent" ? { run, block } : undefined;
 };
 
 /** The agent of the task's open run finished its block, and settle has not yet closed its run. */
