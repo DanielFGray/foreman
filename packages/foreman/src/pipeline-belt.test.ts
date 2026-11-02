@@ -26,7 +26,7 @@ describe("the standard pipeline as belts", () => {
       branch: [1, 0],
       worktree: [2, 0],
       retry: [3, 0],
-      climb: [8, 1],
+      climb: [4, 1],
       start: [4, 0],
       author: [5, 0],
       "review-gate": [6, 0],
@@ -172,9 +172,9 @@ describe("belt edits", () => {
   });
 
   test("a wire rejoins a later block, never an earlier one", () => {
-    const skip = rejoin(STANDARD_PIPELINE, { from: "start", port: "next" }, "review-gate");
-    expect(Option.map(skip, (pipeline) => node(pipeline, "start"))).toEqual(
-      Option.some({ kind: "gate", id: "start", step: "author", next: "review-gate" }),
+    const skip = rejoin(STANDARD_PIPELINE, { from: "climb", port: "next" }, "review-gate");
+    expect(Option.map(skip, (pipeline) => node(pipeline, "climb"))).toEqual(
+      Option.some({ kind: "gate", id: "climb", step: "climb", next: "review-gate" }),
     );
     expect(rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "author")).toEqual(
       Option.none(),

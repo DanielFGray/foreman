@@ -61,19 +61,17 @@ export interface Belt {
 export const beltOf = (pipeline: Pipeline): Belt => {
   const nodes = new Map(pipeline.nodes.map((node) => [node.id, node]));
   const wires = wiresOf(pipeline);
-  const into = new Map<string, Array<string>>();
-  for (const wire of wires) into.set(wire.to, [...(into.get(wire.to) ?? []), wire.from]);
+  const into = forwardInputsOf(
+    wires,
+    pipeline.nodes.filter((node) => node.kind === "source").map((node) => node.id),
+  );
 
   const columns = new Map<string, number>();
-  const columnOf = (id: string, visiting: ReadonlySet<string>): number => {
+  const columnOf = (id: string): number => {
     const known = columns.get(id);
     if (known !== undefined) return known;
-    // A cycle still draws: the wire that closes it counts for nothing.
-    const before = (into.get(id) ?? []).filter((from) => !visiting.has(from) && nodes.has(from));
-    const column =
-      before.length === 0
-        ? 0
-        : Math.max(...before.map((from) => columnOf(from, new Set([...visiting, id])))) + 1;
+    const before = (into.get(id) ?? []).filter((from) => nodes.has(from));
+    const column = before.length === 0 ? 0 : Math.max(...before.map((from) => columnOf(from))) + 1;
     columns.set(id, column);
     return column;
   };
@@ -104,7 +102,7 @@ export const beltOf = (pipeline: Pipeline): Belt => {
 
   const cells = pipeline.nodes.map((node) => ({
     node,
-    column: columnOf(node.id, new Set()),
+    column: columnOf(node.id),
     row: rows.get(node.id) ?? 0,
   }));
   return {
@@ -191,17 +189,21 @@ export const removeRoute = (pipeline: Pipeline, router: string, index: number): 
 
 /**
  * Points a wire at another block, which is how a branch joins a belt further
- * on. Refused (none) when the block reaches back to the wire's own block: the
- * belt's edits draw forward wires only.
+ * on. Refused (none) unless the target is in a later column: the belt's edits
+ * draw forward wires only, even when an existing exit closes a cycle.
  */
 export const rejoin = (
   pipeline: Pipeline,
   wire: Pick<Wire, "from" | "port">,
   to: string,
-): Option.Option<Pipeline> =>
-  !pipeline.nodes.some((node) => node.id === to) || reaches(pipeline, to, wire.from)
-    ? Option.none()
-    : Option.some(pruned(retargeted(pipeline, wire, to)));
+): Option.Option<Pipeline> => {
+  const { cells } = beltOf(pipeline);
+  const from = cells.find((cell) => cell.node.id === wire.from);
+  const target = cells.find((cell) => cell.node.id === to);
+  return from !== undefined && target !== undefined && target.column > from.column
+    ? Option.some(pruned(retargeted(pipeline, wire, to)))
+    : Option.none();
+};
 
 /** Starts a new belt: a source with this filter that joins the first source's belt. */
 export const addSource = (
@@ -273,6 +275,28 @@ export const configure = (
     }
     return node;
   });
+
+/** Incoming wires after excluding edges that close a walk from a source. */
+const forwardInputsOf = (wires: ReadonlyArray<Wire>, sources: ReadonlyArray<string>) => {
+  const into = new Map<string, Array<string>>();
+  const visited = new Set<string>();
+  const visit = (id: string, path: ReadonlySet<string>) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const nextPath = new Set([...path, id]);
+    for (const wire of wires.filter((candidate) => candidate.from === id)) {
+      // A wire back into this path closes a cycle. Draw it, but let the
+      // source's forward routes determine the columns of the blocks it joins.
+      if (nextPath.has(wire.to)) continue;
+      into.set(wire.to, [...(into.get(wire.to) ?? []), wire.from]);
+      visit(wire.to, nextPath);
+    }
+  };
+  for (const id of sources) visit(id, new Set());
+  for (const wire of wires) visit(wire.from, new Set());
+
+  return into;
+};
 
 const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
   pipeline.nodes.flatMap((node): ReadonlyArray<Wire> => {
@@ -375,18 +399,6 @@ const pruned = (pipeline: Pipeline): Pipeline => {
   };
   for (const node of pipeline.nodes) if (node.kind === "source") visit(node.id);
   return { nodes: pipeline.nodes.filter((node) => reached.has(node.id)) };
-};
-
-const reaches = (pipeline: Pipeline, from: string, to: string): boolean => {
-  const wires = wiresOf(pipeline);
-  const seen = new Set<string>();
-  const visit = (id: string): boolean => {
-    if (id === to) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return wires.some((wire) => wire.from === id && visit(wire.to));
-  };
-  return visit(from);
 };
 
 /**
