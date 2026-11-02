@@ -9,6 +9,7 @@ import {
   type PipelineNode,
   place,
   problemsOf,
+  routeWorkspace,
   STANDARD_PIPELINE,
   toMermaid,
 } from "./pipeline.ts";
@@ -482,7 +483,9 @@ describe("workspace blocks", () => {
   const direct = swap(drop(branchOnly, "branch", "retry"), { kind: "done", id: "land" });
   const workspaceOf = (pipeline: Pipeline, over: Partial<Facts> = {}) => {
     const placement = place(pipeline, facts(over));
-    return placement._tag === "At" ? [placement.node.id, placement.workspace] : placement._tag;
+    return placement._tag === "At"
+      ? [placement.node.id, routeWorkspace(pipeline, facts(over))]
+      : placement._tag;
   };
 
   test("each of the three shapes is valid, and places the agent in its workspace", () => {
@@ -553,4 +556,22 @@ describe("workspace blocks", () => {
       "a route from review reaches land through no gate",
     );
   });
+});
+
+test("refuses a workspace block after an agent", () => {
+  const late: Pipeline = {
+    nodes: STANDARD_PIPELINE.nodes
+      .map((node) =>
+        node.id === "author"
+          ? { ...node, next: "late" }
+          : node.id === "queue"
+            ? { ...node, next: "retry" }
+            : node,
+      )
+      .filter((node) => node.id !== "branch" && node.id !== "worktree")
+      .concat([{ kind: "branch", id: "late", next: "review-gate" }]),
+  };
+  expect(problemsOf(late, RUNGS)).toEqual([
+    "a route from author reaches late: a route's workspace is set before its first agent",
+  ]);
 });

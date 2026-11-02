@@ -462,7 +462,6 @@ describe("publishedOf", () => {
               state: "waiting",
               gates: [{ id: "start", step: "author" }],
               ahead: 3,
-              workspace: "worktree",
             },
           },
           { task: task("ts-b", "open", []), placement: { _tag: "Parked", node: "attention" } },

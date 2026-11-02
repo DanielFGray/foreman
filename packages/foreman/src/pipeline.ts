@@ -194,8 +194,6 @@ export type Placement =
       readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
       /** Work blocks after this one, on the route its facts take now. */
       readonly ahead: number;
-      /** Where the workspace blocks on its route put it. */
-      readonly workspace: Workspace;
     };
 
 /**
@@ -219,7 +217,6 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   if (source === undefined) return { _tag: "Outside" };
 
   let gates: Array<{ id: string; step: Step }> = [];
-  let workspace: Workspace = "none";
   let node: PipelineNode | undefined = source;
   // Validation refuses a cycle, but placement may be asked about a pipeline
   // that was never validated, so the walk is bounded by the graph's size.
@@ -236,11 +233,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
         node = nodes.get(routeOf(node, facts));
         continue;
       case "branch":
-        workspace = "branch";
-        node = nodes.get(node.next);
-        continue;
       case "worktree":
-        workspace = "worktree";
         node = nodes.get(node.next);
         continue;
       case "park":
@@ -260,11 +253,46 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
           state: stateAt(node, facts),
           gates,
           ahead: aheadOf(nodes, node, facts, pipeline.nodes.length),
-          workspace,
         };
     }
   }
   return { _tag: "Outside" };
+};
+
+/**
+ * Where the task's route puts its agents, or nothing when no source takes it.
+ *
+ * Validation keeps every workspace block before the route's first agent, so
+ * the answer holds for the whole route. The walk reads routers by the facts
+ * and ignores what the task has passed, so it needs no branch tip: the tip is
+ * read from the workspace this answers.
+ */
+export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | undefined => {
+  const nodes = indexOf(pipeline);
+  let node: PipelineNode | undefined = pipeline.nodes.find(
+    (candidate) => candidate.kind === "source" && matches(facts, candidate.filter),
+  );
+  if (node === undefined) return undefined;
+  let workspace: Workspace = "none";
+  for (let steps = 0; node !== undefined && steps <= pipeline.nodes.length; steps++) {
+    switch (node.kind) {
+      case "router":
+        node = nodes.get(routeOf(node, facts));
+        continue;
+      case "branch":
+      case "worktree":
+        workspace = node.kind;
+        node = nodes.get(node.next);
+        continue;
+      case "source":
+      case "gate":
+        node = nodes.get(node.next);
+        continue;
+      default:
+        return workspace;
+    }
+  }
+  return workspace;
 };
 
 /**
@@ -342,6 +370,20 @@ export const problemsOf = (
     pipeline.nodes.filter((node) => node.kind === "worktree" || node.kind === "land"),
   )) {
     problems.push(`a route from ${source.id} reaches ${target.id} with no branch before it`);
+  }
+  // Every agent on a route works in one workspace, so a branch or a worktree
+  // after an agent or a check would move the work away from the agent that
+  // wrote it.
+  for (const from of work.filter((node) => node.kind === "agent" || node.kind === "check")) {
+    for (const block of pipeline.nodes.filter(
+      (node) => node.kind === "branch" || node.kind === "worktree",
+    )) {
+      if (wired.reaches(from.id, block.id)) {
+        problems.push(
+          `a route from ${from.id} reaches ${block.id}: a route's workspace is set before its first agent`,
+        );
+      }
+    }
   }
   // Work on a branch reaches the trunk only through a land, so a branch whose
   // route ends at done leaves the work on a branch nothing merges.
