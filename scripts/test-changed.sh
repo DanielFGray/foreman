@@ -56,29 +56,28 @@ done < <(git diff --name-only -z "$BASE"..HEAD 2>/dev/null)
 
 # Get uncommitted changes (staged and unstaged)
 # Use git status --porcelain=v1 and parse correctly to handle renames and quotes
+# Format: XY PATH (for normal) or XY OLD_PATH -> NEW_PATH (for renames)
+# X = index status, Y = worktree status, then space, then path (may be quoted)
+# For renames: " -> " + newpath (may be quoted)
+# We want the working tree path (after -> for renames, or the path itself)
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
-  # Format: XY PATH (for normal) or XY OLD_PATH -> NEW_PATH (for renames)
-  # X = index status, Y = worktree status
-  # We want the working tree path (after -> for renames, or the path itself)
-  if [[ "$line" == ".. "*" -> "* ]]; then
-    # Rename: status + space + oldpath + " -> " + newpath
-    newpath="${line##* -> }"
-    CHANGED_FILES+=("$newpath")
-  elif [[ "$line" == '.. "'*'" -> "'*'"' ]]; then
-    # Quoted rename
-    rest="${line:4}"
-    newpath="${rest##*\" -> \"}"
+  # Skip the first 3 chars (XY + space)
+  rest="${line:3}"
+  if [[ "$rest" == *" -> "* ]]; then
+    # Rename: oldpath -> newpath
+    # Extract newpath (after the last " -> ")
+    newpath="${rest##* -> }"
+    # Remove surrounding quotes if present
     newpath="${newpath%\"}"
+    newpath="${newpath#\"}"
     CHANGED_FILES+=("$newpath")
-  elif [[ "$line" == '.. "'*'"' ]]; then
-    # Quoted path
-    path="${line:4}"
-    path="${path%\"}"
-    CHANGED_FILES+=("$path")
   else
-    # Normal unquoted path (status + space + path)
-    CHANGED_FILES+=("${line:3}")
+    # Normal path (may be quoted)
+    path="$rest"
+    path="${path%\"}"
+    path="${path#\"}"
+    CHANGED_FILES+=("$path")
   fi
 done < <(git status --porcelain=v1 2>/dev/null)
 
