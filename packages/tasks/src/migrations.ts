@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import * as Migrator from "effect/sql/Migrator";
 import { SqlClient } from "effect/sql/SqlClient";
+import { PROCESS_ENDINGS } from "./endings.ts";
 
 /**
  * The tables of the store, as Effect migrations.
@@ -33,6 +34,37 @@ export const MIGRATIONS = Migrator.fromRecord({
   "0003_run_base": Effect.gen(function* () {
     const sql = yield* SqlClient;
     yield* sql.unsafe(`ALTER TABLE runs ADD COLUMN base TEXT`);
+  }),
+  // An agent run's ending becomes an exit name the agent named, or a process
+  // ending foreman observed. The old author and review endings are renamed,
+  // and the CHECK that listed them per work kind accepts any exit name.
+  // SQLite cannot alter a CHECK, so the table is rebuilt; the views that read
+  // it are dropped first and made again after, and the foreign key from
+  // `defects` is checked at commit, when the rebuilt table holds every id.
+  "0004_exits": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const views = REGISTRY.filter((statement) => statement.startsWith("CREATE VIEW"));
+    yield* sql.unsafe(`PRAGMA defer_foreign_keys = ON`);
+    for (const view of [...views].reverse()) {
+      yield* sql.unsafe(`DROP VIEW IF EXISTS ${/^CREATE VIEW (\w+)/.exec(view)![1]}`);
+    }
+    const columns = yield* sql.unsafe<{ name: string }>(
+      `SELECT name FROM pragma_table_info('runs')`,
+    );
+    const list = columns.map((column) => `"${column.name}"`).join(", ");
+    yield* sql.unsafe(RUNS.replace("CREATE TABLE runs (", "CREATE TABLE runs_next ("));
+    yield* sql.unsafe(`ALTER TABLE runs_next ADD COLUMN base TEXT`);
+    yield* sql.unsafe(
+      `INSERT INTO runs_next (${list}) SELECT ${list.replace(
+        `"ending"`,
+        `CASE ending WHEN 'handed-off' THEN 'done' WHEN 'satisfied' THEN 'already-done'
+         WHEN 'no-verdict' THEN 'stopped' WHEN 'unfinished' THEN 'stopped' ELSE ending END`,
+      )} FROM runs`,
+    );
+    yield* sql.unsafe(`DROP TABLE runs`);
+    yield* sql.unsafe(`ALTER TABLE runs_next RENAME TO runs`);
+    yield* sql.unsafe(`CREATE INDEX idx_runs_task ON runs(task)`);
+    for (const view of views) yield* sql.unsafe(view);
   }),
 });
 
@@ -183,6 +215,53 @@ const TASKS = [
  * has no kind, pool, model or outcome, it is written closed with its ending,
  * and the views about models leave it out.
  */
+const PROCESS_ENDINGS_SQL = PROCESS_ENDINGS.map((ending) => `'${ending}'`).join(", ");
+
+/**
+ * The runs table. An agent run's ending is an exit name the agent named, which
+ * may stand on an open run, or a process ending, which needs a closed one.
+ */
+const RUNS = `CREATE TABLE runs (
+    id                 INTEGER PRIMARY KEY,
+    project            TEXT NOT NULL,
+    task               TEXT NOT NULL,
+    slice              TEXT NOT NULL,
+    kind               TEXT,             -- NULL only for a check, which runs no model
+    pool               TEXT,
+    model              TEXT,
+    rung               TEXT,             -- foreman rung; NULL for a run launched by hand
+    node               TEXT,             -- the pipeline block it ran at; NULL outside a pipeline
+    work               TEXT NOT NULL CHECK (work IN ('build', 'correction', 'research', 'review', 'check')),
+    started_at         TEXT,             -- NULL for runs recorded before starts were kept
+    closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
+    outcome            TEXT CHECK (outcome IN ('committed', 'dropped', 'handed-off', 'answered')),
+    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip its reviewer reads, moved by a correction round; check: the tip it ran on
+    ending             TEXT,             -- how the run stopped; an agent's verdict may stand on an open run, a settle ending needs a closed one
+    rounds             INTEGER,
+    report_accurate    INTEGER CHECK (report_accurate IN (0, 1)),
+    source             TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live', 'backfill')),
+    evidence           TEXT,
+    notes              TEXT,
+    session            TEXT,
+    active_minutes     REAL,
+    input_tokens       INTEGER,
+    cache_read_tokens  INTEGER,
+    cache_write_tokens INTEGER,
+    output_tokens      INTEGER,
+    reasoning_tokens   INTEGER,
+    actual_cost_usd    REAL,
+    size               INTEGER CHECK (size >= 1),  -- 1 one file or rule, 2 one package, 3 crosses packages
+    CHECK (CASE WHEN work = 'check'
+      THEN kind IS NULL AND pool IS NULL AND model IS NULL AND outcome IS NULL
+           AND closed_at IS NOT NULL AND ending IN ('passed', 'failed')
+      ELSE kind IS NOT NULL AND pool IS NOT NULL AND model IS NOT NULL
+           AND (closed_at IS NULL) = (outcome IS NULL) END),
+    CHECK (ending IS NULL OR closed_at IS NOT NULL OR ending NOT IN (${PROCESS_ENDINGS_SQL})),
+    CHECK (ending IS NULL
+      OR (work = 'check' AND ending IN ('passed', 'failed'))
+      OR (work <> 'check' AND ending <> '' AND ending NOT GLOB '*[^a-z-]*'))
+  )`;
+
 const REGISTRY = [
   `CREATE TABLE providers (
     provider   TEXT PRIMARY KEY,
@@ -235,48 +314,7 @@ const REGISTRY = [
     cache_write REAL,
     fetched_at  TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
-  `CREATE TABLE runs (
-    id                 INTEGER PRIMARY KEY,
-    project            TEXT NOT NULL,
-    task               TEXT NOT NULL,
-    slice              TEXT NOT NULL,
-    kind               TEXT,             -- NULL only for a check, which runs no model
-    pool               TEXT,
-    model              TEXT,
-    rung               TEXT,             -- foreman rung; NULL for a run launched by hand
-    node               TEXT,             -- the pipeline block it ran at; NULL outside a pipeline
-    work               TEXT NOT NULL CHECK (work IN ('build', 'correction', 'research', 'review', 'check')),
-    started_at         TEXT,             -- NULL for runs recorded before starts were kept
-    closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
-    outcome            TEXT CHECK (outcome IN ('committed', 'dropped', 'handed-off', 'answered')),
-    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip its reviewer reads, moved by a correction round; check: the tip it ran on
-    ending             TEXT,             -- how the run stopped; an agent's verdict may stand on an open run, a settle ending needs a closed one
-    rounds             INTEGER,
-    report_accurate    INTEGER CHECK (report_accurate IN (0, 1)),
-    source             TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live', 'backfill')),
-    evidence           TEXT,
-    notes              TEXT,
-    session            TEXT,
-    active_minutes     REAL,
-    input_tokens       INTEGER,
-    cache_read_tokens  INTEGER,
-    cache_write_tokens INTEGER,
-    output_tokens      INTEGER,
-    reasoning_tokens   INTEGER,
-    actual_cost_usd    REAL,
-    size               INTEGER CHECK (size >= 1),  -- 1 one file or rule, 2 one package, 3 crosses packages
-    CHECK (CASE WHEN work = 'check'
-      THEN kind IS NULL AND pool IS NULL AND model IS NULL AND outcome IS NULL
-           AND closed_at IS NOT NULL AND ending IN ('passed', 'failed')
-      ELSE kind IS NOT NULL AND pool IS NOT NULL AND model IS NOT NULL
-           AND (closed_at IS NULL) = (outcome IS NULL) END),
-    CHECK (ending IS NULL OR closed_at IS NOT NULL OR ending IN ('approved', 'returned', 'satisfied')),
-    CHECK (ending IS NULL
-      OR (work = 'review' AND ending IN ('approved', 'returned', 'no-verdict', 'walled', 'released'))
-      OR (work = 'check' AND ending IN ('passed', 'failed'))
-      OR (work IN ('build', 'correction', 'research')
-          AND ending IN ('handed-off', 'satisfied', 'unfinished', 'walled', 'vanished', 'released', 'canceled')))
-  )`,
+  RUNS,
   `CREATE INDEX idx_runs_task ON runs(task)`,
   `CREATE TABLE defects (
     run_id INTEGER NOT NULL REFERENCES runs(id),
