@@ -26,7 +26,7 @@ Proven live: the author → review → merge pipeline end to end. The rig is in
 
 ## The design, and why
 
-### The world holds the work, the policy file holds the intention
+### The world holds the work, the operator's files hold the intention
 
 The world is authoritative for the state of the work, not the process. A
 dispatcher whose memory is authoritative loses the fleet on every restart: tasks
@@ -49,8 +49,9 @@ a claim made by hand.
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
 
-The policy file (`src/policy.ts`) is the one durable thing foreman holds,
-because nothing in the world records the operator's intention: `paused`,
+The policy file (`src/policy.ts`) and the pipelines file (`src/pipeline-file.ts`)
+are the only durable things foreman holds, because nothing in the world records
+the operator's intention. The policy holds `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
@@ -63,6 +64,9 @@ grant's count survives a restart. It is a file, not process state, because a
 restart of the host is not an operator. The dispatcher also watches the file
 and publishes a change at once, outside the tick, because a tick can take
 seconds and the operator's click should show in the reading before it ends.
+The pipelines file holds each project's pipeline (`docs/pipeline-engine.md`); it
+sits in the policy file's directory, and both are written through `rewrite` in
+`src/shared-file.ts`.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything
@@ -104,7 +108,7 @@ The wake queue beside it holds no state: it only ends the poll wait early, after
 `commanded` in the dispatcher's own process or `wake` from its host once a
 one-shot command in another process changed the world.
 
-**Durable state beyond the policy file is a wall.** Needing it means something
+**Durable state beyond the policy and pipelines files is a wall.** Needing it means something
 the world should record is not being recorded, and the fix belongs in hc,
 herdr-app or prog.
 
@@ -485,8 +489,9 @@ the project's `scripts/verify.sh` into the prompt; a project with none has no la
 gate, and there the full run is the reviewer's after all.
 
 **The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
-`models` tables of the herd skill's trials database; `config.jsonc` has no
-ladder. A missing database is a startup error, not a fallback, because a
+`models` tables of the task store (`PROG_DB`, else `~/.prog/prog.db`), through
+the SqlClient the process shares with Prog; `config.jsonc` has no ladder. A
+store with no rungs is a startup error, not a fallback, because a
 fallback is a second ladder that can drift. The model row carries the harness
 and the thinking level, and `launchArguments` in `src/harness.ts` turns the level
 into the harness's flag. `foreman ladder edit` is the one way to change the
@@ -494,7 +499,7 @@ order: it validates the whole edit and writes it in one transaction.
 
 **Two correction rounds, counted.** A reviewer sends mechanical findings to the
 live author with `foreman correct`, which refuses a third round and writes
-`rounds:<n>`. The trial row reads that label, and `attribute` clears it, because
+`rounds:<n>`. The run row reads that label, and `attribute` clears it, because
 it counts one author's rounds, not the task's. The council review the prompt
 asks for before approving is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
@@ -732,7 +737,7 @@ new action is an entry in `ACTIONS_LIST` and the column tables in
 
 A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
 nothing — then finds the row its id keys. It does not talk to the dispatcher:
-the world and the policy file are the only channels, so what it changes the
+the world and the operator's two files are the only channels, so what it changes the
 dispatcher reads on its next tick. **Settle, land and tick have no command.**
 Landings are serialised by the dispatcher's one fiber over one proving ground
 per project; a second process landing races it.

@@ -58,7 +58,7 @@ are yours, before `foreman dispatch` or before the dispatcher's tick takes the t
 ready` reads edges, never the text of a description.
 - **Size.** Label every task `size:1` (one file or rule), `size:2` (one
   package) or `size:3` (crosses packages); larger is allowed. Foreman writes
-  it into the trial rows, which is how the record learns which rung each size
+  it into the run rows, which is how the record learns which rung each size
   needs.
 - **Brief.** Write the task so a stranger can do it from `prog show <id>`:
   the goal, the files in scope, the design decisions you already made, and a
