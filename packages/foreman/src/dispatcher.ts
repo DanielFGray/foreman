@@ -1012,13 +1012,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             )
             .map((task) => [task.id, task]),
         );
-        const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
+        const holdingWork = yield* Effect.forEach(workCandidates.values(), (task) =>
           repository.holdsWork(directoryFor(task.project, task.id), labelFor(task.id)).pipe(
             Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
             Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           ),
         ).pipe(Effect.map((ids) => ids.flat()));
-        const resumable = new Set([...committed, ...unfinished]);
+        const resumable = new Set([...committed, ...holdingWork]);
 
         // Every branch, joined to whatever prog still says about its task. Read
         // for all of them rather than for a pre-filtered few, so the one rule
@@ -1112,7 +1112,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * The account a stopped author ran on, when its screen ends on that account's
      * usage wall. The screen is the only place a harness shows it. A screen that
-     * cannot be read is no wall, so the ordinary unfinished path runs.
+     * cannot be read is no wall, so the ordinary retry path runs.
      */
     const onUsageWall = (
       worker: Worker,
@@ -1230,7 +1230,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         current.unbacked.filter(({ task }) => pipelineOf(task) !== undefined),
         ({ task, kind }) =>
           Effect.gen(function* () {
-            yield* unfinished(
+            yield* retryAttempt(
               task,
               `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
               "stopped",
@@ -1326,7 +1326,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // stands in the operator's own tree, which foreman never commits, so
             // it is left to the ordinary path.
             const stoppedAuthor =
-              role === "author" && (phase === "Unfinished" || phase === "VanishedWithWork");
+              role === "author" && (phase === "AuthorStopped" || phase === "VanishedWithWork");
             const stoppedReviewer = role === "review" && phase === "ReviewStopped";
             const wall =
               rung === undefined || isOnboarding(task) || !(stoppedAuthor || stoppedReviewer)
@@ -1391,7 +1391,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               Match.when("VanishedWithWork", () =>
                 Option.match(wall, {
                   onNone: () =>
-                    unfinished(
+                    retryAttempt(
                       task,
                       `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.directory}. Read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
                       "vanished",
@@ -1400,7 +1400,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }),
               ),
               Match.when("VanishedEmpty", () =>
-                unfinished(
+                retryAttempt(
                   task,
                   `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree.`,
                   "vanished",
@@ -1443,7 +1443,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                   ),
                 ),
               ),
-              Match.when("Unfinished", () =>
+              Match.when("AuthorStopped", () =>
                 Option.match(wall, {
                   onNone: () =>
                     stoppedAt(pipelineOf(task), task) === "park"
@@ -1452,7 +1452,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                           worker,
                           `${kind ?? "agent"} stopped without naming an exit`,
                         )
-                      : unfinished(
+                      : retryAttempt(
                           task,
                           `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
                           "stopped",
@@ -1461,7 +1461,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                           Effect.andThen(
                             fleet.notify(
                               "Task returned",
-                              `${task.id} stopped unfinished — back in the queue`,
+                              `${task.id} stopped with no exit — back in the queue`,
                             ),
                           ),
                         ),
@@ -1555,7 +1555,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // model is stronger or weaker at avoiding. Spending a better one on
         // the retry buys nothing, and it is the resolution — not the work —
         // that is outstanding. A task that genuinely cannot get past it still
-        // ends unfinished, and `unfinished` is what bounds that.
+        // ends stopped, and `retryAttempt` is what bounds that.
         if (result._tag === "Rejected") {
           yield* Effect.logWarning(
             `landing ${task.id} (${project.name}) rejected: ${result.detail}`,
@@ -1593,7 +1593,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // may honestly say it did. `Present` wrote nothing and ran nothing, so
         // it claims neither a merge nor a verification. Two things reach it:
         // an interrupted landing whose merge had already gone in, and a branch
-        // whose author found the trunk already satisfied the task and whose
+        // whose author named `already-done` and whose
         // reviewer confirmed it. The verdict cannot tell them apart — an empty
         // branch is contained by any checkout — so the label the author left
         // is what names the one in the log.
@@ -2189,7 +2189,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * again on the next tick and climb the task a rung early; a count left
      * unwritten by the opposite order merely gives the rung one more try.
      */
-    const unfinished = (task: Climbing, detail: string, ending: Ending) =>
+    const retryAttempt = (task: Climbing, detail: string, ending: Ending) =>
       Effect.gen(function* () {
         yield* prog.release(task.id, ending);
         const rung = ranAt(task);
@@ -2820,7 +2820,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * is written and the answer lists the declared names. The exit records
        * the task's tip as its route reads it (the branch tip, or the checkout's
        * HEAD on a direct route), so a correction round needs no special case:
-       * the reviewer names its exit after the round, on the corrected tip. The
+       * the reviewer names its exit after the round, on the tip the round left. The
        * status move is the one the exit's wire implies: a return to the queue
        * reopens the task, and settle releases it; an author's exit onward sends
        * it to review; a reviewer's exit onward leaves the status as it is.
@@ -3480,7 +3480,7 @@ export const landedColumn = (
  * than an absence of work, and the only ending that closes a task the backlog
  * has outlived. The other is a task labelled `research`, whose deliverable is a
  * report in the task log rather than commits. Both are claims, not verdicts:
- * the reviewer confirms the satisfied one against the trunk and the research
+ * the reviewer confirms the already-done one against the trunk and the research
  * one against its evidence, and an ordinary rejection sends a false one back.
  */
 export const reviewable = (

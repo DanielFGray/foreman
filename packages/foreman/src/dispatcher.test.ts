@@ -261,9 +261,9 @@ describe("decisions", () => {
   // every review it had passed into a question whose only answer is "wait".
   test("does not mistake a finished review waiting on a held project for a vanished one", () => {
     const approved = active(approvedTask("ts-2"), undefined);
-    const unfinished = active(underReview("ts-4"), undefined);
+    const reviewing = active(underReview("ts-4"), undefined);
 
-    const decisions = decisionsOf([], [approved, unfinished], []);
+    const decisions = decisionsOf([], [approved, reviewing], []);
     expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-4"]);
   });
 
@@ -325,7 +325,7 @@ describe("work handed back for review", () => {
 
   test("reviews an empty branch whose author claims the trunk already satisfies it", () => {
     // The one ending that closes a task the backlog outlived. Read as
-    // unfinished, it returns to the queue and buys the same discovery again a
+    // stopped, it returns to the queue and buys the same discovery again a
     // rung up, forever.
     const claimed = active(
       withRuns(authoredOn(task("ts-444444", []), "opencode"), [

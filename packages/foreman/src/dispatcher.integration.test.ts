@@ -544,6 +544,12 @@ const tick = (world: World) =>
     Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
   );
 
+/** Runs `foreman exit` for the agent of the task's open run. */
+const exit = (world: World, id: string, name: string) =>
+  Effect.runPromise(
+    Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(Effect.provide(layerFor(world))),
+  );
+
 describe("Dispatcher tick", () => {
   test("kills a live attempt, logs the reason, and requeues without climbing", async () => {
     const task = item("ts-kill", "in_progress", ["attempt:cheap:1"], "test", [authorRun("cheap")]);
@@ -752,7 +758,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("reviews an empty branch whose author found the trunk already satisfies it", async () => {
-    const task = item("ts-satisfied", "reviewing", [], "test", [
+    const task = item("ts-already-done", "reviewing", [], "test", [
       authorRun("cheap", { open: false, ending: "already-done" }),
     ]);
     const world = new World(task);
@@ -771,7 +777,7 @@ describe("Dispatcher tick", () => {
     expect(world.spawned).toEqual([[task.id, "review"]]);
   });
 
-  test("closes a satisfied task the reviewer approved, merging nothing", async () => {
+  test("closes an already-done task the reviewer approved, merging nothing", async () => {
     const task = item("ts-confirmed", "reviewing", [], "test", [
       authorRun("cheap", { open: false, ending: "already-done" }),
       reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
@@ -962,8 +968,8 @@ describe("Dispatcher tick", () => {
 
 describe("naming an exit", () => {
   /** A review of c1 under way, and a branch at c2 that a correction round committed. */
-  const corrected = () => {
-    const task = item("ts-corrected", "reviewing", [], "test", [
+  const afterRound = () => {
+    const task = item("ts-round", "reviewing", [], "test", [
       authorDone("cheap"),
       reviewRun("dear", { commit: "c1" }),
     ]);
@@ -979,15 +985,8 @@ describe("naming an exit", () => {
     return { task, world };
   };
 
-  const exit = (world: World, id: string, name: string) =>
-    Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
-        Effect.provide(layerFor(world)),
-      ),
-    );
-
   test("records the tip it is named on, so an approval after a round lands the round's tip", async () => {
-    const { task, world } = corrected();
+    const { task, world } = afterRound();
 
     expect(await exit(world, task.id, "approved")).toEqual({
       _tag: "Named",
@@ -1003,7 +1002,7 @@ describe("naming an exit", () => {
   });
 
   test("an approval named before a round stays on the old tip, and lands nothing", async () => {
-    const { task, world } = corrected();
+    const { task, world } = afterRound();
     world.branches.set(`foreman/${task.id}`, {
       ...world.branches.get(`foreman/${task.id}`)!,
       tip: "c1",
@@ -1022,7 +1021,7 @@ describe("naming an exit", () => {
   });
 
   test("refuses a name the block does not declare, lists the ones it does, and writes nothing", async () => {
-    const { task, world } = corrected();
+    const { task, world } = afterRound();
     const before = world.tasks.get(task.id);
 
     expect(await exit(world, task.id, "shipped")).toEqual({
@@ -1034,7 +1033,7 @@ describe("naming an exit", () => {
   });
 
   test("a second exit in the same run replaces the first", async () => {
-    const { task, world } = corrected();
+    const { task, world } = afterRound();
     await exit(world, task.id, "approved");
     await exit(world, task.id, "returned");
 
@@ -1707,7 +1706,7 @@ describe("a usage wall", () => {
     expect(world.tasks.get("ts-walled-clean")?.labels).toContain("walled:opencode");
   });
 
-  test("a stop with no wall text on its screen goes through unfinished as before", async () => {
+  test("a stop with no wall text on its screen goes through the retry path as before", async () => {
     const world = stoppedOn("ts-plain", "all done\n  ctrl+p commands", true);
 
     await tick(world);
@@ -1802,22 +1801,25 @@ describe("a route's workspace blocks", () => {
 
   /**
    * Takes one task from the queue to the end of its route through the real
-   * tick: the author commits and hands off, the reviewer approves the tip it
-   * read, and the next tick ends the task. `commit` stands for the author's
-   * commit in git: a branch tip, or the checkout's HEAD moving.
+   * tick and `foreman exit`: the author commits and names `done`, the reviewer
+   * names `approved` on the tip it read, and the task ends. `commit` stands
+   * for the author's commit in git: a branch tip, or the checkout's HEAD moving.
+   * Each exit takes one tick to close its run, once its pane is idle.
    */
   const drive = async (world: World, id: string, commit: () => void) => {
     await tick(world);
     expect(world.spawned.at(-1)).toEqual([id, "author"]);
 
     commit();
+    await exit(world, id, "done");
     settled(world, id, "author");
-    await Effect.runPromise(world.prog.review(id));
+    await tick(world);
     await tick(world);
     expect(world.spawned.at(-1)).toEqual([id, "review"]);
 
-    await Effect.runPromise(world.prog.endReview(id, "approved"));
+    await exit(world, id, "approved");
     settled(world, id, "review");
+    await tick(world);
     await tick(world);
     expect(world.tasks.get(id)?.status).toBe("done");
   };
@@ -2096,7 +2098,7 @@ describe("a route's workspace blocks", () => {
   });
 });
 
-describe("a reviewer that stops without a verdict", () => {
+describe("a reviewer that stops without naming an exit, and one that names returned", () => {
   /** Three rungs on three accounts, so a review has two rungs to climb. */
   const layerFor = (world: World) =>
     Layer.provideMerge(
@@ -2163,7 +2165,7 @@ describe("a reviewer that stops without a verdict", () => {
     expect(world.spawned).toEqual([["ts-stopped", "review"]]);
   });
 
-  test("keeps recorded reviewer failures and the satisfied claim when a spawn fails", async () => {
+  test("keeps recorded reviewer failures and the already-done claim when a spawn fails", async () => {
     const world = stopped("ts-spawn", [
       authorRun("low", { open: false, ending: "already-done" }),
       reviewRun("mid"),
@@ -2193,6 +2195,49 @@ describe("a reviewer that stops without a verdict", () => {
     expect(task?.status).toBe("open");
     expect(task?.labels).toEqual(["needs-you"]);
     expect(world.spawned).toEqual([]);
+  });
+
+  test("a review's returned exit sends the task to the queue, and the next author is a rung up", async () => {
+    const id = "ts-returned";
+    const world = new World(item(id, "open", []));
+    const exitNamed = (name: string) =>
+      Effect.runPromise(
+        Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
+          Effect.provide(layerFor(world)),
+        ),
+      );
+    const settle = (role: "author" | "review") =>
+      world.workers.set(id, {
+        ...world.workers.get(id)!,
+        roles: new Map([[role, "settled"]]),
+        state: "settled",
+      });
+
+    await tick(world);
+    expect(authoredBy(world.tasks.get(id)!)).toBe("low");
+    world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      tip: "c1",
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    await exitNamed("done");
+    settle("author");
+    await tick(world);
+    await tick(world);
+    expect(world.spawned.at(-1)).toEqual([id, "review"]);
+
+    await exitNamed("returned");
+    expect(world.tasks.get(id)?.status).toBe("open");
+    settle("review");
+    await tick(world);
+
+    // `returned` fails the author, so the rung that wrote the work is charged.
+    expect(world.tasks.get(id)?.labels).toContain("failed-by:low");
+    await tick(world);
+    expect(world.spawned.at(-1)).toEqual([id, "author"]);
+    expect(authoredBy(world.tasks.get(id)!)).toBe("mid");
   });
 });
 

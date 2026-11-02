@@ -189,7 +189,7 @@ describe("Prog against a scratch store", () => {
   // A correction round counts against the author who received it, so the next
   // author's trial row must not inherit it.
   test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
-    const id = (await Bun.$`prog add "corrected" -p foreman`.text()).trim().split("\n")[0]!;
+    const id = (await Bun.$`prog add "round" -p foreman`.text()).trim().split("\n")[0]!;
     await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
 
     expect(await run((prog) => prog.countRound(id))).toBe(1);

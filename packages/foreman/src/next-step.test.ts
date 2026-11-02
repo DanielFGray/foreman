@@ -170,7 +170,7 @@ const PHASES: ReadonlyArray<{
     at: "author waiting via start",
   },
   {
-    phase: "Unfinished",
+    phase: "AuthorStopped",
     after: "released with one attempt",
     task: task(
       "open",
