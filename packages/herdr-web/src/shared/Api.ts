@@ -5,7 +5,8 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
-import { ForemanCommand, ForemanName, ForemanRow, ForemanState } from "./Foreman.ts"
+import { Pipeline } from "foreman/pipeline"
+import { ForemanCommand, ForemanName, ForemanPipeline, ForemanRow, ForemanState } from "./Foreman.ts"
 import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -189,6 +190,12 @@ export const Api = RpcGroup.make(
   Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),
   /** The queue foreman would dispatch, for one project or (none) every open one. */
   Rpc.make("foremanQueue", { payload: { project: S.OptionFromNullOr(ForemanName) }, success: S.Array(ForemanRow), error: BridgeError }),
+  /** The pipeline a project runs, with the problems that would stop it. */
+  Rpc.make("foremanPipeline", { payload: { project: ForemanName }, success: ForemanPipeline, error: BridgeError }),
+  /** Makes a pipeline the one a project runs; foreman's refusal comes back as the error's message. */
+  Rpc.make("saveForemanPipeline", { payload: { project: ForemanName, pipeline: Pipeline }, error: BridgeError }),
+  /** Drops a project's own pipeline, so it runs the standard one. */
+  Rpc.make("clearForemanPipeline", { payload: { project: ForemanName }, error: BridgeError }),
   /** What foreman records of one task: its description, for an epic row that expands. */
   Rpc.make("foremanTask", { payload: { key: ForemanName }, success: S.Struct({ description: S.OptionFromNullOr(S.String) }), error: BridgeError }),
 

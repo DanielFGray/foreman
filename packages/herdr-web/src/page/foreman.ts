@@ -22,7 +22,8 @@ import {
   type ForemanView,
 } from "../shared/Foreman.ts"
 import { ListRungs, LoadForemanEpic, RunForeman, SaveOpenEpics } from "./commands.ts"
-import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, RungList, type UpdateReturn } from "./model.ts"
+import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, PipelineView, RungList, type UpdateReturn } from "./model.ts"
+import { pipelineSectionView } from "./pipelineView.ts"
 import { lastFleet, selectedTab } from "./selection.ts"
 import { ago } from "./usage.ts"
 
@@ -39,6 +40,7 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   openEpics: [],
   epicRecords: {},
   queue: ForemanQueue.Unread(),
+  pipeline: PipelineView.Closed(),
 }
 
 /**
@@ -142,6 +144,7 @@ export const foremanColumnView = (model: Model, h: HtmlBuilder<Message>): Readon
         onSome: (state) => [
           headingView(state, model.now, h),
           scopeView(model, h),
+          pipelineSectionView(model, selectedProject(model), h),
           ...Option.match(failureOf(state), { onNone: () => [], onSome: (detail) => [h.p([h.Class("note error")], [`The dispatcher failed and starts again shortly: ${detail}`])] }),
           ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
           ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),

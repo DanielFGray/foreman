@@ -11,6 +11,8 @@ import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
 import { ForemanCommand, ForemanRow, ForemanState, ForemanView } from "../shared/Foreman.ts"
+import { Pipeline } from "foreman/pipeline"
+import { PipelineEdit, WireRef } from "./pipelineEdit.ts"
 import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -195,6 +197,30 @@ export const EpicRecord = defineTaggedUnion({
 })
 export type EpicRecord = typeof EpicRecord.Type
 
+/**
+ * The Pipeline editor: closed, being read, unreadable, or open on a project's
+ * pipeline as foreman saved it and the draft the operator is changing. The
+ * problems are not kept: the view derives them from the draft and the ladder.
+ */
+export const PipelineView = defineTaggedUnion({
+  Closed: {},
+  Loading: { project: S.String },
+  Unlisted: { project: S.String, reason: S.String },
+  Editing: {
+    project: S.String,
+    /** Whether the project has its own pipeline, or runs the standard one. */
+    drawn: S.Boolean,
+    saved: Pipeline,
+    draft: Pipeline,
+    selected: S.Option(S.String),
+    inserting: S.Option(WireRef),
+    saving: S.Boolean,
+    /** Foreman's reason for refusing the last save or reset. */
+    refusal: S.Option(S.String),
+  },
+})
+export type PipelineView = typeof PipelineView.Type
+
 /** The Foreman column's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
 export const ForemanPage = S.Struct({
   rungs: RungList,
@@ -217,6 +243,7 @@ export const ForemanPage = S.Struct({
   /** What foreman recorded of each opened epic, by key. A key still absent is being read. */
   epicRecords: S.Record(S.String, EpicRecord),
   queue: ForemanQueue,
+  pipeline: PipelineView,
 })
 export type ForemanPage = typeof ForemanPage.Type
 
@@ -522,6 +549,16 @@ export const Message = defineMessageUnion({
   ToggledForemanAll: {},
   ToggledForemanSection: { view: ForemanView },
   ClickedRefreshForeman: {},
+  ClickedPipeline: {},
+  ClosedPipeline: {},
+  ReceivedPipeline: { project: S.String, drawn: S.Boolean, pipeline: Pipeline },
+  FailedPipeline: { project: S.String, reason: S.String },
+  EditedPipeline: { edit: PipelineEdit },
+  ClickedSavePipeline: {},
+  ClickedRevertPipeline: {},
+  ClickedResetPipeline: {},
+  SucceededPipelineChange: { project: S.String },
+  FailedPipelineChange: { project: S.String, reason: S.String },
   CompletedRefreshForeman: {},
   FailedPaneAction: { reason: S.String },
   PressedSpace: { space: S.String },

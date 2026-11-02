@@ -9,7 +9,8 @@ import { Array, Cause, Context, Effect, Layer, Option, Ref, Result, Schedule, Sc
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { buildHost, type FleetState, type Host, Published, PublishedRow, publishedFailure, publishedOf, publishedPath, statusOf, writePublished } from "foreman"
 import { BridgeError } from "../shared/Api.ts"
-import { argvOf, type ForemanCommand, ForemanReading, ForemanRow, type ForemanState } from "../shared/Foreman.ts"
+import { Pipeline } from "foreman/pipeline"
+import { argvOf, type ForemanCommand, ForemanPipeline, ForemanReading, ForemanRow, type ForemanState } from "../shared/Foreman.ts"
 
 /** Builds foreman's dispatcher and its services; a test gives a fake one. */
 export class ForemanHost extends Context.Service<ForemanHost>()("herdr-web/server/ForemanHost", {
@@ -82,10 +83,10 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
     /** Asks the running dispatcher to read again now; none runs while it restarts. */
     const wake = Ref.get(current).pipe(Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: (host) => host.wake })))
 
-    const foreman = (args: ReadonlyArray<string>) =>
+    const foreman = (args: ReadonlyArray<string>, stdin?: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const handle = yield* spawner.spawn(ChildProcess.make(PROGRAM, args))
+          const handle = yield* spawner.spawn(ChildProcess.make(PROGRAM, args, stdin === undefined ? {} : { stdin: Stream.make(new TextEncoder().encode(stdin)) }))
           const [stdout, stderr, code] = yield* Effect.all(
             [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr)), handle.exitCode],
             { concurrency: "unbounded" },
@@ -112,6 +113,23 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
         ),
         Effect.map((rungs) => Array.filterMap(rungs, ({ rung, state }) => (state === "disabled" ? Result.failVoid : Result.succeed(rung)))),
       ),
+      /** The pipeline a project runs, as `foreman pipeline show` prints it. */
+      pipeline: (project: string) =>
+        foreman(["pipeline", "show", project, "--json"]).pipe(
+          Effect.flatMap((text) =>
+            S.decodeEffect(S.fromJsonString(ForemanPipeline))(text).pipe(
+              Effect.mapError((error) => new BridgeError({ kind: "foreman", message: `foreman's pipeline for ${project} is unreadable: ${error.message}` })),
+            ),
+          ),
+        ),
+      /** Sets a project's pipeline. Foreman checks it against the ladder; its refusal is the error's message. */
+      savePipeline: (project: string, pipeline: Pipeline) =>
+        S.encodeEffect(S.fromJsonString(Pipeline))(pipeline).pipe(
+          Effect.mapError((error) => new BridgeError({ kind: "foreman", message: `the pipeline cannot be written: ${error.message}` })),
+          Effect.flatMap((json) => foreman(["pipeline", "set", project, "-"], json)),
+          Effect.andThen(wake),
+        ),
+      clearPipeline: (project: string) => foreman(["pipeline", "clear", project]).pipe(Effect.andThen(wake)),
       /** One task as foreman records it, read in a process of its own like every one-shot command. */
       task: (key: string) =>
         foreman(["show", key, "--json"]).pipe(
