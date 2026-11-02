@@ -689,7 +689,9 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 }
 
 /* The Pipeline editor: belts drawn left to right, one station card per block. */
+/* The pipeline needs the width of the row, so the workspace beside it hides while it is open, instead of shrinking to a strip whose header overflows the column. */
 .foreman-column:has(.pipeline-belt) { flex: 1 1 100%; min-width: 0; }
+.body:has(.pipeline-belt) > :not(.foreman-column) { display: none; }
 .pipeline { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--surface); }
 .pipeline-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pipeline-head h3 { margin: 0; font-size: 14px; }

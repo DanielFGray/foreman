@@ -99,7 +99,7 @@ export const summaryOf = (node: PipelineNode): string => {
     case "check":
       return node.command === "" ? "names no command" : `runs ${node.command}`
     case "land":
-      return "merges the branch"
+      return "merges"
     case "park":
       return "waits for you"
   }
