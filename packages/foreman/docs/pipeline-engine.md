@@ -22,7 +22,7 @@ replaces is the fixed answer to "which step does this task take next".
 | --- | --- |
 | What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the standard pipeline |
 | Where is this task in it? | derived every tick by `place` from the task's facts |
-| Which blocks has it passed? | a fact: the `node` of each run in the current lap that advanced the task |
+| Which block did it last leave? | a fact: the exit its last named run named, and the commit it was named on |
 | May this step run for this task? | the policy: the gate's step, its mode, grants (unchanged) |
 
 The pipeline is operator intention. It lives in its own file, `pipelines.json`
@@ -33,26 +33,31 @@ through `rewrite` in `src/shared-file.ts`.
 
 A task's position is not stored. `place` replays the graph from the source with
 the task's **facts** each tick (status, priority, epic, size, the rungs that
-failed it, its attempts, the blocks it passed, its review state), the same way the ladder reads `failed-by` labels
-instead of storing the next rung. A run's `node` records a fact (the task went
-through that block), so it does not rot: if the operator deletes the node, the
-run places nothing and the task is placed by what remains.
+failed it, its attempts, the exits it named), the same way the ladder reads `failed-by` labels
+instead of storing the next rung. A run's `node` and its exit record a fact (the
+agent at that block named that exit), so they do not rot: if the operator
+deletes the block or the exit, the run places nothing and the task starts at
+its source again.
 
-## The graph has no return wires
+## Exits
 
-Every block has at most one forward wire. Work that goes back is not wired: it
-**returns**. A return releases the task to the queue; its next author run starts a
-new lap, so the blocks it passed no longer count. It keeps the evidence it
-earned (`failed-by`, `attempt`). The task then
-re-enters at a source, and routers send it on by that evidence.
+An agent or a check ends its run by naming an **exit**. Each exit is a wire to
+the block that comes next, or to `queue`. An agent names its exit with
+`foreman exit <task> <name>`; foreman names a check's `passed` or `failed`. A
+run that stops with no exit has a **process ending**: `stopped`, `vanished`,
+`walled`, `released` or `canceled`.
+
+An exit to `queue` is a **return**. It releases the task to the queue, which
+keeps the evidence it earned (`failed-by`, `attempt`). The task then re-enters
+at a source, and routers send it on by that evidence.
 
 This is the doctrine "a task records what failed it, never what runs next",
-applied to the graph. A wire from "rejected" to a chosen block would be a
-pointer to what runs next. A router at the entry that reads `failed-by` reaches
-the same block from evidence, and stays correct when the graph is edited.
+applied to the graph. The exit is evidence of what the agent said; its wire is
+read from the drawing as it is now, so an edit to the wire moves the task.
 
-So the graph is acyclic, and every path from a source ends at a land, a done or
-a park.
+An exit may wire back to an earlier block, so the graph may hold a cycle.
+Validation refuses a cycle that cannot end. The standard pipeline has no cycle:
+its returns go through the queue.
 
 ## Blocks
 
@@ -63,11 +68,11 @@ a park.
 | gate | `step` | `next` | Holds the task before the next work block until the policy permits `step` for it. `ask` lists it for approval. |
 | branch | — | `next` | Instant. Makes `foreman/<id>` from the trunk tip when the first agent is dispatched. git records it as passed. |
 | worktree | — | `next` | Instant. Puts the task's branch in a directory of its own. Without one, agents work in the operator's checkout. See `docs/workspace-blocks.md`. |
-| agent | `role`, `model`, `slots?` | `next` | A work block. Dispatches an agent and waits for its run to end. |
+| agent | `role`, `model`, `slots?`, `stopped?` | `exits` | A work block. Dispatches an agent and waits for it to name an exit or stop. |
 | land | `how?`: `merge` (default) or `fast-forward` | (ends) | A work block. Lands the approved commit, which completes the task. |
 | done | — | (ends) | A work block. Completes a task that has no branch: its commits are already on the operator's branch. |
 | park | — | (ends) | Parks the task for the operator (`needs-you`). |
-| check | `command` | `next` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
+| check | `command` | `exits`: `passed`, `failed` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
 
 A **work block** is one that runs something and takes time: agent, check, land,
 done. Sources, routers, gates, branches and worktrees decide at once.
@@ -76,25 +81,31 @@ done. Sources, routers, gates, branches and worktrees decide at once.
 
 | Block | Advances when | Returns when |
 | --- | --- | --- |
-| author agent | the author hands off committed work (status `reviewing`) | it stops unfinished or hands back an empty branch (`unfinished`: an attempt, and `failed-by` once the rung is spent) |
-| review agent | the reviewer's verdict is `approved` and the branch tip is still the commit it read | the reviewer sends it back (`climb`: `failed-by` the author's rung) |
+| author agent | the author names `done` or `already-done` (status `reviewing`) | it stops with no exit or hands back an empty branch (`stopped: retry`: an attempt, and `failed-by` once the rung is spent) |
+| review agent | the reviewer names `approved` and the branch tip is still the commit it named it on | the reviewer names `returned` (`fails: author`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
 | done | the approval holds for the checkout's HEAD (the task is done) | — |
-| check | `command` exits 0 on the branch tip, or fails at the commit the branch was cut from as well | `command` fails twice on the tip and passes where the branch was cut (`climb`, with the output in the task's log) |
+| check | `passed`: `command` exits 0 on the branch tip, or fails at the commit the branch was cut from as well | `failed`: `command` fails twice on the tip and passes where the branch was cut (`fails: author`, with the output in the task's log) |
 
-A reviewer that stops without a verdict while a rung is left, a usage wall, a
-blocked agent and a dirty checkout are not endings: the task stays at the block,
-as today. Every rung failed, or no reviewer left, parks the task, as today.
+This table is the standard wiring. An operator may wire any exit to any block
+or to `queue`. An exit with `fails: author` charges the rung of the task's last
+author run, and `fails: self` charges the block's own rung.
 
-When settle sees a block advance, the run that advanced it is the record: its
-`node` and its ending. An agent reports its ending with `tasks verdict`
-(`runs-replace-labels.md`), so no label carries a signal and nothing clears one.
+A stop with no exit follows the agent block's `stopped`: `retry` (the default)
+keeps the task at the block, so a reviewer that stops while a rung is left
+tries again on the next one; `park` parks the task. A usage wall, a blocked
+agent and a dirty checkout are not endings: the task stays at the block. Every
+rung failed, or no reviewer left, parks the task.
+
+The run that named the exit is the record: its `node`, its exit and the commit
+it was named on. No label carries a signal and nothing clears one.
 
 ### A review passes one commit
 
-A review run records the commit it read: the branch tip when the run opened.
-The review block counts as passed only while the branch tip is still that
-commit. A commit after the review opened (the author's, a repair's, or the
+`foreman exit` records the commit the exit was named on: the task's tip by its
+route (the branch tip, or the checkout's HEAD on a direct route). The exit
+holds only while the tip is still that commit, so a correction round needs no
+special case: the reviewer names its exit after the round, on the new tip. A commit after the review opened (the author's, a repair's, or the
 operator's by hand) places the task at the review block again, and no code
 clears anything to make that happen. Land checks the tip once more, then merges
 the recorded commit by its id, never the branch name, so what lands is exactly
@@ -105,7 +116,7 @@ newer one.
 This replaces today's rule that every transition which hands a task back must
 clear `approved` (`Prog.release`, `review`, `submit`, `clearReview`). That rule
 holds only while every path remembers it; a recorded commit holds by itself.
-`Held` still keeps a verdict: the tip has not moved, so the review still passes.
+`Held` still keeps an `approved` exit: the tip has not moved, so it still holds.
 
 ### A check passes one commit
 
@@ -119,10 +130,10 @@ command ran, records nothing, and a later tick checks again.
 The command runs inside the tick, as verify does, so a slow command delays
 everything else that tick does, once per commit at each check.
 
-The check records a run with the commit it ran on and the ending `passed` or
+The check records a run with the commit it ran on and the exit `passed` or
 `failed`. The run names no model: the views about models leave it out. Like a
-review, the block counts as passed only while the branch tip is still that
-commit, so a later commit places the task at the check again.
+review's exit, it holds only while the branch tip is still that commit, so a
+later commit places the task at the check again.
 
 The policy has no step of its own for a check, so the gate before a check
 names one of the existing steps.
@@ -145,8 +156,11 @@ Filters read facts, never label strings, so when runs replace labels only
 - `label:<name>`: a person set the label (for example `research`).
 - `epic:<id>`: the task's parent epic.
 - `failed`: any rung failed it. `failed:<rung>`: that rung did.
-- `size`, `priority` or `attempts` compared with `<=`, `>=` or `=` to a whole
-  number (`size` is 1 when unset).
+- `exit:<name>`: the task's last exit was `<name>`.
+- `size`, `priority`, `attempts` or `exits:<name>` compared with `<=`, `>=` or
+  `=` to a whole number (`size` is 1 when unset). `exits:<name>` counts the
+  times the task named that exit since it last left a source; a return counts
+  as leaving.
 
 ## Placement
 
@@ -154,20 +168,24 @@ Filters read facts, never label strings, so when runs replace labels only
 
 1. Start at the first source whose filter matches the task. No match: the task
    is not in this pipeline.
-2. Walk forward. At a router, follow the first matching route. At a gate,
-   remember the gate. At a work block that a run of this lap advanced,
-   forget the remembered gates and go on. An open task has passed nothing: it
-   is back in the queue, and its next author run starts a new lap.
-3. Stop at the first work block not passed. The task is **at** that block. Its
-   state there comes from its status and its runs:
-   - `waiting`: nothing runs yet. The remembered gates decide when it may start.
-   - `running`: the block's run is open and its agent is working.
-   - `ended`: the agent ended its run (an author handed off, or a reviewer
-     wrote its verdict), and settle has not closed the run yet.
-     Settle closes it, and the walk goes on.
+2. A task with an open agent run is **at** that run's block: `ended` when the
+   run named an exit (or the author's task is already `reviewing`), else
+   `running`. Settle closes an ended run once the agent's pane is idle, and
+   the next tick places the task where the exit leads.
+3. Otherwise take the task's last named exit, find it on its block in the
+   drawing as it is now, and walk from its wire. An open task, a return, a
+   missing block or exit, or no exit at all: walk from the source.
+4. Walk forward. At a router, follow the first matching route. At a gate,
+   remember the gate. Stop at the first work block. The task is **at** that
+   block, `waiting`; the remembered gates decide when it may start. The walk
+   has a step bound, so a cycle of routers cannot hang it.
+5. **An exit holds for the commit it was named on.** When the walk reaches a
+   land or a done, or the exit was named at a check, and the tip is not that
+   commit, the exit is void: the task is placed by the exit before it, so a
+   commit after `approved` places the task at the review again.
    A land or a check is always `waiting`: each runs inside one tick and
    leaves no open run.
-4. A park ends the walk with the task parked.
+6. A park ends the walk with the task parked.
 
 A task with work in flight when pipelines start has runs from step 4, so it is
 placed by the same steps. No move-in step is needed.
@@ -197,10 +215,15 @@ project takes no step. It never falls back to the standard pipeline, because
 running a flow the operator did not draw is worse than stopping.
 
 - Block kinds and props as above; pinned rungs are on the ladder.
-- At least one source. Every wire ends at a block. Every block is reachable from
-  a source.
-- No cycle.
-- Every path ends at a land, a done or a park.
+- At least one source. Every wire and every exit ends at a block or `queue`.
+  Every block is reachable from a source, and from every block some route
+  reaches a land, a done or a park.
+- An agent block declares at least one exit. Exit names are unique on their
+  block, match `[a-z-]+`, and are not process endings. A check's exits are
+  `passed` and `failed`, and `fails: self` is refused there: a check has no rung.
+- Every cycle can end: an exit on it has `fails`, or a router on it leaves on a
+  count that grows each lap (`exits:<name>>=N` or `attempts>=N`). A cycle
+  through no work block is a problem.
 - **Every path to a land or a done passes a review agent after its last
   author.** With the reviewers taken out of the graph, no land or done is
   reachable from a source or an author.
@@ -217,7 +240,7 @@ running a flow the operator did not draw is worse than stopping.
   a check still needs a review after its last author.
 - A check names a command.
 
-Both are reachability checks with `effect/Graph`, which also finds cycles and
+These are reachability checks with `effect/Graph`, which also finds cycles and
 draws the pipeline as Mermaid (`foreman pipeline show`).
 
 ## The standard pipeline
@@ -245,16 +268,16 @@ and the policy step that holds the retry is unchanged.
 - "Order inside a tick ... reviews are filled before new work": generalised to
   nearest-to-the-end first. Same order in the standard pipeline.
 - "`awaitingLanding` reads that label": becomes "placed at a land block".
-  The reviewer's `tasks verdict` writes the review run's ending; the run and
-  its commit are the record.
+  The reviewer's `foreman exit` writes the review run's exit and the commit it
+  was named on; the run is the record.
 - "Approval is a durable `approved` label … any transition handing the task
   back … must clear it" and "`Prog.release` therefore clears it alongside
   `approved`": replaced at step 4. A review passes the commit it read, and a
   moved tip voids it (see "A review passes one commit"). `review-by:*` and
   `review-failed-by:*` go with the labels; the review run's open and close
   replace them.
-- "`satisfied` is cleared wherever `approved` is": replaced. `satisfied` is the
-  ending of an author run (`runs-replace-labels.md`).
+- "`satisfied` is cleared wherever `approved` is": replaced. `already-done` is
+  an exit of the author block.
 - "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
   meaning. The tip has not moved, so the review still passes.
 

@@ -1,38 +1,28 @@
 import { Effect, Schema as S } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
+import type { TaskEvent } from "./item.ts";
+import { PROCESS_ENDINGS } from "./endings.ts";
 import { Tasks, TaskError } from "./store.ts";
 
-/**
- * How a run stopped. The agent writes the endings in `VERDICTS` while its run
- * is open; settle writes the others when it closes the run, and keeps the
- * agent's when there is one.
- */
-export const AUTHOR_ENDINGS = [
-  "satisfied",
-  "handed-off",
-  "unfinished",
-  "walled",
-  "vanished",
-  "released",
-  "canceled",
-] as const;
-export const REVIEW_ENDINGS = ["approved", "returned", "no-verdict", "walled", "released"] as const;
 /** A check run is written closed: its command exited 0, or it did not. */
 export const CHECK_ENDINGS = ["passed", "failed"] as const;
-export type AuthorEnding = (typeof AUTHOR_ENDINGS)[number];
-export type ReviewEnding = (typeof REVIEW_ENDINGS)[number];
 export type CheckEnding = (typeof CHECK_ENDINGS)[number];
-/** An ending settle writes when it closes an agent's run. */
-export type AgentEnding = AuthorEnding | ReviewEnding;
-export type Ending = AgentEnding | CheckEnding;
 
-/** What an agent may state about its own run, and the run and status move each one means. */
-export const VERDICTS = {
-  approved: { role: "review", event: undefined },
-  returned: { role: "review", event: "open" },
-  satisfied: { role: "author", event: "review" },
-} as const;
-export type Verdict = keyof typeof VERDICTS;
+/**
+ * How a run ended: an exit the agent named, such as `approved`, or a process
+ * ending. The store accepts any exit name for an agent run, because only
+ * foreman knows the block the run was at and which exits it declares.
+ */
+export type Ending = string;
+
+/** The form of an exit name. */
+export const EXIT_NAME = /^[a-z-]+$/;
+
+/** Whether `ending` names an exit, rather than how a process stopped. */
+export const isExit = (ending: Ending | undefined): ending is string =>
+  ending !== undefined &&
+  EXIT_NAME.test(ending) &&
+  !(PROCESS_ENDINGS as ReadonlyArray<string>).includes(ending);
 
 /** The registry's four words for how a run went. */
 export type Outcome = "committed" | "dropped" | "handed-off" | "answered";
@@ -83,7 +73,7 @@ export interface Run {
  * outcome and no ending. Landing later sets the author run's outcome to
  * `committed` or `answered`.
  */
-export const outcomeOf = (ending: AgentEnding): Outcome =>
+export const outcomeOf = (ending: Ending): Outcome =>
   ending === "canceled" ? "dropped" : "handed-off";
 
 export interface NewRun {
@@ -146,25 +136,26 @@ export const recordCheck = (check: CheckRun) =>
   });
 
 /**
- * Closes an open run with its ending and the outcome that goes with it. The
- * ending the agent wrote while the run was open stands; `ending` is written
- * only when there was none. An author run that hands off passes the branch tip
- * as `commit`; a review run keeps the tip it opened with. Fails when the run
- * is not open.
+ * Closes an open run with its ending and the outcome that goes with it. An
+ * exit the agent named while the run was open stands with the commit it was
+ * named on; `ending` and `commit` are written only when it named none. A
+ * review run keeps the tip it opened with. Fails when the run is not open.
  */
 export const closeRun = (
   id: number,
-  close: { readonly ending: AgentEnding; readonly commit?: string },
+  close: { readonly ending: Ending; readonly commit?: string },
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    const open = yield* sql<{ ending: AgentEnding | null }>`SELECT ending FROM runs
+    const open = yield* sql<{ ending: Ending | null }>`SELECT ending FROM runs
       WHERE id = ${id} AND closed_at IS NULL`;
     if (open.length === 0) return yield* new RunError({ id, detail: "not an open run" });
-    const ending = open[0]!.ending ?? close.ending;
+    const named = open[0]!.ending;
+    const ending = named ?? close.ending;
+    const commit = named === null ? (close.commit ?? null) : null;
     yield* sql`UPDATE runs
       SET ending = ${ending}, outcome = ${outcomeOf(ending)},
-          "commit" = coalesce(${close.commit ?? null}, "commit"), closed_at = datetime('now')
+          "commit" = coalesce(${commit}, "commit"), closed_at = datetime('now')
       WHERE id = ${id}`;
   });
 
@@ -192,44 +183,59 @@ export const addRound = (task: string) =>
     return rows[0]!.rounds;
   });
 
-/**
- * Moves the task's open review run to the commit its reviewer reads next. A
- * correction round leaves new commits that the reviewer judges again, so an
- * approval after the round holds for the tip the round left. A run that
- * already states a verdict keeps its commit: that verdict was about it.
- */
-export const rereadReview = (task: string, commit: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    yield* sql`UPDATE runs SET "commit" = ${commit}
-      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
-                    AND ${ofRole(sql, "review")})
-        AND ending IS NULL`;
-  });
+/** An exit an agent names, with the commit it names it on and the status move it makes. */
+export interface NamedExit {
+  readonly name: string;
+  /** The task's tip when the exit is named; absent when the task has no tip to read. */
+  readonly commit: string | undefined;
+  readonly event: TaskEvent | undefined;
+}
 
 /**
- * States how the task's open run ended, and makes the status move that goes
- * with it, in one transaction. A second verdict on the same run replaces the
- * first. Fails when the task has no open run of the matching work: a closed run
- * cannot change its verdict.
+ * Names the exit that ends the task's open agent run, records the commit it
+ * was named on, and makes the status move that goes with it, in one
+ * transaction. A second exit in the same run replaces the first, commit
+ * included. Fails when the task has no open agent run, since a closed run
+ * cannot change its exit, or when `name` is no exit name.
  */
-export const verdict = (task: string, said: Verdict) =>
+export const nameExit = (task: string, exit: NamedExit) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const tasks = yield* Tasks;
-    const { role, event } = VERDICTS[said];
+    if (!isExit(exit.name))
+      return yield* new TaskError({ id: task, detail: `${exit.name} is no exit name` });
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        const changed = yield* sql`UPDATE runs SET ending = ${said}
+        const changed = yield* sql`UPDATE runs
+          SET ending = ${exit.name}, "commit" = coalesce(${exit.commit ?? null}, "commit")
           WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
-                        AND ${ofRole(sql, role)})
+                        AND work <> 'check')
           RETURNING id`;
         if (changed.length === 0)
           return yield* new TaskError({
             id: task,
-            detail: `${task} has no open ${role} run to say ${said} on`,
+            detail: `${task} has no open run to name ${exit.name} on`,
           });
-        if (event !== undefined) yield* tasks.send(task, event);
+        if (exit.event !== undefined) yield* tasks.send(task, exit.event);
+      }),
+    );
+  });
+
+/**
+ * Sends the task to review and names `done` on its open author run, when it
+ * has one, in one transaction. A task worked without foreman has no run, and
+ * moves all the same.
+ */
+export const handOff = (task: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const tasks = yield* Tasks;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`UPDATE runs SET ending = 'done'
+          WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
+                        AND ${ofRole(sql, "author")})`;
+        yield* tasks.send(task, "review");
       }),
     );
   });
@@ -300,8 +306,8 @@ interface RunRow {
 export const closeOpenRuns = (
   task: string,
   endings: {
-    readonly author?: AuthorEnding;
-    readonly review?: ReviewEnding;
+    readonly author?: Ending;
+    readonly review?: Ending;
     readonly commit?: string;
   },
 ) =>

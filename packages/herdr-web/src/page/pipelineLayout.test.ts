@@ -33,9 +33,10 @@ describe("layoutOf", () => {
   }
 
   // Eleven blocks in ten columns: the branch and worktree chips are as narrow as a land.
-  it("the standard pipeline fits in about 1300px", () => {
+  // Each agent exit is a labelled wire, and the author's `already-done` label widens its gap.
+  it("the standard pipeline fits in about 1400px", () => {
     const layout = layoutOf(beltOf(STANDARD_PIPELINE))
-    expect(layout.width).toBeLessThan(1310)
+    expect(layout.width).toBeLessThan(1420)
   })
 })
 

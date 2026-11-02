@@ -2,7 +2,7 @@ import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import template from "lodash/template.js";
 import { labelFor } from "./fleet.ts";
-import { isSatisfied } from "./lap.ts";
+import { claimsAlreadyDone } from "./lap.ts";
 import type { Workspace } from "./pipeline.ts";
 import type { DiagnosticIntent, Item } from "./prog.ts";
 
@@ -108,7 +108,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
           task: item.id,
           title: item.title,
           labels: item.labels,
-          satisfied: isSatisfied(item),
+          alreadyDone: claimsAlreadyDone(item),
           project: item.project,
           worktree,
           branch: labelFor(item.id),

@@ -148,7 +148,7 @@ const WALL_WINDOW_LINES = 12;
  *
  * Only strings read out of the harness's own binary are listed. Empty means
  * the text is not confirmed, so a run that stops on that harness is never read
- * as a wall: it stays an ordinary unfinished ending.
+ * as a wall: it stays an ordinary `stopped` ending.
  *
  * Claude's session limit is built from a template in its binary, so only its
  * literal spend-limit and shared-budget messages are listed. Cursor's text was

@@ -55,7 +55,7 @@ describe("Prompts", () => {
 
     // Trivial work skips the reviewer, never the landing gate. An author told
     // to merge for itself is the one route past the verification foreman runs.
-    expect(prompt).toContain("tasks review ts-123456");
+    expect(prompt).toContain("foreman exit ts-123456 done");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("tasks done ts-123456");
     expect(prompt).toContain("git worktree list --porcelain");
@@ -113,13 +113,13 @@ describe("Prompts", () => {
     expect(prompt).toContain("only when nothing in the backlog describes it");
   });
 
-  test("asks a successful reviewer for a verdict, not a merge", async () => {
+  test("asks a successful reviewer for an exit, not a merge", async () => {
     const prompt = await run((prompts) =>
       prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", "bun test"),
     );
 
-    expect(prompt).toContain("tasks verdict ts-123456 approved");
-    expect(prompt).toContain("tasks verdict ts-123456 returned");
+    expect(prompt).toContain("foreman exit ts-123456 approved");
+    expect(prompt).toContain("foreman exit ts-123456 returned");
     expect(prompt).not.toContain("tasks label");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("tasks done ts-123456");
@@ -194,7 +194,7 @@ describe("Prompts", () => {
 
   // A rare case reaches only the agents whose task carries its label, so every
   // other prompt stays short; the rule itself must still arrive where it applies.
-  test("gives the research and satisfied rules only to tasks that call for them", async () => {
+  test("gives the research and already-done rules only to tasks that call for them", async () => {
     const plainAuthor = await run((prompts) =>
       prompts.author(ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
@@ -209,13 +209,13 @@ describe("Prompts", () => {
     expect(plainAuthor).not.toContain("labelled `research`");
     expect(researchAuthor).toContain("labelled `research`: the deliverable is a report");
 
-    const review = (labels: ReadonlyArray<string>, satisfied = false) =>
+    const review = (labels: ReadonlyArray<string>, alreadyDone = false) =>
       run((prompts) =>
         prompts.review(
           {
             ...item,
             labels: [...labels],
-            runs: satisfied ? [authorRun("cheap", { open: false, ending: "satisfied" })] : [],
+            runs: alreadyDone ? [authorRun("cheap", { open: false, ending: "already-done" })] : [],
           },
           "/tmp/worktree",
           "/tmp/repository",
@@ -225,9 +225,9 @@ describe("Prompts", () => {
         ),
       );
     const plain = await review([]);
-    expect(plain).not.toContain("ended its run `satisfied`");
+    expect(plain).not.toContain("ended its run `already-done`");
     expect(plain).not.toContain("labelled `research`");
-    expect(await review([], true)).toContain("ended its run `satisfied`");
+    expect(await review([], true)).toContain("ended its run `already-done`");
     expect(await review(["research"])).toContain(
       "labelled `research`: the deliverable is the report",
     );

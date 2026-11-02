@@ -8,7 +8,7 @@ const edited = (pipeline: Pipeline, ...edits: ReadonlyArray<PipelineEdit>): Pipe
   edits.reduce((now: Drafting, change) => applyEdit(now, change), { draft: pipeline, selected: Option.none(), placing: Option.none() }).draft
 
 const inserted = (kind: "gate" | "agent" | "check" | "router") => {
-  const draft = edited(STANDARD_PIPELINE, { _tag: "InsertOn", wire: { from: "author", port: "next" }, kind })
+  const draft = edited(STANDARD_PIPELINE, { _tag: "InsertOn", wire: { from: "author", port: "exit:done" }, kind })
   const id = draft.nodes.find((node) => !STANDARD_PIPELINE.nodes.some((old) => old.id === node.id))!.id
   return { draft, id }
 }
@@ -23,7 +23,7 @@ describe("changesOf", () => {
     const saved = S.decodeSync(Pipeline)({
       nodes: [
         { kind: "source", id: "queue", filter: "", next: "author" },
-        { kind: "agent", id: "author", role: "author", model: "ladder", slots: 2, next: "land" },
+        { kind: "agent", id: "author", role: "author", model: "ladder", slots: 2, exits: [{ name: "done", to: "land" }, { name: "already-done", to: "land" }] },
         { kind: "land", id: "land" },
       ],
     })
@@ -35,7 +35,7 @@ describe("changesOf", () => {
   it("tells an added block once, with where it stands, and not the wire it was put on", () => {
     const { draft, id } = inserted("check")
     const named = edited(draft, { _tag: "Configure", id, setting: { command: "bun test" } })
-    expect(changesOf(STANDARD_PIPELINE, named)).toEqual([`added check ${id} (runs bun test) after author`])
+    expect(changesOf(STANDARD_PIPELINE, named)).toEqual([`added check ${id} (runs bun test) after author done`])
   })
 
   it("tells a removed block once, and not the wires that close the gap", () => {

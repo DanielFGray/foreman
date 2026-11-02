@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 import { join } from "node:path";
-import { closeRun, openRun, Tasks, type AuthorEnding, type NewRun, type ReviewEnding } from "tasks";
+import { closeRun, openRun, Tasks, type Ending, type NewRun } from "tasks";
 import { labelFor } from "./fleet.ts";
 import { providerOf, type Ladder } from "./ladder.ts";
 import { countOf, type Item } from "./prog.ts";
@@ -30,7 +30,7 @@ const UNKNOWN = "unknown";
 /** One run the conversion writes. `ending` is absent for an open run. */
 export interface PlannedRun {
   readonly run: NewRun;
-  readonly ending?: AuthorEnding | ReviewEnding;
+  readonly ending?: Ending;
   /** The author run's tip when it closes; a review run already carries its own. */
   readonly closeCommit?: string;
 }
@@ -128,7 +128,7 @@ export const planOf = (
       ...(open
         ? {}
         : {
-            ending: labels.includes(SATISFIED) ? ("satisfied" as const) : ("handed-off" as const),
+            ending: labels.includes(SATISFIED) ? "already-done" : "done",
             closeCommit: tip,
           }),
     });
@@ -140,7 +140,7 @@ export const planOf = (
   if (open && labels.includes(SATISFIED)) dropped.push(SATISFIED);
 
   for (const rung of after(labels, REVIEW_FAILED_BY)) {
-    planned.push({ run: run(rung, "review"), ending: "no-verdict" });
+    planned.push({ run: run(rung, "review"), ending: "stopped" });
   }
   if (labels.includes(APPROVED)) {
     planned.push({ run: run(undefined, "review", tip), ending: "approved" });
@@ -161,7 +161,7 @@ export const planOf = (
 
 /** A run records the tip when it reads one (review) or hands one off (a closed author run). */
 const needsTip = ({ run, ending }: PlannedRun): boolean =>
-  run.work === "review" ? ending !== "no-verdict" : ending !== undefined;
+  run.work === "review" ? ending !== "stopped" : ending !== undefined;
 
 /** What `convert` did, task by task. */
 export interface Report {

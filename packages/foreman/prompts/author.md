@@ -60,17 +60,17 @@ Working directory: {{ worktree }}
    your change made stale.
 2. Read {% if (workspace === "none") { %}`git diff {{ base }} HEAD`{% } else { %}`git diff HEAD...{{ branch }}`{% } %} once as a stranger's diff: walk the definition
    of done and point at the code for each part. Fix what you find.
-3. `tasks review {{ task }}`, then stop. A reviewer may send you one mechanical defect:
+3. `foreman exit {{ task }} done`, then stop. A reviewer may send you one mechanical defect:
    fix exactly that, commit, stop again. {% if (workspace === "none") { %}Foreman completes the task after an approval;
    do not mark it done.{% } else { %}Foreman merges; do not merge and do not mark
    the task done.{% } %}
 {% if (labels.includes("research")) { %}
 This task is labelled `research`: the deliverable is a report, not code. Write it
 to `tasks log {{ task }}` with the commands you ran and what they showed, so a
-reviewer can check every claim. Then `tasks review {{ task }}`, with no commits of your own.{% if (workspace !== "none") { %} The branch stays empty.{% } %}
+reviewer can check every claim. Then `foreman exit {{ task }} done`, with no commits of your own.{% if (workspace !== "none") { %} The branch stays empty.{% } %}
 {% } %}
 If trunk already does everything the task asks, prove it part by part in
-`tasks log {{ task }}` (code, tests, commits), then `tasks verdict {{ task }} satisfied`,
+`tasks log {{ task }}` (code, tests, commits), then `foreman exit {{ task }} already-done`,
 which also sends the task to review. Partly done is not done; a claim you cannot point at
 line by line is rejected.
 

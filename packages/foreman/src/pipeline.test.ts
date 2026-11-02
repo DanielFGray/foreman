@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { Run } from "tasks";
-import { checkRun, handedOff, reviewRun } from "./task-fixture.ts";
+import { checkRun, authorDone, reviewRun } from "./task-fixture.ts";
 import {
+  type AgentNode,
+  type CheckNode,
+  type Exit,
   type Facts,
   matches,
   nextAgent,
@@ -9,6 +12,7 @@ import {
   type PipelineNode,
   place,
   problemsOf,
+  QUEUE,
   routeWorkspace,
   STANDARD_PIPELINE,
   toMermaid,
@@ -23,9 +27,11 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
   labels: new Set(),
   failedBy: new Set(),
   attempts: 0,
-  passed: new Set(),
-  underReview: false,
-  approved: false,
+  tip: "c1",
+  running: undefined,
+  named: [],
+  // The last exit named, as `factsOf` reads it, unless the test states it.
+  exit: over.named?.at(-1)?.name,
   ...over,
 });
 
@@ -43,7 +49,16 @@ const at = (pipeline: Pipeline, over: Partial<Facts>) => {
 
 const RUNGS = ["cheap", "strong"];
 
+/** The block with each exit that does not return to the queue wired to `to`. */
+const onward = <N extends AgentNode | CheckNode>(node: N, to: string): N => ({
+  ...node,
+  exits: node.exits.map((exit) => (exit.to === QUEUE ? exit : { ...exit, to })),
+});
+
 describe("filters", () => {
+  const returned = { node: "review", name: "returned", commit: "c1" };
+  const approvedExit = { node: "review", name: "approved", commit: "c1" };
+
   test.each<[string, Partial<Facts>, boolean]>([
     ["", {}, true],
     ["failed", { failedBy: new Set(["cheap"]) }, true],
@@ -59,38 +74,52 @@ describe("filters", () => {
     ["label:research", { labels: new Set(["research"]) }, true],
     ["epic:ep-1", { epic: "ep-1" }, true],
     ["kind:failed-by", { failedBy: new Set(["cheap"]) }, false],
+    ["exit:returned", { exit: "returned" }, true],
+    ["exit:returned", { exit: "approved" }, false],
+    ["exits:returned>=2", { named: [returned, returned] }, true],
+    ["exits:returned>=2", { named: [returned, approvedExit] }, false],
+    ["exits:returned=0", {}, true],
   ])("%p on %p is %p", (filter, over, expected) => {
     expect(matches(facts(over), filter)).toBe(expected);
   });
 });
 
 describe("facts read from labels and runs", () => {
-  test("names failures, attempts, size, passed blocks and the review", () => {
-    const read = factsOf({
-      status: "reviewing",
-      priority: 1,
-      parent: "ep-1",
-      labels: [
-        "failed-by:cheap",
-        "attempt:strong:1",
-        "attempt:strong:2",
-        "attempt:x:bad",
-        "size:3",
-      ],
-      runs: [handedOff("cheap"), reviewRun("strong", { ending: "approved", commit: "c1" })],
-      tip: "c1",
-    });
+  test("names failures, attempts, size, the exits and the open run", () => {
+    const read = factsOf(
+      {
+        status: "reviewing",
+        priority: 1,
+        parent: "ep-1",
+        labels: [
+          "failed-by:cheap",
+          "attempt:strong:1",
+          "attempt:strong:2",
+          "attempt:x:bad",
+          "size:3",
+        ],
+        runs: [authorDone("cheap"), reviewRun("strong", { ending: "approved", commit: "c1" })],
+        tip: "c1",
+      },
+      STANDARD_PIPELINE,
+    );
     expect([...read.failedBy]).toEqual(["cheap"]);
     expect(read.attempts).toBe(2);
     expect(read.size).toBe(3);
-    expect([...read.passed]).toEqual(["author", "review"]);
-    expect(read.underReview).toBe(true);
-    expect(read.approved).toBe(true);
+    expect(read.named).toEqual([
+      { node: "author", name: "done", commit: undefined },
+      { node: "review", name: "approved", commit: "c1" },
+    ]);
+    expect(read.exit).toBe("approved");
+    expect(read.running).toEqual({ node: "review", named: true });
     expect(read.epic).toBe("ep-1");
   });
 });
 
 describe("placement on the standard pipeline", () => {
+  const done = { node: "author", name: "done", commit: "c1" };
+  const approved = { node: "review", name: "approved", commit: "c1" };
+
   test.each<[string, Partial<Facts>, ReturnType<typeof at>]>([
     [
       "a new task waits for the author gate",
@@ -103,43 +132,63 @@ describe("placement on the standard pipeline", () => {
       { node: "author", state: "waiting", gates: ["climb"], ahead: 2 },
     ],
     [
-      "an unfinished attempt is a climb too",
+      "a stopped attempt is a climb too",
       { attempts: 1 },
       { node: "author", state: "waiting", gates: ["climb"], ahead: 2 },
     ],
     [
-      "work in flight with nothing passed is running at the author",
+      "work in flight with no exit named is running at the author",
       { status: "in_progress" },
       { node: "author", state: "running", gates: ["start"], ahead: 2 },
     ],
     [
-      "a handoff with nothing passed has ended at the author",
+      "an author that named done, with settle yet to record it, has ended at the author",
+      { status: "in_progress", running: { node: "author", named: true } },
+      { node: "author", state: "ended", gates: ["start"], ahead: 2 },
+    ],
+    [
+      "a handoff with no exit named has ended at the author",
       { status: "reviewing" },
       { node: "author", state: "ended", gates: ["start"], ahead: 2 },
     ],
     [
-      "past the author it waits for the review gate",
-      { status: "reviewing", passed: new Set(["author"]) },
+      "after the author's done it waits for the review gate",
+      { status: "reviewing", named: [done] },
       { node: "review", state: "waiting", gates: ["review-gate"], ahead: 1 },
     ],
     [
       "a reviewer at work is running",
-      { status: "reviewing", passed: new Set(["author"]), underReview: true },
+      { status: "reviewing", named: [done], running: { node: "review", named: false } },
       { node: "review", state: "running", gates: ["review-gate"], ahead: 1 },
     ],
     [
-      "an approval not yet recorded has ended the review",
-      { status: "reviewing", passed: new Set(["author"]), underReview: true, approved: true },
+      "an approval settle has not yet recorded has ended the review",
+      { status: "reviewing", named: [done], running: { node: "review", named: true } },
       { node: "review", state: "ended", gates: ["review-gate"], ahead: 1 },
     ],
     [
-      "past the review it waits for the land gate",
-      { status: "reviewing", passed: new Set(["author", "review"]) },
+      "after the review's approved it waits for the land gate",
+      { status: "reviewing", named: [done, approved] },
       { node: "land", state: "waiting", gates: ["land-gate"], ahead: 0 },
     ],
     [
-      "a passed block the pipeline no longer has places nothing",
-      { status: "reviewing", passed: new Set(["author", "deleted-block"]) },
+      "an earlier exit at a block the pipeline no longer has changes nothing",
+      { status: "reviewing", named: [{ node: "deleted-block", name: "done", commit: "c1" }, done] },
+      { node: "review", state: "waiting", gates: ["review-gate"], ahead: 1 },
+    ],
+    [
+      "a last exit at a block the pipeline no longer has walks from the source",
+      { status: "reviewing", named: [done, { node: "deleted-block", name: "done", commit: "c1" }] },
+      { node: "author", state: "waiting", gates: ["start"], ahead: 2 },
+    ],
+    [
+      "a last exit the block no longer declares walks from the source",
+      { status: "reviewing", named: [{ node: "author", name: "gone", commit: "c1" }] },
+      { node: "author", state: "waiting", gates: ["start"], ahead: 2 },
+    ],
+    [
+      "a commit after the approval places the task at review again",
+      { status: "reviewing", named: [done, approved], tip: "c2" },
       { node: "review", state: "waiting", gates: ["review-gate"], ahead: 1 },
     ],
   ])("%s", (_, over, expected) => {
@@ -168,9 +217,27 @@ describe("placement on a drawn pipeline", () => {
       { kind: "branch", id: "cut", next: "gate" },
       { kind: "park", id: "operator" },
       { kind: "gate", id: "gate", step: "author", next: "write" },
-      { kind: "agent", id: "write", role: "author", model: "ladder", next: "check" },
+      {
+        kind: "agent",
+        id: "write",
+        role: "author",
+        model: "ladder",
+        exits: [
+          { name: "done", to: "check" },
+          { name: "already-done", to: "check" },
+        ],
+      },
       { kind: "gate", id: "check", step: "review", next: "read" },
-      { kind: "agent", id: "read", role: "review", model: "above", next: "ship" },
+      {
+        kind: "agent",
+        id: "read",
+        role: "review",
+        model: "above",
+        exits: [
+          { name: "approved", to: "ship" },
+          { name: "returned", to: "queue", fails: "author" },
+        ],
+      },
       { kind: "gate", id: "ship", step: "land", next: "land" },
       { kind: "land", id: "land" },
     ],
@@ -256,7 +323,10 @@ describe("validation", () => {
           id: "review",
           role: "review",
           model: "ladder",
-          next: "land-gate",
+          exits: [
+            { name: "approved", to: "land-gate" },
+            { name: "returned", to: "queue", fails: "author" },
+          ],
         }),
         RUNGS,
       ),
@@ -268,7 +338,10 @@ describe("validation", () => {
           id: "author",
           role: "author",
           model: "gone",
-          next: "review-gate",
+          exits: [
+            { name: "done", to: "review-gate" },
+            { name: "already-done", to: "review-gate" },
+          ],
         }),
         RUNGS,
       ),
@@ -280,8 +353,8 @@ describe("validation", () => {
       replace({ kind: "gate", id: "land-gate", step: "land", next: "author" }),
       RUNGS,
     );
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/^the wires loop through .*author/);
+    expect(problems[0]).toMatch(/^the wires loop through .*author.*nothing ends the loop/);
+    expect(problems).toContain("no source reaches land");
   });
 
   test("refuses a route to a land that skips review", () => {
@@ -301,9 +374,27 @@ describe("validation", () => {
         { kind: "source", id: "queue", filter: "", next: "cut" },
         { kind: "branch", id: "cut", next: "g1" },
         { kind: "gate", id: "g1", step: "review", next: "review" },
-        { kind: "agent", id: "review", role: "review", model: "above", next: "g2" },
+        {
+          kind: "agent",
+          id: "review",
+          role: "review",
+          model: "above",
+          exits: [
+            { name: "approved", to: "g2" },
+            { name: "returned", to: "queue", fails: "author" },
+          ],
+        },
         { kind: "gate", id: "g2", step: "author", next: "author" },
-        { kind: "agent", id: "author", role: "author", model: "ladder", next: "g3" },
+        {
+          kind: "agent",
+          id: "author",
+          role: "author",
+          model: "ladder",
+          exits: [
+            { name: "done", to: "g3" },
+            { name: "already-done", to: "g3" },
+          ],
+        },
         { kind: "gate", id: "g3", step: "land", next: "land" },
         { kind: "land", id: "land" },
       ],
@@ -316,7 +407,16 @@ describe("validation", () => {
   test("refuses a work block no gate stands before", () => {
     expect(
       problemsOf(
-        replace({ kind: "agent", id: "review", role: "review", model: "above", next: "land" }),
+        replace({
+          kind: "agent",
+          id: "review",
+          role: "review",
+          model: "above",
+          exits: [
+            { name: "approved", to: "land" },
+            { name: "returned", to: "queue", fails: "author" },
+          ],
+        }),
         RUNGS,
       ),
     ).toEqual(["no source reaches land-gate", "a route from review reaches land through no gate"]);
@@ -356,9 +456,17 @@ describe("a check block", () => {
     nodes: STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
       node.kind === "agent" && node.id === "author"
         ? [
-            { ...node, next: "lint-gate" },
+            onward(node, "lint-gate"),
             { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-            { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+            {
+              kind: "check",
+              id: "lint",
+              command: "bun run lint",
+              exits: [
+                { name: "passed", to: "review-gate" },
+                { name: "failed", to: "queue", fails: "author" },
+              ],
+            },
           ]
         : [node],
     ),
@@ -366,14 +474,17 @@ describe("a check block", () => {
   const handedOver = (runs: ReadonlyArray<Run>, tip: string) =>
     place(
       checked,
-      factsOf({
-        status: "reviewing",
-        priority: 1,
-        parent: undefined,
-        labels: [],
-        runs: [handedOff("cheap", "c1"), ...runs],
-        tip,
-      }),
+      factsOf(
+        {
+          status: "reviewing",
+          priority: 1,
+          parent: undefined,
+          labels: [],
+          runs: [authorDone("cheap", "c1"), ...runs],
+          tip,
+        },
+        checked,
+      ),
     );
   const nodeOf = (placement: ReturnType<typeof place>) =>
     placement._tag === "At" ? `${placement.node.id} ${placement.state}` : placement._tag;
@@ -384,7 +495,9 @@ describe("a check block", () => {
 
   test("waits after the author hands off, and counts as a block ahead", () => {
     expect(at(checked, {})).toMatchObject({ node: "author", ahead: 3 });
-    expect(at(checked, { status: "reviewing", passed: new Set(["author"]) })).toEqual({
+    expect(
+      at(checked, { status: "reviewing", named: [{ node: "author", name: "done", commit: "c1" }] }),
+    ).toEqual({
       node: "lint",
       state: "waiting",
       gates: ["lint-gate"],
@@ -395,7 +508,8 @@ describe("a check block", () => {
   test("passes the commit its command passed on, and only that commit", () => {
     expect(nodeOf(handedOver([], "c1"))).toBe("lint waiting");
     expect(nodeOf(handedOver([checkRun("lint", "c1", "passed")], "c1"))).toBe("review waiting");
-    expect(nodeOf(handedOver([checkRun("lint", "c1", "failed")], "c1"))).toBe("lint waiting");
+    // The check's failed exit returns the task to the queue, so it walks from the source.
+    expect(nodeOf(handedOver([checkRun("lint", "c1", "failed")], "c1"))).toBe("author waiting");
     // A commit after the check places the task at the check again.
     expect(nodeOf(handedOver([checkRun("lint", "c1", "passed")], "c2"))).toBe("lint waiting");
   });
@@ -404,7 +518,9 @@ describe("a check block", () => {
     const unreviewed: Pipeline = {
       nodes: checked.nodes
         .filter((node) => node.id !== "review" && node.id !== "review-gate")
-        .map((node) => (node.id === "lint" ? { ...node, next: "land-gate" } : node)),
+        .map((node) =>
+          node.id === "lint" && node.kind === "check" ? onward(node, "land-gate") : node,
+        ),
     };
     expect(problemsOf(unreviewed, RUNGS)).toEqual([
       "a route from queue reaches land with no review after it",
@@ -416,7 +532,9 @@ describe("a check block", () => {
     const ungated: Pipeline = {
       nodes: checked.nodes
         .filter((node) => node.id !== "lint-gate")
-        .map((node) => (node.id === "author" ? { ...node, next: "lint" } : node)),
+        .map((node) =>
+          node.id === "author" && node.kind === "agent" ? onward(node, "lint") : node,
+        ),
     };
     expect(problemsOf(ungated, RUNGS)).toEqual([
       "a route from author reaches lint through no gate",
@@ -427,7 +545,15 @@ describe("a check block", () => {
         { kind: "source", id: "queue", filter: "", next: "branch" },
         { kind: "worktree", id: "worktree", next: "g0" },
         { kind: "gate", id: "g0", step: "author", next: "lint" },
-        { kind: "check", id: "lint", command: "bun run lint", next: "start" },
+        {
+          kind: "check",
+          id: "lint",
+          command: "bun run lint",
+          exits: [
+            { name: "passed", to: "start" },
+            { name: "failed", to: "queue", fails: "author" },
+          ],
+        },
         ...STANDARD_PIPELINE.nodes.filter(
           (node) => !["queue", "worktree", "retry", "climb"].includes(node.id),
         ),
@@ -452,7 +578,8 @@ describe("the Mermaid drawing", () => {
   test("draws every block and one arrow per wire", () => {
     const lines = toMermaid(STANDARD_PIPELINE).split("\n");
     expect(lines[0]).toBe("flowchart LR");
-    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(12);
+    // The author's done and already-done are two arrows to the same gate.
+    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(13);
     expect(lines.some((line) => line.includes('"failed"'))).toBe(true);
     expect(lines.some((line) => line.includes("author: author on ladder"))).toBe(true);
   });
@@ -497,22 +624,26 @@ describe("workspace blocks", () => {
     expect(workspaceOf(direct)).toEqual(["author", "none"]);
   });
 
+  const done = { node: "author", name: "done", commit: "c1" };
+  const approved = { node: "review", name: "approved", commit: "c1" };
+
   test("a task in flight places at the same block as before the workspace blocks", () => {
     const old = drop(drop(STANDARD_PIPELINE, "worktree", "retry"), "branch", "retry");
     for (const over of [
       {},
       { status: "in_progress" as const },
-      { status: "reviewing" as const, passed: new Set(["author"]) },
-      { status: "reviewing" as const, passed: new Set(["author", "review"]), approved: true },
+      { status: "reviewing" as const, named: [done] },
+      { status: "reviewing" as const, named: [done, approved] },
     ]) {
       expect(at(STANDARD_PIPELINE, over)).toEqual(at(old, over));
     }
   });
 
   test("a direct task completes at done after its review", () => {
-    expect(
-      workspaceOf(direct, { status: "reviewing", passed: new Set(["author", "review"]) }),
-    ).toEqual(["land", "none"]);
+    expect(workspaceOf(direct, { status: "reviewing", named: [done, approved] })).toEqual([
+      "land",
+      "none",
+    ]);
   });
 
   test("refuses a worktree with no branch before it", () => {
@@ -540,7 +671,10 @@ describe("workspace blocks", () => {
       id: "author",
       role: "author",
       model: "ladder",
-      next: "land-gate",
+      exits: [
+        { name: "done", to: "land-gate" },
+        { name: "already-done", to: "land-gate" },
+      ],
     });
     expect(problemsOf(unreviewed, RUNGS)).toContain(
       "a route from author reaches land with no review after it",
@@ -550,7 +684,10 @@ describe("workspace blocks", () => {
       id: "review",
       role: "review",
       model: "above",
-      next: "land",
+      exits: [
+        { name: "approved", to: "land" },
+        { name: "returned", to: "queue", fails: "author" },
+      ],
     });
     expect(problemsOf(ungated, RUNGS)).toContain(
       "a route from review reaches land through no gate",
@@ -562,8 +699,8 @@ test("refuses a workspace block after an agent", () => {
   const late: Pipeline = {
     nodes: STANDARD_PIPELINE.nodes
       .map((node) =>
-        node.id === "author"
-          ? { ...node, next: "late" }
+        node.id === "author" && node.kind === "agent"
+          ? onward(node, "late")
           : node.id === "queue"
             ? { ...node, next: "retry" }
             : node,
@@ -574,4 +711,119 @@ test("refuses a workspace block after an agent", () => {
   expect(problemsOf(late, RUNGS)).toEqual([
     "a route from author reaches late: a route's workspace is set before its first agent",
   ]);
+});
+
+describe("a cycle", () => {
+  // The review sends a returned task straight back to the author's gate, a
+  // wire inside the graph rather than a return to the queue.
+  const looped = (returned: Exit): Pipeline => ({
+    nodes: STANDARD_PIPELINE.nodes.map((node) =>
+      node.id === "review" && node.kind === "agent"
+        ? { ...node, exits: [{ name: "approved", to: "land-gate" }, returned] }
+        : node,
+    ),
+  });
+
+  test("is a problem when no exit on it fails a rung and no router leaves it on a count", () => {
+    expect(problemsOf(looped({ name: "returned", to: "start" }), RUNGS)).toEqual([
+      "the wires loop through author, start, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+    ]);
+  });
+
+  test("is valid when an exit on it fails a rung", () => {
+    expect(problemsOf(looped({ name: "returned", to: "start", fails: "author" }), RUNGS)).toEqual(
+      [],
+    );
+  });
+
+  test("is valid when a router leaves it on a count of exits", () => {
+    const counted: Pipeline = {
+      nodes: [
+        ...looped({ name: "returned", to: "count" }).nodes,
+        {
+          kind: "router",
+          id: "count",
+          routes: [{ when: "exits:returned>=3", to: "operator" }],
+          else: "start",
+        },
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(problemsOf(counted, RUNGS)).toEqual([]);
+  });
+
+  test("is a problem when its router counts an exit no block on it declares", () => {
+    const miscounted: Pipeline = {
+      nodes: [
+        ...looped({ name: "returned", to: "count" }).nodes,
+        {
+          kind: "router",
+          id: "count",
+          routes: [{ when: "exits:rejected>=3", to: "operator" }],
+          else: "start",
+        },
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(problemsOf(miscounted, RUNGS)).toEqual([
+      "the wires loop through author, start, count, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+    ]);
+  });
+
+  test("of only routers and gates is a problem", () => {
+    const spin: Pipeline = {
+      nodes: [
+        ...STANDARD_PIPELINE.nodes.map((node) =>
+          node.id === "climb" && node.kind === "gate" ? { ...node, next: "spin" } : node,
+        ),
+        {
+          kind: "router",
+          id: "spin",
+          routes: [{ when: "attempts>=3", to: "author" }],
+          else: "climb",
+        },
+      ],
+    };
+    expect(problemsOf(spin, RUNGS)).toContainEqual(
+      "the wires loop through climb, spin with no work block on the loop",
+    );
+  });
+});
+
+describe("exits", () => {
+  const replace = (node: PipelineNode): Pipeline => ({
+    nodes: STANDARD_PIPELINE.nodes.map((n) => (n.id === node.id ? node : n)),
+  });
+  const review = (exits: ReadonlyArray<Exit>): PipelineNode => ({
+    kind: "agent",
+    id: "review",
+    role: "review",
+    model: "above",
+    exits,
+  });
+
+  test("an agent names at least one, each unique, lower-case and wired", () => {
+    expect(problemsOf(replace(review([])), RUNGS)).toContain(
+      "review: an agent names an exit to end its run, and it declares none",
+    );
+    expect(
+      problemsOf(
+        replace(
+          review([
+            { name: "approved", to: "land-gate" },
+            { name: "approved", to: "queue" },
+            { name: "Bad_Name", to: "land-gate" },
+            { name: "stopped", to: "land-gate" },
+            { name: "loose", to: "nowhere" },
+          ]),
+        ),
+        RUNGS,
+      ),
+    ).toEqual([
+      "review is wired to nowhere, which is no block",
+      "review: two exits are named approved",
+      "review: the exit Bad_Name is not lower-case words and hyphens",
+      "review: stopped is how a run stops with no exit, not an exit",
+    ]);
+  });
 });

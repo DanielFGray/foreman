@@ -70,8 +70,10 @@ import {
   type AgentNode,
   type CheckNode,
   type DoneNode,
+  type Exit,
   type LandNode,
   type Pipeline,
+  QUEUE,
   type Placement,
   type Workspace,
 } from "./pipeline.ts";
@@ -96,18 +98,19 @@ import {
   Prog,
 } from "./prog.ts";
 import {
-  approvedCommit,
   authoredBy,
   directBase,
-  isApproved,
-  isSatisfied,
+  claimsAlreadyDone,
+  reviewerNamed,
   lapOf,
+  lastExit,
+  routedCommit,
   reviewedBy,
   reviewFailedBy,
 } from "./lap.ts";
 import { hitWall } from "./harness.ts";
 import { newRunFor } from "./run-record.ts";
-import type { AuthorEnding, Run } from "tasks";
+import type { Ending, Run } from "tasks";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
@@ -858,7 +861,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // project is placed nowhere, and takes no step.
       const placementOf = (task: Item): Placement => {
         const pipeline = runningPipeline(pipelines, task.project);
-        return pipeline === undefined ? { _tag: "Outside" } : place(pipeline, factsOf(task));
+        return pipeline === undefined
+          ? { _tag: "Outside" }
+          : place(pipeline, factsOf(task, pipeline));
       };
       const placed = [...ordered, ...yours, ...claimed, ...reviewing].map((task) => ({
         task,
@@ -1007,13 +1012,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             )
             .map((task) => [task.id, task]),
         );
-        const unfinished = yield* Effect.forEach(workCandidates.values(), (task) =>
+        const holdingWork = yield* Effect.forEach(workCandidates.values(), (task) =>
           repository.holdsWork(directoryFor(task.project, task.id), labelFor(task.id)).pipe(
             Effect.map((holdsWork) => (holdsWork ? [task.id] : [])),
             Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           ),
         ).pipe(Effect.map((ids) => ids.flat()));
-        const resumable = new Set([...committed, ...unfinished]);
+        const resumable = new Set([...committed, ...holdingWork]);
 
         // Every branch, joined to whatever prog still says about its task. Read
         // for all of them rather than for a pre-filtered few, so the one rule
@@ -1107,7 +1112,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * The account a stopped author ran on, when its screen ends on that account's
      * usage wall. The screen is the only place a harness shows it. A screen that
-     * cannot be read is no wall, so the ordinary unfinished path runs.
+     * cannot be read is no wall, so the ordinary retry path runs.
      */
     const onUsageWall = (
       worker: Worker,
@@ -1225,32 +1230,43 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         current.unbacked.filter(({ task }) => pipelineOf(task) !== undefined),
         ({ task, kind }) =>
           Effect.gen(function* () {
-            yield* unfinished(
+            yield* retryAttempt(
               task,
               `foreman: ${kind ?? "the author"} handed ${task.id} back for review with nothing committed on ${labelFor(task.id)} — there is no work to review.`,
-              "unfinished",
+              "stopped",
             );
             yield* teardown(task);
           }),
         { discard: true },
       );
 
-      // An author that handed off committed work has passed its block, and its
-      // run is the record of that: closed `handed-off` at the commit it left.
-      // Until then the task stands at the author block, ended, and no reviewer
-      // is placed. A live pane is still finishing its turn, so its run waits.
+      // An agent that named its exit has finished its block, but its run stays
+      // open while its pane finishes the turn, and the task stands at the block,
+      // ended. Once the pane is idle its run closes with the exit it named (an
+      // author handoff with no exit closes `done` at the tip), and the next tick
+      // places the task where the exit leads. The exit's `fails` is charged
+      // here, before the run closes, because a charging exit wired onward (a
+      // drawn cycle) never passes the return path that charges the others.
       yield* Effect.forEach(
         current.review.filter(({ task, worker }) => {
           const pipeline = pipelineOf(task);
           return (
             pipeline !== undefined &&
             (worker === undefined || !isBusy(worker)) &&
-            endedAtAuthor(pipeline, task)
+            endedAt(pipeline, task)
           );
         }),
         ({ task }) =>
-          prog
-            .endRuns(task.id, { author: "handed-off", commit: task.tip })
+          charge(
+            task,
+            openExitOf(pipelineOf(task), task)?.fails,
+            openAgentOf(pipelineOf(task), task)?.run.rung,
+          )
+            .pipe(
+              Effect.andThen(
+                prog.endRuns(task.id, { author: "done", review: "stopped", commit: task.tip }),
+              ),
+            )
             .pipe(
               Effect.catch((error) =>
                 Effect.logWarning(`closing the handoff of ${task.id} failed: ${error}`),
@@ -1289,6 +1305,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             pipeline !== undefined &&
             diagnosticIntent(task) === undefined &&
             !awaitingLanding(pipeline, task) &&
+            // An agent that named its exit finished; the step above closes its run.
+            !endedAt(pipeline, task) &&
             worker.state !== "working"
           );
         }),
@@ -1318,7 +1336,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // stands in the operator's own tree, which foreman never commits, so
             // it is left to the ordinary path.
             const stoppedAuthor =
-              role === "author" && (phase === "Unfinished" || phase === "VanishedWithWork");
+              role === "author" && (phase === "AuthorStopped" || phase === "VanishedWithWork");
             const stoppedReviewer = role === "review" && phase === "ReviewStopped";
             const wall =
               rung === undefined || isOnboarding(task) || !(stoppedAuthor || stoppedReviewer)
@@ -1364,10 +1382,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                     Effect.andThen(
                       prog.log(
                         task.id,
-                        `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue one rung up — read the review notes above and continue from ${labelFor(task.id)}.`,
+                        `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue — read the review notes above and continue from ${labelFor(task.id)}.`,
                       ),
                     ),
-                    Effect.andThen(climb(task)),
+                    Effect.andThen(
+                      charge(task, openExitOf(pipelineOf(task), task)?.fails, reviewer),
+                    ),
                     Effect.andThen(stopAgents(worker)),
                     Effect.andThen(
                       fleet.notify(
@@ -1381,7 +1401,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               Match.when("VanishedWithWork", () =>
                 Option.match(wall, {
                   onNone: () =>
-                    unfinished(
+                    retryAttempt(
                       task,
                       `foreman: ${kind ?? "the author"} vanished mid-task and left unfinished work in ${worker.directory}. Read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
                       "vanished",
@@ -1390,7 +1410,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }),
               ),
               Match.when("VanishedEmpty", () =>
-                unfinished(
+                retryAttempt(
                   task,
                   `foreman: ${kind ?? "the author"} vanished without writing anything — no commits on ${labelFor(task.id)} and an untouched worktree.`,
                   "vanished",
@@ -1401,7 +1421,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               Match.when("ReviewExpired", () => stopAgents(worker)),
               Match.when("ReviewStopped", () =>
                 Option.match(wall, {
-                  onNone: () => reviewerStopped(task, worker, reviewer),
+                  onNone: () =>
+                    stoppedAt(pipelineOf(task), task) === "park"
+                      ? parkStopped(
+                          task,
+                          worker,
+                          `reviewer ${reviewer} stopped without naming an exit`,
+                        )
+                      : reviewerStopped(task, worker, reviewer),
                   onSome: (hit) =>
                     prog
                       .endReview(task.id, "walled")
@@ -1426,22 +1453,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                   ),
                 ),
               ),
-              Match.when("Unfinished", () =>
+              Match.when("AuthorStopped", () =>
                 Option.match(wall, {
                   onNone: () =>
-                    unfinished(
-                      task,
-                      `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
-                      "unfinished",
-                    ).pipe(
-                      Effect.andThen(teardown(task)),
-                      Effect.andThen(
-                        fleet.notify(
-                          "Task returned",
-                          `${task.id} stopped unfinished — back in the queue`,
+                    stoppedAt(pipelineOf(task), task) === "park"
+                      ? parkStopped(
+                          task,
+                          worker,
+                          `${kind ?? "agent"} stopped without naming an exit`,
+                        )
+                      : retryAttempt(
+                          task,
+                          `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
+                          "stopped",
+                        ).pipe(
+                          Effect.andThen(teardown(task)),
+                          Effect.andThen(
+                            fleet.notify(
+                              "Task returned",
+                              `${task.id} stopped with no exit — back in the queue`,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
                   onSome: (hit) => handOffWall(task, worker, hit, walledNow),
                 }),
               ),
@@ -1477,7 +1510,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // the checkout is still at the commit the reviewer read: a later commit
         // voids it, and the next review reads the new one.
         if (block.kind === "done") {
-          const approved = approvedCommit(task);
+          const approved = routedCommit(task);
           const head = yield* repository.head(project.directory);
           if (approved === undefined || head !== approved) {
             return yield* Effect.logWarning(
@@ -1496,7 +1529,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
         // The commit the reviewer read is the commit that lands. A tip that moved
         // since the approval voids it, and the next review reads the new one.
-        const approved = approvedCommit(task);
+        const approved = routedCommit(task);
         const tip = yield* repository.tip(project.directory, labelFor(task.id));
         if (approved === undefined || tip !== approved) {
           return yield* Effect.logWarning(
@@ -1532,7 +1565,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // model is stronger or weaker at avoiding. Spending a better one on
         // the retry buys nothing, and it is the resolution — not the work —
         // that is outstanding. A task that genuinely cannot get past it still
-        // ends unfinished, and `unfinished` is what bounds that.
+        // ends stopped, and `retryAttempt` is what bounds that.
         if (result._tag === "Rejected") {
           yield* Effect.logWarning(
             `landing ${task.id} (${project.name}) rejected: ${result.detail}`,
@@ -1570,7 +1603,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // may honestly say it did. `Present` wrote nothing and ran nothing, so
         // it claims neither a merge nor a verification. Two things reach it:
         // an interrupted landing whose merge had already gone in, and a branch
-        // whose author found the trunk already satisfied the task and whose
+        // whose author named `already-done` and whose
         // reviewer confirmed it. The verdict cannot tell them apart — an empty
         // branch is contained by any checkout — so the label the author left
         // is what names the one in the log.
@@ -1580,7 +1613,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
           yield* prog.log(
             task.id,
-            isSatisfied(task)
+            claimsAlreadyDone(task)
               ? `foreman: ${project.name}'s trunk already does what this task asked, and the reviewer confirmed it. Nothing was merged and nothing was verified — the backlog had outlived the work.`
               : isResearch(task)
                 ? `foreman: this task's deliverable was a report, and the reviewer confirmed it against its evidence in the log. Nothing was merged and nothing was verified — there was no code to land.`
@@ -1673,14 +1706,20 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           return;
         }
 
+        // The failed exit charges what the drawing says, and a return sends the
+        // task to the queue; a wire elsewhere moves it with no write at all.
+        const exit = block.exits.find((candidate) => candidate.name === "failed");
+        const returns = exit?.to === QUEUE;
         yield* Effect.logWarning(`${task.id} failed the check ${block.id}`);
         yield* prog.log(
           task.id,
-          `foreman: the check ${block.id} ran \`${block.command}\` at ${tip}, and it failed, so the task is back in the queue.\n\n${result.output}`,
+          `foreman: the check ${block.id} ran \`${block.command}\` at ${tip}, and it failed${returns ? ", so the task is back in the queue" : ""}.\n\n${result.output}`,
         );
-        yield* climb(task);
-        yield* prog.release(task.id);
-        yield* fleet.notify("Check failed", `${task.id} failed ${block.id} — back in the queue`);
+        yield* charge(task, exit?.fails, undefined);
+        if (returns) {
+          yield* prog.release(task.id);
+          yield* fleet.notify("Check failed", `${task.id} failed ${block.id} — back in the queue`);
+        }
       }).pipe(Effect.catch((error) => Effect.logWarning(`checking ${task.id} failed: ${error}`)));
     });
 
@@ -1943,7 +1982,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const blockFor = Effect.fnUntraced(function* (task: Item, role: AgentRole) {
       const pipeline = runningPipeline((yield* SubscriptionRef.get(state)).pipelines, task.project);
-      const block = pipeline === undefined ? undefined : nextAgent(pipeline, factsOf(task), role);
+      const block =
+        pipeline === undefined ? undefined : nextAgent(pipeline, factsOf(task, pipeline), role);
       if (block === undefined) {
         yield* Effect.logWarning(
           `${role} of ${task.id} refused: ${task.project}'s pipeline has no ${role} block on its route`,
@@ -2064,7 +2104,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         project.verify,
       );
       // The run records the tip the reviewer is about to read: its approval
-      // holds for this commit, until a correction round moves it (`corrected`).
+      // is about this commit until the reviewer names its exit, which records
+      // the tip it names it on.
       yield* prog.assignReview(task.id, runFor(task, rung, block, tip));
       const agent = yield* instrumentRun(
         task,
@@ -2158,7 +2199,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * again on the next tick and climb the task a rung early; a count left
      * unwritten by the opposite order merely gives the rung one more try.
      */
-    const unfinished = (task: Climbing, detail: string, ending: AuthorEnding) =>
+    const retryAttempt = (task: Climbing, detail: string, ending: Ending) =>
       Effect.gen(function* () {
         yield* prog.release(task.id, ending);
         const rung = ranAt(task);
@@ -2176,6 +2217,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
           yield* prog.markAttempt(task.id, rung, attempts);
         }
+      });
+
+    /**
+     * Parks a task whose agent stopped without naming an exit at a block that
+     * says `stopped: park`: its runs close `stopped`, it leaves the queue for
+     * the operator, and no rung is charged.
+     */
+    const parkStopped = (task: Item, worker: Worker, what: string) =>
+      Effect.gen(function* () {
+        yield* prog.endRuns(task.id, { author: "stopped", review: "stopped" });
+        yield* prog.release(task.id);
+        yield* prog.parkForOperator(task.id);
+        yield* prog.log(
+          task.id,
+          `foreman: ${what}, and its block parks such a task. It is yours now.`,
+        );
+        yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${what}`);
+        yield* stopAgents(worker);
       });
 
     /**
@@ -2201,7 +2260,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ];
         const next = reviewerFor(settings.ladder, authoredBy(task), new Set(), failed);
         if (next === undefined) {
-          yield* prog.endReview(task.id, "no-verdict");
+          yield* prog.endReview(task.id, "stopped");
           yield* prog.release(task.id);
           yield* prog.parkForOperator(task.id);
           yield* prog.log(
@@ -2210,7 +2269,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
           yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: no reviewer left`);
         } else {
-          yield* prog.endReview(task.id, "no-verdict");
+          yield* prog.endReview(task.id, "stopped");
           yield* prog.log(
             task.id,
             `foreman: reviewer ${ran} ${said ? "approved a commit the branch has moved past" : "stopped without a verdict"}. ${task.id} stays in review; the next reviewer is ${next.name}.`,
@@ -2247,7 +2306,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * where the next dispatch reads it rather than being lost with the worker.
      * A branch that merely would not merge is not one of them: that is the
      * trunk having moved, which says nothing about the model. An agent that
-     * merely stopped unfinished does not fail its rung until the rung is spent.
+     * merely stopped without an exit does not fail its rung until the rung is spent.
      *
      * What is written is the failure, never the model that comes next: which
      * rung takes it depends on what is configured and paid for at the moment of
@@ -2259,12 +2318,25 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * is not exhaustion — the account resets and the fleet carries on — so the
      * account is left out of this reading.
      */
+    /**
+     * Charges the rung a named exit's `fails` names: `author` the task's last
+     * author run's rung, exactly as `climb` does; `self` the rung of the block
+     * that named it, `rung`. An exit with no `fails`, or a `self` with no rung
+     * (a check), charges nothing.
+     */
+    const charge = (task: Climbing, fails: Exit["fails"], rung: string | undefined) =>
+      fails === "author"
+        ? climb(task)
+        : fails === "self" && rung !== undefined
+          ? prog.markFailure(task.id, rung)
+          : Effect.void;
+
     const climb = (task: Climbing) =>
       Effect.gen(function* () {
         const failed = ranAt(task);
         yield* prog.markFailure(task.id, failed);
         const next = authorFor(settings.ladder, [...failuresOf(task), failed]);
-        // The durable write, not an unfinished attempt: this annotation records
+        // The durable write, not a stopped attempt: this annotation records
         // exactly the evidence the ladder acted on.
         yield* Effect.annotateCurrentSpan({
           escalation: "true",
@@ -2739,7 +2811,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * is going to change hands. Liveness is the view's call; the run is
        * re-checked here only so an already-ended snapshot ends nothing.
        *
-       * It ends `released`, not `no-verdict`: a reviewer that vanished says
+       * It ends `released`, not `stopped`: a reviewer that vanished says
        * nothing about whether its rung can read the diff, so the rung stays
        * open to review it again.
        */
@@ -2752,23 +2824,50 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ),
 
       /**
-       * Ends a correction round: the reviewer reads the tip the author left
-       * next, so its review run holds that commit. Without this, an approval
-       * after a round names a commit the branch has moved past and is void.
-       * A task with no open review run has no reviewer to move. It reads the
-       * world first: the task's route decides whether the tip is its branch's
-       * or the checkout's HEAD, and a CLI process has read nothing yet.
+       * Names the exit that ends the task's open agent run (`foreman exit`).
+       *
+       * The name must be one the block of that run declares; otherwise nothing
+       * is written and the answer lists the declared names. The exit records
+       * the task's tip as its route reads it (the branch tip, or the checkout's
+       * HEAD on a direct route), so a correction round needs no special case:
+       * the reviewer names its exit after the round, on the tip the round left. The
+       * status move is the one the exit's wire implies: a return to the queue
+       * reopens the task, and settle releases it; an author's exit onward sends
+       * it to review; a reviewer's exit onward leaves the status as it is.
        */
-      corrected: (id: string) =>
+      exit: (id: string, name: string) =>
         commanded(
           Effect.gen(function* () {
             const task = yield* prog.show(id);
-            if (reviewedBy(task) === undefined) return;
             yield* read;
+            const pipeline = runningPipeline(
+              (yield* SubscriptionRef.get(state)).pipelines,
+              task.project,
+            );
+            const open = openAgentOf(pipeline, task);
+            if (open === undefined) return { _tag: "NoRun" } as const;
+            const { block } = open;
+            const exit = block.exits.find((candidate) => candidate.name === name);
+            if (exit === undefined) {
+              return {
+                _tag: "Undeclared",
+                block: block.id,
+                declared: block.exits.map((candidate) => candidate.name),
+              } as const;
+            }
             const project = yield* projectFor(task.project);
-            if (!project) return;
-            const tip = yield* tipOf(task, project);
-            if (tip !== undefined) yield* prog.rereadReview(task.id, tip);
+            const commit = project ? yield* tipOf(task, project) : undefined;
+            yield* prog.nameExit(task.id, {
+              name,
+              commit,
+              event:
+                exit.to === QUEUE
+                  ? "open"
+                  : block.role === "author" && task.status === "in_progress"
+                    ? "review"
+                    : undefined,
+            });
+            return { _tag: "Named", block: block.id, commit } as const;
           }),
         ),
 
@@ -2894,7 +2993,7 @@ export const planFrom = (
   ].flatMap(({ task, worker }) => {
     const pipeline = runningPipeline(current.pipelines, task.project);
     if (pipeline === undefined) return [];
-    const placement = place(pipeline, factsOf(task));
+    const placement = place(pipeline, factsOf(task, pipeline));
     return placement._tag === "At" && placement.state === "waiting"
       ? [{ task, worker, pipeline, placement }]
       : [];
@@ -2937,7 +3036,7 @@ export const planFrom = (
         step: asking.step,
         rung:
           node.kind === "land" || node.kind === "done"
-            ? reviewedBy(task)
+            ? lastExit(task)?.rung
             : node.kind === "agent" && node.role === "review"
               ? authoredBy(task)
               : undefined,
@@ -3087,7 +3186,7 @@ const workspaceOf = (
   task: Item,
 ): Workspace | undefined => {
   const pipeline = runningPipeline(pipelines, task.project);
-  return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task));
+  return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task, pipeline));
 };
 
 /**
@@ -3118,21 +3217,41 @@ const occupies = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): 
  * around it.
  */
 export const awaitingLanding = (pipeline: Pipeline, task: Item): boolean => {
-  const placement = place(pipeline, factsOf(task));
+  const placement = place(pipeline, factsOf(task, pipeline));
   return (
-    placement._tag === "At" && (placement.node.kind === "land" || placement.node.kind === "done")
+    task.status === "reviewing" &&
+    placement._tag === "At" &&
+    (placement.node.kind === "land" || placement.node.kind === "done")
   );
 };
 
-/** The task's author handed off, and settle has not yet closed its run. */
-const endedAtAuthor = (pipeline: Pipeline, task: Item): boolean => {
-  const placement = place(pipeline, factsOf(task));
-  return (
-    placement._tag === "At" &&
-    placement.node.kind === "agent" &&
-    placement.node.role === "author" &&
-    placement.state === "ended"
-  );
+/** What follows a stop with no exit at the block of the task's open run: `retry` unless it says `park`. */
+const stoppedAt = (pipeline: Pipeline | undefined, task: Item): "retry" | "park" =>
+  openAgentOf(pipeline, task)?.block.stopped ?? "retry";
+
+/**
+ * The exit the agent of the task's open run named, as the drawing declares it
+ * now: nothing when no agent named one, or the block or exit is gone.
+ */
+const openExitOf = (pipeline: Pipeline | undefined, task: Item): Exit | undefined => {
+  const open = openAgentOf(pipeline, task);
+  return open?.block.exits.find((exit) => exit.name === open.run.ending);
+};
+
+/** The task's open agent run and its block in the drawing, while that block is still an agent. */
+const openAgentOf = (
+  pipeline: Pipeline | undefined,
+  task: Item,
+): { readonly run: Run; readonly block: AgentNode } | undefined => {
+  const run = task.runs.findLast((candidate) => candidate.open && candidate.role !== "check");
+  const block = pipeline?.nodes.find((node) => node.id === run?.node);
+  return run !== undefined && block?.kind === "agent" ? { run, block } : undefined;
+};
+
+/** The agent of the task's open run finished its block, and settle has not yet closed its run. */
+const endedAt = (pipeline: Pipeline, task: Item): boolean => {
+  const placement = place(pipeline, factsOf(task, pipeline));
+  return placement._tag === "At" && placement.node.kind === "agent" && placement.state === "ended";
 };
 
 /**
@@ -3202,10 +3321,10 @@ export const decisionsOf = (
   ...reviewing.filter(
     ({ task, worker }) =>
       reviewedBy(task) !== undefined &&
-      // A reviewer that wrote its verdict did not vanish, it finished: the task
+      // A reviewer that named its exit did not vanish, it finished: the task
       // waits on the checkout being clean, not on an answer, and its pane is
       // gone precisely because there was nothing left for it to do.
-      !isApproved(task) &&
+      !reviewerNamed(task) &&
       (worker === undefined || worker.state === "gone"),
   ),
   ...owned.filter(
@@ -3371,7 +3490,7 @@ export const landedColumn = (
  * than an absence of work, and the only ending that closes a task the backlog
  * has outlived. The other is a task labelled `research`, whose deliverable is a
  * report in the task log rather than commits. Both are claims, not verdicts:
- * the reviewer confirms the satisfied one against the trunk and the research
+ * the reviewer confirms the already-done one against the trunk and the research
  * one against its evidence, and an ordinary rejection sends a false one back.
  */
 export const reviewable = (
@@ -3383,7 +3502,7 @@ export const reviewable = (
 } => {
   const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
   const readable = ({ task }: Active) =>
-    committed.has(task.id) || isSatisfied(task) || isResearch(task);
+    committed.has(task.id) || claimsAlreadyDone(task) || isResearch(task);
   return {
     review: authored.filter(readable),
     unbacked: authored.filter((active) => !readable(active)),

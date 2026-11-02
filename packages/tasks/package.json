@@ -6,7 +6,8 @@
     "tasks": "./src/cli/main.ts"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./endings": "./src/endings.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

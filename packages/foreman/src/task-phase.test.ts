@@ -31,9 +31,9 @@ describe("task phases", () => {
     expect(phaseOf(input({ status: "reviewing", handoffExpired: true }))).toBe("ReviewExpired");
   });
 
-  test("distinguishes stopped review, residue, and unfinished work", () => {
+  test("distinguishes stopped review, residue, and a stopped author", () => {
     expect(phaseOf(input({ status: "reviewing", reviewer: "claude" }))).toBe("ReviewStopped");
     expect(phaseOf(input({ status: "open" }))).toBe("Residue");
-    expect(phaseOf(input())).toBe("Unfinished");
+    expect(phaseOf(input())).toBe("AuthorStopped");
   });
 });

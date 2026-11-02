@@ -161,7 +161,7 @@ const ConfigFile = Schema.Struct({
   ),
 
   /**
-   * How many times a task may end unfinished on one rung before it climbs.
+   * How many times a task may stop without an exit on one rung before it climbs.
    *
    * An agent that stops without finishing says nothing about its model — a
    * crash, a timeout and a usage wall all end the same way — so the task stays

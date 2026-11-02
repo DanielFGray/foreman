@@ -36,15 +36,31 @@ describe("the standard pipeline as belts", () => {
     });
     const belt = beltOf(STANDARD_PIPELINE);
     expect([belt.columns, belt.rows]).toEqual([10, 2]);
-    expect(belt.wires).toHaveLength(12);
+    // The author's two exits onward are two wires to the same gate.
+    expect(belt.wires).toHaveLength(13);
   });
 });
 
 describe("belt edits", () => {
   test("a block put on a wire runs on to where the wire went", () => {
-    const { pipeline, id } = insertOn(STANDARD_PIPELINE, { from: "review", port: "next" }, "agent");
-    expect(node(pipeline, "review")).toMatchObject({ next: id });
-    expect(node(pipeline, id)).toMatchObject({ kind: "agent", next: "land-gate" });
+    const { pipeline, id } = insertOn(
+      STANDARD_PIPELINE,
+      { from: "review", port: "exit:approved" },
+      "agent",
+    );
+    expect(node(pipeline, "review")).toMatchObject({
+      exits: [
+        { name: "approved", to: id },
+        { name: "returned", to: "queue" },
+      ],
+    });
+    expect(node(pipeline, id)).toMatchObject({
+      kind: "agent",
+      exits: [
+        { name: "done", to: "land-gate" },
+        { name: "already-done", to: "land-gate" },
+      ],
+    });
     // A second agent between review and land needs its own gate, and a review after it.
     expect(problemsOf(pipeline, RUNGS)).toEqual([
       `a route from ${id} reaches land with no review after it`,
@@ -53,13 +69,31 @@ describe("belt edits", () => {
   });
 
   test("a check put on a wire names no command until the operator sets one", () => {
-    const { pipeline, id } = insertOn(STANDARD_PIPELINE, { from: "author", port: "next" }, "check");
-    expect(node(pipeline, id)).toEqual({ kind: "check", id, command: "", next: "review-gate" });
+    const { pipeline, id } = insertOn(
+      STANDARD_PIPELINE,
+      { from: "author", port: "exit:done" },
+      "check",
+    );
+    expect(node(pipeline, id)).toEqual({
+      kind: "check",
+      id,
+      command: "",
+      exits: [
+        { name: "passed", to: "review-gate" },
+        { name: "failed", to: "queue", fails: "author" },
+      ],
+    });
     expect(problemsOf(pipeline, RUNGS)).toEqual([
       `${id}: a check runs a command, and it names none`,
     ]);
     const named = configure(pipeline, id, { command: "bun run lint" });
-    expect(node(named, id)).toMatchObject({ command: "bun run lint", next: "review-gate" });
+    expect(node(named, id)).toMatchObject({
+      command: "bun run lint",
+      exits: [
+        { name: "passed", to: "review-gate" },
+        { name: "failed", to: "queue" },
+      ],
+    });
     expect(problemsOf(named, RUNGS)).toEqual([`a route from author reaches ${id} through no gate`]);
   });
 
@@ -132,12 +166,12 @@ describe("belt edits", () => {
     expect(Option.map(skip, (pipeline) => node(pipeline, "climb"))).toEqual(
       Option.some({ kind: "gate", id: "climb", step: "climb", next: "review-gate" }),
     );
-    expect(rejoin(STANDARD_PIPELINE, { from: "review", port: "next" }, "author")).toEqual(
+    expect(rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "author")).toEqual(
       Option.none(),
     );
-    expect(rejoin(STANDARD_PIPELINE, { from: "review", port: "next" }, "no-such-block")).toEqual(
-      Option.none(),
-    );
+    expect(
+      rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "no-such-block"),
+    ).toEqual(Option.none());
   });
 
   test("a new source starts a belt that joins the first one", () => {
@@ -158,7 +192,10 @@ describe("belt edits", () => {
       role: "author",
       model: "cheap",
       slots: 2,
-      next: "review-gate",
+      exits: [
+        { name: "done", to: "review-gate" },
+        { name: "already-done", to: "review-gate" },
+      ],
     });
     const unslotted = configure(pipeline, "author", {
       role: "author",

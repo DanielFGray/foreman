@@ -3,75 +3,92 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
-import { connectionAt, store, Tasks, verdict } from "tasks";
+import type { Run } from "tasks";
+import { connectionAt, nameExit, store, Tasks } from "tasks";
 import {
-  approvedCommit,
   authoredBy,
-  isApproved,
-  isSatisfied,
+  claimsAlreadyDone,
   lapOf,
-  passedNodes,
+  lastExit,
   reviewedBy,
+  reviewerNamed,
   reviewFailedBy,
   roundsOf,
+  routedCommit,
 } from "./lap.ts";
+import { place, STANDARD_PIPELINE } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
 import { Prog } from "./prog.ts";
 import { newRunFor } from "./run-record.ts";
-import { authorRun, handedOff, reviewRun } from "./task-fixture.ts";
+import { authorRun, authorDone, reviewRun } from "./task-fixture.ts";
+
+/** The block a reviewing task with these runs stands at on the standard pipeline. */
+const blockOf = (runs: ReadonlyArray<Run>, tip: string | undefined) => {
+  const placement = place(
+    STANDARD_PIPELINE,
+    factsOf(
+      { status: "reviewing", priority: 2, parent: undefined, labels: [], runs, tip },
+      STANDARD_PIPELINE,
+    ),
+  );
+  return placement._tag === "At" ? placement.node.id : placement._tag;
+};
 
 describe("a task's lap", () => {
-  test("a commit after the approval voids it", () => {
+  test("a land takes the commit of the exit that routed it there", () => {
     const runs = [
-      handedOff("low", "c1"),
+      authorDone("low", "c1"),
       reviewRun("mid", { open: false, ending: "approved", commit: "c1" }),
     ];
 
-    expect(isApproved({ runs, tip: "c1" })).toBe(true);
-    expect(isApproved({ runs, tip: "c2" })).toBe(false);
-    expect(approvedCommit({ runs })).toBe("c1");
+    expect(routedCommit({ runs })).toBe("c1");
+    expect(blockOf(runs, "c1")).toBe("land");
+    // A commit after the approval voids it.
+    expect(blockOf(runs, "c2")).toBe("review");
   });
 
-  test("an approval followed by a return in one turn is not an approval", () => {
+  test("an approval followed by a return is a return", () => {
     const runs = [
-      authorRun("low", { open: false, ending: "handed-off" }),
+      authorDone("low", "c1"),
       reviewRun("mid", { open: false, ending: "approved", commit: "c1" }),
       reviewRun("mid", { open: false, ending: "returned", commit: "c1" }),
     ];
 
-    expect(isApproved({ runs, tip: "c1" })).toBe(false);
-    expect(approvedCommit({ runs })).toBeUndefined();
+    expect(lastExit({ runs })?.ending).toBe("returned");
+    expect(blockOf(runs, "c1")).toBe("author");
   });
 
   test("a new author run leaves the last lap's reviews behind", () => {
     const runs = [
-      authorRun("low", { open: false, ending: "handed-off" }),
+      authorDone("low"),
       reviewRun("mid", { open: false, ending: "approved", commit: "c1" }),
-      reviewRun("high", { open: false, ending: "no-verdict" }),
+      reviewRun("high", { open: false, ending: "stopped" }),
       authorRun("low"),
     ];
 
     expect(lapOf({ runs })).toHaveLength(1);
-    expect(isApproved({ runs, tip: "c1" })).toBe(false);
+    expect(lastExit({ runs })).toBeUndefined();
     expect(reviewFailedBy({ runs })).toEqual([]);
   });
 
   test("names the open reviewer and the rungs whose reviewers stopped", () => {
     const runs = [
-      authorRun("low", { open: false, ending: "handed-off" }),
-      reviewRun("mid", { open: false, ending: "no-verdict" }),
+      authorDone("low"),
+      reviewRun("mid", { open: false, ending: "stopped" }),
       reviewRun("high"),
     ];
 
     expect(reviewedBy({ runs })).toBe("high");
     expect(reviewFailedBy({ runs })).toEqual(["mid"]);
+    expect(reviewerNamed({ runs })).toBe(false);
+    const named = runs.map((run) => (run.open ? { ...run, ending: "approved" } : run));
+    expect(reviewerNamed({ runs: named })).toBe(true);
   });
 
   test("a stale reviewer is cleared by ending its run", () => {
-    const stale = [authorRun("low", { open: false, ending: "handed-off" }), reviewRun("mid")];
+    const stale = [authorDone("low"), reviewRun("mid")];
     const cleared = stale.map((run) =>
-      run.open && run.role === "review"
-        ? { ...run, open: false, ending: "no-verdict" as const }
-        : run,
+      run.open && run.role === "review" ? { ...run, open: false, ending: "stopped" } : run,
     );
 
     expect(reviewedBy({ runs: stale })).toBe("mid");
@@ -80,7 +97,7 @@ describe("a task's lap", () => {
 
   test("the author is the latest author run, and rounds are counted on it", () => {
     const runs = [
-      handedOff("low", "c1"),
+      authorDone("low", "c1"),
       reviewRun("mid", { open: false, ending: "returned", commit: "c1" }),
       authorRun("high", { rounds: 1 }),
     ];
@@ -91,36 +108,24 @@ describe("a task's lap", () => {
     expect(roundsOf({ runs: [reviewRun("mid")] })).toBe(0);
   });
 
-  test("passed blocks are the work that advanced the task in this lap", () => {
+  test("the exits of this lap place the task", () => {
     const approval = reviewRun("mid", { open: false, ending: "approved", commit: "c1" });
 
-    expect([...passedNodes({ runs: [authorRun("low")], tip: "c1" })]).toEqual([]);
-    expect([...passedNodes({ runs: [handedOff("low"), reviewRun("mid")], tip: "c1" })]).toEqual([
-      "author",
-    ]);
-    expect([...passedNodes({ runs: [handedOff("low"), approval], tip: "c1" })]).toEqual([
-      "author",
+    expect(blockOf([authorRun("low")], "c1")).toBe("author");
+    expect(blockOf([authorDone("low", "c1"), reviewRun("mid")], "c1")).toBe("review");
+    expect(blockOf([authorDone("low", "c1"), approval], "c1")).toBe("land");
+    expect(blockOf([authorDone("low", "c1"), approval], "c2")).toBe("review");
+    expect(blockOf([authorRun("low", { open: false, ending: "already-done" })], undefined)).toBe(
       "review",
-    ]);
-    expect([...passedNodes({ runs: [handedOff("low"), approval], tip: "c2" })]).toEqual(["author"]);
-    expect([
-      ...passedNodes({
-        runs: [authorRun("low", { open: false, ending: "satisfied" })],
-        tip: undefined,
-      }),
-    ]).toEqual(["author"]);
-    expect([
-      ...passedNodes({ runs: [handedOff("low"), approval, authorRun("high")], tip: "c1" }),
-    ]).toEqual([]);
+    );
+    expect(blockOf([authorDone("low", "c1"), approval, authorRun("high")], "c1")).toBe("author");
   });
 
-  test("reads the author's satisfied claim from its run", () => {
-    expect(isSatisfied({ runs: [authorRun("low", { open: false, ending: "satisfied" })] })).toBe(
-      true,
-    );
-    expect(isSatisfied({ runs: [authorRun("low", { open: false, ending: "handed-off" })] })).toBe(
-      false,
-    );
+  test("reads the author's already-done claim from its exit", () => {
+    expect(
+      claimsAlreadyDone({ runs: [authorRun("low", { open: false, ending: "already-done" })] }),
+    ).toBe(true);
+    expect(claimsAlreadyDone({ runs: [authorDone("low")] })).toBe(false);
   });
 });
 
@@ -138,7 +143,7 @@ describe("the readers against a scratch store", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  test("read the runs a dispatch and a verdict wrote", async () => {
+  test("read the runs a dispatch and a named exit wrote", async () => {
     const id = (await Bun.$`prog add "lap" -p foreman`.text()).trim();
     const dispatch = (role: "author" | "review", rung: string, commit?: string) =>
       newRunFor({
@@ -159,14 +164,16 @@ describe("the readers against a scratch store", () => {
     await run((prog) => prog.submit(id));
     await run((prog) => prog.assignReview(id, dispatch("review", "mid", "c1")));
     await Effect.runPromise(
-      verdict(id, "approved").pipe(Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store)))),
+      nameExit(id, { name: "approved", commit: "c1", event: undefined }).pipe(
+        Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),
+      ),
     );
 
     const task = await run((prog) => prog.show(id));
 
     expect(reviewedBy(task)).toBe("mid");
-    expect(approvedCommit(task)).toBe("c1");
-    expect(isApproved({ ...task, tip: "c1" })).toBe(true);
-    expect(isApproved({ ...task, tip: "c2" })).toBe(false);
+    expect(reviewerNamed(task)).toBe(true);
+    expect(routedCommit(task)).toBe("c1");
+    expect(blockOf(task.runs, "c1")).toBe("review");
   });
 });

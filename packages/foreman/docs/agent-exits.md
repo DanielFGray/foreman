@@ -1,6 +1,33 @@
 # Agent exits: the operator designs the contract
 
-Status: proposed, 2026-11-02, for epic ep-dd7957. Nothing here is built.
+Status: rules 1 to 5 and the store's endings are built (ts-48b15f). Rules 6
+and 7, the State section and the page's exit editing are not. "What is built"
+says where the build differs from the text below; where they differ, that
+section is the rule.
+
+## What is built
+
+- **Schema and file.** Agent and check blocks have `exits`; agent blocks have
+  `stopped`. The pipelines file is `version: 3`, and version 2 and 1 read with
+  the standard exits wired as they were: `returned` and `failed` go to `queue`
+  with `fails: author`. The standard pipeline keeps its retry router and has no
+  cycle. Blocks have no `instructions` or `rounds` yet.
+- **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
+  ending. A migration renamed the old endings: `handed-off` to `done`,
+  `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
+  There is no `charged` column: `fails` still writes the `failed-by:` label.
+- **Placement.** An open agent run places the task at its block. Otherwise
+  the last named exit is followed, and an exit is void when the tip is not the
+  commit it was named on (an exit with no commit counts as moved) and either
+  the exit was named at a check or its walk reaches a land or a done. A void
+  exit drops back to the exit before it. A run that named an exit is `ended`
+  until settle closes it once the pane is idle; the next tick places the task
+  where the exit leads, so a landing comes one tick after the approval.
+- **Status.** `foreman exit` makes the status move the exit implies: an exit
+  to `queue` opens and releases the task; an author's exit puts it in
+  `reviewing`. `reviewing` and `role` stay (open questions 2 and 3).
+- **Prompts.** Only the lines that tell an agent how to end changed, to
+  `foreman exit`. The prompt files keep the rest of their text.
 
 Today the contract between an agent and foreman is fixed in two places: the
 prompts ("run `tasks verdict <id> approved|returned`") and the store
@@ -177,17 +204,17 @@ This is a hint: the editor shows it, but the pipeline runs.
 
 ## The standard pipeline, drawn with exits
 
-- author: `done` → review gate; `already-done` → review gate (today's
+- author: `done` → review gate; `already-done` → review gate (the old
   `satisfied`); `stopped: retry`.
-- review: `approved` → land gate; `returned` → author gate, `fails: author`;
-  `stopped: retry`; `rounds: 2`.
-- check: `passed` → next; `failed` → author gate, `fails: author`.
+- review: `approved` → land gate; `returned` → `queue`, `fails: author`;
+  `stopped: retry`.
+- check: `passed` → next; `failed` → `queue`, `fails: author`.
 
-Today a return goes to the queue and comes back through the retry router. In
-this drawing it goes straight to the author gate, keeps its claim and its
-worktree, and the author block's `ladder` model climbs as before. The cycle is
-valid because `returned` and `failed` have `fails` (rule 5). The store's author
-ending `handed-off` becomes the exit `done`.
+A return goes to the queue and comes back through the retry router, as before
+exits, so the standard pipeline has no cycle. Wiring `returned` and `failed`
+straight back to the author gate, which keeps the claim and the worktree, is a
+later task; it is valid by rule 5, because both exits have `fails`. The store's
+author ending `handed-off` became the exit `done`.
 
 ## Changes to what exists
 

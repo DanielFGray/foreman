@@ -8,3 +8,4 @@ export * from "./connection.ts";
 export * from "./registry.ts";
 export * from "./migrations.ts";
 export * from "./runs.ts";
+export * from "./endings.ts";

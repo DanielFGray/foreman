@@ -5,10 +5,9 @@ import {
   STATUSES,
   TaskError,
   Tasks,
-  VERDICTS,
-  verdict,
+  handOff,
+  nameExit,
   type TaskEvent,
-  type Verdict,
 } from "tasks";
 import { PRIME } from "./prime.ts";
 import { detail, detailJson, json, lines } from "./render.ts";
@@ -349,13 +348,42 @@ const graph = Command.make("graph", {}, () =>
   ),
 );
 
+/**
+ * The exits `tasks verdict` names, and the status move each makes. Foreman
+ * reads its agents' exits from the pipeline drawing; these are the standard
+ * ones, for work tracked with `tasks` alone.
+ */
+const VERDICT_MOVES = {
+  approved: undefined,
+  returned: "open",
+  "already-done": "review",
+} as const satisfies Record<string, TaskEvent | undefined>;
+type VerdictName = keyof typeof VERDICT_MOVES;
+
 const verdictCommand = Command.make(
   "verdict",
-  { id, said: Argument.Literals("verdict", Object.keys(VERDICTS) as [Verdict, ...Array<Verdict>]) },
-  ({ id, said }) => verdict(id, said).pipe(Effect.andThen(Console.log(`${id}: ${said}`))),
+  {
+    id,
+    said: Argument.Literals(
+      "verdict",
+      Object.keys(VERDICT_MOVES) as [VerdictName, ...Array<VerdictName>],
+    ),
+  },
+  ({ id, said }) =>
+    nameExit(id, { name: said, commit: undefined, event: VERDICT_MOVES[said] }).pipe(
+      Effect.andThen(Console.log(`${id}: ${said}`)),
+    ),
 ).pipe(
   Command.withDescription(
-    "State how your run ended: approved or returned (a reviewer), satisfied (an author whose task the trunk already does). returned reopens the task and satisfied sends it to review; a second verdict replaces the first",
+    "Name the exit that ends your run: approved or returned (a reviewer), already-done (an author whose task the trunk already does). returned reopens the task and already-done sends it to review; a second verdict replaces the first",
+  ),
+);
+
+const review = Command.make("review", { id }, ({ id }) =>
+  handOff(id).pipe(Effect.andThen(Console.log(`Moved to review: ${id}`))),
+).pipe(
+  Command.withDescription(
+    "Mark started work as waiting for a reviewer. An open author run ends with the exit done",
   ),
 );
 
@@ -371,7 +399,7 @@ export const tasksCommand = root.pipe(
     list,
     ready,
     move("start", "Started", "Claim an open task: it becomes in_progress"),
-    move("review", "Moved to review:", "Mark started work as waiting for a reviewer"),
+    review,
     move("done", "Completed", "Mark a task done"),
     move(
       "open",

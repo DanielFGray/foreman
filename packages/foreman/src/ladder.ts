@@ -183,7 +183,7 @@ export const highestFailure = (
   }, undefined)?.name;
 
 /**
- * Whether a rung with this many unfinished attempts is spent, so the task
+ * Whether a rung with this many stopped attempts is spent, so the task
  * records the failure and moves up.
  *
  * An agent that stops without finishing says nothing about its model — a

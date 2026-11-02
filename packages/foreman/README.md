@@ -276,10 +276,10 @@ trunk already does what the task asks. A backlog outlives the code it describes,
 and an author sent to an entry like that has nothing it can honestly write —
 committing anything invents work, and stopping reads as a crash, which costs a
 rung and buys the same discovery again at a dearer model. So it records the
-finding as a `satisfied` label and hands off. The second is a task labelled
+finding by naming the exit `already-done`. The second is a task labelled
 `research`, whose deliverable is a report in its own log — a measurement or an
-investigation — and never a diff. Neither is a verdict: the reviewer confirms a
-`satisfied` claim against the trunk and a `research` report against its cited
+investigation — and never a diff. Neither is an approval: the reviewer confirms an
+`already-done` claim against the trunk and a `research` report against its cited
 evidence, part by part, and only its `approved` closes the task — with nothing
 merged and nothing verified, because there is nothing to merge. A claim the
 reviewer cannot confirm is returned like any other work.
@@ -298,7 +298,7 @@ it — the same `tasks unlabel` foreman runs when a review ends.
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
 findings logged, and the branch stays put so the next agent continues from it.
-On approval the reviewer adds the durable `approved` verdict. Foreman then checks
+On approval the reviewer names the exit `approved` on the tip it read. Foreman then checks
 the shared checkout again, proves the merge, applies it, and marks the task done.
 A dirty checkout leaves the approval waiting for a later tick; a conflicting
 merge is returned to the queue. The reviewer needs neither merge nor completion

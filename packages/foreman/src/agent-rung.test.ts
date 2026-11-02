@@ -3,7 +3,7 @@ import type { Run } from "tasks";
 import { rungAt } from "./agent-rung.ts";
 import type { Ladder } from "./ladder.ts";
 import type { AgentNode } from "./pipeline.ts";
-import { handedOff } from "./task-fixture.ts";
+import { authorDone } from "./task-fixture.ts";
 
 const LADDER: Ladder = [
   { name: "cheap", harness: "test", model: undefined, provider: undefined },
@@ -15,7 +15,10 @@ const author = (model: string): AgentNode => ({
   id: "author",
   role: "author",
   model,
-  next: "review-gate",
+  exits: [
+    { name: "done", to: "review-gate" },
+    { name: "already-done", to: "review-gate" },
+  ],
 });
 
 const reviewer = (model: string): AgentNode => ({
@@ -23,7 +26,10 @@ const reviewer = (model: string): AgentNode => ({
   id: "review",
   role: "review",
   model,
-  next: "land-gate",
+  exits: [
+    { name: "approved", to: "land-gate" },
+    { name: "returned", to: "queue", fails: "author" },
+  ],
 });
 
 const task = (labels: ReadonlyArray<string>, runs: ReadonlyArray<Run> = []) => ({ labels, runs });
@@ -45,7 +51,7 @@ describe("the rung an agent block runs a task on", () => {
   });
 
   test("above takes the rung over the author", () => {
-    const authored = task([], [handedOff("cheap")]);
+    const authored = task([], [authorDone("cheap")]);
     expect(rungOf(rungAt(LADDER, reviewer("above"), authored, new Set()))).toBe("dear");
     expect(rungOf(rungAt(LADDER, reviewer("above"), authored, new Set(["dear"])))).toBe("Waiting");
   });

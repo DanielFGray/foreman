@@ -3,13 +3,21 @@
  * where a router splits the row into parallel rows that join again.
  *
  * The drawing is derived from the graph every time, so nothing about it is
- * stored. Every edit keeps the graph a pipeline can be: wires go forward only,
+ * stored. Every edit keeps the graph a pipeline can be: its edits draw forward
+ * wires only (an exit wired back up the belt is drawn as a block's exit),
  * every wire ends at a block, and a block no source reaches is dropped. What an
  * edit cannot guarantee (a gate before each step, a review before each land, a
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
-import type { AgentNode, Landing, Pipeline, PipelineNode } from "./pipeline.ts";
+import {
+  type AgentNode,
+  type Landing,
+  type Pipeline,
+  type PipelineNode,
+  QUEUE,
+  standardExits,
+} from "./pipeline.ts";
 
 /** Where a block sits on the drawing: its column from the left and its row from the top. */
 export interface Cell {
@@ -18,14 +26,18 @@ export interface Cell {
   readonly row: number;
 }
 
-/** One way out of a block: its `next`, its router's `else`, or route `n` of its router. */
-export type Port = "next" | "else" | number;
+/**
+ * One way out of a block: its `next`, its router's `else`, route `n` of its
+ * router, or the exit of an agent or a check that it names. A return to the
+ * queue is no wire.
+ */
+export type Port = "next" | "else" | number | `exit:${string}`;
 
 export interface Wire {
   readonly from: string;
   readonly port: Port;
   readonly to: string;
-  /** The route's filter, `else`, or empty for a block's one way out. */
+  /** The route's filter, `else`, the exit's name, or empty for a block's one way out. */
   readonly label: string;
 }
 
@@ -41,9 +53,9 @@ export interface Belt {
  *
  * A block's column is the longest route to it from a source, so a block every
  * branch must pass stands right of all of them. Rows follow the walk from each
- * source: `next` and `else` stay on the row they came from and are walked
- * first, and a route to a block not yet drawn, or a later source, opens a row
- * below. A join keeps the row it was first
+ * source: `next`, `else` and a block's first exit stay on the row they came
+ * from and are walked first, and a route or a later exit to a block not yet
+ * drawn, or a later source, opens a row below. A join keeps the row it was first
  * reached on.
  */
 export const beltOf = (pipeline: Pipeline): Belt => {
@@ -56,8 +68,7 @@ export const beltOf = (pipeline: Pipeline): Belt => {
   const columnOf = (id: string, visiting: ReadonlySet<string>): number => {
     const known = columns.get(id);
     if (known !== undefined) return known;
-    // A drawing of a looped file still draws: the wire that closes the loop
-    // counts for nothing, and problemsOf reports the loop.
+    // A cycle still draws: the wire that closes it counts for nothing.
     const before = (into.get(id) ?? []).filter((from) => !visiting.has(from) && nodes.has(from));
     const column =
       before.length === 0
@@ -74,8 +85,12 @@ export const beltOf = (pipeline: Pipeline): Belt => {
     rows.set(id, row);
     const out = wires.filter((wire) => wire.from === id);
     // The belt goes on first, so a branch never takes the main row.
-    for (const wire of out.filter((wire) => typeof wire.port !== "number")) walk(wire.to, row);
-    for (const wire of out.filter((wire) => typeof wire.port === "number")) {
+    const [main, ...branches] = [
+      ...out.filter((wire) => typeof wire.port !== "number"),
+      ...out.filter((wire) => typeof wire.port === "number"),
+    ];
+    if (main !== undefined) walk(main.to, row);
+    for (const wire of branches) {
       if (!rows.has(wire.to)) walk(wire.to, nextRow++);
     }
   };
@@ -125,9 +140,15 @@ export const insertOn = (
     kind === "gate"
       ? { kind, id, step: "author", next: target }
       : kind === "agent"
-        ? { kind, id, role: "author", model: "ladder", next: target }
+        ? {
+            kind,
+            id,
+            role: "author",
+            model: "ladder",
+            exits: standardExits({ kind, role: "author" }, target),
+          }
         : kind === "check"
-          ? { kind, id, command: "", next: target }
+          ? { kind, id, command: "", exits: standardExits({ kind }, target) }
           : kind === "router"
             ? { kind, id, routes: [], else: target }
             : { kind, id, next: target };
@@ -137,14 +158,15 @@ export const insertOn = (
 
 /**
  * Takes a block out. The wires into it run on to where it went: a router's
- * `else`, or a block's `next`. An end (land, done or park) cannot go, since
+ * `else`, an agent's or a check's first exit that does not return the task, or
+ * a block's `next`. An end (land, done or park) cannot go, since
  * every route must end somewhere; turn one into another instead. A source takes the
  * blocks only it reached with it.
  */
 export const remove = (pipeline: Pipeline, id: string): Pipeline => {
   const node = pipeline.nodes.find((candidate) => candidate.id === id);
-  if (node === undefined || !("next" in node || node.kind === "router")) return pipeline;
-  const onward = node.kind === "router" ? node.else : node.next;
+  const onward = node === undefined ? undefined : onwardOf(node);
+  if (onward === undefined) return pipeline;
   const left = pipeline.nodes
     .filter((candidate) => candidate.id !== id)
     .map((candidate) => redirect(candidate, id, onward));
@@ -169,8 +191,8 @@ export const removeRoute = (pipeline: Pipeline, router: string, index: number): 
 
 /**
  * Points a wire at another block, which is how a branch joins a belt further
- * on. Refused (none) when the block reaches back to the wire's own block,
- * because work that goes back returns to the queue instead.
+ * on. Refused (none) when the block reaches back to the wire's own block: the
+ * belt's edits draw forward wires only.
  */
 export const rejoin = (
   pipeline: Pipeline,
@@ -257,11 +279,16 @@ const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
     switch (node.kind) {
       case "source":
       case "gate":
-      case "agent":
-      case "check":
       case "branch":
       case "worktree":
         return [{ from: node.id, port: "next", to: node.next, label: "" }];
+      case "agent":
+      case "check":
+        return node.exits.flatMap((exit): ReadonlyArray<Wire> =>
+          exit.to === QUEUE
+            ? []
+            : [{ from: node.id, port: `exit:${exit.name}`, to: exit.to, label: exit.name }],
+        );
       case "router":
         return [
           ...node.routes.map((route, at) => ({
@@ -288,6 +315,13 @@ const retargeted = (pipeline: Pipeline, wire: Pick<Wire, "from" | "port">, to: s
   mapNode(pipeline, wire.from, (node) => {
     if (wire.port === "next" && "next" in node) return { ...node, next: to };
     if (wire.port === "else" && node.kind === "router") return { ...node, else: to };
+    if (typeof wire.port === "string" && wire.port.startsWith("exit:") && "exits" in node) {
+      const name = wire.port.slice("exit:".length);
+      return {
+        ...node,
+        exits: node.exits.map((exit) => (exit.name === name ? { ...exit, to } : exit)),
+      };
+    }
     if (typeof wire.port === "number" && node.kind === "router") {
       return {
         ...node,
@@ -303,11 +337,12 @@ const redirect = (node: PipelineNode, from: string, to: string): PipelineNode =>
   switch (node.kind) {
     case "source":
     case "gate":
-    case "agent":
-    case "check":
     case "branch":
     case "worktree":
       return { ...node, next: swap(node.next) };
+    case "agent":
+    case "check":
+      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: swap(exit.to) })) };
     case "router":
       return {
         ...node,
@@ -364,5 +399,22 @@ const freshId = (pipeline: Pipeline, kind: string): string => {
   for (;;) {
     const id = `${kind}-${crypto.randomUUID().slice(0, 6)}`;
     if (!taken.has(id)) return id;
+  }
+};
+
+/** Where the wires into a block run once it is taken out, or nothing for a block that cannot go. */
+const onwardOf = (node: PipelineNode): string | undefined => {
+  switch (node.kind) {
+    case "router":
+      return node.else;
+    case "agent":
+    case "check":
+      return node.exits.find((exit) => exit.to !== QUEUE)?.to;
+    case "land":
+    case "done":
+    case "park":
+      return undefined;
+    default:
+      return node.next;
   }
 };

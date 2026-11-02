@@ -30,7 +30,7 @@ export const TaskPhase = Schema.Literals([
   "ReviewExpired",
   "ReviewStopped",
   "Residue",
-  "Unfinished",
+  "AuthorStopped",
 ]);
 export type TaskPhase = typeof TaskPhase.Type;
 
@@ -58,5 +58,5 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
   }
 
   if (input.status !== "in_progress") return "Residue";
-  return "Unfinished";
+  return "AuthorStopped";
 };

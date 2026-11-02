@@ -9,14 +9,14 @@ import {
   landAuthorRun,
   openRun,
   recordCheck,
-  rereadReview,
+  nameExit,
   runsOf,
-  type AuthorEnding,
+  type Ending,
   type CheckRun,
   type Item as TaskItem,
   type LogEntry,
+  type NamedExit,
   type NewRun,
-  type ReviewEnding,
   type Role,
   type Run,
   type TaskEvent,
@@ -81,8 +81,8 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     const endRuns = (
       task: string,
       endings: {
-        readonly author?: AuthorEnding;
-        readonly review?: ReviewEnding;
+        readonly author?: Ending;
+        readonly review?: Ending;
         readonly commit?: string | undefined;
       },
     ) => together(`end runs of ${task}`, onStore(closeOpenRuns(task, endings)));
@@ -241,14 +241,21 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        */
       countRound: (task: string) => onStore(addRound(task)).pipe(as(`count round ${task}`)),
 
-      /** Points the task's open review run, with no verdict yet, at the commit its reviewer reads next. */
-      rereadReview: (task: string, commit: string) =>
-        onStore(rereadReview(task, commit)).pipe(as(`reread review ${task}`)),
+      /**
+       * Names the exit that ends the task's open agent run, with the commit it
+       * is named on and the status move it makes, in one transaction.
+       */
+      nameExit: (task: string, exit: NamedExit) =>
+        onStore(nameExit(task, exit).pipe(Effect.provideService(Tasks, tasks))).pipe(
+          Effect.asVoid,
+          as(`name exit ${exit.name} on ${task}`),
+        ),
 
       /**
        * Puts a reviewer on the task: opens its review run at the branch tip it
-       * reads, and closes the author's run `handed-off` at that same tip, in
-       * one transaction. The author's work is what the reviewer reads. A review
+       * reads, and closes the author's run in one transaction. An author that
+       * named no exit is closed `done` at that same tip: its task reached review,
+       * which is the move `done` makes. The author's work is what the reviewer reads. A review
        * run still open belongs to a reviewer this one replaces, such as one that
        * vanished; it ends `released`, which charges its rung nothing.
        */
@@ -256,15 +263,15 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         together(
           `assign review ${task}`,
           onStore(
-            closeOpenRuns(task, { author: "handed-off", review: "released", commit: run.commit }),
+            closeOpenRuns(task, { author: "done", review: "released", commit: run.commit }),
           ).pipe(Effect.andThen(onStore(openRun(run)))),
         ),
 
       /**
        * Ends the task's open review run with a reason the reviewer did not
-       * state itself; a verdict the reviewer wrote stands.
+       * state itself; an exit the reviewer named stands.
        */
-      endReview: (task: string, ending: ReviewEnding) => endRuns(task, { review: ending }),
+      endReview: (task: string, ending: Ending) => endRuns(task, { review: ending }),
 
       /** Closes the task's open runs that have an ending here, keeping the endings agents wrote. */
       endRuns,
@@ -310,7 +317,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         replaceAttempts(task, rung, `${FAILED_BY}:${rung}`),
 
       /**
-       * Writes how many times the named rung has ended the task unfinished.
+       * Writes how many times the named rung has stopped on the task without an exit.
        *
        * The rung is named in the label, so a count follows its rung: reading
        * ignores what a rung the task left recorded, and pinning a task by hand
@@ -362,7 +369,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * make the settle loop climb a rung for a rejection nobody gave. Closed,
        * the run is not the task's reviewer.
        */
-      release: (task: string, ending: AuthorEnding = "released") =>
+      release: (task: string, ending: Ending = "released") =>
         together(
           `release ${task}`,
           onStore(closeOpenRuns(task, { author: ending, review: "released" })).pipe(
@@ -388,7 +395,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
       /**
        * Marks work complete after foreman has landed its branch, and closes the
-       * task's runs in the same transaction: the reviewer's keeps its verdict,
+       * task's runs in the same transaction: the reviewer's keeps its exit,
        * and the lap's author run becomes `committed` (`answered` for research).
        * Done first, so a task that cannot be completed fails on `done` itself.
        * A wall label left on a done task is inert: nothing dispatches it.
@@ -440,7 +447,7 @@ export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): str
  *
  * The report lives in the task's own log, so the branch is legitimately empty
  * and the reviewer reads evidence instead of a diff. `research` is set when the
- * task is filed and survives every attempt, unlike `satisfied`, which is the
+ * task is filed and survives every attempt, unlike the `already-done` exit, which is the
  * author's claim about one attempt.
  */
 export const isResearch = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
@@ -486,7 +493,7 @@ export const needsYou = (item: { readonly labels: ReadonlyArray<string> }): bool
   item.labels.includes(NEEDS_YOU);
 
 /**
- * How many times the named rung has ended the task unfinished.
+ * How many times the named rung has stopped on the task without an exit.
  *
  * `0` when the rung has never been tried, or when the failure it earned was
  * recorded and its count cleared with it. The label names its rung, so one
@@ -571,7 +578,7 @@ export const ONBOARD = "onboard";
 /** The label with which a person parks a task in their own column. */
 export const NEEDS_YOU = "needs-you";
 
-/** Prefix of the label counting a rung's unfinished attempts: `attempt:<rung>:<n>`. */
+/** Prefix of the label counting a rung's stopped attempts: `attempt:<rung>:<n>`. */
 export const ATTEMPT = "attempt";
 
 /**

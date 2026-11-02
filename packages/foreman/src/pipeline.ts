@@ -2,25 +2,43 @@
  * A project's pipeline: the graph of blocks a task moves through, from the
  * queue to a landing.
  *
- * The graph has forward wires only. Work that goes back returns to the queue
- * with the evidence it earned (the rungs that failed it, its attempts), and
- * routers at the entry send it on by that evidence. A wire to "what runs after
- * a rejection" would be a pointer to what runs next, which goes stale when the
- * graph is edited; evidence does not.
+ * An agent or a check ends its run by naming an exit, and each exit is a wire
+ * to the block that comes next, or to `queue`: a return, which sends the task
+ * back to wait in priority order with the evidence it earned (the rungs that
+ * failed it, its attempts). Routers at the entry send it on by that evidence.
+ * An exit may wire back to an earlier block, so the graph may hold cycles;
+ * validation refuses a cycle that cannot end.
  *
- * Nothing here stores where a task is. `place` replays the graph from a source
- * with the task's facts every time it is asked. A fact names a block by its
- * id, so a fact about a block the operator deleted places nothing, and the
- * task is placed by what remains. The editor keeps a block's id across edits
- * for the same reason.
+ * Nothing here stores where a task is. `place` reads the task's last exit and
+ * walks its wire as the drawing stands now, so an edit to a wire moves the
+ * task. An exit names a block by its id, so an exit at a block the operator
+ * deleted places nothing, and the task starts at its source again. The editor
+ * keeps a block's id across edits for the same reason.
  *
  * herdr-web's page imports this module and `pipeline-belt.ts` in the browser,
  * so neither may import, other than as a type, anything that reaches the task
  * store or the file system.
  */
 import { Graph, Option, Schema as S } from "effect";
+import { PROCESS_ENDINGS } from "tasks/endings";
 import type { TaskStatus } from "./prog.ts";
 import { STEPS, type Step } from "./policy.ts";
+
+/** The `to` of an exit that returns the task to the queue. */
+export const QUEUE = "queue";
+
+/**
+ * A name that ends a run, wired to the block that comes next, or to `queue`.
+ *
+ * `fails` charges a rung when the exit is named: `author` the rung of the
+ * task's last author run, `self` the rung of the block that named it.
+ */
+export const Exit = S.Struct({
+  name: S.String,
+  to: S.String,
+  fails: S.optional(S.Literals(["author", "self"])),
+});
+export type Exit = typeof Exit.Type;
 
 /** Takes ready tasks in queue order that match its filter. */
 export const SourceNode = S.Struct({
@@ -52,7 +70,10 @@ export const GateNode = S.Struct({
  * `model` is `ladder` (an author on the cheapest rung above the task's
  * failures), `above` (a reviewer on the next rung above the author), or a rung
  * name, which pins the block to that rung. `slots` caps how many of this
- * block's tasks run at once, inside the fleet's own limit.
+ * block's tasks run at once, inside the fleet's own limit. `exits` are the
+ * names the agent may end its run with. `stopped` is what follows a run that
+ * named none: `retry` (the default) keeps the task at the block, and the
+ * model rule picks the next rung; `park` parks it.
  */
 export const AgentNode = S.Struct({
   kind: S.Literal("agent"),
@@ -60,18 +81,20 @@ export const AgentNode = S.Struct({
   role: S.Literals(["author", "review"]),
   model: S.String,
   slots: S.optional(S.Int.check(S.isGreaterThan(0))),
-  next: S.String,
+  exits: S.Array(Exit),
+  stopped: S.optional(S.Literals(["retry", "park"])),
 });
 
 /**
- * Runs `command` on the task's branch tip. It passes that one commit: a later
- * commit places the task at the check again.
+ * Runs `command` on the task's branch tip, and names `passed` or `failed` by
+ * its exit status. It passes that one commit: a later commit places the task
+ * at the check again.
  */
 export const CheckNode = S.Struct({
   kind: S.Literal("check"),
   id: S.String,
   command: S.String,
-  next: S.String,
+  exits: S.Array(Exit),
 });
 
 /**
@@ -146,11 +169,18 @@ export type Workspace = "none" | "branch" | "worktree";
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
 
+/** An exit a task's run named: the block that named it, the name, and the commit it was named on. */
+export interface NamedExit {
+  readonly node: string;
+  readonly name: string;
+  readonly commit: string | undefined;
+}
+
 /**
  * What placement and filters know about a task.
  *
- * Filters read these, never label strings, so a change in how a fact is
- * recorded changes `factsOf` alone.
+ * Filters read these, never label strings or runs, so a change in how a fact
+ * is recorded changes `factsOf` alone.
  */
 export interface Facts {
   readonly status: TaskStatus;
@@ -162,14 +192,16 @@ export interface Facts {
   readonly labels: ReadonlySet<string>;
   /** The rungs that failed the task. */
   readonly failedBy: ReadonlySet<string>;
-  /** Unfinished attempts recorded against any rung. */
+  /** Stopped attempts recorded against any rung. */
   readonly attempts: number;
-  /** The work blocks the task has passed since it last returned to the queue. */
-  readonly passed: ReadonlySet<string>;
-  /** A reviewer is at work on it. */
-  readonly underReview: boolean;
-  /** Its reviewer approved it, and settle has not yet recorded the review passed. */
-  readonly approved: boolean;
+  /** The task's tip: its branch tip, or the checkout's HEAD on a route with no branch. */
+  readonly tip: string | undefined;
+  /** The block of the task's open agent run, and whether its agent has named an exit. */
+  readonly running: { readonly node: string; readonly named: boolean } | undefined;
+  /** The exits the task named since it last left a source, oldest first. */
+  readonly named: ReadonlyArray<NamedExit>;
+  /** The name of the last exit the task named, a return included. */
+  readonly exit: string | undefined;
 }
 
 /** How far a task's run at the block it stands at has gone. */
@@ -178,7 +210,7 @@ export type RunState =
   | "waiting"
   /** The block's run is under way. */
   | "running"
-  /** The run's advance signal is there and settle has not yet recorded it. */
+  /** The run's agent named its exit, and settle has not yet recorded it. */
   | "ended";
 
 /** Where a task stands in a pipeline. */
@@ -199,64 +231,76 @@ export type Placement =
 /**
  * Where a task with these facts stands in `pipeline`.
  *
- * The walk starts at the first source whose filter matches and goes forward:
- * routers by the facts, past every work block the task has passed, and stops
- * at the first work block it has not. A task with work in flight and nothing
- * passed is placed by the same rule, because its status is the signal of the
- * block it is at: an `in_progress` task stands at the author block running,
- * and a `reviewing` one stands there ended until settle records the pass.
+ * A task with an open agent run is at that run's block. Otherwise it is where
+ * its last exit leads: the walk takes that exit's wire on the block as the
+ * drawing stands now, and goes on through routers, gates and workspace blocks
+ * to the next work block. A task with no exit, an open one (back in the
+ * queue), or one whose last exit names a block or exit no longer drawn, walks
+ * from the first source whose filter matches.
+ *
+ * An exit holds for the commit it was named on. A check passes one commit, and
+ * a land or a done takes the commit the exit before it was named on, so an
+ * exit at a check, or one whose walk reaches a land or a done, is void once
+ * the tip has moved: the task is placed by the exit before it, which stands
+ * it at the block that named the void one.
+ *
+ * A task with no run at all (work launched by hand) is placed by its status at
+ * an author: running while `in_progress`, ended once `reviewing`.
  */
 export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   if (facts.status !== "open" && facts.status !== "in_progress" && facts.status !== "reviewing") {
     return { _tag: "Outside" };
   }
   const nodes = indexOf(pipeline);
-  const source = pipeline.nodes.find(
-    (node) => node.kind === "source" && matches(facts, node.filter),
-  );
+  const source = sourceOf(pipeline, facts);
   if (source === undefined) return { _tag: "Outside" };
+  const bound = pipeline.nodes.length;
 
-  let gates: Array<{ id: string; step: Step }> = [];
-  let node: PipelineNode | undefined = source;
-  // Validation refuses a cycle, but placement may be asked about a pipeline
-  // that was never validated, so the walk is bounded by the graph's size.
-  for (let steps = 0; node !== undefined && steps <= pipeline.nodes.length; steps++) {
-    switch (node.kind) {
-      case "source":
-        node = nodes.get(node.next);
-        continue;
-      case "gate":
-        gates.push({ id: node.id, step: node.step });
-        node = nodes.get(node.next);
-        continue;
-      case "router":
-        node = nodes.get(routeOf(node, facts));
-        continue;
-      case "branch":
-      case "worktree":
-        node = nodes.get(node.next);
-        continue;
-      case "park":
-        return { _tag: "Parked", node: node.id };
-      case "agent":
-      case "check":
-      case "land":
-      case "done":
-        if (facts.passed.has(node.id)) {
-          gates = [];
-          node = "next" in node ? nodes.get(node.next) : undefined;
-          continue;
-        }
-        return {
-          _tag: "At",
-          node,
-          state: stateAt(node, facts),
-          gates,
-          ahead: aheadOf(nodes, node, facts, pipeline.nodes.length),
-        };
-    }
+  const named = facts.status === "open" ? [] : facts.named;
+  let reached = walk(nodes, source.next, facts, bound);
+  for (let last = named.length - 1; last >= 0; last--) {
+    const exit = named[last]!;
+    const wire = exitOf(nodes, exit);
+    if (wire === undefined) break;
+    const target = walk(nodes, wire.to, facts, bound);
+    // A land or a done takes the commit the exit was named on, so an exit
+    // that names none, or names one the tip has moved past, binds nothing.
+    const moved = exit.commit === undefined || exit.commit !== facts.tip;
+    const binds =
+      nodes.get(exit.node)?.kind === "check" ||
+      target.node?.kind === "land" ||
+      target.node?.kind === "done";
+    if (moved && binds) continue;
+    reached = target;
+    break;
   }
-  return { _tag: "Outside" };
+
+  const open = facts.status === "open" ? undefined : facts.running;
+  const runningAt = open === undefined ? undefined : nodes.get(open.node);
+  if (open !== undefined && runningAt?.kind === "agent") {
+    return {
+      _tag: "At",
+      node: runningAt,
+      // A reviewing status is itself the evidence an author handed off, named
+      // exit or not: a recovered or adopted branch is submitted with none.
+      state:
+        open.named || (facts.status === "reviewing" && runningAt.role === "author")
+          ? "ended"
+          : "running",
+      gates: reached.node?.id === runningAt.id ? reached.gates : [],
+      ahead: aheadOf(nodes, runningAt, facts, bound),
+    };
+  }
+  const { node, gates } = reached;
+  if (node === undefined) return { _tag: "Outside" };
+  if (node.kind === "park") return { _tag: "Parked", node: node.id };
+  return {
+    _tag: "At",
+    node,
+    state: stateByStatus(node, facts),
+    gates,
+    ahead: aheadOf(nodes, node, facts, bound),
+  };
 };
 
 /**
@@ -264,14 +308,12 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
  *
  * Validation keeps every workspace block before the route's first agent, so
  * the answer holds for the whole route. The walk reads routers by the facts
- * and ignores what the task has passed, so it needs no branch tip: the tip is
- * read from the workspace this answers.
+ * and ignores the task's exits, so it needs no tip: the tip is read from the
+ * workspace this answers.
  */
 export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | undefined => {
   const nodes = indexOf(pipeline);
-  let node: PipelineNode | undefined = pipeline.nodes.find(
-    (candidate) => candidate.kind === "source" && matches(facts, candidate.filter),
-  );
+  let node: PipelineNode | undefined = sourceOf(pipeline, facts);
   if (node === undefined) return undefined;
   let workspace: Workspace = "none";
   for (let steps = 0; node !== undefined && steps <= pipeline.nodes.length; steps++) {
@@ -296,25 +338,29 @@ export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | un
 };
 
 /**
- * The first agent block of `role` on the task's route that the task has not
- * passed, or nothing when its route has none.
+ * The first agent block of `role` on the task's route from where it stands,
+ * or nothing when its route has none.
  *
  * This is where an agent the operator starts by hand runs. The operator can
  * start it before the task reaches that block, so each work block before it
- * on the route counts as passed.
+ * on the route counts as passed by its advance: its first exit that does not
+ * return the task to the queue.
  */
 export const nextAgent = (
   pipeline: Pipeline,
   facts: Facts,
   role: AgentNode["role"],
 ): AgentNode | undefined => {
-  let passed = facts.passed;
+  const placement = place(pipeline, { ...facts, running: undefined });
+  if (placement._tag !== "At") return undefined;
+  const nodes = indexOf(pipeline);
+  let node: PipelineNode | undefined = placement.node;
   for (let steps = 0; steps <= pipeline.nodes.length; steps++) {
-    const placement = place(pipeline, { ...facts, passed });
-    if (placement._tag !== "At") return undefined;
-    const { node } = placement;
-    if (node.kind === "agent" && node.role === role) return node;
-    passed = new Set([...passed, node.id]);
+    if (node?.kind === "agent" && node.role === role) return node;
+    const advance: Exit | undefined =
+      node?.kind === "agent" || node?.kind === "check" ? advanceOf(node) : undefined;
+    if (advance === undefined) return undefined;
+    node = walk(nodes, advance.to, facts, pipeline.nodes.length).node;
   }
   return undefined;
 };
@@ -325,9 +371,6 @@ export const nextAgent = (
  * A pipeline that fails is not run at all: its project takes no step. It never
  * falls back to the standard pipeline, because running a flow the operator did
  * not draw is worse than stopping.
- *
- * Every block but land and park has a forward wire, so in a graph with no
- * cycle every route ends at a land or a park without a check of its own.
  */
 export const problemsOf = (
   pipeline: Pipeline,
@@ -337,26 +380,31 @@ export const problemsOf = (
   if (shape.length > 0) return shape;
 
   const wired = graphOf(pipeline);
-  const cycle = Graph.findCycle(wired.graph);
-  if (Option.isSome(cycle)) {
-    const loop = cycle.value.path.map((index) => wired.idOf(index)).join(" → ");
-    return [`the wires loop through ${loop}; work returns to the queue instead`];
-  }
-
   const sources = pipeline.nodes.filter((node) => node.kind === "source");
   const work = pipeline.nodes.filter(isWork);
-  const problems: Array<string> = [];
+  const problems: Array<string> = [...cycleProblems(pipeline)];
 
+  const ends = pipeline.nodes.filter(
+    (node) => node.kind === "land" || node.kind === "done" || node.kind === "park",
+  );
   for (const node of pipeline.nodes) {
     if (!sources.some((source) => wired.reaches(source.id, node.id))) {
       problems.push(`no source reaches ${node.id}`);
     }
+    if (!ends.some((end) => end.id === node.id || wired.reaches(node.id, end.id))) {
+      problems.push(`no route from ${node.id} reaches a land, a done or a park`);
+    }
   }
 
   const authors = work.filter(isRole("author"));
-  const ends = work.filter((node) => node.kind === "land" || node.kind === "done");
+  const landings = work.filter((node) => node.kind === "land" || node.kind === "done");
   // Nothing skips review: no land or done after a source or an author but a reviewer.
-  for (const [from, end] of skipping(pipeline, isRole("review"), [...sources, ...authors], ends)) {
+  for (const [from, end] of skipping(
+    pipeline,
+    isRole("review"),
+    [...sources, ...authors],
+    landings,
+  )) {
     problems.push(`a route from ${from.id} reaches ${end.id} with no review after it`);
   }
 
@@ -373,7 +421,7 @@ export const problemsOf = (
   }
   // Every agent on a route works in one workspace, so a branch or a worktree
   // after an agent or a check would move the work away from the agent that
-  // wrote it.
+  // wrote it. A cycle therefore stays inside one workspace.
   for (const from of work.filter((node) => node.kind === "agent" || node.kind === "check")) {
     for (const block of pipeline.nodes.filter(
       (node) => node.kind === "branch" || node.kind === "worktree",
@@ -409,7 +457,8 @@ export const problemsOf = (
 
   // Every step that spends is one the policy can stop: with the gates taken
   // out, and the walk halted at each work block, the first work block after a
-  // source or another work block must be out of reach.
+  // source or another work block must be out of reach. Exits are wires, so
+  // this holds on every lap of a cycle too.
   const ungated = graphOf(
     pipeline,
     (node) => node.kind !== "gate",
@@ -429,6 +478,62 @@ export const problemsOf = (
 
   return [...new Set(problems)];
 };
+
+/**
+ * The cycles that can loop forever. A cycle can end when one of its exits
+ * charges a rung (`fails`), since a task that every rung has failed parks, or
+ * when a router on it has a route out of it whose filter is a count that grows
+ * on each lap. A cycle with no work block on it would spin without a run.
+ */
+const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
+  const wired = graphOf(pipeline);
+  const problems: Array<string> = [];
+  for (const component of Graph.stronglyConnectedComponents(wired.graph)) {
+    const blocks = component.flatMap((at) => Option.toArray(Graph.getNode(wired.graph, at)));
+    const ids = new Set(blocks.map((node) => node.id));
+    const looped =
+      blocks.length > 1 || blocks.some((node) => wiresOf(node).some((wire) => wire.to === node.id));
+    if (!looped) continue;
+    const path = blocks.map((node) => node.id).join(", ");
+    if (!blocks.some(isWork)) {
+      problems.push(`the wires loop through ${path} with no work block on the loop`);
+      continue;
+    }
+    const named = new Set(
+      blocks.flatMap((node) =>
+        node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
+      ),
+    );
+    const charges = blocks.some((node) =>
+      wiresOf(node).some((wire) => wire.fails && ids.has(wire.to)),
+    );
+    const counts = blocks.some(
+      (node) =>
+        node.kind === "router" &&
+        node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when, named)),
+    );
+    if (!charges && !counts) {
+      problems.push(
+        `the wires loop through ${path}, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows`,
+      );
+    }
+  }
+  return problems;
+};
+
+/**
+ * Whether a filter holds a count that grows on each lap of a cycle, such as
+ * `exits:returned>=3`. An `exits:` count grows only when a block on the cycle,
+ * one of `named`, declares that exit.
+ */
+const growsEachLap = (filter: string, named: ReadonlySet<string>): boolean =>
+  filter
+    .trim()
+    .split(/\s+/)
+    .some((term) => {
+      const count = /^(?:exits:([a-z-]+)|attempts)>=\d+$/.exec(term);
+      return count !== null && (count[1] === undefined || named.has(count[1]));
+    });
 
 /**
  * The routes from an origin to a target that pass no block `passes` names:
@@ -455,11 +560,37 @@ const isRole =
     node.kind === "agent" && node.role === role;
 
 /**
+ * The exits each kind of block has when the drawing names none: an author's
+ * `done` and `already-done` advance, a reviewer's `approved` advances and
+ * `returned` sends the task back to the queue charged to its author, and a
+ * check's `passed` and `failed` do the same.
+ */
+export const standardExits = (
+  node: { readonly kind: "agent"; readonly role: AgentNode["role"] } | { readonly kind: "check" },
+  next: string,
+): ReadonlyArray<Exit> =>
+  node.kind === "check"
+    ? [
+        { name: "passed", to: next },
+        { name: "failed", to: QUEUE, fails: "author" },
+      ]
+    : node.role === "author"
+      ? [
+          { name: "done", to: next },
+          { name: "already-done", to: next },
+        ]
+      : [
+          { name: "approved", to: next },
+          { name: "returned", to: QUEUE, fails: "author" },
+        ];
+
+/**
  * The pipeline of a project that has drawn none: the task's branch in a
  * worktree of its own, then author, review, and a merge.
  *
- * The router sends a task with any recorded failure or attempt to the `climb`
- * gate, so a retry is governed by its own step, apart from a first try.
+ * A return goes to the queue, and the router sends a task with any recorded
+ * failure or attempt to the `climb` gate, so a retry is governed by its own
+ * step, apart from a first try.
  */
 export const STANDARD_PIPELINE: Pipeline = {
   nodes: [
@@ -477,15 +608,27 @@ export const STANDARD_PIPELINE: Pipeline = {
     },
     { kind: "gate", id: "start", step: "author", next: "author" },
     { kind: "gate", id: "climb", step: "climb", next: "author" },
-    { kind: "agent", id: "author", role: "author", model: "ladder", next: "review-gate" },
+    {
+      kind: "agent",
+      id: "author",
+      role: "author",
+      model: "ladder",
+      exits: standardExits({ kind: "agent", role: "author" }, "review-gate"),
+    },
     { kind: "gate", id: "review-gate", step: "review", next: "review" },
-    { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
+    {
+      kind: "agent",
+      id: "review",
+      role: "review",
+      model: "above",
+      exits: standardExits({ kind: "agent", role: "review" }, "land-gate"),
+    },
     { kind: "gate", id: "land-gate", step: "land", next: "land" },
     { kind: "land", id: "land", how: "merge" },
   ],
 };
 
-/** The pipeline as a Mermaid flowchart, one arrow per wire. */
+/** The pipeline as a Mermaid flowchart, one arrow per wire. A return to the queue draws none. */
 export const toMermaid = (pipeline: Pipeline): string =>
   Graph.toMermaid(graphOf(pipeline).graph, {
     direction: "LR",
@@ -498,9 +641,11 @@ export const toMermaid = (pipeline: Pipeline): string =>
  * Whether `facts` match every term of `filter`. An empty filter matches all.
  *
  * Terms: `label:<name>`, `epic:<id>`, `failed` (any rung failed it),
- * `failed:<rung>`, and `size`, `priority` or `attempts` compared with `<=`,
- * `>=` or `=` to a whole number. A leading `-` negates a term. A filter that
- * does not parse matches nothing; validation is where it is reported.
+ * `failed:<rung>`, `exit:<name>` (the task's last exit), and `size`,
+ * `priority`, `attempts` or `exits:<name>` (the times the task named that exit
+ * since it last left a source) compared with `<=`, `>=` or `=` to a whole
+ * number. A leading `-` negates a term. A filter that does not parse matches
+ * nothing; validation is where it is reported.
  */
 export const matches = (facts: Facts, filter: string): boolean => {
   const parsed = parseFilter(filter);
@@ -531,31 +676,40 @@ type Term = { readonly negated: boolean; readonly test: (facts: Facts) => boolea
 
 const termTest = (term: string): Term["test"] | undefined => {
   if (term === "failed") return (facts) => facts.failedBy.size > 0;
+  const compared = /^(size|priority|attempts|exits:[a-z-]+)(<=|>=|=)(\d+)$/.exec(term);
+  if (compared !== null) {
+    const [, field, op, raw] = compared;
+    const bound = Number(raw);
+    const read = (facts: Facts): number =>
+      field === "size"
+        ? facts.size
+        : field === "priority"
+          ? facts.priority
+          : field === "attempts"
+            ? facts.attempts
+            : facts.named.filter((exit) => `exits:${exit.name}` === field).length;
+    return (facts) => {
+      const n = read(facts);
+      return op === "<=" ? n <= bound : op === ">=" ? n >= bound : n === bound;
+    };
+  }
   const [kind, ...rest] = term.split(":");
   const value = rest.join(":");
-  if (value !== "") {
-    switch (kind) {
-      case "label":
-        return (facts) => facts.labels.has(value);
-      case "epic":
-        return (facts) => facts.epic === value;
-      case "failed":
-        return (facts) => facts.failedBy.has(value);
-    }
+  if (value === "") return undefined;
+  switch (kind) {
+    case "label":
+      return (facts) => facts.labels.has(value);
+    case "epic":
+      return (facts) => facts.epic === value;
+    case "failed":
+      return (facts) => facts.failedBy.has(value);
+    case "exit":
+      return (facts) => facts.exit === value;
   }
-  const compared = /^(size|priority|attempts)(<=|>=|=)(\d+)$/.exec(term);
-  if (compared === null) return undefined;
-  const [, field, op, raw] = compared;
-  const bound = Number(raw);
-  const read = (facts: Facts) =>
-    field === "size" ? facts.size : field === "priority" ? facts.priority : facts.attempts;
-  return (facts) => {
-    const n = read(facts);
-    return op === "<=" ? n <= bound : op === ">=" ? n >= bound : n === bound;
-  };
+  return undefined;
 };
 
-/** The checks that need no walk: names, wires, filters and models. */
+/** The checks that need no walk: names, wires, exits, filters and models. */
 const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<string>): Array<string> => {
   const problems: Array<string> = [];
   const ids = new Set<string>();
@@ -574,9 +728,36 @@ const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<string>): Array<
       const parsed = parseFilter(filter);
       if (parsed._tag === "Invalid") problems.push(`${node.id}: ${parsed.reason}`);
     }
+    if (node.kind === "agent" || node.kind === "check") problems.push(...exitProblems(node));
     if (node.kind === "agent") problems.push(...modelProblems(node, rungs));
     if (node.kind === "check" && node.command.trim() === "") {
       problems.push(`${node.id}: a check runs a command, and it names none`);
+    }
+  }
+  return problems;
+};
+
+const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
+  const problems: Array<string> = [];
+  const names = node.exits.map((exit) => exit.name);
+  if (node.kind === "agent" && names.length === 0) {
+    problems.push(`${node.id}: an agent names an exit to end its run, and it declares none`);
+  }
+  if (node.kind === "check" && [...names].sort().join(" ") !== "failed passed") {
+    problems.push(`${node.id}: a check's exits are passed and failed`);
+  }
+  for (const [at, exit] of node.exits.entries()) {
+    if (names.indexOf(exit.name) !== at) {
+      problems.push(`${node.id}: two exits are named ${exit.name}`);
+    }
+    if (!/^[a-z-]+$/.test(exit.name)) {
+      problems.push(`${node.id}: the exit ${exit.name} is not lower-case words and hyphens`);
+    }
+    if ((PROCESS_ENDINGS as ReadonlyArray<string>).includes(exit.name)) {
+      problems.push(`${node.id}: ${exit.name} is how a run stops with no exit, not an exit`);
+    }
+    if (node.kind === "check" && exit.fails === "self") {
+      problems.push(`${node.id}: a check runs on no rung, so ${exit.name} has none to fail`);
     }
   }
   return problems;
@@ -596,7 +777,7 @@ const modelProblems = (node: AgentNode, rungs: ReadonlyArray<string>): ReadonlyA
 
 /**
  * The pipeline as a directed graph of the blocks `keep` accepts, with the
- * wires out of each block `follow` accepts.
+ * wires out of each block `follow` accepts. A return to the queue is no wire.
  */
 const graphOf = (
   pipeline: Pipeline,
@@ -619,8 +800,6 @@ const graphOf = (
   });
   return {
     graph,
-    idOf: (at: Graph.NodeIndex) =>
-      Option.match(Graph.getNode(graph, at), { onNone: () => `#${at}`, onSome: (node) => node.id }),
     reaches: (from: string, to: string): boolean => {
       const a = index.get(from);
       const b = index.get(to);
@@ -629,15 +808,23 @@ const graphOf = (
   };
 };
 
-const wiresOf = (node: PipelineNode): ReadonlyArray<{ to: string; label: string }> => {
+/** The wires out of a block, returns to the queue left out. */
+const wiresOf = (
+  node: PipelineNode,
+): ReadonlyArray<{ readonly to: string; readonly label: string; readonly fails?: boolean }> => {
   switch (node.kind) {
     case "source":
     case "gate":
-    case "agent":
-    case "check":
     case "branch":
     case "worktree":
       return [{ to: node.next, label: "" }];
+    case "agent":
+    case "check":
+      return node.exits.flatMap((exit) =>
+        exit.to === QUEUE
+          ? []
+          : [{ to: exit.to, label: exit.name, fails: exit.fails !== undefined }],
+      );
     case "router":
       return [
         ...node.routes.map((route) => ({ to: route.to, label: route.when })),
@@ -663,26 +850,85 @@ const isWork = (node: PipelineNode): node is WorkNode =>
 const indexOf = (pipeline: Pipeline): ReadonlyMap<string, PipelineNode> =>
   new Map(pipeline.nodes.map((node) => [node.id, node]));
 
+const sourceOf = (pipeline: Pipeline, facts: Facts) =>
+  pipeline.nodes.find(
+    (node): node is typeof SourceNode.Type => node.kind === "source" && matches(facts, node.filter),
+  );
+
 const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
   router.routes.find((route) => matches(facts, route.when))?.to ?? router.else;
 
 /**
- * A check, a land and a done run inside one tick and leave no open run, so a
- * task at one is always waiting there.
+ * The exit a named exit took, as the drawing stands now: nothing when its
+ * block or its exit is gone, or when it returns the task to the queue.
  */
-const stateAt = (node: WorkNode, facts: Facts): RunState => {
-  if (node.kind !== "agent") return "waiting";
-  if (node.role === "author") {
-    return facts.status === "in_progress"
-      ? "running"
-      : facts.status === "reviewing"
-        ? "ended"
-        : "waiting";
-  }
-  return facts.approved ? "ended" : facts.underReview ? "running" : "waiting";
+const exitOf = (nodes: ReadonlyMap<string, PipelineNode>, named: NamedExit): Exit | undefined => {
+  const node = nodes.get(named.node);
+  if (node?.kind !== "agent" && node?.kind !== "check") return undefined;
+  const exit = node.exits.find((candidate) => candidate.name === named.name);
+  return exit === undefined || exit.to === QUEUE ? undefined : exit;
 };
 
-/** Work blocks after `from` on the route the facts take now. */
+/** The exit that moves a task on from a work block: its first that does not return it. */
+const advanceOf = (node: WorkNode): Exit | undefined =>
+  node.kind === "agent" || node.kind === "check"
+    ? node.exits.find((exit) => exit.to !== QUEUE)
+    : undefined;
+
+/**
+ * From block `from`, through routers, gates and workspace blocks, to the next
+ * work block or park, with the gates on the way. The walk is bounded by the
+ * graph's size, because placement may be asked about a pipeline that was
+ * never validated.
+ */
+const walk = (
+  nodes: ReadonlyMap<string, PipelineNode>,
+  from: string,
+  facts: Facts,
+  bound: number,
+): {
+  readonly node: WorkNode | typeof ParkNode.Type | undefined;
+  readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
+} => {
+  const gates: Array<{ id: string; step: Step }> = [];
+  let node = nodes.get(from);
+  for (let steps = 0; node !== undefined && steps <= bound; steps++) {
+    switch (node.kind) {
+      case "gate":
+        gates.push({ id: node.id, step: node.step });
+        node = nodes.get(node.next);
+        continue;
+      case "router":
+        node = nodes.get(routeOf(node, facts));
+        continue;
+      case "source":
+      case "branch":
+      case "worktree":
+        node = nodes.get(node.next);
+        continue;
+      default:
+        return { node, gates };
+    }
+  }
+  return { node: undefined, gates };
+};
+
+/**
+ * The state at a block the walk reached, with no open agent run there. A
+ * check, a land and a done run inside one tick and leave no open run, so a
+ * task at one is always waiting there. An author with no run at all is work
+ * launched by hand, and its status is the only signal of it.
+ */
+const stateByStatus = (node: WorkNode, facts: Facts): RunState =>
+  node.kind === "agent" && node.role === "author" && facts.running === undefined
+    ? facts.status === "in_progress"
+      ? "running"
+      : facts.status === "reviewing" && facts.exit === undefined
+        ? "ended"
+        : "waiting"
+    : "waiting";
+
+/** Work blocks after `from` on the route the facts take now, each passed by its advance. */
 const aheadOf = (
   nodes: ReadonlyMap<string, PipelineNode>,
   from: WorkNode,
@@ -690,28 +936,15 @@ const aheadOf = (
   bound: number,
 ): number => {
   let count = 0;
-  let node = "next" in from ? nodes.get(from.next) : undefined;
-  for (let steps = 0; node !== undefined && steps <= bound; steps++) {
-    switch (node.kind) {
-      case "source":
-      case "gate":
-      case "branch":
-      case "worktree":
-        node = nodes.get(node.next);
-        continue;
-      case "router":
-        node = nodes.get(routeOf(node, facts));
-        continue;
-      case "park":
-        return count;
-      case "land":
-      case "done":
-        return count + 1;
-      case "agent":
-      case "check":
-        count++;
-        node = nodes.get(node.next);
-    }
+  let at: WorkNode = from;
+  for (let steps = 0; steps <= bound; steps++) {
+    const advance = advanceOf(at);
+    if (advance === undefined) return count;
+    const { node } = walk(nodes, advance.to, facts, bound);
+    if (node === undefined || node.kind === "park") return count;
+    count++;
+    if (node.kind === "land" || node.kind === "done") return count;
+    at = node;
   }
   return count;
 };

@@ -194,7 +194,7 @@ const correct = Command.make("correct", { id, text }, (args) =>
     const prog = yield* Prog;
     if (roundsOf(yield* prog.show(args.id)) >= MAX_ROUNDS) {
       return yield* new Refused({
-        detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with tasks open instead`,
+        detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with foreman exit ${args.id} returned instead`,
       });
     }
     yield* (yield* Fleet).say(yield* workerOf(args.id), "author", args.text);
@@ -204,6 +204,31 @@ const correct = Command.make("correct", { id, text }, (args) =>
 ).pipe(
   Command.withDescription(
     "Send the author one round of mechanical findings, and count it; two rounds at most",
+  ),
+);
+
+const exitName = Argument.String("exit").pipe(
+  Argument.withDescription("The exit to name, one the block of the task's open run declares"),
+);
+
+const exit = Command.make("exit", { id, name: exitName }, (args) =>
+  Effect.gen(function* () {
+    const named = yield* (yield* Dispatcher).exit(args.id, args.name);
+    if (named._tag === "NoRun") {
+      return yield* new Refused({ detail: `${args.id} has no open agent run to name an exit on` });
+    }
+    if (named._tag === "Undeclared") {
+      return yield* new Refused({
+        detail: `${named.block} declares no exit ${args.name}; its exits are ${named.declared.join(", ")}`,
+      });
+    }
+    yield* Console.log(
+      `${args.id}: ${args.name} at ${named.block}${named.commit ? ` on ${named.commit}` : ""}`,
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "End your run by naming one of the exits your block declares; a second exit in the same run replaces the first",
   ),
 );
 
@@ -290,8 +315,6 @@ const wait = Command.make(
         ),
       );
       yield* untilNotWorking(working, fleet.awaitTurn(taskId, Option.getOrUndefined(args.role)));
-      // A reviewer waits on its author only to end a correction round.
-      if (Option.contains(args.role, "author")) yield* (yield* Dispatcher).corrected(taskId);
       const task = yield* prog.show(taskId);
       yield* Console.log(`${taskId}: ${task.status}`);
     }),
@@ -310,6 +333,7 @@ export const subcommands = <E>(services: Services<E>) => [
   Command.provide(status, services),
   Command.provide(say, services),
   Command.provide(correct, services),
+  Command.provide(exit, services),
   Command.provide(dispatch, services),
   Command.provide(prompt, services),
   Command.provide(wait, services),
