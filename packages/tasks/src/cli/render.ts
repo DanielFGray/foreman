@@ -13,6 +13,28 @@ export const line = (item: Item): string =>
 export const lines = (items: ReadonlyArray<Item>): string =>
   items.length === 0 ? "No items" : items.map(line).join("\n");
 
+/** The items as a JSON array, in the field names the Go `prog` prints with `--json`. */
+export const json = (items: ReadonlyArray<Item>): string =>
+  JSON.stringify(
+    items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      type: item.type,
+      status: item.status,
+      priority: item.priority,
+      project: item.project,
+      parent: item.parent ?? null,
+      description: item.description,
+      definition_of_done: item.definitionOfDone ?? null,
+      labels: item.labels,
+      created_at: item.createdAt.toISOString(),
+      updated_at: item.updatedAt.toISOString(),
+      last_activity_at: item.lastActivityAt.toISOString(),
+    })),
+    null,
+    2,
+  );
+
 /** What an agent needs to start or judge a task. */
 export const detail = (
   item: Item,
@@ -39,7 +61,7 @@ export const detail = (
         : [item.definitionOfDone],
     ),
     ...section(
-      "Depends on",
+      "Dependencies",
       dependencies.map((id) => `  - ${id}`),
     ),
     ...section(

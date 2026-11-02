@@ -193,7 +193,7 @@ describe("tasks dependencies", () => {
     const second = await created("Second", "-p", "g");
     await run(["blocks", first, second]);
     expect(await run(["ready", "-p", "g"])).not.toContain(second);
-    expect(await run(["show", second])).toContain(`Depends on:\n  - ${first}`);
+    expect(await run(["show", second])).toContain(`Dependencies:\n  - ${first}`);
     expect(await run(["show", first])).toContain(`Blocks:\n  - ${second}`);
     const graph = await run(["graph", "-p", "g"]);
     expect(graph).toContain("flowchart");
@@ -202,7 +202,7 @@ describe("tasks dependencies", () => {
     await run(["done", first]);
     expect(await run(["ready", "-p", "g"])).toContain(second);
     await run(["unblocks", first, second]);
-    expect(await run(["show", second])).not.toContain("Depends on");
+    expect(await run(["show", second])).not.toContain("Dependencies");
   });
 
   test("an edge that makes a cycle is refused in one line", async () => {
@@ -230,5 +230,62 @@ describe("a store that does not exist yet", () => {
   test("add makes it and the task shows", async () => {
     const id = await created("First task", "-p", "fresh");
     expect(await run(["ready", "-p", "fresh"])).toContain(id);
+  });
+});
+
+describe("tasks as a drop-in for prog", () => {
+  test("add prints the bare id, so $(tasks add ...) holds it", async () => {
+    const printed = await run(["add", "Scripted", "-p", "j"]);
+    expect(printed).toMatch(/^ts-[0-9a-f]{6}$/);
+    expect(await run(["add", "Group", "-p", "j", "-e"])).toMatch(/^ep-[0-9a-f]{6}$/);
+  });
+
+  test("-p works before the subcommand as well as after it", async () => {
+    const id = await created("Scoped", "-p", "k");
+    expect(await run(["-p", "k", "list"])).toContain(id);
+    expect(await run(["-p", "k", "ready"])).toContain(id);
+    expect(await run(["list", "-p", "other"])).toBe("No items");
+    const viaRoot = await run(["-p", "k", "add", "Later"]);
+    expect(await run(["show", viaRoot])).toContain("Project:     k");
+    expect(await refusal(["add", "No project"])).toBe("add: project is required (-p)");
+  });
+
+  test("add reads --desc and --dod from stdin, and --blocks makes the new task a prerequisite", async () => {
+    const waiting = await created("Waiting", "-p", "l");
+    const id = await created("Needed first", "-p", "l", "--desc", "-", "--blocks", waiting);
+    expect(await run(["ready", "-p", "l"])).not.toContain(waiting);
+    expect(await run(["show", waiting])).toContain(`Dependencies:\n  - ${id}`);
+    expect(await refusal(["add", "x", "-p", "l", "--blocks", "ts-000000"])).toContain(
+      "item not found",
+    );
+    const piped = await run(["add", "Piped", "-p", "l", "-d", "-"], "from stdin\n");
+    expect(await run(["show", piped])).toContain("from stdin");
+  });
+
+  test("list and ready print JSON with prog's field names", async () => {
+    const epic = await created("Parent", "-p", "m", "-e");
+    const child = await created("Child", "-p", "m", "--parent", epic, "-l", "bug");
+    const listed = JSON.parse(await run(["list", "-p", "m", "--parent", epic, "--json"]));
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: child,
+      type: "task",
+      status: "open",
+      parent: epic,
+      labels: ["bug"],
+    });
+    expect(listed[0]).toHaveProperty("last_activity_at");
+    expect(
+      JSON.parse(await run(["ready", "-p", "m", "--json"])).map((x: { id: string }) => x.id),
+    ).toContain(child);
+    expect(JSON.parse(await run(["list", "-p", "m", "--type", "epic", "--json"]))).toHaveLength(1);
+  });
+
+  test("status lists open questions and counts what is ready", async () => {
+    const question = await created("Which way?", "-p", "n", "-l", "question");
+    const shown = await run(["status", "-p", "n"]);
+    expect(shown).toContain("Questions (open decisions):");
+    expect(shown).toContain(question);
+    expect(shown).not.toContain("Ready");
   });
 });

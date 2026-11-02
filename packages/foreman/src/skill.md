@@ -5,16 +5,16 @@ description: Drive foreman's task lifecycle by hand — dispatch a task, wait fo
 
 # Foreman by hand
 
-Foreman moves prog tasks through agents in herdr workspaces. Each task gets
+Foreman moves tasks through agents in herdr workspaces. Each task gets
 its own git worktree and branch, `foreman/<task-id>`. One task goes through
 these steps:
 
-1. **Queue.** The task is ready in prog.
-2. **Author.** An agent works in the task's worktree, commits, and runs `prog review`.
+1. **Queue.** The task is ready in the task store.
+2. **Author.** An agent works in the task's worktree, commits, and runs `tasks review`.
 3. **Review.** An agent one rung up reads the diff and gives its verdict with `tasks verdict`: approved, or sent back.
-4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and runs `prog done`.
+4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and runs `tasks done`.
 
-Every command below reads the world (prog, herdr, git) once, does one thing,
+Every command below reads the world (the task store, herdr, git) once, does one thing,
 and exits. Foreman keeps no state between runs. So you can run these commands
 while foreman's dispatcher runs inside herdr-web's server: it reads your
 change on its next tick and continues the task from there. With the dispatcher
@@ -54,13 +54,13 @@ Foreman runs every step that has one right answer. These need judgement, so they
 are yours, before `foreman dispatch` or before the dispatcher's tick takes the task:
 
 - **Slice.** One task is work one agent can finish and one verify run can
-  prove. Record each prerequisite as `prog blocks <first> <second>`: `prog
+  prove. Record each prerequisite as `tasks blocks <first> <second>`: `tasks
 ready` reads edges, never the text of a description.
 - **Size.** Label every task `size:1` (one file or rule), `size:2` (one
   package) or `size:3` (crosses packages); larger is allowed. Foreman writes
   it into the run rows, which is how the record learns which rung each size
   needs.
-- **Brief.** Write the task so a stranger can do it from `prog show <id>`:
+- **Brief.** Write the task so a stranger can do it from `tasks show <id>`:
   the goal, the files in scope, the design decisions you already made, and a
   definition of done with checkable facts.
 - **Decide first.** An agent given an open design question decides it without

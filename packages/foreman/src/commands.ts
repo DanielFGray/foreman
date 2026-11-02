@@ -194,7 +194,7 @@ const correct = Command.make("correct", { id, text }, (args) =>
     const prog = yield* Prog;
     if (roundsOf(yield* prog.show(args.id)) >= MAX_ROUNDS) {
       return yield* new Refused({
-        detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with prog open instead`,
+        detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with tasks open instead`,
       });
     }
     yield* (yield* Fleet).say(yield* workerOf(args.id), "author", args.text);
