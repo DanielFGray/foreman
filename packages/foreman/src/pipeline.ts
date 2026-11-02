@@ -287,23 +287,6 @@ export const problemsOf = (
     }
   }
 
-  // A dispatch is one policy step: one ask, one grant, one admission. So no
-  // route passes a second gate before it reaches a work block.
-  const halted = graphOf(
-    pipeline,
-    () => true,
-    (node) => !isWork(node),
-  );
-  const gates = pipeline.nodes.filter((node) => node.kind === "gate");
-  for (const gate of gates) {
-    for (const other of gates) {
-      if (other.id !== gate.id && (gate.next === other.id || halted.reaches(gate.next, other.id))) {
-        problems.push(
-          `a route passes ${gate.id} and then ${other.id} before one work block; a step has one gate`,
-        );
-      }
-    }
-  }
   return [...new Set(problems)];
 };
 

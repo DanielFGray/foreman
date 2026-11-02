@@ -274,11 +274,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.catchCause((cause) => Effect.logWarning("policy watcher stopped", cause)),
     );
 
-    /** Records that a grant took on a task, once the step it allowed has run. */
-    const admitted = (given: Permit, task: string) =>
-      given._tag === "Granted" && given.admits
-        ? writePolicy((policy) => admit(policy, given.scope, task))
-        : Effect.void;
+    /** Records that each grant among `permits` took on a task, once the step they allowed has run. */
+    const admitted = (permits: ReadonlyArray<Permit>, task: string) => {
+      const grants = permits.flatMap((given) =>
+        given._tag === "Granted" && given.admits ? [given.scope] : [],
+      );
+      return grants.length === 0
+        ? Effect.void
+        : writePolicy((policy) => grants.reduce((next, scope) => admit(next, scope, task), policy));
+    };
 
     /**
      * Records a dispatch failure against its task, and says so in the log once
@@ -1112,8 +1116,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // plan holds only the landings the policy permits.
       yield* Effect.forEach(
         current.lands,
-        ({ task, worker, permit: given }) =>
-          land(task, worker).pipe(Effect.tap(() => admitted(given, task.id))),
+        ({ task, worker, permits }) =>
+          land(task, worker).pipe(Effect.tap(() => admitted(permits, task.id))),
         { discard: true },
       );
 
@@ -1618,7 +1622,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               ? dispatchReview(dispatch.task, dispatch.block)
               : dispatchAuthor(dispatch.task, dispatch.block, drawn)
             ).pipe(
-              Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
+              Effect.tap(() => admitted(dispatch.permits, dispatch.task.id)),
               Effect.tap(() => clearFailure(dispatch.task.id)),
               Effect.catch((error) => recordFailure(dispatch.task.id, error)),
             ),
@@ -2527,14 +2531,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
  * Selects work for the free slots without performing any dispatch side effects.
  *
  * Each task is placed in its project's pipeline. A task waiting at a work block
- * is a candidate when the gate on its route permits it, and candidates are
+ * is a candidate when every gate on its route permits it, and candidates are
  * taken nearest the end of the pipeline first (fewest work blocks left), then
  * in the order given: the review column, then the queue. In the standard
  * pipeline that is landings, then reviews, then new work.
  *
- * Each dispatch carries the permit its gate gave it, so the caller can record
- * which grant admitted the task once the dispatch has happened. A task the
- * policy does not allow is passed over and keeps no slot.
+ * Each dispatch carries the permits its gates gave it, so the caller can
+ * record which grants admitted the task once the dispatch has happened. A task
+ * the policy does not allow is passed over and keeps no slot.
  *
  * A task whose gate is set to `ask` is listed in `asks` and takes no slot: a
  * slot is spent when a step runs, not when the operator is asked about it. So
@@ -2583,40 +2587,48 @@ export const planFrom = (
 
   for (const { task, worker, pipeline, placement } of candidates) {
     const { node } = placement;
-    // Validation lets exactly one gate stand on each route into a work block.
-    const [gate] = placement.gates;
-    if (gate === undefined) continue;
-
-    if (node.kind === "land") {
-      if (!readyToLand(pipeline, task, worker)) continue;
-      const given = permit(policy, current.scopes, task, gate.step);
-      if (given._tag === "Ask") {
-        asks.push({ task, step: gate.step, rung: reviewedBy(task) });
-      } else if (given._tag !== "Denied") {
-        admitting(given, task.id);
-        lands.push({ task, worker, permit: given });
-      }
-      continue;
+    if (node.kind === "land" && !readyToLand(pipeline, task, worker)) continue;
+    if (node.kind === "agent") {
+      if (held(task.project)) continue;
+      if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
+      if (worker && isBusy(worker)) continue;
     }
 
-    if (held(task.project)) continue;
-    if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
-    if (worker && isBusy(worker)) continue;
-    const given = permit(policy, current.scopes, task, gate.step);
-    if (given._tag === "Ask") {
-      if (gate.step === "author") {
+    // Every gate on the route must permit the step. A gate on `ask` holds the
+    // task for one approval of its own step; once approved, a later reading
+    // asks about the next gate.
+    const gates = placement.gates.map((gate) => ({
+      step: gate.step,
+      given: permit(policy, current.scopes, task, gate.step),
+    }));
+    if (gates.some(({ given }) => given._tag === "Denied")) continue;
+    const asking = gates.find(({ given }) => given._tag === "Ask");
+    if (asking !== undefined) {
+      if (asking.step === "author") {
         if (authorAsks >= current.policy.slots) continue;
         authorAsks += 1;
       }
       asks.push({
         task,
-        step: gate.step,
-        rung: node.role === "review" ? authoredBy(task) : undefined,
+        step: asking.step,
+        rung:
+          node.kind === "land"
+            ? reviewedBy(task)
+            : node.role === "review"
+              ? authoredBy(task)
+              : undefined,
       });
-    } else if (given._tag !== "Denied" && free > 0) {
-      admitting(given, task.id);
+      continue;
+    }
+
+    const permits = gates.map(({ given }) => given);
+    if (node.kind === "land") {
+      for (const given of permits) admitting(given, task.id);
+      lands.push({ task, worker, permits });
+    } else if (free > 0) {
+      for (const given of permits) admitting(given, task.id);
       free -= 1;
-      dispatches.push({ role: node.role, task, permit: given, block: node });
+      dispatches.push({ role: node.role, task, permits, block: node });
     }
   }
 
@@ -2659,19 +2671,23 @@ export interface Ask {
   readonly rung: string | undefined;
 }
 
-/** An agent the plan starts, at the agent block the task waits at. */
+/**
+ * An agent the plan starts, at the agent block the task waits at, with the
+ * permit each gate on its route gave. Two gates can hold grants on different
+ * scopes, and each grant records its own admission.
+ */
 interface PlannedDispatch {
   readonly role: AgentNode["role"];
   readonly task: Item;
-  readonly permit: Permit;
+  readonly permits: ReadonlyArray<Permit>;
   readonly block: AgentNode;
 }
 
-/** An approved branch the plan lands, with the permit its gate gave. */
+/** An approved branch the plan lands, with the permit each gate on its route gave. */
 interface PlannedLanding {
   readonly task: Item;
   readonly worker: Worker | undefined;
-  readonly permit: Permit;
+  readonly permits: ReadonlyArray<Permit>;
 }
 
 /** A task the tick hands to the operator, and the reason it gives them. */

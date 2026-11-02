@@ -448,7 +448,7 @@ describe("the policy gate on dispatch", () => {
     );
 
     expect(planned(dispatches)).toEqual(["author:ts-a"]);
-    expect(dispatches[0]?.permit).toEqual({ _tag: "Granted", scope: "ep-1", admits: true });
+    expect(dispatches[0]?.permits).toEqual([{ _tag: "Granted", scope: "ep-1", admits: true }]);
   });
 
   test("a review step set to ask is listed with the author's rung, and not dispatched", () => {
@@ -526,6 +526,49 @@ describe("the policy gate on dispatch", () => {
 
     expect(planned(dispatches)).toEqual(["author:ts-g"]);
     expect(asks.map(({ task }) => task.id)).toEqual(["ts-r", "ts-c1", "ts-c2"]);
+  });
+
+  test("a route through two gates takes the step only when both permit it", () => {
+    // The author gate and then a second gate on the review step before one
+    // author block: each
+    // gate is a step the policy rules on, and each grant records its own
+    // admission.
+    const twoGates = new Map([
+      [
+        "foreman",
+        {
+          _tag: "Runs" as const,
+          drawn: true,
+          pipeline: {
+            nodes: [
+              ...STANDARD_PIPELINE.nodes.map((node) =>
+                node.id === "start" ? { ...node, next: "second" } : node,
+              ),
+              { kind: "gate" as const, id: "second", step: "review" as const, next: "author" },
+            ],
+          },
+        },
+      ],
+    ]);
+    const queued = {
+      queue: [ready("ts-a")],
+      pipelines: twoGates,
+      scopes: new Map([["ts-a", new Set(["ts-a"])]]),
+    };
+    const planned2 = (steps: Partial<Policy["default"]>, overrides: Partial<Policy> = {}) =>
+      plan(dispatchState(allowing(steps, overrides), queued));
+
+    expect(planned2({ author: "on", review: "off" }).dispatches).toEqual([]);
+    expect(
+      planned2({ author: "on", review: "ask" }).asks.map(({ task, step }) => `${step}:${task.id}`),
+    ).toEqual(["review:ts-a"]);
+    const both = planned2(
+      { author: "on" },
+      { grants: [{ scope: "ts-a", steps: ["review"], remaining: 1, admitted: [] }] },
+    );
+    expect(both.dispatches.map(({ permits }) => permits)).toEqual([
+      [{ _tag: "Default" }, { _tag: "Granted", scope: "ts-a", admits: true }],
+    ]);
   });
 });
 

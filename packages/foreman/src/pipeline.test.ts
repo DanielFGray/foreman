@@ -337,15 +337,6 @@ describe("validation", () => {
       "a route from queue reaches author through no gate",
     ]);
   });
-
-  test("refuses a route through two gates before one work block", () => {
-    // A dispatch asks, grants and admits one step, so a second gate on the
-    // route would be a step the plan cannot ask about.
-    const doubled = replace({ kind: "gate", id: "start", step: "author", next: "climb" });
-    expect(problemsOf(doubled, RUNGS)).toEqual([
-      "a route passes start and then climb before one work block; a step has one gate",
-    ]);
-  });
 });
 
 describe("the Mermaid drawing", () => {
