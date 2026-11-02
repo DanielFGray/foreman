@@ -573,8 +573,10 @@ behind, so no transition clears review state, and no path can forget to.
 
 **A review passes one commit.** The reviewer runs `tasks verdict <task>
 approved|returned`, which ends its run and moves the status in one transaction;
-the run already holds the branch tip it read when it opened. Approval holds only
-while the tip is still that commit, so any commit after it voids it. Foreman
+the run holds the branch tip its reviewer reads: the tip when it opened, moved
+to the new tip when a correction round ends (`foreman wait <task> --role author`
+returns), unless the run already states a verdict. Approval holds only while
+the tip is still that commit, so any other commit after it voids it. Foreman
 re-checks the checkout and the tip, merges the approved commit by its id, never
 the branch name, and only then completes the task. A tip that moved since the
 approval is refused, and the task goes to review again.

@@ -2064,7 +2064,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         project.verify,
       );
       // The run records the tip the reviewer is about to read: its approval
-      // holds for this commit and no other.
+      // holds for this commit, until a correction round moves it (`corrected`).
       yield* prog.assignReview(task.id, runFor(task, rung, block, tip));
       const agent = yield* instrumentRun(
         task,
@@ -2748,6 +2748,26 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           Effect.gen(function* () {
             if (reviewedBy(task) === undefined) return;
             yield* prog.endReview(task.id, "released");
+          }),
+        ),
+
+      /**
+       * Ends a correction round: the reviewer reads the tip the author left
+       * next, so its review run holds that commit. Without this, an approval
+       * after a round names a commit the branch has moved past and is void.
+       * A task with no open review run, or no live workspace to read the
+       * branch from, has no reviewer to move. The workspace names the
+       * repository, so this needs no reading of the world.
+       */
+      corrected: (id: string) =>
+        commanded(
+          Effect.gen(function* () {
+            const task = yield* prog.show(id);
+            if (reviewedBy(task) === undefined) return;
+            const worker = (yield* fleet.roster).find((candidate) => candidate.task === id);
+            if (worker?.repository === undefined) return;
+            const tip = yield* repository.tip(worker.repository, labelFor(task.id));
+            if (tip !== undefined) yield* prog.rereadReview(task.id, tip);
           }),
         ),
 
