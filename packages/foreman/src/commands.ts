@@ -143,7 +143,11 @@ const role = Argument.Literals("role", ["author", "review"] as const);
 
 const prompt = Command.make("prompt", { role, id }, (args) =>
   Effect.gen(function* () {
-    const text = yield* (yield* Dispatcher).prompt(args.role, args.id);
+    const dispatcher = yield* Dispatcher;
+    // A one-shot process has observed nothing yet: the projects and pipelines
+    // the prompt is made from come from one reading of the world.
+    yield* dispatcher.read;
+    const text = yield* dispatcher.prompt(args.role, args.id);
     if (text === undefined) {
       return yield* new Refused({
         detail: `no ${args.role} prompt for ${args.id}: its project is not managed, or it has no branch to review`,

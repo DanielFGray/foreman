@@ -73,13 +73,15 @@ export const GateNode = S.Struct({
  * block's tasks run at once, inside the fleet's own limit. `exits` are the
  * names the agent may end its run with. `stopped` is what follows a run that
  * named none: `retry` (the default) keeps the task at the block, and the
- * model rule picks the next rung; `park` parks it.
+ * model rule picks the next rung; `park` parks it. `instructions` names the
+ * operator's text for the agent, a file `<name>.md`; it defaults to the role.
  */
 export const AgentNode = S.Struct({
   kind: S.Literal("agent"),
   id: S.String,
   role: S.Literals(["author", "review"]),
   model: S.String,
+  instructions: S.optional(S.String),
   slots: S.optional(S.Int.check(S.isGreaterThan(0))),
   exits: S.Array(Exit),
   stopped: S.optional(S.Literals(["retry", "park"])),
@@ -553,6 +555,52 @@ const skipping = (
       .map((target) => [origin, target] as const),
   );
 };
+
+/**
+ * The names an agent block's instructions may use as `{{ name }}`. Foreman
+ * writes everything else an agent needs into the sections it generates, so
+ * the operator's text stays the same whatever the drawing or the workspace.
+ */
+export const PLACEHOLDERS = ["task", "branch", "base", "worktree"] as const;
+
+/** The instructions file an agent block reads: its own, or its role's. */
+export const instructionsOf = (node: AgentNode): string => node.instructions ?? node.role;
+
+/** Every `{{ name }}` in a text, in order. */
+export const placeholdersIn = (text: string): ReadonlyArray<string> =>
+  [...text.matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((match) => match[1] ?? "");
+
+/** The instructions names a pipeline's agent blocks read. */
+export const instructionNames = (pipeline: Pipeline): ReadonlyArray<string> =>
+  pipeline.nodes.flatMap((node) => (node.kind === "agent" ? [instructionsOf(node)] : []));
+
+/**
+ * The problems in a pipeline's instructions, given the text each name reads
+ * (absent when no file has that name). A missing file or a placeholder
+ * outside `PLACEHOLDERS` would fail every dispatch of the block, so the
+ * pipeline does not run.
+ */
+export const instructionProblems = (
+  pipeline: Pipeline,
+  texts: ReadonlyMap<string, string>,
+): ReadonlyArray<string> =>
+  pipeline.nodes.flatMap((node) => {
+    if (node.kind !== "agent") return [];
+    const name = instructionsOf(node);
+    if (!/^[a-z0-9-]+$/.test(name)) {
+      return [`${node.id}: instructions ${name} is no file name: use a-z, 0-9 and -`];
+    }
+    const text = texts.get(name);
+    if (text === undefined)
+      return [`${node.id}: no readable instructions file is named ${name}.md`];
+    const allowed: ReadonlyArray<string> = PLACEHOLDERS;
+    return placeholdersIn(text)
+      .filter((placeholder) => !allowed.includes(placeholder))
+      .map(
+        (placeholder) =>
+          `${node.id}: ${name}.md uses {{ ${placeholder} }}, which is no placeholder: use ${PLACEHOLDERS.join(", ")}`,
+      );
+  });
 
 const isRole =
   (role: AgentNode["role"]) =>
