@@ -1,4 +1,4 @@
-import type { Item, LogEntry } from "tasks";
+import type { Item, LogEntry, Run } from "tasks";
 
 /** One line: id, status, priority, project, then the title behind its labels. */
 export const line = (item: Item): string =>
@@ -28,6 +28,7 @@ export const detailJson = (
   dependents: ReadonlyArray<string>,
   children: ReadonlyArray<Item>,
   logs: ReadonlyArray<LogEntry>,
+  runs: ReadonlyArray<Run>,
 ): string =>
   JSON.stringify(
     {
@@ -36,6 +37,17 @@ export const detailJson = (
       dependents,
       children: children.map((child) => child.id),
       logs: logs.map((log) => ({ message: log.message, created_at: log.createdAt.toISOString() })),
+      runs: runs.map((run) => ({
+        id: run.id,
+        role: run.role,
+        rung: run.rung ?? null,
+        node: run.node ?? null,
+        ending: run.ending ?? null,
+        commit: run.commit ?? null,
+        base: run.base ?? null,
+        rounds: run.rounds ?? null,
+        open: run.open,
+      })),
     },
     null,
     2,
@@ -47,6 +59,7 @@ export const detail = (
   dependencies: ReadonlyArray<string>,
   dependents: ReadonlyArray<string>,
   logs: ReadonlyArray<LogEntry>,
+  runs: ReadonlyArray<Run>,
 ): string => {
   const section = (title: string, body: ReadonlyArray<string>) =>
     body.length === 0 ? [] : ["", `${title}:`, ...body];
@@ -74,12 +87,25 @@ export const detail = (
       "Blocks",
       dependents.map((id) => `  - ${id}`),
     ),
+    ...section("Runs", runs.map(runLine)),
     ...section(
       "Logs",
       logs.map((entry) => `  [${minute(entry.createdAt)}] ${entry.message}`),
     ),
   ].join("\n");
 };
+
+/** One run: its id, role, rung, ending (or "open"), and the commit it names. */
+const runLine = (run: Run): string =>
+  [
+    `  #${run.id}`,
+    run.role,
+    run.rung ?? "-",
+    run.open ? "open" : (run.ending ?? "-"),
+    run.commit?.slice(0, 8) ?? "",
+  ]
+    .join(" ")
+    .trimEnd();
 
 const minute = (date: Date): string => {
   const pad = (n: number) => String(n).padStart(2, "0");

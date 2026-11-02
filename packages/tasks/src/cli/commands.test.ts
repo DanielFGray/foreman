@@ -4,6 +4,7 @@ import { Effect, Layer, Stdio, Stream } from "effect";
 import { Command } from "effect/cli";
 import { connectionAt } from "../connection.ts";
 import { Tasks } from "../store.ts";
+import { nameExit, openRun } from "../runs.ts";
 import { tasksCommand } from "./commands.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -123,6 +124,31 @@ describe("tasks add, show, list and ready", () => {
       children: [],
     });
     expect(shown.logs.map((log: { message: string }) => log.message)).toEqual(["began"]);
+  });
+
+  test("show prints a task's agent runs with their rung, exit and commit", async () => {
+    const task = await created("Worked", "-p", "c");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* openRun({
+          project: "c",
+          task,
+          slice: "Worked",
+          kind: "pi",
+          pool: "Pool",
+          model: "m1",
+          rung: "cheap",
+          node: "author",
+          work: "build",
+        });
+        yield* nameExit(task, { name: "done", commit: "0123456789abcdef", event: undefined });
+      }).pipe(Effect.provide(services())),
+    );
+    const shown = JSON.parse(await run(["show", task, "--json"]));
+    expect(shown.runs).toMatchObject([
+      { role: "author", rung: "cheap", ending: "done", commit: "0123456789abcdef", open: true },
+    ]);
+    expect(await run(["show", task])).toContain("author cheap open 01234567");
   });
 
   test("a bad parent or priority is refused in one line", async () => {

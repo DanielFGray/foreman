@@ -7,6 +7,7 @@ import {
   Tasks,
   handOff,
   nameExit,
+  runsOf,
   type TaskEvent,
 } from "tasks";
 import { PRIME } from "./prime.ts";
@@ -90,21 +91,22 @@ const show = Command.make("show", { id, json: asJson }, (args) =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
     const item = yield* tasks.require(args.id);
-    const [dependencies, dependents, children, logs] = yield* Effect.all([
+    const [dependencies, dependents, children, logs, runs] = yield* Effect.all([
       tasks.dependencies(args.id),
       tasks.dependents(args.id),
       tasks.list({ parent: args.id }),
       tasks.logs(args.id),
+      runsOf([args.id]).pipe(Effect.map((byTask) => byTask.get(args.id) ?? [])),
     ]);
     yield* Console.log(
       args.json
-        ? detailJson(item, dependencies, dependents, children, logs)
-        : detail(item, dependencies, dependents, logs),
+        ? detailJson(item, dependencies, dependents, children, logs, runs)
+        : detail(item, dependencies, dependents, logs, runs),
     );
   }),
 ).pipe(
   Command.withDescription(
-    "Show a task: status, description, definition of done, dependencies both ways, and the log. --json prints one object with those fields and the ids of an epic's children",
+    "Show a task: status, description, definition of done, dependencies both ways, the agent runs (role, rung, exit, commit) and the log. --json prints one object with those fields and the ids of an epic's children",
   ),
 );
 
