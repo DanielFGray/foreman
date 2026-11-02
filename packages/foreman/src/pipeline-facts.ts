@@ -1,8 +1,8 @@
-import { isApproved, reviewedBy } from "./lap.ts";
+import { isApproved, passedNodes, reviewedBy } from "./lap.ts";
 import { failuresOf, type Item, valueOf } from "./prog.ts";
 import type { Facts } from "./pipeline.ts";
 
-/** What placement knows about `item`, read from its status and labels. */
+/** What placement knows about `item`, read from its status, labels and runs. */
 export const factsOf = (
   item: Pick<Item, "status" | "priority" | "parent" | "labels" | "runs" | "tip">,
 ): Facts => ({
@@ -13,13 +13,10 @@ export const factsOf = (
   labels: new Set(item.labels),
   failedBy: new Set(failuresOf(item)),
   attempts: attemptCount(item.labels),
-  passed: new Set(valuesOf(item.labels, PASSED)),
+  passed: passedNodes(item),
   underReview: reviewedBy(item) !== undefined,
   approved: isApproved(item),
 });
-
-/** The label settle writes when a work block advances a task. */
-export const PASSED = "passed";
 
 const valuesOf = (labels: ReadonlyArray<string>, kind: string): ReadonlyArray<string> =>
   labels.flatMap((label) => {

@@ -18,9 +18,9 @@ import {
   waiting,
   type Owned,
 } from "./dispatcher.ts";
-import { authoredBy, diagnosticIntent, type Item, type TaskStatus } from "./prog.ts";
-import { reviewedBy } from "./lap.ts";
-import { authorRun, reviewRun, withRuns } from "./task-fixture.ts";
+import { diagnosticIntent, type Item, type TaskStatus } from "./prog.ts";
+import { authoredBy, reviewedBy } from "./lap.ts";
+import { authorRun, authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
 
@@ -51,14 +51,14 @@ const task = (
 /** A task in review whose reviewer approved the commit it read, which is the tip. */
 const approvedTask = (id: string, status: TaskStatus = "reviewing"): Item =>
   withRuns(
-    task(id, ["by:opencode"], status),
+    authoredOn(task(id, [], status), "opencode"),
     [reviewRun("claude", { ending: "approved", commit: "c1" })],
     "c1",
   );
 
 /** A task in review with a reviewer dispatched and no verdict yet. */
 const underReview = (id: string, status: TaskStatus = "reviewing"): Item =>
-  withRuns(task(id, ["by:opencode"], status), [reviewRun("claude")]);
+  withRuns(authoredOn(task(id, [], status), "opencode"), [reviewRun("claude")]);
 
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   task: id,
@@ -85,7 +85,10 @@ const owned = (
   roles: ReadonlyArray<AgentRole> = [],
   reviewer: string | undefined = undefined,
 ): Owned => {
-  const item = withRuns(task(id, labels, status), reviewer ? [reviewRun(reviewer)] : []);
+  const item = withRuns(
+    authoredOn(task(id, labels, status), "opencode"),
+    reviewer ? [reviewRun(reviewer)] : [],
+  );
   return {
     task: item,
     worker: {
@@ -127,8 +130,10 @@ describe("landing a reviewed branch", () => {
   test("lands nothing on size or priority alone", () => {
     // A branch reaches the operator's checkout on a reviewer's verdict and
     // nothing else, however small the task that produced it says it is.
-    expect(awaitingLanding(task("ts-123456", ["by:opencode", "trivial"]))).toBe(false);
-    expect(awaitingLanding(task("ts-123456", ["by:opencode"], "reviewing", 3))).toBe(false);
+    expect(awaitingLanding(authoredOn(task("ts-123456", ["trivial"]), "opencode"))).toBe(false);
+    expect(awaitingLanding(authoredOn(task("ts-123456", [], "reviewing", 3), "opencode"))).toBe(
+      false,
+    );
   });
 });
 
@@ -140,7 +145,10 @@ describe("the author's pane after a handoff", () => {
     // The author's session is the only place its context exists, and a
     // mechanical finding sent back to it costs a fraction of the rung climb
     // that would otherwise re-derive all of it.
-    const handed = at(task("ts-123456", ["by:opencode"]), new Date("2026-08-15T12:15:00Z"));
+    const handed = at(
+      authoredOn(task("ts-123456", []), "opencode"),
+      new Date("2026-08-15T12:15:00Z"),
+    );
 
     expect(handoffExpired(handed, cutoff)).toBe(false);
   });
@@ -148,7 +156,10 @@ describe("the author's pane after a handoff", () => {
   test("closes one nobody reached inside the window", () => {
     // A second resident model per task in review is the cost, so a review
     // backlog must not accumulate one for every task waiting in it.
-    const stranded = at(task("ts-123456", ["by:opencode"]), new Date("2026-08-15T11:15:00Z"));
+    const stranded = at(
+      authoredOn(task("ts-123456", []), "opencode"),
+      new Date("2026-08-15T11:15:00Z"),
+    );
 
     expect(handoffExpired(stranded, cutoff)).toBe(true);
   });
@@ -156,9 +167,11 @@ describe("the author's pane after a handoff", () => {
 
 describe("diagnostic intervention", () => {
   test("derives its durable intent from the task label", () => {
-    expect(diagnosticIntent(task("ts-1", ["by:opencode", "diagnosing:diagnose"]))).toBe("diagnose");
+    expect(diagnosticIntent(authoredOn(task("ts-1", ["diagnosing:diagnose"]), "opencode"))).toBe(
+      "diagnose",
+    );
     expect(diagnosticIntent(task("ts-2", ["diagnosing:review"]))).toBe("review");
-    expect(diagnosticIntent(task("ts-3", ["by:opencode"]))).toBeUndefined();
+    expect(diagnosticIntent(authoredOn(task("ts-3", []), "opencode"))).toBeUndefined();
   });
 });
 
@@ -167,7 +180,9 @@ describe("working", () => {
   // work showed dozens of rows that nobody was running.
   test("counts a claim as the fleet's only when foreman authored it or holds a worker on it", () => {
     expect(isFleetWork(active(task("ts-1", [], "in_progress"), undefined))).toBe(false);
-    expect(isFleetWork(active(task("ts-2", ["by:opus"], "in_progress"), undefined))).toBe(true);
+    expect(
+      isFleetWork(active(authoredOn(task("ts-2", [], "in_progress"), "opus"), undefined)),
+    ).toBe(true);
     expect(isFleetWork(active(task("ts-3", [], "in_progress"), worker("working", "ts-3")))).toBe(
       true,
     );
@@ -176,7 +191,7 @@ describe("working", () => {
 
 describe("decisions", () => {
   test("surfaces an author or reviewer whose workspace is empty or gone", () => {
-    const claimed = [active(task("ts-1", ["by:opencode"], "in_progress"), undefined)];
+    const claimed = [active(authoredOn(task("ts-1", [], "in_progress"), "opencode"), undefined)];
     const reviewing = [active(underReview("ts-2"), worker("gone", "ts-2"))];
 
     const decisions = decisionsOf(claimed, reviewing, []);
@@ -185,7 +200,7 @@ describe("decisions", () => {
 
   test("ignores a claimed or reviewing task that is still being worked", () => {
     const claimed = [
-      active(task("ts-1", ["by:opencode"], "in_progress"), worker("working", "ts-1")),
+      active(authoredOn(task("ts-1", [], "in_progress"), "opencode"), worker("working", "ts-1")),
     ];
     const reviewing = [active(underReview("ts-2"), worker("working", "ts-2"))];
 
@@ -196,9 +211,9 @@ describe("decisions", () => {
     // A failed spawn leaves the by-* label on while the task returns to the
     // queue; the status is what makes it residue rather than a vanished author.
     const ownedWorkspaces = [
-      owned("ts-3", "open", ["by:opencode"]),
+      owned("ts-3", "open", []),
       owned("ts-4", "done", []),
-      owned("ts-5", "canceled", ["by:opencode"]),
+      owned("ts-5", "canceled", []),
     ];
 
     const decisions = decisionsOf([], [], ownedWorkspaces);
@@ -210,9 +225,9 @@ describe("decisions", () => {
   // no role is the one case foreman cannot prove is spent.
   test("asks only about residue it cannot prove is spent", () => {
     const ownedWorkspaces = [
-      owned("ts-3", "open", ["by:opencode"], ["author"]),
-      owned("ts-4", "open", ["by:opencode"], ["author", "review"], "claude"),
-      owned("ts-5", "open", ["by:opencode"]),
+      owned("ts-3", "open", [], ["author"]),
+      owned("ts-4", "open", [], ["author", "review"], "claude"),
+      owned("ts-5", "open", []),
     ];
 
     const decisions = decisionsOf([], [], ownedWorkspaces);
@@ -233,8 +248,8 @@ describe("decisions", () => {
 
   test("keeps claimed and reviewing workspaces out of the orphaned kind", () => {
     const ownedWorkspaces = [
-      owned("ts-1", "in_progress", ["by:opencode"]),
-      owned("ts-2", "reviewing", ["by:opencode"], [], "claude"),
+      owned("ts-1", "in_progress", []),
+      owned("ts-2", "reviewing", [], [], "claude"),
     ];
 
     expect(decisionsOf([], [], ownedWorkspaces)).toEqual([]);
@@ -279,8 +294,8 @@ describe("dispatch failures", () => {
 
 describe("work handed back for review", () => {
   test("sends a reviewer only at a branch that holds commits", () => {
-    const written = active(task("ts-111111", ["by:opencode"]), undefined);
-    const empty = active(task("ts-222222", ["by:opencode"]), undefined);
+    const written = active(authoredOn(task("ts-111111", []), "opencode"), undefined);
+    const empty = active(authoredOn(task("ts-222222", []), "opencode"), undefined);
     const { review, unbacked } = reviewable([written, empty], new Set(["ts-111111"]));
 
     expect(review.map(({ task }) => task.id)).toEqual(["ts-111111"]);
@@ -292,7 +307,7 @@ describe("work handed back for review", () => {
     // unfinished, it returns to the queue and buys the same discovery again a
     // rung up, forever.
     const claimed = active(
-      withRuns(task("ts-444444", ["by:opencode"]), [
+      withRuns(authoredOn(task("ts-444444", []), "opencode"), [
         authorRun("opencode", { open: false, ending: "satisfied" }),
       ]),
       undefined,
@@ -306,7 +321,7 @@ describe("work handed back for review", () => {
   test("reviews an empty branch whose task's deliverable is a research report", () => {
     // A research task's product is in its log, so its branch is legitimately
     // empty; read as unbacked it would be returned for having no commits.
-    const report = active(task("ts-555555", ["by:opencode", "research"]), undefined);
+    const report = active(authoredOn(task("ts-555555", ["research"]), "opencode"), undefined);
     const { review, unbacked } = reviewable([report], new Set());
 
     expect(review.map(({ task }) => task.id)).toEqual(["ts-555555"]);
@@ -364,7 +379,7 @@ describe("the policy gate on dispatch", () => {
     const dispatches = dispatchesFor(
       dispatchState(policy, {
         queue: [ready("ts-a")],
-        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
       }),
     );
 
@@ -375,7 +390,7 @@ describe("the policy gate on dispatch", () => {
     const dispatches = dispatchesFor(
       dispatchState(allowing({ review: "on" }), {
         queue: [ready("ts-a")],
-        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
       }),
     );
 
@@ -421,7 +436,7 @@ describe("the policy gate on dispatch", () => {
   test("a review step set to ask is listed with the author's rung, and not dispatched", () => {
     const { dispatches, asks } = plan(
       dispatchState(allowing({ review: "ask" }), {
-        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
       }),
     );
 
@@ -458,7 +473,7 @@ describe("the policy gate on dispatch", () => {
       dispatchState(allowing({ review: "ask", climb: "ask" }, { slots: 1 }), {
         workers: [worker("working", "ts-w1")],
         queue: [ready("ts-c", ["attempt:cheap:1"])],
-        review: [active(task("ts-r", ["by:cheap"]), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
       }),
     );
 
@@ -485,7 +500,7 @@ describe("the policy gate on dispatch", () => {
             ready("ts-c2", ["attempt:cheap:1"]),
             ready("ts-g", ["attempt:cheap:1"]),
           ],
-          review: [active(task("ts-r", ["by:cheap"]), undefined)],
+          review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
           scopes: new Map([["ts-g", new Set(["ts-g"])]]),
         },
       ),
@@ -662,7 +677,7 @@ describe("the quota gate", () => {
     // stopped by an account the author never touched.
     const dispatches = dispatchesFor(
       state({
-        review: [active(task("ts-walled", ["by:cheap"]), undefined)],
+        review: [active(authoredOn(task("ts-walled", []), "cheap"), undefined)],
         outOfQuota: new Set(["ts-walled"]),
       }),
     );

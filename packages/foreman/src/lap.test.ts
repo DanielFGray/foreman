@@ -6,11 +6,14 @@ import { Effect, Layer } from "effect";
 import { connectionAt, store, Tasks, verdict } from "tasks";
 import {
   approvedCommit,
+  authoredBy,
   isApproved,
   isSatisfied,
   lapOf,
+  passedNodes,
   reviewedBy,
   reviewFailedBy,
+  roundsOf,
 } from "./lap.ts";
 import { Prog } from "./prog.ts";
 import { newRunFor } from "./run-record.ts";
@@ -75,6 +78,42 @@ describe("a task's lap", () => {
     expect(reviewedBy({ runs: cleared })).toBeUndefined();
   });
 
+  test("the author is the latest author run, and rounds are counted on it", () => {
+    const runs = [
+      handedOff("low", "c1"),
+      reviewRun("mid", { open: false, ending: "returned", commit: "c1" }),
+      authorRun("high", { rounds: 1 }),
+    ];
+
+    expect(authoredBy({ runs })).toBe("high");
+    expect(roundsOf({ runs })).toBe(1);
+    expect(authoredBy({ runs: [] })).toBeUndefined();
+    expect(roundsOf({ runs: [reviewRun("mid")] })).toBe(0);
+  });
+
+  test("passed blocks are the work that advanced the task in this lap", () => {
+    const approval = reviewRun("mid", { open: false, ending: "approved", commit: "c1" });
+
+    expect([...passedNodes({ runs: [authorRun("low")], tip: "c1" })]).toEqual([]);
+    expect([...passedNodes({ runs: [handedOff("low"), reviewRun("mid")], tip: "c1" })]).toEqual([
+      "author",
+    ]);
+    expect([...passedNodes({ runs: [handedOff("low"), approval], tip: "c1" })]).toEqual([
+      "author",
+      "review",
+    ]);
+    expect([...passedNodes({ runs: [handedOff("low"), approval], tip: "c2" })]).toEqual(["author"]);
+    expect([
+      ...passedNodes({
+        runs: [authorRun("low", { open: false, ending: "satisfied" })],
+        tip: undefined,
+      }),
+    ]).toEqual(["author"]);
+    expect([
+      ...passedNodes({ runs: [handedOff("low"), approval, authorRun("high")], tip: "c1" }),
+    ]).toEqual([]);
+  });
+
   test("reads the author's satisfied claim from its run", () => {
     expect(isSatisfied({ runs: [authorRun("low", { open: false, ending: "satisfied" })] })).toBe(
       true,
@@ -115,7 +154,7 @@ describe("the readers against a scratch store", () => {
     const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
       Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
 
-    await run((prog) => prog.attribute(id, "low", dispatch("author", "low")));
+    await run((prog) => prog.attribute(id, dispatch("author", "low")));
     await run((prog) => prog.submit(id));
     await run((prog) => prog.assignReview(id, dispatch("review", "mid", "c1")));
     await Effect.runPromise(

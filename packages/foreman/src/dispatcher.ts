@@ -69,7 +69,6 @@ import {
 import {
   agentLog,
   attemptsOf,
-  authoredBy,
   diagnosticIntent,
   type DiagnosticIntent,
   isOnboarding,
@@ -83,6 +82,7 @@ import {
 } from "./prog.ts";
 import {
   approvedCommit,
+  authoredBy,
   isApproved,
   isSatisfied,
   lapOf,
@@ -1441,7 +1441,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Returns claims that nobody is working on any more.
      *
-     * Only a claim foreman's own agent made, which its `by:*` label records,
+     * Only a claim foreman's own agent made, which its author run records,
      * and only once no agent of the task is live and it has gone stale. A
      * claim made by hand or by another session is that person's to give up:
      * foreman cannot tell an abandoned one from one whose owner is away.
@@ -1636,7 +1636,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const prompt = yield* prompts.author(task, worker.directory, project.directory);
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, rung.name, runFor(task, rung, "author"))
+        .attribute(task.id, runFor(task, rung, "author"))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,
@@ -1754,7 +1754,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, rung.name, runFor(task, rung, "author"))
+        .attribute(task.id, runFor(task, rung, "author"))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,
@@ -1859,7 +1859,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * The rung whose run has just ended, which is the one a verdict is about.
      *
-     * Read from the task rather than recomputed: `by:*` says which model
+     * Read from the task rather than recomputed: the author run says which model
      * actually ran, while the ladder would answer with whichever rung is
      * available now — and the two differ exactly when an account went spent
      * mid-run, which is when charging the wrong model would be worst. A task
@@ -2282,7 +2282,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
             yield* prog.endRuns(task.id, { author: "vanished" });
-            yield* prog.attribute(task.id, rung.name, runFor(task, rung, "author"));
+            yield* prog.attribute(task.id, runFor(task, rung, "author"));
             yield* prog.log(task.id, agentLog("author", rung, agent));
           }),
         ),

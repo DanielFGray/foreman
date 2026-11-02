@@ -123,13 +123,19 @@ export const deleteOpenRun = (id: number) =>
     if (gone.length === 0) return yield* new RunError({ id, detail: "not an open run" });
   });
 
-/** Counts one more correction round on an open author run. Answers the new count. */
-export const addRound = (id: number) =>
+/**
+ * Counts one more correction round on the task's latest author run, and
+ * answers the new count. The run may be closed: a correction goes to the
+ * author after its work was handed off to review.
+ */
+export const addRound = (task: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const rows = yield* sql<{ rounds: number }>`UPDATE runs SET rounds = coalesce(rounds, 0) + 1
-      WHERE id = ${id} AND closed_at IS NULL AND work <> 'review' RETURNING rounds`;
-    if (rows.length === 0) return yield* new RunError({ id, detail: "not an open author run" });
+      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND work <> 'review')
+      RETURNING rounds`;
+    if (rows.length === 0)
+      return yield* new TaskError({ id: task, detail: `${task} has no author run` });
     return rows[0]!.rounds;
   });
 

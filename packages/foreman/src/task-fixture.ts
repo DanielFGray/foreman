@@ -35,9 +35,13 @@ export const approvalOf = (rung: string, commit: string): Run =>
 export const handedOff = (rung: string, commit?: string): Run =>
   authorRun(rung, { open: false, ending: "handed-off", commit });
 
-/** The task with these runs (oldest first) and this branch tip. */
+/** The task with these runs added after its own (oldest first) and this branch tip. */
 export const withRuns = (task: Item, runs: ReadonlyArray<Run>, tip?: string): Item => ({
   ...task,
-  runs: runs.map((run) => ({ ...run, task: task.id })),
-  tip,
+  runs: [...task.runs, ...runs.map((run) => ({ ...run, task: task.id }))],
+  tip: tip ?? task.tip,
 });
+
+/** The task with its author's run first: open while the task is in progress, else handed off. */
+export const authoredOn = (task: Item, rung: string): Item =>
+  withRuns(task, [task.status === "in_progress" ? authorRun(rung) : handedOff(rung)], task.tip);
