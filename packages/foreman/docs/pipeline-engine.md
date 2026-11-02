@@ -74,7 +74,7 @@ Sources, routers and gates decide at once.
 | Block | Advances when | Returns when |
 | --- | --- | --- |
 | author agent | the author hands off committed work (status `reviewing`) | it stops unfinished or hands back an empty branch (`unfinished`: an attempt, and `failed-by` once the rung is spent) |
-| review agent | the reviewer labels it `approved` | the reviewer sends it back (`climb`: `failed-by` the author's rung) |
+| review agent | the reviewer's verdict is `approved` and the branch tip is still the commit it read | the reviewer sends it back (`climb`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
 
 A reviewer that stops without a verdict while a rung is left, a usage wall, a

@@ -4,7 +4,7 @@ Status: plan, accepted for build. Steps are committed one at a time.
 
 ## Why
 
-foreman writes the progress of each run onto prog's tasks as labels: `by:`,
+Before runs, foreman wrote the progress of each run onto prog's tasks as labels: `by:`,
 `review-by:`, `review-failed-by:`, `failed-by:`, `attempt:<rung>:<n>`,
 `rounds:`, `walled:`, `diagnosing:`. Every reader parses them back out of strings,
 and every read is a `prog` child process (one `prog show` per task, because
