@@ -148,7 +148,7 @@ project, so ownership is settled before the store is asked anything.
 
 The checkout, not the task's project. The task's project answers the same
 question right up until the task is deleted — which is exactly when ownership
-needs an answer — and asking it means one `prog show` per worker on the
+needs an answer — and asking it means one `tasks show` per worker on the
 machine before knowing whether any of them is this dispatcher's. A worker with
 no `fm.repo` checkout has nothing to be scoped by and is nobody's.
 
@@ -682,7 +682,7 @@ off one read per project:
 
 **`merged` cannot stand in for `empty`.** An author run proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run
-`prog review` having committed nothing. Asking only "is this branch unmerged" and
+`tasks review` having committed nothing. Asking only "is this branch unmerged" and
 reading "no" as "nothing was committed" hands finished, merged work back to the
 queue as empty. A merge landing keeps the first-parent line to the commits the
 checkout held before any branch touched it, but a fast-forward landing puts the

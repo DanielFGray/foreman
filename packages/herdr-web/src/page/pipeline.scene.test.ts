@@ -1,10 +1,10 @@
 import { Option } from "effect"
 import { STANDARD_PIPELINE } from "foreman/pipeline"
-import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription } from "foldkit/scene"
+import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription, type } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import type { ForemanReading } from "../shared/Foreman.ts"
-import { LoadForemanPipeline, SaveForemanPipeline } from "./commands.ts"
+import { LoadForemanPipeline, SaveClosedPanels, SaveForemanPipeline } from "./commands.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, RungList, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
@@ -23,7 +23,7 @@ const reading: ForemanReading = {
   stopped: [],
 }
 
-const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
+const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
 
 const git: SpaceGit = { top: "/src/app", branch: Option.some("main"), changed: false, project: Option.some("app") }
 const fleet: Fleet = {
@@ -39,7 +39,7 @@ const open = {
   selection: Selection.Tab({ tabId: "tab-s1", maybeFocus: Option.none() }),
   bridge: Bridge.Watching({ fleet }),
   foreman: Option.some({ reading: Option.some(reading), problem: Option.none() }),
-  foremanPage: { ...start.foremanPage, shown: true, rungs: RungList.Listed({ rungs: ["haiku", "sonnet", "opus"] }) },
+  foremanPage: { ...start.foremanPage, shown: true, rungs: RungList.Listed({ rungs: [{ rung: "haiku", state: "proven" }, { rung: "sonnet", state: "trial" }, { rung: "opus", state: "disabled" }] }) },
   now: NOW,
 }
 
@@ -67,15 +67,95 @@ test("the standard pipeline draws as one belt with the retry branch", () => {
   )
 })
 
-test("putting a block on a wire shows it on the belt", () => {
+test("a kind picked in the palette goes on the belt whose + is picked", () => {
   scene(
     { update, view },
     ...opened,
-    click(role("button", { name: "add a block after queue on next" })),
-    click(role("button", { name: "put a gate on the wire" })),
+    // No "+" shows until a kind is picked.
+    expect(selector(".pipeline-add")).not.toExist(),
+    click(role("button", { name: "◧ gate" })),
+    expect(role("button", { name: "◧ gate" })).toHaveAttr("aria-pressed", "true"),
+    click(role("button", { name: "put the gate after queue on next" })),
     expectAll(all.selector(".pipeline-station")).toHaveCount(STANDARD_PIPELINE.nodes.length + 1),
-    // The new block is picked, so its settings are open.
-    expect(selector(".pipeline-inspector h4")).toContainText("gate gate-"),
+    // The pick is spent, and the new block is picked, so its inspector floats on the drawing.
+    expect(selector(".pipeline-add")).not.toExist(),
+    expect(selector(".pipeline-belt .pipeline-inspector h4")).toContainText("gate gate-"),
+    expect(selector(".pipeline-changes li")).toContainText("added gate gate-"),
+    expect(selector(".pipeline-changes li")).toContainText("after queue"),
+  )
+})
+
+test("the palette adds a source at once", () => {
+  scene(
+    { update, view },
+    ...opened,
+    click(role("button", { name: "⇥ Add source" })),
+    expectAll(all.selector(".pipeline-station.source")).toHaveCount(2),
+    expect(selector(".pipeline-inspector h4")).toContainText("source source-"),
+  )
+})
+
+test("the changes panel lists the unsaved edits, and a revert empties it", () => {
+  scene(
+    { update, view },
+    ...opened,
+    expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
+    expect(role("button", { name: "Revert to saved" })).toBeDisabled(),
+    click(role("button", { name: "land land" })),
+    click(role("button", { name: "Make it a park" })),
+    expect(selector(".pipeline-changes li")).toHaveText("made land a park"),
+    click(role("button", { name: "Revert to saved" })),
+    expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
+  )
+})
+
+test("the ladder panel lists the rungs in order with their states", () => {
+  scene(
+    { update, view },
+    ...opened,
+    expectAll(all.selector(".pipeline-rungs li")).toHaveCount(3),
+    expect(selector(".pipeline-rungs")).toHaveText("haikuprovensonnettrialopusdisabled"),
+    expect(selector(".pipeline-rungs li.off")).toHaveText("opusdisabled"),
+  )
+})
+
+test("a panel closes and opens again, and the choice is kept in this browser", () => {
+  scene(
+    { update, view },
+    ...opened,
+    click(role("button", { name: "close the Ladder panel" })),
+    Command.expectExact(SaveClosedPanels({ closedPanels: ["ladder"] })),
+    Command.resolve(SaveClosedPanels, Message.CompletedSaveClosedPanels()),
+    expect(selector(".pipeline-ladder")).not.toExist(),
+    expect(role("button", { name: "Ladder" })).toHaveAttr("aria-pressed", "false"),
+    click(role("button", { name: "Ladder" })),
+    Command.expectExact(SaveClosedPanels({ closedPanels: [] })),
+    Command.resolve(SaveClosedPanels, Message.CompletedSaveClosedPanels()),
+    expect(selector(".pipeline-ladder")).toExist(),
+  )
+})
+
+test("a viewer who closed a panel opens the pipeline without it", () => {
+  scene(
+    { update, view },
+    given({ ...open, foremanPage: { ...open.foremanPage, closedPanels: ["blocks", "changes"] } }),
+    click(role("button", { name: "Pipeline of app" })),
+    Command.resolve(LoadForemanPipeline, Message.ReceivedPipeline({ project: "app", drawn: false, pipeline: STANDARD_PIPELINE })),
+    expect(selector(".pipeline-blocks")).not.toExist(),
+    expect(selector(".pipeline-changes")).not.toExist(),
+    expect(selector(".pipeline-ladder")).toExist(),
+  )
+})
+
+test("a disabled rung is a valid model, as foreman checks it, and an unlisted one is not", () => {
+  scene(
+    { update, view },
+    ...opened,
+    click(role("button", { name: "agent author" })),
+    type(role("textbox", { name: "model" }), "opus"),
+    expect(selector(".pipeline-problems")).not.toExist(),
+    type(role("textbox", { name: "model" }), "gpt-9"),
+    expect(selector(".pipeline-problems")).toContainText("gpt-9"),
   )
 })
 

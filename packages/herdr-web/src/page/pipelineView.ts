@@ -1,17 +1,20 @@
 // The Pipeline editor's drawing: the draft laid out by foreman's `beltOf` as a
 // CSS grid of station cards, with a belt drawn from each block's exit to the
 // block it runs to. pipelineLayout.ts sizes the columns and routes the wires, so
-// the drawing needs no measuring of the page.
+// the drawing needs no measuring of the page. The picked block's inspector and
+// the panels of pipelinePanels.ts float over the drawing and take none of its width.
 import { Array, Option, String as Str } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { LANDINGS, type PipelineNode } from "foreman/pipeline"
-import { type Belt, beltOf, type Cell, INSERTABLE, rejoin, type Wire } from "foreman/pipeline-belt"
-import { labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
+import { type Belt, beltOf, type Cell, rejoin, type Wire } from "foreman/pipeline-belt"
+import { besideOf, labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
 import { FOREMAN_STEPS, type ForemanPlacement } from "../shared/Foreman.ts"
 import { badgeView, standingOf, standingView, stoppedView } from "./pipelineStanding.ts"
 import { type ForemanPage, Message, type Model, PipelineView } from "./model.ts"
-import { isDirty, type PipelineEdit, summaryOf, type WireRef } from "./pipelineEdit.ts"
-import { problemsFor, RESET_LINE } from "./pipelinePage.ts"
+import { changesOf } from "./pipelineChanges.ts"
+import { KIND_ICON, portName, summaryOf, type WireRef } from "./pipelineEdit.ts"
+import { edit, problemsFor, RESET_LINE } from "./pipelinePage.ts"
+import { panelsView, panelTogglesView } from "./pipelinePanels.ts"
 
 type Editing = Extract<PipelineView, { _tag: "Editing" }>
 
@@ -56,39 +59,34 @@ const frame = (project: string, model: Model, body: ReadonlyArray<Html>, h: Html
 
 const editorView = (editing: Editing, page: ForemanPage, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const problems = problemsFor(page, editing)
+  const changes = changesOf(editing.saved, editing.draft)
   const belt = beltOf(editing.draft)
   return [
     h.p([h.Class("note")], [editing.drawn ? "This project runs its own pipeline." : "This project runs the standard pipeline."]),
-    toolbarView(editing, page, problems, h),
+    toolbarView(editing, page, problems, changes, h),
     ...Option.match(editing.refusal, { onNone: () => [], onSome: (reason) => [h.p([h.Class("note error"), h.Role("alert")], [reason])] }),
-    beltView(belt, editing, tasks, h),
+    h.div(
+      [h.Class("pipeline-board")],
+      [beltView(belt, editing, tasks, h), ...panelsView(editing, page, changes, h)],
+    ),
     ...standingView(belt, tasks, h),
     problemsView(problems, h),
-    ...Option.match(editing.selected, {
-      onNone: () => [],
-      onSome: (id) => {
-        const cell = belt.cells.find((one) => one.node.id === id)
-        return cell === undefined ? [] : [inspectorView(cell.node, belt, editing, h)]
-      },
-    }),
   ]
 }
 
-const edit = (change: PipelineEdit): Message => Message.EditedPipeline({ edit: change })
-
-const toolbarView = (editing: Editing, page: ForemanPage, problems: Option.Option<ReadonlyArray<string>>, h: HtmlBuilder<Message>): Html => {
+const toolbarView = (editing: Editing, page: ForemanPage, problems: Option.Option<ReadonlyArray<string>>, changes: ReadonlyArray<string>, h: HtmlBuilder<Message>): Html => {
   const canSave = !editing.saving && Option.exists(problems, (found) => found.length === 0)
   const isArmed = Option.contains(page.armed, RESET_LINE)
   return h.div(
     [h.Class("pipeline-toolbar")],
     [
-      h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "AddSource", filter: "" }))], ["Add source"]),
       h.button([h.Type("button"), h.Class("chip on"), h.Disabled(!canSave), h.OnClick(Message.ClickedSavePipeline())], [editing.saving ? "Saving…" : "Save"]),
-      h.button([h.Type("button"), h.Class("chip"), h.Disabled(editing.saving || !isDirty(editing.saved, editing.draft)), h.OnClick(Message.ClickedRevertPipeline())], ["Revert to saved"]),
+      h.button([h.Type("button"), h.Class("chip"), h.Disabled(editing.saving || changes.length === 0), h.OnClick(Message.ClickedRevertPipeline())], ["Revert to saved"]),
       h.button(
         [h.Type("button"), h.Class(isArmed ? "chip armed" : "chip"), h.Disabled(editing.saving), h.OnClick(Message.ClickedResetPipeline())],
         [isArmed ? "Reset to the standard pipeline?" : "Reset to the standard pipeline"],
       ),
+      ...panelTogglesView(page, h),
     ],
   )
 }
@@ -103,9 +101,9 @@ const problemsView = (problems: Option.Option<ReadonlyArray<string>>, h: HtmlBui
   })
 
 // ── the drawing ──
-const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸", branch: "⎇", worktree: "▤", done: "✔" }
 
-const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
+/** The inspector's width; it floats beside the picked block, so the drawing keeps its own width. */
+const INSPECTOR_WIDTH = 300
 
 const beltView = (belt: Belt, editing: Editing, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): Html => {
   const layout = layoutOf(belt)
@@ -137,6 +135,14 @@ const beltView = (belt: Belt, editing: Editing, tasks: ReadonlyArray<ForemanPlac
             Array.map(belt.cells, (cell) => stationView(cell, layout, editing, tasks, h)),
           ),
           ...Array.flatMap(layout.wires, (placed) => wireControlsView(placed, editing, h)),
+          ...Option.match(editing.selected, {
+            onNone: () => [],
+            onSome: (id) => {
+              const cell = belt.cells.find((one) => one.node.id === id)
+              const box = layout.boxes.get(id)
+              return cell === undefined || box === undefined ? [] : [inspectorView(cell.node, belt, editing, besideOf(box, layout.width, INSPECTOR_WIDTH), h)]
+            },
+          }),
         ],
       ),
     ],
@@ -200,47 +206,49 @@ const stationView = (cell: Cell, layout: Layout, editing: Editing, tasks: Readon
   )
 }
 
-/** The "+" on a wire, the choice of block it opens, and the label of a router's route, all at the middle of the wire's own stretch. */
+/**
+ * The label of a router's route at the middle of the wire's own stretch, and,
+ * while a kind of block is picked in the palette, the "+" that puts one there.
+ */
 const wireControlsView = ({ wire, anchor: [x, y], room }: PlacedWire, editing: Editing, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const ref: WireRef = { from: wire.from, port: wire.port }
-  const isOpen = Option.exists(editing.inserting, (open) => open.from === ref.from && open.port === ref.port)
   const labelRoom = Math.max(24, Math.min(room - 4, labelWidth(wire.label)))
   return [
     ...(wire.label === ""
       ? []
       : [h.span([h.Class("pipeline-wire-label"), h.Title(wire.label), h.Style({ left: `${x - labelRoom / 2}px`, top: `${y - 23}px`, width: `${labelRoom}px` })], [wire.label])]),
-    h.button(
-      [
-        h.Type("button"),
-        h.Class(isOpen ? "pipeline-add on" : "pipeline-add"),
-        h.AriaLabel(`add a block after ${wire.from} on ${portName(wire)}`),
-        h.AriaExpanded(isOpen),
-        h.Style({ left: `${x - 8}px`, top: `${y - 8}px` }),
-        h.OnClick(edit({ _tag: "PickWire", wire: isOpen ? Option.none() : Option.some(ref) })),
+    ...Option.match(editing.placing, {
+      onNone: () => [],
+      onSome: (kind) => [
+        h.button(
+          [
+            h.Type("button"),
+            h.Class("pipeline-add"),
+            h.AriaLabel(`put the ${kind} after ${wire.from} on ${portName(wire)}`),
+            h.Style({ left: `${x - 8}px`, top: `${y - 8}px` }),
+            h.OnClick(edit({ _tag: "InsertOn", wire: ref, kind })),
+          ],
+          ["+"],
+        ),
       ],
-      ["+"],
-    ),
-    ...(isOpen
-      ? [
-          h.div(
-            [h.Class("pipeline-insert"), h.Style({ left: `${x - 60}px`, top: `${y + 12}px` })],
-            Array.map(INSERTABLE, (kind) =>
-              h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(`put a ${kind} on the wire`), h.OnClick(edit({ _tag: "InsertOn", wire: ref, kind }))], [kind]),
-            ),
-          ),
-        ]
-      : []),
+    }),
   ]
 }
 
-
 // ── the inspector ──
 
-const inspectorView = (node: PipelineNode, belt: Belt, editing: Editing, h: HtmlBuilder<Message>): Html =>
+/** The picked block's settings, floating on the drawing at the point `besideOf` gives, beside the block. */
+const inspectorView = (node: PipelineNode, belt: Belt, editing: Editing, [left, top]: Point, h: HtmlBuilder<Message>): Html =>
   h.section(
-    [h.Class("pipeline-inspector"), h.AriaLabel(`Inspector of ${node.id}`)],
+    [h.Class("pipeline-inspector"), h.AriaLabel(`Inspector of ${node.id}`), h.Style({ left: `${left}px`, top: `${top}px`, width: `${INSPECTOR_WIDTH}px` })],
     [
-      h.h4([], [`${node.kind} ${node.id}`]),
+      h.div(
+        [h.Class("pipeline-panel-head")],
+        [
+          h.h4([], [`${node.kind} ${node.id}`]),
+          h.button([h.Type("button"), h.Class("pipeline-remove"), h.AriaLabel("close the inspector"), h.OnClick(edit({ _tag: "Select", id: Option.none() }))], ["✕"]),
+        ],
+      ),
       ...settingsView(node, h),
       ...Array.map(
         belt.wires.filter((wire) => wire.from === node.id),

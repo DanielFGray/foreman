@@ -55,9 +55,9 @@ describe("Prompts", () => {
 
     // Trivial work skips the reviewer, never the landing gate. An author told
     // to merge for itself is the one route past the verification foreman runs.
-    expect(prompt).toContain("prog review ts-123456");
+    expect(prompt).toContain("tasks review ts-123456");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
-    expect(prompt).not.toContain("prog done ts-123456");
+    expect(prompt).not.toContain("tasks done ts-123456");
     expect(prompt).toContain("git worktree list --porcelain");
     expect(prompt).toContain("Never enter /tmp/repository");
     expect(prompt).toContain("do not read another task's worktree");
@@ -106,10 +106,10 @@ describe("Prompts", () => {
       prompts.author(ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
 
-    expect(prompt).toContain("prog list -p foreman");
+    expect(prompt).toContain("tasks list -p foreman");
     expect(prompt).toContain("match on the test name, not on");
     expect(prompt).toContain("do not file a new one");
-    expect(prompt).toContain('prog log <id> "<what failed>"');
+    expect(prompt).toContain('tasks log <id> "<what failed>"');
     expect(prompt).toContain("only when nothing in the backlog describes it");
   });
 
@@ -120,9 +120,9 @@ describe("Prompts", () => {
 
     expect(prompt).toContain("tasks verdict ts-123456 approved");
     expect(prompt).toContain("tasks verdict ts-123456 returned");
-    expect(prompt).not.toContain("prog label");
+    expect(prompt).not.toContain("tasks label");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
-    expect(prompt).not.toContain("prog done ts-123456");
+    expect(prompt).not.toContain("tasks done ts-123456");
     expect(prompt).toContain("Never approve work that landing would omit");
   });
 
@@ -170,9 +170,9 @@ describe("Prompts", () => {
     );
 
     expect(prompt).toContain("Diagnose why this attempt appears stuck");
-    expect(prompt).toContain("prog log ts-123456");
+    expect(prompt).toContain("tasks log ts-123456");
     expect(prompt).toContain("Do not take over the implementation");
-    expect(prompt).not.toContain("prog open ts-123456");
+    expect(prompt).not.toContain("tasks open ts-123456");
   });
 
   test("diagnostic review includes uncommitted edits", async () => {

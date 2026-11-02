@@ -6,7 +6,7 @@ import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
 import { Pipeline } from "foreman/pipeline"
-import { ForemanCommand, ForemanName, ForemanPipeline, ForemanRow, ForemanState } from "./Foreman.ts"
+import { ForemanCommand, ForemanName, ForemanPipeline, ForemanRow, ForemanRung, ForemanState } from "./Foreman.ts"
 import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -186,8 +186,8 @@ export const Api = RpcGroup.make(
   Rpc.make("runForeman", { payload: { command: ForemanCommand }, error: BridgeError }),
   /** Asks the dispatcher to read the fleet now, without waiting for its next poll. */
   Rpc.make("refreshForeman", {}),
-  /** The rungs a queued task can be launched on. */
-  Rpc.make("foremanRungs", { success: S.Array(S.String), error: BridgeError }),
+  /** Every rung of the ladder with its state, cheapest first. */
+  Rpc.make("foremanRungs", { success: S.Array(ForemanRung), error: BridgeError }),
   /** The queue foreman would dispatch, for one project or (none) every open one. */
   Rpc.make("foremanQueue", { payload: { project: S.OptionFromNullOr(ForemanName) }, success: S.Array(ForemanRow), error: BridgeError }),
   /** The pipeline a project runs, with the problems that would stop it. */

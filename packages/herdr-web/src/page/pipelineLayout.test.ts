@@ -1,7 +1,7 @@
 import { STANDARD_PIPELINE } from "foreman/pipeline"
 import { addRoute, beltOf, insertOn } from "foreman/pipeline-belt"
 import { describe, expect, it } from "vitest"
-import { type Box, layoutOf, type Point } from "./pipelineLayout.ts"
+import { besideOf, type Box, layoutOf, type Point } from "./pipelineLayout.ts"
 
 const branched = () => {
   const withRoute = addRoute(STANDARD_PIPELINE, "retry", "size>=3")
@@ -36,5 +36,21 @@ describe("layoutOf", () => {
   it("the standard pipeline fits in about 1300px", () => {
     const layout = layoutOf(beltOf(STANDARD_PIPELINE))
     expect(layout.width).toBeLessThan(1310)
+  })
+})
+
+describe("besideOf", () => {
+  const box: Box = { x: 100, y: 40, w: 100, h: 44 }
+
+  it("floats a panel right of the block when it fits there", () => {
+    expect(besideOf(box, 600, 300)).toEqual([212, 40])
+  })
+
+  it("floats it left of a block near the drawing's right edge", () => {
+    expect(besideOf({ ...box, x: 500 }, 600, 300)).toEqual([188, 40])
+  })
+
+  it("floats it under the block when neither side has room, inside the drawing", () => {
+    expect(besideOf(box, 350, 300)).toEqual([50, 96])
   })
 })

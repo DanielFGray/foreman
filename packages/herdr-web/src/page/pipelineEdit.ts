@@ -4,7 +4,7 @@
 // keeps the editor's selection pointing at a block that still exists.
 import { Option, Schema as S } from "effect"
 import { LANDINGS, type Pipeline, type PipelineNode } from "foreman/pipeline"
-import { addRoute, addSource, configure, INSERTABLE, insertOn, rejoin, remove, removeRoute, swapEnd } from "foreman/pipeline-belt"
+import { addRoute, addSource, configure, INSERTABLE, type Insertable, insertOn, rejoin, remove, removeRoute, swapEnd, type Wire } from "foreman/pipeline-belt"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 
 /** One way out of a block, as `pipeline-belt` names it: `next`, a router's `else`, or route `n`. */
@@ -26,8 +26,8 @@ export const BlockSetting = S.Union([
 /** A change the operator makes to the draft, or to what the editor has picked. */
 export const PipelineEdit = S.Union([
   S.TaggedStruct("Select", { id: S.Option(S.String) }),
-  /** Opens or closes the choice of block to put on a wire. */
-  S.TaggedStruct("PickWire", { wire: S.Option(WireRef) }),
+  /** Picks the kind of block that the next "+" on a belt puts there, or drops the pick. */
+  S.TaggedStruct("PickKind", { kind: S.Option(S.Literals(INSERTABLE)) }),
   S.TaggedStruct("InsertOn", { wire: WireRef, kind: S.Literals(INSERTABLE) }),
   S.TaggedStruct("Remove", { id: S.String }),
   S.TaggedStruct("AddRoute", { router: S.String, when: S.String }),
@@ -39,11 +39,11 @@ export const PipelineEdit = S.Union([
 ])
 export type PipelineEdit = typeof PipelineEdit.Type
 
-/** What an edit changes: the draft, the block picked, and the wire a new block is being chosen for. */
+/** What an edit changes: the draft, the block picked, and the kind of block a "+" puts on a belt. */
 export interface Drafting {
   readonly draft: Pipeline
   readonly selected: Option.Option<string>
-  readonly inserting: Option.Option<WireRef>
+  readonly placing: Option.Option<Insertable>
 }
 
 export const applyEdit = (now: Drafting, edit: PipelineEdit): Drafting => {
@@ -51,11 +51,11 @@ export const applyEdit = (now: Drafting, edit: PipelineEdit): Drafting => {
   switch (edit._tag) {
     case "Select":
       return { ...now, selected: edit.id }
-    case "PickWire":
-      return { ...now, inserting: edit.wire }
+    case "PickKind":
+      return { ...now, placing: edit.kind }
     case "InsertOn": {
       const inserted = insertOn(draft, edit.wire, edit.kind)
-      return settled({ draft: inserted.pipeline, selected: inserted.id === "" ? now.selected : Option.some(inserted.id), inserting: Option.none() })
+      return settled({ draft: inserted.pipeline, selected: inserted.id === "" ? now.selected : Option.some(inserted.id), placing: Option.none() })
     }
     case "Remove":
       return settled({ ...now, draft: remove(draft, edit.id) })
@@ -76,15 +76,17 @@ export const applyEdit = (now: Drafting, edit: PipelineEdit): Drafting => {
   }
 }
 
-/** The picks that name a block or wire the draft no longer has are dropped. */
+/** A pick that names a block the draft no longer has is dropped. */
 const settled = (now: Drafting): Drafting => ({
-  draft: now.draft,
+  ...now,
   selected: Option.filter(now.selected, (id) => now.draft.nodes.some((node) => node.id === id)),
-  inserting: Option.filter(now.inserting, (wire) => now.draft.nodes.some((node) => node.id === wire.from)),
 })
 
-/** Whether the draft differs from what is saved. */
-export const isDirty = (saved: Pipeline, draft: Pipeline): boolean => JSON.stringify(saved) !== JSON.stringify(draft)
+/** How each kind of block is marked on its card and in the palette. */
+export const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸", branch: "⎇", worktree: "▤", done: "✔" }
+
+/** A wire's way out in words: `next`, `else`, or `route n` counted from one. */
+export const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
 
 /** A block's settings in a few words, for its card. */
 export const summaryOf = (node: PipelineNode): string => {
@@ -104,9 +106,9 @@ export const summaryOf = (node: PipelineNode): string => {
     case "worktree":
       return "a directory of its own"
     case "land":
-      return node.how === "fast-forward" ? "fast-forwards the branch" : "merges the branch"
+      return node.how === "fast-forward" ? "fast-forwards" : "merges"
     case "done":
-      return "completes the task"
+      return "completes"
     case "park":
       return "waits for you"
   }

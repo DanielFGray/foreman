@@ -156,3 +156,15 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
  */
 export const ForemanPipeline = S.Struct({ project: S.String, drawn: S.Boolean, pipeline: Pipeline, problems: S.Array(S.String) })
 export type ForemanPipeline = typeof ForemanPipeline.Type
+
+/**
+ * One rung of the ladder, cheapest first, as `foreman ladder list --json`
+ * prints it. `state` is `disabled`, `retired`, or the model's record (`proven`,
+ * `trial`); it stays a string so a state foreman adds later still reads.
+ */
+export const ForemanRung = S.Struct({ rung: S.String, state: S.String })
+export type ForemanRung = typeof ForemanRung.Type
+
+/** The rungs a queued task can be launched on: every one not disabled. */
+export const launchableRungs = (rungs: ReadonlyArray<ForemanRung>): ReadonlyArray<string> =>
+  rungs.flatMap(({ rung, state }) => (state === "disabled" ? [] : [rung]))

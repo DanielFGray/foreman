@@ -3,9 +3,9 @@
 // ladder's rungs (`problemsFor`), and a stored copy could go stale.
 import { Option } from "effect"
 import { problemsOf } from "foreman/pipeline"
-import { ClearForemanPipeline, LoadForemanPipeline, SaveForemanPipeline } from "./commands.ts"
+import { ClearForemanPipeline, LoadForemanPipeline, SaveClosedPanels, SaveForemanPipeline } from "./commands.ts"
 import { selectedProject, withPage } from "./foreman.ts"
-import { type ForemanPage, type Model, PipelineView, type UpdateReturn } from "./model.ts"
+import { type ForemanPage, Message, type Model, type PipelinePanel, PipelineView, type UpdateReturn } from "./model.ts"
 import { applyEdit, type PipelineEdit } from "./pipelineEdit.ts"
 
 type Editing = Extract<PipelineView, { _tag: "Editing" }>
@@ -18,7 +18,7 @@ export const RESET_LINE = "pipeline clear"
  * rungs decide which models are valid, so no answer is better than a wrong one.
  */
 export const problemsFor = (page: ForemanPage, editing: Editing): Option.Option<ReadonlyArray<string>> =>
-  page.rungs._tag === "Listed" ? Option.some(problemsOf(editing.draft, page.rungs.rungs)) : Option.none()
+  page.rungs._tag === "Listed" ? Option.some(problemsOf(editing.draft, page.rungs.rungs.map(({ rung }) => rung))) : Option.none()
 
 /** Opens the editor on the selected space's project, or reads it again. */
 export const openedPipeline = (model: Model): UpdateReturn =>
@@ -36,7 +36,7 @@ export const closedPipeline = (model: Model): Model => withPage(model, (page) =>
 export const receivedPipeline = (model: Model, project: string, drawn: boolean, pipeline: Editing["saved"]): Model =>
   withPage(model, (page) =>
     isAbout(page.pipeline, project)
-      ? { ...page, pipeline: PipelineView.Editing({ project, drawn, saved: pipeline, draft: pipeline, selected: Option.none(), inserting: Option.none(), saving: false, refusal: Option.none() }) }
+      ? { ...page, pipeline: PipelineView.Editing({ project, drawn, saved: pipeline, draft: pipeline, selected: Option.none(), placing: Option.none(), saving: false, refusal: Option.none() }) }
       : page,
   )
 
@@ -63,7 +63,7 @@ export const clickedSave = (model: Model): UpdateReturn => {
 }
 
 export const clickedRevert = (model: Model): Model =>
-  withEditing(model, (editing) => ({ ...editing, ...applyEdit({ ...editing, draft: editing.saved }, { _tag: "Select", id: editing.selected }), inserting: Option.none(), refusal: Option.none() }))
+  withEditing(model, (editing) => ({ ...editing, ...applyEdit({ ...editing, draft: editing.saved }, { _tag: "Select", id: editing.selected }), placing: Option.none(), refusal: Option.none() }))
 
 /** Drops the project's own pipeline. It discards the saved one, so it arms on the first click like the other commands that give something up. */
 export const clickedReset = (model: Model): UpdateReturn => {
@@ -90,3 +90,12 @@ const isAbout = (view: PipelineView, project: string): boolean => view._tag !== 
 const withEditing = (model: Model, change: (editing: Editing) => Editing): Model =>
   withPage(model, (page) => (page.pipeline._tag === "Editing" ? { ...page, pipeline: change(page.pipeline) } : page))
 
+/** Closes an open panel or opens a closed one, and keeps the choice in this browser. */
+export const toggledPanel = (model: Model, panel: PipelinePanel): UpdateReturn => {
+  const closed = model.foremanPage.closedPanels
+  const closedPanels = closed.includes(panel) ? closed.filter((other) => other !== panel) : [...closed, panel]
+  return { model: withPage(model, (page) => ({ ...page, closedPanels })), commands: [SaveClosedPanels({ closedPanels })] }
+}
+
+/** The message that applies one edit to the draft. */
+export const edit = (change: PipelineEdit): Message => Message.EditedPipeline({ edit: change })

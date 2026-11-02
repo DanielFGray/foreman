@@ -5,12 +5,12 @@
 // as the reading's state, and the dispatcher starts again after a pause, while
 // the bridge goes on serving. Each reading is also written to state.json, which
 // the herdr-app panel reads.
-import { Array, Cause, Context, Effect, Layer, Option, Ref, Result, Schedule, Schema as S, Stream, SubscriptionRef } from "effect"
+import { Cause, Context, Effect, Layer, Option, Ref, Schedule, Schema as S, Stream, SubscriptionRef } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { buildHost, type FleetState, type Host, Published, PublishedRow, publishedFailure, publishedOf, publishedPath, statusOf, writePublished } from "foreman"
 import { BridgeError } from "../shared/Api.ts"
 import { Pipeline } from "foreman/pipeline"
-import { argvOf, type ForemanCommand, ForemanPipeline, ForemanReading, ForemanRow, type ForemanState } from "../shared/Foreman.ts"
+import { argvOf, type ForemanCommand, ForemanPipeline, ForemanReading, ForemanRow, ForemanRung, type ForemanState } from "../shared/Foreman.ts"
 
 /** Builds foreman's dispatcher and its services; a test gives a fake one. */
 export class ForemanHost extends Context.Service<ForemanHost>()("herdr-web/server/ForemanHost", {
@@ -104,14 +104,13 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
        */
       run: (command: ForemanCommand) => foreman(argvOf(command)).pipe(Effect.andThen(wake)),
       refresh: wake,
-      /** The ladder's rungs a task can be launched on: every one not disabled. */
+      /** Every rung of the ladder with its state, cheapest first. */
       rungs: foreman(["ladder", "list", "--json"]).pipe(
         Effect.flatMap((text) =>
-          S.decodeEffect(S.fromJsonString(S.Array(Rung)))(text).pipe(
+          S.decodeEffect(S.fromJsonString(S.Array(ForemanRung)))(text).pipe(
             Effect.mapError((error) => new BridgeError({ kind: "foreman", message: `foreman's ladder is unreadable: ${error.message}` })),
           ),
         ),
-        Effect.map((rungs) => Array.filterMap(rungs, ({ rung, state }) => (state === "disabled" ? Result.failVoid : Result.succeed(rung)))),
       ),
       /** The pipeline a project runs, as `foreman pipeline show` prints it. */
       pipeline: (project: string) =>
@@ -171,8 +170,6 @@ export const EMPTY_STATE: ForemanState = { reading: Option.none(), problem: Opti
 const BACKOFF = Schedule.min([Schedule.exponential("1 second"), Schedule.spaced("1 minute")])
 
 const PROGRAM = "foreman"
-
-const Rung = S.Struct({ rung: S.String, state: S.String })
 
 // The end of a failure's output says why; the start is usually a usage line.
 const lastLines = (text: string) => text.trim().split("\n").slice(-4).join("\n")

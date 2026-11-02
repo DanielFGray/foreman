@@ -13,7 +13,7 @@ Working directory: {{ worktree }}
 ## Start
 
 1. `git status` and {% if (workspace === "none") { %}`git log {{ base }}..HEAD`{% } else { %}`git log {{ branch }}`{% } %}: an earlier author may have left work here.
-2. `prog show {{ task }}`, then `prog context` for its concepts, then the project's
+2. `tasks show {{ task }}`, then `prog context` for its concepts, then the project's
    AGENTS.md or CLAUDE.md.
 3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
    or uncertain change, `~/.agents/skills/figure-it-out/SKILL.md`.
@@ -43,16 +43,16 @@ Working directory: {{ worktree }}
   and commit it. Foreman runs that script before every dispatch, so each step must be
   safe to run twice.
 - Commit each logical unit. Log each settled decision with
-  `prog log {{ task }} "Decision. ... Evidence. ... Result. ..."`. git log and the
-  prog log must be enough for another agent to continue.
+  `tasks log {{ task }} "Decision. ... Evidence. ... Result. ..."`. git log and the
+  tasks log must be enough for another agent to continue.
 - No stubs, and no workaround that needs a paragraph to defend it. Never weaken, skip
   or delete a test to green the suite: log why it is wrong and leave it failing.
 - Prove the behavior through the project's real user-facing interface, and record the
   evidence in the task log.
-- A failure that is already on trunk is not yours. Search `prog list -p {{ project }}`
+- A failure that is already on trunk is not yours. Search `tasks list -p {{ project }}`
   and match on the test name, not on wording. If a task describes it, do not file a
-  new one: `prog log <id> "<what failed>"` and name that task in your log. File with
-  `prog add` only when nothing in the backlog describes it.
+  new one: `tasks log <id> "<what failed>"` and name that task in your log. File with
+  `tasks add` only when nothing in the backlog describes it.
 
 ## Finish
 
@@ -60,17 +60,17 @@ Working directory: {{ worktree }}
    your change made stale.
 2. Read {% if (workspace === "none") { %}`git diff {{ base }} HEAD`{% } else { %}`git diff HEAD...{{ branch }}`{% } %} once as a stranger's diff: walk the definition
    of done and point at the code for each part. Fix what you find.
-3. `prog review {{ task }}`, then stop. A reviewer may send you one mechanical defect:
+3. `tasks review {{ task }}`, then stop. A reviewer may send you one mechanical defect:
    fix exactly that, commit, stop again. {% if (workspace === "none") { %}Foreman completes the task after an approval;
    do not mark it done.{% } else { %}Foreman merges; do not merge and do not mark
    the task done.{% } %}
 {% if (labels.includes("research")) { %}
 This task is labelled `research`: the deliverable is a report, not code. Write it
-to `prog log {{ task }}` with the commands you ran and what they showed, so a
-reviewer can check every claim. Then `prog review {{ task }}`, with no commits of your own.{% if (workspace !== "none") { %} The branch stays empty.{% } %}
+to `tasks log {{ task }}` with the commands you ran and what they showed, so a
+reviewer can check every claim. Then `tasks review {{ task }}`, with no commits of your own.{% if (workspace !== "none") { %} The branch stays empty.{% } %}
 {% } %}
 If trunk already does everything the task asks, prove it part by part in
-`prog log {{ task }}` (code, tests, commits), then `tasks verdict {{ task }} satisfied`,
+`tasks log {{ task }}` (code, tests, commits), then `tasks verdict {{ task }} satisfied`,
 which also sends the task to review. Partly done is not done; a claim you cannot point at
 line by line is rejected.
 

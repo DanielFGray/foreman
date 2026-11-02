@@ -1,17 +1,18 @@
 import { Option } from "effect"
 import { type Pipeline, STANDARD_PIPELINE } from "foreman/pipeline"
 import { expect, test } from "vitest"
-import { applyEdit, type Drafting, isDirty, summaryOf } from "./pipelineEdit.ts"
+import { applyEdit, type Drafting, summaryOf } from "./pipelineEdit.ts"
 
-const from = (draft: Pipeline, selected = Option.none<string>()): Drafting => ({ draft, selected, inserting: Option.none() })
+const from = (draft: Pipeline, selected = Option.none<string>()): Drafting => ({ draft, selected, placing: Option.none() })
 
-test("an inserted block is picked and the choice of block closes", () => {
+test("an inserted block is picked and the palette's pick is dropped", () => {
   const wire = { from: "queue", port: "next" as const }
-  const picked = applyEdit(from(STANDARD_PIPELINE), { _tag: "PickWire", wire: Option.some(wire) })
+  const picked = applyEdit(from(STANDARD_PIPELINE), { _tag: "PickKind", kind: Option.some("gate") })
+  expect(picked.placing).toEqual(Option.some("gate"))
   const inserted = applyEdit(picked, { _tag: "InsertOn", wire, kind: "gate" })
   expect(inserted.draft.nodes).toHaveLength(STANDARD_PIPELINE.nodes.length + 1)
   expect(Option.map(inserted.selected, (id) => id.startsWith("gate-"))).toEqual(Option.some(true))
-  expect(inserted.inserting).toEqual(Option.none())
+  expect(inserted.placing).toEqual(Option.none())
 })
 
 test("removing the picked block drops the pick", () => {
@@ -23,11 +24,6 @@ test("removing the picked block drops the pick", () => {
 test("a rejoin that would loop leaves the draft as it was", () => {
   const looped = applyEdit(from(STANDARD_PIPELINE), { _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "queue" })
   expect(looped.draft).toEqual(STANDARD_PIPELINE)
-})
-
-test("a draft is dirty once it differs from the saved pipeline", () => {
-  expect(isDirty(STANDARD_PIPELINE, STANDARD_PIPELINE)).toBe(false)
-  expect(isDirty(STANDARD_PIPELINE, applyEdit(from(STANDARD_PIPELINE), { _tag: "SwapEnd", id: "land" }).draft)).toBe(true)
 })
 
 test("a card says what its block does in a few words", () => {
