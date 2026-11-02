@@ -37,13 +37,12 @@ herdr-web is a bridge, a small Bun server on the computer that runs herdr. The p
 git clone https://github.com/DanielFGray/herdr-web
 cd herdr-web
 bun install
-bun run build
 bun run start
 ```
 
 Open http://127.0.0.1:4180.
 
-`bun run build` builds the page into `dist/`, and the bridge serves it from there. Build again after you change the page.
+`bun run start` builds the page into `dist/` and then starts the bridge, which serves it from there, so a restart always serves the checked-out page. `bun run build` builds the page alone; the running bridge serves the new build at the next page load.
 
 ## Use it from your phone with Tailscale
 
