@@ -25,7 +25,7 @@ That is what makes it survivable. Kill foreman mid-flight and restart it, and it
 re-adopts its live workers instead of orphaning them — a task with a
 `foreman/<task-id>` workspace is being worked on, by definition, whoever started
 it. It also means anything else can read the same picture: `herdr workspace list`
-and `prog list` together tell you everything foreman knows.
+and `tasks list` together tell you everything foreman knows.
 
 ## What one tick does
 
@@ -255,7 +255,7 @@ Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
 ## Review
 
-An author commits to its branch and runs `prog review`, which hands the task to
+An author commits to its branch and runs `tasks review`, which hands the task to
 the review queue.
 
 Only tasks foreman authored are reviewed. `reviewing` is a status anything can
@@ -264,7 +264,7 @@ behind it — no diff to read, and nothing to merge. Foreman labels each task
 `by:<kind>` when an agent actually starts, and that label is what marks the task
 as its own.
 
-The branch must also hold a commit. An agent can run `prog review` having
+The branch must also hold a commit. An agent can run `tasks review` having
 written nothing, and the label alone would send a second agent to read an empty
 diff. Foreman asks git for the branches carrying commits the checkout does not
 have, and a handoff missing from that list goes straight back to the queue with
@@ -293,7 +293,7 @@ cannot mask the current role's state.
 The world records that a reviewer was dispatched, not whether it is still alive.
 A task that is open in the queue with a `review-by:*` label and no live reviewer
 behind it has a stale label, and only you can say so: the dashboard's `u` clears
-it — the same `prog unlabel` foreman runs when a review ends.
+it — the same `tasks unlabel` foreman runs when a review ends.
 
 A reviewer arrives with no sunk cost in the implementation, which is the point.
 It may fix trivia in place; anything substantive goes back to the queue with the
@@ -436,7 +436,7 @@ below them would stall.
 
 A task reaches you two ways. Its recorded failures leave no rung above them,
 meaning nothing configured could finish it — a task the best model could not do
-should stop, not cycle. Or you park it with `prog label <task> needs-you`, which
+should stop, not cycle. Or you park it with `tasks label <task> needs-you`, which
 is what work that was never specified needs: dispatching it once to discover that
 wastes a run.
 
@@ -444,7 +444,7 @@ It waits under dashboard **Attention**, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
 column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
-task with `prog append`, then `prog unlabel <task> needs-you`, in that order.
+task with `tasks append`, then `tasks unlabel <task> needs-you`, in that order.
 The next author reads the answer in the description.
 
 The one exception is `x`, which takes back one thing that put the task here: the

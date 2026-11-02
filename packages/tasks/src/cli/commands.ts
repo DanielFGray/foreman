@@ -11,7 +11,7 @@ import {
   type Verdict,
 } from "tasks";
 import { PRIME } from "./prime.ts";
-import { detail, lines } from "./render.ts";
+import { detail, json, lines } from "./render.ts";
 import { prose } from "./text.ts";
 
 /**
@@ -25,17 +25,32 @@ import { prose } from "./text.ts";
 
 const id = Argument.String("id");
 const text = (name: string) => Argument.String(name);
-const project = Flag.String("project").pipe(Flag.withAlias("p"));
-const projectFilter = project.pipe(Flag.optional);
 const labels = Flag.String("label").pipe(Flag.withAlias("l"), Flag.atLeast(0));
+const asJson = Flag.Boolean("json").pipe(Flag.withDefault(false));
+
+/** The root command owns `-p`, as the Go `prog` does: `tasks -p foo list` and `tasks list -p foo` both work. */
+const root = Command.make("tasks").pipe(
+  Command.withSharedFlags({
+    project: Flag.String("project").pipe(Flag.withAlias("p"), Flag.optional),
+  }),
+);
+
+const projectOf = () =>
+  Effect.gen(function* () {
+    return Option.getOrUndefined((yield* root).project);
+  });
 
 const add = Command.make(
   "add",
   {
     title: Argument.String("title"),
-    project,
-    description: Flag.String("description").pipe(Flag.withAlias("d"), Flag.optional),
+    description: Flag.String("desc").pipe(
+      Flag.withAlias("d"),
+      Flag.withAlias("description"),
+      Flag.optional,
+    ),
     labels,
+    blocks: Flag.String("blocks").pipe(Flag.optional),
     epic: Flag.Boolean("epic").pipe(Flag.withAlias("e"), Flag.withDefault(false)),
     parent: Flag.String("parent").pipe(Flag.optional),
     priority: Flag.Int("priority").pipe(Flag.optional),
@@ -45,11 +60,16 @@ const add = Command.make(
   (args) =>
     Effect.gen(function* () {
       const tasks = yield* Tasks;
+      const project = yield* projectOf();
+      if (project === undefined) {
+        return yield* new TaskError({ id: "add", detail: "project is required (-p)" });
+      }
       const description = yield* optionalProse(args.description);
       const definitionOfDone = yield* optionalProse(args.dod);
+      if (Option.isSome(args.blocks)) yield* tasks.require(args.blocks.value);
       const added = yield* tasks.add({
         title: args.title,
-        project: args.project,
+        project,
         type: args.epic ? "epic" : "task",
         status: Option.getOrUndefined(args.status),
         priority: Option.getOrUndefined(args.priority),
@@ -58,9 +78,14 @@ const add = Command.make(
         definitionOfDone,
         labels: args.labels,
       });
-      yield* Console.log(`Created ${added}`);
+      if (Option.isSome(args.blocks)) yield* tasks.block(added, args.blocks.value);
+      yield* Console.log(added);
     }),
-).pipe(Command.withDescription("Create a task, or an epic with --epic. Prints the new id"));
+).pipe(
+  Command.withDescription(
+    "Create a task, or an epic with --epic. Prints the new id and nothing else, so $(tasks add ...) holds the id. --blocks makes the new task a prerequisite of another",
+  ),
+);
 
 const show = Command.make("show", { id }, ({ id }) =>
   Effect.gen(function* () {
@@ -82,34 +107,39 @@ const show = Command.make("show", { id }, ({ id }) =>
 const list = Command.make(
   "list",
   {
-    project: projectFilter,
     status: Flag.Literals("status", STATUSES).pipe(Flag.optional),
+    type: Flag.Literals("type", ["task", "epic"]).pipe(Flag.optional),
+    parent: Flag.String("parent").pipe(Flag.optional),
     labels,
+    json: asJson,
   },
   (args) =>
     Effect.gen(function* () {
       const tasks = yield* Tasks;
       const found = yield* tasks.list({
-        project: Option.getOrUndefined(args.project),
+        project: yield* projectOf(),
         status: Option.getOrUndefined(args.status),
+        type: Option.getOrUndefined(args.type),
+        parent: Option.getOrUndefined(args.parent),
         labels: args.labels,
       });
-      yield* Console.log(lines(found));
+      yield* Console.log(args.json ? json(found) : lines(found));
     }),
 ).pipe(
   Command.withDescription(
-    "List tasks, one line each: id, status, priority, project, title. Each --label narrows the list",
+    "List tasks, one line each: id, status, priority, project, title. Each --label, --status, --type and --parent narrows the list. --json prints an array of objects",
   ),
 );
 
-const ready = Command.make("ready", { project: projectFilter, labels }, (args) =>
+const ready = Command.make("ready", { labels, json: asJson }, (args) =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
-    yield* Console.log(lines(yield* tasks.ready(Option.getOrUndefined(args.project), args.labels)));
+    const found = yield* tasks.ready(yield* projectOf(), args.labels);
+    yield* Console.log(args.json ? json(found) : lines(found));
   }),
 ).pipe(
   Command.withDescription(
-    "List the open tasks whose dependencies are resolved, best first. A task labelled question is never ready",
+    "List the open tasks whose dependencies are resolved, best first. A task labelled question is never ready. --json prints an array of objects",
   ),
 );
 
@@ -258,32 +288,48 @@ const priority = Command.make(
     }),
 ).pipe(Command.withDescription("Set a task's priority: 1 is high, 2 is medium, 3 is low"));
 
-const status = Command.make("status", { project: projectFilter }, (args) =>
-  Effect.gen(function* () {
-    const tasks = yield* Tasks;
-    const found = yield* tasks.list({ project: Option.getOrUndefined(args.project) });
-    const counts = STATUSES.map(
-      (s) => [s, found.filter((item) => item.status === s).length] as const,
-    )
-      .filter(([, count]) => count > 0)
-      .map(([s, count]) => `${s} ${count}`);
-    yield* Console.log(`Tasks: ${found.length} (${counts.join(", ")})`);
-    const section = (title: string, items: typeof found) =>
-      items.length === 0 ? Effect.void : Console.log(`\n${title}:\n${lines(items)}`);
-    const of = (s: string) => found.filter((item) => item.status === s && item.type === "task");
-    yield* section("In progress", of("in_progress"));
-    yield* section("Reviewing", of("reviewing"));
-    yield* section("Proposals awaiting authorisation", of("proposed"));
-    yield* section("Ready", (yield* tasks.ready(Option.getOrUndefined(args.project))).slice(0, 10));
-  }),
+const status = Command.make(
+  "status",
+  {
+    labels,
+    all: Flag.Boolean("all").pipe(Flag.withDefault(false)),
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const tasks = yield* Tasks;
+      const project = yield* projectOf();
+      const found = yield* tasks.list({ project, labels: args.labels });
+      const counts = STATUSES.map(
+        (s) => [s, found.filter((item) => item.status === s).length] as const,
+      )
+        .filter(([, count]) => count > 0)
+        .map(([s, count]) => `${s} ${count}`);
+      yield* Console.log(`Tasks: ${found.length} (${counts.join(", ")})`);
+      const section = (title: string, items: typeof found) =>
+        items.length === 0 ? Effect.void : Console.log(`\n${title}:\n${lines(items)}`);
+      const of = (s: string) => found.filter((item) => item.status === s && item.type === "task");
+      const open = (item: (typeof found)[number]) =>
+        item.status !== "done" && item.status !== "canceled";
+      yield* section("In progress", of("in_progress"));
+      yield* section("Reviewing", of("reviewing"));
+      yield* section("Proposals awaiting authorisation", of("proposed"));
+      yield* section(
+        "Questions (open decisions)",
+        found.filter((item) => item.labels.includes("question") && open(item)),
+      );
+      const ready = yield* tasks.ready(project, args.labels);
+      yield* section(`Ready (${ready.length})`, args.all ? ready : ready.slice(0, 10));
+    }),
 ).pipe(
-  Command.withDescription("Count tasks by status and list what is under way and what is ready"),
+  Command.withDescription(
+    "Count tasks by status and list what is under way, what waits on a decision and what is ready. --all lists every ready task, not the first 10",
+  ),
 );
 
-const graph = Command.make("graph", { project: projectFilter }, (args) =>
+const graph = Command.make("graph", {}, () =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
-    const edges = yield* tasks.allDependencies(Option.getOrUndefined(args.project));
+    const edges = yield* tasks.allDependencies(yield* projectOf());
     const ids = [...new Set(edges.flatMap((edge) => [edge.item, edge.dependsOn]))];
     const nodes = yield* Effect.forEach(ids, (taskId) =>
       tasks
@@ -312,7 +358,7 @@ const prime = Command.make("prime", {}, () => Console.log(PRIME)).pipe(
   Command.withDescription("Print the workflow an agent follows with tasks"),
 );
 
-export const tasksCommand = Command.make("tasks", {}).pipe(
+export const tasksCommand = root.pipe(
   Command.withDescription("Track tasks across sessions"),
   Command.withSubcommands([
     add,
