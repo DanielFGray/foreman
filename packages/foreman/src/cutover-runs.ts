@@ -101,6 +101,21 @@ export const planOf = (
 
   const planned: Array<PlannedRun> = [];
 
+  // Only work in flight has a lap to keep. On a task back in the queue, `by:`
+  // names an attempt that was released, not handed off, and nothing reads it:
+  // the next author is chosen from `failed-by`, which stays a label. A run made
+  // up for it would pass the author block and count in the model statistics.
+  if (task.status !== "in_progress" && task.status !== "reviewing") {
+    return {
+      task: task.id,
+      labels,
+      runs: [],
+      unknownRungs: [],
+      branchGone: false,
+      dropped: labels,
+    };
+  }
+
   const open = task.status === "in_progress";
   const [author] = after(labels, BY);
   if (author !== undefined) {
@@ -213,7 +228,7 @@ export const reportLines = ({ plans, written }: Report): ReadonlyArray<string> =
       ({ run, ending }) =>
         `  ${verb} ${run.work} run on ${run.rung ?? "?"} ${ending ?? "open"}${run.commit === undefined ? "" : ` at ${run.commit.slice(0, 8)}`}`,
     ),
-    ...plan.dropped.map((label) => `  removes ${label} with no run: the task has no author`),
+    ...plan.dropped.map((label) => `  removes ${label}: no run stands for it`),
   ]);
   const unknown = plans.filter((plan) => plan.unknownRungs.length > 0);
   const gone = plans.filter((plan) => plan.branchGone);

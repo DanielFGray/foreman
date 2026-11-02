@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
+import type { SqlClient } from "effect/sql";
 import { runsOf, Tasks } from "tasks";
 import { convert, reportLines } from "./cutover-runs.ts";
 import { isApproved, reviewedBy, reviewFailedBy } from "./lap.ts";
@@ -36,12 +37,12 @@ const layer = Layer.mergeAll(Tasks.layerSql, Repository.Default).pipe(
   Layer.provideMerge(store.layer),
 );
 
-const program = <A, E>(effect: Effect.Effect<A, E, Tasks | Repository>) =>
+const program = <A, E>(effect: Effect.Effect<A, E, Tasks | Repository | SqlClient.SqlClient>) =>
   Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<A, E>);
 
 /** A task with these labels, in this status; its branch exists when `branch` is true. */
 const taskWith = (
-  status: "in_progress" | "reviewing" | "done",
+  status: "open" | "in_progress" | "reviewing" | "done",
   labels: Array<string>,
   branch = true,
 ) =>
@@ -134,6 +135,24 @@ describe("the runs cutover", () => {
         const text = reportLines(report).join("\n");
         expect(text).toContain("rungs the ladder no longer has");
         expect(text).toContain("branch gone");
+      }),
+    ));
+
+  test("a task back in the queue loses its old labels and gains no runs", () =>
+    program(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        // A released attempt: its by: label names no run that handed work off.
+        const queued = yield* taskWith("open", ["by:cheap", "rounds:1", "failed-by:cheap", "bug"]);
+
+        const report = yield* convert({ root, dryRun: false });
+
+        expect((yield* runsOf([queued])).has(queued)).toBe(false);
+        expect((yield* tasks.require(queued)).labels.slice().sort()).toEqual([
+          "bug",
+          "failed-by:cheap",
+        ]);
+        expect(report.plans.find((plan) => plan.task === queued)?.runs).toEqual([]);
       }),
     ));
 
