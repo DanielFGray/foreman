@@ -243,14 +243,16 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       /**
        * Puts a reviewer on the task: opens its review run at the branch tip it
        * reads, and closes the author's run `handed-off` at that same tip, in
-       * one transaction. The author's work is what the reviewer reads.
+       * one transaction. The author's work is what the reviewer reads. A review
+       * run still open belongs to a reviewer this one replaces, such as one that
+       * vanished; it ends `released`, which charges its rung nothing.
        */
       assignReview: (task: string, run: NewRun) =>
         together(
           `assign review ${task}`,
-          onStore(closeOpenRuns(task, { author: "handed-off", commit: run.commit })).pipe(
-            Effect.andThen(onStore(openRun(run))),
-          ),
+          onStore(
+            closeOpenRuns(task, { author: "handed-off", review: "released", commit: run.commit }),
+          ).pipe(Effect.andThen(onStore(openRun(run)))),
         ),
 
       /**
