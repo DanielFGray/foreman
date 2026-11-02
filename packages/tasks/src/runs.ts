@@ -74,6 +74,8 @@ export interface NewRun {
   readonly work: Work;
   /** A review run records the branch tip it reads. */
   readonly commit?: string | undefined;
+  /** Correction rounds already counted; absent for a run that starts new. */
+  readonly rounds?: number | undefined;
   readonly size?: number | undefined;
   readonly evidence?: string | undefined;
 }
@@ -83,11 +85,11 @@ export const openRun = (run: NewRun) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const rows = yield* sql<{ id: number }>`INSERT INTO runs
-      (project, task, slice, kind, pool, model, rung, node, work, "commit", size, evidence,
+      (project, task, slice, kind, pool, model, rung, node, work, "commit", rounds, size, evidence,
        started_at, closed_at, outcome)
       VALUES (${run.project}, ${run.task}, ${run.slice}, ${run.kind}, ${run.pool}, ${run.model},
               ${run.rung ?? null}, ${run.node}, ${run.work}, ${run.commit ?? null},
-              ${run.size ?? null}, ${run.evidence ?? null}, datetime('now'), NULL, NULL)
+              ${run.rounds ?? null}, ${run.size ?? null}, ${run.evidence ?? null}, datetime('now'), NULL, NULL)
       RETURNING id`;
     return rows[0]!.id;
   });
