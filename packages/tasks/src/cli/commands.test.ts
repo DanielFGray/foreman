@@ -142,6 +142,9 @@ describe("tasks status changes", () => {
     expect(await run(["start", id])).toBe(`Started ${id}`);
     expect(await run(["show", id])).toContain("Status:      in_progress");
     await run(["review", id]);
+    expect(await run(["start", id])).toBe(`Started ${id}`);
+    expect(await run(["show", id])).toContain("Status:      in_progress");
+    await run(["review", id]);
     await run(["done", id]);
     expect(await run(["list", "-p", "d", "--status", "done"])).toContain(id);
     await run(["open", id]);

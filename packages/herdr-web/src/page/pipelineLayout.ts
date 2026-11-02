@@ -93,7 +93,9 @@ export const layoutOf = (belt: Belt): Layout => {
       const { w, h } = sizeFor(cell)
       boxes.set(cell.node.id, { x: left + (columnWidth[column]! - w) / 2, y: rowTop[cell.row]! + (rowHeight[cell.row]! - h) / 2, w, h })
     }
-    const leaving = belt.wires.filter((wire) => here.some((cell) => cell.node.id === wire.from))
+    // A return's label has the whole backward route for room. Only forward
+    // wires need label space in the gap before the next column.
+    const leaving = belt.wires.filter((wire) => here.some((cell) => cell.node.id === wire.from) && belt.cells.some((cell) => cell.node.id === wire.to && cell.column > column))
     gap[column] = Math.max(MIN_GAP_X, ...leaving.map((wire) => labelWidth(wire.label) + 18 + STAGGER * (leaving.length - 1)))
     left += columnWidth[column]! + gap[column]!
   }

@@ -1319,12 +1319,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       yield* Effect.forEach(
         current.owned.filter(({ task, worker }) => {
           const pipeline = pipelineOf(task);
+          const run = task.runs.at(-1);
+          const block = pipeline?.nodes.find((node) => node.id === run?.node);
+          const exit =
+            block?.kind === "agent" || block?.kind === "check"
+              ? block.exits.find((candidate) => candidate.name === run?.ending)
+              : undefined;
+          const placement = pipeline && place(pipeline, factsOf(task, pipeline));
           return (
             pipeline !== undefined &&
             diagnosticIntent(task) === undefined &&
             !awaitingLanding(pipeline, task) &&
             // An agent that named its exit finished; the step above closes its run.
             !endedAt(pipeline, task) &&
+            // A closed run wired onward is waiting for its next block, even
+            // when stopping its agent left the workspace with no live pane.
+            !(
+              run?.open === false &&
+              exit !== undefined &&
+              exit.to !== QUEUE &&
+              placement?._tag === "At" &&
+              placement.state === "waiting"
+            ) &&
             worker.state !== "working"
           );
         }),

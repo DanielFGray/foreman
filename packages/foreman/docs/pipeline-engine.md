@@ -56,8 +56,10 @@ applied to the graph. The exit is evidence of what the agent said; its wire is
 read from the drawing as it is now, so an edit to the wire moves the task.
 
 An exit may wire back to an earlier block, so the graph may hold a cycle.
-Validation refuses a cycle that cannot end. The standard pipeline has no cycle:
-its returns go through the queue.
+Validation refuses a cycle that cannot end. In the standard pipeline, a returned
+review follows a cycle through the `climb` gate to the next author, keeping the
+claim and workspace. See "The standard pipeline, drawn with exits" in
+`agent-exits.md`. Saved pipelines keep their drawn returns to the queue.
 
 ## Blocks
 

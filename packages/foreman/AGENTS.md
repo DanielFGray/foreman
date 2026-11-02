@@ -585,6 +585,11 @@ re-checks the checkout and the tip, merges the approved commit by its id, never
 the branch name, and only then completes the task. A tip that moved since the
 approval is refused, and the task goes to review again.
 
+The drawing decides where a returned review goes. In the standard pipeline it
+keeps the claim and workspace and waits at the `climb` gate before the next
+author. See "The standard pipeline, drawn with exits" in `docs/agent-exits.md`.
+Saved pipelines keep their drawn returns to the queue.
+
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
 `verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the

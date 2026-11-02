@@ -37,7 +37,13 @@ describe("the standard pipeline as belts", () => {
     const belt = beltOf(STANDARD_PIPELINE);
     expect([belt.columns, belt.rows]).toEqual([10, 2]);
     // The author's two exits onward are two wires to the same gate.
-    expect(belt.wires).toHaveLength(13);
+    expect(belt.wires).toHaveLength(14);
+    expect(belt.wires).toContainEqual({
+      from: "review",
+      port: "exit:returned",
+      to: "climb",
+      label: "returned",
+    });
   });
 });
 
@@ -51,7 +57,7 @@ describe("belt edits", () => {
     expect(node(pipeline, "review")).toMatchObject({
       exits: [
         { name: "approved", to: id },
-        { name: "returned", to: "queue" },
+        { name: "returned", to: "climb", fails: "author" },
       ],
     });
     expect(node(pipeline, id)).toMatchObject({
@@ -106,8 +112,8 @@ describe("belt edits", () => {
   test("taking a block out joins the wires around it", () => {
     const pipeline = remove(STANDARD_PIPELINE, "retry");
     expect(node(pipeline, "worktree")).toMatchObject({ next: "start" });
-    // climb was reached only through the router's route, so it goes too.
-    expect(ids(pipeline)).not.toContain("climb");
+    // The review's returned exit still reaches climb after the router goes.
+    expect(ids(pipeline)).toContain("climb");
     expect(problemsOf(pipeline, RUNGS)).toEqual([]);
   });
 
@@ -157,8 +163,12 @@ describe("belt edits", () => {
   });
 
   test("dropping a route drops the blocks only it reached", () => {
-    const pipeline = removeRoute(removeRoute(STANDARD_PIPELINE, "retry", 0), "retry", 0);
-    expect(ids(pipeline)).not.toContain("climb");
+    const routed = addRoute(STANDARD_PIPELINE, "retry", "size>=3");
+    const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
+    const pipeline = removeRoute(inserted.pipeline, "retry", 2);
+    expect(ids(pipeline)).not.toContain(inserted.id);
+    const withoutRetries = removeRoute(removeRoute(pipeline, "retry", 0), "retry", 0);
+    expect(ids(withoutRetries)).toContain("climb");
   });
 
   test("a wire rejoins a later block, never an earlier one", () => {
@@ -172,6 +182,17 @@ describe("belt edits", () => {
     expect(
       rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "no-such-block"),
     ).toEqual(Option.none());
+  });
+
+  test("a wire can rejoin an acyclic sibling in the same column", () => {
+    expect(at(STANDARD_PIPELINE).climb?.[0]).toBe(at(STANDARD_PIPELINE).start?.[0]);
+    const joined = rejoin(STANDARD_PIPELINE, { from: "climb", port: "next" }, "start");
+    expect(Option.map(joined, (pipeline) => node(pipeline, "climb"))).toEqual(
+      Option.some({ kind: "gate", id: "climb", step: "climb", next: "start" }),
+    );
+    expect(Option.map(joined, (pipeline) => node(pipeline, "review"))).toEqual(
+      Option.some(node(STANDARD_PIPELINE, "review")),
+    );
   });
 
   test("a new source starts a belt that joins the first one", () => {
