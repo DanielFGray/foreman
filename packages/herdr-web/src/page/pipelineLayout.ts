@@ -148,3 +148,20 @@ const anchorOf = (points: ReadonlyArray<Point>): { readonly anchor: Point; reado
   const best = candidates.reduce((one, other) => (other.to[0] - other.from[0] > one.to[0] - one.from[0] ? other : one), candidates[0] ?? { from: points[0]!, to: points[points.length - 1]! })
   return { anchor: [(best.from[0] + best.to[0]) / 2, best.from[1]], room: best.to[0] - best.from[0] }
 }
+
+/** The room between a block and the inspector floating beside it. */
+const BESIDE_GAP = 12
+
+/**
+ * Where a panel `panelWidth` wide floats beside a block on a drawing `width`
+ * wide: right of the block when it fits there, else left of it, else under
+ * it, pressed against the drawing's right edge. The panel takes no width of
+ * its own, so the drawing is laid out as if it were not there.
+ */
+export const besideOf = (box: Box, width: number, panelWidth: number): Point => {
+  const right = box.x + box.w + BESIDE_GAP
+  if (right + panelWidth <= width) return [right, box.y]
+  const left = box.x - BESIDE_GAP - panelWidth
+  if (left >= 0) return [left, box.y]
+  return [Math.max(0, Math.min(box.x, width - panelWidth)), box.y + box.h + BESIDE_GAP]
+}

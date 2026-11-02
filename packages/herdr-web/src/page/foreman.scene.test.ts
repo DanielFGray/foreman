@@ -46,7 +46,7 @@ const queue = ForemanQueue.Listed({
 
 const state: ForemanState = { reading: Option.some(reading), problem: Option.none() }
 
-const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
+const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
 
 // Three spaces: app and lib are each in a project, notes is in none.
 // The sidebar names a space by its checkout's folder, so each space's checkout is its own folder.
@@ -77,7 +77,7 @@ test("the sidebar row shows the column, which reads the ladder's rungs, and hide
     given({ ...start, bridge: Bridge.Watching({ fleet }) }),
     click(role("button", { name: "Foreman" })),
     Command.expectExact(ListRungs()),
-    Command.resolve(ListRungs, Message.ReceivedRungs({ rungs: ["sonnet"] })),
+    Command.resolve(ListRungs, Message.ReceivedRungs({ rungs: [{ rung: "sonnet", state: "proven" }] })),
     expect(selector(".foreman .note")).toHaveText("Asking the bridge…"),
     click(role("button", { name: "Foreman" })),
     expect(selector(".foreman-column")).not.toExist(),
@@ -220,13 +220,15 @@ test("an epic leads its queued tasks and takes no launch", () => {
 test("the queue starts folded, and a queued task launches on a picked rung", () => {
   scene(
     { update, view },
-    given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: ["haiku", "sonnet"] } } }),
+    given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: [{ rung: "haiku", state: "proven" }, { rung: "sonnet", state: "trial" }, { rung: "opus", state: "disabled" }] } } }),
     expect(role("list", { name: "Queue" })).not.toExist(),
     click(role("button", { name: "Queue 1" })),
     expectAll(all.selector(".foreman-row")).toHaveCount(5),
     click(role("button", { name: "All projects" })),
     expectAll(all.selector(".foreman-row")).toHaveCount(6),
     click(role("button", { name: "launch ts-q1" })),
+    // A disabled rung takes no task, so it is not offered.
+    expect(role("button", { name: "launch ts-q1 on opus" })).not.toExist(),
     click(role("button", { name: "launch ts-q1 on sonnet" })),
     Command.expectExact(RunForeman({ command: { _tag: "Launch", key: "ts-q1", rung: "sonnet" } })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "dispatch ts-q1 --rung sonnet" })),

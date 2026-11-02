@@ -715,16 +715,14 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .pipeline-kind { font-size: 11px; line-height: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
 .pipeline-summary { font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pipeline-add { position: absolute; width: 16px; height: 16px; padding: 0; border: 1px solid var(--subtext); border-radius: 50%; background: var(--base, Canvas); color: inherit; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
-.pipeline-add.on { background: var(--surface); }
 .pipeline-wire-label { position: absolute; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 10px; line-height: 14px; color: var(--subtext); pointer-events: none; }
 .pipeline-station.chip-block { flex-direction: row; align-items: center; justify-content: center; gap: 6px; padding: 0 8px; border-radius: 14px; }
 .pipeline-icon { font-size: 13px; color: var(--subtext); }
 .pipeline-route { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .pipeline-route-name { flex: 0 0 64px; color: var(--subtext); }
 .pipeline-remove { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 1px solid var(--surface); border-radius: 4px; background: transparent; color: var(--subtext); font: inherit; font-size: 11px; line-height: 1; cursor: pointer; }
-.pipeline-insert { position: absolute; z-index: 1; display: flex; gap: 4px; padding: 4px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base, Canvas); }
 .pipeline-problems { margin: 0; padding-left: 18px; color: var(--red); font-size: 13px; }
-.pipeline-inspector { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--surface); border-radius: 6px; }
+.pipeline-inspector { position: absolute; z-index: 4; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base, Canvas); box-shadow: 0 4px 16px rgb(0 0 0 / 0.25); }
 .pipeline-inspector > .chip { align-self: flex-start; }
 .pipeline-inspector h4 { margin: 0; font-size: 13px; }
 .pipeline-field { display: flex; align-items: center; gap: 8px; font-size: 13px; }
@@ -735,3 +733,28 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .pipeline-standing { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .pipeline-standing-block > summary { cursor: pointer; }
 .pipeline-standing-block ul { margin: 4px 0 0; padding-left: 18px; }
+/* The board holds the drawing and the panels that float over it. A panel takes no width from the drawing; the scroll area takes height only, so an open panel stands beside the belt rather than over its blocks. The inspector stands above the panels, since it is what the operator works in now. */
+.pipeline-board { position: relative; }
+.pipeline-board:has(.pipeline-blocks) .pipeline-scroll { padding-top: 64px; }
+.pipeline-board:has(.pipeline-ladder, .pipeline-changes, .pipeline-inspector) .pipeline-scroll { padding-bottom: 200px; }
+.pipeline-panel { position: absolute; z-index: 3; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; max-height: 188px; overflow: auto; padding: 6px 8px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base, Canvas); font-size: 12px; }
+.pipeline-panel .note { margin: 0; }
+.pipeline-blocks { top: 6px; left: 6px; right: 6px; max-height: 52px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pipeline-blocks .pipeline-panel-head { order: 3; margin-left: auto; }
+.pipeline-blocks .pipeline-panel-head h4 { display: none; }
+.pipeline-ladder { bottom: 6px; left: 6px; width: 240px; }
+.pipeline-changes { bottom: 6px; right: 6px; width: min(380px, calc(100% - 264px)); }
+.pipeline-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pipeline-panel-head h4 { margin: 0; font-size: 13px; }
+.pipeline-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.pipeline-rungs, .pipeline-changes-list { margin: 0; padding-left: 22px; }
+.pipeline-rungs li { display: flex; justify-content: space-between; gap: 8px; }
+.pipeline-rungs li.off { opacity: 0.45; }
+.pipeline-rung { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* On a phone there is no room beside the belt, so the panels stand under it instead. The inspector still floats on the drawing and keeps its room under the belt. */
+@media (max-width: 720px) {
+  .pipeline-board { display: flex; flex-direction: column; gap: 6px; }
+  .pipeline-board:has(.pipeline-panel) .pipeline-scroll { padding-top: 0; }
+  .pipeline-board:not(:has(.pipeline-inspector)) .pipeline-scroll { padding-bottom: 0; }
+  .pipeline-panel { position: static; width: auto; max-height: none; }
+}
