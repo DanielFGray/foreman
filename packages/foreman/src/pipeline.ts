@@ -74,8 +74,43 @@ export const CheckNode = S.Struct({
   next: S.String,
 });
 
-/** Proves and applies the task's branch to the project's checkout, which completes it. */
-export const LandNode = S.Struct({ kind: S.Literal("land"), id: S.String });
+/**
+ * Makes the task's branch `foreman/<id>` from the trunk tip. It runs no agent,
+ * and placement walks through it: the branch is made when the first agent
+ * after it dispatches, and git's record of the branch is what says it passed.
+ */
+export const BranchNode = S.Struct({ kind: S.Literal("branch"), id: S.String, next: S.String });
+
+/**
+ * Checks the task's branch out in a directory of its own. Like a branch block
+ * it runs no agent and is walked through. An agent after a branch with no
+ * worktree works in the operator's checkout.
+ */
+export const WorktreeNode = S.Struct({
+  kind: S.Literal("worktree"),
+  id: S.String,
+  next: S.String,
+});
+
+/** How a land block puts the approved commit onto the trunk. */
+export const LANDINGS = ["merge", "fast-forward"] as const;
+export type Landing = (typeof LANDINGS)[number];
+
+/**
+ * Proves and applies the task's branch to the project's checkout, which
+ * completes it. `how` is `merge` (a merge commit) when absent.
+ */
+export const LandNode = S.Struct({
+  kind: S.Literal("land"),
+  id: S.String,
+  how: S.optional(S.Literals(LANDINGS)),
+});
+
+/**
+ * Completes the task with nothing to land: the end of a route with no branch,
+ * whose author committed onto the operator's branch.
+ */
+export const DoneNode = S.Struct({ kind: S.Literal("done"), id: S.String });
 
 /** Parks the task for the operator. */
 export const ParkNode = S.Struct({ kind: S.Literal("park"), id: S.String });
@@ -86,16 +121,27 @@ export const PipelineNode = S.Union([
   GateNode,
   AgentNode,
   CheckNode,
+  BranchNode,
+  WorktreeNode,
   LandNode,
+  DoneNode,
   ParkNode,
 ]);
 export type PipelineNode = typeof PipelineNode.Type;
 export type AgentNode = typeof AgentNode.Type;
 export type CheckNode = typeof CheckNode.Type;
 export type LandNode = typeof LandNode.Type;
+export type DoneNode = typeof DoneNode.Type;
 
-/** A block that runs something and takes time. The others decide at once. */
-export type WorkNode = AgentNode | CheckNode | LandNode;
+/** A block a task stops at: it runs something, or ends the task. The others decide at once. */
+export type WorkNode = AgentNode | CheckNode | LandNode | DoneNode;
+
+/**
+ * Where the blocks before a work block put the task: `none` is the operator's
+ * checkout on its own branch, `branch` the operator's checkout with the task's
+ * branch out, `worktree` the task's branch in a directory of its own.
+ */
+export type Workspace = "none" | "branch" | "worktree";
 
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
@@ -148,6 +194,8 @@ export type Placement =
       readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
       /** Work blocks after this one, on the route its facts take now. */
       readonly ahead: number;
+      /** Where the workspace blocks on its route put it. */
+      readonly workspace: Workspace;
     };
 
 /**
@@ -171,6 +219,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   if (source === undefined) return { _tag: "Outside" };
 
   let gates: Array<{ id: string; step: Step }> = [];
+  let workspace: Workspace = "none";
   let node: PipelineNode | undefined = source;
   // Validation refuses a cycle, but placement may be asked about a pipeline
   // that was never validated, so the walk is bounded by the graph's size.
@@ -186,14 +235,23 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       case "router":
         node = nodes.get(routeOf(node, facts));
         continue;
+      case "branch":
+        workspace = "branch";
+        node = nodes.get(node.next);
+        continue;
+      case "worktree":
+        workspace = "worktree";
+        node = nodes.get(node.next);
+        continue;
       case "park":
         return { _tag: "Parked", node: node.id };
       case "agent":
       case "check":
       case "land":
+      case "done":
         if (facts.passed.has(node.id)) {
           gates = [];
-          node = node.kind === "land" ? undefined : nodes.get(node.next);
+          node = "next" in node ? nodes.get(node.next) : undefined;
           continue;
         }
         return {
@@ -202,6 +260,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
           state: stateAt(node, facts),
           gates,
           ahead: aheadOf(nodes, node, facts, pipeline.nodes.length),
+          workspace,
         };
     }
   }
@@ -267,14 +326,33 @@ export const problemsOf = (
   }
 
   const authors = work.filter(isRole("author"));
-  // Nothing skips review: no land after a source or an author but a reviewer.
-  for (const [from, land] of skipping(
+  const ends = work.filter((node) => node.kind === "land" || node.kind === "done");
+  // Nothing skips review: no land or done after a source or an author but a reviewer.
+  for (const [from, end] of skipping(pipeline, isRole("review"), [...sources, ...authors], ends)) {
+    problems.push(`a route from ${from.id} reaches ${end.id} with no review after it`);
+  }
+
+  // A worktree checks out the task's branch, and a land merges it, so each
+  // needs a branch made before it on every route.
+  const isBranch = (node: PipelineNode) => node.kind === "branch";
+  for (const [source, target] of skipping(
     pipeline,
-    isRole("review"),
-    [...sources, ...authors],
-    work.filter((node) => node.kind === "land"),
+    isBranch,
+    sources,
+    pipeline.nodes.filter((node) => node.kind === "worktree" || node.kind === "land"),
   )) {
-    problems.push(`a route from ${from.id} reaches ${land.id} with no review after it`);
+    problems.push(`a route from ${source.id} reaches ${target.id} with no branch before it`);
+  }
+  // Work on a branch reaches the trunk only through a land, so a branch whose
+  // route ends at done leaves the work on a branch nothing merges.
+  for (const branch of pipeline.nodes.filter(isBranch)) {
+    for (const done of work.filter((node) => node.kind === "done")) {
+      if (wired.reaches(branch.id, done.id)) {
+        problems.push(
+          `a route from ${branch.id} ends at ${done.id}: work on this branch never lands`,
+        );
+      }
+    }
   }
   // A check runs on the task's branch, and an open task has passed nothing, so
   // a check no author stands before has no branch to run on.
@@ -335,14 +413,17 @@ const isRole =
     node.kind === "agent" && node.role === role;
 
 /**
- * The pipeline of a project that has drawn none: author, review, land.
+ * The pipeline of a project that has drawn none: the task's branch in a
+ * worktree of its own, then author, review, and a merge.
  *
  * The router sends a task with any recorded failure or attempt to the `climb`
  * gate, so a retry is governed by its own step, apart from a first try.
  */
 export const STANDARD_PIPELINE: Pipeline = {
   nodes: [
-    { kind: "source", id: "queue", filter: "", next: "retry" },
+    { kind: "source", id: "queue", filter: "", next: "branch" },
+    { kind: "branch", id: "branch", next: "worktree" },
+    { kind: "worktree", id: "worktree", next: "retry" },
     {
       kind: "router",
       id: "retry",
@@ -358,7 +439,7 @@ export const STANDARD_PIPELINE: Pipeline = {
     { kind: "gate", id: "review-gate", step: "review", next: "review" },
     { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
     { kind: "gate", id: "land-gate", step: "land", next: "land" },
-    { kind: "land", id: "land" },
+    { kind: "land", id: "land", how: "merge" },
   ],
 };
 
@@ -512,6 +593,8 @@ const wiresOf = (node: PipelineNode): ReadonlyArray<{ to: string; label: string 
     case "gate":
     case "agent":
     case "check":
+    case "branch":
+    case "worktree":
       return [{ to: node.next, label: "" }];
     case "router":
       return [
@@ -519,6 +602,7 @@ const wiresOf = (node: PipelineNode): ReadonlyArray<{ to: string; label: string 
         { to: node.else, label: "else" },
       ];
     case "land":
+    case "done":
     case "park":
       return [];
   }
@@ -532,7 +616,7 @@ const filtersOf = (node: PipelineNode): ReadonlyArray<string> =>
       : [];
 
 const isWork = (node: PipelineNode): node is WorkNode =>
-  node.kind === "agent" || node.kind === "check" || node.kind === "land";
+  node.kind === "agent" || node.kind === "check" || node.kind === "land" || node.kind === "done";
 
 const indexOf = (pipeline: Pipeline): ReadonlyMap<string, PipelineNode> =>
   new Map(pipeline.nodes.map((node) => [node.id, node]));
@@ -541,11 +625,11 @@ const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
   router.routes.find((route) => matches(facts, route.when))?.to ?? router.else;
 
 /**
- * A check and a land run inside one tick and leave no open run, so a task at
- * either is always waiting there.
+ * A check, a land and a done run inside one tick and leave no open run, so a
+ * task at one is always waiting there.
  */
 const stateAt = (node: WorkNode, facts: Facts): RunState => {
-  if (node.kind === "land" || node.kind === "check") return "waiting";
+  if (node.kind !== "agent") return "waiting";
   if (node.role === "author") {
     return facts.status === "in_progress"
       ? "running"
@@ -564,11 +648,13 @@ const aheadOf = (
   bound: number,
 ): number => {
   let count = 0;
-  let node = from.kind === "land" ? undefined : nodes.get(from.next);
+  let node = "next" in from ? nodes.get(from.next) : undefined;
   for (let steps = 0; node !== undefined && steps <= bound; steps++) {
     switch (node.kind) {
       case "source":
       case "gate":
+      case "branch":
+      case "worktree":
         node = nodes.get(node.next);
         continue;
       case "router":
@@ -577,6 +663,7 @@ const aheadOf = (
       case "park":
         return count;
       case "land":
+      case "done":
         return count + 1;
       case "agent":
       case "check":
@@ -600,6 +687,10 @@ const describe = (node: PipelineNode): string => {
     case "check":
       return `${node.id}: runs ${node.command}`;
     case "land":
+      return `${node.id}: ${node.how ?? "merge"}`;
+    case "branch":
+    case "worktree":
+    case "done":
     case "park":
       return node.id;
   }
@@ -611,6 +702,9 @@ const SHAPES: Record<PipelineNode["kind"], Graph.MermaidNodeShape> = {
   gate: "hexagon",
   agent: "rectangle",
   check: "rounded",
+  branch: "cylindrical",
+  worktree: "cylindrical",
   land: "subroutine",
+  done: "subroutine",
   park: "circle",
 };

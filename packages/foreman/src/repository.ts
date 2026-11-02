@@ -139,6 +139,19 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         Effect.map((text) => text.split("\n").filter((line) => line.trim() !== "")),
       );
 
+    /**
+     * The commit `branch` was created at: the oldest entry of its reflog, or
+     * undefined when git kept none.
+     */
+    const createdAt = (directory: string, branch: string) =>
+      git(directory, "reflog", "show", "--format=%H", `refs/heads/${branch}`, "--").pipe(
+        Effect.map((result) =>
+          result.exitCode === 0
+            ? result.stdout.trim().split("\n").filter(Boolean).at(-1)
+            : undefined,
+        ),
+      );
+
     const status = (directory: string, untracked: "no" | "all") =>
       gitOutput(directory, "status", "--porcelain", `--untracked-files=${untracked}`);
 
@@ -205,8 +218,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         return yield* gitOutput(directory, "rev-parse", "--abbrev-ref", `${head}@{upstream}`);
       });
 
-    const contains = (directory: string, branch: string) =>
-      git(directory, "merge-base", "--is-ancestor", branch, "HEAD").pipe(
+    /** Whether `descendant` (HEAD when absent) already has `ancestor`. */
+    const contains = (directory: string, ancestor: string, descendant = "HEAD") =>
+      git(directory, "merge-base", "--is-ancestor", ancestor, descendant).pipe(
         Effect.flatMap((result) =>
           result.exitCode === 0 || result.exitCode === 1
             ? Effect.succeed(result.exitCode === 0)
@@ -376,12 +390,26 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       verify: string | undefined,
       base: string,
       message: string,
+      how: How,
     ): Effect.Effect<Proof, RepositoryError> =>
       Effect.gen(function* () {
         const ready = yield* gitGround(proving, directory, base);
         if (ready) return ready;
 
-        const merged = yield* git(proving, "merge", "--no-ff", "-m", message, branch);
+        // A fast-forward lands the approved commit itself, so it needs the
+        // trunk tip below it. A trunk that moved after the branch was cut is
+        // the same finding as a conflict: the branch must take the trunk in
+        // first. Foreman never rebases, because a rebase makes a commit the
+        // reviewer did not read.
+        if (how === "fast-forward" && !(yield* contains(proving, base, branch))) {
+          return {
+            _tag: "Rejected",
+            detail: `the trunk moved after the branch was cut, so ${branch} does not fast-forward onto ${base}`,
+          } as const;
+        }
+        const merged = yield* how === "fast-forward"
+          ? git(proving, "merge", "--ff-only", branch)
+          : git(proving, "merge", "--no-ff", "-m", message, branch);
         if (merged.exitCode !== 0) {
           // A conflict is asked about rather than inferred. git reports a lock
           // it could not take through the same non-zero codes as content it
@@ -482,6 +510,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         verify: string | undefined,
         proving: string,
         message: string,
+        how: How,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           // Asked before the proof, which costs a run of the project's suite:
@@ -492,7 +521,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           const base = yield* gitOutput(directory, "rev-parse", "HEAD");
 
-          const proof = yield* gitProve(proving, directory, branch, verify, base, message);
+          const proof = yield* gitProve(proving, directory, branch, verify, base, message, how);
           if (proof._tag !== "Proven") return proof;
 
           // The proof took as long as the project's suite takes, and the
@@ -752,6 +781,24 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           );
           const staleByBranch = new Map(overtaken);
 
+          // A tip on the first-parent line is a branch nobody committed to, or
+          // one that landed by fast-forward. The commit git created the branch
+          // at tells them apart: an untouched branch still points at it.
+          const untouched = new Set(
+            yield* Effect.forEach(
+              refs.flatMap((ref) => {
+                const [tip, branch] = ref.split(" ");
+                return tip && branch && trunk.has(tip) ? [[tip, branch] as const] : [];
+              }),
+              ([tip, branch]) =>
+                createdAt(directory, branch).pipe(
+                  Effect.map((created) =>
+                    created === undefined || created === tip ? [branch] : [],
+                  ),
+                ),
+            ).pipe(Effect.map((found) => found.flat())),
+          );
+
           return refs.flatMap((ref) => {
             const [tip, branch] = ref.split(" ");
             return tip && branch
@@ -760,7 +807,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
                     branch,
                     tip,
                     merged: merged.has(branch),
-                    empty: trunk.has(tip),
+                    empty: untouched.has(branch),
                     stale: staleByBranch.get(branch),
                   } satisfies Branch,
                 ]
@@ -1006,6 +1053,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         verify: string | undefined,
         proving: string,
         message: string,
+        how: How,
       ) =>
         Effect.gen(function* () {
           // A branch-mode task has its branch out in this checkout. Landing it
@@ -1030,7 +1078,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;
-          return yield* gitCheckout.merge(directory, commit, verify, proving, message);
+          return yield* gitCheckout.merge(directory, commit, verify, proving, message, how);
         }),
 
       /**
@@ -1046,6 +1094,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 }) {
   static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
 }
+
+/**
+ * How a landing puts the approved commit onto the trunk: a merge commit, or
+ * the commit itself when it already has the trunk tip below it.
+ */
+export type How = "merge" | "fast-forward";
 
 /** What became of a branch foreman tried to put into the operator's checkout. */
 export type Landing =

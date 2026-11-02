@@ -9,7 +9,7 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
-import type { AgentNode, Pipeline, PipelineNode } from "./pipeline.ts";
+import type { AgentNode, Landing, Pipeline, PipelineNode } from "./pipeline.ts";
 
 /** Where a block sits on the drawing: its column from the left and its row from the top. */
 export interface Cell {
@@ -101,7 +101,7 @@ export const beltOf = (pipeline: Pipeline): Belt => {
 };
 
 /** The kinds of block an operator puts on a wire. */
-export const INSERTABLE = ["gate", "agent", "check", "router"] as const;
+export const INSERTABLE = ["branch", "worktree", "gate", "agent", "check", "router"] as const;
 export type Insertable = (typeof INSERTABLE)[number];
 
 /**
@@ -110,8 +110,8 @@ export type Insertable = (typeof INSERTABLE)[number];
  *
  * A new router sends everything to `else` until a route is added; a new agent
  * authors from the ladder; a new gate holds for `author`; a new check names no
- * command, which validation reports until the operator names one. The
- * operator sets each one after.
+ * command, which validation reports until the operator names one. A branch
+ * or a worktree has nothing to set. The operator sets each one after.
  */
 export const insertOn = (
   pipeline: Pipeline,
@@ -128,20 +128,22 @@ export const insertOn = (
         ? { kind, id, role: "author", model: "ladder", next: target }
         : kind === "check"
           ? { kind, id, command: "", next: target }
-          : { kind, id, routes: [], else: target };
+          : kind === "router"
+            ? { kind, id, routes: [], else: target }
+            : { kind, id, next: target };
   const rewired = retargeted(pipeline, wire, id);
   return { pipeline: { nodes: [...rewired.nodes, block] }, id };
 };
 
 /**
  * Takes a block out. The wires into it run on to where it went: a router's
- * `else`, or a block's `next`. A land or a park cannot go, since every route
- * must end somewhere; turn one into the other instead. A source takes the
+ * `else`, or a block's `next`. An end (land, done or park) cannot go, since
+ * every route must end somewhere; turn one into another instead. A source takes the
  * blocks only it reached with it.
  */
 export const remove = (pipeline: Pipeline, id: string): Pipeline => {
   const node = pipeline.nodes.find((candidate) => candidate.id === id);
-  if (node === undefined || node.kind === "land" || node.kind === "park") return pipeline;
+  if (node === undefined || !("next" in node || node.kind === "router")) return pipeline;
   const onward = node.kind === "router" ? node.else : node.next;
   const left = pipeline.nodes
     .filter((candidate) => candidate.id !== id)
@@ -191,14 +193,19 @@ export const addSource = (
   return { pipeline: { nodes: [...pipeline.nodes, { kind: "source", id, filter, next }] }, id };
 };
 
-/** Turns a land into a park or a park into a land, keeping its id and the wires into it. */
+/**
+ * Turns one end of a route into another, keeping its id and the wires into it:
+ * a land into a done, a done into a park, a park into a land.
+ */
 export const swapEnd = (pipeline: Pipeline, id: string): Pipeline =>
   mapNode(pipeline, id, (node) =>
     node.kind === "land"
-      ? { kind: "park", id }
-      : node.kind === "park"
-        ? { kind: "land", id }
-        : node,
+      ? { kind: "done", id }
+      : node.kind === "done"
+        ? { kind: "park", id }
+        : node.kind === "park"
+          ? { kind: "land", id }
+          : node,
   );
 
 /**
@@ -217,11 +224,13 @@ export const configure = (
         readonly slots: number | undefined;
       }
     | { readonly route: number; readonly when: string }
-    | { readonly command: string },
+    | { readonly command: string }
+    | { readonly how: Landing },
 ): Pipeline =>
   mapNode(pipeline, id, (node) => {
     if ("filter" in change && node.kind === "source") return { ...node, filter: change.filter };
     if ("command" in change && node.kind === "check") return { ...node, command: change.command };
+    if ("how" in change && node.kind === "land") return { ...node, how: change.how };
     if ("step" in change && node.kind === "gate") return { ...node, step: change.step };
     if ("role" in change && node.kind === "agent") {
       const { slots: _slots, ...rest } = node;
@@ -250,6 +259,8 @@ const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
       case "gate":
       case "agent":
       case "check":
+      case "branch":
+      case "worktree":
         return [{ from: node.id, port: "next", to: node.next, label: "" }];
       case "router":
         return [
@@ -262,6 +273,7 @@ const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
           { from: node.id, port: "else" as const, to: node.else, label: "else" },
         ];
       case "land":
+      case "done":
       case "park":
         return [];
     }
@@ -293,6 +305,8 @@ const redirect = (node: PipelineNode, from: string, to: string): PipelineNode =>
     case "gate":
     case "agent":
     case "check":
+    case "branch":
+    case "worktree":
       return { ...node, next: swap(node.next) };
     case "router":
       return {
@@ -301,6 +315,7 @@ const redirect = (node: PipelineNode, from: string, to: string): PipelineNode =>
         else: swap(node.else),
       };
     case "land":
+    case "done":
     case "park":
       return node;
   }

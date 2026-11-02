@@ -156,14 +156,15 @@ describe("placement on the standard pipeline", () => {
 describe("placement on a drawn pipeline", () => {
   const triage: Pipeline = {
     nodes: [
-      { kind: "source", id: "small", filter: "size<=1 -label:research", next: "gate" },
+      { kind: "source", id: "small", filter: "size<=1 -label:research", next: "cut" },
       { kind: "source", id: "rest", filter: "", next: "big" },
       {
         kind: "router",
         id: "big",
         routes: [{ when: "failed:strong", to: "operator" }],
-        else: "gate",
+        else: "cut",
       },
+      { kind: "branch", id: "cut", next: "gate" },
       { kind: "park", id: "operator" },
       { kind: "gate", id: "gate", step: "author", next: "write" },
       { kind: "agent", id: "write", role: "author", model: "ladder", next: "check" },
@@ -296,7 +297,8 @@ describe("validation", () => {
   test("a review before the author does not count", () => {
     const backwards: Pipeline = {
       nodes: [
-        { kind: "source", id: "queue", filter: "", next: "g1" },
+        { kind: "source", id: "queue", filter: "", next: "cut" },
+        { kind: "branch", id: "cut", next: "g1" },
         { kind: "gate", id: "g1", step: "review", next: "review" },
         { kind: "agent", id: "review", role: "review", model: "above", next: "g2" },
         { kind: "gate", id: "g2", step: "author", next: "author" },
@@ -319,7 +321,13 @@ describe("validation", () => {
     ).toEqual(["no source reaches land-gate", "a route from review reaches land through no gate"]);
     expect(
       problemsOf(
-        { nodes: [{ kind: "source", id: "q", filter: "", next: "start" }, ...without("queue")] },
+        {
+          nodes: [
+            { kind: "source", id: "q", filter: "", next: "branch" },
+            ...without("queue", "worktree"),
+            { kind: "worktree", id: "worktree", next: "start" },
+          ],
+        },
         RUNGS,
       ),
     ).toEqual(["no source reaches retry", "no source reaches climb"]);
@@ -328,10 +336,11 @@ describe("validation", () => {
   test("a router does not stand in for a gate", () => {
     const ungated: Pipeline = {
       nodes: [
-        { kind: "source", id: "queue", filter: "", next: "route" },
+        { kind: "source", id: "queue", filter: "", next: "branch" },
+        { kind: "worktree", id: "worktree", next: "route" },
         { kind: "router", id: "route", routes: [{ when: "failed", to: "g" }], else: "author" },
         { kind: "gate", id: "g", step: "climb", next: "author" },
-        ...without("queue", "retry", "start", "climb"),
+        ...without("queue", "worktree", "retry", "start", "climb"),
       ],
     };
     expect(problemsOf(ungated, RUNGS)).toEqual([
@@ -414,10 +423,13 @@ describe("a check block", () => {
 
     const first: Pipeline = {
       nodes: [
-        { kind: "source", id: "queue", filter: "", next: "g0" },
+        { kind: "source", id: "queue", filter: "", next: "branch" },
+        { kind: "worktree", id: "worktree", next: "g0" },
         { kind: "gate", id: "g0", step: "author", next: "lint" },
         { kind: "check", id: "lint", command: "bun run lint", next: "start" },
-        ...STANDARD_PIPELINE.nodes.filter((node) => !["queue", "retry", "climb"].includes(node.id)),
+        ...STANDARD_PIPELINE.nodes.filter(
+          (node) => !["queue", "worktree", "retry", "climb"].includes(node.id),
+        ),
       ],
     };
     expect(problemsOf(first, RUNGS)).toEqual([
@@ -439,7 +451,7 @@ describe("the Mermaid drawing", () => {
   test("draws every block and one arrow per wire", () => {
     const lines = toMermaid(STANDARD_PIPELINE).split("\n");
     expect(lines[0]).toBe("flowchart LR");
-    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(10);
+    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(12);
     expect(lines.some((line) => line.includes('"failed"'))).toBe(true);
     expect(lines.some((line) => line.includes("author: author on ladder"))).toBe(true);
   });
@@ -454,5 +466,91 @@ describe("the modules herdr-web's page bundles", () => {
     expect(built.success).toBe(true);
     const code = (await Promise.all(built.outputs.map((output) => output.text()))).join("\n");
     expect(code).not.toMatch(/bun:sqlite|from "node:|require\("node:|effect\/sql/);
+  });
+});
+
+describe("workspace blocks", () => {
+  const swap = (pipeline: Pipeline, ...nodes: ReadonlyArray<PipelineNode>): Pipeline => ({
+    nodes: pipeline.nodes.map((node) => nodes.find((other) => other.id === node.id) ?? node),
+  });
+  const drop = (pipeline: Pipeline, id: string, next: string): Pipeline => ({
+    nodes: pipeline.nodes
+      .filter((node) => node.id !== id)
+      .map((node) => ("next" in node && node.next === id ? { ...node, next } : node)),
+  });
+  const branchOnly = drop(STANDARD_PIPELINE, "worktree", "retry");
+  const direct = swap(drop(branchOnly, "branch", "retry"), { kind: "done", id: "land" });
+  const workspaceOf = (pipeline: Pipeline, over: Partial<Facts> = {}) => {
+    const placement = place(pipeline, facts(over));
+    return placement._tag === "At" ? [placement.node.id, placement.workspace] : placement._tag;
+  };
+
+  test("each of the three shapes is valid, and places the agent in its workspace", () => {
+    for (const pipeline of [STANDARD_PIPELINE, branchOnly, direct]) {
+      expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+    }
+    expect(workspaceOf(STANDARD_PIPELINE)).toEqual(["author", "worktree"]);
+    expect(workspaceOf(branchOnly)).toEqual(["author", "branch"]);
+    expect(workspaceOf(direct)).toEqual(["author", "none"]);
+  });
+
+  test("a task in flight places at the same block as before the workspace blocks", () => {
+    const old = drop(drop(STANDARD_PIPELINE, "worktree", "retry"), "branch", "retry");
+    for (const over of [
+      {},
+      { status: "in_progress" as const },
+      { status: "reviewing" as const, passed: new Set(["author"]) },
+      { status: "reviewing" as const, passed: new Set(["author", "review"]), approved: true },
+    ]) {
+      expect(at(STANDARD_PIPELINE, over)).toEqual(at(old, over));
+    }
+  });
+
+  test("a direct task completes at done after its review", () => {
+    expect(
+      workspaceOf(direct, { status: "reviewing", passed: new Set(["author", "review"]) }),
+    ).toEqual(["land", "none"]);
+  });
+
+  test("refuses a worktree with no branch before it", () => {
+    expect(problemsOf(drop(STANDARD_PIPELINE, "branch", "worktree"), RUNGS)).toEqual([
+      "a route from queue reaches worktree with no branch before it",
+      "a route from queue reaches land with no branch before it",
+    ]);
+  });
+
+  test("refuses a land with no branch before it", () => {
+    expect(problemsOf(drop(branchOnly, "branch", "retry"), RUNGS)).toEqual([
+      "a route from queue reaches land with no branch before it",
+    ]);
+  });
+
+  test("refuses a route from a branch that ends at done", () => {
+    expect(problemsOf(swap(STANDARD_PIPELINE, { kind: "done", id: "land" }), RUNGS)).toEqual([
+      "a route from branch ends at land: work on this branch never lands",
+    ]);
+  });
+
+  test("refuses a done that skips review, or that no gate stands before", () => {
+    const unreviewed = swap(direct, {
+      kind: "agent",
+      id: "author",
+      role: "author",
+      model: "ladder",
+      next: "land-gate",
+    });
+    expect(problemsOf(unreviewed, RUNGS)).toContain(
+      "a route from author reaches land with no review after it",
+    );
+    const ungated = swap(direct, {
+      kind: "agent",
+      id: "review",
+      role: "review",
+      model: "above",
+      next: "land",
+    });
+    expect(problemsOf(ungated, RUNGS)).toContain(
+      "a route from review reaches land through no gate",
+    );
   });
 });

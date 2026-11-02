@@ -23,18 +23,20 @@ describe("the standard pipeline as belts", () => {
   test("runs one belt, with the retry branch on a row of its own", () => {
     expect(at(STANDARD_PIPELINE)).toEqual({
       queue: [0, 0],
-      retry: [1, 0],
-      climb: [2, 1],
-      start: [2, 0],
-      author: [3, 0],
-      "review-gate": [4, 0],
-      review: [5, 0],
-      "land-gate": [6, 0],
-      land: [7, 0],
+      branch: [1, 0],
+      worktree: [2, 0],
+      retry: [3, 0],
+      climb: [4, 1],
+      start: [4, 0],
+      author: [5, 0],
+      "review-gate": [6, 0],
+      review: [7, 0],
+      "land-gate": [8, 0],
+      land: [9, 0],
     });
     const belt = beltOf(STANDARD_PIPELINE);
-    expect([belt.columns, belt.rows]).toEqual([8, 2]);
-    expect(belt.wires).toHaveLength(10);
+    expect([belt.columns, belt.rows]).toEqual([10, 2]);
+    expect(belt.wires).toHaveLength(12);
   });
 });
 
@@ -69,15 +71,45 @@ describe("belt edits", () => {
 
   test("taking a block out joins the wires around it", () => {
     const pipeline = remove(STANDARD_PIPELINE, "retry");
-    expect(node(pipeline, "queue")).toMatchObject({ next: "start" });
+    expect(node(pipeline, "worktree")).toMatchObject({ next: "start" });
     // climb was reached only through the router's route, so it goes too.
     expect(ids(pipeline)).not.toContain("climb");
     expect(problemsOf(pipeline, RUNGS)).toEqual([]);
   });
 
-  test("a land or a park stays, and swaps with the other", () => {
+  test("an end stays, and turns from land to done to park and back", () => {
     expect(remove(STANDARD_PIPELINE, "land")).toBe(STANDARD_PIPELINE);
-    expect(node(swapEnd(STANDARD_PIPELINE, "land"), "land")).toEqual({ kind: "park", id: "land" });
+    const done = swapEnd(STANDARD_PIPELINE, "land");
+    expect(node(done, "land")).toEqual({ kind: "done", id: "land" });
+    const park = swapEnd(done, "land");
+    expect(node(park, "land")).toEqual({ kind: "park", id: "land" });
+    expect(node(swapEnd(park, "land"), "land")).toEqual({ kind: "land", id: "land" });
+  });
+
+  test("a land is set to merge or fast-forward", () => {
+    const pipeline = configure(STANDARD_PIPELINE, "land", { how: "fast-forward" });
+    expect(node(pipeline, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
+    expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+  });
+
+  test("taking the worktree out leaves the task's branch in the operator's checkout", () => {
+    const pipeline = remove(STANDARD_PIPELINE, "worktree");
+    expect(node(pipeline, "branch")).toMatchObject({ next: "retry" });
+    expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+  });
+
+  test("a branch and a worktree go on a wire with nothing to set", () => {
+    const direct = swapEnd(remove(remove(STANDARD_PIPELINE, "worktree"), "branch"), "land");
+    expect(problemsOf(direct, RUNGS)).toEqual([]);
+    const branched = insertOn(direct, { from: "queue", port: "next" }, "branch");
+    expect(node(branched.pipeline, branched.id)).toEqual({
+      kind: "branch",
+      id: branched.id,
+      next: "retry",
+    });
+    expect(problemsOf(branched.pipeline, RUNGS)).toEqual([
+      `a route from ${branched.id} ends at land: work on this branch never lands`,
+    ]);
   });
 
   test("a new route joins else at once, and blocks go on it", () => {
@@ -110,7 +142,7 @@ describe("belt edits", () => {
 
   test("a new source starts a belt that joins the first one", () => {
     const { pipeline, id } = addSource(STANDARD_PIPELINE, "label:research");
-    expect(node(pipeline, id)).toMatchObject({ filter: "label:research", next: "retry" });
+    expect(node(pipeline, id)).toMatchObject({ filter: "label:research", next: "branch" });
     expect(at(pipeline)[id]).toEqual([0, 2]);
   });
 

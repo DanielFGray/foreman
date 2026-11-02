@@ -27,7 +27,7 @@ const groundFor = (directory: string) => `${directory}.grounds/verify`;
 
 const merge = (directory: string, branch: string, verify?: string, message = `Merge ${branch}`) =>
   run((repository) =>
-    repository.merge(directory, branch, branch, verify, groundFor(directory), message),
+    repository.merge(directory, branch, branch, verify, groundFor(directory), message, "merge"),
   );
 
 const setup = (directory: string) => run((repository) => repository.setup(directory));
@@ -294,6 +294,7 @@ describe("Repository", () => {
           "sleep 30",
           groundFor(directory),
           "Merge cut-off",
+          "merge",
         ),
       ).pipe(Effect.timeoutOption("500 millis"), Effect.provide(Repository.Default)),
     );
@@ -753,6 +754,7 @@ describe("Repository in branch mode", () => {
             undefined,
             `${here}.grounds/verify`,
             `Merge ${task}`,
+            "merge",
           );
         }),
       ),
@@ -888,7 +890,15 @@ describe("Repository in branch mode, after the task's run", () => {
       const work = await tip(task);
       expect(
         await run((repository) =>
-          repository.merge(here, task, work, "test ! -f b.txt", `${here}.grounds/verify`, "Merge"),
+          repository.merge(
+            here,
+            task,
+            work,
+            "test ! -f b.txt",
+            `${here}.grounds/verify`,
+            "Merge",
+            "merge",
+          ),
         ),
       ).toMatchObject({ _tag: "Broke" });
       expect(await head()).toBe("trunk");

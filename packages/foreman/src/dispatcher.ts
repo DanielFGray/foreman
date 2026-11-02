@@ -69,6 +69,8 @@ import {
   place,
   type AgentNode,
   type CheckNode,
+  type DoneNode,
+  type LandNode,
   type Pipeline,
   type Placement,
 } from "./pipeline.ts";
@@ -1140,8 +1142,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // plan holds only the landings the policy permits.
       yield* Effect.forEach(
         current.lands,
-        ({ task, worker, permits }) =>
-          land(task, worker).pipe(Effect.tap(() => admitted(permits, task.id))),
+        ({ task, worker, permits, block }) =>
+          land(task, worker, block).pipe(Effect.tap(() => admitted(permits, task.id))),
         { discard: true },
       );
 
@@ -1399,10 +1401,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * or author, so every branch passes the same clean-checkout and verification
      * gate.
      */
-    const land = Effect.fn("foreman.land")(function* (task: Item, worker: Worker | undefined) {
+    const land = Effect.fn("foreman.land")(function* (
+      task: Item,
+      worker: Worker | undefined,
+      block: LandNode | DoneNode,
+    ) {
       yield* Effect.gen(function* () {
         const project = yield* projectFor(task.project);
         if (!project) return;
+
+        // A done block ends a route with no branch: the author committed onto
+        // the operator's branch, and the reviewer approved what it read there.
+        // Nothing is left to merge or prove.
+        if (block.kind === "done") {
+          yield* prog.log(
+            task.id,
+            `foreman: completed at ${block.id}. The work was committed onto ${project.name}'s branch, so nothing was merged.`,
+          );
+          yield* Effect.logInfo(`completed ${task.id} (${project.name}) at ${block.id}`);
+          yield* prog.complete(task);
+          yield* fleet.notify("Task done", `${task.id} ${task.title}`);
+          return yield* teardown(task);
+        }
 
         // The commit the reviewer read is the commit that lands. A tip that moved
         // since the approval voids it, and the next review reads the new one.
@@ -1421,6 +1441,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           project.verify,
           verifyDirectoryFor(project.name),
           `Merge ${labelFor(task.id)}: ${task.title}`,
+          block.how ?? "merge",
         );
         // The approval is a run that names the commit it read, so a later tick
         // lands from it with no pane at all — and a project can stay dirty for hours.
@@ -2706,7 +2727,9 @@ export const planFrom = (
 
   for (const { task, worker, pipeline, placement } of candidates) {
     const { node } = placement;
-    if (node.kind === "land" && !readyToLand(pipeline, task, worker)) continue;
+    if ((node.kind === "land" || node.kind === "done") && !readyToLand(pipeline, task, worker)) {
+      continue;
+    }
     if (node.kind === "agent") {
       if (held(task)) continue;
       if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
@@ -2744,9 +2767,9 @@ export const planFrom = (
     }
 
     const permits = gates.map(({ given }) => given);
-    if (node.kind === "land") {
+    if (node.kind === "land" || node.kind === "done") {
       for (const given of permits) admitting(given, task.id);
-      lands.push({ task, worker, permits });
+      lands.push({ task, worker, permits, block: node });
     } else if (node.kind === "check") {
       for (const given of permits) admitting(given, task.id);
       checks.push({ task, permits, block: node });
@@ -2838,11 +2861,15 @@ interface PlannedDispatch {
   readonly block: AgentNode;
 }
 
-/** An approved branch the plan lands, with the permit each gate on its route gave. */
+/**
+ * An approved task the plan ends at its land or done block, with the permit
+ * each gate on its route gave.
+ */
 interface PlannedLanding {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly permits: ReadonlyArray<Permit>;
+  readonly block: LandNode | DoneNode;
 }
 
 /** A check the plan runs on the task's branch tip, with the permit each gate on its route gave. */
@@ -2870,7 +2897,7 @@ const runningPipeline = (
 
 /**
  * A finished branch whose fate is landing rather than the ordinary settle path,
- * whatever its pane is doing: the task is placed at a land block.
+ * whatever its pane is doing: the task is placed at a land or a done block.
  *
  * `reviewing` means the author stopped writing, not that the diff has been read:
  * a pipeline reaches a land block only past a review, and a review is passed
@@ -2879,7 +2906,9 @@ const runningPipeline = (
  */
 export const awaitingLanding = (pipeline: Pipeline, task: Item): boolean => {
   const placement = place(pipeline, factsOf(task));
-  return placement._tag === "At" && placement.node.kind === "land";
+  return (
+    placement._tag === "At" && (placement.node.kind === "land" || placement.node.kind === "done")
+  );
 };
 
 /** The task's author handed off, and settle has not yet closed its run. */
