@@ -564,4 +564,5 @@ implementation, not a rewrite.
 
 `Tracker` (`src/tracker.ts`) is the whole task-tracker surface. Another tracker
 is another implementation of it; foreman's own records (`src/records.ts`) stay
-in foreman's store.
+in foreman's store. "Forking for your own workflow" in AGENTS.md lists
+what to edit for another workflow.

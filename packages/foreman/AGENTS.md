@@ -792,6 +792,22 @@ project's git checkout. Nothing above that file runs `git`.
 `Quota` (`src/quota.ts`) answers what a provider has left of its allowance.
 Nothing above that file knows which endpoint or which client says so.
 
+## Forking for your own workflow
+
+To change how foreman works, edit one of these.
+
+| To change | Edit |
+|---|---|
+| where tasks come from | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example |
+| where agents run | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example |
+| the steps a task goes through | `STANDARD_PIPELINE` in `src/pipeline.ts`, or draw one on the page |
+| what an agent is told | the files in `~/.config/foreman/prompts/` |
+| which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`) |
+| what runs without asking | the policy file (author, climb, review, land) |
+
+Keep `Records` and `Repository` as they are: the runs and git are how foreman
+knows what happened, whatever the workflow.
+
 ## Front ends
 
 herdr-web's server publishes every reading to its pages and writes it to
