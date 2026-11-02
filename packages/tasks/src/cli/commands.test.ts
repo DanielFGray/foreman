@@ -4,9 +4,18 @@ import { Effect, Layer, Stdio, Stream } from "effect";
 import { Command } from "effect/cli";
 import { Tasks } from "../store.ts";
 import { tasksCommand } from "./commands.ts";
-import { scratchTaskStore } from "./scratch-store.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const scratch = scratchTaskStore();
+/** A store file that does not exist yet: `tasks` makes it by running the migrations. */
+const scratch = (() => {
+  const directory = mkdtempSync(join(tmpdir(), "tasks-cli-"));
+  return {
+    file: join(directory, "prog.db"),
+    cleanup: () => rmSync(directory, { recursive: true, force: true }),
+  };
+})();
 afterAll(scratch.cleanup);
 
 const services = (stdin?: string) =>
@@ -213,5 +222,12 @@ describe("tasks status and prime", () => {
     await created("Counted", "-p", "i");
     expect(await run(["status", "-p", "i"])).toContain("Tasks: 1 (open 1)");
     expect(await run(["prime"])).toContain("tasks ready");
+  });
+});
+
+describe("a store that does not exist yet", () => {
+  test("add makes it and the task shows", async () => {
+    const id = await created("First task", "-p", "fresh");
+    expect(await run(["ready", "-p", "fresh"])).toContain(id);
   });
 });

@@ -13,6 +13,7 @@ import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Status } from "./item.ts";
+import { connectionAt } from "./connection.ts";
 import { Tasks } from "./store.ts";
 
 const byText = (left: string, right: string) => left.localeCompare(right);
@@ -300,3 +301,70 @@ describe.skipIf(!hasProg)("refusals match prog", () => {
     });
   });
 });
+
+describe.skipIf(!hasProg)("the migrator makes the schema `prog init` makes", () => {
+  test("same tables, columns, indexes, triggers and schema version", async () => {
+    const made = mkdtempSync(join(tmpdir(), "tasks-schema-"));
+    try {
+      const goFile = join(made, "go.db");
+      const tsFile = join(made, "ts.db");
+      prog(goFile, "init");
+      await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(tsFile))));
+      expect(schemaOf(tsFile)).toEqual(schemaOf(goFile));
+    } finally {
+      rmSync(made, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Every Go-owned object in `sqlite_master` with its columns or index keys, and the schema version. */
+const schemaOf = (file: string) => {
+  const sqlite = new Database(file, { readonly: true });
+  try {
+    const objects = sqlite
+      .query<{ type: string; name: string; tbl_name: string }, []>(
+        `SELECT type, name, tbl_name FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'tasks_migrations%'
+           AND tbl_name NOT IN (${OTHER_TABLES.map((name) => `'${name}'`).join(", ")})
+         ORDER BY type, name`,
+      )
+      .all();
+    return {
+      version: sqlite.query("PRAGMA user_version").get(),
+      objects: objects.map((object) => ({
+        ...object,
+        detail:
+          object.type === "table"
+            ? sqlite
+                .query(
+                  `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info('${object.name}')`,
+                )
+                .all()
+            : object.type === "index"
+              ? sqlite.query(`SELECT name FROM pragma_index_info('${object.name}')`).all()
+              : null,
+      })),
+    };
+  } finally {
+    sqlite.close();
+  }
+};
+
+/** The registry tables `0001_registry` adds; Go does not create them. */
+const OTHER_TABLES = [
+  "providers",
+  "pools",
+  "pool_aliases",
+  "models",
+  "aliases",
+  "ladder",
+  "prices",
+  "runs",
+  "defects",
+  "run_cost",
+  "model_summary",
+  "size_summary",
+  "run_identity",
+  "model_status",
+  "herd_roster",
+];
