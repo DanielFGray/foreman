@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
-import { store } from "tasks";
+import { connectionAt, store } from "tasks";
 import { Prog } from "./prog.ts";
 import { agentLog, attemptsOf, authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
 
@@ -106,7 +106,7 @@ describe("Prog against a scratch store", () => {
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "foreman-prog-"));
     process.env.PROG_DB = join(directory, "prog.db");
-    await Bun.$`prog init`.quiet();
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.PROG_DB))));
   });
 
   afterAll(async () => {

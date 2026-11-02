@@ -19,6 +19,7 @@ import {
   type TaskEvent,
   type TaskState,
 } from "./item.ts";
+import { cycleIn, type Dependency } from "./graph.ts";
 import { transition } from "./machine.ts";
 import { rank } from "./rank.ts";
 import { formatGo, parseStored } from "./time.ts";
@@ -46,7 +47,15 @@ export interface NewItem {
   readonly priority?: number;
   readonly parent?: string;
   readonly description?: string;
+  readonly definitionOfDone?: string;
   readonly labels?: ReadonlyArray<string>;
+}
+
+/** The text fields of an item. A field left out is kept; an empty definition of done clears it. */
+export interface ItemEdit {
+  readonly title?: string;
+  readonly description?: string;
+  readonly definitionOfDone?: string;
 }
 
 export interface LogEntry {
@@ -285,10 +294,146 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
         Effect.asVoid,
       );
 
+    /** The tasks that wait for `id`. */
+    const dependents = (id: string) =>
+      retrying(
+        sql<{
+          item_id: string;
+        }>`SELECT item_id FROM deps WHERE depends_on = ${id} ORDER BY item_id`,
+      ).pipe(Effect.map((rows) => rows.map((row) => row.item_id)));
+
+    /** Every dependency, or those of one project's tasks. */
+    const allDependencies = (project?: string) =>
+      retrying(
+        sql<{ item_id: string; depends_on: string }>`
+          SELECT d.item_id, d.depends_on FROM deps d JOIN items i ON i.id = d.item_id
+          WHERE ${project === undefined ? sql`1 = 1` : sql`i.project = ${project}`}
+          ORDER BY d.item_id, d.depends_on`,
+      ).pipe(
+        Effect.map((rows): ReadonlyArray<Dependency> =>
+          rows.map((row) => ({ item: row.item_id, dependsOn: row.depends_on })),
+        ),
+      );
+
+    /**
+     * Makes `second` wait for `first`. An edge that would close a cycle is
+     * refused, because no task on the cycle could ever start.
+     */
+    const block = (first: string, second: string) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* require(first);
+            yield* require(second);
+            const edges = [...(yield* allDependencies()), { item: second, dependsOn: first }];
+            const cycle = cycleIn(edges);
+            if (cycle !== undefined) {
+              return yield* new TaskError({
+                id: first,
+                detail: `cannot block ${second}: that makes a cycle (${cycle.join(" -> ")})`,
+              });
+            }
+            yield* sql`INSERT OR IGNORE INTO deps (item_id, depends_on) VALUES (${second}, ${first})`;
+          }),
+        )
+        .pipe(retrying);
+
+    /** Ends the wait of `second` for `first`. */
+    const unblock = (first: string, second: string) =>
+      Effect.gen(function* () {
+        yield* require(first);
+        yield* require(second);
+        const removed = yield* retrying(
+          sql`DELETE FROM deps WHERE item_id = ${second} AND depends_on = ${first} RETURNING item_id`,
+        );
+        if (removed.length === 0) {
+          return yield* new TaskError({ id: second, detail: `${first} does not block ${second}` });
+        }
+      });
+
+    const setColumn = (
+      id: string,
+      column: "title" | "description" | "definition_of_done" | "priority" | "parent_id",
+      value: string | number | null,
+    ) =>
+      retrying(
+        sql`UPDATE items SET ${sql.literal(column)} = ${value}, updated_at = ${formatGo(new Date())} WHERE id = ${id}`,
+      );
+
+    const edit = (id: string, change: ItemEdit) =>
+      Effect.gen(function* () {
+        yield* require(id);
+        if (change.title !== undefined && change.title.trim() === "") {
+          return yield* new TaskError({ id, detail: "title cannot be empty" });
+        }
+        if (change.title !== undefined) yield* setColumn(id, "title", change.title);
+        if (change.description !== undefined) {
+          yield* setColumn(id, "description", change.description);
+        }
+        if (change.definitionOfDone !== undefined) {
+          yield* setColumn(
+            id,
+            "definition_of_done",
+            change.definitionOfDone === "" ? null : change.definitionOfDone,
+          );
+        }
+      });
+
+    /** Adds `text` to the end of the description, on a new line. */
+    const append = (id: string, text: string) =>
+      require(id).pipe(
+        Effect.flatMap((item) => setColumn(id, "description", `${item.description}\n${text}`)),
+      );
+
+    const checkPriority = (id: string, priority: number) =>
+      [1, 2, 3].includes(priority)
+        ? Effect.void
+        : Effect.fail(
+            new TaskError({
+              id,
+              detail: `invalid priority ${priority}: must be 1 (high), 2 (medium), or 3 (low)`,
+            }),
+          );
+
+    const setPriority = (id: string, priority: number) =>
+      Effect.gen(function* () {
+        yield* checkPriority(id, priority);
+        yield* require(id);
+        yield* setColumn(id, "priority", priority);
+      });
+
+    /** Puts `id` under `parent`, which must be an epic. */
+    const setParent = (id: string, parent: string) =>
+      Effect.gen(function* () {
+        yield* require(id);
+        yield* requireEpic(id, parent);
+        yield* setColumn(id, "parent_id", parent);
+      });
+
+    const requireEpic = (id: string, parent: string) =>
+      get(parent).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(new TaskError({ id, detail: `parent not found: ${parent}` })),
+            onSome: (found) =>
+              found.type === "epic"
+                ? Effect.void
+                : Effect.fail(
+                    new TaskError({
+                      id,
+                      detail: `parent must be an epic, but ${parent} is a task`,
+                    }),
+                  ),
+          }),
+        ),
+      );
+
     const add = (item: NewItem) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
+            if (item.parent !== undefined) yield* requireEpic(item.title, item.parent);
+            if (item.priority !== undefined) yield* checkPriority(item.title, item.priority);
             const type = item.type ?? "task";
             const id = `${type === "epic" ? "ep" : "ts"}-${hex(3)}`;
             const project = item.project.trim();
@@ -296,8 +441,8 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
             if (project !== "") {
               yield* sql`INSERT OR IGNORE INTO projects (name, created_at, updated_at) VALUES (${project}, ${now}, ${now})`;
             }
-            yield* sql`INSERT INTO items (id, project, type, title, description, status, priority, parent_id, created_at, updated_at)
-              VALUES (${id}, ${project}, ${type}, ${item.title}, ${item.description ?? ""}, ${item.status ?? "open"},
+            yield* sql`INSERT INTO items (id, project, type, title, description, definition_of_done, status, priority, parent_id, created_at, updated_at)
+              VALUES (${id}, ${project}, ${type}, ${item.title}, ${item.description ?? ""}, ${item.definitionOfDone ?? null}, ${item.status ?? "open"},
                       ${item.priority ?? 2}, ${item.parent ?? null}, ${now}, ${now})`;
             return id;
           }),
@@ -311,9 +456,18 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
 
     return {
       get,
+      require,
       list,
       ready,
       dependencies,
+      dependents,
+      allDependencies,
+      block,
+      unblock,
+      edit,
+      append,
+      setPriority,
+      setParent,
       logs,
       send,
       relabel,

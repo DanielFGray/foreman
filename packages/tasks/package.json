@@ -2,6 +2,9 @@
   "name": "tasks",
   "private": true,
   "type": "module",
+  "bin": {
+    "tasks": "./src/cli/main.ts"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

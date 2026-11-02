@@ -3,19 +3,158 @@ import * as Migrator from "effect/sql/Migrator";
 import { SqlClient } from "effect/sql/SqlClient";
 
 /**
- * The tables `tasks` adds to the store, as Effect migrations.
+ * The tables of the store, as Effect migrations.
  *
- * Go `prog` owns `PRAGMA user_version` and every table it created; these
- * migrations record themselves in `tasks_migrations` and touch neither.
+ * `0001_tasks` creates the task and learning tables as Go `prog` leaves them
+ * after its last migration, so `tasks` can make a store on its own. Every
+ * statement is `IF NOT EXISTS`: on a store `prog` already made, it does nothing.
+ *
+ * A store without a `user_version` gets the one Go leaves after its last
+ * migration (`GO_SCHEMA_VERSION`); without it, Go would run its migrations again
+ * over these tables. Go owns the number from then on. Migrations record themselves in
+ * `tasks_migrations`.
  */
 export const MIGRATIONS = Migrator.fromRecord({
-  "0001_registry": Effect.gen(function* () {
+  "0001_tasks": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    for (const statement of TASKS) yield* sql.unsafe(statement);
+    const version = yield* sql.unsafe<{ user_version: number }>("PRAGMA user_version");
+    if (version[0]?.user_version === 0)
+      yield* sql.unsafe(`PRAGMA user_version = ${GO_SCHEMA_VERSION}`);
+  }),
+  "0002_registry": Effect.gen(function* () {
     const sql = yield* SqlClient;
     for (const statement of REGISTRY) yield* sql.unsafe(statement);
   }),
 });
 
 export const MIGRATIONS_TABLE = "tasks_migrations";
+
+/**
+ * Tasks (`items`, `deps`, `logs`, `projects`, `labels`, `item_labels`) and
+ * learnings (`concepts`, `learnings`, their full-text index, sources and
+ * relations). Names match Go's, because Go reads the same file.
+ */
+const TASKS = [
+  `CREATE TABLE IF NOT EXISTS items (
+    id TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    priority INTEGER DEFAULT 2,
+    parent_id TEXT REFERENCES items(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    definition_of_done TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS deps (
+    item_id TEXT REFERENCES items(id),
+    depends_on TEXT REFERENCES items(id),
+    PRIMARY KEY (item_id, depends_on)
+  )`,
+  `CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY,
+    item_id TEXT REFERENCES items(id),
+    message TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS projects (
+    name TEXT PRIMARY KEY,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS labels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    project TEXT NOT NULL,
+    color TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (name, project)
+  )`,
+  `CREATE TABLE IF NOT EXISTS item_labels (
+    item_id TEXT REFERENCES items(id),
+    label_id TEXT REFERENCES labels(id),
+    PRIMARY KEY (item_id, label_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS concepts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    summary TEXT,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS learnings (
+    id TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    task_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+    summary TEXT NOT NULL,
+    detail TEXT,
+    status TEXT DEFAULT 'active'
+  )`,
+  `CREATE TABLE IF NOT EXISTS learning_concepts (
+    learning_id TEXT REFERENCES learnings(id),
+    concept_id TEXT REFERENCES concepts(id),
+    PRIMARY KEY (learning_id, concept_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS learning_sources (
+    id TEXT PRIMARY KEY,
+    learning_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    note TEXT,
+    CHECK (
+      (start_line IS NULL AND end_line IS NULL)
+      OR (start_line IS NOT NULL AND start_line > 0 AND end_line IS NULL)
+      OR (start_line IS NOT NULL AND end_line IS NOT NULL
+        AND start_line > 0 AND end_line >= start_line)
+    )
+  )`,
+  `CREATE TABLE IF NOT EXISTS learning_relations (
+    source_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind = 'supersedes'),
+    CHECK (source_id != target_id),
+    PRIMARY KEY (source_id, target_id, kind)
+  )`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS learnings_fts USING fts5(
+    summary,
+    detail,
+    content='learnings',
+    content_rowid='rowid'
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS learnings_ai AFTER INSERT ON learnings BEGIN
+    INSERT INTO learnings_fts(rowid, summary, detail)
+    VALUES (NEW.rowid, NEW.summary, NEW.detail);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS learnings_ad AFTER DELETE ON learnings BEGIN
+    INSERT INTO learnings_fts(learnings_fts, rowid, summary, detail)
+    VALUES ('delete', OLD.rowid, OLD.summary, OLD.detail);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS learnings_au AFTER UPDATE ON learnings BEGIN
+    INSERT INTO learnings_fts(learnings_fts, rowid, summary, detail)
+    VALUES ('delete', OLD.rowid, OLD.summary, OLD.detail);
+    INSERT INTO learnings_fts(rowid, summary, detail)
+    VALUES (NEW.rowid, NEW.summary, NEW.detail);
+  END`,
+  `CREATE INDEX IF NOT EXISTS idx_items_project ON items(project)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_logs_item ON logs(item_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project)`,
+  `CREATE INDEX IF NOT EXISTS idx_item_labels_item ON item_labels(item_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_item_labels_label ON item_labels(label_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_learning_concepts_concept ON learning_concepts(concept_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_learnings_task ON learnings(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_sources_unique
+    ON learning_sources(learning_id, path, ifnull(start_line, -1), ifnull(end_line, -1))`,
+  `CREATE INDEX IF NOT EXISTS idx_learning_relations_target ON learning_relations(target_id)`,
+];
 
 /**
  * The model registry and the record of runs, moved here from the herd skill's
@@ -212,3 +351,6 @@ const REGISTRY = [
               ORDER BY m2.rank NULLS LAST, m2.model LIMIT -1) s) AS on_trial
   FROM pools p`,
 ];
+
+/** `PRAGMA user_version` after Go `prog`'s last migration. */
+const GO_SCHEMA_VERSION = 8;
