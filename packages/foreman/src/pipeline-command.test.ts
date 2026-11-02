@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { STANDARD_PIPELINE } from "./pipeline.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
+import { readPipelines, withWorkspace } from "./pipeline-file.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
@@ -138,5 +139,37 @@ describe("a pipelines file from before the workspace blocks", () => {
     await run("set", "other", fileWith(pinned));
 
     expect(read().pipelines.amux).toEqual(direct);
+  });
+});
+
+describe("migrating and reading the pipelines file", () => {
+  test("two sources each get a branch and a worktree with ids of their own", () => {
+    const migrated = withWorkspace({
+      nodes: [
+        { kind: "source", id: "bugs", filter: "label:bug", next: "author" },
+        { kind: "source", id: "rest", filter: "", next: "author" },
+        { kind: "agent", id: "author", role: "author", model: "ladder", next: "land" },
+        { kind: "land", id: "land" },
+      ],
+    });
+    expect(migrated.nodes.map((node) => node.id)).toEqual([
+      "bugs",
+      "branch",
+      "worktree",
+      "rest",
+      "branch-2",
+      "worktree-2",
+      "author",
+      "land",
+    ]);
+  });
+
+  test("a file that does not decode reports its path and why", async () => {
+    writeFileSync(path, "{ not json");
+    const read = await Effect.runPromise(
+      readPipelines(path).pipe(Effect.provide(BunServices.layer)),
+    );
+    expect(read.error).toStartWith(`${path} does not decode: `);
+    expect(read.error?.length).toBeGreaterThan(`${path} does not decode: `.length);
   });
 });

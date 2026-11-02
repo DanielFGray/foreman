@@ -1473,8 +1473,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
         // A done block ends a route with no branch: the author committed onto
         // the operator's branch, and the reviewer approved what it read there.
-        // Nothing is left to merge or prove.
+        // Nothing is left to merge or prove, but the approval holds only while
+        // the checkout is still at the commit the reviewer read: a later commit
+        // voids it, and the next review reads the new one.
         if (block.kind === "done") {
+          const approved = approvedCommit(task);
+          const head = yield* repository.head(project.directory);
+          if (approved === undefined || head !== approved) {
+            return yield* Effect.logWarning(
+              `completing ${task.id} (${project.name}) refused: the checkout moved after its approval`,
+            );
+          }
           yield* prog.log(
             task.id,
             `foreman: completed at ${block.id}. The work was committed onto ${project.name}'s branch, so nothing was merged.`,
@@ -1827,6 +1836,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${why}`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
 
+    /** The workspace the task's route gives it, from the published reading. */
+    const routeOf = (task: Item) =>
+      SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => workspaceOf(pipelines, task)));
+
     /**
      * The workspace a task's agents run in, with its worktree made usable.
      *
@@ -1836,10 +1849,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * and an agent given a directory that cannot build will spend its run
      * discovering that and charge it to the branch.
      */
-    /** The workspace the task's route gives it, from the published reading. */
-    const routeOf = (task: Item) =>
-      SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => workspaceOf(pipelines, task)));
-
     const workspaceFor = (task: Item, project: Project) =>
       Effect.gen(function* () {
         // The task's route chooses where a new workspace goes. One that
@@ -2085,10 +2094,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         repository: project.directory,
       });
       const prompt = yield* prompts.onboard(task, project.directory);
+      // On a direct route the reviewer reads from where the checkout stood, as
+      // for any direct author.
+      const base =
+        (yield* routeOf(task)) === "none" ? yield* repository.head(project.directory) : undefined;
 
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, runFor(task, rung, block))
+        .attribute(task.id, runFor(task, rung, block, undefined, base))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,

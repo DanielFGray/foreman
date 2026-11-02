@@ -1749,6 +1749,21 @@ describe("a route's workspace blocks", () => {
     ).toBe(true);
   });
 
+  test("direct: a commit after the approval stops the task completing, and it goes to review again", async () => {
+    draw(DIRECT);
+    const task = item("ts-moved", "reviewing", [], "test", [
+      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+      reviewRun("cheap", { ending: "approved", commit: "h1", open: false }),
+    ]);
+    const world = new World(task);
+    world.headCommit = "h2";
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+    expect(world.spawned).toEqual([[task.id, "review"]]);
+  });
+
   for (const [shape, nodes] of [
     ["branch only", BRANCH_ONLY],
     ["direct", DIRECT],

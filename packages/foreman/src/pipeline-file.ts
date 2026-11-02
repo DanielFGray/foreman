@@ -54,7 +54,7 @@ export const withWorkspace = (pipeline: Pipeline): Pipeline => {
   const taken = new Set(pipeline.nodes.map((node) => node.id));
   const fresh = (base: string) => {
     let id = base;
-    for (let n = 2; taken.has(id); n++) id = `-`;
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
     taken.add(id);
     return id;
   };
@@ -98,7 +98,7 @@ const readFile = (path: string) =>
       Effect.catch((error) =>
         Effect.succeed<Read<PipelinesFile>>({
           value: NONE,
-          error: ` does not decode: `,
+          error: `${path} does not decode: ${error.message}`,
           text: text.value,
         }),
       ),
