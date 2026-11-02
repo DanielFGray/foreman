@@ -79,8 +79,9 @@ tidy, reclaim and recover wait too. Stopping the fleet must hold the world still
 while the operator looks at it. To empty the pipeline without taking on new
 work, turn `author` and `climb` off and leave `review` and `land` on.
 
-An ask is a reading, not a record. `dispatchFrom` plans each tick's dispatches
-and asks together. A slot is spent when a step runs, not when it is asked about,
+An ask is a reading, not a record. `dispatchFrom` plans each tick's dispatches,
+landings, parks and asks together, from where each task stands in its project's
+pipeline. A slot is spent when a step runs, not when it is asked about,
 so an ask holds no slot: review, climb and land asks are listed whatever the free
 count and never hold back a granted task behind them. Author asks are capped at
 `slots`, so an `ask` author step does not list the whole queue. An approved step
@@ -89,8 +90,9 @@ answers one with an ordinary one-task grant for the asked step, which the next
 tick takes; nothing else stores approvals. `foreman wait --asks` returns when a
 new ask appears, for a coordinator that answers asks while it talks to the operator.
 
-A grant permits a step. It never reorders the queue: `fill` walks the queue in
-its order and passes over each task no permit covers. Which granted tasks may run
+A grant permits a step. It never reorders the queue: the plan takes tasks with
+the fewest work blocks left first, then in queue order, and passes over each task
+that a gate on its route does not permit. Which granted tasks may run
 at once is what `prog ready` returns, so the plan's blockers decide it, and
 restating that here would be a second, weaker copy of the dependency graph.
 
@@ -297,7 +299,9 @@ that failure is the project's or the machine's, never the task's.
 
 ### Order inside a tick
 
-Settle, tidy, reclaim, recover, then fill — and **reviews are filled before new work**. A task
+Settle, tidy, reclaim, recover, then fill — and **the work nearest the end is filled first**: the fewest
+work blocks left, then queue order. In the standard pipeline that is landings,
+then reviews, then new work. A task
 awaiting review is nearly finished and is blocking whatever depends on it,
 whereas an unclaimed task has not started costing anything. Filling slots with
 new work while reviews pile up grows a permanent tail of almost-done tasks.
