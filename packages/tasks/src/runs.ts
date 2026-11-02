@@ -17,9 +17,14 @@ export const AUTHOR_ENDINGS = [
   "canceled",
 ] as const;
 export const REVIEW_ENDINGS = ["approved", "returned", "no-verdict", "walled", "released"] as const;
+/** A check run is written closed: its command exited 0, or it did not. */
+export const CHECK_ENDINGS = ["passed", "failed"] as const;
 export type AuthorEnding = (typeof AUTHOR_ENDINGS)[number];
 export type ReviewEnding = (typeof REVIEW_ENDINGS)[number];
-export type Ending = AuthorEnding | ReviewEnding;
+export type CheckEnding = (typeof CHECK_ENDINGS)[number];
+/** An ending settle writes when it closes an agent's run. */
+export type AgentEnding = AuthorEnding | ReviewEnding;
+export type Ending = AgentEnding | CheckEnding;
 
 /** What an agent may state about its own run, and the run and status move each one means. */
 export const VERDICTS = {
@@ -32,10 +37,24 @@ export type Verdict = keyof typeof VERDICTS;
 /** The registry's four words for how a run went. */
 export type Outcome = "committed" | "dropped" | "handed-off" | "answered";
 
-export type Role = "author" | "review";
+/**
+ * What part a run plays on its task. An author writes the branch, a reviewer
+ * reads it, and a check runs a pipeline block's command on it. A check runs no
+ * agent.
+ */
+export type Role = "author" | "review" | "check";
 
-/** The `work` column: a review is its own kind, every other run is an author's. */
-export type Work = "build" | "correction" | "research" | "review";
+/** The kinds of work an author's run can be. */
+const AUTHOR_WORK = ["build", "correction", "research"] as const;
+
+/** The `work` column: an author's run says what kind of work it was. */
+export type Work = (typeof AUTHOR_WORK)[number] | "review" | "check";
+
+const roleOf = (work: Work): Role => (work === "review" || work === "check" ? work : "author");
+
+/** The SQL condition that keeps the runs of `role`. */
+const ofRole = (sql: SqlClient, role: Role) =>
+  role === "author" ? sql.in("work", AUTHOR_WORK) : sql`work = ${role}`;
 
 /** One row of `runs`, as foreman reads it. */
 export interface Run {
@@ -59,7 +78,7 @@ export interface Run {
  * outcome and no ending. Landing later sets the author run's outcome to
  * `committed` or `answered`.
  */
-export const outcomeOf = (ending: Ending): Outcome =>
+export const outcomeOf = (ending: AgentEnding): Outcome =>
   ending === "canceled" ? "dropped" : "handed-off";
 
 export interface NewRun {
@@ -71,7 +90,8 @@ export interface NewRun {
   readonly model: string;
   readonly rung: string | undefined;
   readonly node: string;
-  readonly work: Work;
+  /** An agent's work: a check is written by `recordCheck`, never opened. */
+  readonly work: Exclude<Work, "check">;
   /** A review run records the branch tip it reads. */
   readonly commit?: string | undefined;
   /** Correction rounds already counted; absent for a run that starts new. */
@@ -94,6 +114,30 @@ export const openRun = (run: NewRun) =>
     return rows[0]!.id;
   });
 
+/** A check block's run: its command ran on the branch at `commit`. */
+export interface CheckRun {
+  readonly project: string;
+  readonly task: string;
+  readonly node: string;
+  readonly command: string;
+  readonly commit: string;
+  readonly ending: CheckEnding;
+}
+
+/**
+ * Records a check run, closed, with its ending. A check is written only once
+ * its command has exited, so a check that never finished leaves no run, and
+ * the next reading runs it again.
+ */
+export const recordCheck = (check: CheckRun) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    yield* sql`INSERT INTO runs
+      (project, task, slice, node, work, "commit", ending, started_at, closed_at)
+      VALUES (${check.project}, ${check.task}, ${check.command}, ${check.node}, 'check',
+              ${check.commit}, ${check.ending}, datetime('now'), datetime('now'))`;
+  });
+
 /**
  * Closes an open run with its ending and the outcome that goes with it. The
  * ending the agent wrote while the run was open stands; `ending` is written
@@ -103,11 +147,11 @@ export const openRun = (run: NewRun) =>
  */
 export const closeRun = (
   id: number,
-  close: { readonly ending: Ending; readonly commit?: string },
+  close: { readonly ending: AgentEnding; readonly commit?: string },
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    const open = yield* sql<{ ending: Ending | null }>`SELECT ending FROM runs
+    const open = yield* sql<{ ending: AgentEnding | null }>`SELECT ending FROM runs
       WHERE id = ${id} AND closed_at IS NULL`;
     if (open.length === 0) return yield* new RunError({ id, detail: "not an open run" });
     const ending = open[0]!.ending ?? close.ending;
@@ -134,7 +178,7 @@ export const addRound = (task: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const rows = yield* sql<{ rounds: number }>`UPDATE runs SET rounds = coalesce(rounds, 0) + 1
-      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND work <> 'review')
+      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND ${ofRole(sql, "author")})
       RETURNING rounds`;
     if (rows.length === 0)
       return yield* new TaskError({ id: task, detail: `${task} has no author run` });
@@ -156,7 +200,7 @@ export const verdict = (task: string, said: Verdict) =>
       Effect.gen(function* () {
         const changed = yield* sql`UPDATE runs SET ending = ${said}
           WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
-                        AND (work = 'review') = ${role === "review" ? 1 : 0})
+                        AND ${ofRole(sql, role)})
           RETURNING id`;
         if (changed.length === 0)
           return yield* new TaskError({
@@ -177,7 +221,7 @@ export const landAuthorRun = (task: string, research: boolean) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     yield* sql`UPDATE runs SET outcome = ${research ? "answered" : "committed"}
-      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND work <> 'review')
+      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND ${ofRole(sql, "author")})
         AND closed_at IS NOT NULL`;
   });
 
@@ -194,7 +238,7 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
       const run: Run = {
         id: row.id,
         task: row.task,
-        role: row.work === "review" ? "review" : "author",
+        role: roleOf(row.work),
         rung: row.rung ?? undefined,
         node: row.node ?? undefined,
         commit: row.commit ?? undefined,
@@ -242,9 +286,10 @@ export const closeOpenRuns = (
     const open = yield* sql<{ id: number; work: Work }>`SELECT id, work FROM runs
       WHERE task = ${task} AND closed_at IS NULL ORDER BY id`;
     for (const { id, work } of open) {
-      if (work === "review") {
+      const role = roleOf(work);
+      if (role === "review") {
         if (endings.review !== undefined) yield* closeRun(id, { ending: endings.review });
-      } else if (endings.author !== undefined) {
+      } else if (role === "author" && endings.author !== undefined) {
         yield* closeRun(id, { ending: endings.author, commit: endings.commit });
       }
     }
@@ -255,5 +300,5 @@ export const deleteOpenRunOf = (task: string, role: Role) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     yield* sql`DELETE FROM runs WHERE task = ${task} AND closed_at IS NULL
-      AND (work = 'review') = ${role === "review" ? 1 : 0}`;
+      AND ${ofRole(sql, role)}`;
   });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { handedOff, reviewRun } from "./task-fixture.ts";
+import type { Run } from "tasks";
+import { checkRun, handedOff, reviewRun } from "./task-fixture.ts";
 import {
   type Facts,
   matches,
@@ -336,6 +337,101 @@ describe("validation", () => {
     expect(problemsOf(ungated, RUNGS)).toEqual([
       "a route from queue reaches author through no gate",
     ]);
+  });
+});
+
+describe("a check block", () => {
+  // The standard pipeline with a check between the author and the review.
+  const checked: Pipeline = {
+    nodes: STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+      node.kind === "agent" && node.id === "author"
+        ? [
+            { ...node, next: "lint-gate" },
+            { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+            { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+          ]
+        : [node],
+    ),
+  };
+  const handedOver = (runs: ReadonlyArray<Run>, tip: string) =>
+    place(
+      checked,
+      factsOf({
+        status: "reviewing",
+        priority: 1,
+        parent: undefined,
+        labels: [],
+        runs: [handedOff("cheap", "c1"), ...runs],
+        tip,
+      }),
+    );
+  const nodeOf = (placement: ReturnType<typeof place>) =>
+    placement._tag === "At" ? `${placement.node.id} ${placement.state}` : placement._tag;
+
+  test("is valid where a gate stands before it and an author before that", () => {
+    expect(problemsOf(checked, RUNGS)).toEqual([]);
+  });
+
+  test("waits after the author hands off, and counts as a block ahead", () => {
+    expect(at(checked, {})).toMatchObject({ node: "author", ahead: 3 });
+    expect(at(checked, { status: "reviewing", passed: new Set(["author"]) })).toEqual({
+      node: "lint",
+      state: "waiting",
+      gates: ["lint-gate"],
+      ahead: 2,
+    });
+  });
+
+  test("passes the commit its command passed on, and only that commit", () => {
+    expect(nodeOf(handedOver([], "c1"))).toBe("lint waiting");
+    expect(nodeOf(handedOver([checkRun("lint", "c1", "passed")], "c1"))).toBe("review waiting");
+    expect(nodeOf(handedOver([checkRun("lint", "c1", "failed")], "c1"))).toBe("lint waiting");
+    // A commit after the check places the task at the check again.
+    expect(nodeOf(handedOver([checkRun("lint", "c1", "passed")], "c2"))).toBe("lint waiting");
+  });
+
+  test("is no review: a land past a check and no reviewer is refused", () => {
+    const unreviewed: Pipeline = {
+      nodes: checked.nodes
+        .filter((node) => node.id !== "review" && node.id !== "review-gate")
+        .map((node) => (node.id === "lint" ? { ...node, next: "land-gate" } : node)),
+    };
+    expect(problemsOf(unreviewed, RUNGS)).toEqual([
+      "a route from queue reaches land with no review after it",
+      "a route from author reaches land with no review after it",
+    ]);
+  });
+
+  test("needs a gate before it, an author before it and a command", () => {
+    const ungated: Pipeline = {
+      nodes: checked.nodes
+        .filter((node) => node.id !== "lint-gate")
+        .map((node) => (node.id === "author" ? { ...node, next: "lint" } : node)),
+    };
+    expect(problemsOf(ungated, RUNGS)).toEqual([
+      "a route from author reaches lint through no gate",
+    ]);
+
+    const first: Pipeline = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "g0" },
+        { kind: "gate", id: "g0", step: "author", next: "lint" },
+        { kind: "check", id: "lint", command: "bun run lint", next: "start" },
+        ...STANDARD_PIPELINE.nodes.filter((node) => !["queue", "retry", "climb"].includes(node.id)),
+      ],
+    };
+    expect(problemsOf(first, RUNGS)).toEqual([
+      "a route from queue reaches lint with no author before it",
+    ]);
+
+    const silent: Pipeline = {
+      nodes: checked.nodes.map((node) => (node.id === "lint" ? { ...node, command: " " } : node)),
+    };
+    expect(problemsOf(silent, RUNGS)).toEqual(["lint: a check runs a command, and it names none"]);
+  });
+
+  test("is drawn with its command", () => {
+    expect(toMermaid(checked)).toContain("lint: runs bun run lint");
   });
 });
 

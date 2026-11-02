@@ -4,7 +4,7 @@
 // keeps the editor's selection pointing at a block that still exists.
 import { Option, Schema as S } from "effect"
 import type { Pipeline, PipelineNode } from "foreman/pipeline"
-import { addRoute, addSource, configure, insertOn, rejoin, remove, removeRoute, swapEnd } from "foreman/pipeline-belt"
+import { addRoute, addSource, configure, INSERTABLE, insertOn, rejoin, remove, removeRoute, swapEnd } from "foreman/pipeline-belt"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 
 /** One way out of a block, as `pipeline-belt` names it: `next`, a router's `else`, or route `n`. */
@@ -19,6 +19,7 @@ export const BlockSetting = S.Union([
   S.Struct({ step: S.Literals(FOREMAN_STEPS) }),
   S.Struct({ role: S.Literals(["author", "review"]), model: S.String, slots: S.UndefinedOr(S.Int) }),
   S.Struct({ route: S.Int, when: S.String }),
+  S.Struct({ command: S.String }),
 ])
 
 /** A change the operator makes to the draft, or to what the editor has picked. */
@@ -26,7 +27,7 @@ export const PipelineEdit = S.Union([
   S.TaggedStruct("Select", { id: S.Option(S.String) }),
   /** Opens or closes the choice of block to put on a wire. */
   S.TaggedStruct("PickWire", { wire: S.Option(WireRef) }),
-  S.TaggedStruct("InsertOn", { wire: WireRef, kind: S.Literals(["gate", "agent", "router"]) }),
+  S.TaggedStruct("InsertOn", { wire: WireRef, kind: S.Literals(INSERTABLE) }),
   S.TaggedStruct("Remove", { id: S.String }),
   S.TaggedStruct("AddRoute", { router: S.String, when: S.String }),
   S.TaggedStruct("RemoveRoute", { router: S.String, index: S.Int }),
@@ -95,6 +96,8 @@ export const summaryOf = (node: PipelineNode): string => {
       return `holds for ${node.step}`
     case "agent":
       return `${node.role} · ${node.model}${node.slots === undefined ? "" : ` ×${node.slots}`}`
+    case "check":
+      return node.command === "" ? "names no command" : `runs ${node.command}`
     case "land":
       return "merges the branch"
     case "park":

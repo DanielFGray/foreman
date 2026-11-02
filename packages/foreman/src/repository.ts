@@ -371,26 +371,64 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
         if (!verify) return { _tag: "Proven", commit, verified: false } as const;
 
-        const after = yield* check(proving, verify);
-        if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
+        const judged = yield* judge(proving, verify, gitGround(proving, directory, base));
+        switch (judged._tag) {
+          case "Passed":
+            return { _tag: "Proven", commit, verified: judged.verified } as const;
+          case "Failed":
+            return { _tag: "Broke", output: judged.output } as const;
+          case "Held":
+            return judged;
+        }
+      });
 
-        const broke = yield* reproduced(proving, verify, after.output);
+    /**
+     * What `command` says about the tree the proving ground holds.
+     *
+     * A failure counts against the tree only when it reproduces and the
+     * command passes once `baseline` resets the ground to where the tree
+     * began. Red before the tree touched it, the tree is not the cause, and
+     * gating on an absolute pass would freeze the fleet behind one broken test
+     * forever. Such a pass is not `verified`.
+     */
+    const judge = (
+      proving: string,
+      command: string,
+      baseline: Effect.Effect<
+        { readonly _tag: "Held"; readonly detail: string } | undefined,
+        RepositoryError
+      >,
+    ): Effect.Effect<Checked, RepositoryError> =>
+      Effect.gen(function* () {
+        const after = yield* check(proving, command);
+        if (after.passed) return { _tag: "Passed", verified: true } as const;
+
+        const broke = yield* reproduced(proving, command, after.output);
         if (broke === undefined) {
-          yield* Effect.logWarning(
-            `${verify} failed then passed in ${proving}; a flaky verification is green`,
-          );
-          return { _tag: "Proven", commit, verified: true } as const;
+          yield* Effect.logWarning(`${command} failed then passed in ${proving}; a flake is green`);
+          return { _tag: "Passed", verified: true } as const;
         }
 
-        const restored = yield* gitGround(proving, directory, base);
+        const restored = yield* baseline;
         if (restored) return restored;
-        const before = yield* check(proving, verify);
-        // Red before the branch touched it, so the branch is not the cause.
-        // Gating on an absolute pass would freeze the fleet behind one broken
-        // test forever.
+        const before = yield* check(proving, command);
         return before.passed
-          ? ({ _tag: "Broke", output: broke } as const)
-          : ({ _tag: "Proven", commit, verified: false } as const);
+          ? ({ _tag: "Failed", output: broke } as const)
+          : ({ _tag: "Passed", verified: false } as const);
+      });
+
+    /**
+     * Runs a check block's command on `commit` in the proving ground, so it
+     * judges exactly that commit and writes to no tree a person or an agent
+     * uses. Its baseline is the commit the branch was cut from: where `commit`
+     * and the checkout's HEAD last met.
+     */
+    const gitCheck = (proving: string, directory: string, commit: string, command: string) =>
+      Effect.gen(function* () {
+        const ready = yield* gitGround(proving, directory, commit);
+        if (ready) return ready;
+        const base = yield* gitOutput(directory, "merge-base", "HEAD", commit);
+        return yield* judge(proving, command, gitGround(proving, directory, base));
       });
 
     /**
@@ -833,6 +871,15 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           if (gate._tag !== "Clean") return gate;
           return yield* gitCheckout.merge(directory, branch, verify, proving, message);
         }),
+
+      /**
+       * Runs a check block's `command` on `commit`, a commit of `directory`'s
+       * repository, in the proving ground `proving` that landings use. Writes
+       * nothing to `directory`. A flake and a failure the base shares do not
+       * count against the commit, as at a landing.
+       */
+      check: (directory: string, commit: string, command: string, proving: string) =>
+        gitCheck(proving, directory, commit, command),
     } as const;
   }),
 }) {
@@ -860,6 +907,14 @@ export type Landing =
   | { readonly _tag: "Rejected"; readonly detail: string }
   | { readonly _tag: "Merged"; readonly verified: boolean }
   | { readonly _tag: "Broke"; readonly output: string };
+
+/** What a check block's command said about one commit. */
+export type Checked =
+  /** The proving ground could not be made ready, which says nothing about the commit. */
+  | { readonly _tag: "Held"; readonly detail: string }
+  /** `verified` is false when the command fails on the branch's base as well. */
+  | { readonly _tag: "Passed"; readonly verified: boolean }
+  | { readonly _tag: "Failed"; readonly output: string };
 
 /** One of foreman's branches, as git sees it against the checkout's HEAD. */
 export interface Branch {

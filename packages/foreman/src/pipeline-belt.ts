@@ -101,15 +101,17 @@ export const beltOf = (pipeline: Pipeline): Belt => {
 };
 
 /** The kinds of block an operator puts on a wire. */
-export type Insertable = "gate" | "agent" | "router";
+export const INSERTABLE = ["gate", "agent", "check", "router"] as const;
+export type Insertable = (typeof INSERTABLE)[number];
 
 /**
  * Puts a new block on a wire: the wire runs into it, and it runs on to where
  * the wire went. Answers the pipeline and the new block's id.
  *
  * A new router sends everything to `else` until a route is added; a new agent
- * authors from the ladder; a new gate holds for `author`. The operator sets
- * each one after.
+ * authors from the ladder; a new gate holds for `author`; a new check names no
+ * command, which validation reports until the operator names one. The
+ * operator sets each one after.
  */
 export const insertOn = (
   pipeline: Pipeline,
@@ -124,7 +126,9 @@ export const insertOn = (
       ? { kind, id, step: "author", next: target }
       : kind === "agent"
         ? { kind, id, role: "author", model: "ladder", next: target }
-        : { kind, id, routes: [], else: target };
+        : kind === "check"
+          ? { kind, id, command: "", next: target }
+          : { kind, id, routes: [], else: target };
   const rewired = retargeted(pipeline, wire, id);
   return { pipeline: { nodes: [...rewired.nodes, block] }, id };
 };
@@ -212,10 +216,12 @@ export const configure = (
         readonly model: string;
         readonly slots: number | undefined;
       }
-    | { readonly route: number; readonly when: string },
+    | { readonly route: number; readonly when: string }
+    | { readonly command: string },
 ): Pipeline =>
   mapNode(pipeline, id, (node) => {
     if ("filter" in change && node.kind === "source") return { ...node, filter: change.filter };
+    if ("command" in change && node.kind === "check") return { ...node, command: change.command };
     if ("step" in change && node.kind === "gate") return { ...node, step: change.step };
     if ("role" in change && node.kind === "agent") {
       const { slots: _slots, ...rest } = node;
@@ -243,6 +249,7 @@ const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
       case "source":
       case "gate":
       case "agent":
+      case "check":
         return [{ from: node.id, port: "next", to: node.next, label: "" }];
       case "router":
         return [
@@ -285,6 +292,7 @@ const redirect = (node: PipelineNode, from: string, to: string): PipelineNode =>
     case "source":
     case "gate":
     case "agent":
+    case "check":
       return { ...node, next: swap(node.next) };
     case "router":
       return {

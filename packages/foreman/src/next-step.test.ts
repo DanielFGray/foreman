@@ -274,6 +274,7 @@ const placedStep = (item: Item): string => {
     policy: ASKING,
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: new Map([["foreman", { _tag: "Runs", pipeline: STANDARD_PIPELINE, drawn: false }]]),
+    placed: [],
   }).asks.map(({ step }) => step);
   return steps.length === 0 ? "none" : steps.join(",");
 };

@@ -50,6 +50,17 @@ describe("belt edits", () => {
     ]);
   });
 
+  test("a check put on a wire names no command until the operator sets one", () => {
+    const { pipeline, id } = insertOn(STANDARD_PIPELINE, { from: "author", port: "next" }, "check");
+    expect(node(pipeline, id)).toEqual({ kind: "check", id, command: "", next: "review-gate" });
+    expect(problemsOf(pipeline, RUNGS)).toEqual([
+      `${id}: a check runs a command, and it names none`,
+    ]);
+    const named = configure(pipeline, id, { command: "bun run lint" });
+    expect(node(named, id)).toMatchObject({ command: "bun run lint", next: "review-gate" });
+    expect(problemsOf(named, RUNGS)).toEqual([`a route from author reaches ${id} through no gate`]);
+  });
+
   test("new blocks never reuse an id", () => {
     const first = insertOn(STANDARD_PIPELINE, { from: "queue", port: "next" }, "gate");
     const second = insertOn(first.pipeline, { from: "queue", port: "next" }, "gate");

@@ -471,6 +471,35 @@ describe("Repository", () => {
     ).toBeUndefined();
   });
 
+  // A check judges one commit of a branch that has not landed, so it must see
+  // that commit's tree and leave the operator's checkout as it was.
+  test("checks a branch's commit in the proving ground, against where it was cut", async () => {
+    const check = (commit: string, command: string) =>
+      run((repository) => repository.check(directory, commit, command, groundFor(directory)));
+    const head = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "checked");
+    await writeFile(join(directory, "checked.txt"), "work\n");
+    await git("add", "checked.txt");
+    await git("commit", "-qm", "checked work");
+    const tip = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    await git("checkout", "-q", base);
+    const seen = join(tmpdir(), `foreman-check-${process.pid}.txt`);
+
+    expect(await check(tip, `pwd > ${seen}; test -f checked.txt`)).toEqual({
+      _tag: "Passed",
+      verified: true,
+    });
+    expect((await Bun.file(seen).text()).trim()).not.toBe(directory);
+    expect(await check(tip, "test ! -f checked.txt")).toMatchObject({ _tag: "Failed" });
+    // Red where the branch was cut as well: the branch is not the cause.
+    expect(await check(tip, "false")).toEqual({ _tag: "Passed", verified: false });
+
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(head);
+    expect(await Bun.file(join(directory, "checked.txt")).exists()).toBe(false);
+    await rm(seen, { force: true });
+  });
+
   test("deletes a merged branch and refuses one holding the only copy", async () => {
     expect(await remove(directory, "foreman/ts-bbbbbb")).toBe(true);
     expect(await remove(directory, "foreman/ts-cccccc")).toBe(true);

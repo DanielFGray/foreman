@@ -63,6 +63,17 @@ export const AgentNode = S.Struct({
   next: S.String,
 });
 
+/**
+ * Runs `command` on the task's branch tip. It passes that one commit: a later
+ * commit places the task at the check again.
+ */
+export const CheckNode = S.Struct({
+  kind: S.Literal("check"),
+  id: S.String,
+  command: S.String,
+  next: S.String,
+});
+
 /** Proves and applies the task's branch to the project's checkout, which completes it. */
 export const LandNode = S.Struct({ kind: S.Literal("land"), id: S.String });
 
@@ -74,15 +85,17 @@ export const PipelineNode = S.Union([
   RouterNode,
   GateNode,
   AgentNode,
+  CheckNode,
   LandNode,
   ParkNode,
 ]);
 export type PipelineNode = typeof PipelineNode.Type;
 export type AgentNode = typeof AgentNode.Type;
+export type CheckNode = typeof CheckNode.Type;
 export type LandNode = typeof LandNode.Type;
 
 /** A block that runs something and takes time. The others decide at once. */
-export type WorkNode = AgentNode | LandNode;
+export type WorkNode = AgentNode | CheckNode | LandNode;
 
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
@@ -176,10 +189,11 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       case "park":
         return { _tag: "Parked", node: node.id };
       case "agent":
+      case "check":
       case "land":
         if (facts.passed.has(node.id)) {
           gates = [];
-          node = node.kind === "agent" ? nodes.get(node.next) : undefined;
+          node = node.kind === "land" ? undefined : nodes.get(node.next);
           continue;
         }
         return {
@@ -252,19 +266,25 @@ export const problemsOf = (
     }
   }
 
-  // Nothing skips review: with the reviewers taken out, no land may be
-  // reachable from a source or from an author.
-  const unreviewed = graphOf(
+  const authors = work.filter(isRole("author"));
+  // Nothing skips review: no land after a source or an author but a reviewer.
+  for (const [from, land] of skipping(
     pipeline,
-    (node) => !(node.kind === "agent" && node.role === "review"),
-  );
-  const authors = work.filter((node) => node.kind === "agent" && node.role === "author");
-  for (const from of [...sources, ...authors]) {
-    for (const land of work.filter((node) => node.kind === "land")) {
-      if (unreviewed.reaches(from.id, land.id)) {
-        problems.push(`a route from ${from.id} reaches ${land.id} with no review after it`);
-      }
-    }
+    isRole("review"),
+    [...sources, ...authors],
+    work.filter((node) => node.kind === "land"),
+  )) {
+    problems.push(`a route from ${from.id} reaches ${land.id} with no review after it`);
+  }
+  // A check runs on the task's branch, and an open task has passed nothing, so
+  // a check no author stands before has no branch to run on.
+  for (const [source, check] of skipping(
+    pipeline,
+    isRole("author"),
+    sources,
+    work.filter((node) => node.kind === "check"),
+  )) {
+    problems.push(`a route from ${source.id} reaches ${check.id} with no author before it`);
   }
 
   // Every step that spends is one the policy can stop: with the gates taken
@@ -289,6 +309,30 @@ export const problemsOf = (
 
   return [...new Set(problems)];
 };
+
+/**
+ * The routes from an origin to a target that pass no block `passes` names:
+ * with those blocks taken out of the graph, each target still in reach of an
+ * origin is one such route.
+ */
+const skipping = (
+  pipeline: Pipeline,
+  passes: (node: PipelineNode) => boolean,
+  origins: ReadonlyArray<PipelineNode>,
+  targets: ReadonlyArray<PipelineNode>,
+): ReadonlyArray<readonly [PipelineNode, PipelineNode]> => {
+  const without = graphOf(pipeline, (node) => !passes(node));
+  return origins.flatMap((origin) =>
+    targets
+      .filter((target) => without.reaches(origin.id, target.id))
+      .map((target) => [origin, target] as const),
+  );
+};
+
+const isRole =
+  (role: AgentNode["role"]) =>
+  (node: PipelineNode): boolean =>
+    node.kind === "agent" && node.role === role;
 
 /**
  * The pipeline of a project that has drawn none: author, review, land.
@@ -408,6 +452,9 @@ const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<string>): Array<
       if (parsed._tag === "Invalid") problems.push(`${node.id}: ${parsed.reason}`);
     }
     if (node.kind === "agent") problems.push(...modelProblems(node, rungs));
+    if (node.kind === "check" && node.command.trim() === "") {
+      problems.push(`${node.id}: a check runs a command, and it names none`);
+    }
   }
   return problems;
 };
@@ -464,6 +511,7 @@ const wiresOf = (node: PipelineNode): ReadonlyArray<{ to: string; label: string 
     case "source":
     case "gate":
     case "agent":
+    case "check":
       return [{ to: node.next, label: "" }];
     case "router":
       return [
@@ -484,7 +532,7 @@ const filtersOf = (node: PipelineNode): ReadonlyArray<string> =>
       : [];
 
 const isWork = (node: PipelineNode): node is WorkNode =>
-  node.kind === "agent" || node.kind === "land";
+  node.kind === "agent" || node.kind === "check" || node.kind === "land";
 
 const indexOf = (pipeline: Pipeline): ReadonlyMap<string, PipelineNode> =>
   new Map(pipeline.nodes.map((node) => [node.id, node]));
@@ -492,8 +540,12 @@ const indexOf = (pipeline: Pipeline): ReadonlyMap<string, PipelineNode> =>
 const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
   router.routes.find((route) => matches(facts, route.when))?.to ?? router.else;
 
+/**
+ * A check and a land run inside one tick and leave no open run, so a task at
+ * either is always waiting there.
+ */
 const stateAt = (node: WorkNode, facts: Facts): RunState => {
-  if (node.kind === "land") return "waiting";
+  if (node.kind === "land" || node.kind === "check") return "waiting";
   if (node.role === "author") {
     return facts.status === "in_progress"
       ? "running"
@@ -512,7 +564,7 @@ const aheadOf = (
   bound: number,
 ): number => {
   let count = 0;
-  let node = from.kind === "agent" ? nodes.get(from.next) : undefined;
+  let node = from.kind === "land" ? undefined : nodes.get(from.next);
   for (let steps = 0; node !== undefined && steps <= bound; steps++) {
     switch (node.kind) {
       case "source":
@@ -527,6 +579,7 @@ const aheadOf = (
       case "land":
         return count + 1;
       case "agent":
+      case "check":
         count++;
         node = nodes.get(node.next);
     }
@@ -544,6 +597,8 @@ const describe = (node: PipelineNode): string => {
       return `${node.id}: ${node.step}`;
     case "agent":
       return `${node.id}: ${node.role} on ${node.model}`;
+    case "check":
+      return `${node.id}: runs ${node.command}`;
     case "land":
     case "park":
       return node.id;
@@ -555,6 +610,7 @@ const SHAPES: Record<PipelineNode["kind"], Graph.MermaidNodeShape> = {
   router: "diamond",
   gate: "hexagon",
   agent: "rectangle",
+  check: "rounded",
   land: "subroutine",
   park: "circle",
 };

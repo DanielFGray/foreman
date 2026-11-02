@@ -8,8 +8,10 @@ import {
   deleteOpenRunOf,
   landAuthorRun,
   openRun,
+  recordCheck,
   runsOf,
   type AuthorEnding,
+  type CheckRun,
   type Item as TaskItem,
   type LogEntry,
   type NewRun,
@@ -224,6 +226,13 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        */
       attribute: (task: string, run: NewRun) =>
         together(`attribute ${task}`, onStore(openRun(run)).pipe(Effect.asVoid)),
+
+      /**
+       * Records how a check block's command ended on the commit it ran on. A
+       * check opens no run, so nothing has to close one.
+       */
+      recordCheck: (check: CheckRun) =>
+        onStore(recordCheck(check)).pipe(as(`record check ${check.node} on ${check.task}`)),
 
       /**
        * Counts one more correction round sent to the current author, and
