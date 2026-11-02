@@ -447,7 +447,7 @@ export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): str
  *
  * The report lives in the task's own log, so the branch is legitimately empty
  * and the reviewer reads evidence instead of a diff. `research` is set when the
- * task is filed and survives every attempt, unlike `satisfied`, which is the
+ * task is filed and survives every attempt, unlike the `already-done` exit, which is the
  * author's claim about one attempt.
  */
 export const isResearch = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
