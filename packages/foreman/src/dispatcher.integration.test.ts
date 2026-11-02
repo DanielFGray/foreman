@@ -1035,7 +1035,7 @@ describe("naming an exit", () => {
 
     const review = world.tasks.get(task.id)?.runs.filter((run) => run.role === "review");
     expect(review?.map((run) => run.ending)).toEqual(["returned"]);
-    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
   });
 
   test("an author's done sends the task to review", async () => {
@@ -2193,7 +2193,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(world.spawned).toEqual([]);
   });
 
-  test("a review's returned exit sends the task to the queue, and the next author is a rung up", async () => {
+  test("a standard returned review keeps its workspace and claim, then authors a rung up through climb", async () => {
     const id = "ts-returned";
     const world = new World(item(id, "open", []));
     const exitNamed = (name: string) =>
@@ -2224,16 +2224,40 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     await tick(world);
     expect(world.spawned.at(-1)).toEqual([id, "review"]);
 
+    const workspace = world.workers.get(id)?.directory;
     await exitNamed("returned");
-    expect(world.tasks.get(id)?.status).toBe("open");
+    expect(world.tasks.get(id)?.status).toBe("reviewing");
     settle("review");
-    await tick(world);
+    usePolicy({ ...ALLOWED, default: { ...ALLOWED.default, climb: "ask" } });
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+    );
 
-    // `returned` fails the author, so the rung that wrote the work is charged.
     expect(world.tasks.get(id)?.labels).toContain("failed-by:low");
+    expect(world.spawned.at(-1)).toEqual([id, "review"]);
+    const store = scratchStore();
+    const printed: string[] = [];
+    await Effect.runPromise(
+      Command.runWith(pipelineCommand(layerFor(world)), { version: "test" })(["place"]).pipe(
+        Effect.provideService(Console.Console, {
+          ...globalThis.console,
+          log: (...args: ReadonlyArray<string>) => printed.push(args.join(" ")),
+        }),
+        Effect.provide(Layer.merge(BunServices.layer, store.layer)),
+        Effect.ensuring(Effect.sync(store.cleanup)),
+      ),
+    );
+    expect(printed).toEqual([
+      `${id}  test  at author waiting  gates: climb (climb)  ahead: 2  ${id}`,
+    ]);
     await tick(world);
     expect(world.spawned.at(-1)).toEqual([id, "author"]);
     expect(authoredBy(world.tasks.get(id)!)).toBe("mid");
+    expect(world.workers.get(id)?.directory).toBe(workspace);
+    expect(world.opened.every((directory) => directory === workspace)).toBe(true);
+    expect(world.writes).not.toContain("prog.release");
+    expect(world.closed).toEqual([]);
+    expect(world.removed).toEqual([]);
   });
 
   test("a charging exit wired back to the author, not the queue, charges the author's rung when its run closes", async () => {

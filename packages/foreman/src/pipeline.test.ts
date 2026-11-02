@@ -288,10 +288,25 @@ describe("the block an agent started by hand runs at", () => {
   });
 });
 
+// An acyclic drawing lets each invalid-route test introduce its own defect.
+const forwardPipeline: Pipeline = {
+  nodes: STANDARD_PIPELINE.nodes.map((node) =>
+    node.kind === "agent" && node.role === "review"
+      ? {
+          ...node,
+          exits: [
+            { name: "approved", to: "land-gate" },
+            { name: "returned", to: "queue", fails: "author" },
+          ],
+        }
+      : node,
+  ),
+};
+
 describe("validation", () => {
-  const without = (...ids: string[]) => STANDARD_PIPELINE.nodes.filter((n) => !ids.includes(n.id));
+  const without = (...ids: string[]) => forwardPipeline.nodes.filter((n) => !ids.includes(n.id));
   const replace = (node: PipelineNode): Pipeline => ({
-    nodes: STANDARD_PIPELINE.nodes.map((n) => (n.id === node.id ? node : n)),
+    nodes: forwardPipeline.nodes.map((n) => (n.id === node.id ? node : n)),
   });
 
   test("the standard pipeline is valid", () => {
@@ -451,9 +466,9 @@ describe("validation", () => {
 });
 
 describe("a check block", () => {
-  // The standard pipeline with a check between the author and the review.
+  // The forward drawing with a check between the author and the review.
   const checked: Pipeline = {
-    nodes: STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+    nodes: forwardPipeline.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
       node.kind === "agent" && node.id === "author"
         ? [
             onward(node, "lint-gate"),
@@ -554,7 +569,7 @@ describe("a check block", () => {
             { name: "failed", to: "queue", fails: "author" },
           ],
         },
-        ...STANDARD_PIPELINE.nodes.filter(
+        ...forwardPipeline.nodes.filter(
           (node) => !["queue", "worktree", "retry", "climb"].includes(node.id),
         ),
       ],
@@ -579,7 +594,7 @@ describe("the Mermaid drawing", () => {
     const lines = toMermaid(STANDARD_PIPELINE).split("\n");
     expect(lines[0]).toBe("flowchart LR");
     // The author's done and already-done are two arrows to the same gate.
-    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(13);
+    expect(lines.filter((line) => line.includes("-->"))).toHaveLength(14);
     expect(lines.some((line) => line.includes('"failed"'))).toBe(true);
     expect(lines.some((line) => line.includes("author: author on ladder"))).toBe(true);
   });
@@ -697,7 +712,7 @@ describe("workspace blocks", () => {
 
 test("refuses a workspace block after an agent", () => {
   const late: Pipeline = {
-    nodes: STANDARD_PIPELINE.nodes
+    nodes: forwardPipeline.nodes
       .map((node) =>
         node.id === "author" && node.kind === "agent"
           ? onward(node, "late")
@@ -773,7 +788,7 @@ describe("a cycle", () => {
   test("of only routers and gates is a problem", () => {
     const spin: Pipeline = {
       nodes: [
-        ...STANDARD_PIPELINE.nodes.map((node) =>
+        ...forwardPipeline.nodes.map((node) =>
           node.id === "climb" && node.kind === "gate" ? { ...node, next: "spin" } : node,
         ),
         {

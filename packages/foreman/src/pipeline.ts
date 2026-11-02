@@ -636,9 +636,9 @@ export const standardExits = (
  * The pipeline of a project that has drawn none: the task's branch in a
  * worktree of its own, then author, review, and a merge.
  *
- * A return goes to the queue, and the router sends a task with any recorded
- * failure or attempt to the `climb` gate, so a retry is governed by its own
- * step, apart from a first try.
+ * A returned review goes straight to `climb`, keeping the claim and workspace.
+ * The router sends queued retries there too, so the `climb` step governs
+ * retries apart from a first try.
  */
 export const STANDARD_PIPELINE: Pipeline = {
   nodes: [
@@ -669,7 +669,10 @@ export const STANDARD_PIPELINE: Pipeline = {
       id: "review",
       role: "review",
       model: "above",
-      exits: standardExits({ kind: "agent", role: "review" }, "land-gate"),
+      exits: [
+        { name: "approved", to: "land-gate" },
+        { name: "returned", to: "climb", fails: "author" },
+      ],
     },
     { kind: "gate", id: "land-gate", step: "land", next: "land" },
     { kind: "land", id: "land", how: "merge" },

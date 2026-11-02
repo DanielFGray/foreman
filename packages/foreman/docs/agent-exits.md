@@ -10,8 +10,10 @@ section is the rule.
 - **Schema and file.** Agent and check blocks have `exits`; agent blocks have
   `stopped`. The pipelines file is `version: 3`, and version 2 and 1 read with
   the standard exits wired as they were: `returned` and `failed` go to `queue`
-  with `fails: author`. The standard pipeline keeps its retry router and has no
-  cycle. Agent blocks have `instructions`; blocks have no `rounds` yet.
+  with `fails: author`. The standard pipeline wires a returned review to the
+  `climb` gate with `fails: author`, keeping the claim, branch and worktree.
+  It also keeps its retry router for queued retries. Agent blocks have
+  `instructions`; blocks have no `rounds` yet.
 - **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
   ending. A migration renamed the old endings: `handed-off` to `done`,
   `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
@@ -25,7 +27,9 @@ section is the rule.
   where the exit leads, so a landing comes one tick after the approval.
 - **Status.** `foreman exit` makes the status move the exit implies: an exit
   to `queue` opens and releases the task; an author's exit puts it in
-  `reviewing`. `reviewing` and `role` stay (open questions 2 and 3).
+  `reviewing`. A returned review wired to another block keeps `reviewing`
+  until the next author starts, moving directly to `in_progress`.
+  `reviewing` and `role` stay (open questions 2 and 3).
 - **Prompts.** Rule 6 is built (`src/prompt.ts`). The operator's directory
   is `prompts/` in foreman's config directory (`~/.config/foreman/prompts/`).
   An unknown placeholder or a missing instructions file stops the pipeline.
@@ -87,7 +91,8 @@ one included. The operator writes the rest of the prompt.
   `stopped: park` parks the task.
 
 **Check block.** It has the exits `passed` and `failed`, wired like an agent's.
-The standard pipeline wires `failed` to the author with `fails: author`.
+The standard pipeline has no check block. Saved pipelines keep `failed` wired
+to `queue` with `fails: author`.
 
 **Router.** Routes may lead into or out of a cycle. Routers read two new terms
 (rule 4).
@@ -211,15 +216,15 @@ This is a hint: the editor shows it, but the pipeline runs.
 
 - author: `done` → review gate; `already-done` → review gate (the old
   `satisfied`); `stopped: retry`.
-- review: `approved` → land gate; `returned` → `queue`, `fails: author`;
+- review: `approved` → land gate; `returned` → climb gate, `fails: author`;
   `stopped: retry`.
-- check: `passed` → next; `failed` → `queue`, `fails: author`.
 
-A return goes to the queue and comes back through the retry router, as before
-exits, so the standard pipeline has no cycle. Wiring `returned` and `failed`
-straight back to the author gate, which keeps the claim and the worktree, is a
-later task; it is valid by rule 5, because both exits have `fails`. The store's
-author ending `handed-off` became the exit `done`.
+A returned review goes through the `climb` gate to the author, keeping its
+claim, branch and worktree. The author's `ladder` model picks the next rung
+above the charged author. This cycle is valid by rule 5 because `returned`
+has `fails: author`. Queued retries still pass through the retry router.
+The standard pipeline has no check block. The store's author ending
+`handed-off` became the exit `done`.
 
 ## Changes to what exists
 
@@ -227,8 +232,8 @@ author ending `handed-off` became the exit `done`.
   block gets the standard exits for its role, and each agent block gets the
   instructions for its role. Saved pipelines wire `returned` and `failed` to
   `queue` with `fails: author`, so they behave as today. Only the standard
-  pipeline wires them back to the author. The read writes nothing, as with
-  version 2.
+  pipeline wires `returned` back to the author through `climb`. The read
+  writes nothing, as with version 2.
 - **Prompts.** The files under `prompts/` become the default instructions,
   without the contract text and the `{% %}` logic. That logic moves into the
   generated sections. An operator's files live in `~/.config/foreman/prompts/`
