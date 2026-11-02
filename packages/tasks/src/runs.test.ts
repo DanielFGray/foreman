@@ -102,18 +102,19 @@ describe("runs", () => {
     expect(result).toEqual({ left: 1, refused: "RunError" });
   });
 
-  test("rounds count on the open author run only", async () => {
+  test("rounds count on the latest author run, open or closed, and never on a review", async () => {
     const counts = await inStore(
       Effect.gen(function* () {
         const author = yield* openRun(run());
-        const review = yield* openRun(run({ work: "review" }));
-        const first = yield* addRound(author);
-        const second = yield* addRound(author);
-        const refused = yield* addRound(review).pipe(Effect.flip);
-        return [first, second, refused._tag];
+        yield* openRun(run({ work: "review" }));
+        const first = yield* addRound("ts-1");
+        yield* closeRun(author, { ending: "handed-off" });
+        const second = yield* addRound("ts-1");
+        const none = yield* addRound("ts-none").pipe(Effect.flip);
+        return [first, second, none._tag];
       }),
     );
-    expect(counts).toEqual([1, 2, "RunError"]);
+    expect(counts).toEqual([1, 2, "TaskError"]);
   });
 
   test("the store refuses an ending its kind of run cannot have", async () => {

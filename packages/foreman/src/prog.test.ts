@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import { Prog } from "./prog.ts";
-import { agentLog, attemptsOf, authoredBy, type Item } from "./prog.ts";
-import { isApproved, reviewedBy } from "./lap.ts";
+import { agentLog, attemptsOf, type Item } from "./prog.ts";
+import { authoredBy, isApproved, reviewedBy, roundsOf } from "./lap.ts";
 import { newRunFor } from "./run-record.ts";
-import { reviewRun, withRuns } from "./task-fixture.ts";
+import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 
 /** The run row a dispatch of `role` on `rung` opens for the task. */
 const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?: string) =>
@@ -47,7 +47,7 @@ const item = (labels: ReadonlyArray<string>): Item => ({
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
     const task = withRuns(
-      item(["by:opencode"]),
+      authoredOn(item([]), "opencode"),
       [reviewRun("claude", { ending: "approved", commit: "c1" })],
       "c1",
     );
@@ -92,7 +92,7 @@ describe("task attribution", () => {
 describe("unfinished attempts on a rung", () => {
   test("reads zero for a rung that was never tried", () => {
     expect(attemptsOf(item([]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["by:opencode"]), "deepseek")).toBe(0);
+    expect(attemptsOf(authoredOn(item([]), "opencode"), "deepseek")).toBe(0);
   });
 
   test("reads the count recorded for the named rung", () => {
@@ -141,7 +141,7 @@ describe("Prog against a scratch store", () => {
   // opened it and the requeued task is not read as still under review.
   test("release closes the review run and requeues the task", async () => {
     const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
-    await run((prog) => prog.attribute(id, "cheap", dispatchOf(id, "author", "cheap")));
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
     await run((prog) => prog.submit(id));
     await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
@@ -170,16 +170,22 @@ describe("Prog against a scratch store", () => {
 
   // A correction round counts against the author who received it, so the next
   // author's trial row must not inherit it.
-  test("counts correction rounds and resets them for a new author", async () => {
+  test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
     const id = (await Bun.$`prog add "corrected" -p foreman`.text()).trim().split("\n")[0]!;
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
 
     expect(await run((prog) => prog.countRound(id))).toBe(1);
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
     expect(await run((prog) => prog.countRound(id))).toBe(2);
-    await run((prog) => prog.attribute(id, "cheap", dispatchOf(id, "author", "cheap")));
+    expect(roundsOf(await run((prog) => prog.show(id)))).toBe(2);
+    await run((prog) => prog.release(id));
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
 
     const after = await run((prog) => prog.show(id));
-    expect(after.labels).toEqual(["by:cheap"]);
-    expect(after.runs).toMatchObject([{ role: "author", rung: "cheap", open: true }]);
+    expect(roundsOf(after)).toBe(0);
+    expect(after.labels).toEqual([]);
+    expect(after.runs.at(-1)).toMatchObject({ role: "author", rung: "cheap", open: true });
   });
 
   test("names the operation a store failure came from", async () => {

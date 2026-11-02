@@ -3,6 +3,7 @@ import { SqlClient } from "effect/sql";
 import {
   Tasks,
   TaskError,
+  addRound,
   closeOpenRuns,
   deleteOpenRunOf,
   landAuthorRun,
@@ -213,26 +214,17 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        *
        * A task can be attempted more than once, and its next author starts a
        * new lap (`lap.ts`): everything the last reviews said goes out of scope
-       * with no code that clears it. The correction count goes too: it counts
-       * this author's rounds, not the task's.
+       * with no code that clears it. The run carries its own correction count, so
+       * a new author starts at none.
        */
-      attribute: (task: string, kind: string, run: NewRun) =>
-        together(
-          `attribute ${task}`,
-          replaceKinds(task, [BY, ROUNDS], `${BY}:${kind}`).pipe(
-            Effect.andThen(onStore(openRun(run))),
-          ),
-        ),
+      attribute: (task: string, run: NewRun) =>
+        together(`attribute ${task}`, onStore(openRun(run)).pipe(Effect.asVoid)),
 
       /**
        * Counts one more correction round sent to the current author, and
        * answers the new count.
        */
-      countRound: (task: string) =>
-        relabel(task, (labels) => [
-          ...labels.filter((label) => kindOf(label) !== ROUNDS),
-          `${ROUNDS}:${nextRound(labels)}`,
-        ]).pipe(Effect.map(nextRound)),
+      countRound: (task: string) => onStore(addRound(task)).pipe(as(`count round ${task}`)),
 
       /**
        * Puts a reviewer on the task: opens its review run at the branch tip it
@@ -399,8 +391,6 @@ export class Prog extends Context.Service<Prog>()("Prog", {
   static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(Tasks.layerSql));
 }
 
-const nextRound = (labels: ReadonlyArray<string>): number => (countOf({ labels }, ROUNDS) ?? 0) + 1;
-
 /** An epic being driven, and its direct children: how close it is to done. */
 export interface EpicProgress {
   readonly epic: Item;
@@ -411,10 +401,6 @@ export interface EpicProgress {
 export interface TaskDetail extends Item {
   readonly logs: ReadonlyArray<LogEntry>;
 }
-
-/** Which kind of agent authored the work, if foreman recorded it. */
-export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
-  valuesOfKind(item.labels, BY)[0];
 
 /**
  * Stable audit entry for one agent attempt on a task.
@@ -458,8 +444,8 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
  * than a pointer, so retiring a model or spending its allowance moves the work
  * on instead of naming a rung nothing can dispatch.
  *
- * Not derivable from `by:*`. A task pinned by hand has never been authored and
- * has no `by:*` label to read at all, and who authored last does not say who
+ * Not derivable from the author run. A task pinned by hand has never been authored and
+ * has no author run to read at all, and who authored last does not say who
  * authors next: a reviewer's rejection fails the rung, while an agent that
  * stopped without finishing leaves it standing until its attempts run out.
  */
@@ -534,18 +520,12 @@ const attemptFor = (label: string, rung: string): number | undefined => {
   return /^[0-9]+$/.test(count) ? Number(count) : undefined;
 };
 
-/** Kind of the label naming the rung that authored a task's current branch. */
-export const BY = "by";
-
 /**
  * How big a slice is, as the coordinator judged it when filing: `size:1` one
  * file or rule, `size:2` one package, `size:3` crosses packages. Larger is
  * allowed. An integer, so the trials record can compare sizes by order.
  */
 export const SIZE = "size";
-
-/** How many correction rounds the current author has been sent. */
-export const ROUNDS = "rounds";
 
 /** The positive integer a label of this kind carries, or nothing. */
 export const countOf = (

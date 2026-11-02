@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { reviewRun } from "./task-fixture.ts";
+import { handedOff, reviewRun } from "./task-fixture.ts";
 import {
   type Facts,
   matches,
@@ -61,7 +61,7 @@ describe("filters", () => {
   });
 });
 
-describe("facts read from labels", () => {
+describe("facts read from labels and runs", () => {
   test("names failures, attempts, size, passed blocks and the review", () => {
     const read = factsOf({
       status: "reviewing",
@@ -73,15 +73,14 @@ describe("facts read from labels", () => {
         "attempt:strong:2",
         "attempt:x:bad",
         "size:3",
-        "passed:author",
       ],
-      runs: [reviewRun("strong", { ending: "approved", commit: "c1" })],
+      runs: [handedOff("cheap"), reviewRun("strong", { ending: "approved", commit: "c1" })],
       tip: "c1",
     });
     expect([...read.failedBy]).toEqual(["cheap"]);
     expect(read.attempts).toBe(2);
     expect(read.size).toBe(3);
-    expect([...read.passed]).toEqual(["author"]);
+    expect([...read.passed]).toEqual(["author", "review"]);
     expect(read.underReview).toBe(true);
     expect(read.approved).toBe(true);
     expect(read.epic).toBe("ep-1");

@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { authoredBy, type Item, type TaskStatus } from "./prog.ts";
-import { reviewedBy } from "./lap.ts";
-import { reviewRun, withRuns } from "./task-fixture.ts";
+import { type Item, type TaskStatus } from "./prog.ts";
+import { authoredBy, reviewedBy } from "./lap.ts";
+import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import {
@@ -101,18 +101,18 @@ const state: FleetState = {
   yours: [ready("ts-y1", ["needs-you"])],
   working: [
     active(
-      task("ts-w1", "in_progress", ["by:flash", "failed-by:flash"]),
+      authoredOn(task("ts-w1", "in_progress", ["failed-by:flash"]), "flash"),
       worker("ts-w1", "working"),
     ),
   ],
   review: [
     active(
-      withRuns(task("ts-r1", "reviewing", ["by:flash"]), [reviewRun("pro")]),
+      withRuns(authoredOn(task("ts-r1", "reviewing", []), "flash"), [reviewRun("pro")]),
       worker("ts-r1", "working"),
     ),
   ],
   landed: [task("ts-l1", "done", [])],
-  decisions: [active(task("ts-d1", "in_progress", ["by:flash"]), undefined)],
+  decisions: [active(authoredOn(task("ts-d1", "in_progress", []), "flash"), undefined)],
   committed: new Set<string>(),
   resumable: new Set<string>(),
   unreviewed: [
@@ -129,7 +129,7 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: withRuns(task("ts-s1", "reviewing", ["by:flash", "failed-by:flash"]), [
+      task: withRuns(authoredOn(task("ts-s1", "reviewing", ["failed-by:flash"]), "flash"), [
         reviewRun("pro"),
       ]),
       paths: ["src/old.ts", "src/gone.ts"],
@@ -152,12 +152,18 @@ const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
 
 describe("decisionKind", () => {
   test("names the kind from the status, and a failure over any of them", () => {
-    expect(decisionKind(task("ts-1", "in_progress", ["by:flash"]))).toBe("author vanished");
-    expect(decisionKind(task("ts-1", "reviewing", ["by:flash"]))).toBe("reviewer vanished");
-    expect(decisionKind(task("ts-1", "done", ["by:flash"]))).toBe("orphaned workspace");
+    expect(decisionKind(authoredOn(task("ts-1", "in_progress", []), "flash"))).toBe(
+      "author vanished",
+    );
+    expect(decisionKind(authoredOn(task("ts-1", "reviewing", []), "flash"))).toBe(
+      "reviewer vanished",
+    );
+    expect(decisionKind(authoredOn(task("ts-1", "done", []), "flash"))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
-    expect(decisionKind(task("ts-1", "open", ["by:flash"]), "no worktree")).toBe("dispatch failed");
+    expect(decisionKind(authoredOn(task("ts-1", "open", []), "flash"), "no worktree")).toBe(
+      "dispatch failed",
+    );
   });
 });
 
@@ -243,7 +249,9 @@ describe("actionsFor", () => {
     ]);
     const orphan = {
       ...state,
-      decisions: [active(task("ts-o1", "done", ["by:flash"]), worker("ts-o1", "settled"))],
+      decisions: [
+        active(authoredOn(task("ts-o1", "done", []), "flash"), worker("ts-o1", "settled")),
+      ],
     };
     const left = rowsForView("attention", orphan).find((each) => each.key === "ts-o1");
     // Nothing to intervene in either: the task is finished, and the workspace
@@ -262,7 +270,7 @@ describe("actionsFor", () => {
     expect(actionsFor("working", row("working", "ts-w1"))).toContain("focus");
     const gone = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by:flash"]), undefined)],
+      working: [active(authoredOn(task("ts-w2", "in_progress", []), "flash"), undefined)],
     };
     const alone = rowsForView("working", gone).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("focus");
@@ -277,7 +285,9 @@ describe("actionsFor", () => {
     expect(actionsFor("review", blocked)).toContain("kill");
     const settled = {
       ...state,
-      working: [active(task("ts-w2", "in_progress", ["by:flash"]), worker("ts-w2", "settled"))],
+      working: [
+        active(authoredOn(task("ts-w2", "in_progress", []), "flash"), worker("ts-w2", "settled")),
+      ],
     };
     const alone = rowsForView("working", settled).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("kill");
@@ -503,7 +513,7 @@ describe("asks", () => {
     asks: [
       {
         task: withRuns(
-          task("ts-k1", "reviewing", ["by:cheap"]),
+          authoredOn(task("ts-k1", "reviewing", []), "cheap"),
           [reviewRun("cheap", { ending: "approved", commit: "c1" })],
           "c1",
         ),

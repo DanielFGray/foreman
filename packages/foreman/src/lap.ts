@@ -18,6 +18,14 @@ export const lapOf = ({ runs }: Runs): ReadonlyArray<Run> => {
   return start < 0 ? runs : runs.slice(start);
 };
 
+/** The rung of the task's latest author run: who authored its branch. Empty before any author ran. */
+export const authoredBy = (task: Runs): string | undefined =>
+  task.runs.findLast((run) => run.role === "author")?.rung;
+
+/** The correction rounds the current author has been sent. */
+export const roundsOf = (task: Runs): number =>
+  task.runs.findLast((run) => run.role === "author")?.rounds ?? 0;
+
 /** The rung of the lap's open review run: the reviewer that owns the task now. */
 export const reviewedBy = (task: Runs): string | undefined =>
   lapOf(task).find((run) => run.role === "review" && run.open)?.rung;
@@ -50,6 +58,25 @@ const approval = (task: Runs): Run | undefined => {
 export const isApproved = (task: Runs & { readonly tip: string | undefined }): boolean => {
   const commit = approval(task)?.commit;
   return commit !== undefined && commit === task.tip;
+};
+
+/**
+ * The pipeline blocks that advanced the task in this lap: the author's block
+ * once it handed off or claimed the trunk already does the task, and the
+ * review block while its approval holds.
+ */
+export const passedNodes = (
+  task: Runs & { readonly tip: string | undefined },
+): ReadonlySet<string> => {
+  const approved = isApproved(task) ? approval(task) : undefined;
+  const nodes = lapOf(task).flatMap((run) => {
+    const advanced =
+      run.role === "author"
+        ? run.ending === "handed-off" || run.ending === "satisfied"
+        : run === approved;
+    return advanced && run.node !== undefined ? [run.node] : [];
+  });
+  return new Set(nodes);
 };
 
 /** The commit the lap's approval covers. Landing merges this commit by id. */
