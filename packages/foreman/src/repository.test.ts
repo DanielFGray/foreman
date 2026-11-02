@@ -994,3 +994,80 @@ describe("Repository.remove on a branch with a worktree", () => {
     expect(await branchExists()).toBe(true);
   });
 });
+
+describe("Repository landing by fast-forward", () => {
+  const task = "foreman/ts-ff";
+
+  const checkout = async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-ff-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    await sh("init", "-q", "-b", "trunk");
+    await writeFile(join(here, "a.txt"), "a\n");
+    await sh("add", "a.txt");
+    await sh("commit", "-qm", "initial");
+    await sh("branch", task);
+    const out = async (...args: Array<string>) => (await sh(...args)).stdout.toString().trim();
+    return { here, sh, out };
+  };
+
+  const land = (here: string) =>
+    run((repository) =>
+      Effect.gen(function* () {
+        const commit = yield* repository.tip(here, task);
+        if (commit === undefined) return yield* Effect.die(`${task} has no tip`);
+        return yield* repository.merge(
+          here,
+          task,
+          commit,
+          undefined,
+          `${here}.grounds/verify`,
+          `Merge ${task}`,
+          "fast-forward",
+        );
+      }),
+    );
+  const branchOf = async (here: string) =>
+    (await run((repository) => repository.branches(here))).find((entry) => entry.branch === task);
+
+  test("puts the approved commit itself on the trunk, with no merge commit", async () => {
+    const { here, sh, out } = await checkout();
+    await sh("checkout", "-q", task);
+    await writeFile(join(here, "b.txt"), "b\n");
+    await sh("add", "b.txt");
+    await sh("commit", "-qm", "work");
+    await sh("checkout", "-q", "trunk");
+    const work = await out("rev-parse", task);
+    expect(await branchOf(here)).toMatchObject({ merged: false, empty: false });
+
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    expect(await out("rev-parse", "HEAD")).toBe(work);
+    // The branch that landed by fast-forward holds work, though its tip is now
+    // on the trunk's first-parent line.
+    expect(await branchOf(here)).toMatchObject({ merged: true, empty: false });
+  });
+
+  test("refuses a branch the trunk moved past, and moves nothing", async () => {
+    const { here, sh, out } = await checkout();
+    await sh("checkout", "-q", task);
+    await writeFile(join(here, "b.txt"), "b\n");
+    await sh("add", "b.txt");
+    await sh("commit", "-qm", "work");
+    await sh("checkout", "-q", "trunk");
+    await writeFile(join(here, "c.txt"), "c\n");
+    await sh("add", "c.txt");
+    await sh("commit", "-qm", "trunk moved");
+    const before = await out("rev-parse", "HEAD");
+
+    expect(await land(here)).toMatchObject({ _tag: "Rejected" });
+    expect(await out("rev-parse", "HEAD")).toBe(before);
+  });
+
+  test("reads a branch nobody committed to as empty, though the trunk moved on", async () => {
+    const { here, sh } = await checkout();
+    await writeFile(join(here, "c.txt"), "c\n");
+    await sh("add", "c.txt");
+    await sh("commit", "-qm", "trunk moved");
+    expect(await branchOf(here)).toMatchObject({ merged: true, empty: true });
+  });
+});
