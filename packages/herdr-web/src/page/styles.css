@@ -710,8 +710,8 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .pipeline-station.agent { border-left-color: var(--blue, var(--green)); }
 .pipeline-station.land { border-left-color: var(--green); }
 .pipeline-station.park { border-left-color: var(--red); }
-.pipeline-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
-.pipeline-summary { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-kind { font-size: 11px; line-height: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext); }
+.pipeline-summary { font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pipeline-add { position: absolute; width: 16px; height: 16px; padding: 0; border: 1px solid var(--subtext); border-radius: 50%; background: var(--base, Canvas); color: inherit; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
 .pipeline-add.on { background: var(--surface); }
 .pipeline-wire-label { position: absolute; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 10px; line-height: 14px; color: var(--subtext); pointer-events: none; }
