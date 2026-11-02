@@ -209,7 +209,7 @@ const REGISTRY = [
     model TEXT NOT NULL REFERENCES models(model)
   )`,
   `CREATE TABLE ladder (
-    rank      INTEGER PRIMARY KEY,       -- cheapest first; never reused, never reordered
+    rank      INTEGER PRIMARY KEY,       -- cheapest first; the order only, rewritten by every ladder write
     rung      TEXT NOT NULL UNIQUE,      -- foreman rung name
     model     TEXT NOT NULL REFERENCES models(model),
     enabled   INTEGER NOT NULL DEFAULT 1,

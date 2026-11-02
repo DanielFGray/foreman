@@ -1,5 +1,5 @@
 import { Argument, Command, Flag } from "effect/cli";
-import { Console, Effect, Layer, Schema } from "effect";
+import { Console, Effect, Layer, Option, Schema } from "effect";
 import { launchArguments } from "./harness.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { catalogLayer } from "./model-advice-catalog.ts";
 import { NonNegativeTokenCount, runSuggest } from "./model-advice-run.ts";
 import { Quota } from "./quota.ts";
 import {
+  addRow,
   type LadderRow,
   knownModels,
   parseRows,
@@ -17,6 +18,7 @@ import {
   type RungStatus,
   renderRows,
   RegistryError,
+  type RungPlace,
   writeRows,
 } from "./registry.ts";
 
@@ -133,6 +135,54 @@ const edit = Command.make("edit", {}, () =>
 
 const rung = Argument.String("rung").pipe(Argument.withDescription("A rung name"));
 
+const model = Argument.String("model").pipe(
+  Argument.withDescription("The rung's model; it must have a row in the models table"),
+);
+const above = Flag.String("above").pipe(
+  Flag.withDescription("Put the rung just above this one"),
+  Flag.optional,
+);
+const below = Flag.String("below").pipe(
+  Flag.withDescription("Put the rung just below this one"),
+  Flag.optional,
+);
+const disabled = Flag.Boolean("disabled").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Add it disabled"),
+);
+const note = Flag.String("note").pipe(Flag.withDescription("A note on the rung"), Flag.optional);
+
+const add = Command.make("add", { rung, model, above, below, disabled, note }, (args) =>
+  Effect.gen(function* () {
+    if (Option.isSome(args.above) && Option.isSome(args.below)) {
+      return yield* new RegistryError({ detail: "give --above or --below, not both" });
+    }
+    const place: RungPlace = Option.isSome(args.above)
+      ? { _tag: "Above", rung: args.above.value }
+      : Option.isSome(args.below)
+        ? { _tag: "Below", rung: args.below.value }
+        : { _tag: "Bottom" };
+    yield* addRow(
+      {
+        rung: args.rung,
+        model: args.model,
+        enabled: !args.disabled,
+        provider: null,
+        unmetered: false,
+        note: Option.getOrNull(args.note),
+      },
+      place,
+    );
+    const where =
+      place._tag === "Bottom" ? "at the bottom" : `${place._tag.toLowerCase()} ${place.rung}`;
+    yield* Console.log(`${args.rung}: added ${where}`);
+  }),
+).pipe(
+  Command.withDescription(
+    "Add a rung at its place: --above or --below a rung, or at the bottom (the cheapest place)",
+  ),
+);
+
 const toggle = (name: "enable" | "disable") =>
   Command.make(name, { rung }, (args) =>
     Effect.gen(function* () {
@@ -231,7 +281,16 @@ const suggest = Command.make(
 
 export const ladderCommand = Command.make("ladder", {}).pipe(
   Command.withDescription("Read and edit the model ladder in the registry"),
-  Command.withSubcommands([list, size, drift, suggest, edit, toggle("enable"), toggle("disable")]),
+  Command.withSubcommands([
+    list,
+    size,
+    drift,
+    suggest,
+    edit,
+    add,
+    toggle("enable"),
+    toggle("disable"),
+  ]),
 );
 
 /** One line per kind of change, so an edit's effect is read back before it is trusted. */

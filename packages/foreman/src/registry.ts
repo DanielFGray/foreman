@@ -187,6 +187,34 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
     );
   }).pipe(Effect.mapError(registryError("writing the ladder")));
 
+/**
+ * Where a new rung goes: next to a named rung, or at the bottom of the ladder,
+ * which is the cheapest place. A rung's place is its rank, so adding one by
+ * appending a row would rank it above every paid rung.
+ */
+export type RungPlace =
+  | { readonly _tag: "Bottom" }
+  | { readonly _tag: "Above"; readonly rung: string }
+  | { readonly _tag: "Below"; readonly rung: string };
+
+/** Adds `row` to the ladder at `place`, in one validated write. */
+export const addRow = (row: LadderRow, place: RungPlace) =>
+  Effect.gen(function* () {
+    const rows = yield* readRows;
+    if (rows.some((other) => other.rung === row.rung)) {
+      return yield* new RegistryError({ detail: `rung ${row.rung} is already on the ladder` });
+    }
+    if (place._tag === "Bottom") return yield* writeRows([row, ...rows]);
+    const at = rows.findIndex((other) => other.rung === place.rung);
+    if (at < 0) {
+      return yield* new RegistryError({
+        detail: `no rung ${place.rung}; rungs: ${rows.map((other) => other.rung).join(", ")}`,
+      });
+    }
+    const index = place._tag === "Above" ? at + 1 : at;
+    yield* writeRows([...rows.slice(0, index), row, ...rows.slice(index)]);
+  });
+
 /** Parses the editor's text: a JSONC array of rows, with comments allowed. */
 export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
   const raw: unknown = Bun.JSONC.parse(text);

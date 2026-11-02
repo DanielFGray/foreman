@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { parseRows, readLadder, readRows, renderRows, writeRows } from "./registry.ts";
+import { addRow, parseRows, readLadder, readRows, renderRows, writeRows } from "./registry.ts";
 import { withStore } from "./scratch-store.ts";
 
 const rig = readFileSync(join(import.meta.dir, "..", "e2e", "registry.sql"), "utf8");
@@ -28,6 +28,34 @@ describe("the registry ladder", () => {
         const after = yield* readRows;
         expect(after.map((row) => row.rung)).toEqual(["strong", "promo", "cheap"]);
         expect(after[1]?.unmetered).toBe(true);
+      }),
+    ));
+
+  test("a new rung goes in at its place, not on top of the ladder", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const [cheap] = yield* readRows;
+        const row = { ...cheap!, rung: "new" };
+        yield* addRow(row, { _tag: "Bottom" });
+        expect((yield* readRows).map((r) => r.rung)).toEqual(["new", "cheap", "strong", "promo"]);
+        yield* addRow({ ...row, rung: "mid" }, { _tag: "Above", rung: "cheap" });
+        yield* addRow({ ...row, rung: "low" }, { _tag: "Below", rung: "promo" });
+        expect((yield* readRows).map((r) => r.rung)).toEqual([
+          "new",
+          "cheap",
+          "mid",
+          "strong",
+          "low",
+          "promo",
+        ]);
+        expect((yield* Effect.flip(addRow(row, { _tag: "Bottom" }))).detail).toMatch(
+          /already on the ladder/,
+        );
+        expect(
+          (yield* Effect.flip(addRow({ ...row, rung: "x" }, { _tag: "Above", rung: "nope" })))
+            .detail,
+        ).toMatch(/no rung nope/);
       }),
     ));
 
