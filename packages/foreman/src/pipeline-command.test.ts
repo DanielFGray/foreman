@@ -6,7 +6,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STANDARD_PIPELINE } from "./pipeline.ts";
-import { pipelineCommand } from "./pipeline-command.ts";
+import { Dispatcher } from "./dispatcher.ts";
+import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
@@ -18,6 +19,12 @@ afterAll(() => {
   store.cleanup();
 });
 beforeEach(() => rmSync(path, { force: true }));
+
+// `place` reads the dispatcher, and no test here runs it. The dispatcher's own
+// tests cover `place`.
+const pipelineCommand = pipelineCommandWith(
+  Layer.effect(Dispatcher, Effect.die("these tests do not run pipeline place")),
+);
 
 await Effect.runPromise(
   seed(`
