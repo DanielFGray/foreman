@@ -289,6 +289,17 @@ class World {
     add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
     countRound: () => this.write("prog.countRound", () => 1),
+    rereadReview: (id: string, commit: string) =>
+      this.write("prog.rereadReview", () =>
+        this.update(id, (task) => ({
+          ...task,
+          runs: task.runs.map((run) =>
+            run.role === "review" && run.open && run.ending === undefined
+              ? { ...run, commit }
+              : run,
+          ),
+        })),
+      ),
     recordCheck: (check: CheckRun) =>
       this.write("prog.recordCheck", () =>
         this.update(check.task, (task) => ({
@@ -902,6 +913,66 @@ describe("Dispatcher tick", () => {
     expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
     expect(world.merged).toEqual(["c1"]);
     expect(world.tasks.get(task.id)?.runs.some((run) => run.open)).toBe(false);
+  });
+});
+
+describe("a correction round", () => {
+  /** A review of c1 under way, and a branch at c2 that the correction committed. */
+  const corrected = () => {
+    const task = item("ts-corrected", "reviewing", [], "test", [
+      handedOff("cheap"),
+      reviewRun("dear", { commit: "c1" }),
+    ]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c2",
+    });
+    world.workers.set(task.id, worker(task.id, "review", "settled"));
+    return { task, world };
+  };
+
+  const approve = (world: World, id: string) => {
+    const task = world.tasks.get(id)!;
+    world.tasks.set(id, {
+      ...task,
+      runs: task.runs.map((run) => (run.role === "review" ? { ...run, ending: "approved" } : run)),
+    });
+  };
+
+  test("lands the tip the round left when the reviewer approves it", async () => {
+    const { task, world } = corrected();
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+    approve(world, task.id);
+    await tick(world);
+
+    expect(world.merged).toEqual(["c2"]);
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+  });
+
+  test("an approval of the old tip, given before the round ended, stays on it", async () => {
+    const { task, world } = corrected();
+    approve(world, task.id);
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+    await tick(world);
+
+    expect(world.merged).toEqual([]);
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.ending === "approved")?.commit).toBe(
+      "c1",
+    );
   });
 });
 

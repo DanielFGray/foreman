@@ -290,6 +290,8 @@ const wait = Command.make(
         ),
       );
       yield* untilNotWorking(working, fleet.awaitTurn(taskId, Option.getOrUndefined(args.role)));
+      // A reviewer waits on its author only to end a correction round.
+      if (Option.contains(args.role, "author")) yield* (yield* Dispatcher).corrected(taskId);
       const task = yield* prog.show(taskId);
       yield* Console.log(`${taskId}: ${task.status}`);
     }),

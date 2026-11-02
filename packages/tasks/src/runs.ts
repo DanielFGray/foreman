@@ -186,6 +186,21 @@ export const addRound = (task: string) =>
   });
 
 /**
+ * Moves the task's open review run to the commit its reviewer reads next. A
+ * correction round leaves new commits that the reviewer judges again, so an
+ * approval after the round holds for the tip the round left. A run that
+ * already states a verdict keeps its commit: that verdict was about it.
+ */
+export const rereadReview = (task: string, commit: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    yield* sql`UPDATE runs SET "commit" = ${commit}
+      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
+                    AND ${ofRole(sql, "review")})
+        AND ending IS NULL`;
+  });
+
+/**
  * States how the task's open run ended, and makes the status move that goes
  * with it, in one transaction. A second verdict on the same run replaces the
  * first. Fails when the task has no open run of the matching work: a closed run

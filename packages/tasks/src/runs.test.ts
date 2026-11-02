@@ -14,6 +14,7 @@ import {
   openRun,
   recordCheck,
   outcomeOf,
+  rereadReview,
   runsOf,
   verdict,
   type NewRun,
@@ -73,6 +74,24 @@ describe("runs", () => {
       }),
     );
     expect(runs?.[0]).toMatchObject({ role: "review", ending: "approved", commit: "tip1" });
+  });
+
+  test("a reread moves an open review with no verdict to the new tip, and nothing else", async () => {
+    const runs = await inStore(
+      Effect.gen(function* () {
+        const author = yield* openRun(run({ commit: "a1" }));
+        yield* closeRun(author, { ending: "handed-off", commit: "a1" });
+        yield* openRun(run({ work: "review", node: "review", commit: "tip1" }));
+        yield* rereadReview("ts-1", "tip2");
+        yield* openRun(run({ task: "ts-2", work: "review", node: "review", commit: "tip1" }));
+        const sql = yield* SqlClient;
+        yield* sql`UPDATE runs SET ending = 'approved' WHERE task = 'ts-2'`;
+        yield* rereadReview("ts-2", "tip2");
+        return yield* runsOf(["ts-1", "ts-2"]);
+      }),
+    );
+    expect(runs.get("ts-1")?.map((r) => r.commit)).toEqual(["a1", "tip2"]);
+    expect(runs.get("ts-2")?.map((r) => r.commit)).toEqual(["tip1"]);
   });
 
   test("runs read oldest first, per task", async () => {

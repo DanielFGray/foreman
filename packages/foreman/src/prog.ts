@@ -9,6 +9,7 @@ import {
   landAuthorRun,
   openRun,
   recordCheck,
+  rereadReview,
   runsOf,
   type AuthorEnding,
   type CheckRun,
@@ -239,6 +240,10 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * answers the new count.
        */
       countRound: (task: string) => onStore(addRound(task)).pipe(as(`count round ${task}`)),
+
+      /** Points the task's open review run, with no verdict yet, at the commit its reviewer reads next. */
+      rereadReview: (task: string, commit: string) =>
+        onStore(rereadReview(task, commit)).pipe(as(`reread review ${task}`)),
 
       /**
        * Puts a reviewer on the task: opens its review run at the branch tip it
