@@ -62,8 +62,10 @@ export const isApproved = (task: Runs & { readonly tip: string | undefined }): b
 
 /**
  * The pipeline blocks that advanced the task in this lap: the author's block
- * once it handed off or claimed the trunk already does the task, and the
- * review block while its approval holds.
+ * once it handed off or claimed the trunk already does the task, the review
+ * block while its approval holds, and a check block whose command passed on
+ * the branch tip. A review and a check each pass one commit, so a commit after
+ * either places the task at that block again.
  */
 export const passedNodes = (
   task: Runs & { readonly tip: string | undefined },
@@ -73,7 +75,9 @@ export const passedNodes = (
     const advanced =
       run.role === "author"
         ? run.ending === "handed-off" || run.ending === "satisfied"
-        : run === approved;
+        : run.role === "check"
+          ? run.ending === "passed" && run.commit !== undefined && run.commit === task.tip
+          : run === approved;
     return advanced && run.node !== undefined ? [run.node] : [];
   });
   return new Set(nodes);

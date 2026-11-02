@@ -63,7 +63,14 @@ import {
   topOf,
 } from "./ladder.ts";
 import { authorWalls, rungAt } from "./agent-rung.ts";
-import { nextAgent, place, type AgentNode, type Pipeline, type Placement } from "./pipeline.ts";
+import {
+  nextAgent,
+  place,
+  type AgentNode,
+  type CheckNode,
+  type Pipeline,
+  type Placement,
+} from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import {
   pipelinesPath,
@@ -854,6 +861,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           policy,
           scopes,
           pipelines,
+          placed,
         },
         failedIds,
         new Set(stale.map((row) => row.task.id)),
@@ -873,6 +881,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ...reviews,
         dispatches: plan.dispatches,
         lands: plan.lands,
+        checks: plan.checks,
         parks,
         asks: plan.asks,
         pipelines,
@@ -1129,6 +1138,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         current.lands,
         ({ task, worker, permits }) =>
           land(task, worker).pipe(Effect.tap(() => admitted(permits, task.id))),
+        { discard: true },
+      );
+
+      // One at a time, after the landings: a check and a landing share the
+      // project's proving ground.
+      yield* Effect.forEach(
+        current.checks,
+        ({ task, permits, block }) =>
+          runCheck(task, block).pipe(Effect.tap(() => admitted(permits, task.id))),
         { discard: true },
       );
 
@@ -1494,6 +1512,74 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
       }).pipe(Effect.catch((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
+    });
+
+    /**
+     * Runs a check block's command on the task's branch tip, in the project's
+     * proving ground, and records the run against that commit.
+     *
+     * A pass advances the task past the block for as long as the tip stays
+     * there. A failure returns it to the queue a rung up with the output in its
+     * log, as broken verification does at a landing: the next author's job is
+     * the failure. A ground that is not ready says nothing about the branch, and
+     * neither does a tip that moved while the command ran, so neither records
+     * a run, and a later reading checks again.
+     */
+    const runCheck = Effect.fn("foreman.check")(function* (task: Item, block: CheckNode) {
+      yield* Effect.gen(function* () {
+        const project = yield* projectFor(task.project);
+        if (!project) return;
+        const branch = labelFor(task.id);
+        const tip = yield* repository.tip(project.directory, branch);
+        if (tip === undefined) {
+          return yield* Effect.logWarning(`checking ${task.id} at ${block.id}: ${branch} is gone`);
+        }
+
+        const result = yield* repository.check(
+          project.directory,
+          tip,
+          block.command,
+          verifyDirectoryFor(project.name),
+        );
+        if (result._tag === "Held") {
+          return yield* Effect.logWarning(
+            `checking ${task.id} at ${block.id} held: ${result.detail}`,
+          );
+        }
+        if ((yield* repository.tip(project.directory, branch)) !== tip) {
+          return yield* Effect.logWarning(
+            `checking ${task.id} at ${block.id}: ${branch} moved while ${block.command} ran`,
+          );
+        }
+
+        const passed = result._tag === "Passed";
+        yield* prog.recordCheck({
+          project: task.project,
+          task: task.id,
+          node: block.id,
+          command: block.command,
+          commit: tip,
+          ending: passed ? "passed" : "failed",
+        });
+        if (passed) {
+          if (!result.verified) {
+            yield* prog.log(
+              task.id,
+              `foreman: \`${block.command}\` fails at the commit ${branch} was cut from as well, so it says nothing about this branch, and the check ${block.id} passes it.`,
+            );
+          }
+          return;
+        }
+
+        yield* Effect.logWarning(`${task.id} failed the check ${block.id}`);
+        yield* prog.log(
+          task.id,
+          `foreman: the check ${block.id} ran \`${block.command}\` on ${branch} at ${tip}, and it failed, so the task is back in the queue.\n\n${result.output}`,
+        );
+        yield* climb(task);
+        yield* prog.release(task.id);
+        yield* fleet.notify("Check failed", `${task.id} failed ${block.id} — back in the queue`);
+      }).pipe(Effect.catch((error) => Effect.logWarning(`checking ${task.id} failed: ${error}`)));
     });
 
     /**
@@ -2557,8 +2643,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
  * in the queue never holds back a granted task behind it. Author asks are
  * capped at the policy's `slots`, so an `ask` author step does not list the
  * whole queue. Approving an ask grants the step, and the granted dispatch then
- * waits for a free slot like any other. A landing runs no agent, so it takes no
- * slot either.
+ * waits for a free slot like any other. A landing and a check run no agent, so
+ * neither takes a slot.
+ *
+ * An agent block with `slots` runs at most that many of its tasks at once,
+ * inside the fleet's own limit. The tasks running there now are counted from
+ * where `placed` stands them, and each dispatch this pass plans there counts
+ * too.
  */
 export const planFrom = (
   current: DispatchState,
@@ -2568,9 +2659,11 @@ export const planFrom = (
   const busy = current.workers.filter(isBusy).length;
   let free = current.policy.slots - busy;
   let authorAsks = 0;
+  const running = runningAt(current.placed);
 
   const dispatches: Array<PlannedDispatch> = [];
   const lands: Array<PlannedLanding> = [];
+  const checks: Array<PlannedCheck> = [];
   const asks: Array<Ask> = [];
   // Admissions planned in this pass count against a grant's `remaining` at
   // once, so one pass cannot admit more tasks than the grant allows. Only a
@@ -2604,6 +2697,9 @@ export const planFrom = (
       if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
       if (worker && isBusy(worker)) continue;
     }
+    // A check runs on the branch tip, so a live pane that can still commit
+    // waits for its turn to end, as it does at a landing.
+    if (node.kind === "check" && (held(task.project) || (worker && isBusy(worker)))) continue;
 
     // Every gate on the route must permit the step. A gate on `ask` holds the
     // task for one approval of its own step; once approved, a later reading
@@ -2625,7 +2721,7 @@ export const planFrom = (
         rung:
           node.kind === "land"
             ? reviewedBy(task)
-            : node.role === "review"
+            : node.kind === "agent" && node.role === "review"
               ? authoredBy(task)
               : undefined,
       });
@@ -2636,14 +2732,44 @@ export const planFrom = (
     if (node.kind === "land") {
       for (const given of permits) admitting(given, task.id);
       lands.push({ task, worker, permits });
-    } else if (free > 0) {
+    } else if (node.kind === "check") {
+      for (const given of permits) admitting(given, task.id);
+      checks.push({ task, permits, block: node });
+    } else if (free > 0 && running.roomAt(task.project, node)) {
       for (const given of permits) admitting(given, task.id);
       free -= 1;
+      running.add(task.project, node);
       dispatches.push({ role: node.role, task, permits, block: node });
     }
   }
 
-  return { dispatches, lands, asks };
+  return { dispatches, lands, checks, asks };
+};
+
+/**
+ * How many tasks run at each agent block, per project, from where the tasks
+ * stand: a block's id names it only inside its own project's pipeline.
+ */
+const runningAt = (placed: DispatchState["placed"]) => {
+  const counts = new Map<string, number>();
+  const key = (project: string, node: AgentNode) => JSON.stringify([project, node.id]);
+  const add = (project: string, node: AgentNode) =>
+    void counts.set(key(project, node), (counts.get(key(project, node)) ?? 0) + 1);
+  for (const { task, placement } of placed) {
+    if (
+      placement._tag === "At" &&
+      placement.state === "running" &&
+      placement.node.kind === "agent"
+    ) {
+      add(task.project, placement.node);
+    }
+  }
+  return {
+    add,
+    /** Whether the block may start one more task: it has no cap, or room under it. */
+    roomAt: (project: string, node: AgentNode) =>
+      node.slots === undefined || (counts.get(key(project, node)) ?? 0) < node.slots,
+  };
 };
 
 const isBusy = (worker: Worker): boolean =>
@@ -2659,11 +2785,14 @@ interface DispatchState {
   readonly scopes: Scopes;
   /** Each project's pipeline. A task whose project's pipeline is stopped or absent takes no step. */
   readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
+  /** Where every queued and owned task stands, from which each block's running tasks are counted. */
+  readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
 }
 
-/** What one tick would start, land, and hold for the operator's approval. */
+/** What one tick would start, land, check, and hold for the operator's approval. */
 interface Plan {
   readonly dispatches: ReadonlyArray<PlannedDispatch>;
+  readonly checks: ReadonlyArray<PlannedCheck>;
   readonly lands: ReadonlyArray<PlannedLanding>;
   readonly asks: ReadonlyArray<Ask>;
 }
@@ -2699,6 +2828,13 @@ interface PlannedLanding {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly permits: ReadonlyArray<Permit>;
+}
+
+/** A check the plan runs on the task's branch tip, with the permit each gate on its route gave. */
+interface PlannedCheck {
+  readonly task: Item;
+  readonly permits: ReadonlyArray<Permit>;
+  readonly block: CheckNode;
 }
 
 /** A task the tick hands to the operator, and the reason it gives them. */
@@ -3309,6 +3445,9 @@ interface Interpretation extends FleetState {
 
   /** The approved branches the plan lands; settle runs them. */
   readonly lands: ReadonlyArray<PlannedLanding>;
+
+  /** The checks the plan runs on branch tips; settle runs them. */
+  readonly checks: ReadonlyArray<PlannedCheck>;
 
   /** The merged branches no live task still points at, for the sweep. */
   readonly prunable: ReadonlyArray<{

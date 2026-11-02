@@ -23,7 +23,8 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { authorRun, authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { place, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
 
 const task = (
   id: string,
@@ -386,6 +387,7 @@ describe("the policy gate on dispatch", () => {
     policy,
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: STANDARD_PIPELINES,
+    placed: [],
     ...overrides,
   });
 
@@ -433,6 +435,69 @@ describe("the policy gate on dispatch", () => {
     );
 
     expect(planned(dispatches)).toEqual(["author:ts-a", "author:ts-b"]);
+  });
+
+  describe("an agent block with slots of its own", () => {
+    // The standard pipeline with one author at a time.
+    const single = STANDARD_PIPELINE.nodes.map((node) =>
+      node.id === "author" ? { ...node, slots: 1 } : node,
+    );
+    const pipelines = new Map([
+      ["foreman", { _tag: "Runs" as const, pipeline: { nodes: single }, drawn: false }],
+    ]);
+    const placedIn = (...tasks: ReadonlyArray<Item>) =>
+      tasks.map((item) => ({ task: item, placement: place({ nodes: single }, factsOf(item)) }));
+
+    test("starts no more of its waiting tasks than its slots", () => {
+      const queue = [task("ts-a", [], "open"), task("ts-b", [], "open")];
+      const dispatches = dispatchesFor(
+        dispatchState(allowing({ author: "on" }), { pipelines, queue, placed: placedIn(...queue) }),
+      );
+
+      expect(planned(dispatches)).toEqual(["author:ts-a"]);
+    });
+
+    test("counts the tasks already running there", () => {
+      const queue = [task("ts-b", [], "open")];
+      const runningNow = authoredOn(task("ts-a", [], "in_progress"), "cheap");
+      const dispatches = dispatchesFor(
+        dispatchState(allowing({ author: "on" }), {
+          pipelines,
+          queue,
+          placed: placedIn(runningNow, ...queue),
+        }),
+      );
+
+      expect(dispatches).toEqual([]);
+    });
+  });
+
+  test("a check takes no slot and runs once its gate permits it", () => {
+    const checked = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+      node.kind === "agent" && node.id === "author"
+        ? [
+            { ...node, next: "lint-gate" },
+            { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+            { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+          ]
+        : [node],
+    );
+    const handed = active(authoredOn(task("ts-c", []), "cheap"), undefined);
+    const planFor = (steps: Partial<Policy["default"]>) =>
+      plan(
+        dispatchState(allowing(steps, { slots: 1 }), {
+          pipelines: new Map([
+            ["foreman", { _tag: "Runs" as const, pipeline: { nodes: checked }, drawn: false }],
+          ]),
+          queue: [ready("ts-a")],
+          review: [handed],
+        }),
+      );
+
+    const on = planFor({ author: "on", review: "on" });
+    expect(on.checks.map(({ task, block }) => `${block.id}:${task.id}`)).toEqual(["lint:ts-c"]);
+    expect(planned(on.dispatches)).toEqual(["author:ts-a"]);
+    expect(planFor({ author: "on", review: "off" }).checks).toEqual([]);
   });
 
   test("an epic grant admits its tasks and no others, up to its count in one pass", () => {
@@ -727,6 +792,7 @@ describe("the quota gate", () => {
     },
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: STANDARD_PIPELINES,
+    placed: [],
     ...overrides,
   });
 

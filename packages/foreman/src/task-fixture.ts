@@ -45,3 +45,7 @@ export const withRuns = (task: Item, runs: ReadonlyArray<Run>, tip?: string): It
 /** The task with its author's run first: open while the task is in progress, else handed off. */
 export const authoredOn = (task: Item, rung: string): Item =>
   withRuns(task, [task.status === "in_progress" ? authorRun(rung) : handedOff(rung)], task.tip);
+
+/** A check run at block `node` that ran on `commit` and ended `ending`. */
+export const checkRun = (node: string, commit: string, ending: "passed" | "failed"): Run =>
+  authorRun("", { role: "check", rung: undefined, node, commit, ending, open: false });

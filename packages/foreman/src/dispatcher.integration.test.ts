@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,11 +13,12 @@ import { kindOf, Prog, ProgError, type Item } from "./prog.ts";
 import type { Run } from "tasks";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
-import { Repository, type Branch, type Landing } from "./repository.ts";
-import type { Ending, NewRun, Role } from "tasks";
+import { Repository, type Branch, type Checked, type Landing } from "./repository.ts";
+import type { CheckRun, Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, handedOff, reviewRun, withRuns } from "./task-fixture.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
+import { type AgentNode, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
 import { scratchStore } from "./scratch-store.ts";
 
 const now = new Date();
@@ -89,6 +90,10 @@ class World {
   readonly writes: string[] = [];
   clean: "clean" | "held" = "clean";
   landing: Landing = { _tag: "Merged", verified: false };
+  /** What every check block's command answers. */
+  checking: Checked = { _tag: "Passed", verified: true };
+  /** The commit and command of every check run, in order. */
+  readonly checked: Array<[string, string]> = [];
   /** The commit message each landing passed to `Repository.merge`. */
   readonly mergeMessages: string[] = [];
 
@@ -284,6 +289,26 @@ class World {
     add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
     countRound: () => this.write("prog.countRound", () => 1),
+    recordCheck: (check: CheckRun) =>
+      this.write("prog.recordCheck", () =>
+        this.update(check.task, (task) => ({
+          ...task,
+          runs: [
+            ...task.runs,
+            {
+              id: task.runs.length + 1,
+              task: check.task,
+              role: "check" as const,
+              rung: undefined,
+              node: check.node,
+              commit: check.commit,
+              ending: check.ending,
+              rounds: undefined,
+              open: false,
+            },
+          ],
+        })),
+      ),
   };
 
   readonly repository = {
@@ -323,6 +348,11 @@ class World {
         this.merged.push(ref);
         this.mergeMessages.push(message);
         return this.landing;
+      }),
+    check: (_directory: string, commit: string, command: string) =>
+      this.write("repository.check", () => {
+        this.checked.push([commit, command]);
+        return this.checking;
       }),
     // Worktrees are the fleet adapter's concern; the world's fleet is faked whole.
     worktrees: () => Effect.die("unused"),
@@ -1677,6 +1707,171 @@ describe("a reviewer that stops without a verdict", () => {
     expect(task?.status).toBe("open");
     expect(task?.labels).toEqual(["needs-you"]);
     expect(world.spawned).toEqual([]);
+  });
+});
+
+describe("a drawn pipeline", () => {
+  const drawn = join(policies, "pipelines.json");
+  const draw = (nodes: ReadonlyArray<PipelineNode>) =>
+    writeFileSync(drawn, JSON.stringify({ test: { nodes } }));
+  afterEach(() => rmSync(drawn, { force: true }));
+
+  /** The standard pipeline with `change` made to its author block. */
+  const withAuthor = (change: (author: AgentNode) => ReadonlyArray<PipelineNode>) =>
+    STANDARD_PIPELINE.nodes.flatMap((node) =>
+      node.kind === "agent" && node.id === "author" ? change(node) : [node],
+    );
+
+  /** A task its author handed off on commit c1, which is its branch's tip. */
+  const handedOver = (id: string) => {
+    const world = new World(item(id, "reviewing", [], "test", [handedOff("cheap", "c1")]));
+    world.workers.set(id, worker(id, "author", "settled"));
+    world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    return world;
+  };
+
+  test("an agent block pinned to a rung dispatches that rung", async () => {
+    draw(withAuthor((author) => [{ ...author, model: "dear" }]));
+    const world = new World(item("ts-pinned", "open", []));
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            Dispatcher.Default,
+            Layer.mergeAll(
+              Layer.succeed(Settings, {
+                ladder: [
+                  { name: "cheap", harness: "test", model: undefined, provider: undefined },
+                  { name: "dear", harness: "test", model: undefined, provider: undefined },
+                ],
+                otlpEndpoint: "http://localhost:4318",
+                pollInterval: 60,
+                staleAfter: 24,
+                coachWindow: 60,
+                landedWindow: 7,
+                attemptsPerRung: 2,
+              }),
+              Layer.succeed(Fleet, world.fleet),
+              Layer.succeed(Prog, world.prog),
+              Layer.succeed(Repository, world.repository),
+              Quota.Default,
+              prompts,
+              BunServices.layer,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(world.spawned).toEqual([["ts-pinned", "author"]]);
+    expect(authoredBy(world.tasks.get("ts-pinned")!)).toBe("dear");
+  });
+
+  test("an agent block with slots of its own runs no more of its tasks at once", async () => {
+    usePolicy({ ...ALLOWED, slots: 3 });
+    draw(withAuthor((author) => [{ ...author, slots: 1 }]));
+    const world = new World(item("ts-first", "open", []), item("ts-second", "open", []));
+    await tick(world);
+    expect(world.spawned).toEqual([["ts-first", "author"]]);
+
+    // The first author is still at work, so the block stays full.
+    await tick(world);
+    expect(world.spawned).toEqual([["ts-first", "author"]]);
+  });
+
+  test("a park block hands the task to the operator once", async () => {
+    draw(
+      STANDARD_PIPELINE.nodes
+        .map((node) =>
+          node.kind === "router" && node.id === "retry"
+            ? { ...node, routes: [{ when: "label:hold", to: "operator" }, ...node.routes] }
+            : node,
+        )
+        .concat([{ kind: "park", id: "operator" }]),
+    );
+    const world = new World(item("ts-parked", "open", ["hold"]));
+    await tick(world);
+    await tick(world);
+
+    expect(world.tasks.get("ts-parked")?.labels).toEqual(["hold", "needs-you"]);
+    expect(world.writes.filter((write) => write === "prog.parkForOperator")).toHaveLength(1);
+    expect(world.spawned).toEqual([]);
+  });
+
+  describe("with a check after the author", () => {
+    beforeEach(() =>
+      draw(
+        withAuthor((author) => [
+          { ...author, next: "lint-gate" },
+          { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+          { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+        ]),
+      ),
+    );
+
+    test("a pass records the commit it ran on, and the same tick sends the reviewer", async () => {
+      const world = handedOver("ts-lint");
+      await tick(world);
+
+      expect(world.checked).toEqual([["c1", "bun run lint"]]);
+      expect(world.tasks.get("ts-lint")?.runs.find((run) => run.role === "check")).toMatchObject({
+        node: "lint",
+        commit: "c1",
+        ending: "passed",
+      });
+      expect(world.spawned).toEqual([["ts-lint", "review"]]);
+    });
+
+    test("a commit after the pass is checked again before the next review", async () => {
+      const world = handedOver("ts-moved");
+      await tick(world);
+      // The reviewer approves c1, and then someone commits c2 on the branch.
+      await Effect.runPromise(world.prog.endReview("ts-moved", "approved"));
+      world.workers.set("ts-moved", worker("ts-moved", "review", "settled"));
+      world.branches.set("foreman/ts-moved", {
+        ...world.branches.get("foreman/ts-moved")!,
+        tip: "c2",
+      });
+      await tick(world);
+
+      expect(world.checked).toEqual([
+        ["c1", "bun run lint"],
+        ["c2", "bun run lint"],
+      ]);
+      expect(world.merged).toEqual([]);
+    });
+
+    test("a failure returns the task a rung up with the output in its log", async () => {
+      const world = handedOver("ts-red");
+      world.checking = { _tag: "Failed", output: "lint: 3 problems" };
+      await tick(world);
+
+      const task = world.tasks.get("ts-red");
+      expect(task?.status).toBe("open");
+      expect(task?.labels).toContain("failed-by:cheap");
+      expect(task?.runs.at(-1)).toMatchObject({ role: "check", commit: "c1", ending: "failed" });
+      expect(
+        world.logs.some(([id, message]) => id === "ts-red" && message.includes("lint: 3 problems")),
+      ).toBe(true);
+      expect(world.notifications).toContain("Check failed");
+    });
+
+    test("a ground that is not ready records nothing, and the check runs again", async () => {
+      const world = handedOver("ts-held");
+      world.checking = { _tag: "Held", detail: "index.lock" };
+      await tick(world);
+      expect(world.tasks.get("ts-held")?.runs.filter((run) => run.role === "check")).toEqual([]);
+
+      world.checking = { _tag: "Passed", verified: true };
+      await tick(world);
+      expect(world.checked).toHaveLength(2);
+    });
   });
 });
 

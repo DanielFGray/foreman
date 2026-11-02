@@ -5,7 +5,7 @@
 import { Array, Option, String as Str } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { PipelineNode } from "foreman/pipeline"
-import { type Belt, beltOf, type Cell, rejoin, type Wire } from "foreman/pipeline-belt"
+import { type Belt, beltOf, type Cell, INSERTABLE, rejoin, type Wire } from "foreman/pipeline-belt"
 import { labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 import { type ForemanPage, Message, type Model, PipelineView } from "./model.ts"
@@ -98,7 +98,7 @@ const problemsView = (problems: Option.Option<ReadonlyArray<string>>, h: HtmlBui
   })
 
 // ── the drawing ──
-const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", land: "⤓", park: "⏸" }
+const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸" }
 
 const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
 
@@ -216,7 +216,7 @@ const wireControlsView = ({ wire, anchor: [x, y], room }: PlacedWire, editing: E
       ? [
           h.div(
             [h.Class("pipeline-insert"), h.Style({ left: `${x - 60}px`, top: `${y + 12}px` })],
-            Array.map(["gate", "agent", "router"] as const, (kind) =>
+            Array.map(INSERTABLE, (kind) =>
               h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(`put a ${kind} on the wire`), h.OnClick(edit({ _tag: "InsertOn", wire: ref, kind }))], [kind]),
             ),
           ),
@@ -301,6 +301,8 @@ const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArra
         ),
         h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "AddRoute", router: node.id, when: "" }))], ["Add route"]),
       ]
+    case "check":
+      return [field("Command", textInput("command", node.command, (command) => edit({ _tag: "Configure", id: node.id, setting: { command } }), h), h)]
     case "land":
     case "park":
       return []
