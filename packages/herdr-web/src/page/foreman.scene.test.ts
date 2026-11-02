@@ -35,6 +35,8 @@ const reading: ForemanReading = {
     // An account belongs to the fleet, not to a project, so every space shows it.
     { ...row("quota", "claude", "claude account", []), project: Option.none() },
   ],
+  placements: [],
+  stopped: [],
 }
 
 // The queue comes from `foreman queue`, not from the reading.

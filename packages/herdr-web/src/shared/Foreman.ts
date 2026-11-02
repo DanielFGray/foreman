@@ -71,6 +71,20 @@ export const ForemanDispatcher = S.Union([
 ])
 export type ForemanDispatcher = typeof ForemanDispatcher.Type
 
+/**
+ * Where one task stands at a block of its project's pipeline: the run's state
+ * at a work block, or `parked` at a park block. `gates` hold it before the block.
+ */
+export const ForemanPlacement = S.Struct({
+  key: S.String,
+  label: S.String,
+  project: S.String,
+  node: S.String,
+  state: S.Literals(["waiting", "running", "ended", "parked"]),
+  gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+})
+export type ForemanPlacement = typeof ForemanPlacement.Type
+
 /** One reading of the fleet, made by the dispatcher the bridge runs. */
 export const ForemanReading = S.Struct({
   version: S.Literal(FOREMAN_VERSION),
@@ -82,6 +96,10 @@ export const ForemanReading = S.Struct({
   observedAt: S.OptionFromNullOr(S.String),
   projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
   rows: S.Array(ForemanRow),
+  /** Each task that stands at a block of its project's pipeline. */
+  placements: S.Array(ForemanPlacement),
+  /** The projects whose pipeline cannot run, and why. */
+  stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
 })
 export type ForemanReading = typeof ForemanReading.Type
 

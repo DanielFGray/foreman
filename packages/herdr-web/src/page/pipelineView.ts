@@ -7,7 +7,8 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import type { PipelineNode } from "foreman/pipeline"
 import { type Belt, beltOf, type Cell, rejoin, type Wire } from "foreman/pipeline-belt"
 import { labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
-import { FOREMAN_STEPS } from "../shared/Foreman.ts"
+import { FOREMAN_STEPS, type ForemanPlacement } from "../shared/Foreman.ts"
+import { badgeView, standingOf, standingView, stoppedView } from "./pipelineStanding.ts"
 import { type ForemanPage, Message, type Model, PipelineView } from "./model.ts"
 import { isDirty, type PipelineEdit, summaryOf, type WireRef } from "./pipelineEdit.ts"
 import { problemsFor, RESET_LINE } from "./pipelinePage.ts"
@@ -23,19 +24,21 @@ export const pipelineSectionView = (model: Model, project: Option.Option<string>
       h.div(
         [h.Class("foreman-pipeline-open")],
         [
+          ...Option.match(project, { onNone: () => [], onSome: (name) => stoppedView(name, standingOf(model, name).problems, h) }),
           h.button(
             [h.Type("button"), h.Class("chip"), h.Disabled(Option.isNone(project)), h.OnClick(Message.ClickedPipeline())],
             [Option.match(project, { onNone: () => "Pipeline", onSome: (name) => `Pipeline of ${name}` })],
           ),
         ],
       ),
-    Loading: ({ project }) => frame(project, [h.p([h.Class("note")], ["Reading the pipeline…"])], h),
-    Unlisted: ({ project, reason }) => frame(project, [h.p([h.Class("note error")], [reason])], h),
-    Editing: (editing) => frame(editing.project, editorView(editing, page, h), h),
+    Loading: ({ project }) => frame(project, model, [h.p([h.Class("note")], ["Reading the pipeline…"])], h),
+    Unlisted: ({ project, reason }) => frame(project, model, [h.p([h.Class("note error")], [reason])], h),
+    Editing: (editing) => frame(editing.project, model, editorView(editing, page, standingOf(model, editing.project).tasks, h), h),
   })
 }
 
-const frame = (project: string, body: ReadonlyArray<Html>, h: HtmlBuilder<Message>): Html =>
+/** The open page: the head, then why the project is stopped if it is, then the body. */
+const frame = (project: string, model: Model, body: ReadonlyArray<Html>, h: HtmlBuilder<Message>): Html =>
   h.section(
     [h.Class("pipeline"), h.AriaLabel("Pipeline")],
     [
@@ -46,18 +49,20 @@ const frame = (project: string, body: ReadonlyArray<Html>, h: HtmlBuilder<Messag
           h.button([h.Type("button"), h.Class("chip"), h.AriaLabel("close the pipeline"), h.OnClick(Message.ClosedPipeline())], ["Close"]),
         ],
       ),
+      ...stoppedView(project, standingOf(model, project).problems, h),
       ...body,
     ],
   )
 
-const editorView = (editing: Editing, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+const editorView = (editing: Editing, page: ForemanPage, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const problems = problemsFor(page, editing)
   const belt = beltOf(editing.draft)
   return [
     h.p([h.Class("note")], [editing.drawn ? "This project runs its own pipeline." : "This project runs the standard pipeline."]),
     toolbarView(editing, page, problems, h),
     ...Option.match(editing.refusal, { onNone: () => [], onSome: (reason) => [h.p([h.Class("note error"), h.Role("alert")], [reason])] }),
-    beltView(belt, editing, h),
+    beltView(belt, editing, tasks, h),
+    ...standingView(belt, tasks, h),
     problemsView(problems, h),
     ...Option.match(editing.selected, {
       onNone: () => [],
@@ -102,7 +107,7 @@ const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router:
 
 const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
 
-const beltView = (belt: Belt, editing: Editing, h: HtmlBuilder<Message>): Html => {
+const beltView = (belt: Belt, editing: Editing, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): Html => {
   const layout = layoutOf(belt)
   return h.div(
     [h.Class("pipeline-scroll")],
@@ -129,7 +134,7 @@ const beltView = (belt: Belt, editing: Editing, h: HtmlBuilder<Message>): Html =
                 padding: `${PAD}px`,
               }),
             ],
-            Array.map(belt.cells, (cell) => stationView(cell, layout, editing, h)),
+            Array.map(belt.cells, (cell) => stationView(cell, layout, editing, tasks, h)),
           ),
           ...Array.flatMap(layout.wires, (placed) => wireControlsView(placed, editing, h)),
         ],
@@ -160,7 +165,7 @@ const pathOf = (points: ReadonlyArray<Point>): string => {
 }
 
 /** A chip says its kind by an icon and one word; a card has the kind above its summary. */
-const stationView = (cell: Cell, layout: Layout, editing: Editing, h: HtmlBuilder<Message>): Html => {
+const stationView = (cell: Cell, layout: Layout, editing: Editing, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): Html => {
   const { node } = cell
   const isSelected = Option.contains(editing.selected, node.id)
   const box = layout.boxes.get(node.id)
@@ -186,9 +191,12 @@ const stationView = (cell: Cell, layout: Layout, editing: Editing, h: HtmlBuilde
       h.Attribute("data-row", String(cell.row)),
       h.OnClick(edit({ _tag: "Select", id: isSelected ? Option.none() : Option.some(node.id) })),
     ],
-    isChip
-      ? [h.span([h.Class("pipeline-icon")], [KIND_ICON[node.kind]]), h.span([h.Class("pipeline-summary")], [text])]
-      : [h.span([h.Class("pipeline-kind")], [`${KIND_ICON[node.kind]} ${node.kind}`]), h.span([h.Class("pipeline-summary")], [text])],
+    [
+      ...(isChip
+        ? [h.span([h.Class("pipeline-icon")], [KIND_ICON[node.kind]]), h.span([h.Class("pipeline-summary")], [text])]
+        : [h.span([h.Class("pipeline-kind")], [`${KIND_ICON[node.kind]} ${node.kind}`]), h.span([h.Class("pipeline-summary")], [text])]),
+      ...badgeView(node, tasks, h),
+    ],
   )
 }
 

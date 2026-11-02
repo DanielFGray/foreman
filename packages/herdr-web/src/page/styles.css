@@ -702,7 +702,7 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 @keyframes pipeline-flow { to { stroke-dashoffset: -14; } }
 @media (prefers-reduced-motion: reduce) { .pipeline-flow { animation: none; } }
 .pipeline-grid { position: absolute; inset: 0; display: grid; box-sizing: border-box; pointer-events: none; }
-.pipeline-station { pointer-events: auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 8px; border: 1px solid var(--surface); border-left-width: 4px; border-radius: 6px; background: var(--base, transparent); color: inherit; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.pipeline-station { position: relative; pointer-events: auto; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 8px; border: 1px solid var(--surface); border-left-width: 4px; border-radius: 6px; background: var(--base, transparent); color: inherit; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
 .pipeline-station.selected { outline: 2px solid var(--green); }
 .pipeline-station.source { border-left-color: var(--green); }
 .pipeline-station.router { border-left-color: var(--yellow); }
@@ -728,3 +728,8 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .pipeline-field { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .pipeline-field > span { flex: 0 0 110px; color: var(--subtext); }
 .pipeline-input { flex: 1; min-width: 0; }
+.pipeline-count { position: absolute; top: -8px; right: -8px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--green); color: var(--base, Canvas); font-size: 11px; line-height: 18px; text-align: center; }
+.pipeline-stopped { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--red); border-radius: 6px; }
+.pipeline-standing { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.pipeline-standing-block > summary { cursor: pointer; }
+.pipeline-standing-block ul { margin: 4px 0 0; padding-left: 18px; }
