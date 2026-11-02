@@ -11,6 +11,7 @@ import { VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
+import { pipelineCommand } from "./pipeline-command.ts";
 import { policyCommand } from "./policy-command.ts";
 import { queueCommand, showCommand } from "./store-commands.ts";
 import { services, storeServices } from "./host.ts";
@@ -130,6 +131,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),
     policyCommand,
+    Command.provide(pipelineCommand, store),
     ...subcommands(services),
   ]),
 );

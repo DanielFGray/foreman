@@ -19,7 +19,7 @@ import { APPROVED, failuresOf, type Item, reviewedBy, type TaskStatus, valueOf }
 import { STEPS, type Step } from "./policy.ts";
 
 /** Where the editor draws a block. Placement never reads it. */
-const Layout = S.optional(S.Struct({ x: S.Number, y: S.Number }));
+const Layout = S.optional(S.Struct({ x: S.Finite, y: S.Finite }));
 
 /** Takes ready tasks in queue order that match its filter. */
 export const SourceNode = S.Struct({
