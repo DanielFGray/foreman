@@ -232,11 +232,14 @@ describe("check runs", () => {
         const author = yield* openRun(run());
         yield* closeRun(author, { ending: "handed-off", commit: "c1" });
         yield* recordCheck({ ...check, commit: "c1", ending: "passed" });
-        return yield* sql<{ model: string | null; slices: number }>`
+        const summary = yield* sql<{ model: string | null; slices: number }>`
           SELECT model, slices FROM model_summary`;
+        // model_status and herd_roster read their runs through run_identity.
+        const identities = yield* sql<{ cmodel: string | null }>`SELECT cmodel FROM run_identity`;
+        return { summary, identities };
       }),
     );
-    expect(rows).toEqual([{ model: "m1", slices: 1 }]);
+    expect(rows).toEqual({ summary: [{ model: "m1", slices: 1 }], identities: [{ cmodel: "m1" }] });
   });
 });
 
