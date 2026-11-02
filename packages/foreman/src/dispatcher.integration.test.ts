@@ -1851,6 +1851,24 @@ describe("a route's workspace blocks", () => {
     expect(world.spawned).toEqual([[task.id, "review"]]);
   });
 
+  test("direct: a correction round moves the review to the checkout's HEAD", async () => {
+    draw(DIRECT);
+    const task = item("ts-direct-round", "reviewing", [], "test", [
+      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+      reviewRun("cheap", { commit: "h1" }),
+    ]);
+    const world = new World(task);
+    world.headCommit = "h2";
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toBe("h2");
+  });
+
   test("direct: a commit after the approval stops the task completing, and it goes to review again", async () => {
     draw(DIRECT);
     const task = item("ts-moved", "reviewing", [], "test", [
