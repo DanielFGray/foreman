@@ -55,21 +55,39 @@ added to `runs`:
 
 - `commit TEXT`: for an author run, the branch tip when it closed; for a review
   run, the branch tip when it opened (the commit the reviewer read).
-- `ending TEXT`: how foreman saw the run end, in foreman's own words. NULL while
-  the run is open, and NULL for a run foreman did not settle (imported, or
-  launched by hand).
+- `ending TEXT`: how the run stopped. The agent may write it while the run is
+  open (its verdict, below); settle writes it at close when the agent did not.
+  NULL for a run nobody settled (imported, or launched by hand).
 
 `ending` takes one of these values:
 
-| Work | Endings |
-| --- | --- |
-| author | `handed-off` (committed work for review), `satisfied`, `unfinished`, `walled`, `vanished`, `released`, `canceled`, `landed` |
-| review | `approved`, `returned`, `no-verdict`, `walled`, `released` |
+| Work | Written by the agent | Written by settle |
+| --- | --- | --- |
+| author | `satisfied` | `handed-off` (committed work for review), `unfinished`, `walled`, `vanished`, `released`, `canceled` |
+| review | `approved`, `returned` | `no-verdict`, `walled`, `released` |
 
 `outcome` stays the registry's four words (`committed`, `dropped`,
-`handed-off`, `answered`). `outcomeOf` maps an ending to its outcome when the
-run closes. It is written, not derived in the view, because runs launched by
-hand have an outcome and no ending.
+`handed-off`, `answered`). It says what became of the run's work, which is not
+the same as how the run stopped: an author run stops `handed-off`, and its work
+is known to have landed only later. So `outcomeOf` maps the ending to an
+outcome when the run closes, and landing sets the lap's author run to
+`committed` (or `answered` for research) in the transaction that completes the
+task. It is written, not derived in the view, because runs launched by hand have
+an outcome and no ending.
+
+### The agent's verdict
+
+An agent states how its run ended with one command:
+`tasks verdict <task> approved|returned|satisfied`. It writes the ending on the
+task's open run of the matching work (review for `approved` and `returned`,
+author for `satisfied`), and makes the status change that goes with it in the
+same transaction: `returned` sends the task back to `open`, `satisfied` sends it
+to `reviewing`, `approved` leaves the status alone. A second verdict on the same
+run replaces the first, so a reviewer that approves and then returns in one turn
+leaves `returned`. There is no open run to write to after settle closes it, so
+a verdict cannot change a closed run. The review and author prompts use this
+command in place of `prog label … approved`, `prog open` and
+`prog label … satisfied`.
 
 `node` is the pipeline block the run ran at. Until the dispatcher places tasks
 (step 5), foreman writes the standard pipeline's block for the role: `author`
@@ -89,8 +107,10 @@ changes, because runs are now the record foreman reads back.
 - A spawn that fails: delete the open run in the same transaction that
   releases the task. The agent never ran, so the run never happened.
 - `correct` (a correction round): add one to the open author run's `rounds`.
-- Settle: close the run with its ending; an author run that hands off records
-  the tip as `commit`.
+- Settle: close the run, keeping the agent's ending if it wrote one, else
+  writing its own; an author run that hands off records the tip as `commit`.
+- Land: set the lap's author run outcome to `committed` or `answered`, in the
+  transaction that completes the task.
 - The operator clears a stale reviewer: close the open review run `no-verdict`.
 
 Run reads and writes go in their own module in `packages/tasks`, not in
