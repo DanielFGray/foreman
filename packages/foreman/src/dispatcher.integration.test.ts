@@ -16,7 +16,7 @@ import {
   type WorkerState,
 } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import { kindOf, Records, type ExitMove, type Item } from "./records.ts";
+import { kindOf, Records, type Endings, type ExitMove, type Item } from "./records.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
@@ -250,7 +250,10 @@ class World {
         ),
       ),
     attribute: (id: string, run: NewRun) =>
-      this.write("records.attribute", () => this.openRun(id, run)),
+      this.write("records.attribute", () => {
+        this.update(id, (task) => ({ ...task, status: "in_progress" }));
+        return this.openRun(id, run);
+      }),
     assignReview: (id: string, run: NewRun) =>
       this.write("records.assignReview", () => {
         this.closeRuns(id, { author: "done", review: "released", commit: run.commit });
@@ -268,10 +271,18 @@ class World {
           runs: task.runs.filter((run) => !(run.open && run.role === role)),
         }));
       }),
-    parkForOperator: (id: string) =>
-      this.write("records.parkForOperator", () =>
-        this.update(id, (task) => ({ ...task, labels: [...task.labels, "needs-you"] })),
-      ),
+    park: (id: string, endings: Endings = {}) =>
+      this.write("records.park", () => {
+        this.closeRuns(id, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        });
+        this.update(id, (task) => ({
+          ...task,
+          status: "open",
+          labels: [...task.labels, "needs-you"],
+        }));
+      }),
     markFailure: (id: string, rung: string) =>
       this.write("records.markFailure", () =>
         this.update(id, (task) => ({
@@ -312,9 +323,12 @@ class World {
         this.update(id, (task) => ({ ...task, labels: [...task.labels, `walled:${provider}`] })),
       ),
     clearDiagnostic: () => this.write("records.clearDiagnostic", () => undefined),
-    release: (id: string, ending: Ending = "released") =>
+    release: (id: string, endings: Endings = {}) =>
       this.write("records.release", () => {
-        this.closeRuns(id, { author: ending, review: "released" });
+        this.closeRuns(id, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        });
         this.update(id, (task) => ({ ...task, status: "open" }));
         return "open" as const;
       }),
@@ -1162,7 +1176,7 @@ describe("a fleet that is not running", () => {
         "repository.remove",
         "records.release",
         "tracker.submit",
-        "tracker.claim",
+        "records.attribute",
         "fleet.spawn",
       ]),
     );
@@ -2012,7 +2026,7 @@ describe("a route's workspace blocks", () => {
 
       // Its author stops and is sent back: the task still holds the checkout.
       settled(world, first.id, "author");
-      await Effect.runPromise(world.records.release(first.id, "returned"));
+      await Effect.runPromise(world.records.release(first.id, { author: "returned" }));
       world.workers.delete(first.id);
       await tick(world);
       expect(world.spawned.map(([id]) => id)).not.toContain(second.id);
@@ -2467,7 +2481,7 @@ describe("a drawn pipeline", () => {
     await tick(world);
 
     expect(world.tasks.get("ts-parked")?.labels).toEqual(["hold", "needs-you"]);
-    expect(world.writes.filter((write) => write === "records.parkForOperator")).toHaveLength(1);
+    expect(world.writes.filter((write) => write === "records.park")).toHaveLength(1);
     expect(world.spawned).toEqual([]);
   });
 

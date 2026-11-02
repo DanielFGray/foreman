@@ -1,5 +1,13 @@
 import { Context, Effect, Layer, Option, Schema as S } from "effect";
-import { Tasks, TaskError, type Item, type ListFilter, type LogEntry, type TaskEvent } from "tasks";
+import {
+  Tasks,
+  TaskError,
+  type Item,
+  type ListFilter,
+  type LogEntry,
+  type Status,
+  type TaskEvent,
+} from "tasks";
 
 /**
  * The task tracker foreman takes its work from, in tracker terms: which tasks
@@ -28,7 +36,12 @@ export class Tracker extends Context.Service<
       readonly description: string;
       readonly labels: ReadonlyArray<string>;
     }) => Effect.Effect<string, TrackerError>;
-    /** Takes the task: after this it is no longer ready. */
+    /**
+     * The status moves. Each skips a task that already has the status it
+     * leads to, so a caller need not check the status first.
+     *
+     * Takes the task: after this it is no longer ready.
+     */
     readonly claim: (task: string) => Effect.Effect<void, TrackerError>;
     /** Puts the task back among the ready work. */
     readonly reopen: (task: string) => Effect.Effect<void, TrackerError>;
@@ -84,8 +97,20 @@ export const TasksTracker = Layer.effect(
           ),
         );
 
-    const move = (event: TaskEvent) => (task: string) =>
-      tasks.send(task, event).pipe(as(`${event} ${task}`), Effect.asVoid);
+    /**
+     * Sends a status event, skipping it when the task already has the status
+     * the event leads to: claiming claimed work or reopening open work changes
+     * nothing, and the store would refuse it as a move from a status to itself.
+     */
+    const move = (event: TaskEvent, to: Status) => (task: string) =>
+      tasks.get(task).pipe(
+        Effect.flatMap((item) =>
+          Option.isSome(item) && item.value.status === to
+            ? Effect.void
+            : tasks.send(task, event).pipe(Effect.asVoid),
+        ),
+        as(`${event} ${task}`),
+      );
 
     return Tracker.of({
       lookup: (task) => tasks.get(task).pipe(as(`show ${task}`)),
@@ -93,11 +118,11 @@ export const TasksTracker = Layer.effect(
       ready: (project) => tasks.ready(project).pipe(as("ready")),
       logs: (task) => tasks.logs(task).pipe(as(`show ${task}`)),
       add: (task) => tasks.add(task).pipe(as(`add ${task.title}`)),
-      claim: move("start"),
-      reopen: move("open"),
-      submit: move("submit"),
-      review: move("review"),
-      complete: move("done"),
+      claim: move("start", "in_progress"),
+      reopen: move("open", "open"),
+      submit: move("submit", "reviewing"),
+      review: move("review", "reviewing"),
+      complete: move("done", "done"),
       label: (task, label) => tasks.label(task, label).pipe(as(`label ${task} ${label}`)),
       unlabel: (task, label) => tasks.unlabel(task, label).pipe(as(`unlabel ${task} ${label}`)),
       relabel: (task, change) => tasks.relabel(task, change).pipe(as(`relabel ${task}`)),

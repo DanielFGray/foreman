@@ -36,6 +36,12 @@ export interface Item extends TaskItem {
   readonly tip: string | undefined;
 }
 
+/** The endings a release closes a task's open runs with, per role. */
+export interface Endings {
+  readonly author?: Ending;
+  readonly review?: Ending;
+}
+
 /** The status move an exit makes, if any: back to the queue, or on to review. */
 export type ExitMove = "reopen" | "review";
 
@@ -151,6 +157,28 @@ export class Records extends Context.Service<Records>()("Records", {
         ),
       );
 
+    /** Closes the task's open runs with these endings, `released` by default, and requeues it. */
+    const releasing = (task: string, endings: Endings) =>
+      onStore(
+        closeOpenRuns(task, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        }),
+      ).pipe(Effect.andThen(tracker.reopen(task)));
+
+    /**
+     * Returns a task to the queue and closes its open runs in one transaction,
+     * each `released` unless `endings` names another. An exit an agent named
+     * stands. A task already open stays open, and its runs still close.
+     *
+     * A reviewer that is over and a task that is open is exactly the shape a
+     * rejection leaves, so a review run left open on a requeued task would
+     * make the settle loop climb a rung for a rejection nobody gave. Closed,
+     * the run is not the task's reviewer.
+     */
+    const release = (task: string, endings: Endings = {}) =>
+      together(`release ${task}`, releasing(task, endings));
+
     /** The items that belong to one epic. */
     const children = (epic: string) =>
       tracker.list({ parent: epic }).pipe(Effect.flatMap(withRuns));
@@ -228,9 +256,16 @@ export class Records extends Context.Service<Records>()("Records", {
        * new lap (`lap.ts`): everything the last reviews said goes out of scope
        * with no code that clears it. The run carries its own correction count, so
        * a new author starts at none.
+       *
+       * Claims the task in the same transaction, so a claimed task always has
+       * its author run. A task already claimed, such as one whose author
+       * vanished, stays claimed.
        */
       attribute: (task: string, run: NewRun) =>
-        together(`attribute ${task}`, onStore(openRun(run)).pipe(Effect.asVoid)),
+        together(
+          `attribute ${task}`,
+          tracker.claim(task).pipe(Effect.andThen(onStore(openRun(run))), Effect.asVoid),
+        ),
 
       /**
        * Records how a check block's command ended on the commit it ran on. A
@@ -299,21 +334,17 @@ export class Records extends Context.Service<Records>()("Records", {
           ),
         ),
 
+      release,
+
       /**
-       * Returns a task to the queue and closes its open runs in one
-       * transaction: the author's with `ending`, a reviewer's `released`.
-       *
-       * A reviewer that is over and a task that is open is exactly the shape a
-       * rejection leaves, so a review run left open on a requeued task would
-       * make the settle loop climb a rung for a rejection nobody gave. Closed,
-       * the run is not the task's reviewer.
+       * Releases the task, as `release` does, and parks it in the operator's
+       * column, in one transaction: whatever the ladder would say, a person
+       * decides what comes next.
        */
-      release: (task: string, ending: Ending = "released") =>
+      park: (task: string, endings: Endings = {}) =>
         together(
-          `release ${task}`,
-          onStore(closeOpenRuns(task, { author: ending, review: "released" })).pipe(
-            Effect.andThen(tracker.reopen(task)),
-          ),
+          `park ${task}`,
+          releasing(task, endings).pipe(Effect.andThen(tracker.label(task, NEEDS_YOU))),
         ),
 
       /**
@@ -336,9 +367,6 @@ export class Records extends Context.Service<Records>()("Records", {
               Effect.andThen(replaceKinds(task.id, [WALLED])),
             ),
         ),
-
-      /** Parks a task in the operator's column, whatever the ladder would say. */
-      parkForOperator: (task: string) => tracker.label(task, NEEDS_YOU),
 
       /** Records that the task's agent stopped on this account's usage wall. */
       markWall: (task: string, provider: string) => tracker.label(task, `${WALLED}:${provider}`),

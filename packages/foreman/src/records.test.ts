@@ -256,11 +256,13 @@ describe("Records against a scratch store", () => {
 
   // The records and the tracker share one connection, so a status move the
   // tracker refuses takes the records write in its transaction back with it.
+  // A done task cannot go to review by `review`, so that move is refused.
   test("an exit whose status move is refused is not recorded", async () => {
     const id = await run((_, tracker) =>
       tracker.add({ project: "foreman", title: "refused move", description: "", labels: [] }),
     );
     await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((_, tracker) => tracker.complete(id));
 
     const refused = await run((records) =>
       Effect.flip(records.nameExit(id, { name: "done", commit: "c1" }, "review")),
@@ -268,7 +270,7 @@ describe("Records against a scratch store", () => {
     const after = await run((records) => records.show(id));
 
     expect(refused.detail).toContain("review");
-    expect(after.status).toBe("open");
+    expect(after.status).toBe("done");
     expect(after.runs.map((r) => [r.role, r.open, r.ending, r.commit])).toEqual([
       ["author", true, undefined, undefined],
     ]);

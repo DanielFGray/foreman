@@ -1185,7 +1185,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
         }
         yield* records.markWall(task.id, wall.provider);
-        yield* records.release(task.id, "walled");
+        yield* records.release(task.id, { author: "walled" });
         yield* stopAgents(worker);
 
         const labels = [...task.labels, `walled:${wall.provider}`];
@@ -1913,8 +1913,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const park = ({ task, why }: Park) =>
       Effect.gen(function* () {
-        if (task.status !== "open") yield* records.release(task.id);
-        yield* records.parkForOperator(task.id);
+        yield* records.park(task.id);
         yield* tracker.log(task.id, `foreman: ${task.id} is yours now: ${why}`);
         yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${why}`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
@@ -2092,10 +2091,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         workspace,
         base: yield* authorBaseOf(task, project),
       });
-      yield* tracker.claim(task.id);
-      yield* records
-        .attribute(task.id, runFor(task, rung, block, undefined, base))
-        .pipe(Effect.tapError(() => records.release(task.id)));
+      yield* records.attribute(task.id, runFor(task, rung, block, undefined, base));
       const agent = yield* instrumentRun(
         task,
         rung,
@@ -2211,10 +2207,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const base =
         (yield* routeOf(task)) === "none" ? yield* repository.head(project.directory) : undefined;
 
-      yield* tracker.claim(task.id);
-      yield* records
-        .attribute(task.id, runFor(task, rung, block, undefined, base))
-        .pipe(Effect.tapError(() => records.release(task.id)));
+      yield* records.attribute(task.id, runFor(task, rung, block, undefined, base));
       const agent = yield* instrumentRun(
         task,
         rung,
@@ -2247,7 +2240,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const retryAttempt = (task: Climbing, detail: string, ending: Ending) =>
       Effect.gen(function* () {
-        yield* records.release(task.id, ending);
+        yield* records.release(task.id, { author: ending });
         const rung = ranAt(task);
         const attempts = attemptsOf(task, rung) + 1;
         if (rungSpent(attempts, settings.attemptsPerRung)) {
@@ -2272,9 +2265,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const parkStopped = (task: Item, worker: Worker, what: string) =>
       Effect.gen(function* () {
-        yield* records.endRuns(task.id, { author: "stopped", review: "stopped" });
-        yield* records.release(task.id);
-        yield* records.parkForOperator(task.id);
+        yield* records.park(task.id, { author: "stopped", review: "stopped" });
         yield* tracker.log(
           task.id,
           `foreman: ${what}, and its block parks such a task. It is yours now.`,
@@ -2306,9 +2297,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ];
         const next = reviewerFor(settings.ladder, authoredBy(task), new Set(), failed);
         if (next === undefined) {
-          yield* records.endReview(task.id, "stopped");
-          yield* records.release(task.id);
-          yield* records.parkForOperator(task.id);
+          yield* records.park(task.id, { review: "stopped" });
           yield* tracker.log(
             task.id,
             `foreman: reviewer ${ran} stopped without a verdict, and no rung above it is left to read ${task.id}. It is yours now.`,
@@ -2503,8 +2492,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
 
         yield* stopAgents(target.worker);
-        if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
-        if (task.status !== "open") yield* records.release(task.id);
+        yield* records.release(task.id);
         yield* records.markDiagnostic(task.id, intent);
         yield* Effect.gen(function* () {
           const worker = yield* workspaceFor(task, project);
@@ -2537,7 +2525,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* stopAgents(target.worker);
         if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
         if (task.status === "open") yield* tracker.claim(task.id);
-        if (task.status !== "reviewing") yield* tracker.review(task.id);
+        yield* tracker.review(task.id);
         yield* handReview(yield* records.show(task.id));
       });
 
@@ -2567,9 +2555,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!rung) return;
         yield* stopAgents(target.worker);
-        if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
         yield* records.clearDiagnostic(task.id);
-        if (task.status !== "open") yield* records.release(task.id);
+        yield* records.release(task.id);
         yield* raiseFloor(task, rung);
         yield* handAuthor(yield* records.show(task.id));
       });
@@ -2656,7 +2643,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const task = yield* records.show(target.task.id);
             if (task.status === "done" || task.status === "canceled" || !target.worker) return;
             yield* stopAgents(target.worker);
-            if (task.status !== "open") yield* records.release(task.id);
+            yield* records.release(task.id);
             yield* tracker.log(task.id, killLogLine(reason));
             yield* teardown(task);
           }),
