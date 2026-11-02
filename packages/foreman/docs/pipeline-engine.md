@@ -85,6 +85,23 @@ block it also clears `approved`: the label is the reviewer's signal to foreman,
 and `passed:<node>` is the record. `release` clears `passed:*` the way it clears
 `approved` today.
 
+### A review passes one commit
+
+A review run records the commit it read: the branch tip when the run opened.
+The review block counts as passed only while the branch tip is still that
+commit. A commit after the review opened (the author's, a repair's, or the
+operator's by hand) places the task at the review block again, and no code
+clears anything to make that happen. Land checks the tip once more, then merges
+the recorded commit by its id, never the branch name, so what lands is exactly
+what the reviewer read. A tip that moved in between sends the task back to the
+review block; landing the older commit would close the task and strand the
+newer one.
+
+This replaces today's rule that every transition which hands a task back must
+clear `approved` (`Prog.release`, `review`, `submit`, `clearReview`). That rule
+holds only while every path remembers it; a recorded commit holds by itself.
+`Held` still keeps a verdict: the tip has not moved, so the review still passes.
+
 ### Models
 
 `model` is `ladder` (author: the cheapest rung above the task's failures),
@@ -193,7 +210,19 @@ and the policy step that holds the retry is unchanged.
 - "Order inside a tick ... reviews are filled before new work": generalised to
   nearest-to-the-end first. Same order in the standard pipeline.
 - "`awaitingLanding` reads that label": becomes "placed at a land block".
-  `approved` stays the reviewer's signal; `passed:<review>` is the record.
+  `approved` stays the reviewer's signal; the review run and its commit are the
+  record.
+- "Approval is a durable `approved` label … any transition handing the task
+  back … must clear it" and "`Prog.release` therefore clears it alongside
+  `approved`": replaced at step 4. A review passes the commit it read, and a
+  moved tip voids it (see "A review passes one commit"). `review-by:*` and
+  `review-failed-by:*` go with the labels; the review run's open and close
+  replace them.
+- "`satisfied` is cleared wherever `approved` is": open. `satisfied` is the
+  author's claim about its diff, so it likely belongs to the author run's
+  outcome; step 4 decides.
+- "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
+  meaning. The tip has not moved, so the review still passes.
 
 ## Build order
 
@@ -204,9 +233,14 @@ from the main checkout and lands into `develop` there.
 1. Done: `src/pipeline.ts`: schema, facts, filters, placement, validation,
    Mermaid, the standard pipeline.
 2. Done: `pipelines.json` and `foreman pipeline show|check|set|clear`.
-3. herdr-web's Pipeline page: the editor. It draws, checks and saves through
-   foreman's commands, and needs nothing from the dispatcher.
-4. Runs replace labels (tasks step 3b); `factsOf` reads runs.
+3. Done: herdr-web's Pipeline page: the editor. It draws, checks and saves
+   through foreman's commands, and needs nothing from the dispatcher.
+4. Runs replace labels (tasks step 3b); `factsOf` reads runs and each task's
+   branch tip. A review run records the commit it read, and land merges that
+   commit by id. Pass criterion: a commit to an approved branch places the task
+   at the review block again, with no clearing code on any path; land refuses a
+   tip other than the recorded commit; the code that clears `approved` on
+   requeue is gone.
 5. The dispatcher runs the standard pipeline through `place`. Pass criterion:
    the dispatcher tests pass with no test edited, a table test maps each
    `TaskPhase` and merge verdict to its old and its placed next step, and
