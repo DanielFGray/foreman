@@ -27,6 +27,7 @@
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Effect, Layer, Option, Schema } from "effect";
+import { store } from "tasks";
 import { settings, Settings } from "../src/config.ts";
 import { type Ladder, rankOf } from "../src/ladder.ts";
 import { NEEDS_YOU } from "../src/prog.ts";
@@ -126,6 +127,7 @@ BunRuntime.runMain(
   program.pipe(
     Effect.provide(
       settings.pipe(
+        Layer.provide(store),
         Layer.provideMerge(BunServices.layer),
       ),
     ),

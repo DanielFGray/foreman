@@ -17,3 +17,10 @@ export const connectionAt = (filename: string) =>
 
 /** The task store's file: `PROG_DB`, else `~/.prog/prog.db`, as the Go `prog` resolves it. */
 export const storePath = (): string => process.env.PROG_DB ?? join(homedir(), ".prog", "prog.db");
+
+/**
+ * The store's connection, built once per process: a layer value is memoized by
+ * reference, so every service that requires it shares the one connection.
+ * `PROG_DB` is read when the layer is built.
+ */
+export const store = Layer.suspend(() => connectionAt(storePath()));

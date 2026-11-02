@@ -15,6 +15,7 @@ import { Fleet } from "./fleet.ts";
 import { HcFleet } from "./hc.ts";
 import { logging } from "./log.ts";
 import { Prog } from "./prog.ts";
+import { store } from "tasks";
 import { openCheckouts, projectSet } from "./projects.ts";
 import { Prompts } from "./prompt.ts";
 import { publishedOf, publishedQueue } from "./published.ts";
@@ -23,7 +24,7 @@ import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
 import { Repository } from "./repository.ts";
 import { telemetry } from "./telemetry.ts";
-import { Trials } from "./trials.ts";
+import { Runs } from "./run-record.ts";
 
 /**
  * Every service the dispatcher and the one-shot commands read.
@@ -39,6 +40,9 @@ import { Trials } from "./trials.ts";
  * is why a host provides it to the dispatcher alone and not to the whole
  * process. If DevTools is ever added it must come *before* the tracing layers,
  * or the tracer it patches is not the one foreman ends up using.
+ *
+ * `store` is the one connection to the task store: Prog, the registry in
+ * `Settings` and run recording all read it, and a layer value is built once.
  */
 export const services = Layer.provideMerge(
   Dispatcher.Default,
@@ -49,12 +53,12 @@ export const services = Layer.provideMerge(
     Prompts.Default,
     Quota.Default,
     Repository.Default,
-    Trials.Default,
+    Runs.Default,
     BunServices.layer,
     logging(),
     telemetry.pipe(Layer.provide(settings)),
   ),
-);
+).pipe(Layer.provide(store));
 
 /** What the store reads need: the task store, and the open spaces for the queue's projects. */
 export const storeServices = Layer.mergeAll(
@@ -63,7 +67,7 @@ export const storeServices = Layer.mergeAll(
   HcFleet,
   Repository.Default,
   BunServices.layer,
-);
+).pipe(Layer.provide(store));
 
 /**
  * The queue in the order the fleet would dispatch it, for one project or for

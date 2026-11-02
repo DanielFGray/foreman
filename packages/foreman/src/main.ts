@@ -2,6 +2,7 @@
 import { CliError, Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Console, Effect, FileSystem, Layer } from "effect";
+import { store } from "tasks";
 import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
@@ -90,7 +91,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
         yield* Console.log(`${reading.provider}  unreadable: ${reading.detail}`);
       }
     }
-  }).pipe(Effect.provide(Layer.mergeAll(Quota.Default, settings))),
+  }).pipe(Effect.provide(Layer.mergeAll(Quota.Default, settings).pipe(Layer.provide(store)))),
 ).pipe(
   Command.withDescription(
     "Report how much of each provider's allowance the ladder has left, and which rungs are stopped",
@@ -124,7 +125,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
 ).pipe(
   Command.withSubcommands([
     quotaCommand,
-    ladderCommand,
+    Command.provide(ladderCommand, store),
     statsCommand,
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),

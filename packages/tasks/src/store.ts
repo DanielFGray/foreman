@@ -9,7 +9,7 @@
  */
 import { Context, Effect, Layer, Option, Schedule, Schema as S } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
-import { connectionAt, storePath } from "./connection.ts";
+import { connectionAt } from "./connection.ts";
 import {
   epicStatus,
   type Item,
@@ -324,12 +324,12 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
     } as const;
   }),
 }) {
+  /** The store over a `SqlClient` the caller provides, so services share one connection. */
+  static readonly layerSql = Layer.effect(this, this.make);
+
   /** The store in one file, for tests and tools that work on a copy. */
   static readonly layerAt = (filename: string) =>
-    Layer.effect(this, this.make).pipe(Layer.provide(connectionAt(filename)));
-
-  /** The store at `PROG_DB`, else `~/.prog/prog.db`, read when the layer is built. */
-  static readonly layer = Layer.suspend(() => Tasks.layerAt(storePath()));
+    Tasks.layerSql.pipe(Layer.provide(connectionAt(filename)));
 }
 
 type SqlFragment = ReturnType<SqlClient.SqlClient["and"]>;

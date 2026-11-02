@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { Effect, Layer, Option, Schema as S } from "effect";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +26,9 @@ import {
 } from "./model-advice-run.ts";
 import { Quota, QuotaError, type Usage } from "./quota.ts";
 import { RegistryError } from "./registry.ts";
+import { seed } from "./scratch-store.ts";
+import { connectionAt } from "tasks";
+import { SqlClient } from "effect/sql";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -691,73 +693,33 @@ describe("medianOf", () => {
   });
 });
 
-/** Richer registry than e2e/registry.sql: pool, models_dev, tier, retired, trials. */
-const seedAdviceRegistry = (dir: string): string => {
+/** A scratch store seeded with richer registry rows than e2e/registry.sql: pool, models_dev, tier, retired, runs. */
+const seedAdviceRegistry = async (dir: string): Promise<string> => {
   const path = join(dir, "registry.db");
-  const db = new Database(path);
-  db.exec(`
-    CREATE TABLE pools(pool TEXT PRIMARY KEY);
-    INSERT INTO pools(pool) VALUES ('OpenAI'), ('OpenCode Go'), ('Cursor');
-    CREATE TABLE models(
-      model TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      pool TEXT NOT NULL,
-      harness TEXT NOT NULL,
-      models_dev TEXT,
-      tier TEXT NOT NULL,
-      limit_scope TEXT NOT NULL DEFAULT 'pool',
-      thinking TEXT NOT NULL DEFAULT 'medium',
-      retired INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE ladder(
-      rank INTEGER PRIMARY KEY,
-      rung TEXT NOT NULL UNIQUE,
-      model TEXT NOT NULL REFERENCES models(model),
-      enabled INTEGER NOT NULL DEFAULT 1,
-      provider TEXT,
-      unmetered INTEGER NOT NULL DEFAULT 0,
-      note TEXT
-    );
-    CREATE TABLE trials(
-      id INTEGER PRIMARY KEY,
-      closed_at TEXT NOT NULL DEFAULT (datetime('now')),
-      project TEXT NOT NULL,
-      task TEXT NOT NULL,
-      slice TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      pool TEXT NOT NULL,
-      model TEXT NOT NULL,
-      work TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'live',
-      input_tokens INTEGER,
-      cache_read_tokens INTEGER,
-      cache_write_tokens INTEGER,
-      output_tokens INTEGER,
-      size INTEGER
-    );
-    INSERT INTO models(model, provider, pool, harness, models_dev, tier) VALUES
-      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'metered'),
-      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'free'),
-      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'metered');
+  await seed(`
+    INSERT INTO pools(pool, harness, provider_default) VALUES
+      ('OpenAI', 'codex', 'openai'), ('OpenCode Go', 'opencode', 'opencode-go'), ('Cursor', 'cursor', 'cursor');
+    INSERT INTO models(model, provider, pool, harness, models_dev, tier, limit_scope) VALUES
+      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'metered', 'pool'),
+      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'free', 'pool'),
+      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'metered', 'pool');
     INSERT INTO ladder(rank, rung, model, provider, unmetered, enabled) VALUES
       (1, 'promo', 'opencode-go/ox-alpha-free', 'opencode-go', 1, 1),
       (2, 'codex-luna', 'gpt-6-luna', 'openai', 0, 1),
       (3, 'cursor-agent', 'auto', 'cursor', 0, 1);
-    INSERT INTO trials(project, task, slice, kind, pool, model, work, outcome,
-                       input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, size)
+    INSERT INTO runs(project, task, slice, kind, pool, model, work, outcome,
+                     input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, size)
     VALUES
       ('foreman', 't1', 's1', 'author', 'OpenAI', 'gpt-6-luna', 'build', 'committed',
        1000, 2000, 100, 50, 2),
       ('foreman', 't2', 's2', 'author', 'OpenAI', 'gpt-6-luna', 'build', 'committed',
        3000, 4000, 200, 100, 2),
       -- Partial measurement: input+output only, so per-part sample counts diverge.
-      ('foreman', 't2b', 's2b', 'author', 'OpenAI', 'gpt-6-luna', 'build', 'failed',
+      ('foreman', 't2b', 's2b', 'author', 'OpenAI', 'gpt-6-luna', 'build', 'dropped',
        5000, NULL, NULL, 80, 2),
       ('foreman', 't3', 's3', 'author', 'OpenAI', 'gpt-6-luna', 'build', 'committed',
        9000, 9000, 900, 900, 1);
-  `);
-  db.close();
+  `).pipe(Effect.provide(connectionAt(path)), Effect.runPromise);
   return path;
 };
 
@@ -803,9 +765,9 @@ const quotaLayerFor = (readings: ReadonlyMap<string, Usage>): Layer.Layer<Quota>
 describe("runSuggest I/O boundary", () => {
   test("spent pool does not exclude an unmetered sponsored rung; JSON decodes", async () => {
     const dir = scratchDir();
-    const registry = seedAdviceRegistry(dir);
+    const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    process.env["FOREMAN_REGISTRY"] = registry;
+    const storeLayer = connectionAt(registry);
 
     const room = (provider: string, used: number): Usage => ({
       provider,
@@ -840,7 +802,7 @@ describe("runSuggest I/O boundary", () => {
         cacheWriteTokens: Option.some(0),
         outputTokens: Option.some(50),
         size: Option.some(2),
-      }).pipe(Effect.provide(Layer.mergeAll(quotaLayerFor(spent), catalogLayer))),
+      }).pipe(Effect.provide(Layer.mergeAll(quotaLayerFor(spent), catalogLayer, storeLayer))),
     );
 
     const decoded = S.decodeUnknownSync(S.fromJsonString(AdviceJsonReport))(text);
@@ -867,9 +829,9 @@ describe("runSuggest I/O boundary", () => {
 
   test("partially measured trials report per-part sample counts, not one shared n", async () => {
     const dir = scratchDir();
-    const registry = seedAdviceRegistry(dir);
+    const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    process.env["FOREMAN_REGISTRY"] = registry;
+    const storeLayer = connectionAt(registry);
 
     const text = await Effect.runPromise(
       runSuggest({
@@ -932,6 +894,7 @@ describe("runSuggest I/O boundary", () => {
               ]),
             ),
             catalogLayer,
+            storeLayer,
           ),
         ),
       ),
@@ -950,21 +913,23 @@ describe("runSuggest I/O boundary", () => {
   test("missing ladder table yields a typed RegistryError, not an Effect defect", async () => {
     const dir = scratchDir();
     const path = join(dir, "broken.db");
-    const db = new Database(path);
-    db.exec("CREATE TABLE nonsense (x INTEGER)");
-    db.close();
+    const broken = Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DROP TABLE ladder`;
+      return yield* Effect.result(readCandidates);
+    }).pipe(Effect.provide(connectionAt(path)));
 
-    const result = await Effect.runPromise(Effect.result(readCandidates(path)));
+    const result = await Effect.runPromise(broken);
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") {
       expect(result.failure).toBeInstanceOf(RegistryError);
-      expect(result.failure.detail).toContain("querying registry");
+      expect(result.failure.detail).toContain("reading the ladder candidates");
     }
   });
 
   test("missing cache_read rate in catalog yields unknown price through runSuggest", async () => {
     const dir = scratchDir();
-    const registry = seedAdviceRegistry(dir);
+    const registry = await seedAdviceRegistry(dir);
     const catalogPath = join(dir, "api.json");
     writeFileSync(
       catalogPath,
@@ -979,7 +944,7 @@ describe("runSuggest I/O boundary", () => {
         },
       }),
     );
-    process.env["FOREMAN_REGISTRY"] = registry;
+    const storeLayer = connectionAt(registry);
 
     // Force recommendation onto codex-luna by disabling free promo via after floor past promo
     // and spending nothing on openai.
@@ -1030,6 +995,7 @@ describe("runSuggest I/O boundary", () => {
               ]),
             ),
             catalogLayer,
+            storeLayer,
           ),
         ),
       ),
