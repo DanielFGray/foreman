@@ -56,10 +56,10 @@ the operator's intention. The policy holds `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
-project's own `paused` and its own mode for any step, which replace the
-default for that project's tasks only. A paused project takes no step, grants
-included; slots stay fleet-wide, and an agent block's `slots` caps that block's
-running tasks inside them. `foreman policy` and the panel write it
+project's own `paused`, its own mode for any step, which replace the
+default for that project's tasks only. A paused project takes no step, grants included; slots stay
+fleet-wide, and an agent block's `slots` caps that block's running tasks inside
+them. `foreman policy` and the panel write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
@@ -126,7 +126,10 @@ under way. Two checkouts with one name are held as `ambiguous`, because a task
 names a project, not a directory. A project's verify command is its own
 `scripts/verify.sh`.
 
-### One worktree per task
+### One workspace per task
+
+The task's route says where it works (see "Workspace blocks" below): a worktree
+of its own in the standard pipeline, or the operator's checkout.
 
 `foreman/<task-id>` is the git branch. Each of the task's agents runs in an hc
 terminal labelled with the task (`fm.task`) and its role (`fm.role`), in
@@ -197,7 +200,8 @@ next author skips that account. The label clears when the task completes.
 
 ### The operator's checkout is shared, so it is asked about
 
-Every task ends by merging into the project's main checkout, the one the operator
+Every task with a branch ends by merging into the project's main checkout, and a
+direct task commits there from the start: the checkout is the one the operator
 edits in. `Repository.isFree` is the dispatch gate: a project it answers `Held`
 for is **held**, and `fill` passes over its tasks in both the review and the
 author pass. It is read every tick, so a project frees itself the moment the
@@ -234,14 +238,55 @@ check below comes first) and returns `Held`: the landing is not attempted, the
 verdict stays on the task, and a later tick lands it. No prompt is involved,
 because no agent merges.
 
-Agents stay out of that checkout entirely. `git` commands there refresh the
+In a worktree, agents stay out of that checkout entirely. `git` commands there refresh the
 index, which collides with a landing mid-merge and leaves `index.lock` behind;
 foreman's own reads set `GIT_OPTIONAL_LOCKS=0`, and an agent's cannot be made to.
 `Repository.base` resolves a branch's fork point so a reviewer can diff
-`<base>..HEAD` inside its own worktree. Onboarding is the one exception, and only
-ever on a project already held.
+`<base>..HEAD` inside its own worktree. A route with no worktree and onboarding
+are the exceptions, and in each the project is held for everything else while
+the agent is there.
 
-### Onboarding is the one agent inside the operator's checkout
+### Workspace blocks: where a task works
+
+The pipeline says where a task works, not the policy (`docs/workspace-blocks.md`).
+A `branch` block makes `foreman/<id>` from the trunk tip; a `worktree` block puts
+it in a directory of its own. `routeWorkspace` reads the shape off the task's
+route, and `workspaceFor` opens it: a worktree, the operator's checkout on the
+task's branch (branch only), or the operator's checkout on the operator's own
+branch (direct, no branch). Both blocks are walked through like gates, and git
+records whether they are passed, so tasks in flight place as before.
+
+- **Every route from a branch reaches a land or a park.** Validation refuses a
+  branch that reaches `done`, a worktree or land with no branch before it, and a
+  workspace block after an agent or a check: the workspace is set before the
+  first agent.
+- **The checkout holds one task at a time.** A task with no worktree, an author
+  run, and still in the pipeline occupies its checkout, derived each tick, and
+  shows as a `busy` hold that names it. It holds every other task in the
+  project, landings included. A dispatch the
+  planner sends into a free checkout takes it in the same pass, and needs a clean
+  tree (`Repository.dirty`), because git carries uncommitted edits into the
+  agent's commits. That dirty tree is not a held row: a row would hold
+  the project's worktree tasks too, which uncommitted work must not do.
+- **Branch only keeps the old branch-mode git code.** `Fleet.open` with the
+  checkout as the directory runs `Repository.checkoutBranch`, which sets the
+  branch it left as the upstream; `trunkOf` reads that upstream as the trunk while
+  the task branch is out; landing and teardown (`leaveBranch`) check the
+  operator's branch out again from a clean tree. The checkout is never removed.
+- **Direct has no undo, and completes at `done`.** The author commits onto the
+  operator's branch, so a rejection is fixed by new commits. Each direct author
+  run records the checkout's HEAD as its `base`; the reviewer reads from the first
+  one, the task's tip is the checkout's HEAD while it occupies it, and a tip past
+  the base is the author's commit. `done` completes the task and merges nothing.
+- **`land` has `how`.** `merge` (the default) makes a merge commit;
+  `fast-forward` lands only a commit that descends from the trunk tip, and a
+  trunk that moved returns the task like a conflict. Foreman never rebases: a
+  rebase makes a commit the reviewer did not read.
+- **A pipelines file with no `version` predates the blocks.** It reads with
+  branch → worktree after each source, which is how it ran, and the next write
+  stores the versioned form.
+
+### Onboarding salvages the operator's checkout
 
 A held project is unheld by salvaging what is in it. `Dispatcher.onboard` files a
 task in that project, calls `Fleet.attach` for a worker on the checkout
@@ -475,8 +520,10 @@ Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is
 most likely to have stubbed. An approving reviewer is the only thing that makes
-a branch landable, and landing is the only code path that writes to the
-operator's checkout, so no prompt gives an agent merge rights.
+a branch landable, and landing is the only code path that moves the
+operator's branch for a task with a branch, so no prompt gives an agent merge
+rights. A direct route is the operator's choice to let the author commit there,
+and its `done` still waits for an approval.
 
 The author critiques its own diff before handing off, reading `git diff` rather
 than recalling its intent, because the intent is what wrote any mistake in there.
@@ -628,17 +675,22 @@ moment its task is closed, reclaimed or deleted — while the commits stay. So
 off one read per project:
 
 - **`merged`** — `HEAD` already contains the tip, so the ref is free to delete.
-- **`empty`** — the tip is still on `rev-list --first-parent HEAD`, so nothing
-  was ever committed on this branch.
+- **`empty`** — the tip is still on `rev-list --first-parent HEAD`, and the
+  branch's reflog says it was created at that tip, so nothing was ever
+  committed on this branch.
 - Neither — the branch holds work the checkout has not taken.
 
 **`merged` cannot stand in for `empty`.** An author run proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run
 `tasks review` having committed nothing. Asking only "is this branch unmerged" and
 reading "no" as "nothing was committed" hands finished, merged work back to the
-queue as empty. `--no-ff` is what makes the honest question cheap: every landing
-is a merge commit, so the first-parent line is exactly the set of commits the
-checkout held before any branch touched it.
+queue as empty. A merge landing keeps the first-parent line to the commits the
+checkout held before any branch touched it, but a fast-forward landing puts the
+branch's own commits on it. So `createdAt` reads the oldest reflog entry of the
+branch: a tip on the line that moved since the branch was created holds work. A
+branch whose reflog is gone reads as work: an unknown creation is no evidence
+that nothing was committed, and a reviewer reading an empty diff costs less than
+finished work handed back as empty.
 
 The sweep is not a step inside landing. Every tick, in every project, the
 dispatcher deletes refs that are `merged` **and** whose task no longer appears in

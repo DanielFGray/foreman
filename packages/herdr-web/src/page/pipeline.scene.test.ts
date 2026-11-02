@@ -56,7 +56,7 @@ test("the standard pipeline draws as one belt with the retry branch", () => {
     ...opened,
     expectAll(all.selector(".pipeline-station")).toHaveCount(STANDARD_PIPELINE.nodes.length),
     // The router's two routes and its else are three wires, each labelled; the other blocks have one.
-    expectAll(all.selector(".pipeline-track")).toHaveCount(10),
+    expectAll(all.selector(".pipeline-track")).toHaveCount(12),
     expect(selector(".pipeline-wire-label[title='failed']")).toExist(),
     expect(selector(".pipeline-wire-label[title='else']")).toExist(),
     // The retry gate stands on a row of its own, below the main belt.
@@ -102,8 +102,8 @@ test("the changes panel lists the unsaved edits, and a revert empties it", () =>
     expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
     expect(role("button", { name: "Revert to saved" })).toBeDisabled(),
     click(role("button", { name: "land land" })),
-    click(role("button", { name: "Make it a park" })),
-    expect(selector(".pipeline-changes li")).toHaveText("made land a park"),
+    click(role("button", { name: "Make it a done" })),
+    expect(selector(".pipeline-changes li")).toHaveText("made land a done"),
     click(role("button", { name: "Revert to saved" })),
     expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
   )
@@ -251,5 +251,19 @@ test("a stopped project shows its problems at the top, and the editor still open
     Command.resolve(LoadForemanPipeline, Message.ReceivedPipeline({ project: "app", drawn: false, pipeline: STANDARD_PIPELINE })),
     expect(selector(".pipeline .pipeline-stopped")).toContainText("is stopped, so no task takes a step"),
     expectAll(all.selector(".pipeline-station")).toHaveCount(STANDARD_PIPELINE.nodes.length),
+  )
+})
+
+test("the block palette offers the workspace blocks, and a land's inspector sets how it lands", () => {
+  scene(
+    { update, view },
+    ...opened,
+    expect(role("button", { name: "⎇ branch" })).toExist(),
+    expect(role("button", { name: "▤ worktree" })).toExist(),
+    click(role("button", { name: "land land" })),
+    expect(role("combobox", { name: "how" })).toExist(),
+    expect(selector(".pipeline-inspector option[value='merge']")).toHaveAttr("selected", "true"),
+    expect(selector(".pipeline-inspector option[value='fast-forward']")).toExist(),
+    expect(role("button", { name: "Make it a done" })).toExist(),
   )
 })

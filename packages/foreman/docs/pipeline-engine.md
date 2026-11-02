@@ -51,8 +51,8 @@ applied to the graph. A wire from "rejected" to a chosen block would be a
 pointer to what runs next. A router at the entry that reads `failed-by` reaches
 the same block from evidence, and stays correct when the graph is edited.
 
-So the graph is acyclic, and every path from a source ends at a land block or a
-park.
+So the graph is acyclic, and every path from a source ends at a land, a done or
+a park.
 
 ## Blocks
 
@@ -61,13 +61,16 @@ park.
 | source | `filter` | `next` | Ready tasks in queue order that match the filter. A task enters the first source that matches. |
 | router | `routes: [{when, to}]`, `else` | per route | Instant. The first route whose filter matches. |
 | gate | `step` | `next` | Holds the task before the next work block until the policy permits `step` for it. `ask` lists it for approval. |
+| branch | — | `next` | Instant. Makes `foreman/<id>` from the trunk tip when the first agent is dispatched. git records it as passed. |
+| worktree | — | `next` | Instant. Puts the task's branch in a directory of its own. Without one, agents work in the operator's checkout. See `docs/workspace-blocks.md`. |
 | agent | `role`, `model`, `slots?` | `next` | A work block. Dispatches an agent and waits for its run to end. |
-| land | — | (ends) | A work block. Today's `land`. Landing completes the task. |
+| land | `how?`: `merge` (default) or `fast-forward` | (ends) | A work block. Lands the approved commit, which completes the task. |
+| done | — | (ends) | A work block. Completes a task that has no branch: its commits are already on the operator's branch. |
 | park | — | (ends) | Parks the task for the operator (`needs-you`). |
 | check | `command` | `next` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
 
-A **work block** is one that runs something and takes time: agent, check, land.
-Sources, routers and gates decide at once.
+A **work block** is one that runs something and takes time: agent, check, land,
+done. Sources, routers, gates, branches and worktrees decide at once.
 
 ### How each work block ends a run
 
@@ -76,6 +79,7 @@ Sources, routers and gates decide at once.
 | author agent | the author hands off committed work (status `reviewing`) | it stops unfinished or hands back an empty branch (`unfinished`: an attempt, and `failed-by` once the rung is spent) |
 | review agent | the reviewer's verdict is `approved` and the branch tip is still the commit it read | the reviewer sends it back (`climb`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
+| done | the approval holds for the checkout's HEAD (the task is done) | — |
 | check | `command` exits 0 on the branch tip, or fails at the commit the branch was cut from as well | `command` fails twice on the tip and passes where the branch was cut (`climb`, with the output in the task's log) |
 
 A reviewer that stops without a verdict while a rung is left, a usage wall, a
@@ -196,12 +200,15 @@ running a flow the operator did not draw is worse than stopping.
 - At least one source. Every wire ends at a block. Every block is reachable from
   a source.
 - No cycle.
-- Every path ends at a land or a park.
-- **Every path to a land passes a review agent after its last author.** With
-  the reviewers taken out of the graph, no land is reachable from a source or
-  an author.
+- Every path ends at a land, a done or a park.
+- **Every path to a land or a done passes a review agent after its last
+  author.** With the reviewers taken out of the graph, no land or done is
+  reachable from a source or an author.
+- A path from a branch ends at a land or a park, never a done: work on a
+  branch must land. A worktree or a land needs a branch before it on every path,
+  and no branch or worktree stands after an agent or a check.
 - Every agent has a gate on each path into it, and so does every check and
-  every land. With the gates taken out, and the walk halted at each work
+  every land and done. With the gates taken out, and the walk halted at each work
   block, no work block is reachable from a source or from the work block
   before it. A step that spends without a policy step would be one the
   operator cannot stop.

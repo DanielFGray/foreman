@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Option, Schema as S } from "effect";
-import { Pipeline, problemsOf, STANDARD_PIPELINE } from "./pipeline.ts";
-import { configDirectory, rewrite } from "./shared-file.ts";
+import { Pipeline, type PipelineNode, problemsOf, STANDARD_PIPELINE } from "./pipeline.ts";
+import { configDirectory, type Read, rewrite } from "./shared-file.ts";
 
 /**
  * The pipelines the operator drew, one per project, in a file of their own
@@ -12,6 +12,15 @@ import { configDirectory, rewrite } from "./shared-file.ts";
  */
 export const Pipelines = S.Record(S.String, Pipeline);
 export type Pipelines = typeof Pipelines.Type;
+
+/**
+ * The file as written: the pipelines under the format's version. A file
+ * without a version predates the workspace blocks, and reads through
+ * `withWorkspace`; the next write stores it in this form, so a pipeline the
+ * operator then draws with no worktree is never given one again.
+ */
+const PipelinesFile = S.Struct({ version: S.Literal(2), pipelines: Pipelines });
+type PipelinesFile = typeof PipelinesFile.Type;
 
 /** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
 export const pipelinesPath = (): string =>
@@ -25,25 +34,76 @@ export const pipelinesPath = (): string =>
  * decides what an unreadable drawing stops.
  */
 export const readPipelines = (path: string) =>
+  readFile(path).pipe(
+    Effect.map((read): Read<Pipelines> => ({ ...read, value: read.value.pipelines })),
+  );
+
+/** Rewrites the pipelines through `change`, the one way anything writes them. */
+export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
+  rewrite(path, PipelinesFile, readFile, (file) => ({
+    version: 2 as const,
+    pipelines: change(file.pipelines),
+  }));
+
+/**
+ * A pipeline drawn before the workspace blocks, as it ran then: every task
+ * had a branch and a worktree of its own, so each source leads into a branch
+ * block and a worktree block before whatever it led into.
+ */
+export const withWorkspace = (pipeline: Pipeline): Pipeline => {
+  const taken = new Set(pipeline.nodes.map((node) => node.id));
+  const fresh = (base: string) => {
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+    taken.add(id);
+    return id;
+  };
+  return {
+    ...pipeline,
+    nodes: pipeline.nodes.flatMap((node): ReadonlyArray<PipelineNode> => {
+      if (node.kind !== "source") return [node];
+      const branch = fresh("branch");
+      const worktree = fresh("worktree");
+      return [
+        { ...node, next: branch },
+        { kind: "branch", id: branch, next: worktree },
+        { kind: "worktree", id: worktree, next: node.next },
+      ];
+    }),
+  };
+};
+
+const NONE: PipelinesFile = { version: 2, pipelines: {} };
+
+/** The file as stored, with a file from before the version read as it ran then. */
+const readFile = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(path).pipe(Effect.option);
-    if (Option.isNone(text)) return { value: {}, error: undefined, text: undefined };
-    return yield* S.decodeEffect(S.fromJsonString(Pipelines))(text.value).pipe(
-      Effect.map((value) => ({ value, error: undefined, text: text.value })),
+    if (Option.isNone(text)) return { value: NONE, error: undefined, text: undefined };
+    // A file that is neither form reports why it is not the current one.
+    return yield* S.decodeEffect(S.fromJsonString(PipelinesFile))(text.value).pipe(
+      Effect.catch((current) =>
+        S.decodeEffect(S.fromJsonString(Pipelines))(text.value).pipe(
+          Effect.map((old): PipelinesFile => ({
+            version: 2,
+            pipelines: Object.fromEntries(
+              Object.entries(old).map(([project, pipeline]) => [project, withWorkspace(pipeline)]),
+            ),
+          })),
+          Effect.mapError(() => current),
+        ),
+      ),
+      Effect.map((value): Read<PipelinesFile> => ({ value, error: undefined, text: text.value })),
       Effect.catch((error) =>
-        Effect.succeed({
-          value: {},
+        Effect.succeed<Read<PipelinesFile>>({
+          value: NONE,
           error: `${path} does not decode: ${error.message}`,
           text: text.value,
         }),
       ),
     );
   });
-
-/** Rewrites the pipelines through `change`, the one way anything writes them. */
-export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
-  rewrite(path, Pipelines, readPipelines, change);
 
 /** The pipeline `project` runs, and whether the operator drew it. */
 export const pipelineFor = (

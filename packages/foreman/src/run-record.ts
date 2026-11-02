@@ -48,6 +48,8 @@ export const newRunFor = (input: {
   readonly node: string;
   /** A review run records the branch tip it reads. */
   readonly commit?: string | undefined;
+  /** An author on the operator's own branch records the commit it starts from. */
+  readonly base?: string | undefined;
 }): NewRun => ({
   project: input.task.project,
   task: input.task.id,
@@ -63,6 +65,7 @@ export const newRunFor = (input: {
   node: input.node,
   work: input.role === "review" ? "review" : isResearch(input.task) ? "research" : "build",
   commit: input.commit,
+  base: input.base,
   // `||`, not `??`: the table starts sizes at 1, so a `size:0` label reads as none.
   size: countOf(input.task, SIZE) || undefined,
   evidence: input.branch,

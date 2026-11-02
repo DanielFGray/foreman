@@ -388,6 +388,7 @@ describe("the policy gate on dispatch", () => {
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: STANDARD_PIPELINES,
     placed: [],
+    dirty: new Set<string>(),
     ...overrides,
   });
 
@@ -793,6 +794,7 @@ describe("the quota gate", () => {
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: STANDARD_PIPELINES,
     placed: [],
+    dirty: new Set<string>(),
     ...overrides,
   });
 

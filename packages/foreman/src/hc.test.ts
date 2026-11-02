@@ -115,7 +115,11 @@ describe("placementOf", () => {
 });
 
 describe("resolveOpen", () => {
-  const options = { branch: "foreman/ts-1", directory: "/state/proj/ts-1" };
+  const options = {
+    branch: "foreman/ts-1",
+    directory: "/state/proj/ts-1",
+    repository: "/build/proj",
+  };
   const worktree = (path: string, branch: string | undefined, prunable = false) => ({
     path,
     branch,
@@ -140,6 +144,19 @@ describe("resolveOpen", () => {
     expect(resolveOpen([worktree("/state/proj/ts-1", "foreman/ts-1", true)], options)).toEqual({
       kind: "create",
       path: "/state/proj/ts-1",
+    });
+  });
+
+  test("switches the checkout itself onto the branch when the workspace is the repository", () => {
+    const inCheckout = { ...options, directory: "/build/proj" };
+    expect(resolveOpen([worktree("/build/proj", "trunk")], inCheckout)).toEqual({
+      kind: "switch",
+      path: "/build/proj",
+    });
+    // Once the checkout has the branch out, a later open adopts it.
+    expect(resolveOpen([worktree("/build/proj", "foreman/ts-1")], inCheckout)).toEqual({
+      kind: "adopt",
+      path: "/build/proj",
     });
   });
 });

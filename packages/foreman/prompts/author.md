@@ -6,12 +6,13 @@ or log the open decision and stop.
 Task: {{ task }} — {{ title }}
 Project: {{ project }}
 Working directory: {{ worktree }}
-Branch: {{ branch }}
-Repository checkout: {{ repository }}
+{% if (workspace === "none") { %}Branch: the operator's own branch, from commit {{ base }}
+{% } else { %}Branch: {{ branch }}
+{% } %}Repository checkout: {{ repository }}
 
 ## Start
 
-1. `git status` and `git log {{ branch }}`: an earlier author may have left work here.
+1. `git status` and {% if (workspace === "none") { %}`git log {{ base }}..HEAD`{% } else { %}`git log {{ branch }}`{% } %}: an earlier author may have left work here.
 2. `tasks show {{ task }}`, then `prog context` for its concepts, then the project's
    AGENTS.md or CLAUDE.md.
 3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
@@ -21,9 +22,23 @@ Repository checkout: {{ repository }}
 
 ## Rules
 
+{% if (workspace === "none") { %}
+- Work only in {{ worktree }}, on the branch it has out. This is the operator's own
+  checkout and branch, and no other agent or landing runs here until this task ends.
+  Commit here; foreman lands nothing, because your commits are already on the
+  operator's branch. Never switch branches, and never stash, reset or clean: a
+  returned review is fixed by new commits, not by undoing old ones.
+{% } else if (workspace === "branch") { %}
+- Work only in {{ worktree }}, on {{ branch }}. This is the operator's own checkout,
+  put on your branch for this task; no other agent or landing runs here until it
+  lands. Never switch branches, and never stash, reset or clean: foreman checks the
+  operator's branch out again when it lands, from a clean tree. To see trunk, use
+  `git log @{upstream}` and `git diff @{upstream}...HEAD`.
+{% } else { %}
 - Work only in {{ worktree }}, on {{ branch }}. Never enter {{ repository }} or switch
   branches, and do not read another task's worktree. To see trunk, find its commit with
   `git worktree list --porcelain` and use `git show` or `git diff` from here.
+{% } %}
 - If you repair this worktree by hand, add the step to `scripts/worktree-setup.sh`
   and commit it. Foreman runs that script before every dispatch, so each step must be
   safe to run twice.
@@ -43,15 +58,16 @@ Repository checkout: {{ repository }}
 
 1. Run the full verification: definition of done, tests, linter, build. Update what
    your change made stale.
-2. Read `git diff HEAD...{{ branch }}` once as a stranger's diff: walk the definition
+2. Read {% if (workspace === "none") { %}`git diff {{ base }} HEAD`{% } else { %}`git diff HEAD...{{ branch }}`{% } %} once as a stranger's diff: walk the definition
    of done and point at the code for each part. Fix what you find.
 3. `tasks review {{ task }}`, then stop. A reviewer may send you one mechanical defect:
-   fix exactly that, commit, stop again. Foreman merges; do not merge and do not mark
-   the task done.
+   fix exactly that, commit, stop again. {% if (workspace === "none") { %}Foreman completes the task after an approval;
+   do not mark it done.{% } else { %}Foreman merges; do not merge and do not mark
+   the task done.{% } %}
 {% if (labels.includes("research")) { %}
 This task is labelled `research`: the deliverable is a report, not code. Write it
 to `tasks log {{ task }}` with the commands you ran and what they showed, so a
-reviewer can check every claim. Then `tasks review {{ task }}`; the branch stays empty.
+reviewer can check every claim. Then `tasks review {{ task }}`, with no commits of your own.{% if (workspace !== "none") { %} The branch stays empty.{% } %}
 {% } %}
 If trunk already does everything the task asks, prove it part by part in
 `tasks log {{ task }}` (code, tests, commits), then `tasks verdict {{ task }} satisfied`,

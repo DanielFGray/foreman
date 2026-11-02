@@ -5,7 +5,7 @@
 // the panels of pipelinePanels.ts float over the drawing and take none of its width.
 import { Array, Option, String as Str } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import type { PipelineNode } from "foreman/pipeline"
+import { LANDINGS, type PipelineNode } from "foreman/pipeline"
 import { type Belt, beltOf, type Cell, rejoin, type Wire } from "foreman/pipeline-belt"
 import { besideOf, labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
 import { FOREMAN_STEPS, type ForemanPlacement } from "../shared/Foreman.ts"
@@ -256,8 +256,8 @@ const inspectorView = (node: PipelineNode, belt: Belt, editing: Editing, [left, 
       ),
       h.div(
         [h.Class("pipeline-actions")],
-        node.kind === "land" || node.kind === "park"
-          ? [h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "SwapEnd", id: node.id }))], [node.kind === "land" ? "Make it a park" : "Make it a land"])]
+        node.kind === "land" || node.kind === "done" || node.kind === "park"
+          ? [h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "SwapEnd", id: node.id }))], [NEXT_END[node.kind]])]
           : [h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "Remove", id: node.id }))], ["Remove block"])],
       ),
     ],
@@ -320,10 +320,23 @@ const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArra
     case "check":
       return [field("Command", textInput("command", node.command, (command) => edit({ _tag: "Configure", id: node.id, setting: { command } }), h), h)]
     case "land":
+      return [
+        field(
+          "How",
+          selectInput("how", LANDINGS, node.how ?? "merge", (how) => edit({ _tag: "Configure", id: node.id, setting: { how: Option.getOrElse(Array.findFirst(LANDINGS, (landing) => landing === how), () => "merge" as const) } }), h),
+          h,
+        ),
+      ]
+    case "branch":
+    case "worktree":
+    case "done":
     case "park":
       return []
   }
 }
+
+/** What `swapEnd` turns each end into, as its button says. */
+const NEXT_END = { land: "Make it a done", done: "Make it a park", park: "Make it a land" } as const
 
 /** A slots field holds a whole number above zero, or nothing for no cap; anything else is no cap too. */
 const slotsOf = (text: string): number | undefined => {

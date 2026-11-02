@@ -6,7 +6,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect
 const ours = "foreman/";
 
 /** Why a checkout is not free to work against. */
-export type HoldReason = "dirty" | "noBranch" | "unreadable" | "ambiguous";
+export type HoldReason = "dirty" | "noBranch" | "busy" | "unreadable" | "ambiguous";
 
 /**
  * Whether a checkout is free to work against, and if not, why.
@@ -17,7 +17,16 @@ export type HoldReason = "dirty" | "noBranch" | "unreadable" | "ambiguous";
  */
 export type Hold =
   | { readonly _tag: "Clean" }
-  | { readonly _tag: "Held"; readonly reason: HoldReason; readonly detail: string };
+  | {
+      readonly _tag: "Held";
+      readonly reason: HoldReason;
+      readonly detail: string;
+      /**
+       * For a `busy` hold, the task branch the checkout has out. The hold is
+       * that task's own workspace, so it holds every task but that one.
+       */
+      readonly branch?: string;
+    };
 
 /** A checkout with no branch for a landing to move, so there is no branch to land on. */
 const DETACHED = "no checked-out branch (detached HEAD)";
@@ -130,6 +139,19 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         Effect.map((text) => text.split("\n").filter((line) => line.trim() !== "")),
       );
 
+    /**
+     * The commit `branch` was created at: the oldest entry of its reflog, or
+     * undefined when git kept none.
+     */
+    const createdAt = (directory: string, branch: string) =>
+      git(directory, "reflog", "show", "--format=%H", `refs/heads/${branch}`, "--").pipe(
+        Effect.map((result) =>
+          result.exitCode === 0
+            ? result.stdout.trim().split("\n").filter(Boolean).at(-1)
+            : undefined,
+        ),
+      );
+
     const status = (directory: string, untracked: "no" | "all") =>
       gitOutput(directory, "status", "--porcelain", `--untracked-files=${untracked}`);
 
@@ -171,8 +193,34 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         }),
       );
 
-    const contains = (directory: string, branch: string) =>
-      git(directory, "merge-base", "--is-ancestor", branch, "HEAD").pipe(
+    /** The short name of the branch HEAD names, or undefined for a detached HEAD. */
+    const headBranch = (directory: string) =>
+      git(directory, "symbolic-ref", "--quiet", "--short", "HEAD").pipe(
+        Effect.map((head) => (head.exitCode === 0 ? head.stdout.trim() : undefined)),
+      );
+
+    /**
+     * The revision a checkout's work lands on: HEAD, unless the checkout has a
+     * task's branch out.
+     *
+     * A project in branch mode checks `foreman/<id>` out in the operator's
+     * checkout, so for that whole run HEAD is the task's own work. Read as the
+     * trunk, it makes the task's branch read as merged and empty and gives its
+     * reviewer an empty diff. The branch it lands on is the task branch's
+     * upstream, which `checkoutBranch` set, so git records it and foreman
+     * remembers nothing. A task branch with no upstream fails here: the
+     * checkout was put on it by hand, and foreman cannot say where it lands.
+     */
+    const trunkOf = (directory: string) =>
+      Effect.gen(function* () {
+        const head = yield* headBranch(directory);
+        if (head === undefined || !head.startsWith(ours)) return "HEAD";
+        return yield* gitOutput(directory, "rev-parse", "--abbrev-ref", `${head}@{upstream}`);
+      });
+
+    /** Whether `descendant` (HEAD when absent) already has `ancestor`. */
+    const contains = (directory: string, ancestor: string, descendant = "HEAD") =>
+      git(directory, "merge-base", "--is-ancestor", ancestor, descendant).pipe(
         Effect.flatMap((result) =>
           result.exitCode === 0 || result.exitCode === 1
             ? Effect.succeed(result.exitCode === 0)
@@ -342,12 +390,26 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       verify: string | undefined,
       base: string,
       message: string,
+      how: How,
     ): Effect.Effect<Proof, RepositoryError> =>
       Effect.gen(function* () {
         const ready = yield* gitGround(proving, directory, base);
         if (ready) return ready;
 
-        const merged = yield* git(proving, "merge", "--no-ff", "-m", message, branch);
+        // A fast-forward lands the approved commit itself, so it needs the
+        // trunk tip below it. A trunk that moved after the branch was cut is
+        // the same finding as a conflict: the branch must take the trunk in
+        // first. Foreman never rebases, because a rebase makes a commit the
+        // reviewer did not read.
+        if (how === "fast-forward" && !(yield* contains(proving, base, branch))) {
+          return {
+            _tag: "Rejected",
+            detail: `the trunk moved after the branch was cut, so ${branch} does not fast-forward onto ${base}`,
+          } as const;
+        }
+        const merged = yield* how === "fast-forward"
+          ? git(proving, "merge", "--ff-only", branch)
+          : git(proving, "merge", "--no-ff", "-m", message, branch);
         if (merged.exitCode !== 0) {
           // A conflict is asked about rather than inferred. git reports a lock
           // it could not take through the same non-zero codes as content it
@@ -420,14 +482,18 @@ export class Repository extends Context.Service<Repository>()("Repository", {
     /**
      * Runs a check block's command on `commit` in the proving ground, so it
      * judges exactly that commit and writes to no tree a person or an agent
-     * uses. Its baseline is the commit the branch was cut from: where `commit`
-     * and the checkout's HEAD last met.
+     * uses. Its baseline is `base`, the commit the work started from.
      */
-    const gitCheck = (proving: string, directory: string, commit: string, command: string) =>
+    const gitCheck = (
+      proving: string,
+      directory: string,
+      commit: string,
+      base: string,
+      command: string,
+    ) =>
       Effect.gen(function* () {
         const ready = yield* gitGround(proving, directory, commit);
         if (ready) return ready;
-        const base = yield* gitOutput(directory, "merge-base", "HEAD", commit);
         return yield* judge(proving, command, gitGround(proving, directory, base));
       });
 
@@ -448,6 +514,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         verify: string | undefined,
         proving: string,
         message: string,
+        how: How,
       ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           // Asked before the proof, which costs a run of the project's suite:
@@ -458,7 +525,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
           const base = yield* gitOutput(directory, "rev-parse", "HEAD");
 
-          const proof = yield* gitProve(proving, directory, branch, verify, base, message);
+          const proof = yield* gitProve(proving, directory, branch, verify, base, message, how);
           if (proof._tag !== "Proven") return proof;
 
           // The proof took as long as the project's suite takes, and the
@@ -507,18 +574,77 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * edits stop exactly the branches that change the same files, and `merge`
      * finds those per branch. `detail` names the cause, so the operator can see
      * whether the hold clears itself or needs a hand-run command.
+     *
+     * A checkout with a task's branch out is `busy`: that task works in the
+     * checkout itself (branch mode), so no other agent starts there and no
+     * other landing moves it, until its own landing checks the operator's
+     * branch out again.
      */
     const isFree = (directory: string): Effect.Effect<Hold, RepositoryError> =>
-      git(directory, "symbolic-ref", "--quiet", "HEAD").pipe(
-        Effect.map((head) =>
-          head.exitCode === 0
-            ? ({ _tag: "Clean" } as const)
-            : ({ _tag: "Held", reason: "noBranch", detail: DETACHED } as const),
-        ),
-      );
+      Effect.gen(function* () {
+        const head = yield* headBranch(directory);
+        if (head === undefined) return { _tag: "Held", reason: "noBranch", detail: DETACHED };
+        if (head.startsWith(ours)) {
+          return {
+            _tag: "Held",
+            reason: "busy",
+            branch: head,
+            detail: `${head} is checked out here; other work waits until its task lands or ends`,
+          };
+        }
+        return { _tag: "Clean" };
+      });
+
+    /**
+     * Whether a directory's tree is the task's: a linked worktree foreman made
+     * for it, or the operator's checkout while it has the task's branch out.
+     *
+     * The operator's checkout is the task's only while it is on the task's
+     * branch. Landing switches it back before it proves anything, and an
+     * operator can switch by hand, and after either the edits there are the
+     * operator's. Reading them as the agent's work would commit them.
+     */
+    const ownsTree = (directory: string, branch: string) =>
+      Effect.gen(function* () {
+        if ((yield* headBranch(directory)) === branch) return true;
+        const [own, common] = yield* Effect.all([
+          gitOutput(directory, "rev-parse", "--path-format=absolute", "--git-dir"),
+          gitOutput(directory, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        ]);
+        return own !== common;
+      });
+
+    /**
+     * Checks the operator's branch out again in a checkout that has `branch`
+     * out, and says what it found. A checkout on any other branch, or a linked
+     * worktree, is left as it is.
+     *
+     * `dirty` leaves it on the task's branch: git would carry the leftover
+     * edits onto the operator's branch.
+     */
+    const leaveBranch = (directory: string, branch: string) =>
+      Effect.gen(function* () {
+        if ((yield* headBranch(directory)) !== branch) return "elsewhere" as const;
+        if ((yield* status(directory, "all")) !== "") return "dirty" as const;
+        yield* gitOutput(directory, "checkout", "--quiet", yield* trunkOf(directory));
+        return "left" as const;
+      });
 
     return {
       isFree,
+      leaveBranch,
+
+      /**
+       * Whether the checkout has uncommitted changes, untracked files included.
+       * A task starts in the operator's checkout only from a clean tree: git
+       * carries edits across a branch switch, and an agent on the operator's
+       * branch would commit them as its own.
+       */
+      dirty: (directory: string) =>
+        status(directory, "all").pipe(Effect.map((text) => text !== "")),
+
+      /** The commit HEAD names: the operator's branch tip, where a direct task works. */
+      head: (directory: string) => gitOutput(directory, "rev-parse", "HEAD"),
 
       /**
        * The commit a branch points at, or nothing when the branch does not
@@ -543,8 +669,11 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Always git: `addWorktree` makes these with `git worktree add`, so a worktree is
        * git's whatever the project checkout it came from is.
        */
-      holdsWork: (directory: string) =>
-        status(directory, "all").pipe(Effect.map((changes) => changes !== "")),
+      holdsWork: (directory: string, branch: string) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsTree(directory, branch))) return false;
+          return (yield* status(directory, "all")) !== "";
+        }),
 
       /**
        * Commits everything a stopped agent left in its worktree onto the branch
@@ -552,11 +681,17 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * starts from it. Called only in a worktree foreman made: an attached
        * checkout is the operator's, and is never committed to.
        */
-      commitWork: (directory: string, message: string) =>
-        git(directory, "add", "--all").pipe(
-          Effect.andThen(git(directory, "commit", "--quiet", "-m", message)),
-          Effect.asVoid,
-        ),
+      commitWork: (directory: string, branch: string, message: string) =>
+        Effect.gen(function* () {
+          if (!(yield* ownsTree(directory, branch))) {
+            return yield* new RepositoryError({
+              directory,
+              detail: `not committing: the checkout is not on ${branch}`,
+            });
+          }
+          yield* git(directory, "add", "--all");
+          yield* git(directory, "commit", "--quiet", "-m", message);
+        }).pipe(Effect.asVoid),
 
       /**
        * The commit a task's branch was cut from, so a reviewer can read the
@@ -577,7 +712,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Always git: worktrees are git's whatever records the project.
        */
       base: (directory: string, branch: string) =>
-        gitOutput(directory, "merge-base", "HEAD", branch).pipe(
+        trunkOf(directory).pipe(
+          Effect.flatMap((trunk) => gitOutput(directory, "merge-base", trunk, branch)),
           Effect.map((sha) => (sha === "" ? undefined : sha)),
           Effect.orElseSucceed(() => undefined),
         ),
@@ -597,9 +733,10 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * from `HEAD`, so "not unmerged" says nothing about whether an author
        * wrote anything. What separates them is where the tip sits: an untouched
        * branch still points at the trunk commit it was cut from, while a merged
-       * branch's tip arrives through a merge commit's second parent. Foreman
-       * merges without fast-forwarding either way, so the first-parent line is
-       * exactly the set of commits the checkout had before any branch landed.
+       * branch's tip arrives through a merge commit's second parent. A
+       * fast-forward landing puts the branch's own commits on the first-parent
+       * line, so a tip on that line is empty only when the branch's reflog
+       * says it was created there.
        *
        * `stale` is the third: whether a branch the checkout has not taken
        * would still merge into the current tip. Every author cuts from the
@@ -612,6 +749,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        */
       branches: (directory: string) =>
         Effect.gen(function* () {
+          const onto = yield* trunkOf(directory);
           const refs = yield* lines(
             directory,
             "for-each-ref",
@@ -622,12 +760,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             yield* lines(
               directory,
               "for-each-ref",
-              "--merged=HEAD",
+              `--merged=${onto}`,
               "--format=%(refname:short)",
               `refs/heads/${ours}`,
             ),
           );
-          const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", "HEAD"));
+          const trunk = new Set(yield* lines(directory, "rev-list", "--first-parent", onto));
 
           const overtaken = yield* Effect.forEach(
             refs.flatMap((ref) => {
@@ -635,7 +773,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               return tip && branch && !merged.has(branch) && !trunk.has(tip) ? [branch] : [];
             }),
             (branch) =>
-              git(directory, "merge-tree", "--write-tree", "HEAD", branch).pipe(
+              git(directory, "merge-tree", "--write-tree", onto, branch).pipe(
                 // 0 is a clean merge and 1 is conflicts; anything else means
                 // merge-tree could not answer, which is not evidence the branch
                 // would merge — but it is not a conflict either, so it reads as
@@ -651,6 +789,24 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           );
           const staleByBranch = new Map(overtaken);
 
+          // A tip on the first-parent line is a branch nobody committed to, or
+          // one that landed by fast-forward. The commit git created the branch
+          // at tells them apart: an untouched branch still points at it. A
+          // branch whose reflog is gone has no such answer, and an unknown
+          // creation is not evidence that nothing was committed.
+          const untouched = new Set(
+            yield* Effect.forEach(
+              refs.flatMap((ref) => {
+                const [tip, branch] = ref.split(" ");
+                return tip && branch && trunk.has(tip) ? [[tip, branch] as const] : [];
+              }),
+              ([tip, branch]) =>
+                createdAt(directory, branch).pipe(
+                  Effect.map((created) => (created === tip ? [branch] : [])),
+                ),
+            ).pipe(Effect.map((found) => found.flat())),
+          );
+
           return refs.flatMap((ref) => {
             const [tip, branch] = ref.split(" ");
             return tip && branch
@@ -659,7 +815,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
                     branch,
                     tip,
                     merged: merged.has(branch),
-                    empty: trunk.has(tip),
+                    empty: untouched.has(branch),
                     stale: staleByBranch.get(branch),
                   } satisfies Branch,
                 ]
@@ -732,6 +888,47 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               ? ["worktree", "add", path, branch]
               : ["worktree", "add", "-b", branch, path, "HEAD"]),
           );
+        }),
+
+      /**
+       * Puts the operator's checkout itself on a task's branch, for a project
+       * in branch mode, cutting the branch from HEAD when it does not exist.
+       *
+       * The branch HEAD was on becomes the task branch's upstream. That is how
+       * every later step finds where the task lands (`trunkOf`), and how
+       * landing returns the checkout to it, with nothing kept outside git.
+       * Refuses a dirty tree, because git would carry the operator's edits
+       * onto the task's branch and into the agent's commits.
+       */
+      checkoutBranch: (directory: string, branch: string) =>
+        Effect.gen(function* () {
+          const onto = yield* headBranch(directory);
+          if (onto === undefined || onto.startsWith(ours)) {
+            return yield* new RepositoryError({
+              directory,
+              detail: `cannot put the checkout on ${branch}: it is on ${onto ?? "no branch"}`,
+            });
+          }
+          if ((yield* status(directory, "all")) !== "") {
+            return yield* new RepositoryError({
+              directory,
+              detail: `cannot put the checkout on ${branch}: it has uncommitted changes`,
+            });
+          }
+          const exists = yield* git(
+            directory,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            `refs/heads/${branch}`,
+          );
+          yield* gitOutput(
+            directory,
+            ...(exists.exitCode === 0
+              ? ["checkout", "--quiet", branch]
+              : ["checkout", "--quiet", "-b", branch]),
+          );
+          yield* gitOutput(directory, "branch", "--quiet", `--set-upstream-to=${onto}`, branch);
         }),
 
       /**
@@ -852,39 +1049,67 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * `message` is the subject of the merge commit. Without it git names the
        * commit after the detached HEAD the proof runs on, which reads as noise
        * in the operator's history.
+       *
+       * `commit` is what lands: the commit the reviewer approved, merged by its
+       * id. `branch` is the task's branch, which a branch-mode checkout has out
+       * and must leave first.
        */
       merge: (
         directory: string,
         branch: string,
+        commit: string,
         verify: string | undefined,
         proving: string,
         message: string,
+        how: How,
       ) =>
         Effect.gen(function* () {
+          // A branch-mode task has its branch out in this checkout. Landing it
+          // starts by checking the operator's branch out again, so every step
+          // below runs against the operator's branch exactly as for a
+          // worktree. The switch needs a clean tree: git would carry leftover
+          // edits onto the operator's branch. The branch is left by its name;
+          // only the commit is merged.
+          if ((yield* leaveBranch(directory, branch)) === "dirty") {
+            return {
+              _tag: "Held",
+              reason: "dirty",
+              detail: `uncommitted changes on ${branch}, which must be checked out of this checkout to land`,
+            } as const;
+          }
+
           // Asked before the clean gate, because a checkout that already has
           // the commits is not going to be written to and its cleanliness is
           // beside the point. Holding here would strand the task exactly as
           // long as the operator kept editing.
-          if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
+          if (yield* contains(directory, commit)) return { _tag: "Present" } as const;
 
           const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;
-          return yield* gitCheckout.merge(directory, branch, verify, proving, message);
+          return yield* gitCheckout.merge(directory, commit, verify, proving, message, how);
         }),
 
       /**
        * Runs a check block's `command` on `commit`, a commit of `directory`'s
        * repository, in the proving ground `proving` that landings use. Writes
        * nothing to `directory`. A flake and a failure the base shares do not
-       * count against the commit, as at a landing.
+       * count against the commit, as at a landing. `base` is the commit the
+       * work started from: a branch's fork point, or a direct task's first
+       * author base.
        */
-      check: (directory: string, commit: string, command: string, proving: string) =>
-        gitCheck(proving, directory, commit, command),
+      check: (directory: string, commit: string, base: string, command: string, proving: string) =>
+        gitCheck(proving, directory, commit, base, command),
     } as const;
   }),
 }) {
   static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
 }
+
+/**
+ * How a landing puts the approved commit onto the trunk: a merge commit, or
+ * the commit itself when it already has the trunk tip below it.
+ */
+export type How = "merge" | "fast-forward";
 
 /** What became of a branch foreman tried to put into the operator's checkout. */
 export type Landing =

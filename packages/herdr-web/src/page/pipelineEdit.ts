@@ -3,7 +3,7 @@
 // foreman's `pipeline-belt`; this module only picks which one an edit calls and
 // keeps the editor's selection pointing at a block that still exists.
 import { Option, Schema as S } from "effect"
-import type { Pipeline, PipelineNode } from "foreman/pipeline"
+import { LANDINGS, type Pipeline, type PipelineNode } from "foreman/pipeline"
 import { addRoute, addSource, configure, INSERTABLE, type Insertable, insertOn, rejoin, remove, removeRoute, swapEnd, type Wire } from "foreman/pipeline-belt"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 
@@ -20,6 +20,7 @@ export const BlockSetting = S.Union([
   S.Struct({ role: S.Literals(["author", "review"]), model: S.String, slots: S.UndefinedOr(S.Int) }),
   S.Struct({ route: S.Int, when: S.String }),
   S.Struct({ command: S.String }),
+  S.Struct({ how: S.Literals(LANDINGS) }),
 ])
 
 /** A change the operator makes to the draft, or to what the editor has picked. */
@@ -82,7 +83,7 @@ const settled = (now: Drafting): Drafting => ({
 })
 
 /** How each kind of block is marked on its card and in the palette. */
-export const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸" }
+export const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸", branch: "⎇", worktree: "▤", done: "✔" }
 
 /** A wire's way out in words: `next`, `else`, or `route n` counted from one. */
 export const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
@@ -100,8 +101,14 @@ export const summaryOf = (node: PipelineNode): string => {
       return `${node.role} · ${node.model}${node.slots === undefined ? "" : ` ×${node.slots}`}`
     case "check":
       return node.command === "" ? "names no command" : `runs ${node.command}`
+    case "branch":
+      return "cuts foreman/<id> from trunk"
+    case "worktree":
+      return "a directory of its own"
     case "land":
-      return "merges"
+      return node.how === "fast-forward" ? "fast-forwards" : "merges"
+    case "done":
+      return "completes"
     case "park":
       return "waits for you"
   }

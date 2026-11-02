@@ -47,8 +47,8 @@ describe("changesOf", () => {
     expect(changesOf(STANDARD_PIPELINE, draft)).toEqual(["changed author's model from 'ladder' to 'opus'", "changed author's slots from no cap to '2'"])
   })
 
-  it("tells a land made a park", () => {
-    expect(changesOf(STANDARD_PIPELINE, edited(STANDARD_PIPELINE, { _tag: "SwapEnd", id: "land" }))).toEqual(["made land a park"])
+  it("tells a land made a done", () => {
+    expect(changesOf(STANDARD_PIPELINE, edited(STANDARD_PIPELINE, { _tag: "SwapEnd", id: "land" }))).toEqual(["made land a done"])
   })
 
   it("tells a removed first route as one removal, not as every later route changed", () => {

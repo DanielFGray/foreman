@@ -7,7 +7,11 @@ export interface TaskPhaseInput {
   readonly status: TaskStatus;
   readonly reviewer: string | undefined;
   readonly worker: WorkerState;
-  readonly worktree: boolean;
+  /**
+   * The worker is an onboarding salvage in the operator's checkout, whose
+   * tree is the operator's and is never committed or swept by foreman.
+   */
+  readonly attached: boolean;
   readonly committed: boolean;
   readonly holdsWork: boolean;
   readonly handoffExpired: boolean;
@@ -40,7 +44,7 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
   }
 
   if (input.worker === "gone") {
-    if (!input.worktree) return "VanishedAttached";
+    if (input.attached) return "VanishedAttached";
     return input.committed || input.holdsWork ? "VanishedWithWork" : "VanishedEmpty";
   }
 

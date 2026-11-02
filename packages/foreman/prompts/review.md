@@ -6,14 +6,27 @@ decisions, or log the open decision and stop.
 Task: {{ task }} — {{ title }}
 Project: {{ project }}
 Working directory: {{ worktree }}
-Branch: {{ branch }}
-Repository: {{ repository }}
+{% if (workspace === "none") { %}Branch: the operator's own branch; the author's work is every commit after {{ base }}
+{% } else { %}Branch: {{ branch }}
+{% } %}Repository: {{ repository }}
 
 ## Rules
 
+{% if (workspace === "none") { %}
+- Run every command in {{ worktree }}: the operator's own checkout and branch, where
+  the author committed. Nothing else runs here until this task ends. Never switch
+  branches, and never stash, reset or clean: the commits are already on the
+  operator's branch, so a return asks for new commits, never an undo. Do not read
+  another task's worktree.
+{% } else if (workspace === "branch") { %}
+- Run every command in {{ worktree }}: the operator's own checkout, which has the
+  task's branch out. No landing runs here until this task lands. Never switch
+  branches, and never stash, reset or clean. Do not read another task's worktree.
+{% } else { %}
 - Run every command in {{ worktree }}. Never run git in {{ repository }}: foreman
   merges there, and a git command of yours mid-merge fails the landing. Do not read
   another task's worktree.
+{% } %}
 - If you repair the worktree by hand, add the step to `scripts/worktree-setup.sh` and
   commit it; reject a setup step that is not safe to run twice.
 - Log each decision with `tasks log {{ task }} "Decision. ... Evidence. ... Result. ..."`.

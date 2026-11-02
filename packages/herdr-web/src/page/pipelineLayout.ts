@@ -50,7 +50,11 @@ export const sizeOf = (kind: Cell["node"]["kind"], exits: number): { readonly w:
     case "park":
       return { w: 114, h: 44 }
     case "land":
+    case "done":
       return { w: 72, h: 44 }
+    case "branch":
+    case "worktree":
+      return { w: 72, h: 28 }
     case "gate":
       return { w: 88, h: 28 }
     case "router":

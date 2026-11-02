@@ -49,6 +49,17 @@ const run = (over: Partial<NewRun> = {}): NewRun => ({
 });
 
 describe("runs", () => {
+  test("an author on the operator's branch keeps the commit it started from after it closes", async () => {
+    const runs = await inStore(
+      Effect.gen(function* () {
+        const id = yield* openRun(run({ base: "start" }));
+        yield* closeRun(id, { ending: "handed-off", commit: "end" });
+        return (yield* runsOf(["ts-1"])).get("ts-1");
+      }),
+    );
+    expect(runs?.[0]).toMatchObject({ base: "start", commit: "end" });
+  });
+
   test("a run is open until closed, and closes with its outcome and commit", async () => {
     const [open, closed] = await inStore(
       Effect.gen(function* () {

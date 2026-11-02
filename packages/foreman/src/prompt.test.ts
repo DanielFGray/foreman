@@ -50,7 +50,7 @@ const ready = {
 describe("Prompts", () => {
   test("takes the operator's checkout away from the author", async () => {
     const prompt = await run((prompts) =>
-      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
 
     // Trivial work skips the reviewer, never the landing gate. An author told
@@ -63,13 +63,47 @@ describe("Prompts", () => {
     expect(prompt).toContain("do not read another task's worktree");
   });
 
+  test("an author and reviewer in the operator's checkout are told it is theirs, not forbidden", async () => {
+    const author = await run((prompts) =>
+      prompts.author(ready, "/tmp/repository", "/tmp/repository", "branch"),
+    );
+    expect(author).toContain("This is the operator's own checkout");
+    expect(author).toContain("git diff @{upstream}...HEAD");
+    expect(author).not.toContain("Never enter /tmp/repository");
+
+    const review = await run((prompts) =>
+      prompts.review(item, "/tmp/repository", "/tmp/repository", "branch", "abc123", undefined),
+    );
+    expect(review).toContain("the operator's own checkout, which has the task's branch out");
+    expect(review).not.toContain("Never run git in /tmp/repository");
+  });
+
+  test("an author and reviewer on the operator's own branch read the work from its base and undo nothing", async () => {
+    const author = await run((prompts) =>
+      prompts.author(ready, "/tmp/repository", "/tmp/repository", "none", "abc123"),
+    );
+    expect(author).toContain("git log abc123..HEAD");
+    expect(author).toContain("git diff abc123 HEAD");
+    expect(author).toContain("not by undoing old ones");
+    expect(author).not.toContain("Foreman merges");
+    expect(author).not.toContain("foreman/ts-123456");
+
+    const review = await run((prompts) =>
+      prompts.review(item, "/tmp/repository", "/tmp/repository", "none", "abc123", "bun test"),
+    );
+    expect(review).toContain("git -C /tmp/repository diff abc123 HEAD");
+    expect(review).toContain("never an undo");
+    expect(review).toContain("the full run is yours");
+    expect(review).not.toContain("foreman/ts-123456");
+  });
+
   // A pre-existing failure is filed once per author that hits it, reworded each
   // time, and each duplicate costs the fleet a full suite run. The whole dedup
   // is this block: the search command renders the project, and the instruction
   // is to append to an existing task rather than file a new one.
   test("an author searches the backlog before filing a pre-existing failure", async () => {
     const prompt = await run((prompts) =>
-      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
 
     expect(prompt).toContain("tasks list -p foreman");
@@ -81,7 +115,7 @@ describe("Prompts", () => {
 
   test("asks a successful reviewer for a verdict, not a merge", async () => {
     const prompt = await run((prompts) =>
-      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("tasks verdict ts-123456 approved");
@@ -99,7 +133,7 @@ describe("Prompts", () => {
   // named from inside the worktree at all.
   test("keeps every reviewer command out of the operator's checkout", async () => {
     const prompt = await run((prompts) =>
-      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("git -C /tmp/worktree diff abc1234 HEAD");
@@ -113,7 +147,7 @@ describe("Prompts", () => {
   // is never rendered in the operator's own config is the one that would rot.
   test("names the landing verification the reviewer must not repeat", async () => {
     const prompt = await run((prompts) =>
-      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", "bun test"),
     );
 
     expect(prompt).toContain("Foreman runs `bun test` in /tmp/repository");
@@ -122,7 +156,7 @@ describe("Prompts", () => {
 
   test("leaves the full run to a reviewer whose project has no verification", async () => {
     const prompt = await run((prompts) =>
-      prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", undefined),
+      prompts.review(item, "/tmp/worktree", "/tmp/repository", "worktree", "abc1234", undefined),
     );
 
     expect(prompt).toContain("lands this branch on git's exit code alone");
@@ -162,10 +196,15 @@ describe("Prompts", () => {
   // other prompt stays short; the rule itself must still arrive where it applies.
   test("gives the research and satisfied rules only to tasks that call for them", async () => {
     const plainAuthor = await run((prompts) =>
-      prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
+      prompts.author(ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
     const researchAuthor = await run((prompts) =>
-      prompts.author({ ...ready, labels: ["research"] }, "/tmp/worktree", "/tmp/repository"),
+      prompts.author(
+        { ...ready, labels: ["research"] },
+        "/tmp/worktree",
+        "/tmp/repository",
+        "worktree",
+      ),
     );
     expect(plainAuthor).not.toContain("labelled `research`");
     expect(researchAuthor).toContain("labelled `research`: the deliverable is a report");
@@ -180,6 +219,7 @@ describe("Prompts", () => {
           },
           "/tmp/worktree",
           "/tmp/repository",
+          "worktree",
           "abc1234",
           "bun test",
         ),
