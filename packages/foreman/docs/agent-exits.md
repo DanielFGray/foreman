@@ -1,7 +1,7 @@
 # Agent exits: the operator designs the contract
 
-Status: rules 1 to 5 and the store's endings are built (ts-48b15f). Rules 6
-and 7, the State section and the page's exit editing are not. "What is built"
+Status: rules 1 to 6 and the store's endings are built (ts-48b15f, ts-c3fdcf).
+Rule 7, the State section and the page's exit editing are not. "What is built"
 says where the build differs from the text below; where they differ, that
 section is the rule.
 
@@ -11,7 +11,7 @@ section is the rule.
   `stopped`. The pipelines file is `version: 3`, and version 2 and 1 read with
   the standard exits wired as they were: `returned` and `failed` go to `queue`
   with `fails: author`. The standard pipeline keeps its retry router and has no
-  cycle. Blocks have no `instructions` or `rounds` yet.
+  cycle. Agent blocks have `instructions`; blocks have no `rounds` yet.
 - **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
   ending. A migration renamed the old endings: `handed-off` to `done`,
   `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
@@ -26,8 +26,11 @@ section is the rule.
 - **Status.** `foreman exit` makes the status move the exit implies: an exit
   to `queue` opens and releases the task; an author's exit puts it in
   `reviewing`. `reviewing` and `role` stay (open questions 2 and 3).
-- **Prompts.** Only the lines that tell an agent how to end changed, to
-  `foreman exit`. The prompt files keep the rest of their text.
+- **Prompts.** Rule 6 is built (`src/prompt.ts`). The operator's directory
+  is `prompts/` in foreman's config directory (`~/.config/foreman/prompts/`).
+  An unknown placeholder or a missing instructions file stops the pipeline.
+  The onboard and diagnose prompts are not agent blocks: they stay whole
+  files, with the same lookup and their own placeholders.
 
 Today the contract between an agent and foreman is fixed in two places: the
 prompts ("run `tasks verdict <id> approved|returned`") and the store

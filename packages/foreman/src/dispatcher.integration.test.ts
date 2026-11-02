@@ -18,7 +18,7 @@ import {
 import { Settings } from "./config.ts";
 import { kindOf, Prog, ProgError, type Item } from "./prog.ts";
 import type { Run } from "tasks";
-import { Prompts } from "./prompt.ts";
+import { type AgentRun, Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
 import type { CheckRun, Ending, NamedExit, NewRun, Role } from "tasks";
@@ -471,15 +471,11 @@ class World {
 }
 
 const prompts = Layer.succeed(Prompts, {
-  author: () => Effect.succeed("author"),
+  instructions: (names: ReadonlyArray<string>) =>
+    Effect.succeed(new Map(names.map((name) => [name, ""]))),
+  agent: (block: AgentNode, run: AgentRun) =>
+    Effect.succeed(block.role === "author" ? "author" : `review from ${run.base}`),
   onboard: () => Effect.succeed("onboard"),
-  review: (
-    _task: Item,
-    _worktree: string,
-    _repository: string,
-    _workspace: unknown,
-    base: string,
-  ) => Effect.succeed(`review from ${base}`),
   diagnose: () => Effect.succeed("diagnose"),
 });
 

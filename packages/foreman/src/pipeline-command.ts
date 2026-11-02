@@ -1,7 +1,15 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
 import { Dispatcher } from "./dispatcher.ts";
-import { Pipeline, type Placement, problemsOf, toMermaid } from "./pipeline.ts";
+import {
+  instructionNames,
+  instructionProblems,
+  Pipeline,
+  type Placement,
+  problemsOf,
+  toMermaid,
+} from "./pipeline.ts";
+import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
 import { readLadder } from "./registry.ts";
 
@@ -123,15 +131,22 @@ export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError
   detail: S.String,
 }) {}
 
+/**
+ * The problems that stop `pipeline` running: against the ladder, and in the
+ * instructions files its agent blocks read.
+ */
 const problemsAgainstLadder = (pipeline: Pipeline) =>
-  readLadder.pipe(
-    Effect.map((ladder) =>
-      problemsOf(
+  Effect.gen(function* () {
+    const ladder = yield* readLadder;
+    const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
+    return [
+      ...problemsOf(
         pipeline,
         ladder.map((rung) => rung.name),
       ),
-    ),
-  );
+      ...instructionProblems(pipeline, texts),
+    ];
+  }).pipe(Effect.provide(Prompts.Default));
 
 const refuse = (problems: ReadonlyArray<string>) =>
   new PipelineError({

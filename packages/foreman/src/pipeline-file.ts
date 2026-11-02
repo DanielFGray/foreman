@@ -12,6 +12,7 @@ import {
   RouterNode,
   SourceNode,
   WorktreeNode,
+  instructionProblems,
   problemsOf,
   STANDARD_PIPELINE,
   standardExits,
@@ -184,14 +185,18 @@ export type ProjectPipeline =
   | { readonly _tag: "Runs"; readonly pipeline: Pipeline; readonly drawn: boolean }
   | { readonly _tag: "Stopped"; readonly problems: ReadonlyArray<string> };
 
-/** What `project` runs, from one reading of the file, checked against these rungs. */
+/**
+ * What `project` runs, from one reading of the file, checked against these
+ * rungs and the instructions texts read for its agent blocks.
+ */
 export const projectPipeline = (
   read: { readonly value: Pipelines; readonly error: string | undefined },
   project: string,
   rungs: ReadonlyArray<string>,
+  instructions: ReadonlyMap<string, string>,
 ): ProjectPipeline => {
   if (read.error !== undefined) return { _tag: "Stopped", problems: [read.error] };
   const { pipeline, drawn } = pipelineFor(read.value, project);
-  const problems = problemsOf(pipeline, rungs);
+  const problems = [...problemsOf(pipeline, rungs), ...instructionProblems(pipeline, instructions)];
   return problems.length > 0 ? { _tag: "Stopped", problems } : { _tag: "Runs", pipeline, drawn };
 };

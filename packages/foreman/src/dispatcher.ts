@@ -64,6 +64,7 @@ import {
 } from "./ladder.ts";
 import { authorWalls, rungAt } from "./agent-rung.ts";
 import {
+  instructionNames,
   nextAgent,
   place,
   routeWorkspace,
@@ -74,6 +75,7 @@ import {
   type LandNode,
   type Pipeline,
   QUEUE,
+  STANDARD_PIPELINE,
   type Placement,
   type Workspace,
 } from "./pipeline.ts";
@@ -605,8 +607,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
       const rungs = settings.ladder.map((rung) => rung.name);
+      const instructions = yield* prompts.instructions(
+        [STANDARD_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
+      );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
-        projects.map((project) => [project.name, projectPipeline(drawings, project.name, rungs)]),
+        projects.map((project) => [
+          project.name,
+          projectPipeline(drawings, project.name, rungs, instructions),
+        ]),
       );
       const scopes: Scopes = new Map(
         yield* Effect.forEach(policy.grants, (grant) =>
@@ -2039,13 +2047,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // author run records where the checkout stood when it started.
       const base = workspace === "none" ? yield* repository.head(project.directory) : undefined;
 
-      const prompt = yield* prompts.author(
+      const prompt = yield* prompts.agent(block, {
         task,
-        worker.directory,
-        project.directory,
+        worktree: worker.directory,
+        repository: project.directory,
         workspace,
-        directBase(task) ?? base,
-      );
+        base: directBase(task) ?? base,
+      });
       yield* prog.claim(task.id);
       yield* prog
         .attribute(task.id, runFor(task, rung, block, undefined, base))
@@ -2095,14 +2103,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       if (!rung) return;
       const worker = yield* workspaceFor(task, project);
 
-      const prompt = yield* prompts.review(
+      const prompt = yield* prompts.agent(block, {
         task,
-        worker.directory,
-        project.directory,
+        worktree: worker.directory,
+        repository: project.directory,
         workspace,
         base,
-        project.verify,
-      );
+        verify: project.verify,
+      });
       // The run records the tip the reviewer is about to read: its approval
       // is about this commit until the reviewer names its exit, which records
       // the tip it names it on.
@@ -2651,32 +2659,26 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const task = yield* prog.show(id);
           const project = yield* projectFor(task.project);
           if (!project) return undefined;
+          const block = yield* blockFor(task, role);
+          if (block === undefined) return undefined;
           const { pipelines } = yield* SubscriptionRef.get(state);
-          const worktree =
-            newWorkspace(workspaceOf(pipelines, task), project, task.id) ?? project.directory;
-          if (role === "author") {
-            return yield* prompts.author(
-              task,
-              worktree,
-              project.directory,
-              workspaceOf(pipelines, task),
-              directBase(task),
-            );
-          }
           const workspace = workspaceOf(pipelines, task);
+          const worktree = newWorkspace(workspace, project, task.id) ?? project.directory;
           const base =
             workspace === "none"
               ? directBase(task)
-              : yield* repository.base(project.directory, labelFor(task.id));
-          if (!base) return undefined;
-          return yield* prompts.review(
+              : role === "author"
+                ? undefined
+                : yield* repository.base(project.directory, labelFor(task.id));
+          if (role === "review" && !base) return undefined;
+          return yield* prompts.agent(block, {
             task,
             worktree,
-            project.directory,
+            repository: project.directory,
             workspace,
             base,
-            project.verify,
-          );
+            verify: project.verify,
+          });
         }),
 
       /** Starts a fresh agent on a task whose worker vanished. */
@@ -2731,13 +2733,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // a retry re-adopts the same directory with its edits instead of
             // losing them.
             const worker = yield* workspaceFor(task, project);
-            const prompt = yield* prompts.author(
+            const prompt = yield* prompts.agent(block, {
               task,
-              worker.directory,
-              project.directory,
-              yield* routeOf(task),
-              directBase(task),
-            );
+              worktree: worker.directory,
+              repository: project.directory,
+              workspace: yield* routeOf(task),
+              base: directBase(task),
+            });
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
             yield* prog.endRuns(task.id, { author: "vanished" });

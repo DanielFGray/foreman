@@ -540,7 +540,7 @@ on one machine each running a full suite slows every worker down for signal
 already being collected. What the reviewer uniquely catches is a stub, or a test
 weakened to get the suite green — neither of which is found by running tests,
 since a green suite is what both produce. So it reads what the diff does to the
-tests and runs only those covering the code it touched. `Prompts.review` renders
+tests and runs only those covering the code it touched. The review prompt's workspace section renders
 the project's `scripts/verify.sh` into the prompt; a project with none has no landing
 gate, and there the full run is the reviewer's after all.
 
