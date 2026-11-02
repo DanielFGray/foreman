@@ -24,6 +24,8 @@ export const MIGRATIONS_TABLE = "tasks_migrations";
  *
  * `runs` is the old `trials` table, with a run able to be open: `closed_at` and
  * `outcome` are both empty until it ends, and the check keeps them together.
+ * `node` names the pipeline block the run belongs to, so a task's place in its
+ * pipeline is replayed from its runs rather than stored.
  * `closed_at` keeps its default, so a closed run recorded by hand still needs
  * only its outcome. Every view that counts or averages runs reads closed runs
  * only, so an open run never counts as a slice.
@@ -89,6 +91,7 @@ const REGISTRY = [
     pool               TEXT NOT NULL,
     model              TEXT NOT NULL,
     rung               TEXT,             -- foreman rung; NULL for a run launched by hand
+    node               TEXT,             -- the pipeline block it ran at; NULL outside a pipeline
     work               TEXT NOT NULL CHECK (work IN ('build', 'correction', 'research', 'review')),
     started_at         TEXT,             -- NULL for runs recorded before starts were kept
     closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
