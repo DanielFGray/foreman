@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   type Facts,
-  factsOf,
   matches,
   type Pipeline,
   type PipelineNode,
@@ -10,6 +9,7 @@ import {
   STANDARD_PIPELINE,
   toMermaid,
 } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
 
 const facts = (over: Partial<Facts> = {}): Facts => ({
   status: "open",
@@ -326,5 +326,17 @@ describe("the Mermaid drawing", () => {
     expect(lines.filter((line) => line.includes("-->"))).toHaveLength(10);
     expect(lines.some((line) => line.includes('"failed"'))).toBe(true);
     expect(lines.some((line) => line.includes("author: author on ladder"))).toBe(true);
+  });
+});
+
+describe("the modules herdr-web's page bundles", () => {
+  test("reach neither the task store nor node", async () => {
+    const built = await Bun.build({
+      entrypoints: [`${import.meta.dir}/pipeline.ts`, `${import.meta.dir}/pipeline-belt.ts`],
+      target: "browser",
+    });
+    expect(built.success).toBe(true);
+    const code = (await Promise.all(built.outputs.map((output) => output.text()))).join("\n");
+    expect(code).not.toMatch(/bun:sqlite|from "node:|require\("node:|effect\/sql/);
   });
 });

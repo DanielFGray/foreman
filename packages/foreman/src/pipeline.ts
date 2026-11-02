@@ -13,13 +13,14 @@
  * id, so a fact about a block the operator deleted places nothing, and the
  * task is placed by what remains. The editor keeps a block's id across edits
  * for the same reason.
+ *
+ * herdr-web's page imports this module and `pipeline-belt.ts` in the browser,
+ * so neither may import, other than as a type, anything that reaches the task
+ * store or the file system.
  */
 import { Graph, Option, Schema as S } from "effect";
-import { APPROVED, failuresOf, type Item, reviewedBy, type TaskStatus, valueOf } from "./prog.ts";
+import type { TaskStatus } from "./prog.ts";
 import { STEPS, type Step } from "./policy.ts";
-
-/** Where the editor draws a block. Placement never reads it. */
-const Layout = S.optional(S.Struct({ x: S.Finite, y: S.Finite }));
 
 /** Takes ready tasks in queue order that match its filter. */
 export const SourceNode = S.Struct({
@@ -27,7 +28,6 @@ export const SourceNode = S.Struct({
   id: S.String,
   filter: S.String,
   next: S.String,
-  layout: Layout,
 });
 
 /** Sends a task on by the first route whose filter it matches. */
@@ -36,7 +36,6 @@ export const RouterNode = S.Struct({
   id: S.String,
   routes: S.Array(S.Struct({ when: S.String, to: S.String })),
   else: S.String,
-  layout: Layout,
 });
 
 /** Holds a task before the next work block until the policy permits `step`. */
@@ -45,7 +44,6 @@ export const GateNode = S.Struct({
   id: S.String,
   step: S.Literals(STEPS),
   next: S.String,
-  layout: Layout,
 });
 
 /**
@@ -63,14 +61,13 @@ export const AgentNode = S.Struct({
   model: S.String,
   slots: S.optional(S.Int.check(S.isGreaterThan(0))),
   next: S.String,
-  layout: Layout,
 });
 
 /** Proves and applies the task's branch to the project's checkout, which completes it. */
-export const LandNode = S.Struct({ kind: S.Literal("land"), id: S.String, layout: Layout });
+export const LandNode = S.Struct({ kind: S.Literal("land"), id: S.String });
 
 /** Parks the task for the operator. */
-export const ParkNode = S.Struct({ kind: S.Literal("park"), id: S.String, layout: Layout });
+export const ParkNode = S.Struct({ kind: S.Literal("park"), id: S.String });
 
 export const PipelineNode = S.Union([
   SourceNode,
@@ -267,23 +264,6 @@ export const problemsOf = (
   }
   return [...new Set(problems)];
 };
-
-/** What placement knows about `item`, read from its status and labels. */
-export const factsOf = (item: Pick<Item, "status" | "priority" | "parent" | "labels">): Facts => ({
-  status: item.status,
-  priority: item.priority,
-  epic: item.parent,
-  size: sizeOf(item.labels),
-  labels: new Set(item.labels),
-  failedBy: new Set(failuresOf(item)),
-  attempts: attemptCount(item.labels),
-  passed: new Set(valuesOf(item.labels, PASSED)),
-  underReview: reviewedBy(item) !== undefined,
-  approved: item.labels.includes(APPROVED),
-});
-
-/** The label settle writes when a work block advances a task. */
-export const PASSED = "passed";
 
 /**
  * The flow foreman ran before pipelines: author, review, land.
@@ -552,29 +532,4 @@ const SHAPES: Record<PipelineNode["kind"], Graph.MermaidNodeShape> = {
   agent: "rectangle",
   land: "subroutine",
   park: "circle",
-};
-
-const valuesOf = (labels: ReadonlyArray<string>, kind: string): ReadonlyArray<string> =>
-  labels.flatMap((label) => {
-    const value = valueOf(label, kind);
-    return value === undefined ? [] : [value];
-  });
-
-/** From `size:N`; 1 when the task has none. */
-const sizeOf = (labels: ReadonlyArray<string>): number => {
-  const size = valuesOf(labels, "size").find((value) => /^\d+$/.test(value));
-  return size === undefined ? 1 : Number(size);
-};
-
-/** The newest `attempt:<rung>:<n>` count of each rung, summed. */
-const attemptCount = (labels: ReadonlyArray<string>): number => {
-  const newest = new Map<string, number>();
-  for (const value of valuesOf(labels, "attempt")) {
-    const at = value.lastIndexOf(":");
-    const count = Number(value.slice(at + 1));
-    if (at <= 0 || !Number.isInteger(count)) continue;
-    const rung = value.slice(0, at);
-    newest.set(rung, Math.max(newest.get(rung) ?? 0, count));
-  }
-  return [...newest.values()].reduce((sum, n) => sum + n, 0);
 };

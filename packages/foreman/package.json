@@ -6,7 +6,9 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pipeline": "./src/pipeline.ts",
+    "./pipeline-belt": "./src/pipeline-belt.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",
