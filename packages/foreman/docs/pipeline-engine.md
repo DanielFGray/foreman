@@ -112,6 +112,8 @@ flake, and then run where the branch was cut from its trunk: a command red
 there too says nothing about the branch, so the check passes with a note in
 the task's log. A ground that is not ready, or a tip that moved while the
 command ran, records nothing, and a later tick checks again.
+The command runs inside the tick, as verify does, so a slow command delays
+everything else that tick does, once per commit at each check.
 
 The check records a run with the commit it ran on and the ending `passed` or
 `failed`. The run names no model: the views about models leave it out. Like a
@@ -175,6 +177,8 @@ settle comes before fill.
 2. **Settle.** For each owned task, classify the run's end as today (`phaseOf`,
    the merge result). An advance closes the run. A return does today's
    bookkeeping and releases the task.
+   The landings and checks the last plan holds run here, one at a time,
+   landings first: they share the project's proving ground.
 3. **Plan.** Place every queued and owned task. A task `waiting` at a work block
    is a candidate when every remembered gate permits it. A gate in `ask` mode
    gives an ask. Candidates are taken nearest to the end first (fewest work
