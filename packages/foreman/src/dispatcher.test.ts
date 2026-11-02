@@ -4,7 +4,7 @@ import {
   awaitingLanding,
   decisionsOf,
   isFleetWork,
-  dispatchesFor as plan,
+  planFrom as plan,
   failedTasks,
   handoffExpired,
   isUnread,
@@ -23,6 +23,7 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { authorRun, authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
+import { STANDARD_PIPELINE } from "./pipeline.ts";
 
 const task = (
   id: string,
@@ -107,9 +108,9 @@ describe("landing a reviewed branch", () => {
     // until its whole turn ends. Landing inside that window closes the
     // workspace with `worktree remove --force` and deletes the directory the
     // reviewer is standing in.
-    expect(readyToLand(approved, worker("working"))).toBe(false);
-    expect(readyToLand(approved, worker("settled"))).toBe(true);
-    expect(readyToLand(approved, undefined)).toBe(true);
+    expect(readyToLand(STANDARD_PIPELINE, approved, worker("working"))).toBe(false);
+    expect(readyToLand(STANDARD_PIPELINE, approved, worker("settled"))).toBe(true);
+    expect(readyToLand(STANDARD_PIPELINE, approved, undefined)).toBe(true);
   });
 
   test("keeps an approved task out of the ordinary settle path either way", () => {
@@ -118,22 +119,29 @@ describe("landing a reviewed branch", () => {
     // The two filters in settle must agree. A task excluded from landing
     // because its reviewer is live must not fall through to the branch that
     // treats it as a reviewer who stopped without a verdict.
-    expect(readyToLand(approved, worker("working"))).toBe(false);
-    expect(awaitingLanding(approved)).toBe(true);
+    expect(readyToLand(STANDARD_PIPELINE, approved, worker("working"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINE, approved)).toBe(true);
   });
 
   test("ignores a task without a verdict, and one that already left review", () => {
-    expect(awaitingLanding(underReview("ts-123456"))).toBe(false);
-    expect(awaitingLanding(approvedTask("ts-123456", "in_progress"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINE, underReview("ts-123456"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINE, approvedTask("ts-123456", "in_progress"))).toBe(
+      false,
+    );
   });
 
   test("lands nothing on size or priority alone", () => {
     // A branch reaches the operator's checkout on a reviewer's verdict and
     // nothing else, however small the task that produced it says it is.
-    expect(awaitingLanding(authoredOn(task("ts-123456", ["trivial"]), "opencode"))).toBe(false);
-    expect(awaitingLanding(authoredOn(task("ts-123456", [], "reviewing", 3), "opencode"))).toBe(
-      false,
-    );
+    expect(
+      awaitingLanding(STANDARD_PIPELINE, authoredOn(task("ts-123456", ["trivial"]), "opencode")),
+    ).toBe(false);
+    expect(
+      awaitingLanding(
+        STANDARD_PIPELINE,
+        authoredOn(task("ts-123456", [], "reviewing", 3), "opencode"),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -341,6 +349,11 @@ describe("work handed back for review", () => {
 
 const dispatchesFor = (...args: Parameters<typeof plan>) => plan(...args).dispatches;
 
+/** Every task in these tests is in project "foreman", which runs the standard pipeline. */
+const STANDARD_PIPELINES = new Map([
+  ["foreman", { _tag: "Runs" as const, pipeline: STANDARD_PIPELINE, drawn: false }],
+]);
+
 describe("the policy gate on dispatch", () => {
   const ready = (id: string, labels: ReadonlyArray<string> = []) => ({
     id,
@@ -348,6 +361,10 @@ describe("the policy gate on dispatch", () => {
     priority: 1,
     project: "foreman",
     labels,
+    status: "open" as const,
+    parent: undefined,
+    runs: [],
+    tip: undefined,
   });
 
   const allowing = (
@@ -368,6 +385,7 @@ describe("the policy gate on dispatch", () => {
     outOfQuota: new Set<string>(),
     policy,
     scopes: new Map<string, ReadonlySet<string>>(),
+    pipelines: STANDARD_PIPELINES,
     ...overrides,
   });
 
@@ -647,6 +665,10 @@ describe("the quota gate", () => {
     priority: 1,
     project,
     labels: [],
+    status: "open" as const,
+    parent: undefined,
+    runs: [],
+    tip: undefined,
   });
 
   const state = (overrides: Record<string, unknown> = {}) => ({
@@ -661,6 +683,7 @@ describe("the quota gate", () => {
       default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     },
     scopes: new Map<string, ReadonlySet<string>>(),
+    pipelines: STANDARD_PIPELINES,
     ...overrides,
   });
 

@@ -2,7 +2,13 @@ import { isApproved, passedNodes, reviewedBy } from "./lap.ts";
 import { failuresOf, type Item, valueOf } from "./prog.ts";
 import type { Facts } from "./pipeline.ts";
 
-/** What placement knows about `item`, read from its status, labels and runs. */
+/**
+ * What placement knows about `item`, read from its status, labels and runs.
+ *
+ * An open task has passed nothing. A return releases the task to the queue and
+ * opens no run, so its lap still holds the runs of the round it returned from
+ * until its next author run starts a new one.
+ */
 export const factsOf = (
   item: Pick<Item, "status" | "priority" | "parent" | "labels" | "runs" | "tip">,
 ): Facts => ({
@@ -13,7 +19,7 @@ export const factsOf = (
   labels: new Set(item.labels),
   failedBy: new Set(failuresOf(item)),
   attempts: attemptCount(item.labels),
-  passed: passedNodes(item),
+  passed: item.status === "open" ? new Set() : passedNodes(item),
   underReview: reviewedBy(item) !== undefined,
   approved: isApproved(item),
 });

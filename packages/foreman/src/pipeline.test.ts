@@ -3,6 +3,7 @@ import { handedOff, reviewRun } from "./task-fixture.ts";
 import {
   type Facts,
   matches,
+  nextAgent,
   type Pipeline,
   type PipelineNode,
   place,
@@ -198,6 +199,25 @@ describe("placement on a drawn pipeline", () => {
   });
 });
 
+describe("the block an agent started by hand runs at", () => {
+  test("is the first block of its role on the route", () => {
+    expect(nextAgent(STANDARD_PIPELINE, facts(), "author")?.id).toBe("author");
+    // A review started before the author handed off still runs at the review
+    // block: the blocks before it count as passed.
+    expect(nextAgent(STANDARD_PIPELINE, facts(), "review")?.id).toBe("review");
+  });
+
+  test("is nothing when the route has no such block", () => {
+    const parked: Pipeline = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "operator" },
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(nextAgent(parked, facts(), "author")).toBeUndefined();
+  });
+});
+
 describe("validation", () => {
   const without = (...ids: string[]) => STANDARD_PIPELINE.nodes.filter((n) => !ids.includes(n.id));
   const replace = (node: PipelineNode): Pipeline => ({
@@ -315,6 +335,15 @@ describe("validation", () => {
     };
     expect(problemsOf(ungated, RUNGS)).toEqual([
       "a route from queue reaches author through no gate",
+    ]);
+  });
+
+  test("refuses a route through two gates before one work block", () => {
+    // A dispatch asks, grants and admits one step, so a second gate on the
+    // route would be a step the plan cannot ask about.
+    const doubled = replace({ kind: "gate", id: "start", step: "author", next: "climb" });
+    expect(problemsOf(doubled, RUNGS)).toEqual([
+      "a route passes start and then climb before one work block; a step has one gate",
     ]);
   });
 });

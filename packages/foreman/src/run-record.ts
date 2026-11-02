@@ -44,6 +44,8 @@ export const newRunFor = (input: {
   readonly rung: string;
   readonly provider: string | undefined;
   readonly role: Role;
+  /** The pipeline block the run runs at. */
+  readonly node: string;
   /** A review run records the branch tip it reads. */
   readonly commit?: string | undefined;
 }): NewRun => ({
@@ -58,9 +60,7 @@ export const newRunFor = (input: {
   pool: input.provider === undefined ? input.harness : poolFor(input.provider),
   model: input.model ?? input.harness,
   rung: input.rung,
-  // Until the dispatcher places tasks, a run's node is the standard
-  // pipeline's block for its role.
-  node: input.role,
+  node: input.node,
   work: input.role === "review" ? "review" : isResearch(input.task) ? "research" : "build",
   commit: input.commit,
   // `||`, not `??`: the table starts sizes at 1, so a `size:0` label reads as none.

@@ -20,6 +20,7 @@ const run = (overrides: Partial<Parameters<typeof newRunFor>[0]> = {}) => ({
   rung: "cheap",
   provider: "opencode-go",
   role: "author" as const,
+  node: "author",
   ...overrides,
 });
 
@@ -61,7 +62,7 @@ describe("newRunFor", () => {
   });
 
   test("a review run is review work and records the tip it reads", () => {
-    expect(newRunFor(run({ role: "review", commit: "c1" }))).toMatchObject({
+    expect(newRunFor(run({ role: "review", node: "review", commit: "c1" }))).toMatchObject({
       work: "review",
       node: "review",
       commit: "c1",

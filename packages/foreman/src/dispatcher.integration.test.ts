@@ -414,10 +414,16 @@ const usePolicy = (policy: object) => {
 };
 beforeEach(() => usePolicy(ALLOWED));
 const operatorPolicy = process.env["FOREMAN_POLICY"];
+// A pipelines file that does not exist: every project runs the standard
+// pipeline, and the operator's own drawings stay out of the tests.
+const operatorPipelines = process.env["FOREMAN_PIPELINES"];
+process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
 afterAll(() => {
   rmSync(policies, { recursive: true, force: true });
   if (operatorPolicy === undefined) delete process.env["FOREMAN_POLICY"];
   else process.env["FOREMAN_POLICY"] = operatorPolicy;
+  if (operatorPipelines === undefined) delete process.env["FOREMAN_PIPELINES"];
+  else process.env["FOREMAN_PIPELINES"] = operatorPipelines;
 });
 
 const layerFor = (world: World) =>

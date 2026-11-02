@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Option, Schema as S } from "effect";
-import { Pipeline, STANDARD_PIPELINE } from "./pipeline.ts";
+import { Pipeline, problemsOf, STANDARD_PIPELINE } from "./pipeline.ts";
 import { configDirectory, rewrite } from "./shared-file.ts";
 
 /**
@@ -54,4 +54,27 @@ export const pipelineFor = (
   return drawn === undefined
     ? { pipeline: STANDARD_PIPELINE, drawn: false }
     : { pipeline: drawn, drawn: true };
+};
+
+/**
+ * A project's pipeline as one reading found it.
+ *
+ * A stopped project takes no step, and `problems` says why: its drawing fails
+ * validation, or the file does not decode. It never runs the standard pipeline
+ * instead, because a flow the operator did not draw is worse than stopping.
+ */
+export type ProjectPipeline =
+  | { readonly _tag: "Runs"; readonly pipeline: Pipeline; readonly drawn: boolean }
+  | { readonly _tag: "Stopped"; readonly problems: ReadonlyArray<string> };
+
+/** What `project` runs, from one reading of the file, checked against these rungs. */
+export const projectPipeline = (
+  read: { readonly value: Pipelines; readonly error: string | undefined },
+  project: string,
+  rungs: ReadonlyArray<string>,
+): ProjectPipeline => {
+  if (read.error !== undefined) return { _tag: "Stopped", problems: [read.error] };
+  const { pipeline, drawn } = pipelineFor(read.value, project);
+  const problems = problemsOf(pipeline, rungs);
+  return problems.length > 0 ? { _tag: "Stopped", problems } : { _tag: "Runs", pipeline, drawn };
 };

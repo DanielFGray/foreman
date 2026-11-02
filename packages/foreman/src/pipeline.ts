@@ -195,6 +195,30 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
 };
 
 /**
+ * The first agent block of `role` on the task's route that the task has not
+ * passed, or nothing when its route has none.
+ *
+ * This is where an agent the operator starts by hand runs. The operator can
+ * start it before the task reaches that block, so each work block before it
+ * on the route counts as passed.
+ */
+export const nextAgent = (
+  pipeline: Pipeline,
+  facts: Facts,
+  role: AgentNode["role"],
+): AgentNode | undefined => {
+  let passed = facts.passed;
+  for (let steps = 0; steps <= pipeline.nodes.length; steps++) {
+    const placement = place(pipeline, { ...facts, passed });
+    if (placement._tag !== "At") return undefined;
+    const { node } = placement;
+    if (node.kind === "agent" && node.role === role) return node;
+    passed = new Set([...passed, node.id]);
+  }
+  return undefined;
+};
+
+/**
  * Why a pipeline cannot run, or nothing when it can.
  *
  * A pipeline that fails is not run at all: its project takes no step. It never
@@ -262,14 +286,32 @@ export const problemsOf = (
       }
     }
   }
+
+  // A dispatch is one policy step: one ask, one grant, one admission. So no
+  // route passes a second gate before it reaches a work block.
+  const halted = graphOf(
+    pipeline,
+    () => true,
+    (node) => !isWork(node),
+  );
+  const gates = pipeline.nodes.filter((node) => node.kind === "gate");
+  for (const gate of gates) {
+    for (const other of gates) {
+      if (other.id !== gate.id && (gate.next === other.id || halted.reaches(gate.next, other.id))) {
+        problems.push(
+          `a route passes ${gate.id} and then ${other.id} before one work block; a step has one gate`,
+        );
+      }
+    }
+  }
   return [...new Set(problems)];
 };
 
 /**
- * The flow foreman ran before pipelines: author, review, land.
+ * The pipeline of a project that has drawn none: author, review, land.
  *
- * The router is `authorStep` drawn as a block: a task with any recorded
- * failure or attempt is a retry, which the `climb` step governs.
+ * The router sends a task with any recorded failure or attempt to the `climb`
+ * gate, so a retry is governed by its own step, apart from a first try.
  */
 export const STANDARD_PIPELINE: Pipeline = {
   nodes: [

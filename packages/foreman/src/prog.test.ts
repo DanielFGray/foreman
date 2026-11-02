@@ -20,6 +20,7 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
     rung,
     provider: undefined,
     role,
+    node: role,
     commit,
   });
 

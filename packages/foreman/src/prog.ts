@@ -74,9 +74,14 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     const onStore = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
       effect.pipe(Effect.provideService(SqlClient.SqlClient, sql));
 
+    /** Closes the task's open runs with these endings; `commit` is the branch tip they leave. */
     const endRuns = (
       task: string,
-      endings: { readonly author?: AuthorEnding; readonly review?: ReviewEnding },
+      endings: {
+        readonly author?: AuthorEnding;
+        readonly review?: ReviewEnding;
+        readonly commit?: string | undefined;
+      },
     ) => together(`end runs of ${task}`, onStore(closeOpenRuns(task, endings)));
 
     /** The tasks with their runs, oldest first. */
