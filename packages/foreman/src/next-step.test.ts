@@ -10,7 +10,7 @@ import type { Item, TaskStatus } from "./prog.ts";
 import { queueFrom } from "./queue.ts";
 import type { Landing } from "./repository.ts";
 import type { TaskPhase } from "./task-phase.ts";
-import { authorRun, handedOff, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
 
 /**
  * The step a task takes next after each way settle can find a run ended, and
@@ -67,8 +67,8 @@ const returned = (): Run => reviewRun("dear", { open: false, ending: "returned",
 /** A reviewer approved c1 and has not been settled yet: its run is still open. */
 const approved = (): Run => reviewRun("dear", { ending: "approved", commit: "c1" });
 
-/** A reviewer whose run ended without a verdict. */
-const noVerdict = (rung: string): Run => reviewRun(rung, { open: false, ending: "no-verdict" });
+/** A reviewer whose run stopped without naming an exit. */
+const stoppedReview = (rung: string): Run => reviewRun(rung, { open: false, ending: "stopped" });
 
 const PHASES: ReadonlyArray<{
   readonly phase: TaskPhase;
@@ -80,7 +80,7 @@ const PHASES: ReadonlyArray<{
   {
     phase: "Landed",
     after: "done",
-    task: task("done", [], [handedOff("cheap")]),
+    task: task("done", [], [authorDone("cheap")]),
     step: "none",
     at: "outside",
   },
@@ -94,7 +94,7 @@ const PHASES: ReadonlyArray<{
   {
     phase: "ReviewReturned",
     after: "released, the author's rung failed",
-    task: task("open", ["failed-by:cheap"], [handedOff("cheap"), returned()]),
+    task: task("open", ["failed-by:cheap"], [authorDone("cheap"), returned()]),
     step: "climb",
     at: "author waiting via climb",
   },
@@ -137,28 +137,28 @@ const PHASES: ReadonlyArray<{
   {
     phase: "ReviewWaiting",
     after: "the author's run closed handed off",
-    task: task("reviewing", [], [handedOff("cheap", "c1")]),
+    task: task("reviewing", [], [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewExpired",
     after: "the author's pane stopped",
-    task: task("reviewing", [], [handedOff("cheap", "c1")]),
+    task: task("reviewing", [], [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewStopped",
     after: "the review run ended without a verdict, a rung left",
-    task: task("reviewing", [], [handedOff("cheap", "c1"), noVerdict("cheap")]),
+    task: task("reviewing", [], [authorDone("cheap", "c1"), stoppedReview("cheap")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewStopped",
     after: "no reviewer left: released and parked",
-    task: task("open", ["needs-you"], [handedOff("cheap", "c1"), noVerdict("dear")]),
+    task: task("open", ["needs-you"], [authorDone("cheap", "c1"), stoppedReview("dear")]),
     step: "none",
     at: "author waiting via start",
   },
@@ -175,52 +175,52 @@ const PHASES: ReadonlyArray<{
     task: task(
       "open",
       ["attempt:cheap:1"],
-      [authorRun("cheap", { open: false, ending: "unfinished" })],
+      [authorRun("cheap", { open: false, ending: "stopped" })],
     ),
     step: "climb",
     at: "author waiting via climb",
   },
 ];
 
-const VERDICTS: ReadonlyArray<{
-  readonly verdict: Landing["_tag"];
+const LANDINGS: ReadonlyArray<{
+  readonly result: Landing["_tag"];
   readonly after: string;
   readonly task: Item;
   readonly step: string;
   readonly at: string;
 }> = [
   {
-    verdict: "Merged",
+    result: "Merged",
     after: "completed",
-    task: task("done", [], [handedOff("cheap", "c1"), approved()]),
+    task: task("done", [], [authorDone("cheap", "c1"), approved()]),
     step: "none",
     at: "outside",
   },
   {
-    verdict: "Present",
+    result: "Present",
     after: "completed",
-    task: task("done", [], [handedOff("cheap", "c1"), approved()]),
+    task: task("done", [], [authorDone("cheap", "c1"), approved()]),
     step: "none",
     at: "outside",
   },
   {
-    verdict: "Held",
-    after: "still approved",
-    task: task("reviewing", [], [handedOff("cheap", "c1"), approved()]),
+    result: "Held",
+    after: "still approved, the reviewer's run closed by settle",
+    task: task("reviewing", [], [authorDone("cheap", "c1"), { ...approved(), open: false }]),
     step: "land",
     at: "land waiting via land-gate",
   },
   {
-    verdict: "Rejected",
+    result: "Rejected",
     after: "released with no evidence",
-    task: task("open", [], [handedOff("cheap", "c1"), approved()]),
+    task: task("open", [], [authorDone("cheap", "c1"), approved()]),
     step: "author",
     at: "author waiting via start",
   },
   {
-    verdict: "Broke",
+    result: "Broke",
     after: "released, the author's rung failed",
-    task: task("open", ["failed-by:cheap"], [handedOff("cheap", "c1"), approved()]),
+    task: task("open", ["failed-by:cheap"], [authorDone("cheap", "c1"), approved()]),
     step: "climb",
     at: "author waiting via climb",
   },
@@ -283,16 +283,16 @@ const placedStep = (item: Item): string => {
 describe("the next step after a run ends", () => {
   for (const row of PHASES) {
     test(`${row.phase} (${row.after}) → ${row.step} at ${row.at}`, () => {
-      expect(at(place(STANDARD_PIPELINE, factsOf(row.task)))).toBe(row.at);
+      expect(at(place(STANDARD_PIPELINE, factsOf(row.task, STANDARD_PIPELINE)))).toBe(row.at);
       expect(placedStep(row.task)).toBe(row.step);
     });
   }
 });
 
 describe("the next step after a landing", () => {
-  for (const row of VERDICTS) {
-    test(`${row.verdict} (${row.after}) → ${row.step} at ${row.at}`, () => {
-      expect(at(place(STANDARD_PIPELINE, factsOf(row.task)))).toBe(row.at);
+  for (const row of LANDINGS) {
+    test(`${row.result} (${row.after}) → ${row.step} at ${row.at}`, () => {
+      expect(at(place(STANDARD_PIPELINE, factsOf(row.task, STANDARD_PIPELINE)))).toBe(row.at);
       expect(placedStep(row.task)).toBe(row.step);
     });
   }

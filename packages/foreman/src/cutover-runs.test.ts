@@ -1,3 +1,4 @@
+import type { Run } from "tasks";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,7 +7,9 @@ import { Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import { runsOf, Tasks } from "tasks";
 import { convert, reportLines } from "./cutover-runs.ts";
-import { isApproved, reviewedBy, reviewFailedBy } from "./lap.ts";
+import { reviewedBy, reviewFailedBy } from "./lap.ts";
+import { place, STANDARD_PIPELINE } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
 import { Repository } from "./repository.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 
@@ -82,14 +85,14 @@ describe("the runs cutover", () => {
 
         expect(brief(working)).toEqual([
           ["author", "cheap", true, undefined, undefined, 1],
-          ["review", "strong", false, "no-verdict", undefined, undefined],
+          ["review", "strong", false, "stopped", undefined, undefined],
         ]);
         expect(brief(settled)).toEqual([
-          ["author", "cheap", false, "satisfied", tip, undefined],
+          ["author", "cheap", false, "already-done", tip, undefined],
           ["review", undefined, false, "approved", tip, undefined],
         ]);
         expect(brief(reviewing)).toEqual([
-          ["author", "cheap", false, "handed-off", tip, undefined],
+          ["author", "cheap", false, "done", tip, undefined],
           ["review", "strong", true, undefined, tip, undefined],
         ]);
         expect(runs.has(finished)).toBe(false);
@@ -106,7 +109,7 @@ describe("the runs cutover", () => {
 
         // The readers see what the labels said.
         const settledRuns = { runs: runs.get(settled)!, tip };
-        expect(isApproved(settledRuns)).toBe(true);
+        expect(landsAt(settledRuns)).toBe(true);
         expect(reviewedBy({ runs: runs.get(reviewing)! })).toBe("strong");
         expect(reviewFailedBy({ runs: runs.get(working)! })).toEqual(["strong"]);
 
@@ -128,7 +131,7 @@ describe("the runs cutover", () => {
           ["author", "retired", undefined],
           ["review", undefined, undefined],
         ]);
-        expect(isApproved({ runs, tip })).toBe(false);
+        expect(landsAt({ runs, tip: undefined })).toBe(false);
         const plan = report.plans.find((candidate) => candidate.task === lost)!;
         expect(plan.unknownRungs).toEqual(["retired", "approved (reviewer not recorded)"]);
         expect(plan.branchGone).toBe(true);
@@ -175,3 +178,15 @@ describe("the runs cutover", () => {
       }),
     ));
 });
+
+/** Whether a reviewing task with these runs stands at the land of the standard pipeline. */
+const landsAt = (task: { readonly runs: ReadonlyArray<Run>; readonly tip: string | undefined }) => {
+  const placement = place(
+    STANDARD_PIPELINE,
+    factsOf(
+      { status: "reviewing", priority: 2, parent: undefined, labels: [], ...task },
+      STANDARD_PIPELINE,
+    ),
+  );
+  return placement._tag === "At" && placement.node.kind === "land";
+};

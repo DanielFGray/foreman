@@ -1,5 +1,21 @@
-import { Effect, FileSystem, Option, Schema as S } from "effect";
-import { Pipeline, type PipelineNode, problemsOf, STANDARD_PIPELINE } from "./pipeline.ts";
+import { Effect, FileSystem, Option, Schema as S, Struct } from "effect";
+import {
+  AgentNode,
+  BranchNode,
+  CheckNode,
+  DoneNode,
+  GateNode,
+  LandNode,
+  ParkNode,
+  Pipeline,
+  type PipelineNode,
+  RouterNode,
+  SourceNode,
+  WorktreeNode,
+  problemsOf,
+  STANDARD_PIPELINE,
+  standardExits,
+} from "./pipeline.ts";
 import { configDirectory, type Read, rewrite } from "./shared-file.ts";
 
 /**
@@ -14,13 +30,36 @@ export const Pipelines = S.Record(S.String, Pipeline);
 export type Pipelines = typeof Pipelines.Type;
 
 /**
- * The file as written: the pipelines under the format's version. A file
- * without a version predates the workspace blocks, and reads through
- * `withWorkspace`; the next write stores it in this form, so a pipeline the
- * operator then draws with no worktree is never given one again.
+ * The file as written: the pipelines under the format's version. Older files
+ * read as they ran then, and the next write stores them in this form:
+ *
+ * - version 2 wired each agent and check block to one `next` block. Each gets
+ *   the standard exits for its role, advancing to that block, and returning
+ *   to the queue charged to the author.
+ * - a file without a version predates the workspace blocks as well, and also
+ *   reads through `withWorkspace`, so a pipeline the operator then draws with
+ *   no worktree is never given one again.
  */
-const PipelinesFile = S.Struct({ version: S.Literal(2), pipelines: Pipelines });
+const PipelinesFile = S.Struct({ version: S.Literal(3), pipelines: Pipelines });
 type PipelinesFile = typeof PipelinesFile.Type;
+
+/** An agent or a check block as version 2 drew it: one wire on. */
+const WiredOn = { next: S.String };
+const OldNode = S.Union([
+  SourceNode,
+  RouterNode,
+  GateNode,
+  BranchNode,
+  WorktreeNode,
+  LandNode,
+  DoneNode,
+  ParkNode,
+  AgentNode.mapFields((fields) => ({ ...Struct.omit(fields, ["exits", "stopped"]), ...WiredOn })),
+  CheckNode.mapFields((fields) => ({ ...Struct.omit(fields, ["exits"]), ...WiredOn })),
+]);
+type OldNode = typeof OldNode.Type;
+const OldPipelines = S.Record(S.String, S.Struct({ nodes: S.Array(OldNode) }));
+const OldFile = S.Struct({ version: S.Literal(2), pipelines: OldPipelines });
 
 /** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
 export const pipelinesPath = (): string =>
@@ -41,9 +80,18 @@ export const readPipelines = (path: string) =>
 /** Rewrites the pipelines through `change`, the one way anything writes them. */
 export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
   rewrite(path, PipelinesFile, readFile, (file) => ({
-    version: 2 as const,
+    version: 3 as const,
     pipelines: change(file.pipelines),
   }));
+
+/** A version 2 pipeline as it ran: each agent and check block takes the standard exits for its role. */
+export const withExits = (pipeline: { readonly nodes: ReadonlyArray<OldNode> }): Pipeline => ({
+  nodes: pipeline.nodes.map((node): PipelineNode => {
+    if (node.kind !== "agent" && node.kind !== "check") return node;
+    const { next, ...rest } = node;
+    return { ...rest, exits: standardExits(node, next) };
+  }),
+});
 
 /**
  * A pipeline drawn before the workspace blocks, as it ran then: every task
@@ -73,7 +121,17 @@ export const withWorkspace = (pipeline: Pipeline): Pipeline => {
   };
 };
 
-const NONE: PipelinesFile = { version: 2, pipelines: {} };
+const NONE: PipelinesFile = { version: 3, pipelines: {} };
+
+const each = (
+  pipelines: typeof OldPipelines.Type,
+  upgrade: (pipeline: { readonly nodes: ReadonlyArray<OldNode> }) => Pipeline,
+): PipelinesFile => ({
+  version: 3,
+  pipelines: Object.fromEntries(
+    Object.entries(pipelines).map(([project, pipeline]) => [project, upgrade(pipeline)]),
+  ),
+});
 
 /** The file as stored, with a file from before the version read as it ran then. */
 const readFile = (path: string) =>
@@ -81,16 +139,16 @@ const readFile = (path: string) =>
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(path).pipe(Effect.option);
     if (Option.isNone(text)) return { value: NONE, error: undefined, text: undefined };
-    // A file that is neither form reports why it is not the current one.
+    // A file that is no form reports why it is not the current one.
     return yield* S.decodeEffect(S.fromJsonString(PipelinesFile))(text.value).pipe(
       Effect.catch((current) =>
-        S.decodeEffect(S.fromJsonString(Pipelines))(text.value).pipe(
-          Effect.map((old): PipelinesFile => ({
-            version: 2,
-            pipelines: Object.fromEntries(
-              Object.entries(old).map(([project, pipeline]) => [project, withWorkspace(pipeline)]),
+        S.decodeEffect(S.fromJsonString(OldFile))(text.value).pipe(
+          Effect.map((old) => each(old.pipelines, withExits)),
+          Effect.catch(() =>
+            S.decodeEffect(S.fromJsonString(OldPipelines))(text.value).pipe(
+              Effect.map((old) => each(old, (pipeline) => withWorkspace(withExits(pipeline)))),
             ),
-          })),
+          ),
           Effect.mapError(() => current),
         ),
       ),
@@ -104,7 +162,6 @@ const readFile = (path: string) =>
       ),
     );
   });
-
 /** The pipeline `project` runs, and whether the operator drew it. */
 export const pipelineFor = (
   pipelines: Pipelines,

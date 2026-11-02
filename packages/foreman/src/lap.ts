@@ -1,4 +1,4 @@
-import type { Run } from "tasks";
+import { isExit, type Run } from "tasks";
 
 /**
  * What foreman reads off a task's runs.
@@ -30,61 +30,26 @@ export const roundsOf = (task: Runs): number =>
 export const reviewedBy = (task: Runs): string | undefined =>
   lapOf(task).find((run) => run.role === "review" && run.open)?.rung;
 
-/** The rungs whose reviewers ended this lap with no verdict. */
+/** The rungs whose reviewers stopped this lap without naming an exit. */
 export const reviewFailedBy = (task: Runs): ReadonlyArray<string> =>
   lapOf(task).flatMap((run) =>
-    run.role === "review" && run.ending === "no-verdict" && run.rung !== undefined
-      ? [run.rung]
-      : [],
+    run.role === "review" && run.ending === "stopped" && run.rung !== undefined ? [run.rung] : [],
   );
 
-/**
- * The lap's last review run that gave a verdict, when that verdict approves.
- * A reviewer that approves and then returns the work in one turn leaves
- * `returned`, so its approval is gone.
- */
-const approval = (task: Runs): Run | undefined => {
-  const verdict = lapOf(task).findLast(
-    (run) => run.role === "review" && (run.ending === "approved" || run.ending === "returned"),
-  );
-  return verdict?.ending === "approved" ? verdict : undefined;
-};
+/** The lap's last run that named an exit: the one that placed the task where it is. */
+export const lastExit = (task: Runs): Run | undefined =>
+  lapOf(task).findLast((run) => isExit(run.ending));
 
 /**
- * Whether a reviewer accepted the branch as it stands: the lap's last verdict
- * approves, and the commit the reviewer read is the branch tip now. A commit
- * after the approval voids it.
+ * The commit a land or a done takes: the one the exit that routed the task
+ * there was named on. Landing merges this commit by id, and refuses a tip that
+ * has moved past it.
  */
-export const isApproved = (task: Runs & { readonly tip: string | undefined }): boolean => {
-  const commit = approval(task)?.commit;
-  return commit !== undefined && commit === task.tip;
-};
+export const routedCommit = (task: Runs): string | undefined => lastExit(task)?.commit;
 
-/**
- * The pipeline blocks that advanced the task in this lap: the author's block
- * once it handed off or claimed the trunk already does the task, the review
- * block while its approval holds, and a check block whose command passed on
- * the branch tip. A review and a check each pass one commit, so a commit after
- * either places the task at that block again.
- */
-export const passedNodes = (
-  task: Runs & { readonly tip: string | undefined },
-): ReadonlySet<string> => {
-  const approved = isApproved(task) ? approval(task) : undefined;
-  const nodes = lapOf(task).flatMap((run) => {
-    const advanced =
-      run.role === "author"
-        ? run.ending === "handed-off" || run.ending === "satisfied"
-        : run.role === "check"
-          ? run.ending === "passed" && run.commit !== undefined && run.commit === task.tip
-          : run === approved;
-    return advanced && run.node !== undefined ? [run.node] : [];
-  });
-  return new Set(nodes);
-};
-
-/** The commit the lap's approval covers. Landing merges this commit by id. */
-export const approvedCommit = (task: Runs): string | undefined => approval(task)?.commit;
+/** Whether the open reviewer named its exit, and settle has not yet closed its run. */
+export const reviewerNamed = (task: Runs): boolean =>
+  lapOf(task).some((run) => run.role === "review" && run.open && run.ending !== undefined);
 
 /**
  * The commit a task working on the operator's branch started from: the base
@@ -104,11 +69,11 @@ export const directBase = (task: Runs): string | undefined =>
  * read as a crash, which costs a rung and dispatches the same discovery again
  * at a more expensive model, forever.
  *
- * So the finding is a claim the author records, and the branch it hands over
+ * So the finding is a claim the author records as the exit `already-done`, and the branch it hands over
  * is legitimately empty. It is a claim and not a verdict: "it is already done"
  * is exactly what a model too weak for the task would say to escape it, so a
  * reviewer confirms it against the trunk like any other diff, and only the
  * reviewer's approval closes the task.
  */
-export const isSatisfied = (task: Runs): boolean =>
-  lapOf(task).find((run) => run.role === "author")?.ending === "satisfied";
+export const claimsAlreadyDone = (task: Runs): boolean =>
+  lapOf(task).find((run) => run.role === "author")?.ending === "already-done";

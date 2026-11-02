@@ -50,10 +50,18 @@ const task = (
   tip: undefined,
 });
 
-/** A task in review whose reviewer approved the commit it read, which is the tip. */
+/** A task in review whose reviewer approved the tip, and whose run settle has closed. */
 const approvedTask = (id: string, status: TaskStatus = "reviewing"): Item =>
   withRuns(
     authoredOn(task(id, [], status), "opencode"),
+    [reviewRun("claude", { ending: "approved", commit: "c1", open: false })],
+    "c1",
+  );
+
+/** A task whose reviewer named `approved` on the tip, with its run still open. */
+const namedApproval = (id: string): Item =>
+  withRuns(
+    authoredOn(task(id, [], "reviewing"), "opencode"),
     [reviewRun("claude", { ending: "approved", commit: "c1" })],
     "c1",
   );
@@ -114,14 +122,18 @@ describe("landing a reviewed branch", () => {
     expect(readyToLand(STANDARD_PIPELINE, approved, undefined)).toBe(true);
   });
 
-  test("keeps an approved task out of the ordinary settle path either way", () => {
-    const approved = approvedTask("ts-123456");
+  test("an approval whose run is still open waits for settle to close it", () => {
+    const named = namedApproval("ts-123456");
 
-    // The two filters in settle must agree. A task excluded from landing
-    // because its reviewer is live must not fall through to the branch that
-    // treats it as a reviewer who stopped without a verdict.
-    expect(readyToLand(STANDARD_PIPELINE, approved, worker("working"))).toBe(false);
-    expect(awaitingLanding(STANDARD_PIPELINE, approved)).toBe(true);
+    // The task stands at the review, ended: settle closes the run once the
+    // pane is idle, and does not read it as a reviewer that stopped with no
+    // exit. Only then does it stand at the land.
+    expect(readyToLand(STANDARD_PIPELINE, named, worker("settled"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINE, named)).toBe(false);
+    const placement = place(STANDARD_PIPELINE, factsOf(named, STANDARD_PIPELINE));
+    expect(placement._tag === "At" && `${placement.node.id} ${placement.state}`).toBe(
+      "review ended",
+    );
   });
 
   test("ignores a task without a verdict, and one that already left review", () => {
@@ -317,7 +329,7 @@ describe("work handed back for review", () => {
     // rung up, forever.
     const claimed = active(
       withRuns(authoredOn(task("ts-444444", []), "opencode"), [
-        authorRun("opencode", { open: false, ending: "satisfied" }),
+        authorRun("opencode", { open: false, ending: "already-done" }),
       ]),
       undefined,
     );
@@ -447,7 +459,10 @@ describe("the policy gate on dispatch", () => {
       ["foreman", { _tag: "Runs" as const, pipeline: { nodes: single }, drawn: false }],
     ]);
     const placedIn = (...tasks: ReadonlyArray<Item>) =>
-      tasks.map((item) => ({ task: item, placement: place({ nodes: single }, factsOf(item)) }));
+      tasks.map((item) => ({
+        task: item,
+        placement: place({ nodes: single }, factsOf(item, { nodes: single })),
+      }));
 
     test("starts no more of its waiting tasks than its slots", () => {
       const queue = [task("ts-a", [], "open"), task("ts-b", [], "open")];
@@ -477,9 +492,17 @@ describe("the policy gate on dispatch", () => {
     const checked = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
       node.kind === "agent" && node.id === "author"
         ? [
-            { ...node, next: "lint-gate" },
+            { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
             { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-            { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+            {
+              kind: "check",
+              id: "lint",
+              command: "bun run lint",
+              exits: [
+                { name: "passed", to: "review-gate" },
+                { name: "failed", to: "queue", fails: "author" },
+              ],
+            },
           ]
         : [node],
     );

@@ -5,7 +5,7 @@ import { Command } from "effect/cli";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { STANDARD_PIPELINE, standardExits } from "./pipeline.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { readPipelines, withWorkspace } from "./pipeline-file.ts";
@@ -68,12 +68,12 @@ describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      version: 2,
+      version: 3,
       pipelines: { amux: pinned },
     });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2, pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 3, pipelines: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -114,11 +114,28 @@ describe("a pipelines file from before the workspace blocks", () => {
     writeFileSync(path, JSON.stringify({ amux: old }));
     await run("set", "other", fileWith(pinned));
 
-    expect(read().version).toBe(2);
+    expect(read().version).toBe(3);
     expect(read().pipelines.amux.nodes.slice(0, 3)).toEqual([
       { kind: "source", id: "queue", filter: "", next: "branch" },
       { kind: "branch", id: "branch", next: "worktree" },
       { kind: "worktree", id: "worktree", next: "author" },
+    ]);
+    expect(read().pipelines.amux.nodes.slice(3)).toEqual([
+      {
+        kind: "agent",
+        id: "author",
+        role: "author",
+        model: "ladder",
+        exits: standardExits({ kind: "agent", role: "author" }, "review"),
+      },
+      {
+        kind: "agent",
+        id: "review",
+        role: "review",
+        model: "above",
+        exits: standardExits({ kind: "agent", role: "review" }, "land"),
+      },
+      { kind: "land", id: "land" },
     ]);
   });
 
@@ -128,9 +145,27 @@ describe("a pipelines file from before the workspace blocks", () => {
       nodes: [
         { kind: "source", id: "queue", filter: "", next: "start" },
         { kind: "gate", id: "start", step: "author", next: "author" },
-        { kind: "agent", id: "author", role: "author", model: "ladder", next: "review-gate" },
+        {
+          kind: "agent",
+          id: "author",
+          role: "author",
+          model: "ladder",
+          exits: [
+            { name: "done", to: "review-gate" },
+            { name: "already-done", to: "review-gate" },
+          ],
+        },
         { kind: "gate", id: "review-gate", step: "review", next: "review" },
-        { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
+        {
+          kind: "agent",
+          id: "review",
+          role: "review",
+          model: "above",
+          exits: [
+            { name: "approved", to: "land-gate" },
+            { name: "returned", to: "queue", fails: "author" },
+          ],
+        },
         { kind: "gate", id: "land-gate", step: "land", next: "done" },
         { kind: "done", id: "done" },
       ],
@@ -148,7 +183,16 @@ describe("migrating and reading the pipelines file", () => {
       nodes: [
         { kind: "source", id: "bugs", filter: "label:bug", next: "author" },
         { kind: "source", id: "rest", filter: "", next: "author" },
-        { kind: "agent", id: "author", role: "author", model: "ladder", next: "land" },
+        {
+          kind: "agent",
+          id: "author",
+          role: "author",
+          model: "ladder",
+          exits: [
+            { name: "done", to: "land" },
+            { name: "already-done", to: "land" },
+          ],
+        },
         { kind: "land", id: "land" },
       ],
     });
@@ -171,5 +215,62 @@ describe("migrating and reading the pipelines file", () => {
     );
     expect(read.error).toStartWith(`${path} does not decode: `);
     expect(read.error?.length).toBeGreaterThan(`${path} does not decode: `.length);
+  });
+});
+
+describe("a pipelines file from before the exits", () => {
+  test("gives each agent and check the standard exits for its role, and is stored that way once written", async () => {
+    const drawn = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "branch" },
+        { kind: "branch", id: "branch", next: "worktree" },
+        { kind: "worktree", id: "worktree", next: "start" },
+        { kind: "gate", id: "start", step: "author", next: "author" },
+        { kind: "agent", id: "author", role: "author", model: "ladder", next: "lint-gate" },
+        { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+        { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+        { kind: "gate", id: "review-gate", step: "review", next: "review" },
+        { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
+        { kind: "gate", id: "land-gate", step: "land", next: "land" },
+        { kind: "land", id: "land" },
+      ],
+    };
+    writeFileSync(path, JSON.stringify({ version: 2, pipelines: { amux: drawn } }));
+    await run("set", "other", fileWith(pinned));
+
+    const stored = JSON.parse(readFileSync(path, "utf8"));
+    expect(stored.version).toBe(3);
+    const byId = new Map(
+      stored.pipelines.amux.nodes.map((node: { readonly id: string }) => [node.id, node]),
+    );
+    expect(byId.get("author")).toEqual({
+      kind: "agent",
+      id: "author",
+      role: "author",
+      model: "ladder",
+      exits: [
+        { name: "done", to: "lint-gate" },
+        { name: "already-done", to: "lint-gate" },
+      ],
+    });
+    expect(byId.get("lint")).toEqual({
+      kind: "check",
+      id: "lint",
+      command: "bun run lint",
+      exits: [
+        { name: "passed", to: "review-gate" },
+        { name: "failed", to: "queue", fails: "author" },
+      ],
+    });
+    expect(byId.get("review")).toEqual({
+      kind: "agent",
+      id: "review",
+      role: "review",
+      model: "above",
+      exits: [
+        { name: "approved", to: "land-gate" },
+        { name: "returned", to: "queue", fails: "author" },
+      ],
+    });
   });
 });

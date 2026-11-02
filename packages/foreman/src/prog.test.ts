@@ -6,7 +6,7 @@ import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import { Prog } from "./prog.ts";
 import { agentLog, attemptsOf, type Item } from "./prog.ts";
-import { authoredBy, isApproved, reviewedBy, roundsOf } from "./lap.ts";
+import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from "./lap.ts";
 import { newRunFor } from "./run-record.ts";
 import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 
@@ -55,7 +55,8 @@ describe("task attribution", () => {
 
     expect(authoredBy(task)).toBe("opencode");
     expect(reviewedBy(task)).toBe("claude");
-    expect(isApproved(task)).toBe(true);
+    expect(reviewerNamed(task)).toBe(true);
+    expect(routedCommit(task)).toBe("c1");
   });
 
   test("names the rung and the model the agent reported", () => {
@@ -151,7 +152,7 @@ describe("Prog against a scratch store", () => {
 
     expect(after.status).toBe("open");
     expect(after.runs.map((r) => [r.role, r.open, r.ending])).toEqual([
-      ["author", false, "handed-off"],
+      ["author", false, "done"],
       ["review", false, "released"],
     ]);
   });
@@ -166,7 +167,7 @@ describe("Prog against a scratch store", () => {
 
     const after = await run((prog) => prog.show(id));
     expect(after.runs.map((r) => [r.role, r.rung, r.open, r.ending])).toEqual([
-      ["author", "cheap", false, "handed-off"],
+      ["author", "cheap", false, "done"],
       ["review", "cheap", false, "released"],
       ["review", "dear", true, undefined],
     ]);

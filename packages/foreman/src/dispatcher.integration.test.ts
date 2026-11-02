@@ -21,9 +21,9 @@ import type { Run } from "tasks";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
-import type { CheckRun, Ending, NewRun, Role } from "tasks";
+import type { CheckRun, Ending, NamedExit, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
-import { authorRun, handedOff, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
 import { type AgentNode, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
 import { scratchStore } from "./scratch-store.ts";
@@ -223,7 +223,7 @@ class World {
       this.write("prog.attribute", () => this.openRun(id, run)),
     assignReview: (id: string, run: NewRun) =>
       this.write("prog.assignReview", () => {
-        this.closeRuns(id, { author: "handed-off", review: "released", commit: run.commit });
+        this.closeRuns(id, { author: "done", review: "released", commit: run.commit });
         return this.openRun(id, run);
       }),
     endReview: (id: string, ending: Ending) =>
@@ -310,16 +310,19 @@ class World {
     add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
     countRound: () => this.write("prog.countRound", () => 1),
-    rereadReview: (id: string, commit: string) =>
-      this.write("prog.rereadReview", () =>
-        this.update(id, (task) => ({
-          ...task,
-          runs: task.runs.map((run) =>
-            run.role === "review" && run.open && run.ending === undefined
-              ? { ...run, commit }
-              : run,
-          ),
-        })),
+    nameExit: (id: string, exit: NamedExit) =>
+      this.write("prog.nameExit", () =>
+        this.update(id, (task) => {
+          const open = task.runs.findLast((run) => run.open && run.role !== "check");
+          return {
+            ...task,
+            status:
+              exit.event === "review" ? "reviewing" : exit.event === "open" ? "open" : task.status,
+            runs: task.runs.map((run) =>
+              run === open ? { ...run, ending: exit.name, commit: exit.commit ?? run.commit } : run,
+            ),
+          };
+        }),
       ),
     recordCheck: (check: CheckRun) =>
       this.write("prog.recordCheck", () =>
@@ -450,7 +453,11 @@ class World {
               ...run,
               open: false,
               ending: run.ending ?? ending,
-              commit: run.role === "author" ? (endings.commit ?? run.commit) : run.commit,
+              // A named exit keeps the commit it was named on.
+              commit:
+                run.role === "author" && run.ending === undefined
+                  ? (endings.commit ?? run.commit)
+                  : run.commit,
             }
           : run;
       }),
@@ -561,7 +568,7 @@ describe("Dispatcher tick", () => {
 
   test("writes the bare kill note and refills the freed slot", async () => {
     const task = item("ts-kill-default", "reviewing", ["attempt:cheap:1"], "test", [
-      handedOff("cheap"),
+      authorDone("cheap"),
     ]);
     const world = new World(task);
     const live = worker(task.id, "review", "blocked");
@@ -581,7 +588,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("settles an author handoff without climbing", async () => {
-    const task = item("ts-author", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-author", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -600,7 +607,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("allows a settled role to receive the next dispatch", async () => {
-    const task = item("ts-settled", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-settled", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -648,7 +655,7 @@ describe("Dispatcher tick", () => {
 
   test("sweeps a merged branch only after its task leaves the pipeline", async () => {
     const swept = item("ts-swept", "canceled", []);
-    const kept = item("ts-kept", "reviewing", [], "test", [handedOff("cheap")]);
+    const kept = item("ts-kept", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(swept, kept);
     world.branches.set("foreman/ts-swept", {
       branch: "foreman/ts-swept",
@@ -704,7 +711,7 @@ describe("Dispatcher tick", () => {
     await tick(world);
 
     expect(world.tasks.get(task.id)?.runs).toMatchObject([
-      { role: "author", open: false, ending: "handed-off", commit: "c1" },
+      { role: "author", open: false, ending: "done", commit: "c1" },
       { role: "review", open: true, commit: "c1" },
     ]);
   });
@@ -727,7 +734,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("returns a review handoff with no commit to the queue", async () => {
-    const task = item("ts-empty", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-empty", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -746,7 +753,7 @@ describe("Dispatcher tick", () => {
 
   test("reviews an empty branch whose author found the trunk already satisfies it", async () => {
     const task = item("ts-satisfied", "reviewing", [], "test", [
-      authorRun("cheap", { open: false, ending: "satisfied" }),
+      authorRun("cheap", { open: false, ending: "already-done" }),
     ]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
@@ -766,8 +773,8 @@ describe("Dispatcher tick", () => {
 
   test("closes a satisfied task the reviewer approved, merging nothing", async () => {
     const task = item("ts-confirmed", "reviewing", [], "test", [
-      authorRun("cheap", { open: false, ending: "satisfied" }),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorRun("cheap", { open: false, ending: "already-done" }),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(task);
     // The trunk contains an empty branch by definition, which is the verdict a
@@ -788,7 +795,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("reviews an empty branch whose task's deliverable is a research report", async () => {
-    const task = item("ts-research", "reviewing", ["research"], "test", [handedOff("cheap")]);
+    const task = item("ts-research", "reviewing", ["research"], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -807,8 +814,8 @@ describe("Dispatcher tick", () => {
 
   test("closes a research task the reviewer approved, merging nothing", async () => {
     const task = item("ts-research-confirmed", "reviewing", ["research"], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(task);
     world.landing = { _tag: "Present" };
@@ -860,8 +867,8 @@ describe("Dispatcher tick", () => {
 
   test("lands an approved task without a worker", async () => {
     const task = item("ts-approved", "reviewing", [], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(task);
     world.branches.set(`foreman/${task.id}`, {
@@ -880,7 +887,7 @@ describe("Dispatcher tick", () => {
 
   test("a commit after the approval voids it: nothing lands", async () => {
     const task = item("ts-voided", "reviewing", [], "test", [
-      handedOff("cheap"),
+      authorDone("cheap"),
       reviewRun("cheap", { ending: "approved", commit: "c1" }),
     ]);
     const world = new World(task);
@@ -908,7 +915,7 @@ describe("Dispatcher tick", () => {
 
   test("land refuses a tip that moved after it was observed", async () => {
     const task = item("ts-moved", "reviewing", [], "test", [
-      handedOff("cheap"),
+      authorDone("cheap"),
       reviewRun("cheap", { ending: "approved", commit: "c1" }),
     ]);
     const world = new World(task);
@@ -931,8 +938,8 @@ describe("Dispatcher tick", () => {
     // The landing takes the task's terminals down, so no later settle sees
     // them: the runs must be closed here or never.
     const task = item("ts-landed", "reviewing", [], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "review", "settled"));
@@ -953,11 +960,11 @@ describe("Dispatcher tick", () => {
   });
 });
 
-describe("a correction round", () => {
-  /** A review of c1 under way, and a branch at c2 that the correction committed. */
+describe("naming an exit", () => {
+  /** A review of c1 under way, and a branch at c2 that a correction round committed. */
   const corrected = () => {
     const task = item("ts-corrected", "reviewing", [], "test", [
-      handedOff("cheap"),
+      authorDone("cheap"),
       reviewRun("dear", { commit: "c1" }),
     ]);
     const world = new World(task);
@@ -972,44 +979,85 @@ describe("a correction round", () => {
     return { task, world };
   };
 
-  const approve = (world: World, id: string) => {
-    const task = world.tasks.get(id)!;
-    world.tasks.set(id, {
-      ...task,
-      runs: task.runs.map((run) => (run.role === "review" ? { ...run, ending: "approved" } : run)),
-    });
-  };
-
-  test("lands the tip the round left when the reviewer approves it", async () => {
-    const { task, world } = corrected();
-
-    await Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
+  const exit = (world: World, id: string, name: string) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
         Effect.provide(layerFor(world)),
       ),
     );
-    approve(world, task.id);
+
+  test("records the tip it is named on, so an approval after a round lands the round's tip", async () => {
+    const { task, world } = corrected();
+
+    expect(await exit(world, task.id, "approved")).toEqual({
+      _tag: "Named",
+      block: "review",
+      commit: "c2",
+    });
+    await tick(world);
+    // The first tick closes the run the reviewer named its exit on; the next lands.
     await tick(world);
 
     expect(world.merged).toEqual(["c2"]);
     expect(world.tasks.get(task.id)?.status).toBe("done");
   });
 
-  test("an approval of the old tip, given before the round ended, stays on it", async () => {
+  test("an approval named before a round stays on the old tip, and lands nothing", async () => {
     const { task, world } = corrected();
-    approve(world, task.id);
-
-    await Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
-        Effect.provide(layerFor(world)),
-      ),
-    );
+    world.branches.set(`foreman/${task.id}`, {
+      ...world.branches.get(`foreman/${task.id}`)!,
+      tip: "c1",
+    });
+    await exit(world, task.id, "approved");
+    world.branches.set(`foreman/${task.id}`, {
+      ...world.branches.get(`foreman/${task.id}`)!,
+      tip: "c2",
+    });
     await tick(world);
 
     expect(world.merged).toEqual([]);
     expect(world.tasks.get(task.id)?.runs.find((run) => run.ending === "approved")?.commit).toBe(
       "c1",
     );
+  });
+
+  test("refuses a name the block does not declare, lists the ones it does, and writes nothing", async () => {
+    const { task, world } = corrected();
+    const before = world.tasks.get(task.id);
+
+    expect(await exit(world, task.id, "shipped")).toEqual({
+      _tag: "Undeclared",
+      block: "review",
+      declared: ["approved", "returned"],
+    });
+    expect(world.tasks.get(task.id)).toEqual(before);
+  });
+
+  test("a second exit in the same run replaces the first", async () => {
+    const { task, world } = corrected();
+    await exit(world, task.id, "approved");
+    await exit(world, task.id, "returned");
+
+    const review = world.tasks.get(task.id)?.runs.filter((run) => run.role === "review");
+    expect(review?.map((run) => run.ending)).toEqual(["returned"]);
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+  });
+
+  test("an author's done sends the task to review", async () => {
+    const task = item("ts-done", "in_progress", [], "test", [authorRun("cheap")]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+
+    await exit(world, task.id, "done");
+
+    expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+    expect(world.tasks.get(task.id)?.runs[0]).toMatchObject({ ending: "done", commit: "c1" });
   });
 });
 
@@ -1030,17 +1078,17 @@ describe("a fleet that is not running", () => {
    * also expire it.
    */
   const busy = () => {
-    const settled = item("ts-settled", "reviewing", [], "test", [handedOff("cheap")]);
+    const settled = item("ts-settled", "reviewing", [], "test", [authorDone("cheap")]);
     const approved = item("ts-approved", "reviewing", [], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const swept = item("ts-swept", "canceled", []);
     const stale = {
       ...item("ts-stale", "in_progress", [], "test", [authorRun("cheap")]),
       lastActivityAt: new Date(now.getTime() - 48 * 60 * 60 * 1000),
     };
-    const abandoned = item("ts-abandoned", "done", [], "test", [handedOff("cheap")]);
+    const abandoned = item("ts-abandoned", "done", [], "test", [authorDone("cheap")]);
     const queued = item("ts-queued", "open", []);
     const world = new World(settled, approved, swept, stale, abandoned, queued);
     world.workers.set(settled.id, worker(settled.id, "author", "settled"));
@@ -1258,7 +1306,7 @@ describe("a spent account and the reviewer above it", () => {
 
   /** A task whose author finished, waiting to be read. */
   const awaiting = (id: string) => {
-    const task = item(id, "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item(id, "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(id, worker(id, "author", "settled"));
     world.branches.set(`foreman/${id}`, {
@@ -1316,7 +1364,7 @@ describe("a spent account and the reviewer above it", () => {
   test("substitutes a reviewer without climbing the task's own rung", async () => {
     // A dearer reviewer is what the wallet forced, not what the work earned, so
     // the task keeps the rung it had and its next author is unchanged.
-    const task = item("ts-rung", "reviewing", ["attempt:cheap:1"], "test", [handedOff("cheap")]);
+    const task = item("ts-rung", "reviewing", ["attempt:cheap:1"], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -1380,7 +1428,10 @@ describe("a spent account and the reviewer above it", () => {
   test("records the rung that ran, not the one that comes next", async () => {
     // A reviewer sending work back is a judgement about the model that wrote
     // the code, so what lands on the task is that model's failure.
-    const task = item("ts-sent-back", "open", [], "test", [handedOff("cheap"), reviewRun("dear")]);
+    const task = item("ts-sent-back", "open", [], "test", [
+      authorDone("cheap"),
+      reviewRun("dear", { ending: "returned", commit: "c1" }),
+    ]);
     const world = new World(task);
     world.workers.set(task.id, {
       ...worker(task.id, "review", "settled"),
@@ -1425,7 +1476,7 @@ describe("a step set to ask", () => {
 
   test("a review ask writes nothing and reports the reviewer it is waiting on", async () => {
     usePolicy({ slots: 1, default: { ...off, review: "ask" } });
-    const task = item("ts-ask-review", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-ask-review", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.branches.set(`foreman/${task.id}`, unmerged(task.id));
 
@@ -1437,7 +1488,7 @@ describe("a step set to ask", () => {
   });
 
   test("approving a review ask starts exactly that review on the next tick", async () => {
-    const task = item("ts-approve-review", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-approve-review", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.branches.set(`foreman/${task.id}`, unmerged(task.id));
     usePolicy({
@@ -1455,8 +1506,8 @@ describe("a step set to ask", () => {
   test("a land ask writes nothing until its approval grant lands the task", async () => {
     usePolicy({ slots: 1, default: { ...off, land: "ask" } });
     const task = item("ts-ask-land", "reviewing", [], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(task);
     world.branches.set(`foreman/${task.id}`, unmerged(task.id));
@@ -1492,7 +1543,7 @@ describe("a step set to ask", () => {
 describe("approving an ask", () => {
   test("writes the grant the next tick takes, and only for the asked step", async () => {
     usePolicy({ slots: 1, default: { author: "off", climb: "off", review: "ask", land: "ask" } });
-    const task = item("ts-approve-real", "reviewing", [], "test", [handedOff("cheap")]);
+    const task = item("ts-approve-real", "reviewing", [], "test", [authorDone("cheap")]);
     const world = new World(task);
     world.branches.set(`foreman/${task.id}`, {
       branch: `foreman/${task.id}`,
@@ -1521,7 +1572,7 @@ describe("approving an ask", () => {
 
 describe("unassign", () => {
   test("ends a stale review with no failure, so the same rung may review again", async () => {
-    const task = item("ts-stale", "open", [], "test", [handedOff("low"), reviewRun("mid")]);
+    const task = item("ts-stale", "open", [], "test", [authorDone("low"), reviewRun("mid")]);
     const world = new World(task);
 
     await Effect.runPromise(
@@ -1617,7 +1668,7 @@ describe("a usage wall", () => {
 
   test("hands a review to another account without recording a reviewer failure", async () => {
     const task = item("ts-review-wall", "reviewing", [], "test", [
-      handedOff("free"),
+      authorDone("free"),
       reviewRun("free"),
     ]);
     const world = new World(task);
@@ -1639,7 +1690,7 @@ describe("a usage wall", () => {
     const found = world.tasks.get(task.id);
     expect(found?.status).toBe("reviewing");
     expect(found?.labels).toContain("walled:opencode");
-    expect(found?.runs.some((run) => run.ending === "no-verdict")).toBe(false);
+    expect(found?.runs.some((run) => run.ending === "stopped")).toBe(false);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
 
@@ -1667,7 +1718,7 @@ describe("a usage wall", () => {
     expect(world.commits).toHaveLength(0);
     expect(world.tasks.get("ts-plain")?.runs[0]).toMatchObject({
       open: false,
-      ending: "unfinished",
+      ending: "stopped",
     });
   });
 
@@ -1721,7 +1772,7 @@ describe("a policy change", () => {
 describe("a route's workspace blocks", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 2, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with no worktree: the task's branch in the operator's checkout. */
@@ -1828,15 +1879,23 @@ describe("a route's workspace blocks", () => {
       DIRECT.flatMap((node): ReadonlyArray<PipelineNode> =>
         node.kind === "agent" && node.role === "author"
           ? [
-              { ...node, next: "lint-gate" },
+              { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
               { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-              { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+              {
+                kind: "check",
+                id: "lint",
+                command: "bun run lint",
+                exits: [
+                  { name: "passed", to: "review-gate" },
+                  { name: "failed", to: "queue", fails: "author" },
+                ],
+              },
             ]
           : [node],
       ),
     );
     const task = item("ts-direct-lint", "reviewing", [], "test", [
-      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+      authorRun("cheap", { base: "h0", open: false, ending: "done", commit: "h1" }),
     ]);
     const world = new World(task);
     world.headCommit = "h1";
@@ -1851,17 +1910,17 @@ describe("a route's workspace blocks", () => {
     expect(world.spawned).toEqual([[task.id, "review"]]);
   });
 
-  test("direct: a correction round moves the review to the checkout's HEAD", async () => {
+  test("direct: an exit after a correction round records the checkout's HEAD", async () => {
     draw(DIRECT);
     const task = item("ts-direct-round", "reviewing", [], "test", [
-      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+      authorRun("cheap", { base: "h0", open: false, ending: "done", commit: "h1" }),
       reviewRun("cheap", { commit: "h1" }),
     ]);
     const world = new World(task);
     world.headCommit = "h2";
 
     await Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.corrected(task.id)).pipe(
+      Dispatcher.use((dispatcher) => dispatcher.exit(task.id, "approved")).pipe(
         Effect.provide(layerFor(world)),
       ),
     );
@@ -1872,7 +1931,7 @@ describe("a route's workspace blocks", () => {
   test("direct: a commit after the approval stops the task completing, and it goes to review again", async () => {
     draw(DIRECT);
     const task = item("ts-moved", "reviewing", [], "test", [
-      authorRun("cheap", { base: "h0", open: false, ending: "handed-off", commit: "h1" }),
+      authorRun("cheap", { base: "h0", open: false, ending: "done", commit: "h1" }),
       reviewRun("cheap", { ending: "approved", commit: "h1", open: false }),
     ]);
     const world = new World(task);
@@ -1920,7 +1979,7 @@ describe("a route's workspace blocks", () => {
 
   test("a task branch out in the checkout holds every other task, and not its own review", async () => {
     draw(BRANCH_ONLY);
-    const own = item("ts-own", "reviewing", [], "test", [handedOff("cheap", "c1")]);
+    const own = item("ts-own", "reviewing", [], "test", [authorDone("cheap", "c1")]);
     const other = item("ts-other", "open", []);
     const world = new World(own, other);
     world.checkedOut = `foreman/${own.id}`;
@@ -1948,9 +2007,27 @@ describe("a route's workspace blocks", () => {
       },
       ...STANDARD_PIPELINE.nodes.filter((node) => node.kind !== "source"),
       { kind: "gate", id: "d-start", step: "author", next: "d-author" },
-      { kind: "agent", id: "d-author", role: "author", model: "ladder", next: "d-review-gate" },
+      {
+        kind: "agent",
+        id: "d-author",
+        role: "author",
+        model: "ladder",
+        exits: [
+          { name: "done", to: "d-review-gate" },
+          { name: "already-done", to: "d-review-gate" },
+        ],
+      },
       { kind: "gate", id: "d-review-gate", step: "review", next: "d-review" },
-      { kind: "agent", id: "d-review", role: "review", model: "above", next: "d-land-gate" },
+      {
+        kind: "agent",
+        id: "d-review",
+        role: "review",
+        model: "above",
+        exits: [
+          { name: "approved", to: "d-land-gate" },
+          { name: "returned", to: "queue", fails: "author" },
+        ],
+      },
       { kind: "gate", id: "d-land-gate", step: "land", next: "d-done" },
       { kind: "done", id: "d-done" },
     ]);
@@ -1958,7 +2035,7 @@ describe("a route's workspace blocks", () => {
       authorRun("cheap", { base: "h0" }),
     ]);
     const approved = item("ts-approved", "reviewing", [], "test", [
-      handedOff("cheap", "c1"),
+      authorDone("cheap", "c1"),
       reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
     ]);
     const world = new World(direct, approved);
@@ -2072,7 +2149,7 @@ describe("a reviewer that stops without a verdict", () => {
   };
 
   test("keeps the task in review, charges no attempt, and dispatches a higher reviewer", async () => {
-    const world = stopped("ts-stopped", [handedOff("low"), reviewRun("mid")]);
+    const world = stopped("ts-stopped", [authorDone("low"), reviewRun("mid")]);
 
     await tick(world);
 
@@ -2080,7 +2157,7 @@ describe("a reviewer that stops without a verdict", () => {
     expect(task?.status).toBe("reviewing");
     expect(task?.labels).toEqual([]);
     expect(task?.runs.slice(1)).toMatchObject([
-      { rung: "mid", open: false, ending: "no-verdict" },
+      { rung: "mid", open: false, ending: "stopped" },
       { rung: "high", open: true },
     ]);
     expect(world.spawned).toEqual([["ts-stopped", "review"]]);
@@ -2088,7 +2165,7 @@ describe("a reviewer that stops without a verdict", () => {
 
   test("keeps recorded reviewer failures and the satisfied claim when a spawn fails", async () => {
     const world = stopped("ts-spawn", [
-      authorRun("low", { open: false, ending: "satisfied" }),
+      authorRun("low", { open: false, ending: "already-done" }),
       reviewRun("mid"),
     ]);
     world.spawnFails.add("ts-spawn");
@@ -2097,16 +2174,16 @@ describe("a reviewer that stops without a verdict", () => {
 
     const runs = world.tasks.get("ts-spawn")?.runs ?? [];
     expect(runs).toMatchObject([
-      { role: "author", ending: "satisfied" },
-      { rung: "mid", open: false, ending: "no-verdict" },
+      { role: "author", ending: "already-done" },
+      { rung: "mid", open: false, ending: "stopped" },
     ]);
     expect(world.tasks.get("ts-spawn")?.status).toBe("reviewing");
   });
 
   test("hands the task to the operator when no reviewer rung is left", async () => {
     const world = stopped("ts-last", [
-      handedOff("low"),
-      reviewRun("mid", { open: false, ending: "no-verdict" }),
+      authorDone("low"),
+      reviewRun("mid", { open: false, ending: "stopped" }),
       reviewRun("high"),
     ]);
 
@@ -2122,7 +2199,7 @@ describe("a reviewer that stops without a verdict", () => {
 describe("a drawn pipeline", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 2, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with `change` made to its author block. */
@@ -2133,7 +2210,7 @@ describe("a drawn pipeline", () => {
 
   /** A task its author handed off on commit c1, which is its branch's tip. */
   const handedOver = (id: string) => {
-    const world = new World(item(id, "reviewing", [], "test", [handedOff("cheap", "c1")]));
+    const world = new World(item(id, "reviewing", [], "test", [authorDone("cheap", "c1")]));
     world.workers.set(id, worker(id, "author", "settled"));
     world.branches.set(`foreman/${id}`, {
       branch: `foreman/${id}`,
@@ -2217,9 +2294,17 @@ describe("a drawn pipeline", () => {
     beforeEach(() =>
       draw(
         withAuthor((author) => [
-          { ...author, next: "lint-gate" },
+          { ...author, exits: author.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
           { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-          { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
+          {
+            kind: "check",
+            id: "lint",
+            command: "bun run lint",
+            exits: [
+              { name: "passed", to: "review-gate" },
+              { name: "failed", to: "queue", fails: "author" },
+            ],
+          },
         ]),
       ),
     );
@@ -2288,8 +2373,8 @@ describe("foreman pipeline place", () => {
   test("prints where each task stands, and writes nothing", async () => {
     const queued = item("ts-queued", "open", []);
     const approved = withRuns(
-      item("ts-approved", "reviewing", [], "test", [handedOff("cheap", "c1")]),
-      [reviewRun("cheap", { ending: "approved", commit: "c1" })],
+      item("ts-approved", "reviewing", [], "test", [authorDone("cheap", "c1")]),
+      [reviewRun("cheap", { ending: "approved", commit: "c1", open: false })],
       "c1",
     );
     const world = new World(queued, approved);
