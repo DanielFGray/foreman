@@ -66,10 +66,13 @@ const pinned = {
 describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ amux: pinned });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      version: 2,
+      pipelines: { amux: pinned },
+    });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({});
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2, pipelines: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -92,5 +95,48 @@ describe("foreman pipeline", () => {
   test("check writes nothing", async () => {
     await run("check", fileWith(pinned));
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("a pipelines file from before the workspace blocks", () => {
+  const old = {
+    nodes: [
+      { kind: "source", id: "queue", filter: "", next: "author" },
+      { kind: "agent", id: "author", role: "author", model: "ladder", next: "review" },
+      { kind: "agent", id: "review", role: "review", model: "above", next: "land" },
+      { kind: "land", id: "land" },
+    ],
+  };
+  const read = () => JSON.parse(readFileSync(path, "utf8"));
+
+  test("reads with a branch and a worktree after each source, and is stored that way once written", async () => {
+    writeFileSync(path, JSON.stringify({ amux: old }));
+    await run("set", "other", fileWith(pinned));
+
+    expect(read().version).toBe(2);
+    expect(read().pipelines.amux.nodes.slice(0, 3)).toEqual([
+      { kind: "source", id: "queue", filter: "", next: "branch" },
+      { kind: "branch", id: "branch", next: "worktree" },
+      { kind: "worktree", id: "worktree", next: "author" },
+    ]);
+  });
+
+  test("a pipeline later drawn direct stays direct", async () => {
+    writeFileSync(path, JSON.stringify({ amux: old }));
+    const direct = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "start" },
+        { kind: "gate", id: "start", step: "author", next: "author" },
+        { kind: "agent", id: "author", role: "author", model: "ladder", next: "review-gate" },
+        { kind: "gate", id: "review-gate", step: "review", next: "review" },
+        { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
+        { kind: "gate", id: "land-gate", step: "land", next: "done" },
+        { kind: "done", id: "done" },
+      ],
+    };
+    await run("set", "amux", fileWith(direct));
+    await run("set", "other", fileWith(pinned));
+
+    expect(read().pipelines.amux).toEqual(direct);
   });
 });

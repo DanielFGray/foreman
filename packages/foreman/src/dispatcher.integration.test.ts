@@ -1647,7 +1647,7 @@ describe("a policy change", () => {
 describe("a route's workspace blocks", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ test: { nodes } }));
+    writeFileSync(drawn, JSON.stringify({ version: 2, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with no worktree: the task's branch in the operator's checkout. */
@@ -1910,7 +1910,7 @@ describe("a reviewer that stops without a verdict", () => {
 describe("a drawn pipeline", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ test: { nodes } }));
+    writeFileSync(drawn, JSON.stringify({ version: 2, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with `change` made to its author block. */
