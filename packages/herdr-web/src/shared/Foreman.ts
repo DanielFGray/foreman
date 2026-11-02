@@ -5,6 +5,7 @@
 // cannot import foreman's schema: it is bundled for the browser, and foreman's
 // modules are not.
 import { Match, Schema as S } from "effect"
+import { Pipeline } from "foreman/pipeline"
 
 /** The version of foreman's published shape this page reads. */
 export const FOREMAN_VERSION = 5
@@ -129,3 +130,11 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
     SetSlots: ({ slots }) => ["policy", "slots", String(slots)],
     Revoke: ({ scope }) => ["policy", "revoke", scope],
   })
+
+/**
+ * What `foreman pipeline show <project> --json` prints: the pipeline a project
+ * runs (its own when `drawn`, else the standard one) and why it cannot run, if
+ * it cannot. The pipeline schema is foreman's own, not a copy.
+ */
+export const ForemanPipeline = S.Struct({ project: S.String, drawn: S.Boolean, pipeline: Pipeline, problems: S.Array(S.String) })
+export type ForemanPipeline = typeof ForemanPipeline.Type

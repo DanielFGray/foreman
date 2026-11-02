@@ -4,6 +4,7 @@ import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
+import { Pipeline } from "foreman/pipeline"
 import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
 import { Message, OPEN_EPICS_KEY, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
@@ -379,4 +380,40 @@ export const LoadForemanEpic = Command.define("LoadForemanEpic", {
       const { description } = yield* client.foremanTask({ key })
       return Message.ReceivedForemanEpic({ key, description })
     }).pipe(reportFailure((reason) => Message.FailedForemanEpic({ key, reason }))),
+})
+
+/** Reads the pipeline a project runs. */
+export const LoadForemanPipeline = Command.define("LoadForemanPipeline", {
+  args: { project: S.String },
+  messages: [Message.ReceivedPipeline, Message.FailedPipeline],
+  execute: ({ project }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      const { drawn, pipeline } = yield* client.foremanPipeline({ project })
+      return Message.ReceivedPipeline({ project, drawn, pipeline })
+    }).pipe(reportFailure((reason) => Message.FailedPipeline({ project, reason }))),
+})
+
+/** Makes the draft the pipeline a project runs; foreman's refusal comes back as the reason. */
+export const SaveForemanPipeline = Command.define("SaveForemanPipeline", {
+  args: { project: S.String, pipeline: Pipeline },
+  messages: [Message.SucceededPipelineChange, Message.FailedPipelineChange],
+  execute: ({ project, pipeline }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.saveForemanPipeline({ project, pipeline })
+      return Message.SucceededPipelineChange({ project })
+    }).pipe(reportFailure((reason) => Message.FailedPipelineChange({ project, reason }))),
+})
+
+/** Drops a project's own pipeline, so it runs the standard one. */
+export const ClearForemanPipeline = Command.define("ClearForemanPipeline", {
+  args: { project: S.String },
+  messages: [Message.SucceededPipelineChange, Message.FailedPipelineChange],
+  execute: ({ project }) =>
+    Effect.gen(function* () {
+      const client = yield* BridgeClient
+      yield* client.clearForemanPipeline({ project })
+      return Message.SucceededPipelineChange({ project })
+    }).pipe(reportFailure((reason) => Message.FailedPipelineChange({ project, reason }))),
 })

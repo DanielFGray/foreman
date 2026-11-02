@@ -18,6 +18,7 @@ import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, ta
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
+import { clickedReset, clickedRevert, clickedSave, closedPipeline, editedPipeline, failedChange, failedPipeline, openedPipeline, receivedPipeline, succeededChange } from "./pipelinePage.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -330,6 +331,26 @@ const respond = (model: Model, message: Message): UpdateReturn =>
     CompletedSaveOpenEpics: () => ({ model }),
 
     ClickedRefreshForeman: () => ({ model, commands: [RefreshForeman()] }),
+
+    ClickedPipeline: () => openedPipeline(model),
+
+    ClosedPipeline: () => ({ model: closedPipeline(model) }),
+
+    ReceivedPipeline: ({ project, drawn, pipeline }) => ({ model: receivedPipeline(model, project, drawn, pipeline) }),
+
+    FailedPipeline: ({ project, reason }) => ({ model: failedPipeline(model, project, reason) }),
+
+    EditedPipeline: ({ edit }) => ({ model: editedPipeline(model, edit) }),
+
+    ClickedSavePipeline: () => clickedSave(model),
+
+    ClickedRevertPipeline: () => ({ model: clickedRevert(model) }),
+
+    ClickedResetPipeline: () => clickedReset(model),
+
+    SucceededPipelineChange: ({ project }) => succeededChange(model, project),
+
+    FailedPipelineChange: ({ project, reason }) => ({ model: failedChange(model, project, reason) }),
 
     CompletedRefreshForeman: () => ({ model }),
 
