@@ -208,6 +208,11 @@ describe("reviewerFor", () => {
     expect(reviewerFor(ladder, "top", new Set(), ["top"])).toBeUndefined();
   });
 
+  test("still has the top review a top author's work after a lower reviewer stopped", () => {
+    // A reorder can put a reviewer that already stopped below the author.
+    expect(reviewerFor(ladder, "top", new Set(), ["cheap"])?.name).toBe("top");
+  });
+
   test("gives no reviewer when every rung at or above is spent", () => {
     expect(reviewerFor(ladder, "cheap", new Set(["middle", "top"]))).toBeUndefined();
   });

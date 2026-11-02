@@ -243,8 +243,10 @@ export const reviewerFor = (
   const rank = ranks.length === 0 ? undefined : Math.max(...ranks);
   const above = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
   // An unrecognised author and the top rung both fall back to the top, which
-  // reviews itself. A top reviewer that already failed has no one left.
-  const candidates = above.length > 0 ? above : failedRanks.length > 0 ? [] : [topOf(ladder)];
+  // reviews itself. Only the top's own failure leaves no one: a failed reviewer
+  // ranked below the author (the ladder was reordered since) rules out nothing.
+  const top = topOf(ladder);
+  const candidates = above.length > 0 ? above : failed.includes(top.name) ? [] : [top];
   return candidates.find((rung) => !walled.has(rung.name));
 };
 
