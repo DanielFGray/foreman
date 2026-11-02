@@ -1422,8 +1422,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           verifyDirectoryFor(project.name),
           `Merge ${labelFor(task.id)}: ${task.title}`,
         );
-        // The verdict is a durable label, so a later tick lands from it with no
-        // pane at all — and a project can stay dirty for hours.
+        // The approval is a run that names the commit it read, so a later tick
+        // lands from it with no pane at all — and a project can stay dirty for hours.
         if (result._tag === "Held") {
           // An operator editing, or another task's branch out in the checkout,
           // clears itself and is not worth a line every poll. Any other hold — a missing landing target, a machine foreman
