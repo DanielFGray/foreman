@@ -21,7 +21,7 @@
  */
 import { Graph, Option, Schema as S } from "effect";
 import { PROCESS_ENDINGS } from "tasks/endings";
-import type { TaskStatus } from "./prog.ts";
+import type { TaskStatus } from "./records.ts";
 import { STEPS, type Step } from "./policy.ts";
 
 /** The `to` of an exit that returns the task to the queue. */

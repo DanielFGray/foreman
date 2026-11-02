@@ -18,7 +18,8 @@ import {
 } from "./lap.ts";
 import { place, STANDARD_PIPELINE } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
-import { Prog } from "./prog.ts";
+import { Records } from "./records.ts";
+import { Tracker } from "./tracker.ts";
 import { newRunFor } from "./run-record.ts";
 import { authorRun, authorDone, reviewRun } from "./task-fixture.ts";
 
@@ -157,19 +158,25 @@ describe("the readers against a scratch store", () => {
         node: role,
         commit,
       });
-    const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
-      Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
+    const run = <A, E>(
+      f: (records: Records["Service"], tracker: Tracker["Service"]) => Effect.Effect<A, E>,
+    ) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* f(yield* Records, yield* Tracker);
+        }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
+      );
 
-    await run((prog) => prog.attribute(id, dispatch("author", "low")));
-    await run((prog) => prog.submit(id));
-    await run((prog) => prog.assignReview(id, dispatch("review", "mid", "c1")));
+    await run((records) => records.attribute(id, dispatch("author", "low")));
+    await run((_, tracker) => tracker.submit(id));
+    await run((records) => records.assignReview(id, dispatch("review", "mid", "c1")));
     await Effect.runPromise(
       nameExit(id, { name: "approved", commit: "c1", event: undefined }).pipe(
         Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),
       ),
     );
 
-    const task = await run((prog) => prog.show(id));
+    const task = await run((records) => records.show(id));
 
     expect(reviewedBy(task)).toBe("mid");
     expect(reviewerNamed(task)).toBe(true);

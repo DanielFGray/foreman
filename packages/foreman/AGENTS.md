@@ -10,7 +10,7 @@ dates, no task ids as evidence, no counts, no proof-run narration.
 
 ## Status
 
-The tree is one `Dispatcher` service over `Fleet`, `Prog` and `Repository`. It
+The tree is one `Dispatcher` service over `Fleet`, `Tracker`, `Records` and `Repository`. It
 runs in one place: herdr-web's server hosts it through `src/host.ts`
 (`buildHost`), supervised, and restarts it after a failure. `src/main.ts` is the
 command line, and every command there is one-shot.
@@ -157,10 +157,10 @@ What survives that scope and the store then denies is an **orphan**: a
 worker whose task was deleted under it. No column shows it, no slot counts
 it and no tick will dispatch into it, so it is surfaced in attention with one
 action, `close`. Not swept, because the worktree may hold uncommitted work and no
-task remains to say what it was. This is why `Prog.lookup` answers `Option`
+task remains to say what it was. This is why `Records.lookup` answers `Option`
 rather than failing: "there is no such task" is a fact about the world, while a
 store that would not answer says nothing at all and must leave the worker
-alone. `Prog.show` is `lookup` with the absent case made an error, for the
+alone. `Records.show` is `lookup` with the absent case made an error, for the
 callers that already know the task exists.
 
 ### A vanished worker is not a verdict
@@ -377,7 +377,7 @@ than needing a constant tuned against nothing. Linear growth would let a
 freshly-half-finished epic already outrank unrelated priority-1 work, which is
 "any epic wins" rather than "push the close one over the line".
 
-The fraction comes from `epicsOver` in `src/prog.ts`, which reads only the epics
+The fraction comes from `epicsOver` in `src/records.ts`, which reads only the epics
 a ready task sits under. `queueFrom` is the one split of ready work into the
 queue and the operator's column, and both the tick and `foreman queue` call it.
 
@@ -410,7 +410,7 @@ which stays true however the ladder is edited afterwards.
 - **Every label is `<kind>:<value>`.** Rung names contain hyphens, so the older
   `attempt-<rung>-<n>` could only be read by guessing where the model's name
   ended — and durable labels make that guess again on every dispatch, forever.
-  `kindOf` and `valueOf` in `src/prog.ts` are the whole parser.
+  `kindOf` and `valueOf` in `src/records.ts` are the whole parser.
 
 ### An allowance belongs to an account, not to a rung
 
@@ -546,7 +546,7 @@ gate, and there the full run is the reviewer's after all.
 
 **The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
 `models` tables of the task store (`PROG_DB`, else `~/.prog/prog.db`), through
-the SqlClient the process shares with Prog; `config.jsonc` has no ladder. A
+the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. A
 store with no rungs is a startup error, not a fallback, because a
 fallback is a second ladder that can drift. The model row carries the harness
 and the thinking level, and `launchArguments` in `src/harness.ts` turns the level
@@ -778,8 +778,13 @@ running agent to end.
 `src/hc.ts` is one implementation; another multiplexer would be a second, not a
 rewrite.
 
-`Prog` (`src/prog.ts`) is the whole task-store surface. Nothing above that file
-builds a `prog` command line.
+`Tracker` (`src/tracker.ts`) is the whole task-tracker surface, in tracker
+terms: tasks, their status moves, labels and logs. `TasksTracker` there is the
+one adapter, the `tasks` package. `Records` (`src/records.ts`) holds foreman's
+own records beside it, keyed by task id: the runs, and the marks foreman keeps
+as labels. A records write that goes with a status move shares one transaction
+with it, which holds only while both run on one store connection;
+`Records.layer` builds them that way.
 
 `Repository` (`src/repository.ts`) answers what foreman needs to know about a
 project's git checkout. Nothing above that file runs `git`.
@@ -885,9 +890,9 @@ not to have been earned.
   and races the running one's landings. Typecheck instead; for a live run,
   follow `e2e/README.md`. A smoke test's tasks enter the live queue whenever a
   herdr-app space is open on its project.
-- **A reader of stdout alone sees a refusal as success.** hc and prog report a
-  failure on stderr with a non-zero exit. `exec` in `src/hc.ts` and `run` in
-  `src/prog.ts` collect the exit code and both streams; a new adapter must too.
+- **A reader of stdout alone sees a refusal as success.** hc reports a
+  failure on stderr with a non-zero exit. `exec` in `src/hc.ts` collects the
+  exit code and both streams; a new adapter over a command line must too.
 - **Module resolution breaks outside the project directory.** Scratch scripts
   that import `./src/*` must live in the repo root.
 - **Landing belongs to foreman, not the reviewer.** The reviewer names its

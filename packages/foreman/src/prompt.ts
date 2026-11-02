@@ -10,7 +10,7 @@ import {
   QUEUE,
   type Workspace,
 } from "./pipeline.ts";
-import type { DiagnosticIntent, Item } from "./prog.ts";
+import type { DiagnosticIntent, Item } from "./records.ts";
 import { configDirectory } from "./shared-file.ts";
 
 /**

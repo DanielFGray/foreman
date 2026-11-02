@@ -202,23 +202,33 @@ export const nameExit = (task: string, exit: NamedExit) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const tasks = yield* Tasks;
+    yield* sql.withTransaction(
+      recordExit(task, exit).pipe(
+        Effect.andThen(exit.event === undefined ? Effect.void : tasks.send(task, exit.event)),
+      ),
+    );
+  });
+
+/**
+ * Writes the exit and its commit on the task's open agent run, and nothing
+ * else: the caller makes the status move, in the same transaction when it
+ * wants the two together. Fails as `nameExit` does.
+ */
+export const recordExit = (task: string, exit: Omit<NamedExit, "event">) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
     if (!isExit(exit.name))
       return yield* new TaskError({ id: task, detail: `${exit.name} is no exit name` });
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const changed = yield* sql`UPDATE runs
-          SET ending = ${exit.name}, "commit" = coalesce(${exit.commit ?? null}, "commit")
-          WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
-                        AND work <> 'check')
-          RETURNING id`;
-        if (changed.length === 0)
-          return yield* new TaskError({
-            id: task,
-            detail: `${task} has no open run to name ${exit.name} on`,
-          });
-        if (exit.event !== undefined) yield* tasks.send(task, exit.event);
-      }),
-    );
+    const changed = yield* sql`UPDATE runs
+      SET ending = ${exit.name}, "commit" = coalesce(${exit.commit ?? null}, "commit")
+      WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
+                    AND work <> 'check')
+      RETURNING id`;
+    if (changed.length === 0)
+      return yield* new TaskError({
+        id: task,
+        detail: `${task} has no open run to name ${exit.name} on`,
+      });
   });
 
 /**

@@ -97,8 +97,9 @@ import {
   failuresOf,
   needsYou,
   ONBOARD,
-  Prog,
-} from "./prog.ts";
+  Records,
+} from "./records.ts";
+import { Tracker } from "./tracker.ts";
 import {
   authoredBy,
   directBase,
@@ -151,7 +152,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
   make: Effect.gen(function* () {
     const settings = yield* Settings;
     const fleet = yield* Fleet;
-    const prog = yield* Prog;
+    const records = yield* Records;
+    const tracker = yield* Tracker;
     const prompts = yield* Prompts;
     const repository = yield* Repository;
     const quota = yield* Quota;
@@ -520,7 +522,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // `lookup` returning nothing is a fact, and it makes the workspace an
       // orphan below.
       const readings = yield* Effect.forEach(roster, (worker) =>
-        prog.lookup(worker.task).pipe(
+        records.lookup(worker.task).pipe(
           Effect.map((task) => [{ worker, task }] as const),
           Effect.catch((error) =>
             Effect.logWarning(`skipped worker ${worker.task}: ${error}`).pipe(
@@ -602,16 +604,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         })),
       ];
 
-      const claimed = yield* eachProject(projects, (project) => prog.claimed(project.name));
+      const claimed = yield* eachProject(projects, (project) => records.claimed(project.name));
       const reviewing = yield* eachProject(projects, (project) =>
-        prog.awaitingReview(project.name),
+        records.awaitingReview(project.name),
       );
       // One query, gated by prog: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
       // allowlist is applied afterwards, to prog's answer rather than to the
       // question, so a blocker outside the fleet still holds its dependents.
-      const queue = yield* prog.ready(Option.none());
-      const epics = yield* prog.epicsOver(queue);
+      const queue = yield* records.ready(Option.none());
+      const epics = yield* records.epicsOver(queue);
 
       // Each project's pipeline, read with the policy and checked against the
       // ladder on every pass: a ladder edit can make a drawing invalid.
@@ -628,10 +630,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
       const scopes: Scopes = new Map(
         yield* Effect.forEach(policy.grants, (grant) =>
-          prog.lookup(grant.scope).pipe(
+          records.lookup(grant.scope).pipe(
             Effect.flatMap((item) =>
               Option.isSome(item)
-                ? scopeOf([item.value], (id) => prog.children(id))
+                ? scopeOf([item.value], (id) => records.children(id))
                 : Effect.succeed<ReadonlySet<string>>(new Set()),
             ),
             Effect.map((tasks) => [grant.scope, tasks] as const),
@@ -1016,7 +1018,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // Everything below is read for a person to look at rather than for a
         // dispatch to turn on, which is why it is here and not in `dispatchFrom`:
         // the tick's second reading skips all of it.
-        const landed = yield* eachProject(projects, (project) => prog.landed(project.name));
+        const landed = yield* eachProject(projects, (project) => records.landed(project.name));
 
         const now = yield* DateTime.now;
 
@@ -1046,7 +1048,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         //
         // Oldest first, which is the order they are recovered in.
         const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
-          prog.show(task).pipe(
+          records.show(task).pipe(
             Effect.map((item) => ({
               title: item.title as string | undefined,
               status: item.status as string | undefined,
@@ -1088,7 +1090,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // operator sees what to clear before retrying. The tally lives across
         // ticks, so the decision outlasts the tick that recorded the failure.
         const failedDecisions = yield* Effect.forEach(failed, ([task, failure]) =>
-          prog.show(task).pipe(
+          records.show(task).pipe(
             Effect.map((item): Active => ({
               task: item,
               worker: undefined,
@@ -1182,8 +1184,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             `chore(foreman): WIP from ${task.id}: its agent stopped on a usage limit before verifying it`,
           );
         }
-        yield* prog.markWall(task.id, wall.provider);
-        yield* prog.release(task.id, "walled");
+        yield* records.markWall(task.id, wall.provider);
+        yield* records.release(task.id, "walled");
         yield* stopAgents(worker);
 
         const labels = [...task.labels, `walled:${wall.provider}`];
@@ -1198,7 +1200,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             : next._tag === "Waiting"
               ? `no rung off ${wall.provider} has room, so the task waits in the queue`
               : `every rung off ${wall.provider} has already failed it, so it is the operator's`;
-        yield* prog.log(
+        yield* tracker.log(
           task.id,
           `foreman: the author stopped on ${wall.provider}'s usage wall ("${wall.text}"), which is not a failure of its rung. ${committed ? `Its uncommitted work is committed on ${labelFor(task.id)}.` : "It held no uncommitted work."} ${task.id} will not dispatch onto ${wall.provider} again: ${takeover}.`,
         );
@@ -1282,7 +1284,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           )
             .pipe(
               Effect.andThen(
-                prog.endRuns(task.id, { author: "done", review: "stopped", commit: task.tip }),
+                records.endRuns(task.id, { author: "done", review: "stopped", commit: task.tip }),
               ),
             )
             .pipe(
@@ -1303,10 +1305,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ),
         ({ task, worker }) =>
           Effect.gen(function* () {
-            yield* prog.release(task.id);
+            yield* records.release(task.id);
             yield* fleet.stop(worker, "author");
-            yield* prog.clearDiagnostic(task.id);
-            yield* handAuthor(yield* prog.show(task.id));
+            yield* records.clearDiagnostic(task.id);
+            yield* handAuthor(yield* records.show(task.id));
             yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
           }).pipe(
             Effect.catch((error) =>
@@ -1394,7 +1396,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
             yield* Match.value(phase).pipe(
               Match.when("Landed", () =>
-                prog
+                records
                   .endRuns(task.id, { author: "released", review: "released" })
                   .pipe(
                     Effect.andThen(fleet.notify("Task landed", `${task.id} ${task.title}`)),
@@ -1402,7 +1404,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                   ),
               ),
               Match.when("Canceled", () =>
-                prog
+                records
                   .endRuns(task.id, { author: "canceled", review: "released" })
                   .pipe(
                     Effect.andThen(fleet.notify("Task canceled", `${task.id} ${task.title}`)),
@@ -1410,11 +1412,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                   ),
               ),
               Match.when("ReviewReturned", () =>
-                prog
+                records
                   .endReview(task.id, "released")
                   .pipe(
                     Effect.andThen(
-                      prog.log(
+                      tracker.log(
                         task.id,
                         `foreman: reviewer ${reviewer} sent ${task.id} back with findings. Returned to the queue — read the review notes above and continue from ${labelFor(task.id)}.`,
                       ),
@@ -1464,13 +1466,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                         )
                       : reviewerStopped(task, worker, reviewer),
                   onSome: (hit) =>
-                    prog
+                    records
                       .endReview(task.id, "walled")
                       .pipe(
-                        Effect.andThen(prog.markWall(task.id, hit.provider)),
+                        Effect.andThen(records.markWall(task.id, hit.provider)),
                         Effect.andThen(stopAgents(worker)),
                         Effect.andThen(
-                          prog.log(
+                          tracker.log(
                             task.id,
                             `foreman: reviewer ${reviewer} stopped on ${hit.provider}'s usage wall ("${hit.text}"), which is not a failure of its rung. ${task.id} stays in review and will not be read on ${hit.provider} again.`,
                           ),
@@ -1479,7 +1481,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }),
               ),
               Match.when("Residue", () =>
-                prog.endRuns(task.id, { author: "released", review: "released" }).pipe(
+                records.endRuns(task.id, { author: "released", review: "released" }).pipe(
                   Effect.andThen(
                     Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
                       discard: true,
@@ -1551,12 +1553,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               `completing ${task.id} (${project.name}) refused: the checkout moved after its approval`,
             );
           }
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `foreman: completed at ${block.id}. The work was committed onto ${project.name}'s branch, so nothing was merged.`,
           );
           yield* Effect.logInfo(`completed ${task.id} (${project.name}) at ${block.id}`);
-          yield* prog.complete(task);
+          yield* records.complete(task);
           yield* fleet.notify("Task done", `${task.id} ${task.title}`);
           return yield* teardown(task);
         }
@@ -1604,11 +1606,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           yield* Effect.logWarning(
             `landing ${task.id} (${project.name}) rejected: ${result.detail}`,
           );
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `foreman: this branch no longer merges into ${project.name}'s checkout, because the trunk moved after the branch was cut:\n\n${result.detail}\n\nReturned to the queue at the same rung. Merge the current trunk into this branch and resolve those paths before anything else — the work already on the branch may have been overtaken, so read what the trunk did to those files before assuming the branch's version is the one to keep.`,
           );
-          yield* prog.release(task.id);
+          yield* records.release(task.id);
           return yield* fleet.notify(
             "Landing failed",
             `${task.id} is behind ${project.name} — back in the queue to rebase`,
@@ -1621,12 +1623,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (result._tag === "Broke") {
           yield* Effect.annotateCurrentSpan("verification", "broken");
           yield* Effect.logWarning(`landing ${task.id} broke ${project.name}'s verification`);
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `foreman: merging this branch fails ${project.name}'s verification, so it was not landed and the task is back in the queue.\n\n${result.output}`,
           );
           yield* climb(task);
-          yield* prog.release(task.id);
+          yield* records.release(task.id);
           return yield* fleet.notify(
             "Landing reverted",
             `${task.id} broke ${project.name} — back in the queue`,
@@ -1645,7 +1647,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           yield* Effect.logInfo(
             `${task.id} (${project.name}) was already in the checkout; completing`,
           );
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             claimsAlreadyDone(task)
               ? `foreman: ${project.name}'s trunk already does what this task asked, and the reviewer confirmed it. Nothing was merged and nothing was verified — the backlog had outlived the work.`
@@ -1655,7 +1657,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
         } else {
           if (!result.verified) {
-            yield* prog.log(
+            yield* tracker.log(
               task.id,
               `foreman: landed on git's exit code alone — ${project.name} names no verification command, or its checkout was already failing before the merge.`,
             );
@@ -1669,7 +1671,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
         }
 
-        yield* prog.complete(task);
+        yield* records.complete(task);
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
       }).pipe(Effect.catch((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));
@@ -1722,7 +1724,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
 
         const passed = result._tag === "Passed";
-        yield* prog.recordCheck({
+        yield* records.recordCheck({
           project: task.project,
           task: task.id,
           node: block.id,
@@ -1732,7 +1734,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         });
         if (passed) {
           if (!result.verified) {
-            yield* prog.log(
+            yield* tracker.log(
               task.id,
               `foreman: \`${block.command}\` fails at the commit its work started from as well, so it says nothing about this work, and the check ${block.id} passes it.`,
             );
@@ -1745,13 +1747,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const exit = block.exits.find((candidate) => candidate.name === "failed");
         const returns = exit?.to === QUEUE;
         yield* Effect.logWarning(`${task.id} failed the check ${block.id}`);
-        yield* prog.log(
+        yield* tracker.log(
           task.id,
           `foreman: the check ${block.id} ran \`${block.command}\` at ${tip}, and it failed${returns ? ", so the task is back in the queue" : ""}.\n\n${result.output}`,
         );
         yield* charge(task, exit?.fails, undefined);
         if (returns) {
-          yield* prog.release(task.id);
+          yield* records.release(task.id);
           yield* fleet.notify("Check failed", `${task.id} failed ${block.id} — back in the queue`);
         }
       }).pipe(Effect.catch((error) => Effect.logWarning(`checking ${task.id} failed: ${error}`)));
@@ -1818,11 +1820,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ),
           ({ task, worker }) =>
             Effect.gen(function* () {
-              yield* prog.log(
+              yield* tracker.log(
                 task.id,
                 `foreman: claim released — no activity since ${task.lastActivityAt.toISOString()}.`,
               );
-              yield* prog.release(task.id);
+              yield* records.release(task.id);
               // Only a workspace that still exists is taken down. A worker
               // whose workspace already closed leaves its worktree behind on
               // purpose: it may hold the interrupted agent's edits, and the
@@ -1859,8 +1861,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const oldest = current.unreviewed.find(recoverable);
         if (!oldest) return;
-        yield* prog.submit(oldest.task);
-        yield* prog.log(
+        yield* tracker.submit(oldest.task);
+        yield* tracker.log(
           oldest.task,
           `foreman: ${oldest.task} is done, but ${oldest.branch} still holds commits ${oldest.project} never took, so the landing never completed. Nothing in the pipeline reaches a done task, so it is back in review to decide whether the work is worth landing.`,
         );
@@ -1911,9 +1913,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const park = ({ task, why }: Park) =>
       Effect.gen(function* () {
-        if (task.status !== "open") yield* prog.release(task.id);
-        yield* prog.parkForOperator(task.id);
-        yield* prog.log(task.id, `foreman: ${task.id} is yours now: ${why}`);
+        if (task.status !== "open") yield* records.release(task.id);
+        yield* records.parkForOperator(task.id);
+        yield* tracker.log(task.id, `foreman: ${task.id} is yours now: ${why}`);
         yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${why}`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
 
@@ -2090,10 +2092,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         workspace,
         base: yield* authorBaseOf(task, project),
       });
-      yield* prog.claim(task.id);
-      yield* prog
+      yield* tracker.claim(task.id);
+      yield* records
         .attribute(task.id, runFor(task, rung, block, undefined, base))
-        .pipe(Effect.tapError(() => prog.release(task.id)));
+        .pipe(Effect.tapError(() => records.release(task.id)));
       const agent = yield* instrumentRun(
         task,
         rung,
@@ -2102,10 +2104,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           // The agent never started, so the claim would strand the task until
           // the stale sweep noticed, and its run never happened. Hand both back
           // immediately instead.
-          Effect.tapError(() => prog.abandon(task.id, "author")),
+          Effect.tapError(() => records.abandon(task.id, "author")),
         ),
       );
-      yield* prog.log(task.id, agentLog("author", rung, agent));
+      yield* tracker.log(task.id, agentLog("author", rung, agent));
       yield* Effect.logInfo(
         `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.directory}`,
       );
@@ -2150,16 +2152,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // The run records the tip the reviewer is about to read: its approval
       // is about this commit until the reviewer names its exit, which records
       // the tip it names it on.
-      yield* prog.assignReview(task.id, runFor(task, rung, block, tip));
+      yield* records.assignReview(task.id, runFor(task, rung, block, tip));
       const agent = yield* instrumentRun(
         task,
         rung,
         "review",
         fleet
           .spawn(worker, spawnAs(rung, prompt, "review"))
-          .pipe(Effect.tapError(() => prog.abandon(task.id, "review"))),
+          .pipe(Effect.tapError(() => records.abandon(task.id, "review"))),
       );
-      yield* prog.log(task.id, agentLog("review", rung, agent));
+      yield* tracker.log(task.id, agentLog("review", rung, agent));
       yield* Effect.logInfo(`review of ${task.id} (${task.project}) to ${rung.name}`);
     });
 
@@ -2179,14 +2181,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const onboard = (project: Project) =>
       Effect.gen(function* () {
-        const id = yield* prog.add(
-          project.name,
-          `Adopt uncommitted work in ${project.name}`,
-          `Foreman found uncommitted changes in ${project.directory}. This task is the salvage run: preserve the work on a rescue branch, report what it was doing and what passes, and leave the checkout clean.`,
-          [ONBOARD],
-        );
+        const id = yield* tracker.add({
+          project: project.name,
+          title: `Adopt uncommitted work in ${project.name}`,
+          description: `Foreman found uncommitted changes in ${project.directory}. This task is the salvage run: preserve the work on a rescue branch, report what it was doing and what passes, and leave the checkout clean.`,
+          labels: [ONBOARD],
+        });
 
-        yield* dispatchOnboard(yield* prog.show(id), project);
+        yield* dispatchOnboard(yield* records.show(id), project);
       });
 
     const dispatchOnboard = Effect.fn("foreman.dispatch.onboard")(function* (
@@ -2209,19 +2211,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const base =
         (yield* routeOf(task)) === "none" ? yield* repository.head(project.directory) : undefined;
 
-      yield* prog.claim(task.id);
-      yield* prog
+      yield* tracker.claim(task.id);
+      yield* records
         .attribute(task.id, runFor(task, rung, block, undefined, base))
-        .pipe(Effect.tapError(() => prog.release(task.id)));
+        .pipe(Effect.tapError(() => records.release(task.id)));
       const agent = yield* instrumentRun(
         task,
         rung,
         "author",
         fleet
           .spawn(worker, spawnAs(rung, prompt, "author"))
-          .pipe(Effect.tapError(() => prog.abandon(task.id, "author"))),
+          .pipe(Effect.tapError(() => records.abandon(task.id, "author"))),
       );
-      yield* prog.log(task.id, agentLog("author", rung, agent));
+      yield* tracker.log(task.id, agentLog("author", rung, agent));
       yield* Effect.logInfo(`onboarding ${project.name} as ${task.id} with ${rung.name}`);
     });
 
@@ -2245,21 +2247,21 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const retryAttempt = (task: Climbing, detail: string, ending: Ending) =>
       Effect.gen(function* () {
-        yield* prog.release(task.id, ending);
+        yield* records.release(task.id, ending);
         const rung = ranAt(task);
         const attempts = attemptsOf(task, rung) + 1;
         if (rungSpent(attempts, settings.attemptsPerRung)) {
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `${detail} Returned to the queue one rung up — ${attempts} attempts on ${rung} exhausted it.`,
           );
           yield* climb(task);
         } else {
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `${detail} Returned to the queue to try ${rung} again (attempt ${attempts} of ${settings.attemptsPerRung}).`,
           );
-          yield* prog.markAttempt(task.id, rung, attempts);
+          yield* records.markAttempt(task.id, rung, attempts);
         }
       });
 
@@ -2270,10 +2272,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const parkStopped = (task: Item, worker: Worker, what: string) =>
       Effect.gen(function* () {
-        yield* prog.endRuns(task.id, { author: "stopped", review: "stopped" });
-        yield* prog.release(task.id);
-        yield* prog.parkForOperator(task.id);
-        yield* prog.log(
+        yield* records.endRuns(task.id, { author: "stopped", review: "stopped" });
+        yield* records.release(task.id);
+        yield* records.parkForOperator(task.id);
+        yield* tracker.log(
           task.id,
           `foreman: ${what}, and its block parks such a task. It is yours now.`,
         );
@@ -2304,17 +2306,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ];
         const next = reviewerFor(settings.ladder, authoredBy(task), new Set(), failed);
         if (next === undefined) {
-          yield* prog.endReview(task.id, "stopped");
-          yield* prog.release(task.id);
-          yield* prog.parkForOperator(task.id);
-          yield* prog.log(
+          yield* records.endReview(task.id, "stopped");
+          yield* records.release(task.id);
+          yield* records.parkForOperator(task.id);
+          yield* tracker.log(
             task.id,
             `foreman: reviewer ${ran} stopped without a verdict, and no rung above it is left to read ${task.id}. It is yours now.`,
           );
           yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: no reviewer left`);
         } else {
-          yield* prog.endReview(task.id, "stopped");
-          yield* prog.log(
+          yield* records.endReview(task.id, "stopped");
+          yield* tracker.log(
             task.id,
             `foreman: reviewer ${ran} ${said ? "approved a commit the branch has moved past" : "stopped without a verdict"}. ${task.id} stays in review; the next reviewer is ${next.name}.`,
           );
@@ -2372,13 +2374,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       fails === "author"
         ? climb(task)
         : fails === "self" && rung !== undefined
-          ? prog.markFailure(task.id, rung)
+          ? records.markFailure(task.id, rung)
           : Effect.void;
 
     const climb = (task: Climbing) =>
       Effect.gen(function* () {
         const failed = ranAt(task);
-        yield* prog.markFailure(task.id, failed);
+        yield* records.markFailure(task.id, failed);
         const next = authorFor(settings.ladder, [...failuresOf(task), failed]);
         // The durable write, not a stopped attempt: this annotation records
         // exactly the evidence the ladder acted on.
@@ -2388,7 +2390,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           "rung.next": next._tag === "Dispatch" ? next.rung.name : next._tag,
         });
         if (next._tag === "Yours") {
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then remove the failures it recorded to put it back in the queue.`,
           );
@@ -2413,10 +2415,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // out of the operator's column and onto the strongest model — which is
         // where the failures it already carries put it. Removing the park is
         // that step; the failures are the next one.
-        if (needsYou(task)) return yield* prog.clearNeedsYou(task.id);
+        if (needsYou(task)) return yield* records.clearNeedsYou(task.id);
         const highest = highestFailure(settings.ladder, failuresOf(task));
         if (highest === undefined) return;
-        yield* prog.clearFailure(task.id, highest);
+        yield* records.clearFailure(task.id, highest);
       });
 
     /**
@@ -2494,49 +2496,49 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       rungName: string,
     ) =>
       Effect.gen(function* () {
-        const task = yield* prog.show(target.task.id);
+        const task = yield* records.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
         const project = yield* projectFor(task.project);
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
 
         yield* stopAgents(target.worker);
-        if (reviewedBy(task) !== undefined) yield* prog.endReview(task.id, "released");
-        if (task.status !== "open") yield* prog.release(task.id);
-        yield* prog.markDiagnostic(task.id, intent);
+        if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
+        if (task.status !== "open") yield* records.release(task.id);
+        yield* records.markDiagnostic(task.id, intent);
         yield* Effect.gen(function* () {
           const worker = yield* workspaceFor(task, project);
           const prompt = yield* prompts.diagnose(task, worker.directory, project.directory, intent);
-          yield* prog.claim(task.id);
+          yield* tracker.claim(task.id);
           const agent = yield* instrumentRun(
             task,
             rung,
             "author",
             fleet.spawn(worker, spawnAs(rung, prompt, "author")),
           );
-          yield* prog.log(
+          yield* tracker.log(
             task.id,
             `foreman: diagnostic ${intent} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`,
           );
           yield* Effect.logInfo(`${intent} intervention on ${task.id} with ${rung.name}`);
         }).pipe(
           Effect.onError(() =>
-            prog
+            records
               .clearDiagnostic(task.id)
-              .pipe(Effect.andThen(prog.release(task.id)), Effect.ignore),
+              .pipe(Effect.andThen(records.release(task.id)), Effect.ignore),
           ),
         );
       });
 
     const dispatchFormalReview = (target: InterventionTarget) =>
       Effect.gen(function* () {
-        const task = yield* prog.show(target.task.id);
+        const task = yield* records.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
         yield* stopAgents(target.worker);
-        if (reviewedBy(task) !== undefined) yield* prog.endReview(task.id, "released");
-        if (task.status === "open") yield* prog.claim(task.id);
-        if (task.status !== "reviewing") yield* prog.review(task.id);
-        yield* handReview(yield* prog.show(task.id));
+        if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
+        if (task.status === "open") yield* tracker.claim(task.id);
+        if (task.status !== "reviewing") yield* tracker.review(task.id);
+        yield* handReview(yield* records.show(task.id));
       });
 
     /**
@@ -2553,23 +2555,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const beneath = settings.ladder
         .slice(0, rankOf(settings.ladder, rung.name) ?? 0)
         .filter((lower) => !already.has(lower.name));
-      return Effect.forEach(beneath, (lower) => prog.markFailure(task.id, lower.name), {
+      return Effect.forEach(beneath, (lower) => records.markFailure(task.id, lower.name), {
         discard: true,
       });
     };
 
     const dispatchContinuation = (target: InterventionTarget, rungName: string) =>
       Effect.gen(function* () {
-        const task = yield* prog.show(target.task.id);
+        const task = yield* records.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
         const rung = settings.ladder.find((candidate) => candidate.name === rungName);
         if (!rung) return;
         yield* stopAgents(target.worker);
-        if (reviewedBy(task) !== undefined) yield* prog.endReview(task.id, "released");
-        yield* prog.clearDiagnostic(task.id);
-        if (task.status !== "open") yield* prog.release(task.id);
+        if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
+        yield* records.clearDiagnostic(task.id);
+        if (task.status !== "open") yield* records.release(task.id);
         yield* raiseFloor(task, rung);
-        yield* handAuthor(yield* prog.show(task.id));
+        yield* handAuthor(yield* records.show(task.id));
       });
 
     /** The checkout a project's work lands in, when foreman is configured for it. */
@@ -2651,11 +2653,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       kill: (target: InterventionTarget, reason: Option.Option<string>) =>
         commanded(
           Effect.gen(function* () {
-            const task = yield* prog.show(target.task.id);
+            const task = yield* records.show(target.task.id);
             if (task.status === "done" || task.status === "canceled" || !target.worker) return;
             yield* stopAgents(target.worker);
-            if (task.status !== "open") yield* prog.release(task.id);
-            yield* prog.log(task.id, killLogLine(reason));
+            if (task.status !== "open") yield* records.release(task.id);
+            yield* tracker.log(task.id, killLogLine(reason));
             yield* teardown(task);
           }),
         ),
@@ -2698,7 +2700,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        */
       prompt: (role: AgentRole, id: string) =>
         Effect.gen(function* () {
-          const task = yield* prog.show(id);
+          const task = yield* records.show(id);
           const project = yield* projectFor(task.project);
           if (!project) return undefined;
           const block = yield* blockFor(task, role);
@@ -2780,9 +2782,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             });
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
-            yield* prog.endRuns(task.id, { author: "vanished" });
-            yield* prog.attribute(task.id, runFor(task, rung, block));
-            yield* prog.log(task.id, agentLog("author", rung, agent));
+            yield* records.endRuns(task.id, { author: "vanished" });
+            yield* records.attribute(task.id, runFor(task, rung, block));
+            yield* tracker.log(task.id, agentLog("author", rung, agent));
           }),
         ),
 
@@ -2790,7 +2792,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       release: (task: Item) =>
         commanded(
           Effect.gen(function* () {
-            yield* prog.release(task.id);
+            yield* records.release(task.id);
             yield* teardown(task);
           }),
         ),
@@ -2813,9 +2815,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       /** Closes a queued task without creating a workspace or landing code. */
       complete: (task: Item, reason: string) =>
         commanded(
-          prog
+          tracker
             .log(task.id, `foreman: marked done from queue: ${reason}`)
-            .pipe(Effect.andThen(prog.complete(task))),
+            .pipe(Effect.andThen(records.complete(task))),
         ),
 
       diagnose: (target: InterventionTarget, intent: DiagnosticIntent, rung: string) =>
@@ -2824,7 +2826,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       reviewIntervention: (target: InterventionTarget, diagnosticRung: string | undefined) =>
         commanded(
           Effect.gen(function* () {
-            const task = yield* prog.show(target.task.id);
+            const task = yield* records.show(target.task.id);
             if (yield* branchCommitted(task)) return yield* dispatchFormalReview(target);
             if (diagnosticRung) yield* dispatchDiagnostic(target, "review", diagnosticRung);
           }),
@@ -2859,7 +2861,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         commanded(
           Effect.gen(function* () {
             if (reviewedBy(task) === undefined) return;
-            yield* prog.endReview(task.id, "released");
+            yield* records.endReview(task.id, "released");
           }),
         ),
 
@@ -2878,7 +2880,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       exit: (id: string, name: string) =>
         commanded(
           Effect.gen(function* () {
-            const task = yield* prog.show(id);
+            const task = yield* records.show(id);
             yield* read;
             const pipeline = runningPipeline(
               (yield* SubscriptionRef.get(state)).pipelines,
@@ -2897,16 +2899,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             }
             const project = yield* projectFor(task.project);
             const commit = project ? yield* tipOf(task, project) : undefined;
-            yield* prog.nameExit(task.id, {
-              name,
-              commit,
-              event:
-                exit.to === QUEUE
-                  ? "open"
-                  : block.role === "author" && task.status === "in_progress"
-                    ? "review"
-                    : undefined,
-            });
+            yield* records.nameExit(
+              task.id,
+              { name, commit },
+              exit.to === QUEUE
+                ? "reopen"
+                : block.role === "author" && task.status === "in_progress"
+                  ? "review"
+                  : undefined,
+            );
             return { _tag: "Named", block: block.id, commit } as const;
           }),
         ),
@@ -2942,9 +2943,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         commanded(
           branch.status === undefined
             ? Effect.void
-            : prog.submit(branch.task).pipe(
+            : tracker.submit(branch.task).pipe(
                 Effect.andThen(
-                  prog.log(
+                  tracker.log(
                     branch.task,
                     `foreman: ${branch.branch} holds commits ${branch.project} never took, and nothing was going to read them. Sent for review to decide whether they are worth landing.`,
                   ),
@@ -3750,7 +3751,7 @@ export interface FleetState {
  * A branch carrying commits nobody has been sent to read.
  *
  * `title` and `status` are absent when the task itself is gone — the branch
- * prog has stopped tracking, which is why git is asked rather than prog. Such
+ * prog has stopped tracking, which is why git is asked rather than records. Such
  * a branch can be shown but not recovered: every workspace, prompt and merge
  * in foreman is addressed by task id, so there is nothing left to dispatch
  * against.

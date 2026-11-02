@@ -562,5 +562,6 @@ workspace, spawn an agent in it, read the roster, focus, close, notify.
 `HerdrFleet` implements it over the herdr CLI. An amux plugin is a second
 implementation, not a rewrite.
 
-`Prog` (`src/prog.ts`) is the whole task-store surface. Replacing prog with an
-in-house store means writing another implementation of those methods.
+`Tracker` (`src/tracker.ts`) is the whole task-tracker surface. Another tracker
+is another implementation of it; foreman's own records (`src/records.ts`) stay
+in foreman's store.

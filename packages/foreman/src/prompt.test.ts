@@ -10,7 +10,7 @@ import {
   type Workspace,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
-import type { Item } from "./prog.ts";
+import type { Item } from "./records.ts";
 import { authorRun } from "./task-fixture.ts";
 
 // Prompts are prose wrapped at about 85 columns; the tests check what a rule says,

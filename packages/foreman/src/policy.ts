@@ -29,7 +29,7 @@
  * are not gated: the operator pressing the key is the permission.
  */
 import { Effect, FileSystem, Option, Schema as S } from "effect";
-import type { Item } from "./prog.ts";
+import type { Item } from "./records.ts";
 import { configDirectory, rewrite } from "./shared-file.ts";
 
 export const STEPS = ["author", "climb", "review", "land"] as const;

@@ -1,6 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
-import { Prog } from "./prog.ts";
+import { Records } from "./records.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
 import { queueOf } from "./host.ts";
 import { Refused } from "./commands.ts";
@@ -10,7 +10,7 @@ import { Refused } from "./commands.ts";
  *
  * The panel and herdr-web show the queue and a task's record through these,
  * so neither speaks to the task store itself, and a store other than prog is
- * one `Prog` implementation away. They read the store only: no roster, no
+ * one `Records` implementation away. They read the store only: no roster, no
  * checkout gates, no `Dispatcher.read`, which takes seconds.
  */
 
@@ -47,7 +47,7 @@ const id = Argument.String("id").pipe(Argument.withDescription("A task id"));
 /** One task whole: its fields, what done means, and its log. */
 export const showCommand = Command.make("show", { id, json }, (args) =>
   Effect.gen(function* () {
-    const task = yield* (yield* Prog).detail(args.id).pipe(
+    const task = yield* (yield* Records).detail(args.id).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new Refused({ detail: `no task ${args.id}` })),

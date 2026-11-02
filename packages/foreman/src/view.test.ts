@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { type Item, type TaskStatus } from "./prog.ts";
+import { type Item, type TaskStatus } from "./records.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
 import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
