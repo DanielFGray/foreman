@@ -26,6 +26,14 @@ export const MIGRATIONS = Migrator.fromRecord({
     const sql = yield* SqlClient;
     for (const statement of REGISTRY) yield* sql.unsafe(statement);
   }),
+  // An author that commits onto the operator's branch (a pipeline with no
+  // branch block) has no fork point git can name, so its run records the
+  // commit it started from. A run on a task branch leaves it empty: git keeps
+  // that branch's fork point.
+  "0003_run_base": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    yield* sql.unsafe(`ALTER TABLE runs ADD COLUMN base TEXT`);
+  }),
 });
 
 export const MIGRATIONS_TABLE = "tasks_migrations";

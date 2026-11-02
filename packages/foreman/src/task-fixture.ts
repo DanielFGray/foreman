@@ -17,6 +17,7 @@ export const authorRun = (rung: string, over: Partial<Run> = {}): Run => ({
   rung,
   node: "author",
   commit: undefined,
+  base: undefined,
   ending: undefined,
   rounds: undefined,
   open: true,

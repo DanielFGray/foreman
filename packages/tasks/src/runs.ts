@@ -64,6 +64,11 @@ export interface Run {
   readonly rung: string | undefined;
   readonly node: string | undefined;
   readonly commit: string | undefined;
+  /**
+   * An author on the operator's branch: the commit it started from. Empty for
+   * a run on a task branch, whose fork point git keeps.
+   */
+  readonly base: string | undefined;
   /** Empty while the run is open, and for a run foreman did not settle. */
   readonly ending: Ending | undefined;
   readonly rounds: number | undefined;
@@ -94,6 +99,8 @@ export interface NewRun {
   readonly work: Exclude<Work, "check">;
   /** A review run records the branch tip it reads. */
   readonly commit?: string | undefined;
+  /** An author on the operator's branch records the commit it starts from. */
+  readonly base?: string | undefined;
   /** Correction rounds already counted; absent for a run that starts new. */
   readonly rounds?: number | undefined;
   readonly size?: number | undefined;
@@ -105,10 +112,10 @@ export const openRun = (run: NewRun) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
     const rows = yield* sql<{ id: number }>`INSERT INTO runs
-      (project, task, slice, kind, pool, model, rung, node, work, "commit", rounds, size, evidence,
-       started_at, closed_at, outcome)
+      (project, task, slice, kind, pool, model, rung, node, work, "commit", base, rounds, size,
+       evidence, started_at, closed_at, outcome)
       VALUES (${run.project}, ${run.task}, ${run.slice}, ${run.kind}, ${run.pool}, ${run.model},
-              ${run.rung ?? null}, ${run.node}, ${run.work}, ${run.commit ?? null},
+              ${run.rung ?? null}, ${run.node}, ${run.work}, ${run.commit ?? null}, ${run.base ?? null},
               ${run.rounds ?? null}, ${run.size ?? null}, ${run.evidence ?? null}, datetime('now'), NULL, NULL)
       RETURNING id`;
     return rows[0]!.id;
@@ -232,7 +239,7 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
     const grouped = new Map<string, Array<Run>>();
     if (tasks.length === 0) return grouped as ReadonlyMap<string, ReadonlyArray<Run>>;
     const rows =
-      yield* sql<RunRow>`SELECT id, task, work, rung, node, "commit", ending, rounds, closed_at
+      yield* sql<RunRow>`SELECT id, task, work, rung, node, "commit", base, ending, rounds, closed_at
       FROM runs WHERE ${sql.in("task", tasks)} ORDER BY id`;
     for (const row of rows) {
       const run: Run = {
@@ -242,6 +249,7 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
         rung: row.rung ?? undefined,
         node: row.node ?? undefined,
         commit: row.commit ?? undefined,
+        base: row.base ?? undefined,
         ending: row.ending ?? undefined,
         rounds: row.rounds ?? undefined,
         open: row.closed_at === null,
@@ -263,6 +271,7 @@ interface RunRow {
   readonly rung: string | null;
   readonly node: string | null;
   readonly commit: string | null;
+  readonly base: string | null;
   readonly ending: Ending | null;
   readonly rounds: number | null;
   readonly closed_at: string | null;
