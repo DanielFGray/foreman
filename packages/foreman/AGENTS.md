@@ -36,12 +36,13 @@ a claim made by hand.
 | Question | Answered by |
 | --- | --- |
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
-| Who authored this branch? | the task's `by:<rung>` label |
-| Is a reviewer assigned? | the task's `review-by:<rung>` label |
+| Who authored this branch? | the rung of the task's latest author run |
+| Is a reviewer assigned? | an open review run in the task's current lap |
+| Has a reviewer accepted it? | the lap's last verdict is `approved`, and the branch tip is the commit that review read |
 | Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels |
 | How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
 | Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
-| Is this task mine to review? | it has a `by:*` label |
+| Is this task mine to review? | it has an author run |
 | Is this worker mine? | the checkout in its terminals' `fm.repo` label |
 | Which projects are in play? | the git checkouts of the operator's open herdr-app spaces |
 | Is this project free to work in? | `git` in its checkout |
@@ -167,7 +168,7 @@ agent to stop a run spends money on the next rung.
 A vanished worker becomes a **decision** in `FleetState`, surfaced in
 attention, and the task stays claimed until someone answers. After
 `staleAfterHours` of no activity the claim is released with a log line — only a
-claim foreman's own agent made, which its `by:*` label records. A claim made by
+claim foreman's own agent made, which its author run records. A claim made by
 hand or by another session is its owner's to give up: foreman cannot tell an
 abandoned one from one whose owner is away.
 
@@ -431,22 +432,23 @@ a model — so the ordinary rung is chosen again once the account resets.
 and have no branch behind them. Dispatching a reviewer to one gives it no diff to
 read and nothing to merge; it will invent something.
 
-A task is foreman's to review only if it carries a `by:*` label, which foreman
-writes when an agent actually starts. **Do not weaken this into "has a
-worker"** — the worker can legitimately be absent while the label is not.
+A task is foreman's to review only if it has an author run, which foreman opens
+when an agent actually starts. **Do not weaken this into "has a worker"** — the
+worker can legitimately be absent while the run is not.
 
 `reviewing` also does not say whether a reviewer was dispatched: it covers both
-the author's completed handoff and the whole review run. `review-by:*` records
-the latter, so a vanished worker under that label is a question for the operator
-rather than grounds for silently launching another reviewer.
+the author's completed handoff and the whole review run. An open review run
+records the latter, so a vanished worker behind one is a question for the
+operator rather than grounds for silently launching another reviewer.
 
 **An empty branch is unfinished work, except when it is a finding.** A backlog
 outlives the code it describes: work goes in under another task's branch or by
 hand, and the entry stays open. Every ending an author can reach there says
 something false — committing invents work, and stopping is indistinguishable
 from a crash, so the task climbs a rung and buys the same discovery again at a
-dearer model until the ladder runs out at the operator. So the author records a
-`satisfied` label, and `reviewable` sends that one empty branch to a reviewer.
+dearer model until the ladder runs out at the operator. So the author ends its
+run `satisfied` (`tasks verdict <task> satisfied`), and `reviewable` sends that
+one empty branch to a reviewer.
 
 A task labelled `research` is the second such branch: its deliverable is a report
 in its own log, so it never has a diff to commit. That label is set when the task
@@ -456,12 +458,13 @@ one attempt.
 Both are claims, never verdicts. "It is already done" is exactly what a model too
 weak for a task would say to escape it, so the reviewer confirms a `satisfied`
 claim against the trunk and a `research` report against its cited evidence, each
-part by part, and its `approved` is what closes the task; a rejection sends it
-back like any other. Landing needs no special case — an empty branch is contained
-by any checkout, so `merge` answers `Present` and completes the task without
-merging or verifying. The labels are what tell the causes of `Present` apart in
-the log; `satisfied` is cleared wherever `approved` is, since both describe a
-diff that a requeue has invalidated, while `research` names the work and stays.
+part by part, and its `approved` verdict is what closes the task; a rejection
+sends it back like any other. Landing needs no special case — an empty branch is
+contained by any checkout, so `merge` answers `Present` and completes the task
+without merging or verifying. The author run's ending and the `research` label
+tell the causes of `Present` apart in the log. A new author run starts a new
+lap, so a `satisfied` ending stops counting with no code that clears it, while
+`research` names the work and stays.
 
 Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
@@ -498,37 +501,31 @@ into the harness's flag. `foreman ladder edit` is the one way to change the
 order: it validates the whole edit and writes it in one transaction.
 
 **Two correction rounds, counted.** A reviewer sends mechanical findings to the
-live author with `foreman correct`, which refuses a third round and writes
-`rounds:<n>`. The run row reads that label, and `attribute` clears it, because
-it counts one author's rounds, not the task's. The council review the prompt
+live author with `foreman correct`, which refuses a third round and counts each
+round on the lap's author run. The count belongs to one author, not the task, so
+a new author run starts at zero. The council review the prompt
 asks for before approving is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
 
 **A reviewer that stops without a verdict is the reviewer's failure, not the
-author's.** The task stays in `reviewing`, `review-by:*` goes, and
-`review-failed-by:<rung>` records the stopped rung; `reviewerFor` then reads
-above the author and every recorded reviewer. No attempt is charged to the
-author. When no rung is left the task is released and parked with `needs-you`.
-A reviewer stopped on a usage wall hands off the same way, writing
-`walled:<provider>` and no failure. `review-failed-by:*` goes with the author
-(`attribute`, `release`, `clearReview`); a spawn failure ends only `review-by`.
+author's.** The task stays in `reviewing`, and its review run ends `no-verdict`;
+`reviewerFor` then reads above the author and every rung whose review in this
+lap ended that way. No attempt is charged to the author. When no rung is left
+the task is released and parked with `needs-you`. A reviewer stopped on a usage
+wall ends `walled` and charges no rung. A reviewer whose approval a later commit
+voided has not failed: the same rung may read the new tip.
 
-**Whatever ends a review clears `review-by:*`.** A label left behind is read as
-evidence of something that never happened: a reviewer that is over on a task
-that is open is exactly the shape a rejection leaves, so the settle loop takes
-it for one — climbing a second rung and logging that the reviewer sent work
-back, on a task whose reviewer approved it and whose landing failed on the
-machine. `Prog.release` therefore clears it alongside `approved`, for every path
-that requeues a task.
+**Review state is the current lap's runs.** A lap is the task's latest author
+run and every run after it. A new author run leaves the last lap's reviews
+behind, so no transition clears review state, and no path can forget to.
 
-Approval is a durable `approved` label, not task completion. The reviewer writes
-that verdict and stops. Foreman re-checks the checkout, merges, and only then
-runs `prog done`. `awaitingLanding` reads that label with no other
-corroboration, so any transition handing the task back for its diff to change
-must clear it — `Prog.release`, `review` and `submit` all do, and so does
-`clearReview`, which is how the settle loop's `ReviewReturned` ends a review:
-a reviewer can approve and then return the work in one turn, and the verdict
-must not outlive the review that wrote it.
+**A review passes one commit.** The reviewer runs `tasks verdict <task>
+approved|returned`, which ends its run and moves the status in one transaction;
+the run already holds the branch tip it read when it opened. Approval holds only
+while the tip is still that commit, so any commit after it voids it. Foreman
+re-checks the checkout and the tip, merges the approved commit by its id, never
+the branch name, and only then completes the task. A tip that moved since the
+approval is refused, and the task goes to review again.
 
 **A landing is proved somewhere disposable before it is applied.** The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
@@ -578,8 +575,8 @@ That distinction lives wholly in the proving ground. By the time the branch
 reaches the operator's checkout it is proved mergeable against exactly that
 commit, so a refusal there cannot be about content — it is `Held`, always.
 
-`Held` is also what keeps a verdict alive. It leaves the task in `reviewing` with
-its `approved` label, so a later tick lands the same reviewed branch; nothing
+`Held` is also what keeps a verdict alive. It leaves the task in `reviewing` and
+the tip where it was, so a later tick lands the same reviewed commit; nothing
 about a lock invalidates a diff a reviewer already read.
 
 Landing also runs `verify`. Only a ground that was green and reproducibly went red
@@ -629,7 +626,7 @@ off one read per project:
   was ever committed on this branch.
 - Neither — the branch holds work the checkout has not taken.
 
-**`merged` cannot stand in for `empty`.** A `by:*` label proves foreman authored
+**`merged` cannot stand in for `empty`.** An author run proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run
 `prog review` having committed nothing. Asking only "is this branch unmerged" and
 reading "no" as "nothing was committed" hands finished, merged work back to the
@@ -778,18 +775,17 @@ it a working fleet and a wedged one look identical.
 
 Each source kind allows only the actions that make sense there, and `perform`
 refuses an action the row cannot take. Decisions are named from the task's
-status, not its labels: a failed spawn leaves the `by:*` label on a task that
-sits back in the queue, and only the status — neither claimed nor under review —
-marks its worker as residue.
+status: only the status — neither claimed nor under review — marks a worker as
+residue.
 
 The two corrections follow the labels, not the views. `descend` takes back one
 recorded failure, because a rung is only ever as good as the evidence that wrote
 it and a bug, an OOM or a killed run all write one nothing earned; one step per
 call, unwriting exactly the `failed-by:*` label foreman itself would have
-written, and with nothing recorded there is nothing to take back. `unassign` clears a
-`review-by:*` label no reviewer is behind — the world records whether a reviewer
-was dispatched, not whether it is still alive, so only the operator can say the
-label is stale. Both write exactly what foreman itself would have written.
+written, and with nothing recorded there is nothing to take back. `unassign` ends
+an open review run no reviewer is behind, as `released`, which charges no rung —
+the world records whether a reviewer was dispatched, not whether it is still
+alive, so only the operator can say the run is stale. Both write exactly what foreman itself would have written.
 
 `intervene` acts rather than silently editing a rung. Continue stops the live role,
 preserves its worktree and uncommitted edits, and dispatches the rung the
@@ -822,9 +818,9 @@ not to have been earned.
   `src/prog.ts` collect the exit code and both streams; a new adapter must too.
 - **Module resolution breaks outside the project directory.** Scratch scripts
   that import `./src/*` must live in the repo root.
-- **Landing belongs to foreman, not the reviewer.** The reviewer records an
-  `approved` label. Foreman owns the clean-checkout gate, merge, verification and
-  `prog done`.
+- **Landing belongs to foreman, not the reviewer.** The reviewer records its
+  verdict with `tasks verdict`. Foreman owns the clean-checkout gate, merge,
+  verification and completing the task.
 
 ## House rules
 

@@ -11,7 +11,7 @@ these steps:
 
 1. **Queue.** The task is ready in prog.
 2. **Author.** An agent works in the task's worktree, commits, and runs `prog review`.
-3. **Review.** An agent one rung up reads the diff and labels the task `approved`, or sends the work back.
+3. **Review.** An agent one rung up reads the diff and gives its verdict with `tasks verdict`: approved, or sent back.
 4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and runs `prog done`.
 
 Every command below reads the world (prog, herdr, git) once, does one thing,
