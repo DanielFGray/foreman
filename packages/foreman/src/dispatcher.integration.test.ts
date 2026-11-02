@@ -12,7 +12,7 @@ import { kindOf, Prog, ProgError, type Item } from "./prog.ts";
 import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
-import { Trials, type Trial } from "./trials.ts";
+import { Runs, type RunRecord } from "./run-record.ts";
 
 const now = new Date();
 
@@ -58,8 +58,8 @@ class World {
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
-  /** Trial rows the settle pass appended, in the order it wrote them. */
-  readonly trials: Trial[] = [];
+  /** Run rows the settle pass appended, in the order it wrote them. */
+  readonly runs: RunRecord[] = [];
   /** The worktrees holding uncommitted work, which `holdsWork` reports. */
   readonly dirty = new Set<string>();
   /** The commit message of every work commit a tick made, in order. */
@@ -354,7 +354,7 @@ class World {
 
   /**
    * Every write a fake makes passes through here, so a test can assert that a
-   * tick wrote nothing to the task store, git, the multiplexer or the trials.
+   * tick wrote nothing to the task store, git, the multiplexer or the runs.
    */
   write<A>(name: string, body: () => A) {
     return Effect.sync(() => {
@@ -369,10 +369,10 @@ class World {
   }
 }
 
-/** The trials table, held in memory so a test can read what a tick appended. */
-const trialsFor = (world: World) =>
-  Layer.succeed(Trials, {
-    record: (trial: Trial) => world.write("trials.record", () => void world.trials.push(trial)),
+/** The runs table, held in memory so a test can read what a tick appended. */
+const runsFor = (world: World) =>
+  Layer.succeed(Runs, {
+    record: (run: RunRecord) => world.write("runs.record", () => void world.runs.push(run)),
   });
 
 const prompts = Layer.succeed(Prompts, {
@@ -423,7 +423,7 @@ const layerFor = (world: World) =>
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Prog, world.prog),
       Layer.succeed(Repository, world.repository),
-      trialsFor(world),
+      runsFor(world),
       // Every rung in the test ladder names a bare harness, so no provider is
       // derivable and the gate has nothing to ask about — which is the point:
       // a ladder foreman cannot read quota for dispatches exactly as before.
@@ -597,8 +597,8 @@ describe("Dispatcher tick", () => {
 
     await tick(world);
 
-    expect(world.trials).toHaveLength(1);
-    expect(world.trials[0]).toMatchObject({
+    expect(world.runs).toHaveLength(1);
+    expect(world.runs[0]).toMatchObject({
       task: "ts-empty",
       kind: "test",
       work: "build",
@@ -620,7 +620,7 @@ describe("Dispatcher tick", () => {
 
     await tick(world);
 
-    expect(world.trials).toEqual([]);
+    expect(world.runs).toEqual([]);
   });
 
   test("returns a review handoff with no commit to the queue", async () => {
@@ -785,7 +785,7 @@ describe("Dispatcher tick", () => {
 
     expect(world.tasks.get(task.id)?.status).toBe("done");
     expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
-    expect(world.trials).toEqual([
+    expect(world.runs).toEqual([
       expect.objectContaining({ task: task.id, work: "build", outcome: "committed" }),
       expect.objectContaining({ task: task.id, work: "review", outcome: "committed" }),
     ]);
@@ -871,7 +871,7 @@ describe("a fleet that is not running", () => {
 
     expect(world.writes).toEqual(
       expect.arrayContaining([
-        "trials.record",
+        "runs.record",
         "repository.merge",
         "repository.remove",
         "prog.release",
@@ -946,7 +946,7 @@ describe("quota probing", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
-        trialsFor(world),
+        runsFor(world),
         quota,
         prompts,
         BunServices.layer,
@@ -1024,7 +1024,7 @@ describe("a spent account and the reviewer above it", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
-        trialsFor(world),
+        runsFor(world),
         quotaSpending(spent),
         prompts,
         BunServices.layer,
@@ -1315,7 +1315,7 @@ describe("a usage wall", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
-        trialsFor(world),
+        runsFor(world),
         Layer.succeed(Quota, {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
@@ -1361,7 +1361,7 @@ describe("a usage wall", () => {
     expect(labels).toContain("walled:opencode");
     expect(labels.some((label) => label.startsWith("attempt:"))).toBe(false);
     expect(labels.some((label) => label.startsWith("failed-by:"))).toBe(false);
-    expect(world.trials.at(-1)).toMatchObject({ outcome: "handed-off", notes: "wall" });
+    expect(world.runs.at(-1)).toMatchObject({ outcome: "handed-off", notes: "wall" });
     expect(world.logs.map(([, message]) => message).join("\n")).toContain("opencode");
     // Settle runs before fill in the same tick, so the next author is already
     // dispatched onto the rung on the other account.
@@ -1415,7 +1415,7 @@ describe("a usage wall", () => {
     expect(labels).toContain("attempt:free:1");
     expect(labels.some((label) => label.startsWith("walled:"))).toBe(false);
     expect(world.commits).toHaveLength(0);
-    expect(world.trials.at(-1)).toMatchObject({ outcome: "handed-off", notes: "Unfinished" });
+    expect(world.runs.at(-1)).toMatchObject({ outcome: "handed-off", notes: "Unfinished" });
   });
 
   test("a quoted wall higher up the screen than the stop is no wall", async () => {
@@ -1487,7 +1487,7 @@ describe("a reviewer that stops without a verdict", () => {
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Prog, world.prog),
         Layer.succeed(Repository, world.repository),
-        trialsFor(world),
+        runsFor(world),
         Layer.succeed(Quota, {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),

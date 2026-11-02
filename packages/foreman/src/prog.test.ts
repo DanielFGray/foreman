@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import { store } from "tasks";
 import { Prog } from "./prog.ts";
 import { agentLog, attemptsOf, authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
 
 const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
-  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default)));
+  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",

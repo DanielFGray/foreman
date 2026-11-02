@@ -1,11 +1,12 @@
-import { Database } from "bun:sqlite";
 import { Context, Effect, Layer } from "effect";
+import { SqlClient } from "effect/sql";
+import { reasonOf } from "./registry.ts";
 import { countOf, isResearch, ROUNDS, SIZE, type Item } from "./prog.ts";
 import type { TaskPhase } from "./task-phase.ts";
 
 /**
- * One slice of work as foreman saw it end, in the shape the model-trials
- * database keeps.
+ * One slice of work as foreman saw it end, in the shape of a closed row of the
+ * task store's `runs` table.
  *
  * The rows foreman can state are the ones it already derives: which model ran,
  * on which account, at what kind of work, and how the run ended. `size` and
@@ -18,13 +19,15 @@ import type { TaskPhase } from "./task-phase.ts";
  * finding, and foreman reads findings as prose in a task log rather than as
  * typed kinds.
  */
-export interface Trial {
+export interface RunRecord {
   readonly project: string;
   readonly task: string;
   readonly slice: string;
   readonly kind: string;
   readonly pool: string;
   readonly model: string;
+  /** The foreman rung that ran; null for a run launched by hand. */
+  readonly rung: string | null;
   readonly work: Work;
   readonly outcome: Outcome;
   readonly source: "live";
@@ -39,7 +42,7 @@ export type Work = "build" | "research" | "review";
 export type Outcome = "committed" | "dropped" | "handed-off" | "answered";
 
 /**
- * The database's words for foreman's accounts.
+ * The store's words for foreman's accounts.
  *
  * A table rather than a convention, because the two sides were written by
  * different hands: foreman keys an account by what reads it (`opencode-go`),
@@ -56,7 +59,7 @@ const POOLS: Record<string, string> = {
   cursor: "Cursor",
 };
 
-/** The account's name as the trials table spells it, or the account itself. */
+/** The account's name as the runs table spells it, or the account itself. */
 export const poolFor = (provider: string): string => POOLS[provider] ?? provider;
 
 /**
@@ -70,7 +73,7 @@ const workOf = (role: "author" | "review", research: boolean): Work =>
   role === "review" ? "review" : research ? "research" : "build";
 
 /**
- * How a closed run ended, in the trials table's four words.
+ * How a closed run ended, in the runs table's four words.
  *
  * `ReviewReturned` is a hand-off and not a drop: the branch stays and the work
  * continues on a stronger rung, which is exactly what the table calls a
@@ -90,7 +93,7 @@ const outcomeOf = (phase: TaskPhase, research: boolean): Outcome => {
 };
 
 /**
- * The phases that end a run, which is what a trial row describes.
+ * The phases that end a run, which is what a run row describes.
  *
  * `Blocked`, `ReviewWaiting` and `ReviewExpired` are absent because the agent or
  * its reviewer is still there in all three: foreman closed a coach window, not a
@@ -108,7 +111,7 @@ const CLOSING: ReadonlySet<TaskPhase> = new Set<TaskPhase>([
   "Unfinished",
 ]);
 
-/** Whether this phase ends a run and so has a trial to write. */
+/** Whether this phase ends a run and so has a run to write. */
 export const closes = (phase: TaskPhase): boolean => CLOSING.has(phase);
 
 /**
@@ -117,17 +120,18 @@ export const closes = (phase: TaskPhase): boolean => CLOSING.has(phase);
  * `undefined` is the honest answer for a live agent, and the caller writes
  * nothing rather than a row that says an unfinished thing was finished.
  */
-export const trialFor = (input: {
+export const runFor = (input: {
   readonly task: Pick<Item, "id" | "title" | "project" | "labels">;
   readonly branch: string;
   readonly harness: string;
   readonly model: string | undefined;
+  readonly rung?: string | undefined;
   readonly provider: string | undefined;
   readonly role: "author" | "review";
   readonly phase: TaskPhase;
   /** What the row says about the run when the phase alone does not, such as a usage wall. */
   readonly notes?: string | undefined;
-}): Trial | undefined => {
+}): RunRecord | undefined => {
   if (!closes(input.phase)) return undefined;
   const research = isResearch(input.task);
   return {
@@ -141,6 +145,7 @@ export const trialFor = (input: {
     // row a rung with no model would have anyway.
     pool: input.provider === undefined ? input.harness : poolFor(input.provider),
     model: input.model ?? input.harness,
+    rung: input.rung ?? null,
     work: workOf(input.role, research),
     outcome: outcomeOf(input.phase, research),
     source: "live",
@@ -153,72 +158,44 @@ export const trialFor = (input: {
 };
 
 /**
- * The trials database the herd skill keeps, at the one path it keeps it.
+ * Inserts one closed run into the store's `runs` table, naming every column.
  *
- * The coordinator writes it by hand at every slice close, which is the manual
- * step this removes. It lives in the coordinator's home rather than foreman's
- * config because it is one file per machine that both tools already name; a
- * missing file is not an error, since a machine without the skill has nothing to
- * record into.
+ * `started_at` stays NULL (foreman does not keep starts), and so does
+ * `report_accurate`: it is a judgement foreman cannot make, and the column is
+ * nullable precisely for a row written without it. The insert fails when the
+ * table is missing, and the failure carries the store's own message.
  */
-const databasePath = (): string => `${process.env["HOME"] ?? ""}/.agents/model-trials.db`;
+export const insertRun = (run: RunRecord) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO runs
+      (project, task, slice, kind, pool, model, rung, work, outcome, source, evidence, notes, size, rounds)
+      VALUES (${run.project}, ${run.task}, ${run.slice}, ${run.kind}, ${run.pool}, ${run.model},
+              ${run.rung}, ${run.work}, ${run.outcome}, ${run.source}, ${run.evidence},
+              ${run.notes}, ${run.size}, ${run.rounds})`;
+  });
 
 /**
- * Appends one row, if the file is there and has the columns we write.
+ * Records closed runs in the task store.
  *
- * Nothing here can fail foreman. The database belongs to another tool, so a
- * missing file, a schema that has moved on, or a lock held by the coordinator is
- * a skipped row and never a stalled tick — and the columns are filtered against
- * what the table actually declares, so a trial row survives a schema that has
- * grown rather than throwing on a column it does not have.
+ * A failed insert is logged at warning and never fails the tick: the store is
+ * shared with other tools, so a lock they hold or a schema that moved on costs
+ * a row, not a stalled fleet. The warning carries the cause, so a missing table
+ * shows instead of vanishing.
  */
-/**
- * An appender for one database file.
- *
- * The path is an argument rather than a hidden global so the only interesting
- * code here — a real insert into a schema foreman does not own — can be pointed
- * at a scratch file and proved, instead of being the one part of this module the
- * suite never runs.
- */
-export const appendTo =
-  (path: string) =>
-  (trial: Trial): Effect.Effect<void> =>
-    Effect.sync(() => {
-      const db = new Database(path, { create: false, readwrite: true });
-      try {
-        const declared = db
-          .query("PRAGMA table_info(trials)")
-          .all()
-          .map((row) => (row as { readonly name: string }).name);
-        if (declared.length === 0) return;
-
-        const wanted: Record<string, string | number | null> = {
-          ...trial,
-          closed_at: new Date().toISOString(),
-          // The judgement foreman cannot make, stated as absent rather than
-          // guessed: the column is nullable precisely for a row written without it.
-          report_accurate: null,
-        };
-        const columns = Object.keys(wanted).filter((name) => declared.includes(name));
-        if (!columns.includes("task")) return;
-        const values = columns.map((name) => wanted[name] ?? null);
-        db.query(
-          `INSERT INTO trials (${columns.join(", ")}) VALUES (${columns
-            .map(() => "?")
-            .join(", ")})`,
-        ).run(...values);
-      } finally {
-        db.close();
-      }
-    }).pipe(
-      // The cause, not the error: opening a file that is not there *throws*, which
-      // makes it a defect, and `Effect.ignore` would let it through to take the
-      // tick down. A skipped row is the promised outcome, so the defect is caught.
-      Effect.catchDefect((defect) => Effect.logDebug(`trials row skipped: ${defect}`)),
-    );
-
-export class Trials extends Context.Service<Trials>()("Trials", {
-  make: Effect.succeed({ record: appendTo(databasePath()) }),
+export class Runs extends Context.Service<Runs>()("Runs", {
+  make: Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return {
+      record: (run: RunRecord): Effect.Effect<void> =>
+        insertRun(run).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catch((error) =>
+            Effect.logWarning(`run row for ${run.task} not recorded: ${reasonOf(error)}`),
+          ),
+        ),
+    };
+  }),
 }) {
   static readonly Default = Layer.effect(this, this.make);
 }

@@ -86,7 +86,7 @@ import {
   walledBy,
 } from "./prog.ts";
 import { hitWall } from "./harness.ts";
-import { Trials, trialFor } from "./trials.ts";
+import { Runs, runFor } from "./run-record.ts";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
@@ -129,7 +129,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const prompts = yield* Prompts;
     const repository = yield* Repository;
     const quota = yield* Quota;
-    const trials = yield* Trials;
+    const runs = yield* Runs;
 
     const runAttributes = (
       task: {
@@ -934,7 +934,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * The trials row for a run that has just ended, written where the ending is
+     * The run row for a run that has just ended, written where the ending is
      * decided rather than once at the end of the tick.
      *
      * Two endings sit outside the settle loop's own pass — a handoff with
@@ -950,7 +950,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * The role is the reviewer where one is recorded, else the author, unless
      * the caller names it: a landing ends both runs at once.
      */
-    const recordTrial = (
+    const recordRun = (
       task: Item,
       phase: TaskPhase,
       role: "author" | "review" = reviewedBy(task) ? "review" : "author",
@@ -961,17 +961,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const row =
         rung === undefined
           ? undefined
-          : trialFor({
+          : runFor({
               task,
               branch: labelFor(task.id),
               harness: rung.harness,
               model: rung.model,
+              rung: rung.name,
               provider: providerOf(rung),
               role,
               phase,
               notes,
             });
-      return row === undefined ? Effect.void : trials.record(row);
+      return row === undefined ? Effect.void : runs.record(row);
     };
 
     /**
@@ -1095,7 +1096,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             );
             // Unfinished for the same reason `unfinished` says it is: the run
             // ended having produced nothing a reviewer could read.
-            yield* recordTrial(task, "Unfinished");
+            yield* recordRun(task, "Unfinished");
             yield* teardown(task);
           }),
         { discard: true },
@@ -1179,10 +1180,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 1,
               );
 
-              // The same fact the run telemetry carries, appended to the trials
+              // The same fact the run telemetry carries, appended to the runs
               // table the coordinator reads by hand at every slice close. Both
               // are written here, once, so they cannot describe different runs.
-              yield* recordTrial(task, phase, role, Option.isSome(wall) ? "wall" : undefined);
+              yield* recordRun(task, phase, role, Option.isSome(wall) ? "wall" : undefined);
             }
 
             yield* Match.value(phase).pipe(
@@ -1398,8 +1399,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* prog.complete(task.id);
         // The teardown below ends the task's terminals, so no later settle
         // sees these runs end: the landing writes both their rows.
-        yield* recordTrial(task, "Landed", "author");
-        yield* recordTrial(task, "Landed", "review");
+        yield* recordRun(task, "Landed", "author");
+        yield* recordRun(task, "Landed", "review");
         yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
         yield* teardown(task);
       }).pipe(Effect.catch((error) => Effect.logWarning(`landing ${task.id} failed: ${error}`)));

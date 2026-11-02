@@ -322,7 +322,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     } as const;
   }),
 }) {
-  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(Tasks.layer));
+  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(Tasks.layerSql));
 }
 
 const nextRound = (labels: ReadonlyArray<string>): number => (countOf({ labels }, ROUNDS) ?? 0) + 1;
