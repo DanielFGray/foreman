@@ -272,7 +272,7 @@ from the main checkout and lands into `develop` there.
    the dispatcher tests pass with no test edited, a table test maps each
    `TaskPhase` and merge verdict to its old and its placed next step, and
    placement of the live tasks matches today's working, review and queue views.
-6. Live placement on the Pipeline page; blocks today's flow does not use
-   (pinned and capped agents, park, check). The blocks are done: an agent
+6. Done: live placement on the Pipeline page; blocks today's flow does not use
+   (pinned and capped agents, park, check). An agent
    block's `slots` counts its running tasks from placement, and each block
    has a dispatcher test on a drawn pipeline.
