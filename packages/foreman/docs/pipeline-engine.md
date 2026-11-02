@@ -131,7 +131,8 @@ Filters read facts, never label strings, so when runs replace labels only
    is not in this pipeline.
 2. Walk forward. At a router, follow the first matching route. At a gate,
    remember the gate. At a work block that a run of this lap advanced,
-   forget the remembered gates and go on.
+   forget the remembered gates and go on. An open task has passed nothing: it
+   is back in the queue, and its next author run starts a new lap.
 3. Stop at the first work block not passed. The task is **at** that block. Its
    state there comes from its status and its runs:
    - `waiting`: nothing runs yet. The remembered gates decide when it may start.

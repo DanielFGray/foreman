@@ -253,21 +253,26 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     /**
      * Publishes each change to the policy file as it happens, then wakes the
-     * loop so the next tick acts on it. The directory is watched, not the
-     * file, because `updatePolicy` replaces the file by rename. A watcher that
-     * cannot start is logged and costs only the delay: the poll still reads
-     * the file.
+     * loop so the next tick acts on it. A change to the pipelines file only
+     * wakes the loop, because every tick reads that file. The directory is
+     * watched, not the files, because both are replaced by rename. A pipelines
+     * file outside the policy's directory, and a watcher that cannot start,
+     * cost only the delay: the poll still reads both files.
      */
     const watchPolicy = Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const paths = yield* Path.Path;
       const file = policyPath();
+      const drawn = paths.basename(pipelinesPath());
       yield* fs.makeDirectory(paths.dirname(file), { recursive: true });
       yield* fs.watch(paths.dirname(file)).pipe(
-        Stream.filter((event) => paths.basename(event.path) === paths.basename(file)),
-        Stream.runForEach(() =>
-          publishPolicy.pipe(Effect.flatMap((changed) => (changed ? nudge : Effect.void))),
-        ),
+        Stream.runForEach((event) => {
+          const name = paths.basename(event.path);
+          if (name === paths.basename(file)) {
+            return publishPolicy.pipe(Effect.flatMap((changed) => (changed ? nudge : Effect.void)));
+          }
+          return name === drawn ? nudge : Effect.void;
+        }),
       );
     }).pipe(
       Effect.provideContext(platform),
