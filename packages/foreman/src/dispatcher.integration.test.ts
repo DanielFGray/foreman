@@ -202,7 +202,7 @@ class World {
       this.write("prog.attribute", () => this.openRun(id, run)),
     assignReview: (id: string, run: NewRun) =>
       this.write("prog.assignReview", () => {
-        this.closeRuns(id, { author: "handed-off", commit: run.commit });
+        this.closeRuns(id, { author: "handed-off", review: "released", commit: run.commit });
         return this.openRun(id, run);
       }),
     endReview: (id: string, ending: Ending) =>

@@ -156,6 +156,22 @@ describe("Prog against a scratch store", () => {
     ]);
   });
 
+  // A retried review replaces a reviewer that vanished, so the lap holds one open review run.
+  test("assigning a reviewer ends the review run it replaces as released", async () => {
+    const id = (await Bun.$`prog add "vanished reviewer" -p foreman`.text()).trim();
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "cheap", "c1")));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+
+    const after = await run((prog) => prog.show(id));
+    expect(after.runs.map((r) => [r.role, r.rung, r.open, r.ending])).toEqual([
+      ["author", "cheap", false, "handed-off"],
+      ["review", "cheap", false, "released"],
+      ["review", "dear", true, undefined],
+    ]);
+  });
+
   // One status the schema does not name fails the decode of the whole list,
   // which drops every epic's progress for that project.
   test("reads an epic's children whatever status prog filed them at", async () => {
