@@ -2350,15 +2350,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * and the task is open. An open review run on an open task is as stale
        * as the reviewer behind it: nothing is awaiting landing, and the task
        * is going to change hands. Liveness is the view's call; the run is
-       * re-checked here only so an already-ended snapshot ends nothing, and it
-       * is ended through the same method the settle loop uses when a review
-       * ends.
+       * re-checked here only so an already-ended snapshot ends nothing.
+       *
+       * It ends `released`, not `no-verdict`: a reviewer that vanished says
+       * nothing about whether its rung can read the diff, so the rung stays
+       * open to review it again.
        */
       unassign: (task: Climbing) =>
         commanded(
           Effect.gen(function* () {
             if (reviewedBy(task) === undefined) return;
-            yield* prog.endReview(task.id, "no-verdict");
+            yield* prog.endReview(task.id, "released");
           }),
         ),
 

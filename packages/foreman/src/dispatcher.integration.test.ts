@@ -14,7 +14,7 @@ import { Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Landing } from "./repository.ts";
 import type { Ending, NewRun, Role } from "tasks";
-import { authoredBy } from "./lap.ts";
+import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, handedOff, reviewRun, withRuns } from "./task-fixture.ts";
 
 const now = new Date();
@@ -1369,6 +1369,23 @@ describe("approving an ask", () => {
     await tick(world);
     expect(world.spawned).toEqual([[task.id, "review"]]);
     expect(world.tasks.get(task.id)?.status).toBe("reviewing");
+  });
+});
+
+describe("unassign", () => {
+  test("ends a stale review with no failure, so the same rung may review again", async () => {
+    const task = item("ts-stale", "open", [], "test", [handedOff("low"), reviewRun("mid")]);
+    const world = new World(task);
+
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.unassign(task)).pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+
+    const runs = world.tasks.get(task.id)?.runs ?? [];
+    expect(runs.at(-1)).toMatchObject({ rung: "mid", open: false, ending: "released" });
+    expect(reviewFailedBy({ runs })).toEqual([]);
   });
 });
 
