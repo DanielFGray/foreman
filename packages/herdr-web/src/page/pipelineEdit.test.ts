@@ -34,7 +34,7 @@ test("a card says what its block does in a few words", () => {
 test("a land's how is set in the inspector, and an end turns into a done", () => {
   const fast = applyEdit(from(STANDARD_PIPELINE), { _tag: "Configure", id: "land", setting: { how: "fast-forward" } })
   expect(fast.draft.nodes.find((node) => node.id === "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" })
-  expect(summaryOf({ kind: "land", id: "l", how: "fast-forward" })).toBe("fast-forwards the branch")
+  expect(summaryOf({ kind: "land", id: "l", how: "fast-forward" })).toBe("fast-forwards")
   const done = applyEdit(from(STANDARD_PIPELINE), { _tag: "SwapEnd", id: "land" })
   expect(done.draft.nodes.find((node) => node.id === "land")?.kind).toBe("done")
 })

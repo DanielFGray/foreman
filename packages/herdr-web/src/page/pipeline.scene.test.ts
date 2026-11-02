@@ -102,8 +102,8 @@ test("the changes panel lists the unsaved edits, and a revert empties it", () =>
     expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
     expect(role("button", { name: "Revert to saved" })).toBeDisabled(),
     click(role("button", { name: "land land" })),
-    click(role("button", { name: "Make it a park" })),
-    expect(selector(".pipeline-changes li")).toHaveText("made land a park"),
+    click(role("button", { name: "Make it a done" })),
+    expect(selector(".pipeline-changes li")).toHaveText("made land a done"),
     click(role("button", { name: "Revert to saved" })),
     expect(selector(".pipeline-changes")).toContainText("No changes since the last save."),
   )
@@ -258,9 +258,8 @@ test("the block palette offers the workspace blocks, and a land's inspector sets
   scene(
     { update, view },
     ...opened,
-    click(role("button", { name: "add a block after queue on next" })),
-    expect(role("button", { name: "put a branch on the wire" })).toExist(),
-    expect(role("button", { name: "put a worktree on the wire" })).toExist(),
+    expect(role("button", { name: "⎇ branch" })).toExist(),
+    expect(role("button", { name: "▤ worktree" })).toExist(),
     click(role("button", { name: "land land" })),
     expect(role("combobox", { name: "how" })).toExist(),
     expect(selector(".pipeline-inspector option[value='merge']")).toHaveAttr("selected", "true"),
