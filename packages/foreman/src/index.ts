@@ -4,6 +4,7 @@ export { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 export { projectOf } from "./projects.ts";
 export {
   Published,
+  PublishedPlacement,
   PublishedRow,
   publishedOf,
   publishedPath,

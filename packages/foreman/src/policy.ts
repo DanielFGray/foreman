@@ -28,8 +28,9 @@
  * Commands the operator gives by hand (`foreman dispatch`, the panel's launch)
  * are not gated: the operator pressing the key is the permission.
  */
-import { Effect, FileSystem, Option, Path, Schema as S } from "effect";
+import { Effect, FileSystem, Option, Schema as S } from "effect";
 import type { Item } from "./prog.ts";
+import { configDirectory, rewrite } from "./shared-file.ts";
 
 export const STEPS = ["author", "climb", "review", "land"] as const;
 export type Step = (typeof STEPS)[number];
@@ -200,12 +201,6 @@ export const permit = (
   return mode === "ask" ? { _tag: "Ask" } : { _tag: "Denied" };
 };
 
-/** The step a dispatch of an author on this task is: a first try or a retry. */
-export const authorStep = (labels: ReadonlyArray<string>): Step =>
-  labels.some((label) => label.startsWith("failed-by:") || label.startsWith("attempt:"))
-    ? "climb"
-    : "author";
-
 /** Each grant's scope, mapped to the unfinished tasks at or under it. */
 export type Scopes = ReadonlyMap<string, ReadonlySet<string>>;
 
@@ -291,8 +286,7 @@ const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
 
 /** Where the policy lives: `$FOREMAN_POLICY`, else beside the config. */
 export const policyPath = (): string =>
-  process.env["FOREMAN_POLICY"] ??
-  `${process.env["XDG_CONFIG_HOME"] ?? `${process.env["HOME"] ?? ""}/.config`}/foreman/policy.json`;
+  process.env["FOREMAN_POLICY"] ?? `${configDirectory()}/policy.json`;
 
 /**
  * The policy as the file states it.
@@ -322,46 +316,25 @@ export const readPolicy = (path: string) =>
 /**
  * Rewrites the policy through `change`, the one way anything writes it.
  *
- * The dispatcher and the operator's commands write the same file from different
- * processes. So the file is read again just before the rename, and a write
- * that finds it changed since its own read starts over from the new contents
- * instead of overwriting them. That narrows the race to the moment between the
- * second read and the rename; it does not close it, and nothing here holds a
- * lock. Losing it loses one write: an expiry the dispatcher makes again next tick,
- * an admission that lets a grant take on one task more than its count, or an
- * operator's change that the next reading shows did not happen. A file that does not decode is refused: the
- * operator's broken edit is theirs to fix, not foreman's to replace.
+ * Losing the race `rewrite` describes loses one write: an expiry the
+ * dispatcher makes again next tick, an admission that lets a grant take on one
+ * task more than its count, or an operator's change that the next reading
+ * shows did not happen.
  */
 export const updatePolicy = (path: string, change: (policy: Policy) => Policy) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const paths = yield* Path.Path;
-    // One temporary per write: several processes write this file, and two
-    // sharing a name would rename each other's text into place.
-    const temporary = paths.join(
-      paths.dirname(path),
-      `.${paths.basename(path)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
-    );
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const read = yield* readPolicy(path);
-      if (read.error !== undefined) return yield* new PolicyError({ detail: read.error });
-      const next = change(read.policy);
-      const text = `${JSON.stringify(yield* S.encodeEffect(Policy)(next), null, 2)}\n`;
-      if (text === read.text) return next;
-      yield* fs.makeDirectory(paths.dirname(path), { recursive: true });
-      yield* fs.writeFileString(temporary, text);
-      const now = yield* fs.readFileString(path).pipe(Effect.option);
-      if (Option.getOrUndefined(now) !== read.text) {
-        yield* fs.remove(temporary);
-        continue;
-      }
-      yield* fs.rename(temporary, path);
-      return next;
-    }
-    return yield* new PolicyError({
-      detail: `${path} kept changing under the write`,
-    });
-  });
+  rewrite(
+    path,
+    Policy,
+    (path) =>
+      readPolicy(path).pipe(
+        Effect.map(({ policy, error, text }) => ({ value: policy, error, text })),
+      ),
+    change,
+  ).pipe(
+    Effect.catchTag("RewriteError", (error) =>
+      Effect.fail(new PolicyError({ detail: error.detail })),
+    ),
+  );
 
 export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
   detail: S.String,

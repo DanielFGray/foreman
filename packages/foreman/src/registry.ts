@@ -1,15 +1,16 @@
-import { Database } from "bun:sqlite";
 import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import type { Ladder, Rung } from "./ladder.ts";
 
 /**
  * The model registry: the ladder, and the facts about each model on it.
  *
- * It is the `ladder` and `models` tables of the trials database the herd skill
- * also uses (`~/.agents/model-trials.db`), so the order of the models, their
- * launch settings and the record of how each one fared live in one file. Foreman
- * reads the ladder from it on every start and refuses to run without it: a
- * second copy of the order in a config file is a copy that can disagree.
+ * It is the `ladder` and `models` tables of the task store (`PROG_DB`, else
+ * `~/.prog/prog.db`), reached through the `SqlClient` the process shares with
+ * the task layer, so the order of the models, their launch settings and the
+ * record of how each one fared live in one file. Foreman reads the ladder from
+ * it on every start and refuses to run without it: a second copy of the order
+ * in a config file is a copy that can disagree.
  *
  * Models themselves (harness, pool, thinking level) are rows the herd skill's
  * `schema-registry.sql` seeds. This module edits only the ladder, which is the
@@ -24,10 +25,6 @@ export class RegistryError extends Schema.TaggedError<RegistryError>()("Registry
   }
 }
 
-/** The registry's path: `$FOREMAN_REGISTRY`, else the herd skill's database. */
-export const registryPath = (): string =>
-  process.env["FOREMAN_REGISTRY"] ?? `${process.env["HOME"] ?? ""}/.agents/model-trials.db`;
-
 /** One ladder row as an operator edits it. Position in the list is the rank. */
 export interface LadderRow {
   readonly rung: string;
@@ -39,45 +36,33 @@ export interface LadderRow {
 }
 
 /** The ladder, cheapest first, with each rung's launch settings from its model. */
-export const readLadder = (path: string): Ladder => {
-  const db = open(path, false);
-  try {
-    const rungs = db
-      .query(
-        `SELECT l.rung, l.model, l.enabled, l.provider, l.unmetered, m.harness, m.thinking
-           FROM ladder l JOIN models m USING (model)
-          ORDER BY l.rank`,
-      )
-      .all() as ReadonlyArray<{
-      rung: string;
-      model: string;
-      enabled: number;
-      provider: string | null;
-      unmetered: number;
-      harness: string;
-      thinking: string;
-    }>;
-    const [bottom, ...rest] = rungs.map((row): Rung => ({
-      name: row.rung,
-      harness: row.harness,
-      model: row.model,
-      provider: row.provider ?? undefined,
-      enabled: row.enabled !== 0,
-      unmetered: row.unmetered !== 0 ? true : undefined,
-      thinking: row.thinking,
-    }));
-    if (bottom === undefined) {
-      throw new RegistryError({ detail: `the ladder table in ${path} has no rungs` });
-    }
-    return [bottom, ...rest];
-  } catch (cause) {
-    throw cause instanceof RegistryError
-      ? cause
-      : new RegistryError({ detail: `reading the ladder from ${path}: ${cause}` });
-  } finally {
-    db.close();
+export const readLadder = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rungs = yield* sql<{
+    rung: string;
+    model: string;
+    enabled: number;
+    provider: string | null;
+    unmetered: number;
+    harness: string;
+    thinking: string;
+  }>`SELECT l.rung, l.model, l.enabled, l.provider, l.unmetered, m.harness, m.thinking
+       FROM ladder l JOIN models m USING (model)
+      ORDER BY l.rank`;
+  const [bottom, ...rest] = rungs.map((row): Rung => ({
+    name: row.rung,
+    harness: row.harness,
+    model: row.model,
+    provider: row.provider ?? undefined,
+    enabled: row.enabled !== 0,
+    unmetered: row.unmetered !== 0 ? true : undefined,
+    thinking: row.thinking,
+  }));
+  if (bottom === undefined) {
+    return yield* new RegistryError({ detail: "the ladder table has no rungs" });
   }
-};
+  return [bottom, ...rest] as Ladder;
+}).pipe(Effect.mapError(registryError("reading the ladder")));
 
 /** One rung with the record the registry holds for its model. */
 export interface RungStatus {
@@ -93,93 +78,67 @@ export interface RungStatus {
 }
 
 /** The ladder joined to `model_status`, for `foreman ladder` to print. */
-export const readStatus = (path: string): ReadonlyArray<RungStatus> => {
-  const db = open(path, false);
-  try {
-    return (
-      db
-        .query(
-          `SELECT l.rung, s.harness, s.model, s.thinking, l.enabled, s.retired, s.status,
-                  s.slices, s.succeeded, s.avg_rounds
-             FROM ladder l JOIN model_status s USING (model) ORDER BY l.rank`,
-        )
-        .all() as ReadonlyArray<{
-        rung: string;
-        harness: string;
-        model: string;
-        thinking: string;
-        enabled: number;
-        retired: number;
-        status: string;
-        slices: number;
-        succeeded: number;
-        avg_rounds: number | null;
-      }>
-    ).map((row) => ({
-      rung: row.rung,
-      harness: row.harness,
-      model: row.model,
-      thinking: row.thinking,
-      state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
-      slices: row.slices,
-      succeeded: row.succeeded,
-      avgRounds: row.avg_rounds,
-    }));
-  } finally {
-    db.close();
-  }
-};
+export const readStatus = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    rung: string;
+    harness: string;
+    model: string;
+    thinking: string;
+    enabled: number;
+    retired: number;
+    status: string;
+    slices: number;
+    succeeded: number;
+    avg_rounds: number | null;
+  }>`SELECT l.rung, s.harness, s.model, s.thinking, l.enabled, s.retired, s.status,
+            s.slices, s.succeeded, s.avg_rounds
+       FROM ladder l JOIN model_status s USING (model) ORDER BY l.rank`;
+  return rows.map((row): RungStatus => ({
+    rung: row.rung,
+    harness: row.harness,
+    model: row.model,
+    thinking: row.thinking,
+    state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
+    slices: row.slices,
+    succeeded: row.succeeded,
+    avgRounds: row.avg_rounds,
+  }));
+}).pipe(Effect.mapError(registryError("reading the ladder's record")));
 
 /** Every model id the registry knows, for drift checks. */
-export const knownModels = (path: string): ReadonlySet<string> => {
-  const db = open(path, false);
-  try {
-    return new Set(
-      (db.query(`SELECT model FROM models`).all() as ReadonlyArray<{ model: string }>).map(
-        (row) => row.model,
-      ),
-    );
-  } finally {
-    db.close();
-  }
-};
+export const knownModels = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ model: string }>`SELECT model FROM models`;
+  return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
+}).pipe(Effect.mapError(registryError("reading the models")));
 
 /** Landed slices, rounds and cost per success, by model and size. */
-export const sizeSummary = (path: string): ReadonlyArray<Record<string, unknown>> => {
-  const db = open(path, false);
-  try {
-    return db
-      .query(`SELECT * FROM size_summary ORDER BY size, cost_per_success_usd`)
-      .all() as ReadonlyArray<Record<string, unknown>>;
-  } finally {
-    db.close();
-  }
-};
+export const sizeSummary = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return (yield* sql<Record<string, unknown>>`
+    SELECT * FROM size_summary ORDER BY size, cost_per_success_usd`) as ReadonlyArray<
+    Record<string, unknown>
+  >;
+}).pipe(Effect.mapError(registryError("reading the size summary")));
 
 /** The ladder as editable rows, for `foreman ladder` and its editor. */
-export const readRows = (path: string): ReadonlyArray<LadderRow> => {
-  const db = open(path, false);
-  try {
-    return (
-      db
-        .query(`SELECT rung, model, enabled, provider, unmetered, note FROM ladder ORDER BY rank`)
-        .all() as ReadonlyArray<{
-        rung: string;
-        model: string;
-        enabled: number;
-        provider: string | null;
-        unmetered: number;
-        note: string | null;
-      }>
-    ).map((row) => ({
-      ...row,
-      enabled: row.enabled !== 0,
-      unmetered: row.unmetered !== 0,
-    }));
-  } finally {
-    db.close();
-  }
-};
+export const readRows = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    rung: string;
+    model: string;
+    enabled: number;
+    provider: string | null;
+    unmetered: number;
+    note: string | null;
+  }>`SELECT rung, model, enabled, provider, unmetered, note FROM ladder ORDER BY rank`;
+  return rows.map((row): LadderRow => ({
+    ...row,
+    enabled: row.enabled !== 0,
+    unmetered: row.unmetered !== 0,
+  }));
+}).pipe(Effect.mapError(registryError("reading the ladder rows")));
 
 /**
  * Replaces the ladder with these rows, in this order.
@@ -190,13 +149,11 @@ export const readRows = (path: string): ReadonlyArray<LadderRow> => {
  * before anything is written, and the write is one transaction, so a bad edit
  * leaves the ladder as it was.
  */
-export const writeRows = (path: string, rows: ReadonlyArray<LadderRow>): void => {
-  const db = open(path, true);
-  try {
+export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
     const known = new Set(
-      (db.query(`SELECT model FROM models`).all() as ReadonlyArray<{ model: string }>).map(
-        (row) => row.model,
-      ),
+      (yield* sql<{ model: string }>`SELECT model FROM models`).map((row) => row.model),
     );
     const problems = [
       ...(rows.length === 0 ? ["the ladder needs at least one rung"] : []),
@@ -213,30 +170,22 @@ export const writeRows = (path: string, rows: ReadonlyArray<LadderRow>): void =>
         ),
       ...(rows.some((row) => row.enabled) ? [] : ["every rung is disabled"]),
     ];
-    if (problems.length > 0) throw new RegistryError({ detail: problems.join("; ") });
+    if (problems.length > 0) return yield* new RegistryError({ detail: problems.join("; ") });
 
-    db.transaction(() => {
-      db.query(`DELETE FROM ladder`).run();
-      const insert = db.query(
-        `INSERT INTO ladder(rank, rung, model, enabled, provider, unmetered, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      );
-      rows.forEach((row, index) =>
-        insert.run(
-          index + 1,
-          row.rung,
-          row.model,
-          row.enabled ? 1 : 0,
-          row.provider,
-          row.unmetered ? 1 : 0,
-          row.note,
-        ),
-      );
-    })();
-  } finally {
-    db.close();
-  }
-};
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`DELETE FROM ladder`;
+        yield* Effect.forEach(
+          rows,
+          (row, index) =>
+            sql`INSERT INTO ladder(rank, rung, model, enabled, provider, unmetered, note)
+                VALUES (${index + 1}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
+                        ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note})`,
+          { discard: true },
+        );
+      }),
+    );
+  }).pipe(Effect.mapError(registryError("writing the ladder")));
 
 /** Parses the editor's text: a JSONC array of rows, with comments allowed. */
 export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
@@ -284,12 +233,22 @@ const RowFile = Schema.Struct({
   note: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const open = (path: string, write: boolean): Database => {
-  try {
-    return new Database(path, write ? { create: false, readwrite: true } : { readonly: true });
-  } catch (cause) {
-    throw new RegistryError({
-      detail: `no model registry at ${path} (${cause}); it is the herd skill's trials database — set FOREMAN_REGISTRY to use another`,
-    });
-  }
-};
+/**
+ * What a store failure says, for a message an operator reads.
+ *
+ * A `SqlError` stringifies as "Failed to execute statement" alone; the
+ * database's own words (a lock, a missing table) are on its `reason.cause`.
+ */
+export function reasonOf(error: unknown): string {
+  const cause = (error as { reason?: { cause?: unknown } } | null)?.reason?.cause;
+  if (cause instanceof Error) return cause.message;
+  return cause === undefined ? String(error) : String(cause);
+}
+
+/** Names the step a store failure came from; a `RegistryError` passes through. */
+export function registryError(step: string) {
+  return (cause: unknown): RegistryError =>
+    cause instanceof RegistryError
+      ? cause
+      : new RegistryError({ detail: `${step} in the task store: ${reasonOf(cause)}` });
+}

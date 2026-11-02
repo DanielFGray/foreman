@@ -6,7 +6,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware",
     "test": "bun --bun vitest run",
-    "start": "bun src/server/main.ts",
+    "start": "vite build && bun src/server/main.ts",
     "build": "vite build",
     "build:watch": "vite build --watch"
   },

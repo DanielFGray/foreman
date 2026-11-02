@@ -405,26 +405,64 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
         if (!verify) return { _tag: "Proven", commit, verified: false } as const;
 
-        const after = yield* check(proving, verify);
-        if (after.passed) return { _tag: "Proven", commit, verified: true } as const;
+        const judged = yield* judge(proving, verify, gitGround(proving, directory, base));
+        switch (judged._tag) {
+          case "Passed":
+            return { _tag: "Proven", commit, verified: judged.verified } as const;
+          case "Failed":
+            return { _tag: "Broke", output: judged.output } as const;
+          case "Held":
+            return judged;
+        }
+      });
 
-        const broke = yield* reproduced(proving, verify, after.output);
+    /**
+     * What `command` says about the tree the proving ground holds.
+     *
+     * A failure counts against the tree only when it reproduces and the
+     * command passes once `baseline` resets the ground to where the tree
+     * began. Red before the tree touched it, the tree is not the cause, and
+     * gating on an absolute pass would freeze the fleet behind one broken test
+     * forever. Such a pass is not `verified`.
+     */
+    const judge = (
+      proving: string,
+      command: string,
+      baseline: Effect.Effect<
+        { readonly _tag: "Held"; readonly detail: string } | undefined,
+        RepositoryError
+      >,
+    ): Effect.Effect<Checked, RepositoryError> =>
+      Effect.gen(function* () {
+        const after = yield* check(proving, command);
+        if (after.passed) return { _tag: "Passed", verified: true } as const;
+
+        const broke = yield* reproduced(proving, command, after.output);
         if (broke === undefined) {
-          yield* Effect.logWarning(
-            `${verify} failed then passed in ${proving}; a flaky verification is green`,
-          );
-          return { _tag: "Proven", commit, verified: true } as const;
+          yield* Effect.logWarning(`${command} failed then passed in ${proving}; a flake is green`);
+          return { _tag: "Passed", verified: true } as const;
         }
 
-        const restored = yield* gitGround(proving, directory, base);
+        const restored = yield* baseline;
         if (restored) return restored;
-        const before = yield* check(proving, verify);
-        // Red before the branch touched it, so the branch is not the cause.
-        // Gating on an absolute pass would freeze the fleet behind one broken
-        // test forever.
+        const before = yield* check(proving, command);
         return before.passed
-          ? ({ _tag: "Broke", output: broke } as const)
-          : ({ _tag: "Proven", commit, verified: false } as const);
+          ? ({ _tag: "Failed", output: broke } as const)
+          : ({ _tag: "Passed", verified: false } as const);
+      });
+
+    /**
+     * Runs a check block's command on `commit` in the proving ground, so it
+     * judges exactly that commit and writes to no tree a person or an agent
+     * uses. Its baseline is the commit the branch was cut from: where `commit`
+     * and the checkout's HEAD last met.
+     */
+    const gitCheck = (proving: string, directory: string, commit: string, command: string) =>
+      Effect.gen(function* () {
+        const ready = yield* gitGround(proving, directory, commit);
+        if (ready) return ready;
+        const base = yield* gitOutput(directory, "merge-base", "HEAD", commit);
+        return yield* judge(proving, command, gitGround(proving, directory, base));
       });
 
     /**
@@ -573,6 +611,15 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       leaveBranch,
 
       /**
+       * The commit a branch points at, or nothing when the branch does not
+       * exist. A reviewer reads this commit and an approval is bound to it.
+       */
+      tip: (directory: string, branch: string) =>
+        git(directory, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`).pipe(
+          Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : undefined)),
+        ),
+
+      /**
        * Whether a task worktree holds anything the agent that lived in it made.
        *
        * Untracked files count, unlike in the operator's checkout. That checkout
@@ -711,6 +758,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               ? [
                   {
                     branch,
+                    tip,
                     merged: merged.has(branch),
                     empty: trunk.has(tip),
                     stale: staleByBranch.get(branch),
@@ -721,18 +769,33 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         }),
 
       /**
-       * Deletes a branch, and says whether git let it go.
+       * Deletes a merged branch and the linked worktree still holding it, and
+       * says whether the branch went.
        *
-       * `--delete` without `--force` is what makes the sweep above it safe:
-       * git refuses a branch holding commits the checkout does not have, and
-       * refuses one a worktree still has checked out — which is picked up on a
-       * later tick, once that workspace closes. A refusal is an answer, not a
-       * failure, so it comes back as `false` rather than as an error.
+       * git refuses to delete a branch a worktree has checked out, and nothing
+       * else takes that worktree down: a landing whose teardown failed leaves
+       * it behind with a merged branch. So the worktree goes first, and only
+       * when it is clean. The non-forced remove refuses uncommitted or untracked
+       * work, which is then kept, and the refusal comes back as `false`.
+       * `--delete` without `--force` still refuses commits the checkout lacks.
+       * A refusal is an answer, not a failure, so it is never an error.
        */
       remove: (directory: string, branch: string) =>
-        git(directory, "branch", "--delete", branch).pipe(
-          Effect.map((result) => result.exitCode === 0),
-        ),
+        Effect.gen(function* () {
+          yield* git(directory, "worktree", "prune");
+          const listed = yield* gitOutput(directory, "worktree", "list", "--porcelain");
+          // The main checkout is always listed first, and git refuses to
+          // remove it, so only the linked worktrees after it are candidates.
+          const linked = worktreesOf(listed)
+            .slice(1)
+            .find((worktree) => worktree.branch === branch);
+          if (linked) {
+            const removed = yield* git(directory, "worktree", "remove", linked.path);
+            if (removed.exitCode !== 0) return false;
+          }
+          const deleted = yield* git(directory, "branch", "--delete", branch);
+          return deleted.exitCode === 0;
+        }),
 
       /**
        * Every worktree git has registered for the checkout, with the branch
@@ -931,10 +994,15 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * `message` is the subject of the merge commit. Without it git names the
        * commit after the detached HEAD the proof runs on, which reads as noise
        * in the operator's history.
+       *
+       * `commit` is what lands: the commit the reviewer approved, merged by its
+       * id. `branch` is the task's branch, which a branch-mode checkout has out
+       * and must leave first.
        */
       merge: (
         directory: string,
         branch: string,
+        commit: string,
         verify: string | undefined,
         proving: string,
         message: string,
@@ -944,7 +1012,8 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // starts by checking the operator's branch out again, so every step
           // below runs against the operator's branch exactly as for a
           // worktree. The switch needs a clean tree: git would carry leftover
-          // edits onto the operator's branch.
+          // edits onto the operator's branch. The branch is left by its name;
+          // only the commit is merged.
           if ((yield* leaveBranch(directory, branch)) === "dirty") {
             return {
               _tag: "Held",
@@ -957,12 +1026,21 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // the commits is not going to be written to and its cleanliness is
           // beside the point. Holding here would strand the task exactly as
           // long as the operator kept editing.
-          if (yield* contains(directory, branch)) return { _tag: "Present" } as const;
+          if (yield* contains(directory, commit)) return { _tag: "Present" } as const;
 
           const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;
-          return yield* gitCheckout.merge(directory, branch, verify, proving, message);
+          return yield* gitCheckout.merge(directory, commit, verify, proving, message);
         }),
+
+      /**
+       * Runs a check block's `command` on `commit`, a commit of `directory`'s
+       * repository, in the proving ground `proving` that landings use. Writes
+       * nothing to `directory`. A flake and a failure the base shares do not
+       * count against the commit, as at a landing.
+       */
+      check: (directory: string, commit: string, command: string, proving: string) =>
+        gitCheck(proving, directory, commit, command),
     } as const;
   }),
 }) {
@@ -991,9 +1069,20 @@ export type Landing =
   | { readonly _tag: "Merged"; readonly verified: boolean }
   | { readonly _tag: "Broke"; readonly output: string };
 
+/** What a check block's command said about one commit. */
+export type Checked =
+  /** The proving ground could not be made ready, which says nothing about the commit. */
+  | { readonly _tag: "Held"; readonly detail: string }
+  /** `verified` is false when the command fails on the branch's base as well. */
+  | { readonly _tag: "Passed"; readonly verified: boolean }
+  | { readonly _tag: "Failed"; readonly output: string };
+
 /** One of foreman's branches, as git sees it against the checkout's HEAD. */
 export interface Branch {
   readonly branch: string;
+
+  /** The commit the branch points at. */
+  readonly tip: string;
 
   /** The checkout already has these commits, so the ref is free to delete. */
   readonly merged: boolean;

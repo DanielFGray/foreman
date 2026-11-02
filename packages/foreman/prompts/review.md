@@ -32,8 +32,8 @@ Repository: {{ repository }}
    Approval means everything worth landing is committed. Commit valid uncommitted
    work; return the task if it is substantive and unfinished. Never approve work that
    landing would omit.
-{% if (labels.includes("satisfied")) { %}
-The author labelled this task `satisfied`: it claims trunk already does what the task
+{% if (satisfied) { %}
+The author ended its run `satisfied`: it claims trunk already does what the task
 asks. Walk the definition of done and find the code and tests on trunk for each part.
 Approve only when every part is there; otherwise log the missing parts and return it.
 {% } %}{% if (labels.includes("research")) { %}
@@ -84,8 +84,10 @@ Before approving, run the `council` skill's Review over `{{ base }}..HEAD`. A co
 defect is a rejection. Log what council found and what you decided, then close the
 member panes.
 
-- Return: log findings detailed enough for the next agent, then `prog open {{ task }}`.
-- Approve: `prog label {{ task }} approved`. Foreman merges and closes the task; do
+- Return: log findings detailed enough for the next agent, then `tasks verdict {{ task }} returned`.
+- Approve: `tasks verdict {{ task }} approved`. Foreman merges and closes the task; do
   not merge or mark it done.
+
+A later verdict replaces an earlier one, so state exactly one.
 
 Do not start any other work.

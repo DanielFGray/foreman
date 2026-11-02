@@ -9,18 +9,11 @@ import type {
   StaleRow,
   Unreviewed,
 } from "./dispatcher.ts";
+import { reviewedBy } from "./lap.ts";
 import { exhausted, type Allowance } from "./quota.ts";
 import { resetsLabel, usedLabel } from "./format.ts";
 import type { Worker } from "./fleet.ts";
-import {
-  diagnosticIntent,
-  failuresOf,
-  needsYou,
-  reviewedBy,
-  type EpicProgress,
-  type Item,
-  type ReadyTask,
-} from "./prog.ts";
+import { diagnosticIntent, failuresOf, needsYou, type EpicProgress, type Item } from "./prog.ts";
 
 /**
  * The dashboard as data: every line, every legal action, no renderer.
@@ -77,18 +70,18 @@ export const decisionKind = (task: Item, failure: string | undefined = undefined
         : "orphaned workspace";
 
 /**
- * Whether a review-by:* label has no live reviewer behind it, so it is stale.
+ * Whether an open review run has no live reviewer behind it, so it is stale.
  *
  * The world records whether a reviewer was dispatched, not whether that
- * reviewer is still alive. A task that is open — waiting in the queue — with a
- * review-by:* label is stale by definition, because a real review keeps the
- * task in `reviewing` with its reviewer beside it; the label only survives on
+ * reviewer is still alive. A task that is open — waiting in the queue — with an
+ * open review run is stale by definition, because a real review keeps the
+ * task in `reviewing` with its reviewer beside it; the run only survives on
  * an open task when the review is already over. A workspace that is gone, or a
- * reviewer that settled, is nobody behind the label. Only the operator can say
- * the label is stale, and this is the only place that asks.
+ * reviewer that settled, is nobody behind the run. Only the operator can say
+ * the run is stale, and this is the only place that asks.
  */
 export const staleReview = (
-  task: { readonly labels: ReadonlyArray<string>; readonly status?: string },
+  task: Pick<Item, "runs"> & { readonly status?: string },
   worker: Worker | undefined,
 ): boolean =>
   reviewedBy(task) !== undefined &&
@@ -113,7 +106,7 @@ export interface ColumnRow {
   /** The full task, for rows that came out of a claimed status. */
   readonly task: Item | undefined;
   /** The queued task, which has never been claimed and so never has a status. */
-  readonly ready: ReadyTask | undefined;
+  readonly ready: Item | undefined;
   readonly worker: Worker | undefined;
   readonly project: string | undefined;
   /** The hold's reason, for rows whose actions depend on what is holding it. */
@@ -163,7 +156,7 @@ export type Action = (typeof ACTIONS_LIST)[number];
  * rather than doing nothing to a claim. `descend` only reaches a row carrying
  * a `needs-you` label or a recorded failure: with nothing written against the
  * task there is nothing to take back. `unassign` only reaches a row whose
- * review-by:* label has no live reviewer behind it.
+ * open review run has no live reviewer behind it.
  *
  * `yours` takes no answer key, and that is the design rather than an omission.
  * A task waits there because a question about it is unanswered, and a single
@@ -203,8 +196,8 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  *
  * A vanished author or reviewer can be retried, taken over, or released. An
  * orphaned workspace has no claim to undo — releasing would reopen a done or
- * canceled task — so it is only ever closed, or, when it carries a review-by:*
- * label no reviewer is behind, unassigned.
+ * canceled task — so it is only ever closed, or, when it carries an open review
+ * run no reviewer is behind, unassigned.
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "intervene", "release"],
@@ -337,7 +330,7 @@ const attentionRow =
  * group the tasks under it and the tasks keep their dispatch order.
  */
 export const queueRows = (
-  queue: ReadonlyArray<ReadyTask>,
+  queue: ReadonlyArray<Item>,
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<ColumnRow> =>
   queue.flatMap((task, index) => {
@@ -347,7 +340,7 @@ export const queueRows = (
     return leads ? [epicRow(progress), queueRow(task)] : [queueRow(task)];
   });
 
-export const queueRow = (task: ReadyTask): ColumnRow => ({
+export const queueRow = (task: Item): ColumnRow => ({
   column: "queue",
   key: task.id,
   label: `${task.project}  ${task.title}`,
@@ -389,7 +382,7 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
 // A parked task with a branch behind it is a resumption: an earlier author
 // committed and the task came back. Marked rather than counted, because the
 // commit count is a read per branch per tick to say what "resume" already says.
-const yoursRow = (task: ReadyTask, state: FleetState): ColumnRow => ({
+const yoursRow = (task: Item, state: FleetState): ColumnRow => ({
   ...queueRow(task),
   column: "yours",
   label: `${task.project}  ${state.resumable.has(task.id) ? "resume  " : ""}${task.title}`,

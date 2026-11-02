@@ -1,7 +1,8 @@
 import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, Layer, Path, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
-import { readLadder, RegistryError, registryPath } from "./registry.ts";
+import { readLadder, RegistryError } from "./registry.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
 export class Settings extends Context.Service<Settings, SettingsShape>()("Settings") {}
@@ -16,7 +17,7 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * The projects are not configured: they are the operator's open spaces, read
  * every tick (`src/projects.ts`).
  */
-export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
+export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> = Layer.effect(
   Settings,
   Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -54,14 +55,14 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
 
     // The ladder is the registry's, not the config file's: one copy of the
     // order, shared with the herd skill and the trial record.
-    const registry = registryPath();
-    const ladder = yield* Effect.try({
-      try: () => readLadder(registry),
-      catch: (cause) =>
-        new ConfigError({
-          detail: cause instanceof RegistryError ? cause.detail : String(cause),
-        }),
-    });
+    const ladder = yield* readLadder.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ConfigError({
+            detail: cause instanceof RegistryError ? cause.detail : String(cause),
+          }),
+      ),
+    );
 
     // A duplicate name makes both "the next rung up" and "which rung failed
     // this task" ambiguous, and the second is durable: tasks record rung
@@ -80,7 +81,7 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
     // line commented out.
     if (dispatchable(ladder).length === 0) {
       return yield* new ConfigError({
-        detail: `every rung in ${registry} is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
+        detail: `every rung in the registry is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
       });
     }
 
@@ -98,7 +99,7 @@ export const settings: Layer.Layer<Settings, ConfigError> = Layer.effect(
           .map((rung) => `"${rung.name}"`)
           .join(
             ", ",
-          )} in ${registry} — set "provider" on each so foreman can read its remaining quota before dispatching`,
+          )} in the registry — set "provider" on each so foreman can read its remaining quota before dispatching`,
       );
     }
 

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,9 @@ const holdsWork = (directory: string, branch: string) =>
 const groundFor = (directory: string) => `${directory}.grounds/verify`;
 
 const merge = (directory: string, branch: string, verify?: string, message = `Merge ${branch}`) =>
-  run((repository) => repository.merge(directory, branch, verify, groundFor(directory), message));
+  run((repository) =>
+    repository.merge(directory, branch, branch, verify, groundFor(directory), message),
+  );
 
 const setup = (directory: string) => run((repository) => repository.setup(directory));
 
@@ -285,7 +287,14 @@ describe("Repository", () => {
 
     const cut = await Effect.runPromise(
       Repository.use((repository) =>
-        repository.merge(directory, "cut-off", "sleep 30", groundFor(directory), "Merge cut-off"),
+        repository.merge(
+          directory,
+          "cut-off",
+          "cut-off",
+          "sleep 30",
+          groundFor(directory),
+          "Merge cut-off",
+        ),
       ).pipe(Effect.timeoutOption("500 millis"), Effect.provide(Repository.Default)),
     );
     expect(cut).toEqual(Option.none());
@@ -385,9 +394,27 @@ describe("Repository", () => {
     // nothing: its commits are in the checkout, so it is not unmerged — and
     // reading that as an empty branch sent finished work back to the queue.
     expect(await branches(directory)).toEqual([
-      { branch: "foreman/ts-aaaaaa", merged: false, empty: false, stale: undefined },
-      { branch: "foreman/ts-bbbbbb", merged: true, empty: true, stale: undefined },
-      { branch: "foreman/ts-cccccc", merged: true, empty: false, stale: undefined },
+      {
+        branch: "foreman/ts-aaaaaa",
+        merged: false,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-bbbbbb",
+        merged: true,
+        empty: true,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-cccccc",
+        merged: true,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
     ]);
   });
 
@@ -429,16 +456,58 @@ describe("Repository", () => {
       merged: false,
       empty: false,
       stale: { paths: ["touched.txt"], modifyDelete: true },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     expect(byName("foreman/ts-stale-con")).toEqual({
       branch: "foreman/ts-stale-con",
       merged: false,
       empty: false,
       stale: { paths: ["shared.txt"], modifyDelete: false },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     // A branch the trunk has not moved past still merges, and so reads as
     // not stale rather than as anything worse.
     expect(byName("foreman/ts-aaaaaa")?.stale).toBeUndefined();
+  });
+
+  test("reads a branch's tip as the commit id git names", async () => {
+    const expected = (await git("rev-parse", "foreman/ts-aaaaaa")).stdout.toString().trim();
+
+    expect(await run((repository) => repository.tip(directory, "foreman/ts-aaaaaa"))).toBe(
+      expected,
+    );
+    expect(
+      await run((repository) => repository.tip(directory, "foreman/ts-nowhere")),
+    ).toBeUndefined();
+  });
+
+  // A check judges one commit of a branch that has not landed, so it must see
+  // that commit's tree and leave the operator's checkout as it was.
+  test("checks a branch's commit in the proving ground, against where it was cut", async () => {
+    const check = (commit: string, command: string) =>
+      run((repository) => repository.check(directory, commit, command, groundFor(directory)));
+    const head = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    const base = (await git("branch", "--show-current")).stdout.toString().trim();
+    await git("checkout", "-qb", "checked");
+    await writeFile(join(directory, "checked.txt"), "work\n");
+    await git("add", "checked.txt");
+    await git("commit", "-qm", "checked work");
+    const tip = (await git("rev-parse", "HEAD")).stdout.toString().trim();
+    await git("checkout", "-q", base);
+    const seen = join(tmpdir(), `foreman-check-${process.pid}.txt`);
+
+    expect(await check(tip, `pwd > ${seen}; test -f checked.txt`)).toEqual({
+      _tag: "Passed",
+      verified: true,
+    });
+    expect((await Bun.file(seen).text()).trim()).not.toBe(directory);
+    expect(await check(tip, "test ! -f checked.txt")).toMatchObject({ _tag: "Failed" });
+    // Red where the branch was cut as well: the branch is not the cause.
+    expect(await check(tip, "false")).toEqual({ _tag: "Passed", verified: false });
+
+    expect((await git("rev-parse", "HEAD")).stdout.toString().trim()).toBe(head);
+    expect(await Bun.file(join(directory, "checked.txt")).exists()).toBe(false);
+    await rm(seen, { force: true });
   });
 
   test("deletes a merged branch and refuses one holding the only copy", async () => {
@@ -671,9 +740,21 @@ describe("Repository in branch mode", () => {
     isFree: (cleanTree = false) => run((repository) => repository.isFree(here, cleanTree)),
     base: () => run((repository) => repository.base(here, task)),
     branches: () => run((repository) => repository.branches(here)),
+    // Lands by the commit id the reviewer read, as the dispatcher does.
     merge: () =>
       run((repository) =>
-        repository.merge(here, task, undefined, `${here}.grounds/verify`, `Merge ${task}`),
+        Effect.gen(function* () {
+          const commit = yield* repository.tip(here, task);
+          if (commit === undefined) return yield* Effect.die(`${task} has no tip`);
+          return yield* repository.merge(
+            here,
+            task,
+            commit,
+            undefined,
+            `${here}.grounds/verify`,
+            `Merge ${task}`,
+          );
+        }),
       ),
   });
 
@@ -712,7 +793,13 @@ describe("Repository in branch mode", () => {
       // HEAD is the task's own work; the trunk is its upstream.
       expect(await repo.base()).toBe(fork);
       expect(await repo.branches()).toEqual([
-        { branch: task, merged: false, empty: false, stale: undefined },
+        {
+          branch: task,
+          tip: (await sh("rev-parse", "HEAD")).stdout.toString().trim(),
+          merged: false,
+          empty: false,
+          stale: undefined,
+        },
       ]);
 
       expect(await repo.merge()).toEqual({ _tag: "Merged", verified: false });
@@ -801,7 +888,7 @@ describe("Repository in branch mode, after the task's run", () => {
       const work = await tip(task);
       expect(
         await run((repository) =>
-          repository.merge(here, task, "test ! -f b.txt", `${here}.grounds/verify`, "Merge"),
+          repository.merge(here, task, work, "test ! -f b.txt", `${here}.grounds/verify`, "Merge"),
         ),
       ).toMatchObject({ _tag: "Broke" });
       expect(await head()).toBe("trunk");
@@ -830,5 +917,70 @@ describe("Repository in branch mode, after the task's run", () => {
     } finally {
       await cleanup(here);
     }
+  });
+});
+
+describe("Repository.remove on a branch with a worktree", () => {
+  let root = "";
+  let checkout = "";
+  let worktree = "";
+  const branch = "foreman/ts-1";
+  const sh = (cwd: string, script: string) => Bun.$`sh -c ${script}`.cwd(cwd).quiet().nothrow();
+  const branchExists = async () =>
+    (
+      await Bun.$`git -C ${checkout} rev-parse --verify --quiet refs/heads/${branch}`
+        .quiet()
+        .nothrow()
+    ).exitCode === 0;
+  const worktreeExists = async () =>
+    (await run((repository) => repository.worktrees(checkout))).some(
+      (entry) => entry.path === worktree,
+    );
+  const remove = () => run((repository) => repository.remove(checkout, branch));
+
+  // A branch merged into the checkout whose worktree is still registered, with
+  // a gitignored directory in it the way a bun install leaves one.
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "foreman-remove-"));
+    checkout = join(root, "checkout");
+    worktree = join(root, "tasks", "ts-1");
+    await mkdir(checkout, { recursive: true });
+    await sh(
+      checkout,
+      "git init -q && printf 'node_modules/\\n' > .gitignore && printf 'tracked\\n' > tracked.txt && " +
+        "git add . && git -c user.email=f@t -c user.name=f commit -q -m base",
+    );
+    await run((repository) => repository.addWorktree(checkout, branch, worktree));
+    await sh(
+      worktree,
+      "printf 'work\\n' > work.txt && git add work.txt && " +
+        "git -c user.email=f@t -c user.name=f commit -q -m work && " +
+        "mkdir -p node_modules/pkg && printf 'x\\n' > node_modules/pkg/index.js",
+    );
+    await sh(checkout, `git -c user.email=f@t -c user.name=f merge -q --no-ff ${branch} -m merge`);
+  });
+
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  test("takes a clean merged worktree down with its branch", async () => {
+    expect(await remove()).toBe(true);
+    expect(await worktreeExists()).toBe(false);
+    expect(await branchExists()).toBe(false);
+  });
+
+  test("keeps a merged worktree holding an uncommitted edit", async () => {
+    await sh(worktree, "printf 'edit\\n' >> tracked.txt");
+
+    expect(await remove()).toBe(false);
+    expect(await worktreeExists()).toBe(true);
+    expect(await branchExists()).toBe(true);
+  });
+
+  test("keeps a merged worktree holding an untracked file", async () => {
+    await sh(worktree, "printf 'new\\n' > untracked.txt");
+
+    expect(await remove()).toBe(false);
+    expect(await worktreeExists()).toBe(true);
+    expect(await branchExists()).toBe(true);
   });
 });

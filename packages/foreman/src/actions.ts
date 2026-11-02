@@ -112,7 +112,7 @@ export const ACTION_HELP: Record<Action, string> = {
   kill: "Stop a live attempt, log why, and requeue the task on the same rung",
   intervene: "Resume a task at a rung, or send an agent to diagnose or review its last attempt",
   descend: "Take back the last recorded failure, moving the task one rung down",
-  unassign: "Clear a review-by label that no reviewer is behind",
+  unassign: "End an open review run that no reviewer is behind",
   onboard: "Send an agent to salvage the uncommitted work holding a project",
   adopt: "Put an unread branch in front of a reviewer",
   approve: "Allow the step a task is waiting on, once, for that task alone",

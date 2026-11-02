@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./prog.ts";
+import { authorRun } from "./task-fixture.ts";
 
 // Prompts are prose wrapped at about 85 columns; the tests check what a rule says,
 // not where a line happens to break, so whitespace runs read as one space.
@@ -18,10 +19,14 @@ const item: Item = {
   type: "task",
   priority: 2,
   labels: ["onboard"],
-  description: null,
-  parent: null,
-  last_activity_at: new Date(),
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  lastActivityAt: new Date(),
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  definitionOfDone: undefined,
+  runs: [],
+  tip: undefined,
 };
 
 const ready = {
@@ -30,9 +35,16 @@ const ready = {
   priority: 3,
   project: "foreman",
   labels: [],
-  description: null,
-  parent: null,
-  created_at: new Date(),
+  description: "",
+  parent: undefined,
+  createdAt: new Date(),
+  updatedAt: new Date(0),
+  lastActivityAt: new Date(0),
+  definitionOfDone: undefined,
+  type: "task",
+  status: "open",
+  runs: [],
+  tip: undefined,
 } as const;
 
 describe("Prompts", () => {
@@ -87,7 +99,9 @@ describe("Prompts", () => {
       prompts.review(item, "/tmp/worktree", "/tmp/repository", "abc1234", "bun test"),
     );
 
-    expect(prompt).toContain("prog label ts-123456 approved");
+    expect(prompt).toContain("tasks verdict ts-123456 approved");
+    expect(prompt).toContain("tasks verdict ts-123456 returned");
+    expect(prompt).not.toContain("prog label");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("prog done ts-123456");
     expect(prompt).toContain("Never approve work that landing would omit");
@@ -161,7 +175,7 @@ describe("Prompts", () => {
 
   // A rare case reaches only the agents whose task carries its label, so every
   // other prompt stays short; the rule itself must still arrive where it applies.
-  test("gives the research and satisfied rules only to tasks with those labels", async () => {
+  test("gives the research and satisfied rules only to tasks that call for them", async () => {
     const plainAuthor = await run((prompts) =>
       prompts.author(ready, "/tmp/worktree", "/tmp/repository"),
     );
@@ -171,10 +185,14 @@ describe("Prompts", () => {
     expect(plainAuthor).not.toContain("labelled `research`");
     expect(researchAuthor).toContain("labelled `research`: the deliverable is a report");
 
-    const review = (labels: ReadonlyArray<string>) =>
+    const review = (labels: ReadonlyArray<string>, satisfied = false) =>
       run((prompts) =>
         prompts.review(
-          { ...item, labels: [...labels] },
+          {
+            ...item,
+            labels: [...labels],
+            runs: satisfied ? [authorRun("cheap", { open: false, ending: "satisfied" })] : [],
+          },
           "/tmp/worktree",
           "/tmp/repository",
           "abc1234",
@@ -182,9 +200,9 @@ describe("Prompts", () => {
         ),
       );
     const plain = await review([]);
-    expect(plain).not.toContain("labelled this task `satisfied`");
+    expect(plain).not.toContain("ended its run `satisfied`");
     expect(plain).not.toContain("labelled `research`");
-    expect(await review(["satisfied"])).toContain("labelled this task `satisfied`");
+    expect(await review([], true)).toContain("ended its run `satisfied`");
     expect(await review(["research"])).toContain(
       "labelled `research`: the deliverable is the report",
     );

@@ -8,7 +8,6 @@ import {
   admit,
   checkoutFor,
   clearProject,
-  authorStep,
   DEFAULT_POLICY,
   expire,
   grant,
@@ -205,14 +204,6 @@ describe("grant", () => {
     expect(widened.grants).toEqual([
       { scope: "ep-1", steps: ["author", "land"], remaining: 2, admitted: ["ts-a"] },
     ]);
-  });
-});
-
-describe("authorStep", () => {
-  test("a task with an earlier attempt on record is a climb", () => {
-    expect(authorStep([])).toBe("author");
-    expect(authorStep(["failed-by:cheap"])).toBe("climb");
-    expect(authorStep(["attempt:cheap:1"])).toBe("climb");
   });
 });
 

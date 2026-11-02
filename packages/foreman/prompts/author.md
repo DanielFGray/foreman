@@ -62,8 +62,8 @@ to `prog log {{ task }}` with the commands you ran and what they showed, so a
 reviewer can check every claim. Then `prog review {{ task }}`; the branch stays empty.
 {% } %}
 If trunk already does everything the task asks, prove it part by part in
-`prog log {{ task }}` (code, tests, commits), then `prog label {{ task }} satisfied`
-and `prog review {{ task }}`. Partly done is not done; a claim you cannot point at
+`prog log {{ task }}` (code, tests, commits), then `tasks verdict {{ task }} satisfied`,
+which also sends the task to review. Partly done is not done; a claim you cannot point at
 line by line is rejected.
 
 If you are stuck (the same approach failed three times, the task describes code that

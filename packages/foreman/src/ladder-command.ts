@@ -15,7 +15,6 @@ import {
   readStatus,
   sizeSummary,
   type RungStatus,
-  registryPath,
   renderRows,
   RegistryError,
   writeRows,
@@ -35,7 +34,7 @@ const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescrip
 
 const list = Command.make("list", { json }, ({ json }) =>
   Effect.gen(function* () {
-    const rows = readStatus(registryPath());
+    const rows = yield* readStatus;
     if (json) return yield* Console.log(JSON.stringify(rows, null, 2));
     for (const [index, row] of rows.entries()) {
       const record =
@@ -52,7 +51,7 @@ const list = Command.make("list", { json }, ({ json }) =>
 /** Cost per landed slice by model and size: read it before starting a size a tier up. */
 const size = Command.make("size", {}, () =>
   Effect.gen(function* () {
-    const rows = sizeSummary(registryPath());
+    const rows = yield* sizeSummary;
     if (rows.length === 0) return yield* Console.log("no trials carry a size yet");
     for (const row of rows) yield* Console.log(JSON.stringify(row));
   }),
@@ -67,7 +66,6 @@ const size = Command.make("size", {}, () =>
  */
 const drift = Command.make("drift", {}, () =>
   Effect.gen(function* () {
-    const path = registryPath();
     const probe = yield* Effect.promise(async () => {
       const process = Bun.spawn(["opencode", "models"], { stdout: "pipe", stderr: "pipe" });
       const [out, err] = await Promise.all([
@@ -87,14 +85,15 @@ const drift = Command.make("drift", {}, () =>
         detail: `\`opencode models\` listed nothing (exit ${probe.code}); run it again. ${probe.err.trim()}`,
       });
     }
+    const known = yield* knownModels;
     const findings = [
-      ...readStatus(path)
+      ...(yield* readStatus)
         .filter(
           (row) => row.harness === "opencode" && row.state !== "disabled" && !listed.has(row.model),
         )
         .map((row) => `drift: rung ${row.rung} names ${row.model}, which opencode no longer lists`),
       ...[...listed]
-        .filter((model) => /\bfree\b/.test(model) && !knownModels(path).has(model))
+        .filter((model) => /\bfree\b/.test(model) && !known.has(model))
         .map((model) => `candidate: ${model} is free in opencode and in no registry row`),
     ];
     yield* Console.log(findings.length ? findings.join("\n") : "no drift");
@@ -105,8 +104,7 @@ const drift = Command.make("drift", {}, () =>
 
 const edit = Command.make("edit", {}, () =>
   Effect.gen(function* () {
-    const path = registryPath();
-    const before = readRows(path);
+    const before = yield* readRows;
     const dir = mkdtempSync(join(tmpdir(), "foreman-ladder-"));
     const file = join(dir, "ladder.jsonc");
     try {
@@ -125,11 +123,7 @@ const edit = Command.make("edit", {}, () =>
         try: () => parseRows(readFileSync(file, "utf8")),
         catch: (cause) => new RegistryError({ detail: `could not read your edit: ${cause}` }),
       });
-      yield* Effect.try({
-        try: () => writeRows(path, after),
-        catch: (cause) =>
-          cause instanceof RegistryError ? cause : new RegistryError({ detail: String(cause) }),
-      });
+      yield* writeRows(after);
       yield* Console.log(describeChange(before, after));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -142,24 +136,15 @@ const rung = Argument.String("rung").pipe(Argument.withDescription("A rung name"
 const toggle = (name: "enable" | "disable") =>
   Command.make(name, { rung }, (args) =>
     Effect.gen(function* () {
-      const path = registryPath();
-      const rows = readRows(path);
+      const rows = yield* readRows;
       if (!rows.some((row) => row.rung === args.rung)) {
         return yield* new RegistryError({
           detail: `no rung ${args.rung}; rungs: ${rows.map((row) => row.rung).join(", ")}`,
         });
       }
-      yield* Effect.try({
-        try: () =>
-          writeRows(
-            path,
-            rows.map((row) =>
-              row.rung === args.rung ? { ...row, enabled: name === "enable" } : row,
-            ),
-          ),
-        catch: (cause) =>
-          cause instanceof RegistryError ? cause : new RegistryError({ detail: String(cause) }),
-      });
+      yield* writeRows(
+        rows.map((row) => (row.rung === args.rung ? { ...row, enabled: name === "enable" } : row)),
+      );
       yield* Console.log(`${args.rung}: ${name}d`);
     }),
   ).pipe(
