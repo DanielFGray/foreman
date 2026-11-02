@@ -9,6 +9,8 @@ export default defineConfig({
   build: { outDir: "../../dist", emptyOutDir: true },
   plugins: [foldkit()],
   // Tests cover the bridge as well as the page; they run on Bun (`bun --bun
-  // vitest`), so the bridge's tests keep Bun's APIs.
-  test: { dir: `${import.meta.dirname}/src` },
+  // vitest`), so the bridge's tests keep Bun's APIs. Half the cores: the suite
+  // runs on the machine the bridge and the fleet's agents share, and vitest's
+  // default of one worker per core starves them.
+  test: { dir: `${import.meta.dirname}/src`, maxWorkers: "50%" },
 })
