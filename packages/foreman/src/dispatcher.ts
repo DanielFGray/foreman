@@ -2755,18 +2755,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * Ends a correction round: the reviewer reads the tip the author left
        * next, so its review run holds that commit. Without this, an approval
        * after a round names a commit the branch has moved past and is void.
-       * A task with no open review run, or no live workspace to read the
-       * branch from, has no reviewer to move. The workspace names the
-       * repository, so this needs no reading of the world.
+       * A task with no open review run has no reviewer to move. It reads the
+       * world first: the task's route decides whether the tip is its branch's
+       * or the checkout's HEAD, and a CLI process has read nothing yet.
        */
       corrected: (id: string) =>
         commanded(
           Effect.gen(function* () {
             const task = yield* prog.show(id);
             if (reviewedBy(task) === undefined) return;
-            const worker = (yield* fleet.roster).find((candidate) => candidate.task === id);
-            if (worker?.repository === undefined) return;
-            const tip = yield* repository.tip(worker.repository, labelFor(task.id));
+            yield* read;
+            const project = yield* projectFor(task.project);
+            if (!project) return;
+            const tip = yield* tipOf(task, project);
             if (tip !== undefined) yield* prog.rereadReview(task.id, tip);
           }),
         ),
