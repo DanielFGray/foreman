@@ -24,13 +24,14 @@ export const standingOf = (model: Model, project: string): Standing =>
     }),
   })
 
-/** The tasks a block holds: those standing at it, or for a gate, those it holds back. */
+/**
+ * The tasks a block holds: those standing at it, or for a gate, those it holds back.
+ * Only work blocks and parks are ever a placement's node, so a source or router holds none.
+ */
 export const tasksAt = (node: PipelineNode, tasks: ReadonlyArray<ForemanPlacement>): ReadonlyArray<ForemanPlacement> =>
   node.kind === "gate"
     ? Array.filter(tasks, (placed) => Array.some(placed.gates, (gate) => gate.id === node.id))
-    : node.kind === "agent" || node.kind === "land" || node.kind === "park"
-      ? Array.filter(tasks, (placed) => placed.node === node.id)
-      : []
+    : Array.filter(tasks, (placed) => placed.node === node.id)
 
 /** "2 waiting, 1 running": the tasks at a block counted by state, in the order a task goes through them. */
 export const countsOf = (tasks: ReadonlyArray<ForemanPlacement>): string =>
