@@ -828,7 +828,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               ]
             : [],
         ),
-      ].filter(({ worker }) => worker === undefined || !isBusy(worker));
+      ].filter(
+        // A park is a step: a paused project takes none, and a live pane is
+        // still finishing its turn.
+        ({ task, worker }) =>
+          !held.some((entry) => entry.project === task.project) &&
+          (worker === undefined || !isBusy(worker)),
+      );
       const parked = new Set(parks.map(({ task }) => task.id));
 
       // Planned here, from the reading the gates read, so the asks a reading
