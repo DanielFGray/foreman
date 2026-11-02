@@ -55,7 +55,7 @@ are yours, before `foreman dispatch` or before the dispatcher's tick takes the t
 
 - **Slice.** One task is work one agent can finish and one verify run can
   prove. Record each prerequisite as `prog blocks <first> <second>`: `prog
-  ready` reads edges, never the text of a description.
+ready` reads edges, never the text of a description.
 - **Size.** Label every task `size:1` (one file or rule), `size:2` (one
   package) or `size:3` (crosses packages); larger is allowed. Foreman writes
   it into the run rows, which is how the record learns which rung each size
