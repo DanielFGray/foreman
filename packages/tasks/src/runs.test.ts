@@ -12,6 +12,7 @@ import {
   deleteOpenRun,
   landAuthorRun,
   openRun,
+  recordCheck,
   outcomeOf,
   runsOf,
   verdict,
@@ -168,6 +169,74 @@ describe("runs", () => {
       }),
     );
     expect(outcomes.map((r) => r.outcome)).toEqual(["committed"]);
+  });
+});
+
+describe("check runs", () => {
+  const check = { project: "p", task: "ts-1", node: "lint", command: "bun run lint" } as const;
+
+  test("are written closed with their ending and the commit they ran on", async () => {
+    const runs = await inStore(
+      Effect.gen(function* () {
+        yield* recordCheck({ ...check, commit: "c1", ending: "failed" });
+        yield* recordCheck({ ...check, commit: "c2", ending: "passed" });
+        return (yield* runsOf(["ts-1"])).get("ts-1");
+      }),
+    );
+    expect(runs?.map((r) => [r.role, r.node, r.commit, r.ending, r.open])).toEqual([
+      ["check", "lint", "c1", "failed", false],
+      ["check", "lint", "c2", "passed", false],
+    ]);
+  });
+
+  test("are never an author's run: rounds and landing pass over them", async () => {
+    const [rounds, rows] = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const author = yield* openRun(run());
+        yield* closeRun(author, { ending: "handed-off", commit: "c1" });
+        yield* recordCheck({ ...check, commit: "c1", ending: "passed" });
+        const rounds = yield* addRound("ts-1");
+        yield* landAuthorRun("ts-1", false);
+        const rows = yield* sql<{ work: string; outcome: string | null; rounds: number | null }>`
+          SELECT work, outcome, rounds FROM runs ORDER BY id`;
+        return [rounds, rows] as const;
+      }),
+    );
+    expect(rounds).toBe(1);
+    expect(rows).toEqual([
+      { work: "build", outcome: "committed", rounds: 1 },
+      { work: "check", outcome: null, rounds: null },
+    ]);
+  });
+
+  test("the store refuses a check with a model or an agent's ending", async () => {
+    const refused = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const withModel =
+          yield* sql`INSERT INTO runs (project, task, slice, model, node, work, ending)
+          VALUES ('p', 'ts-1', 'x', 'm1', 'lint', 'check', 'passed')`.pipe(Effect.flip);
+        const agentEnding = yield* sql`INSERT INTO runs (project, task, slice, node, work, ending)
+          VALUES ('p', 'ts-1', 'x', 'lint', 'check', 'approved')`.pipe(Effect.flip);
+        return [withModel._tag, agentEnding._tag];
+      }),
+    );
+    expect(refused).toEqual(["SqlError", "SqlError"]);
+  });
+
+  test("count in no view about models", async () => {
+    const rows = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const author = yield* openRun(run());
+        yield* closeRun(author, { ending: "handed-off", commit: "c1" });
+        yield* recordCheck({ ...check, commit: "c1", ending: "passed" });
+        return yield* sql<{ model: string | null; slices: number }>`
+          SELECT model, slices FROM model_summary`;
+      }),
+    );
+    expect(rows).toEqual([{ model: "m1", slices: 1 }]);
   });
 });
 

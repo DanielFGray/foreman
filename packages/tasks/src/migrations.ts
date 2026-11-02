@@ -170,6 +170,10 @@ const TASKS = [
  * `closed_at` keeps its default, so a closed run recorded by hand still needs
  * only its outcome. Every view that counts or averages runs reads closed runs
  * only, so an open run never counts as a slice.
+ *
+ * A `check` run is a pipeline check block's command, not a model's work: it
+ * has no kind, pool, model or outcome, it is written closed with its ending,
+ * and the views about models leave it out.
  */
 const REGISTRY = [
   `CREATE TABLE providers (
@@ -228,16 +232,16 @@ const REGISTRY = [
     project            TEXT NOT NULL,
     task               TEXT NOT NULL,
     slice              TEXT NOT NULL,
-    kind               TEXT NOT NULL,
-    pool               TEXT NOT NULL,
-    model              TEXT NOT NULL,
+    kind               TEXT,             -- NULL only for a check, which runs no model
+    pool               TEXT,
+    model              TEXT,
     rung               TEXT,             -- foreman rung; NULL for a run launched by hand
     node               TEXT,             -- the pipeline block it ran at; NULL outside a pipeline
-    work               TEXT NOT NULL CHECK (work IN ('build', 'correction', 'research', 'review')),
+    work               TEXT NOT NULL CHECK (work IN ('build', 'correction', 'research', 'review', 'check')),
     started_at         TEXT,             -- NULL for runs recorded before starts were kept
     closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
     outcome            TEXT CHECK (outcome IN ('committed', 'dropped', 'handed-off', 'answered')),
-    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip when it opened
+    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip when it opened; check: the tip it ran on
     ending             TEXT,             -- how the run stopped; an agent's verdict may stand on an open run, a settle ending needs a closed one
     rounds             INTEGER,
     report_accurate    INTEGER CHECK (report_accurate IN (0, 1)),
@@ -253,11 +257,17 @@ const REGISTRY = [
     reasoning_tokens   INTEGER,
     actual_cost_usd    REAL,
     size               INTEGER CHECK (size >= 1),  -- 1 one file or rule, 2 one package, 3 crosses packages
-    CHECK ((closed_at IS NULL) = (outcome IS NULL)),
+    CHECK (CASE WHEN work = 'check'
+      THEN kind IS NULL AND pool IS NULL AND model IS NULL AND outcome IS NULL
+           AND closed_at IS NOT NULL AND ending IN ('passed', 'failed')
+      ELSE kind IS NOT NULL AND pool IS NOT NULL AND model IS NOT NULL
+           AND (closed_at IS NULL) = (outcome IS NULL) END),
     CHECK (ending IS NULL OR closed_at IS NOT NULL OR ending IN ('approved', 'returned', 'satisfied')),
     CHECK (ending IS NULL
       OR (work = 'review' AND ending IN ('approved', 'returned', 'no-verdict', 'walled', 'released'))
-      OR (work <> 'review' AND ending IN ('handed-off', 'satisfied', 'unfinished', 'walled', 'vanished', 'released', 'canceled')))
+      OR (work = 'check' AND ending IN ('passed', 'failed'))
+      OR (work IN ('build', 'correction', 'research')
+          AND ending IN ('handed-off', 'satisfied', 'unfinished', 'walled', 'vanished', 'released', 'canceled')))
   )`,
   `CREATE INDEX idx_runs_task ON runs(task)`,
   `CREATE TABLE defects (
@@ -304,7 +314,7 @@ const REGISTRY = [
          (SELECT round(avg(c.list_cost_usd), 4) FROM run_cost c WHERE c.model = t.model) AS avg_list_cost_usd,
          (SELECT count(c.list_cost_usd) FROM run_cost c WHERE c.model = t.model) AS slices_costed
   FROM runs t
-  WHERE t.closed_at IS NOT NULL
+  WHERE t.closed_at IS NOT NULL AND t.work <> 'check'
   GROUP BY t.model`,
   `CREATE VIEW size_summary AS
   SELECT t.model, t.size,
@@ -327,7 +337,7 @@ const REGISTRY = [
   FROM runs t
   LEFT JOIN pool_aliases pa ON pa.alias = t.pool
   LEFT JOIN aliases a ON a.alias = t.model
-  WHERE t.closed_at IS NOT NULL`,
+  WHERE t.closed_at IS NOT NULL AND t.work <> 'check'`,
   `CREATE VIEW model_status AS
   SELECT m.model, m.provider, m.pool, m.harness, m.tier, m.limit_scope,
          m.thinking, m.retired, m.models_dev,
