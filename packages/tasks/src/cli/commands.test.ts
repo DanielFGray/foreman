@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer, Stdio, Stream } from "effect";
 import { Command } from "effect/cli";
+import { connectionAt } from "../connection.ts";
 import { Tasks } from "../store.ts";
 import { tasksCommand } from "./commands.ts";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,7 +25,7 @@ const services = (stdin?: string) =>
     stdin === undefined
       ? Layer.empty
       : Stdio.layerTest({ stdin: Stream.make(new TextEncoder().encode(stdin)) }),
-    Tasks.layerAt(scratch.file),
+    Tasks.layerSql.pipe(Layer.provideMerge(connectionAt(scratch.file))),
   );
 
 const runCommand = (args: ReadonlyArray<string>, stdin?: string) =>

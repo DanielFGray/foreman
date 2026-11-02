@@ -8,7 +8,7 @@ import { refusals } from "./errors.ts";
 
 /** The `tasks` program. A missing store file is created and migrated on open. */
 const program = tasksCommand.pipe(
-  Command.provide(Tasks.layerSql.pipe(Layer.provide(store))),
+  Command.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),
   Command.run({ version: "0.1.0" }),
 );
 

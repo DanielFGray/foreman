@@ -24,7 +24,6 @@ import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
 import { Repository } from "./repository.ts";
 import { telemetry } from "./telemetry.ts";
-import { Runs } from "./run-record.ts";
 
 /**
  * Every service the dispatcher and the one-shot commands read.
@@ -53,7 +52,6 @@ export const services = Layer.provideMerge(
     Prompts.Default,
     Quota.Default,
     Repository.Default,
-    Runs.Default,
     BunServices.layer,
     logging(),
     telemetry.pipe(Layer.provide(settings)),

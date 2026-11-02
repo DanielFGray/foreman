@@ -1,6 +1,15 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option } from "effect";
-import { dependencyMermaid, STATUSES, TaskError, Tasks, type TaskEvent } from "tasks";
+import {
+  dependencyMermaid,
+  STATUSES,
+  TaskError,
+  Tasks,
+  VERDICTS,
+  verdict,
+  type TaskEvent,
+  type Verdict,
+} from "tasks";
 import { PRIME } from "./prime.ts";
 import { detail, lines } from "./render.ts";
 import { prose } from "./text.ts";
@@ -289,6 +298,16 @@ const graph = Command.make("graph", { project: projectFilter }, (args) =>
   ),
 );
 
+const verdictCommand = Command.make(
+  "verdict",
+  { id, said: Argument.Literals("verdict", Object.keys(VERDICTS) as [Verdict, ...Array<Verdict>]) },
+  ({ id, said }) => verdict(id, said).pipe(Effect.andThen(Console.log(`${id}: ${said}`))),
+).pipe(
+  Command.withDescription(
+    "State how your run ended: approved or returned (a reviewer), satisfied (an author whose task the trunk already does). returned reopens the task and satisfied sends it to review; a second verdict replaces the first",
+  ),
+);
+
 const prime = Command.make("prime", {}, () => Console.log(PRIME)).pipe(
   Command.withDescription("Print the workflow an agent follows with tasks"),
 );
@@ -327,6 +346,7 @@ export const tasksCommand = Command.make("tasks", {}).pipe(
     priority,
     status,
     graph,
+    verdictCommand,
     prime,
   ]),
 );

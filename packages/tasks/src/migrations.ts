@@ -165,6 +165,8 @@ const TASKS = [
  * `outcome` are both empty until it ends, and the check keeps them together.
  * `node` names the pipeline block the run belongs to, so a task's place in its
  * pipeline is replayed from its runs rather than stored.
+ * `commit` and `ending` are foreman's own record of a run (see `runs.ts`); a run
+ * recorded by hand or imported leaves both empty.
  * `closed_at` keeps its default, so a closed run recorded by hand still needs
  * only its outcome. Every view that counts or averages runs reads closed runs
  * only, so an open run never counts as a slice.
@@ -235,6 +237,8 @@ const REGISTRY = [
     started_at         TEXT,             -- NULL for runs recorded before starts were kept
     closed_at          TEXT DEFAULT (datetime('now')),  -- NULL while the run is open
     outcome            TEXT CHECK (outcome IN ('committed', 'dropped', 'handed-off', 'answered')),
+    "commit"           TEXT,             -- author: the branch tip when it closed; review: the tip when it opened
+    ending             TEXT,             -- how the run stopped; an agent's verdict may stand on an open run, a settle ending needs a closed one
     rounds             INTEGER,
     report_accurate    INTEGER CHECK (report_accurate IN (0, 1)),
     source             TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live', 'backfill')),
@@ -249,7 +253,11 @@ const REGISTRY = [
     reasoning_tokens   INTEGER,
     actual_cost_usd    REAL,
     size               INTEGER CHECK (size >= 1),  -- 1 one file or rule, 2 one package, 3 crosses packages
-    CHECK ((closed_at IS NULL) = (outcome IS NULL))
+    CHECK ((closed_at IS NULL) = (outcome IS NULL)),
+    CHECK (ending IS NULL OR closed_at IS NOT NULL OR ending IN ('approved', 'returned', 'satisfied')),
+    CHECK (ending IS NULL
+      OR (work = 'review' AND ending IN ('approved', 'returned', 'no-verdict', 'walled', 'released'))
+      OR (work <> 'review' AND ending IN ('handed-off', 'satisfied', 'unfinished', 'walled', 'vanished', 'released', 'canceled')))
   )`,
   `CREATE INDEX idx_runs_task ON runs(task)`,
   `CREATE TABLE defects (

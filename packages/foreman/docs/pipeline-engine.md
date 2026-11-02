@@ -22,7 +22,7 @@ replaces is the fixed answer to "which step does this task take next".
 | --- | --- |
 | What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the standard pipeline |
 | Where is this task in it? | derived every tick by `place` from the task's facts |
-| Which blocks has it passed? | a fact: today one `passed:<node>` label per block, since its last return; after runs replace labels, its closed runs' `node` |
+| Which blocks has it passed? | a fact: the `node` of each run in the current lap that advanced the task |
 | May this step run for this task? | the policy: the gate's step, its mode, grants (unchanged) |
 
 The pipeline is operator intention. It lives in its own file, `pipelines.json`
@@ -34,15 +34,16 @@ through `rewrite` in `src/shared-file.ts`.
 A task's position is not stored. `place` replays the graph from the source with
 the task's **facts** each tick (status, priority, epic, size, the rungs that
 failed it, its attempts, the blocks it passed, its review state), the same way the ladder reads `failed-by` labels
-instead of storing the next rung. A `passed:<node>` label records a fact (the
-task went through that block), so it does not rot: if the operator deletes the
-node, the label places nothing and the task is placed by what remains.
+instead of storing the next rung. A run's `node` records a fact (the task went
+through that block), so it does not rot: if the operator deletes the node, the
+run places nothing and the task is placed by what remains.
 
 ## The graph has no return wires
 
 Every block has at most one forward wire. Work that goes back is not wired: it
-**returns**. A return releases the task to the queue, clears its `passed:*`
-labels, and keeps the evidence it earned (`failed-by`, `attempt`). The task then
+**returns**. A return releases the task to the queue; its next author run starts a
+new lap, so the blocks it passed no longer count. It keeps the evidence it
+earned (`failed-by`, `attempt`). The task then
 re-enters at a source, and routers send it on by that evidence.
 
 This is the doctrine "a task records what failed it, never what runs next",
@@ -80,10 +81,9 @@ A reviewer that stops without a verdict while a rung is left, a usage wall, a
 blocked agent and a dirty checkout are not endings: the task stays at the block,
 as today. Every rung failed, or no reviewer left, parks the task, as today.
 
-When settle sees a block advance, it writes `passed:<node>`. For a review
-block it also clears `approved`: the label is the reviewer's signal to foreman,
-and `passed:<node>` is the record. `release` clears `passed:*` the way it clears
-`approved` today.
+When settle sees a block advance, the run that advanced it is the record: its
+`node` and its ending. An agent reports its ending with `tasks verdict`
+(`runs-replace-labels.md`), so no label carries a signal and nothing clears one.
 
 ### A review passes one commit
 
@@ -130,22 +130,19 @@ Filters read facts, never label strings, so when runs replace labels only
 1. Start at the first source whose filter matches the task. No match: the task
    is not in this pipeline.
 2. Walk forward. At a router, follow the first matching route. At a gate,
-   remember the gate. At a work block that the task has `passed:<node>` for,
+   remember the gate. At a work block that a run of this lap advanced,
    forget the remembered gates and go on.
 3. Stop at the first work block not passed. The task is **at** that block. Its
-   state there comes from its status and labels:
+   state there comes from its status and its runs:
    - `waiting`: nothing runs yet. The remembered gates decide when it may start.
-   - `running`: the block's run is under way (author: `in_progress`; review:
-     `review-by`).
-   - `ended`: the run's advance signal is there and not yet recorded (author:
-     status `reviewing`; review: `approved`). Settle records it, and the walk
-     goes on.
+   - `running`: the block's run is open and its agent is working.
+   - `ended`: the agent ended its run (an author handed off, or a reviewer
+     wrote its verdict), and settle has not closed the run yet.
+     Settle closes it, and the walk goes on.
 4. A park ends the walk with the task parked.
 
-A task with work in flight and no `passed:*` labels (every task before the
-first tick with pipelines) is placed by the same steps: a `reviewing` task is at
-the author block in state `ended`, and settle records `passed:<author>` and
-places it at the review block. No move-in step is needed.
+A task with work in flight when pipelines start has runs from step 4, so it is
+placed by the same steps. No move-in step is needed.
 
 ## The tick
 
@@ -154,7 +151,7 @@ settle comes before fill.
 
 1. **Read**, unchanged. The pipeline comes with the policy.
 2. **Settle.** For each owned task, classify the run's end as today (`phaseOf`,
-   the merge result). An advance writes `passed:<node>`. A return does today's
+   the merge result). An advance closes the run. A return does today's
    bookkeeping and releases the task.
 3. **Plan.** Place every queued and owned task. A task `waiting` at a work block
    is a candidate when every remembered gate permits it. A gate in `ask` mode
@@ -210,17 +207,16 @@ and the policy step that holds the retry is unchanged.
 - "Order inside a tick ... reviews are filled before new work": generalised to
   nearest-to-the-end first. Same order in the standard pipeline.
 - "`awaitingLanding` reads that label": becomes "placed at a land block".
-  `approved` stays the reviewer's signal; the review run and its commit are the
-  record.
+  The reviewer's `tasks verdict` writes the review run's ending; the run and
+  its commit are the record.
 - "Approval is a durable `approved` label … any transition handing the task
   back … must clear it" and "`Prog.release` therefore clears it alongside
   `approved`": replaced at step 4. A review passes the commit it read, and a
   moved tip voids it (see "A review passes one commit"). `review-by:*` and
   `review-failed-by:*` go with the labels; the review run's open and close
   replace them.
-- "`satisfied` is cleared wherever `approved` is": open. `satisfied` is the
-  author's claim about its diff, so it likely belongs to the author run's
-  outcome; step 4 decides.
+- "`satisfied` is cleared wherever `approved` is": replaced. `satisfied` is the
+  ending of an author run (`runs-replace-labels.md`).
 - "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
   meaning. The tip has not moved, so the review still passes.
 
@@ -235,7 +231,7 @@ from the main checkout and lands into `develop` there.
 2. Done: `pipelines.json` and `foreman pipeline show|check|set|clear`.
 3. Done: herdr-web's Pipeline page: the editor. It draws, checks and saves
    through foreman's commands, and needs nothing from the dispatcher.
-4. Runs replace labels (tasks step 3b); `factsOf` reads runs and each task's
+4. Runs replace labels (tasks step 3b; design in `runs-replace-labels.md`); `factsOf` reads runs and each task's
    branch tip. A review run records the commit it read, and land merges that
    commit by id. Pass criterion: a commit to an approved branch places the task
    at the review block again, with no clearing code on any path; land refuses a

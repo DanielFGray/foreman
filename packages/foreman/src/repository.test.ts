@@ -384,9 +384,27 @@ describe("Repository", () => {
     // nothing: its commits are in the checkout, so it is not unmerged — and
     // reading that as an empty branch sent finished work back to the queue.
     expect(await branches(directory)).toEqual([
-      { branch: "foreman/ts-aaaaaa", merged: false, empty: false, stale: undefined },
-      { branch: "foreman/ts-bbbbbb", merged: true, empty: true, stale: undefined },
-      { branch: "foreman/ts-cccccc", merged: true, empty: false, stale: undefined },
+      {
+        branch: "foreman/ts-aaaaaa",
+        merged: false,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-bbbbbb",
+        merged: true,
+        empty: true,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
+      {
+        branch: "foreman/ts-cccccc",
+        merged: true,
+        empty: false,
+        stale: undefined,
+        tip: expect.stringMatching(/^[0-9a-f]{40}$/),
+      },
     ]);
   });
 
@@ -428,16 +446,29 @@ describe("Repository", () => {
       merged: false,
       empty: false,
       stale: { paths: ["touched.txt"], modifyDelete: true },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     expect(byName("foreman/ts-stale-con")).toEqual({
       branch: "foreman/ts-stale-con",
       merged: false,
       empty: false,
       stale: { paths: ["shared.txt"], modifyDelete: false },
+      tip: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     // A branch the trunk has not moved past still merges, and so reads as
     // not stale rather than as anything worse.
     expect(byName("foreman/ts-aaaaaa")?.stale).toBeUndefined();
+  });
+
+  test("reads a branch's tip as the commit id git names", async () => {
+    const expected = (await git("rev-parse", "foreman/ts-aaaaaa")).stdout.toString().trim();
+
+    expect(await run((repository) => repository.tip(directory, "foreman/ts-aaaaaa"))).toBe(
+      expected,
+    );
+    expect(
+      await run((repository) => repository.tip(directory, "foreman/ts-nowhere")),
+    ).toBeUndefined();
   });
 
   test("deletes a merged branch and refuses one holding the only copy", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { reviewRun } from "./task-fixture.ts";
 import {
   type Facts,
   matches,
@@ -73,9 +74,9 @@ describe("facts read from labels", () => {
         "attempt:x:bad",
         "size:3",
         "passed:author",
-        "review-by:strong",
-        "approved",
       ],
+      runs: [reviewRun("strong", { ending: "approved", commit: "c1" })],
+      tip: "c1",
     });
     expect([...read.failedBy]).toEqual(["cheap"]);
     expect(read.attempts).toBe(2);

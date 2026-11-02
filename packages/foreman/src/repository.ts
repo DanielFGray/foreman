@@ -483,6 +483,15 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       isFree,
 
       /**
+       * The commit a branch points at, or nothing when the branch does not
+       * exist. A reviewer reads this commit and an approval is bound to it.
+       */
+      tip: (directory: string, branch: string) =>
+        git(directory, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`).pipe(
+          Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : undefined)),
+        ),
+
+      /**
        * Whether a task worktree holds anything the agent that lived in it made.
        *
        * Untracked files count, unlike in the operator's checkout. That checkout
@@ -610,6 +619,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
               ? [
                   {
                     branch,
+                    tip,
                     merged: merged.has(branch),
                     empty: trunk.has(tip),
                     stale: staleByBranch.get(branch),
@@ -854,6 +864,9 @@ export type Landing =
 /** One of foreman's branches, as git sees it against the checkout's HEAD. */
 export interface Branch {
   readonly branch: string;
+
+  /** The commit the branch points at. */
+  readonly tip: string;
 
   /** The checkout already has these commits, so the ref is free to delete. */
   readonly merged: boolean;
