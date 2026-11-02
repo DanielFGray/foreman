@@ -7,6 +7,7 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
+import { STANDARD_PIPELINE, type AgentNode } from "./pipeline.ts";
 import {
   Published,
   publishedOf,
@@ -442,6 +443,55 @@ describe("publishedOf", () => {
     // The panel filters to the shown space by this, and a ready task carries
     // its project only on the task.
     expect(parked?.project).toBe(state.yours[0]!.project);
+  });
+
+  test("publishes where each task stands and which projects are stopped", () => {
+    const author = STANDARD_PIPELINE.nodes.find(
+      (node): node is AgentNode => node.kind === "agent" && node.role === "author",
+    )!;
+    const published = publishedOf(
+      {
+        ...state,
+        pipelines: new Map([["fibrae", { _tag: "Stopped", problems: ["no source"] }]]),
+        placed: [
+          {
+            task: task("ts-a", "open", []),
+            placement: {
+              _tag: "At",
+              node: author,
+              state: "waiting",
+              gates: [{ id: "start", step: "author" }],
+              ahead: 3,
+            },
+          },
+          { task: task("ts-b", "open", []), placement: { _tag: "Parked", node: "attention" } },
+          { task: task("ts-c", "open", []), placement: { _tag: "Outside" } },
+        ],
+      },
+      Option.none(),
+    );
+    expect(published.placements).toEqual([
+      {
+        key: "ts-a",
+        label: "task ts-a",
+        project: "fibrae",
+        node: author.id,
+        state: "waiting",
+        gates: [{ id: "start", step: "author" }],
+      },
+      {
+        key: "ts-b",
+        label: "task ts-b",
+        project: "fibrae",
+        node: "attention",
+        state: "parked",
+        gates: [],
+      },
+    ]);
+    expect(published.stopped).toEqual([{ project: "fibrae", problems: ["no source"] }]);
+    expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
+      published,
+    );
   });
 
   test("prints a queued task with the commands its queue row takes", () => {
