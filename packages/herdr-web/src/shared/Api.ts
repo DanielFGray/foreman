@@ -196,7 +196,7 @@ export const Api = RpcGroup.make(
   Rpc.make("saveForemanPipeline", { payload: { project: ForemanName, pipeline: Pipeline }, error: BridgeError }),
   /** Drops a project's own pipeline, so it runs the standard one. */
   Rpc.make("clearForemanPipeline", { payload: { project: ForemanName }, error: BridgeError }),
-  /** What foreman records of one task:its description, for an epic row that expands. */
+  /** What foreman records of one task: its description, for an epic row that expands. */
   Rpc.make("foremanTask", { payload: { key: ForemanName }, success: S.Struct({ description: S.OptionFromNullOr(S.String) }), error: BridgeError }),
 
   Rpc.make("pushKey", { success: S.String, error: BridgeError }),

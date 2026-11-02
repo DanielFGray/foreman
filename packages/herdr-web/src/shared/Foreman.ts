@@ -1,9 +1,9 @@
 // What foreman publishes about its fleet, the queue it ranks, and the commands
 // the page may ask the bridge to run. The reading is a copy of foreman's own
 // `Published` (src/published.ts there), version 4, holding the fields this
-// page reads. A queue row has the same shape as a published row. The page
-// cannot import foreman's schema: it is bundled for the browser, and foreman's
-// modules are not.
+// page reads. A queue row has the same shape as a published row. Foreman's
+// other modules are not browser-safe, so this copy stands in for them; the two
+// that are, `foreman/pipeline` and `foreman/pipeline-belt`, the page imports.
 import { Match, Schema as S } from "effect"
 import { Pipeline } from "foreman/pipeline"
 

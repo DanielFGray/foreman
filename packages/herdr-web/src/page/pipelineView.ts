@@ -1,11 +1,12 @@
 // The Pipeline editor's drawing: the draft laid out by foreman's `beltOf` as a
-// CSS grid of station cards, with a wire drawn from each block's exit to the
-// block it runs to. Cell and gap sizes are fixed, so a wire's ends follow from
-// the cell's column and row without measuring the page.
-import { Array, Option, Result, String as Str } from "effect"
+// CSS grid of station cards, with a belt drawn from each block's exit to the
+// block it runs to. pipelineLayout.ts sizes the columns and routes the wires, so
+// the drawing needs no measuring of the page.
+import { Array, Option, String as Str } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { PipelineNode } from "foreman/pipeline"
 import { type Belt, beltOf, type Cell, rejoin, type Wire } from "foreman/pipeline-belt"
+import { labelWidth, type Layout, layoutOf, PAD, type PlacedWire, type Point } from "./pipelineLayout.ts"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 import { type ForemanPage, Message, type Model, PipelineView } from "./model.ts"
 import { isDirty, type PipelineEdit, summaryOf, type WireRef } from "./pipelineEdit.ts"
@@ -13,13 +14,6 @@ import { problemsFor, RESET_LINE } from "./pipelinePage.ts"
 
 type Editing = Extract<PipelineView, { _tag: "Editing" }>
 
-const CELL_W = 150
-const CELL_H = 64
-const GAP_X = 72
-const GAP_Y = 32
-const PAD = 8
-/** How far apart the exits of a block with several wires sit on its right edge. */
-const EXIT_STEP = 22
 
 /** The editor under the Foreman column's heading: a button to open it, or the open editor. */
 export const pipelineSectionView = (model: Model, project: Option.Option<string>, h: HtmlBuilder<Message>): Html => {
@@ -104,102 +98,116 @@ const problemsView = (problems: Option.Option<ReadonlyArray<string>>, h: HtmlBui
   })
 
 // ── the drawing ──
-
-const columnX = (column: number) => PAD + column * (CELL_W + GAP_X)
-const rowY = (row: number) => PAD + row * (CELL_H + GAP_Y)
-
-/** Where a wire leaves its block and where it enters the next. Blocks with several wires spread their exits. */
-const endsOf = (belt: Belt, wire: Wire): { readonly out: readonly [number, number]; readonly into: readonly [number, number] } | undefined => {
-  const from = belt.cells.find((cell) => cell.node.id === wire.from)
-  const to = belt.cells.find((cell) => cell.node.id === wire.to)
-  if (from === undefined || to === undefined) return undefined
-  const siblings = belt.wires.filter((other) => other.from === wire.from)
-  const at = siblings.findIndex((other) => other.port === wire.port)
-  return {
-    out: [columnX(from.column) + CELL_W, rowY(from.row) + CELL_H / 2 + (at - (siblings.length - 1) / 2) * EXIT_STEP],
-    into: [columnX(to.column), rowY(to.row) + CELL_H / 2],
-  }
-}
+const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", land: "⤓", park: "⏸" }
 
 const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
 
 const beltView = (belt: Belt, editing: Editing, h: HtmlBuilder<Message>): Html => {
-  const width = PAD * 2 + belt.columns * CELL_W + Math.max(0, belt.columns - 1) * GAP_X
-  const height = PAD * 2 + belt.rows * CELL_H + Math.max(0, belt.rows - 1) * GAP_Y
-  const wires = Array.filterMap(belt.wires, (wire) => {
-    const ends = endsOf(belt, wire)
-    return ends === undefined ? Result.failVoid : Result.succeed({ wire, ...ends })
-  })
+  const layout = layoutOf(belt)
   return h.div(
     [h.Class("pipeline-scroll")],
     [
       h.div(
-        [h.Class("pipeline-belt"), h.Style({ width: `${width}px`, height: `${height}px` })],
+        [h.Class("pipeline-belt"), h.Style({ width: `${layout.width}px`, height: `${layout.height}px` })],
         [
           h.svg(
-            [h.Class("pipeline-wires"), h.AriaHidden(true), h.Attribute("width", String(width)), h.Attribute("height", String(height))],
-            Array.map(wires, ({ out, into }) =>
-              h.path([h.Class("pipeline-wire"), h.Attribute("d", curve(out, into)), h.Attribute("fill", "none")], []),
-            ),
+            [h.Class("pipeline-wires"), h.AriaHidden(true), h.Attribute("width", String(layout.width)), h.Attribute("height", String(layout.height))],
+            Array.flatMap(layout.wires, ({ points }) => {
+              const d = pathOf(points)
+              return [
+                h.path([h.Class("pipeline-track"), h.Attribute("d", d), h.Attribute("fill", "none")], []),
+                h.path([h.Class("pipeline-flow"), h.Attribute("d", d), h.Attribute("fill", "none")], []),
+              ]
+            }),
           ),
           h.div(
             [
               h.Class("pipeline-grid"),
               h.Style({
-                "grid-template-columns": `repeat(${belt.columns}, ${CELL_W}px)`,
-                "grid-template-rows": `repeat(${belt.rows}, ${CELL_H}px)`,
-                "column-gap": `${GAP_X}px`,
-                "row-gap": `${GAP_Y}px`,
+                "grid-template-columns": layout.columnTracks.map((size) => `${size}px`).join(" "),
+                "grid-template-rows": layout.rowTracks.map((size) => `${size}px`).join(" "),
                 padding: `${PAD}px`,
               }),
             ],
-            Array.map(belt.cells, (cell) => stationView(cell, editing, h)),
+            Array.map(belt.cells, (cell) => stationView(cell, layout, editing, h)),
           ),
-          ...Array.flatMap(wires, ({ wire, out }) => wireControlsView(wire, out, editing, h)),
+          ...Array.flatMap(layout.wires, (placed) => wireControlsView(placed, editing, h)),
         ],
       ),
     ],
   )
 }
 
-const curve = ([x0, y0]: readonly [number, number], [x1, y1]: readonly [number, number]): string => {
-  const bend = Math.max(GAP_X / 2, (x1 - x0) / 2)
-  return `M ${x0} ${y0} C ${x0 + bend} ${y0}, ${x1 - bend} ${y1}, ${x1} ${y1}`
+/** A route as an SVG path through its corners, each corner rounded so a belt turns instead of kinking. */
+const pathOf = (points: ReadonlyArray<Point>): string => {
+  const RADIUS = 8
+  return points
+    .map(([x, y], index) => {
+      const before = points[index - 1]
+      const after = points[index + 1]
+      if (before === undefined) return `M ${x} ${y}`
+      if (after === undefined) return `L ${x} ${y}`
+      const r = Math.min(RADIUS, Math.abs(x - before[0]) + Math.abs(y - before[1]), Math.abs(after[0] - x) + Math.abs(after[1] - y)) / 2
+      const toward = (a: Point, b: Point): Point => {
+        const length = Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1])
+        return [a[0] + ((b[0] - a[0]) * r) / length, a[1] + ((b[1] - a[1]) * r) / length]
+      }
+      const [x0, y0] = toward([x, y], before)
+      const [x1, y1] = toward([x, y], after)
+      return `L ${x0} ${y0} Q ${x} ${y} ${x1} ${y1}`
+    })
+    .join(" ")
 }
 
-const stationView = (cell: Cell, editing: Editing, h: HtmlBuilder<Message>): Html => {
+/** A chip says its kind by an icon and one word; a card has the kind above its summary. */
+const stationView = (cell: Cell, layout: Layout, editing: Editing, h: HtmlBuilder<Message>): Html => {
   const { node } = cell
   const isSelected = Option.contains(editing.selected, node.id)
+  const box = layout.boxes.get(node.id)
+  const isChip = node.kind === "gate" || node.kind === "router"
+  const text = node.kind === "gate" ? node.step : summaryOf(node)
   return h.keyed("button")(
     node.id,
     [
       h.Type("button"),
-      h.Class(`pipeline-station ${node.kind}${isSelected ? " selected" : ""}`),
+      h.Class(`pipeline-station ${node.kind}${isChip ? " chip-block" : ""}${isSelected ? " selected" : ""}`),
       h.AriaLabel(`${node.kind} ${node.id}`),
       h.AriaPressed(isSelected ? "true" : "false"),
-      h.Style({ "grid-column": String(cell.column + 1), "grid-row": String(cell.row + 1) }),
+      h.Title(summaryOf(node)),
+      h.Style({
+        "grid-column": String(cell.column * 2 + 1),
+        "grid-row": String(cell.row * 2 + 1),
+        width: `${box?.w ?? 0}px`,
+        height: `${box?.h ?? 0}px`,
+        "justify-self": "center",
+        "align-self": "center",
+      }),
       h.Attribute("data-column", String(cell.column)),
       h.Attribute("data-row", String(cell.row)),
       h.OnClick(edit({ _tag: "Select", id: isSelected ? Option.none() : Option.some(node.id) })),
     ],
-    [h.span([h.Class("pipeline-kind")], [node.kind]), h.span([h.Class("pipeline-summary")], [summaryOf(node)])],
+    isChip
+      ? [h.span([h.Class("pipeline-icon")], [KIND_ICON[node.kind]]), h.span([h.Class("pipeline-summary")], [text])]
+      : [h.span([h.Class("pipeline-kind")], [`${KIND_ICON[node.kind]} ${node.kind}`]), h.span([h.Class("pipeline-summary")], [text])],
   )
 }
 
-/** The "+" on a wire, the choice of block it opens, and the label of a router's route. */
-const wireControlsView = (wire: Wire, [x, y]: readonly [number, number], editing: Editing, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+/** The "+" on a wire, the choice of block it opens, and the label of a router's route, all at the middle of the wire's own stretch. */
+const wireControlsView = ({ wire, anchor: [x, y], room }: PlacedWire, editing: Editing, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const ref: WireRef = { from: wire.from, port: wire.port }
   const isOpen = Option.exists(editing.inserting, (open) => open.from === ref.from && open.port === ref.port)
-  const at = { left: `${x + 4}px`, top: `${y - 11}px` }
+  const labelRoom = Math.max(24, Math.min(room - 4, labelWidth(wire.label)))
   return [
-    ...(wire.label === "" ? [] : [h.span([h.Class("pipeline-wire-label"), h.Title(wire.label), h.Style({ left: `${x + 2}px`, top: `${y - 24}px` })], [wire.label])]),
+    ...(wire.label === ""
+      ? []
+      : [h.span([h.Class("pipeline-wire-label"), h.Title(wire.label), h.Style({ left: `${x - labelRoom / 2}px`, top: `${y - 23}px`, width: `${labelRoom}px` })], [wire.label])]),
     h.button(
       [
         h.Type("button"),
         h.Class(isOpen ? "pipeline-add on" : "pipeline-add"),
         h.AriaLabel(`add a block after ${wire.from} on ${portName(wire)}`),
         h.AriaExpanded(isOpen),
-        h.Style(at),
+        h.Style({ left: `${x - 8}px`, top: `${y - 8}px` }),
         h.OnClick(edit({ _tag: "PickWire", wire: isOpen ? Option.none() : Option.some(ref) })),
       ],
       ["+"],
@@ -207,7 +215,7 @@ const wireControlsView = (wire: Wire, [x, y]: readonly [number, number], editing
     ...(isOpen
       ? [
           h.div(
-            [h.Class("pipeline-insert"), h.Style({ left: `${x + 4}px`, top: `${y + 12}px` })],
+            [h.Class("pipeline-insert"), h.Style({ left: `${x - 60}px`, top: `${y + 12}px` })],
             Array.map(["gate", "agent", "router"] as const, (kind) =>
               h.button([h.Type("button"), h.Class("chip"), h.AriaLabel(`put a ${kind} on the wire`), h.OnClick(edit({ _tag: "InsertOn", wire: ref, kind }))], [kind]),
             ),
@@ -216,6 +224,7 @@ const wireControlsView = (wire: Wire, [x, y]: readonly [number, number], editing
       : []),
   ]
 }
+
 
 // ── the inspector ──
 
@@ -277,17 +286,19 @@ const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArra
     }
     case "router":
       return [
-        ...Array.flatMap(node.routes, (route, index) => [
-          field(
-            `Route ${index + 1} when`,
-            textInput(`route ${index + 1} filter`, route.when, (when) => edit({ _tag: "Configure", id: node.id, setting: { route: index, when } }), h),
-            h,
+        ...Array.map(node.routes, (route, index) =>
+          h.div(
+            [h.Class("pipeline-route")],
+            [
+              h.span([h.Class("pipeline-route-name")], [`Route ${index + 1}`]),
+              textInput(`route ${index + 1} filter`, route.when, (when) => edit({ _tag: "Configure", id: node.id, setting: { route: index, when } }), h),
+              h.button(
+                [h.Type("button"), h.Class("pipeline-remove"), h.Title("Remove this route"), h.AriaLabel(`remove route ${index + 1}`), h.OnClick(edit({ _tag: "RemoveRoute", router: node.id, index }))],
+                ["✕"],
+              ),
+            ],
           ),
-          h.button(
-            [h.Type("button"), h.Class("chip"), h.AriaLabel(`remove route ${index + 1}`), h.OnClick(edit({ _tag: "RemoveRoute", router: node.id, index }))],
-            ["Remove route"],
-          ),
-        ]),
+        ),
         h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "AddRoute", router: node.id, when: "" }))], ["Add route"]),
       ]
     case "land":
