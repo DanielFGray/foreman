@@ -36,7 +36,6 @@ import {
   permit,
   grant,
   policyPath,
-  checkoutFor,
   readPolicy,
   scopeOf,
   updatePolicy,
@@ -67,12 +66,14 @@ import { authorWalls, rungAt } from "./agent-rung.ts";
 import {
   nextAgent,
   place,
+  routeWorkspace,
   type AgentNode,
   type CheckNode,
   type DoneNode,
   type LandNode,
   type Pipeline,
   type Placement,
+  type Workspace,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import {
@@ -97,6 +98,7 @@ import {
 import {
   approvedCommit,
   authoredBy,
+  directBase,
   isApproved,
   isSatisfied,
   lapOf,
@@ -514,11 +516,29 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       ).pipe(Effect.map((entries) => entries.flat()));
 
       // The operator's policy, read every pass so an edit takes effect on the
-      // next one. Read before the checkouts, because a project in branch mode
-      // asks its checkout for a clean tree as well.
+      // next one.
       const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
         Effect.provideContext(platform),
       );
+
+      // Each checkout's tip and whether it has uncommitted changes. A task that
+      // works in the operator's checkout starts only from a clean tree, and a
+      // task on the operator's own branch reads its work at that tip. A
+      // checkout that cannot answer reads as dirty, so nothing starts there.
+      const checkoutStates = yield* Effect.forEach(projects, (project) =>
+        Effect.all([repository.dirty(project.directory), repository.head(project.directory)]).pipe(
+          Effect.map(([dirty, head]) => ({ project: project.name, dirty, head })),
+          Effect.orElseSucceed(() => ({
+            project: project.name,
+            dirty: true,
+            head: undefined as string | undefined,
+          })),
+        ),
+      );
+      const dirty: ReadonlySet<string> = new Set(
+        checkoutStates.filter((entry) => entry.dirty).map((entry) => entry.project),
+      );
+      const heads = new Map(checkoutStates.map((entry) => [entry.project, entry.head] as const));
 
       // Which checkouts the operator is presently working in. Read every tick
       // like everything else: you clean a tree up between two ticks and the
@@ -526,7 +546,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // that clears itself and one that needs a hand-run command must not read
       // the same on the dashboard.
       const checkouts = yield* Effect.forEach(projects, (project) =>
-        repository.isFree(project.directory, checkoutFor(policy, project.name) === "branch").pipe(
+        repository.isFree(project.directory).pipe(
           Effect.map((result: Hold): ReadonlyArray<Held> =>
             result._tag === "Clean"
               ? []
@@ -623,9 +643,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
 
       // An approval is bound to the commit the reviewer read, so every task
-      // carries the tip its branch has in this reading.
+      // carries the tip its work has in this reading: its branch's, or, for a
+      // task on the operator's own branch, the checkout's while it occupies it.
       const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
-      const withTip = (task: Item): Item => ({ ...task, tip: tips.get(task.id) });
+      const withTip = (task: Item): Item => ({
+        ...task,
+        tip:
+          workspaceOf(pipelines, task) === "none"
+            ? occupies(pipelines, task)
+              ? heads.get(task.project)
+              : undefined
+            : tips.get(task.id),
+      });
 
       return {
         projects,
@@ -645,6 +674,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         pipelines,
         scopes,
         branches,
+        dirty,
       } as const;
     });
 
@@ -679,6 +709,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         pipelines,
         scopes,
         branches,
+        dirty,
       } = observation;
 
       const tasks = new Map(
@@ -699,9 +730,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Authorship, not availability. A branch whose commits the checkout
       // already has still proves the author wrote something — and a task in
       // review whose branch was merged by hand needs landing, not requeueing.
-      const committed = new Set(
-        branches.filter((entry) => !entry.empty).map((entry) => entry.task),
-      );
+      // A task on the operator's own branch has no branch of its own: its
+      // author wrote something when the tip moved past the commit it started from.
+      const committed = new Set([
+        ...branches.filter((entry) => !entry.empty).map((entry) => entry.task),
+        ...[...claimed, ...reviewing]
+          .filter(
+            (task) =>
+              workspaceOf(pipelines, task) === "none" &&
+              task.tip !== undefined &&
+              task.tip !== directBase(task),
+          )
+          .map((task) => task.id),
+      ]);
 
       // A branch the trunk has overtaken, under a task still in review. The
       // branch cannot land, so the review of it cannot be applied either — the
@@ -867,6 +908,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           scopes,
           pipelines,
           placed,
+          dirty,
         },
         failedIds,
         new Set(stale.map((row) => row.task.id)),
@@ -1030,7 +1072,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /** The run row for an agent about to start on this task at `block`. */
-    const runFor = (task: Item, rung: Rung, block: AgentNode, commit?: string) =>
+    const runFor = (task: Item, rung: Rung, block: AgentNode, commit?: string, base?: string) =>
       newRunFor({
         task,
         branch: labelFor(task.id),
@@ -1041,6 +1083,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         role: block.role,
         node: block.id,
         commit,
+        base,
       });
 
     /**
@@ -1775,18 +1818,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * and an agent given a directory that cannot build will spend its run
      * discovering that and charge it to the branch.
      */
-    const workspaceFor = (task: { id: string; project: string }, project: Project) =>
+    /** The workspace the task's route gives it, from the published reading. */
+    const routeOf = (task: Item) =>
+      SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => workspaceOf(pipelines, task)));
+
+    const workspaceFor = (task: Item, project: Project) =>
       Effect.gen(function* () {
-        // The policy chooses where a new workspace goes. One that exists is
-        // adopted wherever git has the branch out, so a task keeps the mode it
-        // started in when the operator changes the policy.
-        const { policy } = yield* SubscriptionRef.get(state);
-        const worker = yield* fleet.open({
-          task: task.id,
-          repository: project.directory,
-          branch: labelFor(task.id),
-          directory: newWorkspace(policy, project, task.id),
-        });
+        // The task's route chooses where a new workspace goes. One that
+        // exists is adopted wherever git has the branch out.
+        const directory = newWorkspace(yield* routeOf(task), project, task.id);
+        const worker =
+          directory === undefined
+            ? yield* fleet.attach({ task: task.id, repository: project.directory })
+            : yield* fleet.open({
+                task: task.id,
+                repository: project.directory,
+                branch: labelFor(task.id),
+                directory,
+              });
         const setup = yield* repository.setup(worker.directory);
         if (setup && !setup.passed) {
           return yield* new RepositoryError({
@@ -1888,11 +1937,21 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // would briefly be claimed with nothing to show for it, and that state
       // is indistinguishable from an abandoned claim.
       const worker = yield* workspaceFor(task, project);
+      const workspace = yield* routeOf(task);
+      // A task on the operator's branch has no branch to diff against, so its
+      // author run records where the checkout stood when it started.
+      const base = workspace === "none" ? yield* repository.head(project.directory) : undefined;
 
-      const prompt = yield* prompts.author(task, worker.directory, project.directory);
+      const prompt = yield* prompts.author(
+        task,
+        worker.directory,
+        project.directory,
+        workspace,
+        directBase(task) ?? base,
+      );
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, runFor(task, rung, block))
+        .attribute(task.id, runFor(task, rung, block, undefined, base))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,
@@ -1920,13 +1979,20 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // The fork point is how the reviewer names the author's work from
       // inside its own worktree; without it the only diff it could read is in
-      // the operator's checkout. The status is untouched, so a later tick
-      // tries again.
-      const base = yield* repository.base(project.directory, labelFor(task.id));
-      const tip = yield* repository.tip(project.directory, labelFor(task.id));
+      // the operator's checkout. A task on the operator's own branch reads
+      // everything since its first author started (it has no undo). The status
+      // is untouched, so a later tick tries again.
+      const workspace = yield* routeOf(task);
+      const { base, tip } =
+        workspace === "none"
+          ? { base: directBase(task), tip: yield* repository.head(project.directory) }
+          : {
+              base: yield* repository.base(project.directory, labelFor(task.id)),
+              tip: yield* repository.tip(project.directory, labelFor(task.id)),
+            };
       if (!base || tip === undefined) {
         return yield* Effect.logWarning(
-          `review of ${task.id} deferred: no merge base for ${labelFor(task.id)} in ${project.directory}`,
+          `review of ${task.id} deferred: no base for its work in ${project.directory}`,
         );
       }
 
@@ -1941,6 +2007,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         task,
         worker.directory,
         project.directory,
+        workspace,
         base,
         project.verify,
       );
@@ -2456,17 +2523,32 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const task = yield* prog.show(id);
           const project = yield* projectFor(task.project);
           if (!project) return undefined;
-          const worktree = newWorkspace(
-            (yield* SubscriptionRef.get(state)).policy,
-            project,
-            task.id,
-          );
+          const { pipelines } = yield* SubscriptionRef.get(state);
+          const worktree =
+            newWorkspace(workspaceOf(pipelines, task), project, task.id) ?? project.directory;
           if (role === "author") {
-            return yield* prompts.author(task, worktree, project.directory);
+            return yield* prompts.author(
+              task,
+              worktree,
+              project.directory,
+              workspaceOf(pipelines, task),
+              directBase(task),
+            );
           }
-          const base = yield* repository.base(project.directory, labelFor(task.id));
+          const workspace = workspaceOf(pipelines, task);
+          const base =
+            workspace === "none"
+              ? directBase(task)
+              : yield* repository.base(project.directory, labelFor(task.id));
           if (!base) return undefined;
-          return yield* prompts.review(task, worktree, project.directory, base, project.verify);
+          return yield* prompts.review(
+            task,
+            worktree,
+            project.directory,
+            workspace,
+            base,
+            project.verify,
+          );
         }),
 
       /** Starts a fresh agent on a task whose worker vanished. */
@@ -2521,7 +2603,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // a retry re-adopts the same directory with its edits instead of
             // losing them.
             const worker = yield* workspaceFor(task, project);
-            const prompt = yield* prompts.author(task, worker.directory, project.directory);
+            const prompt = yield* prompts.author(
+              task,
+              worker.directory,
+              project.directory,
+              yield* routeOf(task),
+              directBase(task),
+            );
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
             yield* prog.endRuns(task.id, { author: "vanished" });
@@ -2702,11 +2790,27 @@ export const planFrom = (
   // step that is taken admits: a task passed over for want of a slot leaves
   // the grant whole for the next tick.
   let policy = current.policy;
+  // The task each checkout holds (rule 2 of docs/workspace-blocks.md). It
+  // holds every other task in its project, and a dispatch planned into a
+  // free checkout takes it at once, so one pass cannot send two tasks there.
+  const occupant = new Map<string, string>(
+    current.placed
+      .filter(({ task }) => occupies(current.pipelines, task))
+      .map(({ task }) => [task.project, task.id] as const),
+  );
   // A busy hold is one task's own workspace, so it holds every task but that one.
   const held = (task: { readonly id: string; readonly project: string }) =>
     current.held.some(
       (entry) => entry.project === task.project && entry.branch !== labelFor(task.id),
-    );
+    ) || (occupant.get(task.project) ?? task.id) !== task.id;
+  // A task that works in the checkout starts there only from a clean tree, and
+  // only while no other task holds it.
+  const intoCheckout = (task: Item) => {
+    const workspace = workspaceOf(current.pipelines, task);
+    return workspace !== undefined && workspace !== "worktree";
+  };
+  const enters = (task: Item) =>
+    !intoCheckout(task) || occupant.has(task.project) || !current.dirty.has(task.project);
   const admitting = (given: Permit, task: string) => {
     if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
   };
@@ -2731,7 +2835,7 @@ export const planFrom = (
       continue;
     }
     if (node.kind === "agent") {
-      if (held(task)) continue;
+      if (held(task) || !enters(task)) continue;
       if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
       if (worker && isBusy(worker)) continue;
     }
@@ -2757,7 +2861,7 @@ export const planFrom = (
         task,
         step: asking.step,
         rung:
-          node.kind === "land"
+          node.kind === "land" || node.kind === "done"
             ? reviewedBy(task)
             : node.kind === "agent" && node.role === "review"
               ? authoredBy(task)
@@ -2777,6 +2881,7 @@ export const planFrom = (
       for (const given of permits) admitting(given, task.id);
       free -= 1;
       running.add(task.project, node);
+      if (intoCheckout(task)) occupant.set(task.project, task.id);
       dispatches.push({ role: node.role, task, permits, block: node });
     }
   }
@@ -2825,6 +2930,8 @@ interface DispatchState {
   readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
   /** Where every queued and owned task stands, from which each block's running tasks are counted. */
   readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
+  /** The projects whose checkout has uncommitted changes. */
+  readonly dirty: ReadonlySet<string>;
 }
 
 /** What one tick would start, land, check, and hold for the operator's approval. */
@@ -2893,6 +3000,37 @@ const runningPipeline = (
 ): Pipeline | undefined => {
   const found = pipelines.get(project);
   return found?._tag === "Runs" ? found.pipeline : undefined;
+};
+
+/**
+ * Where the task's route has it work: a worktree of its own, the operator's
+ * checkout on its branch, or the operator's checkout on the operator's branch.
+ * Nothing when its project's pipeline is stopped or no source takes it.
+ */
+const workspaceOf = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): Workspace | undefined => {
+  const pipeline = runningPipeline(pipelines, task.project);
+  return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task));
+};
+
+/**
+ * Whether the task holds its project's checkout. A task with no worktree
+ * occupies the checkout from its first author run until it leaves the
+ * pipeline, so no other task starts or lands there in between: its commits
+ * sit on the checkout's branch, and a task on the operator's own branch has
+ * no undo.
+ */
+const occupies = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): boolean => {
+  const workspace = workspaceOf(pipelines, task);
+  return (
+    workspace !== undefined &&
+    workspace !== "worktree" &&
+    task.status !== "done" &&
+    task.status !== "canceled" &&
+    task.runs.some((run) => run.role === "author")
+  );
 };
 
 /**
@@ -3529,10 +3667,17 @@ export const EMPTY_FLEET: FleetState = {
 };
 
 /**
- * Where a task's new workspace goes: the operator's checkout itself for a
- * project in branch mode, else a worktree of its own.
+ * Where a task's new workspace goes on its route: a worktree of its own, the
+ * operator's checkout put on the task's branch, or nothing for a task that
+ * works on the operator's own branch, which attaches to the checkout as it is.
  */
-const newWorkspace = (policy: Policy, project: Project, task: string): string =>
-  checkoutFor(policy, project.name) === "branch"
-    ? project.directory
-    : directoryFor(project.name, task);
+const newWorkspace = (
+  workspace: Workspace | undefined,
+  project: Project,
+  task: string,
+): string | undefined =>
+  workspace === "none"
+    ? undefined
+    : workspace === "branch"
+      ? project.directory
+      : directoryFor(project.name, task);

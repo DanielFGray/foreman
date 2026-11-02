@@ -98,8 +98,12 @@ class World {
   clean: "clean" | "held" = "clean";
   /** The task branch the project's checkout has out (branch mode), if any. */
   checkedOut: string | undefined = undefined;
-  /** Whether the checkout has uncommitted changes, which a branch-mode start refuses. */
+  /** Whether the checkout has uncommitted changes, which a start in the checkout refuses. */
   treeDirty = false;
+  /** The commit the checkout's HEAD names. */
+  headCommit = "h0";
+  /** Every prompt an agent was started with, in order. */
+  readonly prompts: string[] = [];
   /** The directory of every workspace `open` was asked for, in order. */
   readonly opened: string[] = [];
   landing: Landing = { _tag: "Merged", verified: false };
@@ -146,6 +150,7 @@ class World {
         ? Effect.fail(new FleetError({ operation: "spawn", detail: "harness would not start" }))
         : this.write("fleet.spawn", () => {
             this.spawned.push([target.task, options.role]);
+            this.prompts.push(options.prompt);
             const roles = new Map(target.roles).set(options.role, "working" as const);
             this.workers.set(target.task, { ...target, roles, state: "working" });
             return { kind: options.kind, model: options.model };
@@ -329,16 +334,16 @@ class World {
   readonly repository = {
     checkoutOf: (folder: string) => Effect.succeed<string | undefined>(folder),
     verifyOf: () => Effect.succeed<string | undefined>(undefined),
-    isFree: (_directory: string, cleanTree = false) =>
+    isFree: () =>
       Effect.succeed<Hold>(
         this.clean === "held"
           ? { _tag: "Held", reason: "dirty", detail: "held" }
           : this.checkedOut !== undefined
             ? { _tag: "Held", reason: "busy", detail: "busy", branch: this.checkedOut }
-            : cleanTree && this.treeDirty
-              ? { _tag: "Held", reason: "dirty", detail: "not clean" }
-              : { _tag: "Clean" },
+            : { _tag: "Clean" },
       ),
+    dirty: () => Effect.sync(() => this.treeDirty),
+    head: () => Effect.sync(() => this.headCommit),
     holdsWork: (directory: string) => Effect.sync(() => this.dirty.has(directory)),
     commitWork: (directory: string, _branch: string, message: string) =>
       this.write("repository.commitWork", () => {
@@ -447,7 +452,13 @@ class World {
 const prompts = Layer.succeed(Prompts, {
   author: () => Effect.succeed("author"),
   onboard: () => Effect.succeed("onboard"),
-  review: () => Effect.succeed("review"),
+  review: (
+    _task: Item,
+    _worktree: string,
+    _repository: string,
+    _workspace: unknown,
+    base: string,
+  ) => Effect.succeed(`review from ${base}`),
   diagnose: () => Effect.succeed("diagnose"),
 });
 
@@ -1633,88 +1644,154 @@ describe("a policy change", () => {
   });
 });
 
-describe("where a project's agents work", () => {
-  const BRANCH = { ...ALLOWED, slots: 2, projects: { test: { checkout: "branch" } } };
-  const unmerged = (task: string): Branch => ({
-    branch: `foreman/${task}`,
-    tip: "c1",
-    merged: false,
-    empty: false,
-    stale: undefined,
-  });
-  const reading = (world: World) =>
-    Effect.runPromise(
-      Dispatcher.use((dispatcher) =>
-        dispatcher.tick.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
-      ).pipe(Effect.provide(layerFor(world))),
-    );
+describe("a route's workspace blocks", () => {
+  const drawn = join(policies, "pipelines.json");
+  const draw = (nodes: ReadonlyArray<PipelineNode>) =>
+    writeFileSync(drawn, JSON.stringify({ test: { nodes } }));
+  afterEach(() => rmSync(drawn, { force: true }));
 
-  test("a worktree project's author works in a worktree of its own", async () => {
+  /** The standard pipeline with no worktree: the task's branch in the operator's checkout. */
+  const BRANCH_ONLY = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+    node.kind === "worktree" ? [] : node.kind === "branch" ? [{ ...node, next: "retry" }] : [node],
+  );
+  /** The standard pipeline with no branch and no worktree, ending at done: the operator's branch. */
+  const DIRECT = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+    node.kind === "branch" || node.kind === "worktree"
+      ? []
+      : node.kind === "source"
+        ? [{ ...node, next: "retry" }]
+        : node.kind === "gate" && node.id === "land-gate"
+          ? [{ ...node, next: "done" }]
+          : node.kind === "land"
+            ? [{ kind: "done", id: "done" }]
+            : [node],
+  );
+
+  const settled = (world: World, id: string, role: "author" | "review") => {
+    const current = world.workers.get(id);
+    if (current === undefined) throw new Error(`${id} has no worker`);
+    world.workers.set(id, { ...current, roles: new Map([[role, "settled"]]), state: "settled" });
+  };
+  const authorRuns = (world: World, id: string) =>
+    world.tasks.get(id)?.runs.filter((run) => run.role === "author") ?? [];
+
+  /**
+   * Takes one task from the queue to the end of its route through the real
+   * tick: the author commits and hands off, the reviewer approves the tip it
+   * read, and the next tick ends the task. `commit` stands for the author's
+   * commit in git: a branch tip, or the checkout's HEAD moving.
+   */
+  const drive = async (world: World, id: string, commit: () => void) => {
+    await tick(world);
+    expect(world.spawned.at(-1)).toEqual([id, "author"]);
+
+    commit();
+    settled(world, id, "author");
+    await Effect.runPromise(world.prog.review(id));
+    await tick(world);
+    expect(world.spawned.at(-1)).toEqual([id, "review"]);
+
+    await Effect.runPromise(world.prog.endReview(id, "approved"));
+    settled(world, id, "review");
+    await tick(world);
+    expect(world.tasks.get(id)?.status).toBe("done");
+  };
+  const onBranch = (world: World, id: string) => () =>
+    void world.branches.set(`foreman/${id}`, {
+      branch: `foreman/${id}`,
+      tip: "c1",
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+
+  test("worktree: the author works in its own worktree, and the approved commit merges", async () => {
     const task = item("ts-tree", "open", []);
     const world = new World(task);
 
-    await tick(world);
+    await drive(world, task.id, onBranch(world, task.id));
 
-    expect(world.opened).toEqual([directoryFor("test", task.id)]);
-    expect(world.workers.get(task.id)?.worktree).toBe(directoryFor("test", task.id));
-    expect(world.spawned).toEqual([[task.id, "author"]]);
+    expect(world.opened[0]).toBe(directoryFor("test", task.id));
+    expect(world.prompts).toEqual(["author", "review from base"]);
+    expect(world.merged).toEqual(["c1"]);
+    expect(authorRuns(world, task.id)[0]?.base).toBeUndefined();
   });
 
-  test("a branch project's author works in the operator's checkout, which teardown leaves alone", async () => {
-    usePolicy(BRANCH);
+  test("branch only: the author works in the operator's checkout, and the approved commit merges", async () => {
+    draw(BRANCH_ONLY);
     const task = item("ts-branch", "open", []);
     const world = new World(task);
 
-    await tick(world);
+    await drive(world, task.id, onBranch(world, task.id));
 
-    expect(world.opened).toEqual(["/build/test"]);
+    expect(world.opened[0]).toBe("/build/test");
     expect(world.workers.get(task.id)?.worktree).toBeUndefined();
-    expect(world.spawned).toEqual([[task.id, "author"]]);
+    expect(world.merged).toEqual(["c1"]);
   });
 
-  test("a dirty checkout holds a branch project's start, with the reason", async () => {
-    usePolicy(BRANCH);
-    const task = item("ts-dirty", "open", []);
+  test("direct: the author commits on the operator's branch, the reviewer reads from where it started, and done merges nothing", async () => {
+    draw(DIRECT);
+    const task = item("ts-direct", "open", []);
     const world = new World(task);
-    world.treeDirty = true;
 
-    const state = await reading(world);
+    await drive(world, task.id, () => {
+      world.headCommit = "h1";
+    });
 
-    expect(world.spawned).toEqual([]);
-    expect(world.tasks.get(task.id)?.status).toBe("open");
-    expect(state.held).toEqual([{ project: "test", reason: "dirty", detail: "not clean" }]);
+    expect(world.opened[0]).toBe("/build/test");
+    expect(authorRuns(world, task.id)[0]?.base).toBe("h0");
+    expect(world.prompts).toEqual(["author", "review from h0"]);
+    // The reviewer's approval holds for the commit the checkout had when it read.
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toBe("h1");
+    expect(world.merged).toEqual([]);
+    expect(
+      world.logs.some(([id, line]) => id === task.id && line.includes("completed at done")),
+    ).toBe(true);
   });
 
-  test("a worktree project ignores a dirty checkout at dispatch", async () => {
-    const task = item("ts-tree-dirty", "open", []);
-    const world = new World(task);
+  for (const [shape, nodes] of [
+    ["branch only", BRANCH_ONLY],
+    ["direct", DIRECT],
+  ] as const) {
+    test(`${shape}: the checkout takes one task at a time, even with two candidates in one tick`, async () => {
+      draw(nodes);
+      usePolicy({ ...ALLOWED, slots: 2 });
+      const first = item("ts-first", "open", []);
+      const second = item("ts-second", "open", []);
+      const world = new World(first, second);
+
+      await tick(world);
+      expect(world.spawned).toEqual([[first.id, "author"]]);
+
+      // Its author stops and is sent back: the task still holds the checkout.
+      settled(world, first.id, "author");
+      await Effect.runPromise(world.prog.release(first.id, "returned"));
+      world.workers.delete(first.id);
+      await tick(world);
+      expect(world.spawned.map(([id]) => id)).not.toContain(second.id);
+
+      await Effect.runPromise(world.prog.complete({ id: first.id }));
+      await tick(world);
+      expect(world.spawned.at(-1)).toEqual([second.id, "author"]);
+    });
+  }
+
+  test("a dirty checkout holds a start there, and not a worktree start", async () => {
+    draw(DIRECT);
+    const direct = item("ts-dirty", "open", []);
+    const world = new World(direct);
     world.treeDirty = true;
 
     await tick(world);
+    expect(world.spawned).toEqual([]);
 
-    expect(world.spawned).toEqual([[task.id, "author"]]);
+    rmSync(drawn, { force: true });
+    await tick(world);
+    expect(world.spawned).toEqual([[direct.id, "author"]]);
   });
 
-  test("a task branch out in the checkout holds every other task, and not its own review", async () => {
-    usePolicy(BRANCH);
-    const own = item("ts-own", "reviewing", [], "test", [handedOff("cheap", "c1")]);
-    const other = item("ts-other", "open", []);
-    const world = new World(own, other);
-    world.checkedOut = `foreman/${own.id}`;
-    world.branches.set(`foreman/${own.id}`, unmerged(own.id));
-
-    const state = await reading(world);
-
-    expect(world.spawned).toEqual([[own.id, "review"]]);
-    expect(world.opened).toEqual(["/build/test"]);
-    expect(world.tasks.get(other.id)?.status).toBe("open");
-    expect(state.held).toEqual([
-      { project: "test", reason: "busy", detail: "busy", branch: `foreman/${own.id}` },
-    ]);
-  });
-
-  test("a canceled branch-mode task's workspace is ended, which hands the checkout back", async () => {
-    usePolicy(BRANCH);
+  test("a canceled task in the checkout has its workspace ended, which hands the checkout back", async () => {
+    draw(BRANCH_ONLY);
     const task = item("ts-cancel-branch", "canceled", [], "test", [authorRun("cheap")]);
     const world = new World(task);
     world.workers.set(task.id, {
@@ -1727,24 +1804,6 @@ describe("where a project's agents work", () => {
     await tick(world);
 
     expect(world.closed).toEqual([task.id]);
-  });
-
-  test("an approved branch-mode task lands and completes like a worktree one", async () => {
-    usePolicy(BRANCH);
-    const task = item("ts-land-branch", "reviewing", [], "test", [
-      handedOff("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1" }),
-    ]);
-    const world = new World(task);
-    world.checkedOut = `foreman/${task.id}`;
-    world.branches.set(`foreman/${task.id}`, unmerged(task.id));
-
-    await tick(world);
-
-    expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
-    expect(world.merged).toEqual(["c1"]);
-    expect(world.tasks.get(task.id)?.status).toBe("done");
-    expect(world.closed).toContain(task.id);
   });
 });
 

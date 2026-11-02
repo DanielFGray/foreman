@@ -87,6 +87,14 @@ export const passedNodes = (
 export const approvedCommit = (task: Runs): string | undefined => approval(task)?.commit;
 
 /**
+ * The commit a task working on the operator's branch started from: the base
+ * its first such author run recorded. Every later author continues on top of
+ * that work (a return has no undo there), so a reviewer reads all of it.
+ */
+export const directBase = (task: Runs): string | undefined =>
+  task.runs.find((run) => run.role === "author" && run.base !== undefined)?.base;
+
+/**
  * The author's claim that the trunk already does what the task asks.
  *
  * A backlog outlives the code it describes: work gets done under another

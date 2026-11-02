@@ -574,11 +574,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * A checkout with a task's branch out is `busy`: that task works in the
      * checkout itself (branch mode), so no other agent starts there and no
      * other landing moves it, until its own landing checks the operator's
-     * branch out again. `clean` asks for an empty tree as well, which a
-     * branch-mode author needs: its first act is to switch branches, and git
-     * carries uncommitted edits across a switch into the agent's commits.
+     * branch out again.
      */
-    const isFree = (directory: string, clean = false): Effect.Effect<Hold, RepositoryError> =>
+    const isFree = (directory: string): Effect.Effect<Hold, RepositoryError> =>
       Effect.gen(function* () {
         const head = yield* headBranch(directory);
         if (head === undefined) return { _tag: "Held", reason: "noBranch", detail: DETACHED };
@@ -588,13 +586,6 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             reason: "busy",
             branch: head,
             detail: `${head} is checked out here; other work waits until its task lands or ends`,
-          };
-        }
-        if (clean && (yield* status(directory, "all")) !== "") {
-          return {
-            _tag: "Held",
-            reason: "dirty",
-            detail: "uncommitted changes; a branch-mode task starts only from a clean checkout",
           };
         }
         return { _tag: "Clean" };
@@ -638,6 +629,18 @@ export class Repository extends Context.Service<Repository>()("Repository", {
     return {
       isFree,
       leaveBranch,
+
+      /**
+       * Whether the checkout has uncommitted changes, untracked files included.
+       * A task starts in the operator's checkout only from a clean tree: git
+       * carries edits across a branch switch, and an agent on the operator's
+       * branch would commit them as its own.
+       */
+      dirty: (directory: string) =>
+        status(directory, "all").pipe(Effect.map((text) => text !== "")),
+
+      /** The commit HEAD names: the operator's branch tip, where a direct task works. */
+      head: (directory: string) => gitOutput(directory, "rev-parse", "HEAD"),
 
       /**
        * The commit a branch points at, or nothing when the branch does not

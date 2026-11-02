@@ -738,7 +738,8 @@ describe("Repository in branch mode", () => {
 
   const ofCheckout = (here: string) => ({
     checkoutBranch: () => run((repository) => repository.checkoutBranch(here, task)),
-    isFree: (cleanTree = false) => run((repository) => repository.isFree(here, cleanTree)),
+    isFree: () => run((repository) => repository.isFree(here)),
+    dirty: () => run((repository) => repository.dirty(here)),
     base: () => run((repository) => repository.base(here, task)),
     branches: () => run((repository) => repository.branches(here)),
     // Lands by the commit id the reviewer read, as the dispatcher does.
@@ -760,13 +761,13 @@ describe("Repository in branch mode", () => {
       ),
   });
 
-  test("a dirty checkout holds a branch-mode start, and refuses the checkout with a reason", async () => {
+  test("an untracked file makes the checkout dirty without holding it, and the branch switch refuses the checkout with a reason", async () => {
     const { here, head } = await checkout();
     const repo = ofCheckout(here);
     try {
       await writeFile(join(here, "notes.md"), "operator's\n");
       expect(await repo.isFree()).toEqual(clean);
-      expect(await repo.isFree(true)).toMatchObject({ _tag: "Held", reason: "dirty" });
+      expect(await repo.dirty()).toBe(true);
       await expect(repo.checkoutBranch()).rejects.toThrow(/uncommitted changes/);
       expect(await head()).toBe("trunk");
     } finally {

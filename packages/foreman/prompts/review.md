@@ -6,12 +6,19 @@ decisions, or log the open decision and stop.
 Task: {{ task }} — {{ title }}
 Project: {{ project }}
 Working directory: {{ worktree }}
-Branch: {{ branch }}
-Repository: {{ repository }}
+{% if (workspace === "none") { %}Branch: the operator's own branch; the author's work is every commit after {{ base }}
+{% } else { %}Branch: {{ branch }}
+{% } %}Repository: {{ repository }}
 
 ## Rules
 
-{% if (worktree === repository) { %}
+{% if (workspace === "none") { %}
+- Run every command in {{ worktree }}: the operator's own checkout and branch, where
+  the author committed. Nothing else runs here until this task ends. Never switch
+  branches, and never stash, reset or clean: the commits are already on the
+  operator's branch, so a return asks for new commits, never an undo. Do not read
+  another task's worktree.
+{% } else if (workspace === "branch") { %}
 - Run every command in {{ worktree }}: the operator's own checkout, which has the
   task's branch out. No landing runs here until this task lands. Never switch
   branches, and never stash, reset or clean. Do not read another task's worktree.

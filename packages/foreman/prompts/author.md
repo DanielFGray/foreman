@@ -6,12 +6,13 @@ or log the open decision and stop.
 Task: {{ task }} — {{ title }}
 Project: {{ project }}
 Working directory: {{ worktree }}
-Branch: {{ branch }}
-Repository checkout: {{ repository }}
+{% if (workspace === "none") { %}Branch: the operator's own branch, from commit {{ base }}
+{% } else { %}Branch: {{ branch }}
+{% } %}Repository checkout: {{ repository }}
 
 ## Start
 
-1. `git status` and `git log {{ branch }}`: an earlier author may have left work here.
+1. `git status` and {% if (workspace === "none") { %}`git log {{ base }}..HEAD`{% } else { %}`git log {{ branch }}`{% } %}: an earlier author may have left work here.
 2. `prog show {{ task }}`, then `prog context` for its concepts, then the project's
    AGENTS.md or CLAUDE.md.
 3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
@@ -21,7 +22,13 @@ Repository checkout: {{ repository }}
 
 ## Rules
 
-{% if (worktree === repository) { %}
+{% if (workspace === "none") { %}
+- Work only in {{ worktree }}, on the branch it has out. This is the operator's own
+  checkout and branch, and no other agent or landing runs here until this task ends.
+  Commit here; foreman lands nothing, because your commits are already on the
+  operator's branch. Never switch branches, and never stash, reset or clean: a
+  returned review is fixed by new commits, not by undoing old ones.
+{% } else if (workspace === "branch") { %}
 - Work only in {{ worktree }}, on {{ branch }}. This is the operator's own checkout,
   put on your branch for this task; no other agent or landing runs here until it
   lands. Never switch branches, and never stash, reset or clean: foreman checks the
@@ -51,7 +58,7 @@ Repository checkout: {{ repository }}
 
 1. Run the full verification: definition of done, tests, linter, build. Update what
    your change made stale.
-2. Read `git diff HEAD...{{ branch }}` once as a stranger's diff: walk the definition
+2. Read {% if (workspace === "none") { %}`git diff {{ base }} HEAD`{% } else { %}`git diff HEAD...{{ branch }}`{% } %} once as a stranger's diff: walk the definition
    of done and point at the code for each part. Fix what you find.
 3. `prog review {{ task }}`, then stop. A reviewer may send you one mechanical defect:
    fix exactly that, commit, stop again. Foreman merges; do not merge and do not mark

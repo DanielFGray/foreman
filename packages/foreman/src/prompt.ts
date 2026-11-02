@@ -3,6 +3,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import template from "lodash/template.js";
 import { labelFor } from "./fleet.ts";
 import { isSatisfied } from "./lap.ts";
+import type { Workspace } from "./pipeline.ts";
 import type { DiagnosticIntent, Item } from "./prog.ts";
 
 /**
@@ -42,8 +43,22 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       );
 
     return {
-      author: (task: Item, worktree: string, repository: string) =>
+      /**
+       * `workspace` is where the task's route has it work, which decides
+       * what the agent may do to the checkout and how it reads trunk. `base`
+       * is where the checkout stood when a task on the operator's own branch
+       * first started, which is the only way to name its work there.
+       */
+      author: (
+        task: Item,
+        worktree: string,
+        repository: string,
+        workspace: Workspace | undefined,
+        base?: string,
+      ) =>
         render("author", {
+          workspace: workspace ?? "worktree",
+          base,
           task: task.id,
           title: task.title,
           labels: task.labels,
@@ -84,10 +99,12 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
         item: Item,
         worktree: string,
         repository: string,
+        workspace: Workspace | undefined,
         base: string,
         verify: string | undefined,
       ) =>
         render("review", {
+          workspace: workspace ?? "worktree",
           task: item.id,
           title: item.title,
           labels: item.labels,
@@ -97,9 +114,12 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
           branch: labelFor(item.id),
           repository,
           base,
-          verification: verify
-            ? `Foreman runs \`${verify}\` in ${repository} before and after it merges, and undoes a merge that turns it red, so do not spend a full suite run repeating it: other agents share this machine.`
-            : `Foreman lands this branch on git's exit code alone: ${item.project} keeps no \`scripts/verify.sh\`. The full run is yours.`,
+          verification:
+            workspace === "none"
+              ? `This work is already on the operator's branch, and nothing verifies it after you: the full run is yours.`
+              : verify
+                ? `Foreman runs \`${verify}\` in ${repository} before and after it merges, and undoes a merge that turns it red, so do not spend a full suite run repeating it: other agents share this machine.`
+                : `Foreman lands this branch on git's exit code alone: ${item.project} keeps no \`scripts/verify.sh\`. The full run is yours.`,
         }),
 
       diagnose: (item: Item, worktree: string, repository: string, intent: DiagnosticIntent) =>

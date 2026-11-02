@@ -275,6 +275,7 @@ const placedStep = (item: Item): string => {
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: new Map([["foreman", { _tag: "Runs", pipeline: STANDARD_PIPELINE, drawn: false }]]),
     placed: [],
+    dirty: new Set<string>(),
   }).asks.map(({ step }) => step);
   return steps.length === 0 ? "none" : steps.join(",");
 };
