@@ -3,7 +3,7 @@
 // foreman's `pipeline-belt`; this module only picks which one an edit calls and
 // keeps the editor's selection pointing at a block that still exists.
 import { Option, Schema as S } from "effect"
-import type { Pipeline, PipelineNode } from "foreman/pipeline"
+import { LANDINGS, type Pipeline, type PipelineNode } from "foreman/pipeline"
 import { addRoute, addSource, configure, INSERTABLE, insertOn, rejoin, remove, removeRoute, swapEnd } from "foreman/pipeline-belt"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 
@@ -20,6 +20,7 @@ export const BlockSetting = S.Union([
   S.Struct({ role: S.Literals(["author", "review"]), model: S.String, slots: S.UndefinedOr(S.Int) }),
   S.Struct({ route: S.Int, when: S.String }),
   S.Struct({ command: S.String }),
+  S.Struct({ how: S.Literals(LANDINGS) }),
 ])
 
 /** A change the operator makes to the draft, or to what the editor has picked. */
@@ -98,8 +99,14 @@ export const summaryOf = (node: PipelineNode): string => {
       return `${node.role} · ${node.model}${node.slots === undefined ? "" : ` ×${node.slots}`}`
     case "check":
       return node.command === "" ? "names no command" : `runs ${node.command}`
+    case "branch":
+      return "cuts foreman/<id> from trunk"
+    case "worktree":
+      return "a directory of its own"
     case "land":
-      return "merges the branch"
+      return node.how === "fast-forward" ? "fast-forwards the branch" : "merges the branch"
+    case "done":
+      return "completes the task"
     case "park":
       return "waits for you"
   }
