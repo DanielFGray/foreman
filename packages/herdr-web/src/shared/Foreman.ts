@@ -1,6 +1,6 @@
 // What foreman publishes about its fleet, the queue it ranks, and the commands
 // the page may ask the bridge to run. The reading is a copy of foreman's own
-// `Published` (src/published.ts there), version 4, holding the fields this
+// `Published` (src/published.ts there), version 5, holding the fields this
 // page reads. A queue row has the same shape as a published row. Foreman's
 // other modules are not browser-safe, so this copy stands in for them; the two
 // that are, `foreman/pipeline` and `foreman/pipeline-belt`, the page imports.
