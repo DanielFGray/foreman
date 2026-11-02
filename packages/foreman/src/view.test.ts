@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { Active, FleetState, Held, Provider } from "./dispatcher.ts";
 import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
-import { authoredBy, reviewedBy, type Item, type TaskStatus } from "./prog.ts";
+import { authoredBy, type Item, type TaskStatus } from "./prog.ts";
+import { reviewedBy } from "./lap.ts";
+import { reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import {
@@ -33,6 +35,8 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   createdAt: new Date(),
   updatedAt: new Date(0),
   definitionOfDone: undefined,
+  runs: [],
+  tip: undefined,
 });
 
 const ready = (id: string, labels: ReadonlyArray<string> = [], description = ""): Item => ({
@@ -49,6 +53,8 @@ const ready = (id: string, labels: ReadonlyArray<string> = [], description = "")
   definitionOfDone: undefined,
   type: "task",
   status: "open",
+  runs: [],
+  tip: undefined,
 });
 
 const worker = (task: string, state: WorkerState): Worker => ({
@@ -100,7 +106,10 @@ const state: FleetState = {
     ),
   ],
   review: [
-    active(task("ts-r1", "reviewing", ["by:flash", "review-by:pro"]), worker("ts-r1", "working")),
+    active(
+      withRuns(task("ts-r1", "reviewing", ["by:flash"]), [reviewRun("pro")]),
+      worker("ts-r1", "working"),
+    ),
   ],
   landed: [task("ts-l1", "done", [])],
   decisions: [active(task("ts-d1", "in_progress", ["by:flash"]), undefined)],
@@ -120,7 +129,9 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: task("ts-s1", "reviewing", ["by:flash", "failed-by:flash", "review-by:pro"]),
+      task: withRuns(task("ts-s1", "reviewing", ["by:flash", "failed-by:flash"]), [
+        reviewRun("pro"),
+      ]),
       paths: ["src/old.ts", "src/gone.ts"],
       modifyDelete: true,
     },
@@ -151,15 +162,15 @@ describe("decisionKind", () => {
 });
 
 describe("staleReview", () => {
-  test("is a review-by label on an open task with nobody behind it", () => {
-    const label = ["review-by:pro"];
-    expect(staleReview({ labels: label, status: "open" }, undefined)).toBe(true);
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "settled"))).toBe(true);
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "gone"))).toBe(true);
-    // A live review is not stale, and neither is a task with no label.
-    expect(staleReview({ labels: label, status: "open" }, worker("ts-1", "working"))).toBe(false);
-    expect(staleReview({ labels: label, status: "reviewing" }, undefined)).toBe(false);
-    expect(staleReview({ labels: [], status: "open" }, undefined)).toBe(false);
+  test("is an open review run on an open task with nobody behind it", () => {
+    const runs = [reviewRun("pro")];
+    expect(staleReview({ runs, status: "open" }, undefined)).toBe(true);
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "settled"))).toBe(true);
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "gone"))).toBe(true);
+    // A live review is not stale, and neither is a task with no open review run.
+    expect(staleReview({ runs, status: "open" }, worker("ts-1", "working"))).toBe(false);
+    expect(staleReview({ runs, status: "reviewing" }, undefined)).toBe(false);
+    expect(staleReview({ runs: [], status: "open" }, undefined)).toBe(false);
   });
 });
 
@@ -490,7 +501,15 @@ describe("asks", () => {
   const askState: FleetState = {
     ...state,
     asks: [
-      { task: task("ts-k1", "reviewing", ["by:cheap", "approved"]), step: "land", rung: "cheap" },
+      {
+        task: withRuns(
+          task("ts-k1", "reviewing", ["by:cheap"]),
+          [reviewRun("cheap", { ending: "approved", commit: "c1" })],
+          "c1",
+        ),
+        step: "land",
+        rung: "cheap",
+      },
     ],
   };
 

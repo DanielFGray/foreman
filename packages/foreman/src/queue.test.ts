@@ -25,6 +25,8 @@ const task = (
   definitionOfDone: undefined,
   type: "task",
   status: "open",
+  runs: [],
+  tip: undefined,
 });
 
 const bug = (id: string, project: string, priority: number, createdAt = now): Item =>
@@ -204,6 +206,8 @@ describe("queueFrom", () => {
       updatedAt: new Date(0),
       definitionOfDone: undefined,
       parent: "ep",
+      runs: [],
+      tip: undefined,
     });
     const epic = { ...child("ep", "in_progress"), type: "epic" as const, parent: undefined };
     const split = queueFrom({

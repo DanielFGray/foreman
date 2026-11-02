@@ -1,20 +1,52 @@
 import { Context, Effect, Layer, Option, Schema as S } from "effect";
-import { Tasks, TaskError, type Item, type LogEntry, type TaskEvent } from "tasks";
+import { SqlClient } from "effect/sql";
+import {
+  Tasks,
+  TaskError,
+  closeOpenRuns,
+  deleteOpenRunOf,
+  landAuthorRun,
+  openRun,
+  runsOf,
+  type AuthorEnding,
+  type Item as TaskItem,
+  type LogEntry,
+  type NewRun,
+  type ReviewEnding,
+  type Role,
+  type Run,
+  type TaskEvent,
+} from "tasks";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import type { Rung } from "./ladder.ts";
 
-export type { Item, Status as TaskStatus } from "tasks";
+export type { Status as TaskStatus } from "tasks";
 
 /**
- * The task store, and the run records foreman keeps on its tasks as labels.
+ * A task as foreman reads it: the store's item, the runs on it oldest first,
+ * and the tip of its branch.
+ *
+ * The tip is not in the store. The dispatcher's observation stamps it from git,
+ * because an approval is bound to the commit the reviewer read (`lap.ts`); a
+ * task read any other way has none.
+ */
+export interface Item extends TaskItem {
+  readonly runs: ReadonlyArray<Run>;
+  readonly tip: string | undefined;
+}
+
+/**
+ * The task store: foreman's labels on tasks, the runs on them, and which
+ * status move each of foreman's operations is.
  *
  * Everything foreman knows about work comes through this service. The store is
- * the `tasks` package, in process; this file owns what foreman's labels mean
- * and which status move each of foreman's operations is.
+ * the `tasks` package, in process. A write that goes with a status change
+ * (opening a run, closing it) shares one transaction with the change.
  */
 export class Prog extends Context.Service<Prog>()("Prog", {
   make: Effect.gen(function* () {
     const tasks = yield* Tasks;
+    const sql = yield* SqlClient.SqlClient;
 
     /** Runs a store call, naming the operation in its failure. */
     const as =
@@ -32,6 +64,30 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
     const send = (task: string, event: TaskEvent) =>
       tasks.send(task, event).pipe(as(`${event} ${task}`), Effect.asVoid);
+
+    /** Runs a write on runs and a status change as one transaction. */
+    const together = <A, E>(command: string, effect: Effect.Effect<A, E>) =>
+      sql.withTransaction(effect).pipe(as(command));
+
+    /** A run write, on the store's connection and so inside the caller's transaction. */
+    const onStore = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+      effect.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+
+    const endRuns = (
+      task: string,
+      endings: { readonly author?: AuthorEnding; readonly review?: ReviewEnding },
+    ) => together(`end runs of ${task}`, onStore(closeOpenRuns(task, endings)));
+
+    /** The tasks with their runs, oldest first. */
+    const withRuns = (
+      items: ReadonlyArray<TaskItem>,
+    ): Effect.Effect<ReadonlyArray<Item>, ProgError> =>
+      onStore(runsOf(items.map((item) => item.id))).pipe(
+        Effect.map((byTask) =>
+          items.map((item): Item => ({ ...item, runs: byTask.get(item.id) ?? [], tip: undefined })),
+        ),
+        as("read runs"),
+      );
 
     /** Rewrites a task's labels in one transaction, answering the ones it carried before. */
     const relabel = (
@@ -61,7 +117,16 @@ export class Prog extends Context.Service<Prog>()("Prog", {
      * deleted is residue to surface, while a store that would not answer says
      * nothing at all and must leave the workspace alone.
      */
-    const lookup = (task: string) => tasks.get(task).pipe(as(`show ${task}`));
+    const lookup = (task: string) =>
+      tasks.get(task).pipe(
+        as(`show ${task}`),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(Option.none<Item>()),
+            onSome: (item) => withRuns([item]).pipe(Effect.map(([found]) => Option.some(found!))),
+          }),
+        ),
+      );
 
     /** One task, failing when the store has no such task. */
     const show = (task: string) =>
@@ -77,7 +142,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
     /** The items that belong to one epic. */
     const children = (epic: string) =>
-      tasks.list({ parent: epic }).pipe(as(`list --parent ${epic}`));
+      tasks.list({ parent: epic }).pipe(as(`list --parent ${epic}`), Effect.flatMap(withRuns));
 
     /**
      * One project's tasks in a given status.
@@ -90,7 +155,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     const byStatus = (project: string, status: "in_progress" | "reviewing" | "done") =>
       tasks
         .list({ project, status, type: "task" })
-        .pipe(as(`list -p ${project} --status ${status}`));
+        .pipe(as(`list -p ${project} --status ${status}`), Effect.flatMap(withRuns));
 
     return {
       show,
@@ -106,7 +171,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
       /** Unblocked, unclaimed tasks, in every project or in one. */
       ready: (project: Option.Option<string>) =>
-        tasks.ready(Option.getOrUndefined(project)).pipe(as("ready")),
+        tasks.ready(Option.getOrUndefined(project)).pipe(as("ready"), Effect.flatMap(withRuns)),
 
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
@@ -121,6 +186,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       epicsOver: (over: ReadonlyArray<{ readonly parent: string | undefined }>) =>
         tasks.list({ status: "in_progress", type: "epic" }).pipe(
           as("list --status in_progress --type epic"),
+          Effect.flatMap(withRuns),
           Effect.flatMap((epics) =>
             Effect.forEach(
               epics.filter((epic) => over.some((task) => task.parent === epic.id)),
@@ -142,17 +208,20 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       landed: (project: string) => byStatus(project, "done"),
 
       /**
-       * Records which rung of the ladder did the work, so review can pick the next.
+       * Records which rung of the ladder did the work, so review can pick the
+       * next, and opens the author run.
        *
-       * Replaces earlier author and reviewer ownership. A task can be attempted
-       * more than once, and its next author starts a new lifecycle stage. The
-       * correction count goes too: it counts this author's rounds, not the task's.
+       * A task can be attempted more than once, and its next author starts a
+       * new lap (`lap.ts`): everything the last reviews said goes out of scope
+       * with no code that clears it. The correction count goes too: it counts
+       * this author's rounds, not the task's.
        */
-      attribute: (task: string, kind: string) =>
-        replaceKinds(
-          task,
-          [BY, REVIEW_BY, REVIEW_FAILED, APPROVED, SATISFIED, ROUNDS],
-          `${BY}:${kind}`,
+      attribute: (task: string, kind: string, run: NewRun) =>
+        together(
+          `attribute ${task}`,
+          replaceKinds(task, [BY, ROUNDS], `${BY}:${kind}`).pipe(
+            Effect.andThen(onStore(openRun(run))),
+          ),
         ),
 
       /**
@@ -165,39 +234,40 @@ export class Prog extends Context.Service<Prog>()("Prog", {
           `${ROUNDS}:${nextRound(labels)}`,
         ]).pipe(Effect.map(nextRound)),
 
-      /** Records that a reviewer, rather than the author, owns the live pane. */
-      assignReview: (task: string, kind: string) =>
-        replaceKinds(task, [REVIEW_BY], `${REVIEW_BY}:${kind}`),
+      /**
+       * Puts a reviewer on the task: opens its review run at the branch tip it
+       * reads, and closes the author's run `handed-off` at that same tip, in
+       * one transaction. The author's work is what the reviewer reads.
+       */
+      assignReview: (task: string, run: NewRun) =>
+        together(
+          `assign review ${task}`,
+          onStore(closeOpenRuns(task, { author: "handed-off", commit: run.commit })).pipe(
+            Effect.andThen(onStore(openRun(run))),
+          ),
+        ),
 
       /**
-       * Ends a review, and the verdict that went with it.
-       *
-       * The verdict says a reviewer read a diff and found it sound, so it stops
-       * being true the moment the review ends without landing — whichever way
-       * that happens: the reviewer sent the work back, never started, or the
-       * operator cleared it as stale. Leaving `approved` behind is the exact
-       * failure `awaitingLanding` reads: a task back in the queue still
-       * labelled as approved is a pre-approved branch waiting for its next
-       * author, and a reviewer can approve and then return work in the same
-       * turn.
+       * Ends the task's open review run with a reason the reviewer did not
+       * state itself; a verdict the reviewer wrote stands.
        */
-      clearReview: (task: string) =>
-        replaceKinds(task, [REVIEW_BY, REVIEW_FAILED, APPROVED, SATISFIED]),
+      endReview: (task: string, ending: ReviewEnding) => endRuns(task, { review: ending }),
+
+      /** Closes the task's open runs that have an ending here, keeping the endings agents wrote. */
+      endRuns,
 
       /**
-       * Ends a review that gave no verdict, leaving the task in `reviewing` for
-       * the next reviewer. Touches only `review-by`: `satisfied` is the
-       * author's claim and the next reviewer needs it, and the reviewers that
-       * already failed stay recorded.
+       * Takes back a dispatch whose agent never started: deletes the open run
+       * of that role, and for an author returns the task to the queue in the
+       * same transaction. The agent never ran, so the run never happened.
        */
-      endReview: (task: string) => replaceKinds(task, [REVIEW_BY]),
-
-      /**
-       * Ends a review whose reviewer stopped without a verdict, and records that
-       * rung so the next reviewer is chosen above it.
-       */
-      failReview: (task: string, rung: string) =>
-        replaceKinds(task, [REVIEW_BY], `${REVIEW_FAILED}:${rung}`),
+      abandon: (task: string, role: Role) =>
+        together(
+          `abandon ${role} of ${task}`,
+          onStore(deleteOpenRunOf(task, role)).pipe(
+            Effect.andThen(role === "author" ? tasks.send(task, "open") : Effect.void),
+          ),
+        ),
 
       /** Parks a task in the operator's column, whatever the ladder would say. */
       parkForOperator: (task: string) =>
@@ -271,27 +341,20 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       claim: (task: string) => send(task, "start"),
 
       /**
-       * Returns a task to the queue, and with it everything the last review
-       * said about it.
+       * Returns a task to the queue and closes its open runs in one
+       * transaction: the author's with `ending`, a reviewer's `released`.
        *
-       * `approved` says a reviewer read a diff and found it sound, so it stops
-       * being true the moment the task is handed back for someone to change
-       * that diff — and `awaitingLanding` reads it with no other corroboration.
-       * Here it holds for every path that requeues a task, including one that
-       * never reaches an author.
-       *
-       * `review-by:*` goes for a sharper reason: left behind, it is read as
-       * evidence of something that never happened. A reviewer that is over and
-       * a task that is open is exactly the shape a rejection leaves, so the
-       * settle loop takes it for one — climbing a second rung and logging that
-       * the reviewer sent work back, on a task whose reviewer approved it and
-       * whose landing failed on the machine. The label is the only record that
-       * a review was dispatched, so whatever ends the review must be what
-       * clears it.
+       * A reviewer that is over and a task that is open is exactly the shape a
+       * rejection leaves, so a review run left open on a requeued task would
+       * make the settle loop climb a rung for a rejection nobody gave. Closed,
+       * the run is not the task's reviewer.
        */
-      release: (task: string) =>
-        replaceKinds(task, [APPROVED, REVIEW_BY, REVIEW_FAILED, SATISFIED]).pipe(
-          Effect.andThen(send(task, "open")),
+      release: (task: string, ending: AuthorEnding = "released") =>
+        together(
+          `release ${task}`,
+          onStore(closeOpenRuns(task, { author: ending, review: "released" })).pipe(
+            Effect.andThen(tasks.send(task, "open")),
+          ),
         ),
 
       /**
@@ -300,12 +363,10 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * they are any good, which is the question a reviewer answers. From
        * `reviewing` the ordinary loop takes over.
        */
-      submit: (task: string) =>
-        replaceKinds(task, [APPROVED, SATISFIED]).pipe(Effect.andThen(send(task, "submit"))),
+      submit: (task: string) => send(task, "submit"),
 
-      /** Moves already-claimed work to formal review, and with it any stale verdict. */
-      review: (task: string) =>
-        replaceKinds(task, [APPROVED, SATISFIED]).pipe(Effect.andThen(send(task, "review"))),
+      /** Moves already-claimed work to formal review. */
+      review: (task: string) => send(task, "review"),
 
       /** Appends to the task's audit trail. Also counts as activity. */
       log: (task: string, message: string) => tasks.log(task, message).pipe(as(`log ${task}`)),
@@ -313,12 +374,25 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       children,
 
       /**
-       * Marks work complete after foreman has landed its branch. Done first, so
-       * a task that cannot be completed fails on `done` itself. A wall label
-       * left on a done task is inert: nothing dispatches it.
+       * Marks work complete after foreman has landed its branch, and closes the
+       * task's runs in the same transaction: the reviewer's keeps its verdict,
+       * and the lap's author run becomes `committed` (`answered` for research).
+       * Done first, so a task that cannot be completed fails on `done` itself.
+       * A wall label left on a done task is inert: nothing dispatches it.
        */
-      complete: (task: string) =>
-        send(task, "done").pipe(Effect.andThen(replaceKinds(task, [WALLED]))),
+      complete: (task: Pick<Item, "id" | "labels">) =>
+        together(
+          `done ${task.id}`,
+          tasks
+            .send(task.id, "done")
+            .pipe(
+              Effect.andThen(
+                onStore(closeOpenRuns(task.id, { author: "released", review: "released" })),
+              ),
+              Effect.andThen(onStore(landAuthorRun(task.id, isResearch(task)))),
+              Effect.andThen(replaceKinds(task.id, [WALLED])),
+            ),
+        ),
     } as const;
   }),
 }) {
@@ -342,15 +416,6 @@ export interface TaskDetail extends Item {
 export const authoredBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
   valuesOfKind(item.labels, BY)[0];
 
-/** Which reviewer currently owns a reviewing task, if one was dispatched. */
-export const reviewedBy = (item: { readonly labels: ReadonlyArray<string> }): string | undefined =>
-  valuesOfKind(item.labels, REVIEW_BY)[0];
-
-/** The rungs whose reviewers stopped on this task without a verdict. */
-export const reviewFailedBy = (item: {
-  readonly labels: ReadonlyArray<string>;
-}): ReadonlyArray<string> => valuesOfKind(item.labels, REVIEW_FAILED);
-
 /**
  * Stable audit entry for one agent attempt on a task.
  *
@@ -362,30 +427,6 @@ export const reviewFailedBy = (item: {
  */
 export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): string =>
   `foreman: ${role} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`;
-
-/** Whether the reviewer accepted the branch for mechanical landing. */
-export const isApproved = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(APPROVED);
-
-/**
- * The author's claim that the trunk already does what the task asks.
- *
- * A backlog outlives the code it describes: work gets done under another
- * task's branch, or by hand, and the entry for it stays open. An author sent
- * to one of those has nothing to write, and every ending it can reach says
- * something false. Committing anything at all fabricates work; stopping is
- * read as a crash, which costs a rung and dispatches the same discovery again
- * at a more expensive model, forever.
- *
- * So the finding is a claim the author records, and the branch it hands over
- * is legitimately empty. It is a claim and not a verdict: "it is already done"
- * is exactly what a model too weak for the task would say to escape it, so a
- * reviewer confirms it against the trunk like any other diff, and only its
- * `approved` closes the task. It is cleared wherever `approved` is, for the
- * same reason — both describe a diff that a requeue has invalidated.
- */
-export const isSatisfied = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(SATISFIED);
 
 /**
  * Whether a task's deliverable is a report rather than code.
@@ -495,14 +536,6 @@ const attemptFor = (label: string, rung: string): number | undefined => {
 
 /** Kind of the label naming the rung that authored a task's current branch. */
 export const BY = "by";
-export const REVIEW_BY = "review-by";
-
-/**
- * Kind of the label naming a rung whose reviewer stopped without a verdict, one
- * per rung. The next review is chosen above every one of them. They go with the
- * author, because they describe this branch's reviews, not the task's.
- */
-export const REVIEW_FAILED = "review-failed-by";
 
 /**
  * How big a slice is, as the coordinator judged it when filing: `size:1` one
@@ -539,10 +572,6 @@ export const NEEDS_YOU = "needs-you";
 
 /** Prefix of the label counting a rung's unfinished attempts: `attempt:<rung>:<n>`. */
 export const ATTEMPT = "attempt";
-export const APPROVED = "approved";
-
-/** The label carrying an author's claim that the trunk already satisfies a task. */
-export const SATISFIED = "satisfied";
 
 /**
  * The label marking a task whose deliverable is a report, not code.

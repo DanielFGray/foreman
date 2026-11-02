@@ -215,3 +215,37 @@ interface RunRow {
   readonly rounds: number | null;
   readonly closed_at: string | null;
 }
+
+/**
+ * Closes every open run of a task that has an ending for its role, keeping the
+ * ending an agent wrote. The author run takes the branch tip as `commit` when
+ * one is given. A role with no ending is left open.
+ */
+export const closeOpenRuns = (
+  task: string,
+  endings: {
+    readonly author?: AuthorEnding;
+    readonly review?: ReviewEnding;
+    readonly commit?: string;
+  },
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const open = yield* sql<{ id: number; work: Work }>`SELECT id, work FROM runs
+      WHERE task = ${task} AND closed_at IS NULL ORDER BY id`;
+    for (const { id, work } of open) {
+      if (work === "review") {
+        if (endings.review !== undefined) yield* closeRun(id, { ending: endings.review });
+      } else if (endings.author !== undefined) {
+        yield* closeRun(id, { ending: endings.author, commit: endings.commit });
+      }
+    }
+  });
+
+/** Deletes the task's open run of this role: the agent never started, so the run never happened. */
+export const deleteOpenRunOf = (task: string, role: Role) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    yield* sql`DELETE FROM runs WHERE task = ${task} AND closed_at IS NULL
+      AND (work = 'review') = ${role === "review" ? 1 : 0}`;
+  });

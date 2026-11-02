@@ -5,7 +5,23 @@ import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import { Prog } from "./prog.ts";
-import { agentLog, attemptsOf, authoredBy, isApproved, reviewedBy, type Item } from "./prog.ts";
+import { agentLog, attemptsOf, authoredBy, type Item } from "./prog.ts";
+import { isApproved, reviewedBy } from "./lap.ts";
+import { newRunFor } from "./run-record.ts";
+import { reviewRun, withRuns } from "./task-fixture.ts";
+
+/** The run row a dispatch of `role` on `rung` opens for the task. */
+const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?: string) =>
+  newRunFor({
+    task: { id, title: id, project: "foreman", labels: [] },
+    branch: `foreman/${id}`,
+    harness: "test",
+    model: undefined,
+    rung,
+    provider: undefined,
+    role,
+    commit,
+  });
 
 const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
   Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
@@ -24,11 +40,17 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   createdAt: new Date(),
   updatedAt: new Date(0),
   definitionOfDone: undefined,
+  runs: [],
+  tip: undefined,
 });
 
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
-    const task = item(["by:opencode", "review-by:claude", "approved"]);
+    const task = withRuns(
+      item(["by:opencode"]),
+      [reviewRun("claude", { ending: "approved", commit: "c1" })],
+      "c1",
+    );
 
     expect(authoredBy(task)).toBe("opencode");
     expect(reviewedBy(task)).toBe("claude");
@@ -114,21 +136,23 @@ describe("Prog against a scratch store", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  // A reviewer can approve and then return the work in one turn, and the
-  // settle loop's ReviewReturned path clears the review through this method.
-  // The verdict must go with it, or the task returns to the queue pre-approved
-  // and the next author's handoff lands without anyone having read the new
-  // diff.
-  test("clears the verdict alongside reviewer ownership", async () => {
-    const id = (
-      await Bun.$`prog add "returned approval" -p foreman -l approved -l review-by-x`.text()
-    ).trim();
+  // A reviewer can approve and then return the work in one turn. Releasing the
+  // task closes the review run, so no open run outlives the review that
+  // opened it and the requeued task is not read as still under review.
+  test("release closes the review run and requeues the task", async () => {
+    const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
+    await run((prog) => prog.attribute(id, "cheap", dispatchOf(id, "author", "cheap")));
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
-    await run((prog) => prog.clearReview(id));
+    await run((prog) => prog.release(id));
     const after = await run((prog) => prog.show(id));
 
-    expect(after.labels).not.toContain("approved");
-    expect(after.labels).not.toContain("review-by:x");
+    expect(after.status).toBe("open");
+    expect(after.runs.map((r) => [r.role, r.open, r.ending])).toEqual([
+      ["author", false, "handed-off"],
+      ["review", false, "released"],
+    ]);
   });
 
   // One status the schema does not name fails the decode of the whole list,
@@ -151,36 +175,29 @@ describe("Prog against a scratch store", () => {
 
     expect(await run((prog) => prog.countRound(id))).toBe(1);
     expect(await run((prog) => prog.countRound(id))).toBe(2);
-    await run((prog) => prog.attribute(id, "cheap"));
+    await run((prog) => prog.attribute(id, "cheap", dispatchOf(id, "author", "cheap")));
 
     const after = await run((prog) => prog.show(id));
     expect(after.labels).toEqual(["by:cheap"]);
-  });
-
-  test("leaves a task that never carried the labels untouched", async () => {
-    const id = (await Bun.$`prog add "plain return" -p foreman`.text()).trim();
-
-    await run((prog) => prog.clearReview(id));
-    const after = await run((prog) => prog.show(id));
-
-    expect(after.labels).toEqual([]);
+    expect(after.runs).toMatchObject([{ role: "author", rung: "cheap", open: true }]);
   });
 
   test("names the operation a store failure came from", async () => {
-    const error = await run((prog) => Effect.flip(prog.complete("ts-does-not-exist")));
+    const error = await run((prog) =>
+      Effect.flip(prog.complete({ id: "ts-does-not-exist", labels: [] })),
+    );
 
     expect(error.command).toBe("done ts-does-not-exist");
     expect(error.detail).toContain("not found");
   });
 
   test("submits a done task with an unread branch for review", async () => {
-    const id = (await Bun.$`prog add "unread branch" -p foreman -l approved`.text()).trim();
+    const id = (await Bun.$`prog add "unread branch" -p foreman`.text()).trim();
     await Bun.$`prog done ${id}`.quiet();
 
     await run((prog) => prog.submit(id));
     const after = await run((prog) => prog.show(id));
 
     expect(after.status).toBe("reviewing");
-    expect(after.labels).not.toContain("approved");
   });
 });
