@@ -139,6 +139,8 @@ const state: FleetState = {
   held: [held("fibrae", "dirty", "uncommitted changes to tracked files")],
   policy: DEFAULT_POLICY,
   policyError: undefined,
+  pipelines: new Map(),
+  placed: [],
   scopes: new Map(),
   asks: [],
   observedAt: undefined,

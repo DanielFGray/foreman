@@ -3,6 +3,7 @@ import { handedOff, reviewRun } from "./task-fixture.ts";
 import {
   type Facts,
   matches,
+  nextAgent,
   type Pipeline,
   type PipelineNode,
   place,
@@ -195,6 +196,25 @@ describe("placement on a drawn pipeline", () => {
       ),
     };
     expect(place(narrow, facts({ size: 3 }))._tag).toBe("Outside");
+  });
+});
+
+describe("the block an agent started by hand runs at", () => {
+  test("is the first block of its role on the route", () => {
+    expect(nextAgent(STANDARD_PIPELINE, facts(), "author")?.id).toBe("author");
+    // A review started before the author handed off still runs at the review
+    // block: the blocks before it count as passed.
+    expect(nextAgent(STANDARD_PIPELINE, facts(), "review")?.id).toBe("review");
+  });
+
+  test("is nothing when the route has no such block", () => {
+    const parked: Pipeline = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "operator" },
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(nextAgent(parked, facts(), "author")).toBeUndefined();
   });
 });
 

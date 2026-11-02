@@ -149,6 +149,7 @@ describe("the readers against a scratch store", () => {
         rung,
         provider: undefined,
         role,
+        node: role,
         commit,
       });
     const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>

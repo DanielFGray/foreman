@@ -3,7 +3,8 @@ import { BunServices } from "@effect/platform-bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
+import { Console, Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
+import { Command } from "effect/cli";
 import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, FleetError, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
@@ -16,6 +17,8 @@ import { Repository, type Branch, type Landing } from "./repository.ts";
 import type { Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, handedOff, reviewRun, withRuns } from "./task-fixture.ts";
+import { pipelineCommand } from "./pipeline-command.ts";
+import { scratchStore } from "./scratch-store.ts";
 
 const now = new Date();
 
@@ -414,10 +417,16 @@ const usePolicy = (policy: object) => {
 };
 beforeEach(() => usePolicy(ALLOWED));
 const operatorPolicy = process.env["FOREMAN_POLICY"];
+// A pipelines file that does not exist: every project runs the standard
+// pipeline, and the operator's own drawings stay out of the tests.
+const operatorPipelines = process.env["FOREMAN_PIPELINES"];
+process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
 afterAll(() => {
   rmSync(policies, { recursive: true, force: true });
   if (operatorPolicy === undefined) delete process.env["FOREMAN_POLICY"];
   else process.env["FOREMAN_POLICY"] = operatorPolicy;
+  if (operatorPipelines === undefined) delete process.env["FOREMAN_PIPELINES"];
+  else process.env["FOREMAN_PIPELINES"] = operatorPipelines;
 });
 
 const layerFor = (world: World) =>
@@ -1667,6 +1676,45 @@ describe("a reviewer that stops without a verdict", () => {
     const task = world.tasks.get("ts-last");
     expect(task?.status).toBe("open");
     expect(task?.labels).toEqual(["needs-you"]);
+    expect(world.spawned).toEqual([]);
+  });
+});
+
+describe("foreman pipeline place", () => {
+  test("prints where each task stands, and writes nothing", async () => {
+    const queued = item("ts-queued", "open", []);
+    const approved = withRuns(
+      item("ts-approved", "reviewing", [], "test", [handedOff("cheap", "c1")]),
+      [reviewRun("cheap", { ending: "approved", commit: "c1" })],
+      "c1",
+    );
+    const world = new World(queued, approved);
+    world.branches.set(`foreman/${approved.id}`, {
+      branch: `foreman/${approved.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    const store = scratchStore();
+    const printed: Array<string> = [];
+
+    await Effect.runPromise(
+      Command.runWith(pipelineCommand(layerFor(world)), { version: "test" })(["place"]).pipe(
+        Effect.provideService(Console.Console, {
+          ...globalThis.console,
+          log: (...args: ReadonlyArray<string>) => printed.push(args.join(" ")),
+        }),
+        Effect.provide(Layer.merge(BunServices.layer, store.layer)),
+        Effect.ensuring(Effect.sync(store.cleanup)),
+      ),
+    );
+
+    expect(printed).toEqual([
+      "ts-queued  test  at author waiting  gates: start (author)  ahead: 2  ts-queued",
+      "ts-approved  test  at land waiting  gates: land-gate (land)  ahead: 0  ts-approved",
+    ]);
+    expect(world.writes).toEqual([]);
     expect(world.spawned).toEqual([]);
   });
 });

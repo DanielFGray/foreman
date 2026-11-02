@@ -93,6 +93,9 @@ export const planOf = (
         rung: rung ?? UNKNOWN,
         provider: known === undefined ? undefined : providerOf(known),
         role,
+        // Old labels predate drawn pipelines: every task ran the standard
+        // pipeline, whose agent blocks are named after their roles.
+        node: role,
         commit,
       }),
       rung,

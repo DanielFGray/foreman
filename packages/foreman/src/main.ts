@@ -133,7 +133,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(showCommand, storeServices),
     policyCommand,
     cutoverCommand,
-    Command.provide(pipelineCommand, store),
+    Command.provide(pipelineCommand(services), store),
     ...subcommands(services),
   ]),
 );

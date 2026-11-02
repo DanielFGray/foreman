@@ -183,12 +183,6 @@ export const permit = (
   return mode === "ask" ? { _tag: "Ask" } : { _tag: "Denied" };
 };
 
-/** The step a dispatch of an author on this task is: a first try or a retry. */
-export const authorStep = (labels: ReadonlyArray<string>): Step =>
-  labels.some((label) => label.startsWith("failed-by:") || label.startsWith("attempt:"))
-    ? "climb"
-    : "author";
-
 /** Each grant's scope, mapped to the unfinished tasks at or under it. */
 export type Scopes = ReadonlyMap<string, ReadonlySet<string>>;
 

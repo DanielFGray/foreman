@@ -1,6 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
-import { Console, Effect, FileSystem, Schema as S } from "effect";
-import { Pipeline, problemsOf, toMermaid } from "./pipeline.ts";
+import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
+import { Dispatcher } from "./dispatcher.ts";
+import { Pipeline, type Placement, problemsOf, toMermaid } from "./pipeline.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
 import { readLadder } from "./registry.ts";
 
@@ -67,10 +68,56 @@ const clear = Command.make("clear", { project }, ({ project }) =>
   }),
 ).pipe(Command.withDescription("Drop a project's own pipeline, so it runs the standard one"));
 
-export const pipelineCommand = Command.make("pipeline", {}).pipe(
-  Command.withDescription(`Read, check and change each project's pipeline (${pipelinesPath()})`),
-  Command.withSubcommands([show, check, set, clear]),
+const place = Command.make(
+  "place",
+  {
+    project: Flag.String("project").pipe(
+      Flag.optional,
+      Flag.withDescription("Only the tasks of this project"),
+    ),
+  },
+  ({ project }) =>
+    Effect.gen(function* () {
+      const dispatcher = yield* Dispatcher;
+      yield* dispatcher.read;
+      const { pipelines, placed } = yield* SubscriptionRef.get(dispatcher.state);
+      const shown = (name: string) =>
+        Option.match(project, { onNone: () => true, onSome: (only) => only === name });
+      for (const [name, found] of pipelines) {
+        if (!shown(name) || found._tag === "Runs") continue;
+        yield* Console.error(`${name} takes no step:`);
+        for (const problem of found.problems) yield* Console.error(`  ${problem}`);
+      }
+      const rows = placed.filter(({ task }) => shown(task.project));
+      if (rows.length === 0) return yield* Console.log("no open, claimed or reviewing task");
+      for (const { task, placement } of rows) {
+        yield* Console.log(`${task.id}  ${task.project}  ${whereIs(placement)}  ${task.title}`);
+      }
+    }),
+).pipe(
+  Command.withDescription(
+    "Print where each open, claimed and reviewing task stands in its pipeline: block, state, gates and work blocks left. Dispatches nothing",
+  ),
 );
+
+/**
+ * `foreman pipeline`. `place` reads the dispatcher's view of the world, so it
+ * takes the dispatcher's services; the others read only the pipelines file and
+ * the ladder.
+ */
+export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
+  Command.make("pipeline", {}).pipe(
+    Command.withDescription(`Read, check and change each project's pipeline (${pipelinesPath()})`),
+    Command.withSubcommands([show, check, set, clear, Command.provide(place, services)]),
+  );
+
+/** A placement in words: the block, its state, the gates before it, and the work blocks left. */
+const whereIs = (placement: Placement): string =>
+  placement._tag === "Outside"
+    ? "outside the pipeline"
+    : placement._tag === "Parked"
+      ? `parked at ${placement.node}`
+      : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
 
 export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError", {
   detail: S.String,

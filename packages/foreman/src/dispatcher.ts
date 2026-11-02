@@ -31,7 +31,6 @@ import {
 import { Prompts } from "./prompt.ts";
 import {
   admit,
-  authorStep,
   expire,
   modeOf,
   permit,
@@ -54,7 +53,6 @@ import {
   authorFor,
   dispatchable as dispatchableRungs,
   rankOf,
-  type Choice,
   highestFailure,
   providersOf,
   providerOf,
@@ -62,10 +60,17 @@ import {
   type Rung,
   rungSpent,
   rungsOn,
-  rungsOnAccounts,
-  type Ladder,
   topOf,
 } from "./ladder.ts";
+import { authorWalls, rungAt } from "./agent-rung.ts";
+import { nextAgent, place, type AgentNode, type Pipeline, type Placement } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
+import {
+  pipelinesPath,
+  projectPipeline,
+  readPipelines,
+  type ProjectPipeline,
+} from "./pipeline-file.ts";
 import {
   agentLog,
   attemptsOf,
@@ -78,7 +83,6 @@ import {
   needsYou,
   ONBOARD,
   Prog,
-  walledBy,
 } from "./prog.ts";
 import {
   approvedCommit,
@@ -91,7 +95,7 @@ import {
 } from "./lap.ts";
 import { hitWall } from "./harness.ts";
 import { newRunFor } from "./run-record.ts";
-import type { AuthorEnding, Role, Run } from "tasks";
+import type { AuthorEnding, Run } from "tasks";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
@@ -270,11 +274,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.catchCause((cause) => Effect.logWarning("policy watcher stopped", cause)),
     );
 
-    /** Records that a grant took on a task, once the step it allowed has run. */
-    const admitted = (given: Permit, task: string) =>
-      given._tag === "Granted" && given.admits
-        ? writePolicy((policy) => admit(policy, given.scope, task))
-        : Effect.void;
+    /** Records that each grant among `permits` took on a task, once the step they allowed has run. */
+    const admitted = (permits: ReadonlyArray<Permit>, task: string) => {
+      const grants = permits.flatMap((given) =>
+        given._tag === "Granted" && given.admits ? [given.scope] : [],
+      );
+      return grants.length === 0
+        ? Effect.void
+        : writePolicy((policy) => grants.reduce((next, scope) => admit(next, scope, task), policy));
+    };
 
     /**
      * Records a dispatch failure against its task, and says so in the log once
@@ -371,11 +379,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * the world without it moving, and a step nobody allowed is not foreman's
      * to take.
      *
-     * Order matters. Reviews are dispatched before new work because a task
-     * waiting to be reviewed is nearly finished and is blocking whatever
-     * depends on it, whereas an unclaimed task has not started costing
-     * anything yet. Filling slots with new work while reviews pile up is how a
-     * queue grows a permanent tail of almost-done tasks.
+     * Order matters. The plan takes the tasks nearest the end of their
+     * pipeline first (fewest work blocks left), then in queue order. In the
+     * standard pipeline that dispatches reviews before new work: a task waiting
+     * to be reviewed is nearly finished and is blocking whatever depends on it,
+     * whereas an unclaimed task has not started costing anything yet. Filling
+     * slots with new work while reviews pile up is how a queue grows a
+     * permanent tail of almost-done tasks.
      */
     const tick = Effect.gen(function* () {
       const { current, providers } = yield* read;
@@ -551,6 +561,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
         Effect.provideContext(platform),
       );
+      // Each project's pipeline, read with the policy and checked against the
+      // ladder on every pass: a ladder edit can make a drawing invalid.
+      const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
+      const rungs = settings.ladder.map((rung) => rung.name);
+      const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
+        projects.map((project) => [project.name, projectPipeline(drawings, project.name, rungs)]),
+      );
       const scopes: Scopes = new Map(
         yield* Effect.forEach(policy.grants, (grant) =>
           prog.lookup(grant.scope).pipe(
@@ -608,6 +625,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         queue: queue.map(withTip),
         policy,
         policyError,
+        pipelines,
         scopes,
         branches,
       } as const;
@@ -641,6 +659,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         queue,
         policy,
         policyError,
+        pipelines,
         scopes,
         branches,
       } = observation;
@@ -722,13 +741,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           !orphaned.has(entry.task),
       );
 
-      // Which rungs have no allowance left. An author's rung is chosen from
-      // what the task records as having failed it, so this is read before the
-      // queue is split: a spent account changes which rung a task gets, and at
-      // the top of the ladder whether it can be dispatched at all.
+      // Which rungs have no allowance left. A spent account changes which rung
+      // a task gets, and at the top of the ladder whether it can be dispatched
+      // at all.
       const walled = walledRungs(providers);
-      const choiceFor = (task: { readonly labels: ReadonlyArray<string> }): Choice =>
-        authorFor(settings.ladder, failuresOf(task), authorWalls(settings.ladder, task, walled));
 
       // Work waiting on the operator is ready by every measure prog knows and
       // still must not be dispatched: it is waiting on a decision no agent can
@@ -762,36 +778,81 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const claimedActive = active(claimed);
       const reviewingActive = active(reviewing);
 
-      // Which tasks their next agent could not be paid for. A task's rung
-      // depends on the column it is in — an author's is the cheapest available
-      // rung above its failures, a review's is the rung above whoever wrote it
-      // — and the columns are disjoint, so one set of task ids says it for both
-      // without ambiguity.
+      // Where each task stands in its project's pipeline. A task in a stopped
+      // project is placed nowhere, and takes no step.
+      const placementOf = (task: Item): Placement => {
+        const pipeline = runningPipeline(pipelines, task.project);
+        return pipeline === undefined ? { _tag: "Outside" } : place(pipeline, factsOf(task));
+      };
+      const placed = [...ordered, ...yours, ...claimed, ...reviewing].map((task) => ({
+        task,
+        placement: placementOf(task),
+      }));
+
+      // A task waiting at an agent block runs on the rung that block takes.
+      // The dispatch resolves the rung the same way from the same reading, so
+      // the plan cannot pass over a task the dispatch would have found an
+      // agent for, nor the reverse. A rung on a spent account holds the task
+      // back; a block with no rung left for it parks it.
       const reviews = reviewable(reviewingActive, committed);
-      const outOfQuota = new Set([
-        ...ordered.filter((task) => choiceFor(task)._tag === "Waiting").map((task) => task.id),
-        // A review is gated only when no rung at or above the reviewer's can be
-        // paid for. `reviewerFor` answers that by returning nothing, and the
-        // dispatch resolves the rung the same way from the same reading, so the
-        // gate cannot pass over a task the dispatch would have found an agent
-        // for, nor the reverse.
-        ...reviews.review
-          .filter(({ task }) => reviewerForTask(task, walled) === undefined)
-          .map(({ task }) => task.id),
-      ]);
+      const candidates: ReadonlyArray<Active> = [
+        ...reviews.review,
+        ...ordered.map((task) => ({ task, worker: undefined, kind: undefined })),
+      ];
+      const rungs = candidates.flatMap(({ task, worker }) => {
+        const placement = placementOf(task);
+        return placement._tag === "At" &&
+          placement.state === "waiting" &&
+          placement.node.kind === "agent"
+          ? [{ task, worker, rung: rungAt(settings.ladder, placement.node, task, walled) }]
+          : [];
+      });
+      const outOfQuota = new Set(
+        rungs.filter(({ rung }) => rung._tag === "Waiting").map(({ task }) => task.id),
+      );
+      const parks: ReadonlyArray<Park> = [
+        ...candidates.flatMap(({ task, worker }) => {
+          const placement = placementOf(task);
+          return placement._tag === "Parked"
+            ? [{ task, worker, why: `${task.project}'s pipeline parks it at ${placement.node}.` }]
+            : [];
+        }),
+        ...rungs.flatMap(({ task, worker, rung }) =>
+          rung._tag === "Exhausted"
+            ? [
+                {
+                  task,
+                  worker,
+                  why: "the block it waits at has no rung left that has not failed it.",
+                },
+              ]
+            : [],
+        ),
+      ].filter(
+        // A park is a step: a paused project takes none, and a live pane is
+        // still finishing its turn.
+        ({ task, worker }) =>
+          !held.some((entry) => entry.project === task.project) &&
+          (worker === undefined || !isBusy(worker)),
+      );
+      const parked = new Set(parks.map(({ task }) => task.id));
 
       // Planned here, from the reading the gates read, so the asks a reading
       // shows and the dispatches fill makes are the same plan by construction.
-      const gates: DispatchState = {
-        workers,
-        outOfQuota,
-        queue: ordered,
-        held,
-        review: reviews.review,
-        policy,
-        scopes,
-      };
-      const plan = dispatchesFor(gates, failedIds, new Set(stale.map((row) => row.task.id)));
+      const plan = planFrom(
+        {
+          workers,
+          outOfQuota,
+          queue: ordered.filter((task) => !parked.has(task.id)),
+          held,
+          review: reviews.review.filter(({ task }) => !parked.has(task.id)),
+          policy,
+          scopes,
+          pipelines,
+        },
+        failedIds,
+        new Set(stale.map((row) => row.task.id)),
+      );
 
       return {
         projects,
@@ -806,7 +867,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         working: claimedActive.filter(isFleetWork),
         ...reviews,
         dispatches: plan.dispatches,
-        asks: [...plan.asks, ...landAsks(gates)],
+        lands: plan.lands,
+        parks,
+        asks: plan.asks,
+        pipelines,
+        placed,
         committed,
         prunable,
         stale,
@@ -945,8 +1010,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         } satisfies Interpretation;
       });
 
-    /** The run row for an agent about to start on this task. */
-    const runFor = (task: Item, rung: Rung, role: Role, commit?: string) =>
+    /** The run row for an agent about to start on this task at `block`. */
+    const runFor = (task: Item, rung: Rung, block: AgentNode, commit?: string) =>
       newRunFor({
         task,
         branch: labelFor(task.id),
@@ -954,7 +1019,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         model: rung.model,
         rung: rung.name,
         provider: providerOf(rung),
-        role,
+        role: block.role,
+        node: block.id,
         commit,
       });
 
@@ -1047,21 +1113,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
       const walledNow = walledRungs(current.providers);
 
+      // A stopped project's tasks stay as they are: its pipeline cannot say
+      // which block they stand at, so no ending of theirs can be classified.
+      const pipelineOf = (task: Item) => runningPipeline(current.pipelines, task.project);
+
       // Landing writes to the operator's checkout, so it waits for the policy
-      // like every step that spends: an approved branch stays approved.
+      // like every step that spends: an approved branch stays approved. The
+      // plan holds only the landings the policy permits.
       yield* Effect.forEach(
-        current.review.filter(({ task, worker }) => readyToLand(task, worker)),
-        ({ task, worker }) => {
-          const given = permit(current.policy, current.scopes, task, "land");
-          switch (given._tag) {
-            case "Denied":
-            case "Ask":
-              return Effect.void;
-            case "Default":
-            case "Granted":
-              return land(task, worker).pipe(Effect.tap(() => admitted(given, task.id)));
-          }
-        },
+        current.lands,
+        ({ task, worker, permits }) =>
+          land(task, worker).pipe(Effect.tap(() => admitted(permits, task.id))),
         { discard: true },
       );
 
@@ -1070,7 +1132,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // to read an empty diff. So the task goes back to the queue, which is
       // where unfinished work belongs.
       yield* Effect.forEach(
-        current.unbacked,
+        current.unbacked.filter(({ task }) => pipelineOf(task) !== undefined),
         ({ task, kind }) =>
           Effect.gen(function* () {
             yield* unfinished(
@@ -1083,9 +1145,34 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         { discard: true },
       );
 
+      // An author that handed off committed work has passed its block, and its
+      // run is the record of that: closed `handed-off` at the commit it left.
+      // Until then the task stands at the author block, ended, and no reviewer
+      // is placed. A live pane is still finishing its turn, so its run waits.
+      yield* Effect.forEach(
+        current.review.filter(({ task, worker }) => {
+          const pipeline = pipelineOf(task);
+          return (
+            pipeline !== undefined &&
+            (worker === undefined || !isBusy(worker)) &&
+            endedAtAuthor(pipeline, task)
+          );
+        }),
+        ({ task }) =>
+          prog
+            .endRuns(task.id, { author: "handed-off", commit: task.tip })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`closing the handoff of ${task.id} failed: ${error}`),
+              ),
+            ),
+        { discard: true },
+      );
+
       yield* Effect.forEach(
         current.owned.filter(
           ({ task, worker }) =>
+            pipelineOf(task) !== undefined &&
             diagnosticIntent(task) !== undefined &&
             worker.state !== "working" &&
             worker.state !== "blocked",
@@ -1095,7 +1182,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             yield* prog.release(task.id);
             yield* fleet.stop(worker, "author");
             yield* prog.clearDiagnostic(task.id);
-            yield* dispatchAuthor(task);
+            yield* handAuthor(yield* prog.show(task.id));
             yield* Effect.logInfo(`resumed ${task.id} after diagnostic intervention`);
           }).pipe(
             Effect.catch((error) =>
@@ -1106,12 +1193,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
 
       yield* Effect.forEach(
-        current.owned.filter(
-          ({ task, worker }) =>
+        current.owned.filter(({ task, worker }) => {
+          const pipeline = pipelineOf(task);
+          return (
+            pipeline !== undefined &&
             diagnosticIntent(task) === undefined &&
-            !awaitingLanding(task) &&
-            worker.state !== "working",
-        ),
+            !awaitingLanding(pipeline, task) &&
+            worker.state !== "working"
+          );
+        }),
         ({ task, worker, kind }) =>
           Effect.gen(function* () {
             const reviewer = reviewedBy(task);
@@ -1523,30 +1613,43 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const fill = (current: Dispatchable) =>
       Effect.gen(function* () {
-        // A task whose dispatch has failed twice is held out of both passes.
+        yield* Effect.forEach(current.parks, park, { discard: true });
+        // A task whose dispatch has failed twice is held out of the plan.
         // Its failure is a fact about the world, so a third attempt would
         // repeat the second; the operator clears the cause and retries.
         // This tick's burst, not a memory: one set per fill pass, read by the
-        // author pass only, and discarded with it. Its whole job is to stop every
+        // authors only, and discarded with it. Its whole job is to stop every
         // slot in this pass drawing on the one account the reading calls healthy.
         const drawn = new Set<string>();
         yield* Effect.forEach(
           current.dispatches,
           (dispatch) =>
-            dispatch.role === "review"
-              ? dispatchReview(dispatch.task).pipe(
-                  Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
-                  Effect.tap(() => clearFailure(dispatch.task.id)),
-                  Effect.catch((error) => recordFailure(dispatch.task.id, error)),
-                )
-              : dispatchAuthor(dispatch.task, drawn).pipe(
-                  Effect.tap(() => admitted(dispatch.permit, dispatch.task.id)),
-                  Effect.tap(() => clearFailure(dispatch.task.id)),
-                  Effect.catch((error) => recordFailure(dispatch.task.id, error)),
-                ),
+            (dispatch.role === "review"
+              ? dispatchReview(dispatch.task, dispatch.block)
+              : dispatchAuthor(dispatch.task, dispatch.block, drawn)
+            ).pipe(
+              Effect.tap(() => admitted(dispatch.permits, dispatch.task.id)),
+              Effect.tap(() => clearFailure(dispatch.task.id)),
+              Effect.catch((error) => recordFailure(dispatch.task.id, error)),
+            ),
           { discard: true },
         );
       });
+
+    /**
+     * Hands a task to the operator: its route ends at a park block, or the
+     * block it waits at has no rung left for it.
+     *
+     * The task is released first, so it leaves the pipeline for the operator's
+     * column, and the next reading does not park it again.
+     */
+    const park = ({ task, why }: Park) =>
+      Effect.gen(function* () {
+        if (task.status !== "open") yield* prog.release(task.id);
+        yield* prog.parkForOperator(task.id);
+        yield* prog.log(task.id, `foreman: ${task.id} is yours now: ${why}`);
+        yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${why}`);
+      }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
 
     /**
      * The workspace a task's agents run in, with its worktree made usable.
@@ -1576,27 +1679,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * The rung that authors a task now, or nothing when none can.
+     * The rung `block` runs this task on now, or nothing when none can.
      *
-     * The author's mirror of the reviewer resolution below, and it reads the
-     * same tick's allowances for the same reason: every dispatch and the gate
-     * that offered the task must agree, or the gate passes over work a dispatch
-     * would have found an agent for. `undefined` is not an error — the queue
-     * keeps the task and a later tick, or an allowance reset, asks again.
+     * It reads the same tick's allowances as the plan, for the same reason:
+     * every dispatch and the plan that offered the task must agree, or the plan
+     * passes over work a dispatch would have found an agent for. `undefined` is
+     * not an error. The task keeps its place and a later tick, or an allowance
+     * reset, asks again. The reading is the tick's own: `state` is published
+     * before any pass runs, and for an operator's command it is the reading the
+     * dashboard was showing when they pressed the key.
      */
-    const rungNow = Effect.fnUntraced(function* (
-      task: {
-        readonly id: string;
-        readonly labels: ReadonlyArray<string>;
-      },
+    const rungFor = Effect.fnUntraced(function* (
+      task: Item,
+      block: AgentNode,
       drawn?: Set<string>,
     ) {
-      const walled = authorWalls(
-        settings.ladder,
-        task,
-        walledRungs((yield* SubscriptionRef.get(state)).providers),
-      );
-      const choice = authorFor(settings.ladder, failuresOf(task), walled, drawn ?? new Set());
+      const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
+      const choice = rungAt(settings.ladder, block, task, walled, drawn);
       if (choice._tag === "Dispatch") {
         const provider = providerOf(choice.rung);
         if (provider !== undefined) drawn?.add(provider);
@@ -1604,27 +1703,65 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       }
       yield* Effect.logInfo(
         choice._tag === "Waiting"
-          ? `${task.id} deferred: no account with room on ${choice.walled.join(", ")}`
-          : `${task.id} deferred: every rung of the ladder has already failed it`,
+          ? `${block.role} of ${task.id} at ${block.id} deferred: no account with room for ${block.model}`
+          : `${block.role} of ${task.id} at ${block.id} deferred: no rung of ${block.model} is left that has not failed it`,
       );
       return undefined;
     });
 
+    /**
+     * The agent block an agent started by hand runs at: the first block of
+     * `role` on the task's route that it has not passed. Nothing when the
+     * project's pipeline is stopped or the route has no such block, and the
+     * dispatch is then refused: its run would record a block the task never
+     * stood at.
+     */
+    const blockFor = Effect.fnUntraced(function* (task: Item, role: AgentRole) {
+      const pipeline = runningPipeline((yield* SubscriptionRef.get(state)).pipelines, task.project);
+      const block = pipeline === undefined ? undefined : nextAgent(pipeline, factsOf(task), role);
+      if (block === undefined) {
+        yield* Effect.logWarning(
+          `${role} of ${task.id} refused: ${task.project}'s pipeline has no ${role} block on its route`,
+        );
+      }
+      return block;
+    });
+
+    /** Starts an author by hand, at the author block on the task's route. */
+    const handAuthor = (task: Item) =>
+      blockFor(task, "author").pipe(
+        Effect.flatMap((block) =>
+          block === undefined ? Effect.void : dispatchAuthor(task, block),
+        ),
+      );
+
+    /** Starts a reviewer by hand, at the review block on the task's route. */
+    const handReview = (task: Item) =>
+      blockFor(task, "review").pipe(
+        Effect.flatMap((block) =>
+          block === undefined ? Effect.void : dispatchReview(task, block),
+        ),
+      );
+
     const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (
       task: Item,
+      block: AgentNode,
       drawn?: Set<string>,
     ) {
-      // The bottom rung by default; higher only where the rungs below have
-      // already been tried and failed, or cannot be paid for. The task carries
-      // the failures in its labels, so the choice survives a restart, and the
-      // allowances are this tick's reading. `drawn` is this tick's burst, not the
-      // task's history: only `fill` has one, so only it spreads.
-      const rung = yield* rungNow(task, drawn);
-      if (rung) yield* authorAt(task, rung);
+      // The task carries its failures in its labels, so the choice survives a
+      // restart, and the allowances are this tick's reading. `drawn` is this
+      // tick's burst, not the task's history: only `fill` has one, so only it
+      // spreads.
+      const rung = yield* rungFor(task, block, drawn);
+      if (rung) yield* authorAt(task, rung, block);
     });
 
     /** Opens the task's workspace, claims it and starts its author on this rung. */
-    const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (task: Item, rung: Rung) {
+    const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (
+      task: Item,
+      rung: Rung,
+      block: AgentNode,
+    ) {
       const project = yield* projectFor(task.project);
       if (!project) return;
 
@@ -1636,7 +1773,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const prompt = yield* prompts.author(task, worker.directory, project.directory);
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, runFor(task, rung, "author"))
+        .attribute(task.id, runFor(task, rung, block))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,
@@ -1655,7 +1792,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
     });
 
-    const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (task: Item) {
+    const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
+      task: Item,
+      block: AgentNode,
+    ) {
       const project = yield* projectFor(task.project);
       if (!project) return;
 
@@ -1671,23 +1811,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         );
       }
 
-      // Resolved here rather than by each caller, so fill, the settle handoff,
-      // a retry and an intervention all pick a reviewer the same way. The
-      // reading is the tick's own: `state` is published before any pass runs,
-      // and for an operator-triggered dispatch it is the same reading the quota
-      // view was showing when they pressed the key.
-      const rung = reviewerForTask(
-        task,
-        walledRungs((yield* SubscriptionRef.get(state)).providers),
-      );
-      if (!rung) {
-        // Every rung that could read this diff is spent. The status is
-        // untouched, so the task keeps its place and a later tick — or an
-        // allowance reset — tries again.
-        return yield* Effect.logInfo(
-          `review of ${task.id} deferred: no account with room at or above ${authoredBy(task) ?? "the top rung"}`,
-        );
-      }
+      // Resolved here rather than by each caller, so fill, a retry and an
+      // intervention all pick a reviewer the same way. The status is untouched
+      // when no rung can read the diff, so the task keeps its place.
+      const rung = yield* rungFor(task, block);
+      if (!rung) return;
       const worker = yield* workspaceFor(task, project);
 
       const prompt = yield* prompts.review(
@@ -1699,7 +1827,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
       // The run records the tip the reviewer is about to read: its approval
       // holds for this commit and no other.
-      yield* prog.assignReview(task.id, runFor(task, rung, "review", tip));
+      yield* prog.assignReview(task.id, runFor(task, rung, block, tip));
       const agent = yield* instrumentRun(
         task,
         rung,
@@ -1743,6 +1871,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       project: Project,
     ) {
       const rung = topOf(settings.ladder);
+      const block = yield* blockFor(task, "author");
+      if (block === undefined) return;
 
       // Attached, not a worktree: the work being rescued exists only in this
       // checkout, so a copy of the last commit would show the agent nothing.
@@ -1754,7 +1884,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       yield* prog.claim(task.id);
       yield* prog
-        .attribute(task.id, runFor(task, rung, "author"))
+        .attribute(task.id, runFor(task, rung, block))
         .pipe(Effect.tapError(() => prog.release(task.id)));
       const agent = yield* instrumentRun(
         task,
@@ -1846,15 +1976,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
         yield* stopAgents(worker);
       });
-
-    /** The reviewer this task would get now, with the accounts that are spent. */
-    const reviewerForTask = (task: Item, walled: ReadonlySet<string>) =>
-      reviewerFor(
-        settings.ladder,
-        authoredBy(task),
-        authorWalls(settings.ladder, task, walled),
-        reviewFailedBy(task),
-      );
 
     /**
      * The rung whose run has just ended, which is the one a verdict is about.
@@ -2057,7 +2178,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (reviewedBy(task) !== undefined) yield* prog.endReview(task.id, "released");
         if (task.status === "open") yield* prog.claim(task.id);
         if (task.status !== "reviewing") yield* prog.review(task.id);
-        yield* dispatchReview(task);
+        yield* handReview(yield* prog.show(task.id));
       });
 
     /**
@@ -2090,7 +2211,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* prog.clearDiagnostic(task.id);
         if (task.status !== "open") yield* prog.release(task.id);
         yield* raiseFloor(task, rung);
-        yield* dispatchAuthor(yield* prog.show(task.id));
+        yield* handAuthor(yield* prog.show(task.id));
       });
 
     /** The checkout a project's work lands in, when foreman is configured for it. */
@@ -2196,11 +2317,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       author: (task: Item, rungName: string | undefined) =>
         commanded(
           Effect.gen(function* () {
+            const block = yield* blockFor(task, "author");
+            if (block === undefined) return;
             const rung =
               rungName === undefined
-                ? yield* rungNow(task)
+                ? yield* rungFor(task, block)
                 : settings.ladder.find((candidate) => candidate.name === rungName);
-            if (rung) yield* authorAt(task, rung);
+            if (rung) yield* authorAt(task, rung, block);
           }),
         ),
 
@@ -2246,18 +2369,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }
                 return;
               }
-              if (task.status === "reviewing") {
-                return yield* dispatchReview(task).pipe(
-                  Effect.catch((error) => recordFailure(task.id, error)),
-                );
-              }
-              return yield* dispatchAuthor(task).pipe(
-                Effect.catch((error) => recordFailure(task.id, error)),
-              );
+              return yield* (
+                task.status === "reviewing" ? handReview(task) : handAuthor(task)
+              ).pipe(Effect.catch((error) => recordFailure(task.id, error)));
             }
 
             if (task.status === "reviewing") {
-              return yield* dispatchReview(task);
+              return yield* handReview(task);
             }
 
             // A salvage run that stopped is retried as a salvage run. Sending an
@@ -2271,7 +2389,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
             const project = yield* projectFor(task.project);
             if (!project) return;
-            const rung = yield* rungNow(task);
+            const block = yield* blockFor(task, "author");
+            if (block === undefined) return;
+            const rung = yield* rungFor(task, block);
             if (!rung) return;
             // The workspace may be gone — the pane that was its only one closed
             // by hand. `fleet.open` resolves to the worktree git still has, so
@@ -2282,7 +2402,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
             yield* prog.endRuns(task.id, { author: "vanished" });
-            yield* prog.attribute(task.id, runFor(task, rung, "author"));
+            yield* prog.attribute(task.id, runFor(task, rung, block));
             yield* prog.log(task.id, agentLog("author", rung, agent));
           }),
         ),
@@ -2416,19 +2536,26 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 /**
  * Selects work for the free slots without performing any dispatch side effects.
  *
- * Each dispatch carries the permit the policy gave it, so the caller can
- * record which grant admitted the task once the dispatch has happened. A task
+ * Each task is placed in its project's pipeline. A task waiting at a work block
+ * is a candidate when every gate on its route permits it, and candidates are
+ * taken nearest the end of the pipeline first (fewest work blocks left), then
+ * in the order given: the review column, then the queue. In the standard
+ * pipeline that is landings, then reviews, then new work.
+ *
+ * Each dispatch carries the permits its gates gave it, so the caller can
+ * record which grants admitted the task once the dispatch has happened. A task
  * the policy does not allow is passed over and keeps no slot.
  *
- * A task whose step is set to `ask` is listed in `asks` and takes no slot: a
+ * A task whose gate is set to `ask` is listed in `asks` and takes no slot: a
  * slot is spent when a step runs, not when the operator is asked about it. So
  * review and climb asks are listed whatever the free count, and an ask ahead
  * in the queue never holds back a granted task behind it. Author asks are
  * capped at the policy's `slots`, so an `ask` author step does not list the
  * whole queue. Approving an ask grants the step, and the granted dispatch then
- * waits for a free slot like any other.
+ * waits for a free slot like any other. A landing runs no agent, so it takes no
+ * slot either.
  */
-export const dispatchesFor = (
+export const planFrom = (
   current: DispatchState,
   failed: ReadonlySet<string> = new Set(),
   stale: ReadonlySet<string> = new Set(),
@@ -2438,65 +2565,81 @@ export const dispatchesFor = (
   let authorAsks = 0;
 
   const dispatches: Array<PlannedDispatch> = [];
+  const lands: Array<PlannedLanding> = [];
   const asks: Array<Ask> = [];
   // Admissions planned in this pass count against a grant's `remaining` at
   // once, so one pass cannot admit more tasks than the grant allows. Only a
-  // dispatch that gets a slot admits: a task passed over for want of one
-  // leaves the grant whole for the next tick.
+  // step that is taken admits: a task passed over for want of a slot leaves
+  // the grant whole for the next tick.
   let policy = current.policy;
   const held = (project: string) => current.held.some((entry) => entry.project === project);
-  const take = (given: Permit, task: string) => {
+  const admitting = (given: Permit, task: string) => {
     if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
-    free -= 1;
   };
 
-  for (const { task, worker } of current.review) {
-    if (held(task.project)) continue;
-    if (reviewedBy(task) !== undefined || failed.has(task.id) || stale.has(task.id)) continue;
-    if (current.outOfQuota.has(task.id)) continue;
-    if (worker && isBusy(worker)) continue;
-    const given = permit(policy, current.scopes, task, "review");
-    if (given._tag === "Ask") {
-      asks.push({ task, step: "review", rung: authoredBy(task) });
-    } else if (given._tag !== "Denied" && free > 0) {
-      take(given, task.id);
-      dispatches.push({ role: "review", task, permit: given });
-    }
-  }
+  const candidates = [
+    ...current.review,
+    ...current.queue.map((task) => ({ task, worker: undefined })),
+  ].flatMap(({ task, worker }) => {
+    const pipeline = runningPipeline(current.pipelines, task.project);
+    if (pipeline === undefined) return [];
+    const placement = place(pipeline, factsOf(task));
+    return placement._tag === "At" && placement.state === "waiting"
+      ? [{ task, worker, pipeline, placement }]
+      : [];
+  });
+  // A stable sort, so tasks the same distance from the end keep their order.
+  candidates.sort((first, second) => first.placement.ahead - second.placement.ahead);
 
-  // Which ready tasks may run together is what the plan's blockers already
-  // say, and the store's `ready` has applied them before foreman sees the queue.
-  for (const task of current.queue) {
-    if (held(task.project)) continue;
-    if (failed.has(task.id) || current.outOfQuota.has(task.id)) continue;
-    const step = authorStep(task.labels);
-    const given = permit(policy, current.scopes, task, step);
-    if (given._tag === "Ask") {
-      if (step === "author") {
+  for (const { task, worker, pipeline, placement } of candidates) {
+    const { node } = placement;
+    if (node.kind === "land" && !readyToLand(pipeline, task, worker)) continue;
+    if (node.kind === "agent") {
+      if (held(task.project)) continue;
+      if (failed.has(task.id) || stale.has(task.id) || current.outOfQuota.has(task.id)) continue;
+      if (worker && isBusy(worker)) continue;
+    }
+
+    // Every gate on the route must permit the step. A gate on `ask` holds the
+    // task for one approval of its own step; once approved, a later reading
+    // asks about the next gate.
+    const gates = placement.gates.map((gate) => ({
+      step: gate.step,
+      given: permit(policy, current.scopes, task, gate.step),
+    }));
+    if (gates.some(({ given }) => given._tag === "Denied")) continue;
+    const asking = gates.find(({ given }) => given._tag === "Ask");
+    if (asking !== undefined) {
+      if (asking.step === "author") {
         if (authorAsks >= current.policy.slots) continue;
         authorAsks += 1;
       }
-      asks.push({ task, step, rung: undefined });
-    } else if (given._tag !== "Denied" && free > 0) {
-      take(given, task.id);
-      dispatches.push({ role: "author", task, permit: given });
+      asks.push({
+        task,
+        step: asking.step,
+        rung:
+          node.kind === "land"
+            ? reviewedBy(task)
+            : node.role === "review"
+              ? authoredBy(task)
+              : undefined,
+      });
+      continue;
+    }
+
+    const permits = gates.map(({ given }) => given);
+    if (node.kind === "land") {
+      for (const given of permits) admitting(given, task.id);
+      lands.push({ task, worker, permits });
+    } else if (free > 0) {
+      for (const given of permits) admitting(given, task.id);
+      free -= 1;
+      dispatches.push({ role: node.role, task, permits, block: node });
     }
   }
 
-  return { dispatches, asks };
+  return { dispatches, lands, asks };
 };
-
-/**
- * The landings the policy holds for one approval: an approved review whose
- * reviewer has stopped, and whose `land` step is `ask` with no grant yet.
- *
- * Landing takes no slot, so this list is not bounded by `slots`.
- */
-export const landAsks = (current: DispatchState): ReadonlyArray<Ask> =>
-  current.review
-    .filter(({ task, worker }) => readyToLand(task, worker))
-    .filter(({ task }) => permit(current.policy, current.scopes, task, "land")._tag === "Ask")
-    .map(({ task }) => ({ task, step: "land", rung: reviewedBy(task) }));
 
 const isBusy = (worker: Worker): boolean =>
   worker.state === "working" || worker.state === "blocked";
@@ -2506,14 +2649,17 @@ interface DispatchState {
   readonly outOfQuota: ReadonlySet<string>;
   readonly queue: ReadonlyArray<Item>;
   readonly held: ReadonlyArray<Held>;
-  readonly review: ReadonlyArray<Active>;
+  readonly review: ReadonlyArray<Pick<Active, "task" | "worker">>;
   readonly policy: Policy;
   readonly scopes: Scopes;
+  /** Each project's pipeline. A task whose project's pipeline is stopped or absent takes no step. */
+  readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
 }
 
-/** What one tick would start, and what it holds for the operator's approval. */
+/** What one tick would start, land, and hold for the operator's approval. */
 interface Plan {
   readonly dispatches: ReadonlyArray<PlannedDispatch>;
+  readonly lands: ReadonlyArray<PlannedLanding>;
   readonly asks: ReadonlyArray<Ask>;
 }
 
@@ -2531,25 +2677,65 @@ export interface Ask {
   readonly rung: string | undefined;
 }
 
-type PlannedDispatch =
-  | { readonly role: "review"; readonly task: Item; readonly permit: Permit }
-  | {
-      readonly role: "author";
-      readonly task: Item;
-      readonly permit: Permit;
-    };
+/**
+ * An agent the plan starts, at the agent block the task waits at, with the
+ * permit each gate on its route gave. Two gates can hold grants on different
+ * scopes, and each grant records its own admission.
+ */
+interface PlannedDispatch {
+  readonly role: AgentNode["role"];
+  readonly task: Item;
+  readonly permits: ReadonlyArray<Permit>;
+  readonly block: AgentNode;
+}
+
+/** An approved branch the plan lands, with the permit each gate on its route gave. */
+interface PlannedLanding {
+  readonly task: Item;
+  readonly worker: Worker | undefined;
+  readonly permits: ReadonlyArray<Permit>;
+}
+
+/** A task the tick hands to the operator, and the reason it gives them. */
+interface Park {
+  readonly task: Item;
+  readonly worker: Worker | undefined;
+  readonly why: string;
+}
+
+/** The pipeline `project` runs, when this reading found one it can run. */
+const runningPipeline = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  project: string,
+): Pipeline | undefined => {
+  const found = pipelines.get(project);
+  return found?._tag === "Runs" ? found.pipeline : undefined;
+};
 
 /**
  * A finished branch whose fate is landing rather than the ordinary settle path,
- * whatever its pane is doing.
+ * whatever its pane is doing: the task is placed at a land block.
  *
  * `reviewing` means the author stopped writing, not that the diff has been read:
- * an approving reviewer is the only thing that makes a branch landable. So the
- * verdict label is the whole question here, and no task size or priority routes
+ * a pipeline reaches a land block only past a review, and a review is passed
+ * only by an approval of the branch tip. So no task size or priority routes
  * around it.
  */
-export const awaitingLanding = (task: Item): boolean =>
-  task.status === "reviewing" && isApproved(task);
+export const awaitingLanding = (pipeline: Pipeline, task: Item): boolean => {
+  const placement = place(pipeline, factsOf(task));
+  return placement._tag === "At" && placement.node.kind === "land";
+};
+
+/** The task's author handed off, and settle has not yet closed its run. */
+const endedAtAuthor = (pipeline: Pipeline, task: Item): boolean => {
+  const placement = place(pipeline, factsOf(task));
+  return (
+    placement._tag === "At" &&
+    placement.node.kind === "agent" &&
+    placement.node.role === "author" &&
+    placement.state === "ended"
+  );
+};
 
 /**
  * Whether an author that handed off has waited too long to be worth keeping.
@@ -2570,15 +2756,15 @@ export const handoffExpired = (task: Item, cutoff: DateTime.Utc): boolean =>
  * A finished branch foreman may merge on this tick.
  *
  * Liveness belongs in the predicate rather than in a check beside it, because
- * the two filters in settle must agree about the same task. An agent that has
+ * the plan and settle must agree about the same task. An agent that has
  * handed its work back still has a turn to finish — a closing message, a last
  * prog call — and landing ends by closing the workspace, which for a worktree
  * worker runs `worktree remove --force` and deletes the directory out from
  * under a running process. Status and verdict are both durable, so waiting one
  * tick costs nothing and loses nothing.
  */
-export const readyToLand = (task: Item, worker: Worker | undefined): boolean =>
-  awaitingLanding(task) && (worker === undefined || worker.state !== "working");
+export const readyToLand = (pipeline: Pipeline, task: Item, worker: Worker | undefined): boolean =>
+  awaitingLanding(pipeline, task) && (worker === undefined || worker.state !== "working");
 
 /**
  * What the dashboard must ask about.
@@ -2621,7 +2807,7 @@ export const decisionsOf = (
       // A reviewer that wrote its verdict did not vanish, it finished: the task
       // waits on the checkout being clean, not on an answer, and its pane is
       // gone precisely because there was nothing left for it to do.
-      !awaitingLanding(task) &&
+      !isApproved(task) &&
       (worker === undefined || worker.state === "gone"),
   ),
   ...owned.filter(
@@ -2877,18 +3063,6 @@ export interface Climbing {
   readonly runs: ReadonlyArray<Run>;
 }
 
-/**
- * The rungs an author may not take for this task: those on a spent account in
- * this tick's reading, and those on an account the task's agents stopped on a
- * usage wall. The second is per task, so it comes from the task's labels, not
- * from the reading.
- */
-const authorWalls = (
-  ladder: Ladder,
-  task: { readonly labels: ReadonlyArray<string> },
-  walled: ReadonlySet<string>,
-): ReadonlySet<string> => new Set([...walled, ...rungsOnAccounts(ladder, walledBy(task))]);
-
 /** History read above a stopped agent's screen when looking for a usage wall. */
 const WALL_READ_LINES = 40;
 
@@ -2988,6 +3162,14 @@ export interface FleetState {
   readonly policy: Policy;
   /** Why the policy file could not be read, which is why the fleet is paused. */
   readonly policyError: string | undefined;
+  /** Each project's pipeline as this reading found it; a stopped one says why. */
+  readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
+  /**
+   * Where each queued, claimed and reviewing task stands in its project's
+   * pipeline: what the plan decided from. A task in a stopped project is
+   * `Outside`.
+   */
+  readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
   /** Each grant's scope, mapped to the unfinished tasks it reaches. */
   readonly scopes: Scopes;
   /** Steps the policy holds for one approval; see `Ask`. */
@@ -3120,6 +3302,9 @@ interface Interpretation extends FleetState {
    */
   readonly unbacked: ReadonlyArray<Active>;
 
+  /** The approved branches the plan lands; settle runs them. */
+  readonly lands: ReadonlyArray<PlannedLanding>;
+
   /** The merged branches no live task still points at, for the sweep. */
   readonly prunable: ReadonlyArray<{
     readonly project: string;
@@ -3146,6 +3331,8 @@ export const EMPTY_FLEET: FleetState = {
   providers: [],
   policy: DEFAULT_POLICY,
   policyError: undefined,
+  pipelines: new Map(),
+  placed: [],
   scopes: new Map(),
   asks: [],
   observedAt: undefined,
