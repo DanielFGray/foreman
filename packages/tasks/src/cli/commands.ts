@@ -398,7 +398,7 @@ export const tasksCommand = root.pipe(
     show,
     list,
     ready,
-    move("start", "Started", "Claim an open task: it becomes in_progress"),
+    move("start", "Started", "Start open or reviewed work: it becomes in_progress"),
     review,
     move("done", "Completed", "Mark a task done"),
     move(

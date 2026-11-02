@@ -11,6 +11,7 @@ describe("the task machine", () => {
     ["proposed", "open", "open"],
     ["draft", "open", "open"],
     ["open", "start", "in_progress"],
+    ["reviewing", "start", "in_progress"],
     ["in_progress", "review", "reviewing"],
     ["reviewing", "open", "open"],
     ["reviewing", "done", "done"],
@@ -25,7 +26,6 @@ describe("the task machine", () => {
 
   test.each<[TaskState, TaskEvent]>([
     ["done", "start"],
-    ["reviewing", "start"],
     ["proposed", "start"],
     ["draft", "start"],
     ["open", "review"],

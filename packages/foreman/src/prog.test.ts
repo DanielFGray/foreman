@@ -138,6 +138,27 @@ describe("Prog against a scratch store", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
+  test("a returned review starts its next author without reopening the task", async () => {
+    const id = (await Bun.$`prog add "review cycle" -p foreman`.text()).trim();
+    await run((prog) => prog.claim(id));
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((prog) => prog.submit(id));
+    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await run((prog) => prog.nameExit(id, { name: "returned", commit: "c1", event: undefined }));
+    await run((prog) => prog.endRuns(id, { review: "stopped" }));
+
+    expect((await run((prog) => prog.show(id))).status).toBe("reviewing");
+    await run((prog) => prog.claim(id));
+    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "dear")));
+    const after = await run((prog) => prog.show(id));
+    expect(after.status).toBe("in_progress");
+    expect(after.runs.map((run) => [run.role, run.ending])).toEqual([
+      ["author", "done"],
+      ["review", "returned"],
+      ["author", undefined],
+    ]);
+  });
+
   // A reviewer can approve and then return the work in one turn. Releasing the
   // task closes the review run, so no open run outlives the review that
   // opened it and the requeued task is not read as still under review.
