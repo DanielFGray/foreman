@@ -16,12 +16,13 @@ import {
   type WorkerState,
 } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import { kindOf, Prog, ProgError, type Item } from "./prog.ts";
+import { kindOf, Records, type Endings, type ExitMove, type Item } from "./records.ts";
+import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
-import type { CheckRun, Ending, NamedExit, NewRun, Role } from "tasks";
+import type { CheckRun, Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
@@ -185,13 +186,42 @@ class World {
       this.write("fleet.notify", () => void this.notifications.push(title)),
   };
 
-  readonly prog = {
-    // Fails for an absent task, as Prog.show does, so callers that tolerate a
+  /** The tracker's status moves and log, the calls the dispatcher makes on it directly. */
+  readonly tracker: Tracker["Service"] = {
+    lookup: () => Effect.die("unused"),
+    list: () => Effect.die("unused"),
+    ready: () => Effect.die("unused"),
+    logs: () => Effect.die("unused"),
+    add: () => Effect.die("unused"),
+    reopen: () => Effect.die("unused"),
+    complete: () => Effect.die("unused"),
+    label: () => Effect.die("unused"),
+    unlabel: () => Effect.die("unused"),
+    relabel: () => Effect.die("unused"),
+    submit: (id) =>
+      this.write("tracker.submit", () =>
+        this.update(id, (task) => ({ ...task, status: "reviewing" })),
+      ),
+    review: (id) =>
+      this.write("tracker.review", () =>
+        this.update(id, (task) => ({ ...task, status: "reviewing" })),
+      ),
+    claim: (id) =>
+      this.write("tracker.claim", () =>
+        this.update(id, (task) => ({ ...task, status: "in_progress" })),
+      ),
+    log: (id, message) => this.write("tracker.log", () => void this.logs.push([id, message])),
+  };
+
+  readonly records = {
+    // Fails for an absent task, as Records.show does, so callers that tolerate a
     // deleted task (the branch read) are exercised against the real contract.
     show: (id: string) => {
       const task = this.tasks.get(id);
       return task === undefined
-        ? Effect.fail(new ProgError({ command: `show ${id}`, detail: "no such task in the store" }))
+        ? Effect.fail(
+            new TrackerError({ command: `show ${id}`, detail: "no such task in the store" }),
+          )
         : Effect.succeed(task);
     },
     lookup: (id: string) => Effect.succeed(Option.fromNullishOr(this.tasks.get(id))),
@@ -220,30 +250,41 @@ class World {
         ),
       ),
     attribute: (id: string, run: NewRun) =>
-      this.write("prog.attribute", () => this.openRun(id, run)),
+      this.write("records.attribute", () => {
+        this.update(id, (task) => ({ ...task, status: "in_progress" }));
+        return this.openRun(id, run);
+      }),
     assignReview: (id: string, run: NewRun) =>
-      this.write("prog.assignReview", () => {
+      this.write("records.assignReview", () => {
         this.closeRuns(id, { author: "done", review: "released", commit: run.commit });
         return this.openRun(id, run);
       }),
     endReview: (id: string, ending: Ending) =>
-      this.write("prog.endReview", () => this.closeRuns(id, { review: ending })),
+      this.write("records.endReview", () => this.closeRuns(id, { review: ending })),
     endRuns: (id: string, endings: { author?: Ending; review?: Ending }) =>
-      this.write("prog.endRuns", () => this.closeRuns(id, endings)),
+      this.write("records.endRuns", () => this.closeRuns(id, endings)),
     abandon: (id: string, role: Role) =>
-      this.write("prog.abandon", () => {
+      this.write("records.abandon", () => {
         this.update(id, (task) => ({
           ...task,
           status: role === "author" ? "open" : task.status,
           runs: task.runs.filter((run) => !(run.open && run.role === role)),
         }));
       }),
-    parkForOperator: (id: string) =>
-      this.write("prog.parkForOperator", () =>
-        this.update(id, (task) => ({ ...task, labels: [...task.labels, "needs-you"] })),
-      ),
+    park: (id: string, endings: Endings = {}) =>
+      this.write("records.park", () => {
+        this.closeRuns(id, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        });
+        this.update(id, (task) => ({
+          ...task,
+          status: "open",
+          labels: [...task.labels, "needs-you"],
+        }));
+      }),
     markFailure: (id: string, rung: string) =>
-      this.write("prog.markFailure", () =>
+      this.write("records.markFailure", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -253,7 +294,7 @@ class World {
         })),
       ),
     markAttempt: (id: string, rung: string, count: number) =>
-      this.write("prog.markAttempt", () =>
+      this.write("records.markAttempt", () =>
         this.update(id, (task) => ({
           ...task,
           labels: [
@@ -263,61 +304,52 @@ class World {
         })),
       ),
     clearNeedsYou: (id: string) =>
-      this.write("prog.clearNeedsYou", () =>
+      this.write("records.clearNeedsYou", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter((label) => label !== "needs-you"),
         })),
       ),
     clearFailure: (id: string, rung: string) =>
-      this.write("prog.clearFailure", () =>
+      this.write("records.clearFailure", () =>
         this.update(id, (task) => ({
           ...task,
           labels: task.labels.filter((label) => label !== `failed-by:${rung}`),
         })),
       ),
-    markDiagnostic: () => this.write("prog.markDiagnostic", () => undefined),
+    markDiagnostic: () => this.write("records.markDiagnostic", () => undefined),
     markWall: (id: string, provider: string) =>
-      this.write("prog.markWall", () =>
+      this.write("records.markWall", () =>
         this.update(id, (task) => ({ ...task, labels: [...task.labels, `walled:${provider}`] })),
       ),
-    clearDiagnostic: () => this.write("prog.clearDiagnostic", () => undefined),
-    release: (id: string, ending: Ending = "released") =>
-      this.write("prog.release", () => {
-        this.closeRuns(id, { author: ending, review: "released" });
+    clearDiagnostic: () => this.write("records.clearDiagnostic", () => undefined),
+    release: (id: string, endings: Endings = {}) =>
+      this.write("records.release", () => {
+        this.closeRuns(id, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        });
         this.update(id, (task) => ({ ...task, status: "open" }));
         return "open" as const;
       }),
-    submit: (id: string) =>
-      this.write("prog.submit", () =>
-        this.update(id, (task) => ({ ...task, status: "reviewing" })),
-      ),
-    review: (id: string) =>
-      this.write("prog.review", () =>
-        this.update(id, (task) => ({ ...task, status: "reviewing" })),
-      ),
-    claim: (id: string) =>
-      this.write("prog.claim", () =>
-        this.update(id, (task) => ({ ...task, status: "in_progress" })),
-      ),
-    log: (id: string, message: string) =>
-      this.write("prog.log", () => void this.logs.push([id, message])),
     complete: (task: { id: string }) =>
-      this.write("prog.complete", () => {
+      this.write("records.complete", () => {
         this.closeRuns(task.id, { author: "released", review: "released" });
         this.update(task.id, (found) => ({ ...found, status: "done" }));
       }),
-    add: () => Effect.die("unused"),
     children: () => Effect.succeed([]),
-    countRound: () => this.write("prog.countRound", () => 1),
-    nameExit: (id: string, exit: NamedExit) =>
-      this.write("prog.nameExit", () =>
+    countRound: () => this.write("records.countRound", () => 1),
+    nameExit: (
+      id: string,
+      exit: { name: string; commit: string | undefined },
+      move: ExitMove | undefined,
+    ) =>
+      this.write("records.nameExit", () =>
         this.update(id, (task) => {
           const open = task.runs.findLast((run) => run.open && run.role !== "check");
           return {
             ...task,
-            status:
-              exit.event === "review" ? "reviewing" : exit.event === "open" ? "open" : task.status,
+            status: move === "review" ? "reviewing" : move === "reopen" ? "open" : task.status,
             runs: task.runs.map((run) =>
               run === open ? { ...run, ending: exit.name, commit: exit.commit ?? run.commit } : run,
             ),
@@ -325,7 +357,7 @@ class World {
         }),
       ),
     recordCheck: (check: CheckRun) =>
-      this.write("prog.recordCheck", () =>
+      this.write("records.recordCheck", () =>
         this.update(check.task, (task) => ({
           ...task,
           runs: [
@@ -524,7 +556,8 @@ const layerFor = (world: World) =>
         attemptsPerRung: 2,
       }),
       Layer.succeed(Fleet, world.fleet),
-      Layer.succeed(Prog, world.prog),
+      Layer.succeed(Records, world.records),
+      Layer.succeed(Tracker, world.tracker),
       Layer.succeed(Repository, world.repository),
       // Every rung in the test ladder names a bare harness, so no provider is
       // derivable and the gate has nothing to ask about — which is the point:
@@ -1141,9 +1174,9 @@ describe("a fleet that is not running", () => {
       expect.arrayContaining([
         "repository.merge",
         "repository.remove",
-        "prog.release",
-        "prog.submit",
-        "prog.claim",
+        "records.release",
+        "tracker.submit",
+        "records.attribute",
         "fleet.spawn",
       ]),
     );
@@ -1214,7 +1247,8 @@ describe("quota probing", () => {
           attemptsPerRung: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
-        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
         quota,
         prompts,
@@ -1291,7 +1325,8 @@ describe("a spent account and the reviewer above it", () => {
           attemptsPerRung: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
-        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
         quotaSpending(spent),
         prompts,
@@ -1606,7 +1641,8 @@ describe("a usage wall", () => {
           attemptsPerRung: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
-        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
         Layer.succeed(Quota, {
           usage: (provider: string) =>
@@ -1990,12 +2026,12 @@ describe("a route's workspace blocks", () => {
 
       // Its author stops and is sent back: the task still holds the checkout.
       settled(world, first.id, "author");
-      await Effect.runPromise(world.prog.release(first.id, "returned"));
+      await Effect.runPromise(world.records.release(first.id, { author: "returned" }));
       world.workers.delete(first.id);
       await tick(world);
       expect(world.spawned.map(([id]) => id)).not.toContain(second.id);
 
-      await Effect.runPromise(world.prog.complete({ id: first.id }));
+      await Effect.runPromise(world.records.complete({ id: first.id }));
       await tick(world);
       expect(world.spawned.at(-1)).toEqual([second.id, "author"]);
     });
@@ -2091,7 +2127,7 @@ describe("a route's workspace blocks", () => {
       },
     ]);
 
-    await Effect.runPromise(world.prog.complete({ id: direct.id }));
+    await Effect.runPromise(world.records.complete({ id: direct.id }));
     await tick(world);
     expect(world.merged).toEqual(["c1"]);
   });
@@ -2147,7 +2183,8 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           attemptsPerRung: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
-        Layer.succeed(Prog, world.prog),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
         Layer.succeed(Quota, {
           usage: (provider: string) =>
@@ -2288,7 +2325,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(authoredBy(world.tasks.get(id)!)).toBe("mid");
     expect(world.workers.get(id)?.directory).toBe(workspace);
     expect(world.opened.every((directory) => directory === workspace)).toBe(true);
-    expect(world.writes).not.toContain("prog.release");
+    expect(world.writes).not.toContain("records.release");
     expect(world.closed).toEqual([]);
     expect(world.removed).toEqual([]);
   });
@@ -2401,7 +2438,8 @@ describe("a drawn pipeline", () => {
                 attemptsPerRung: 2,
               }),
               Layer.succeed(Fleet, world.fleet),
-              Layer.succeed(Prog, world.prog),
+              Layer.succeed(Records, world.records),
+              Layer.succeed(Tracker, world.tracker),
               Layer.succeed(Repository, world.repository),
               Quota.Default,
               prompts,
@@ -2443,7 +2481,7 @@ describe("a drawn pipeline", () => {
     await tick(world);
 
     expect(world.tasks.get("ts-parked")?.labels).toEqual(["hold", "needs-you"]);
-    expect(world.writes.filter((write) => write === "prog.parkForOperator")).toHaveLength(1);
+    expect(world.writes.filter((write) => write === "records.park")).toHaveLength(1);
     expect(world.spawned).toEqual([]);
   });
 
@@ -2483,7 +2521,7 @@ describe("a drawn pipeline", () => {
       const world = handedOver("ts-moved");
       await tick(world);
       // The reviewer approves c1, and then someone commits c2 on the branch.
-      await Effect.runPromise(world.prog.endReview("ts-moved", "approved"));
+      await Effect.runPromise(world.records.endReview("ts-moved", "approved"));
       world.workers.set("ts-moved", worker("ts-moved", "review", "settled"));
       world.branches.set("foreman/ts-moved", {
         ...world.branches.get("foreman/ts-moved")!,

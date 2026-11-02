@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Item } from "./prog.ts";
+import type { Item } from "./records.ts";
 import { newRunFor, poolFor } from "./run-record.ts";
 
 const task = (overrides: Partial<Item> = {}) =>

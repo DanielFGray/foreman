@@ -4,7 +4,7 @@ import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./act
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
 import { roundsOf } from "./lap.ts";
-import { Prog } from "./prog.ts";
+import { Records } from "./records.ts";
 import { ACTIONS_LIST, actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 import { commandName, publishedOf } from "./published.ts";
 import { Settings } from "./config.ts";
@@ -195,14 +195,14 @@ const MAX_ROUNDS = 2;
 
 const correct = Command.make("correct", { id, text }, (args) =>
   Effect.gen(function* () {
-    const prog = yield* Prog;
-    if (roundsOf(yield* prog.show(args.id)) >= MAX_ROUNDS) {
+    const records = yield* Records;
+    if (roundsOf(yield* records.show(args.id)) >= MAX_ROUNDS) {
       return yield* new Refused({
         detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with foreman exit ${args.id} returned instead`,
       });
     }
     yield* (yield* Fleet).say(yield* workerOf(args.id), "author", args.text);
-    yield* prog.countRound(args.id);
+    yield* records.countRound(args.id);
     yield* Console.log(`${args.id}: round sent; run foreman wait ${args.id} --role author`);
   }),
 ).pipe(
@@ -305,7 +305,7 @@ const wait = Command.make(
       }
       const taskId = args.id.value;
       const fleet = yield* Fleet;
-      const prog = yield* Prog;
+      const records = yield* Records;
       const working = fleet.roster.pipe(
         Effect.map((roster) =>
           roster.some(
@@ -319,7 +319,7 @@ const wait = Command.make(
         ),
       );
       yield* untilNotWorking(working, fleet.awaitTurn(taskId, Option.getOrUndefined(args.role)));
-      const task = yield* prog.show(taskId);
+      const task = yield* records.show(taskId);
       yield* Console.log(`${taskId}: ${task.status}`);
     }),
 ).pipe(
@@ -354,4 +354,4 @@ export class Refused extends Schema.TaggedError<Refused>()("Refused", {
 }
 
 /** What a one-shot command reads. */
-type Services<E> = Layer.Layer<Dispatcher | Fleet | Prog | Settings, E>;
+type Services<E> = Layer.Layer<Dispatcher | Fleet | Records | Settings, E>;

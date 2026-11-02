@@ -1,5 +1,5 @@
 import type { Run } from "tasks";
-import type { Item } from "./prog.ts";
+import type { Item } from "./records.ts";
 
 /**
  * Test builders for a task and its runs. A task's review state is its runs, so

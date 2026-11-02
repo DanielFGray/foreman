@@ -18,7 +18,7 @@ import {
   waiting,
   type Owned,
 } from "./dispatcher.ts";
-import { diagnosticIntent, type Item, type TaskStatus } from "./prog.ts";
+import { diagnosticIntent, type Item, type TaskStatus } from "./records.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
 import { authorRun, authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";

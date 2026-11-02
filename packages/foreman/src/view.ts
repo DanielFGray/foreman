@@ -13,7 +13,7 @@ import { reviewedBy } from "./lap.ts";
 import { exhausted, type Allowance } from "./quota.ts";
 import { resetsLabel, usedLabel } from "./format.ts";
 import type { Worker } from "./fleet.ts";
-import { diagnosticIntent, failuresOf, needsYou, type EpicProgress, type Item } from "./prog.ts";
+import { diagnosticIntent, failuresOf, needsYou, type EpicProgress, type Item } from "./records.ts";
 
 /**
  * The dashboard as data: every line, every legal action, no renderer.

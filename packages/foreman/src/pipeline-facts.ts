@@ -1,5 +1,5 @@
 import { isExit, type Run } from "tasks";
-import { failuresOf, type Item, valueOf } from "./prog.ts";
+import { failuresOf, type Item, valueOf } from "./records.ts";
 import { type Facts, type NamedExit, type Pipeline, type PipelineNode, QUEUE } from "./pipeline.ts";
 
 /**

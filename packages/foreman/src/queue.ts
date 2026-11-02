@@ -1,6 +1,6 @@
 import { rank } from "tasks";
 import { authorFor, type Ladder } from "./ladder.ts";
-import { failuresOf, isOnboarding, needsYou, type EpicProgress, type Item } from "./prog.ts";
+import { failuresOf, isOnboarding, needsYou, type EpicProgress, type Item } from "./records.ts";
 
 /**
  * The global queue: the configured projects' ready work, in the order the task

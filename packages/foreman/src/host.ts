@@ -14,7 +14,7 @@ import { Dispatcher, EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 import { Fleet } from "./fleet.ts";
 import { HcFleet } from "./hc.ts";
 import { logging } from "./log.ts";
-import { Prog } from "./prog.ts";
+import { Records } from "./records.ts";
 import { store } from "tasks";
 import { openCheckouts, projectSet } from "./projects.ts";
 import { Prompts } from "./prompt.ts";
@@ -40,7 +40,7 @@ import { telemetry } from "./telemetry.ts";
  * process. If DevTools is ever added it must come *before* the tracing layers,
  * or the tracer it patches is not the one foreman ends up using.
  *
- * `store` is the one connection to the task store: Prog, the registry in
+ * `store` is the one connection to the task store: Records, the registry in
  * `Settings` and run recording all read it, and a layer value is built once.
  */
 export const services = Layer.provideMerge(
@@ -48,7 +48,7 @@ export const services = Layer.provideMerge(
   Layer.mergeAll(
     HcFleet,
     settings,
-    Prog.Default,
+    Records.layer,
     Prompts.Default,
     Quota.Default,
     Repository.Default,
@@ -60,7 +60,7 @@ export const services = Layer.provideMerge(
 
 /** What the store reads need: the task store, and the open spaces for the queue's projects. */
 export const storeServices = Layer.mergeAll(
-  Prog.Default,
+  Records.layer,
   settings,
   HcFleet,
   Repository.Default,
@@ -77,7 +77,7 @@ export const storeServices = Layer.mergeAll(
  */
 export const queueOf = (project: Option.Option<string>) =>
   Effect.gen(function* () {
-    const prog = yield* Prog;
+    const records = yield* Records;
     const projects = yield* Option.match(project, {
       onSome: (name) => Effect.succeed([name]),
       onNone: () =>
@@ -86,8 +86,8 @@ export const queueOf = (project: Option.Option<string>) =>
           return projectSet(open, []).projects.map(({ name }) => name);
         }),
     });
-    const ready = yield* prog.ready(project);
-    const epics = yield* prog.epicsOver(ready);
+    const ready = yield* records.ready(project);
+    const epics = yield* records.epicsOver(ready);
     const { queue } = queueFrom({
       ready,
       ladder: (yield* Settings).ladder,

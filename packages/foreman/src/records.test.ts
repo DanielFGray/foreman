@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
-import { Prog } from "./prog.ts";
-import { agentLog, attemptsOf, type Item } from "./prog.ts";
+import { Records } from "./records.ts";
+import { Tracker } from "./tracker.ts";
+import { agentLog, attemptsOf, type Item } from "./records.ts";
 import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from "./lap.ts";
 import { newRunFor } from "./run-record.ts";
 import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
@@ -24,8 +25,15 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
     commit,
   });
 
-const run = <A, E>(f: (prog: Prog["Service"]) => Effect.Effect<A, E>) =>
-  Effect.runPromise(Prog.use(f).pipe(Effect.provide(Prog.Default.pipe(Layer.provide(store)))));
+/** Runs `f` against foreman's records and the tracker, over one store connection. */
+const run = <A, E>(
+  f: (records: Records["Service"], tracker: Tracker["Service"]) => Effect.Effect<A, E>,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* f(yield* Records, yield* Tracker);
+    }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
+  );
 
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
@@ -124,7 +132,7 @@ describe("stopped attempts on a rung", () => {
   });
 });
 
-describe("Prog against a scratch store", () => {
+describe("Records against a scratch store", () => {
   let directory: string;
 
   beforeAll(async () => {
@@ -140,17 +148,17 @@ describe("Prog against a scratch store", () => {
 
   test("a returned review starts its next author without reopening the task", async () => {
     const id = (await Bun.$`prog add "review cycle" -p foreman`.text()).trim();
-    await run((prog) => prog.claim(id));
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((prog) => prog.submit(id));
-    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
-    await run((prog) => prog.nameExit(id, { name: "returned", commit: "c1", event: undefined }));
-    await run((prog) => prog.endRuns(id, { review: "stopped" }));
+    await run((_, tracker) => tracker.claim(id));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((_, tracker) => tracker.submit(id));
+    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await run((records) => records.nameExit(id, { name: "returned", commit: "c1" }, undefined));
+    await run((records) => records.endRuns(id, { review: "stopped" }));
 
-    expect((await run((prog) => prog.show(id))).status).toBe("reviewing");
-    await run((prog) => prog.claim(id));
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "dear")));
-    const after = await run((prog) => prog.show(id));
+    expect((await run((records) => records.show(id))).status).toBe("reviewing");
+    await run((_, tracker) => tracker.claim(id));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "dear")));
+    const after = await run((records) => records.show(id));
     expect(after.status).toBe("in_progress");
     expect(after.runs.map((run) => [run.role, run.ending])).toEqual([
       ["author", "done"],
@@ -164,12 +172,12 @@ describe("Prog against a scratch store", () => {
   // opened it and the requeued task is not read as still under review.
   test("release closes the review run and requeues the task", async () => {
     const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((prog) => prog.submit(id));
-    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((_, tracker) => tracker.submit(id));
+    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
-    await run((prog) => prog.release(id));
-    const after = await run((prog) => prog.show(id));
+    await run((records) => records.release(id));
+    const after = await run((records) => records.show(id));
 
     expect(after.status).toBe("open");
     expect(after.runs.map((r) => [r.role, r.open, r.ending])).toEqual([
@@ -181,12 +189,12 @@ describe("Prog against a scratch store", () => {
   // A retried review replaces a reviewer that vanished, so the lap holds one open review run.
   test("assigning a reviewer ends the review run it replaces as released", async () => {
     const id = (await Bun.$`prog add "vanished reviewer" -p foreman`.text()).trim();
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((prog) => prog.submit(id));
-    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "cheap", "c1")));
-    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((_, tracker) => tracker.submit(id));
+    await run((records) => records.assignReview(id, dispatchOf(id, "review", "cheap", "c1")));
+    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
-    const after = await run((prog) => prog.show(id));
+    const after = await run((records) => records.show(id));
     expect(after.runs.map((r) => [r.role, r.rung, r.open, r.ending])).toEqual([
       ["author", "cheap", false, "done"],
       ["review", "cheap", false, "released"],
@@ -202,7 +210,7 @@ describe("Prog against a scratch store", () => {
       await Bun.$`prog add ${status} -p foreman --parent ${epic} --status ${status}`.quiet();
     }
 
-    const children = await run((prog) => prog.children(epic));
+    const children = await run((records) => records.children(epic));
 
     expect(children.map((child) => child.status).sort()).toEqual(["blocked", "draft", "proposed"]);
   });
@@ -211,25 +219,25 @@ describe("Prog against a scratch store", () => {
   // author's trial row must not inherit it.
   test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
     const id = (await Bun.$`prog add "round" -p foreman`.text()).trim().split("\n")[0]!;
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
 
-    expect(await run((prog) => prog.countRound(id))).toBe(1);
-    await run((prog) => prog.submit(id));
-    await run((prog) => prog.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
-    expect(await run((prog) => prog.countRound(id))).toBe(2);
-    expect(roundsOf(await run((prog) => prog.show(id)))).toBe(2);
-    await run((prog) => prog.release(id));
-    await run((prog) => prog.attribute(id, dispatchOf(id, "author", "cheap")));
+    expect(await run((records) => records.countRound(id))).toBe(1);
+    await run((_, tracker) => tracker.submit(id));
+    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    expect(await run((records) => records.countRound(id))).toBe(2);
+    expect(roundsOf(await run((records) => records.show(id)))).toBe(2);
+    await run((records) => records.release(id));
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
 
-    const after = await run((prog) => prog.show(id));
+    const after = await run((records) => records.show(id));
     expect(roundsOf(after)).toBe(0);
     expect(after.labels).toEqual([]);
     expect(after.runs.at(-1)).toMatchObject({ role: "author", rung: "cheap", open: true });
   });
 
   test("names the operation a store failure came from", async () => {
-    const error = await run((prog) =>
-      Effect.flip(prog.complete({ id: "ts-does-not-exist", labels: [] })),
+    const error = await run((records) =>
+      Effect.flip(records.complete({ id: "ts-does-not-exist", labels: [] })),
     );
 
     expect(error.command).toBe("done ts-does-not-exist");
@@ -240,9 +248,31 @@ describe("Prog against a scratch store", () => {
     const id = (await Bun.$`prog add "unread branch" -p foreman`.text()).trim();
     await Bun.$`prog done ${id}`.quiet();
 
-    await run((prog) => prog.submit(id));
-    const after = await run((prog) => prog.show(id));
+    await run((_, tracker) => tracker.submit(id));
+    const after = await run((records) => records.show(id));
 
     expect(after.status).toBe("reviewing");
+  });
+
+  // The records and the tracker share one connection, so a status move the
+  // tracker refuses takes the records write in its transaction back with it.
+  // A done task cannot go to review by `review`, so that move is refused.
+  test("an exit whose status move is refused is not recorded", async () => {
+    const id = await run((_, tracker) =>
+      tracker.add({ project: "foreman", title: "refused move", description: "", labels: [] }),
+    );
+    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await run((_, tracker) => tracker.complete(id));
+
+    const refused = await run((records) =>
+      Effect.flip(records.nameExit(id, { name: "done", commit: "c1" }, "review")),
+    );
+    const after = await run((records) => records.show(id));
+
+    expect(refused.detail).toContain("review");
+    expect(after.status).toBe("done");
+    expect(after.runs.map((r) => [r.role, r.open, r.ending, r.commit])).toEqual([
+      ["author", true, undefined, undefined],
+    ]);
   });
 });

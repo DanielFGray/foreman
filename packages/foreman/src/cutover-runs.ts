@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { closeRun, openRun, Tasks, type Ending, type NewRun } from "tasks";
 import { labelFor } from "./fleet.ts";
 import { providerOf, type Ladder } from "./ladder.ts";
-import { countOf, type Item } from "./prog.ts";
+import { countOf, type Item } from "./records.ts";
 import { readLadder } from "./registry.ts";
 import { Repository } from "./repository.ts";
 import { newRunFor } from "./run-record.ts";

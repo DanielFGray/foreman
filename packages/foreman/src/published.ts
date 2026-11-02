@@ -12,7 +12,7 @@
  */
 import { DateTime, Effect, FileSystem, Option, Path, Schema as S } from "effect";
 import type { FleetState } from "./dispatcher.ts";
-import type { EpicProgress, Item } from "./prog.ts";
+import type { EpicProgress, Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
 import { MODES, modeOf, Policy } from "./policy.ts";
 import {

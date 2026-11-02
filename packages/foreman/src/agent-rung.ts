@@ -9,7 +9,7 @@ import {
 } from "./ladder.ts";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import type { AgentNode } from "./pipeline.ts";
-import { failuresOf, walledBy } from "./prog.ts";
+import { failuresOf, walledBy } from "./records.ts";
 
 /**
  * The rung an agent block runs a task on, given this reading's allowances.

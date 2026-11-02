@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
 import { interleave, queueFrom } from "./queue.ts";
-import type { Item } from "./prog.ts";
+import type { Item } from "./records.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
 

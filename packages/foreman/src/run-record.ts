@@ -1,5 +1,5 @@
 import type { NewRun, Role } from "tasks";
-import { countOf, isResearch, SIZE, type Item } from "./prog.ts";
+import { countOf, isResearch, SIZE, type Item } from "./records.ts";
 
 /**
  * The store's words for foreman's accounts.

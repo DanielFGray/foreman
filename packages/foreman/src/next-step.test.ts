@@ -6,7 +6,7 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
 import { place, type Placement, STANDARD_PIPELINE } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
-import type { Item, TaskStatus } from "./prog.ts";
+import type { Item, TaskStatus } from "./records.ts";
 import { queueFrom } from "./queue.ts";
 import type { Landing } from "./repository.ts";
 import type { TaskPhase } from "./task-phase.ts";

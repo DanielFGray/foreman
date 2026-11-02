@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import type { WorkerState } from "./fleet.ts";
-import type { TaskStatus } from "./prog.ts";
+import type { TaskStatus } from "./records.ts";
 
 /** The observable situation that determines how settle must treat a task. */
 export interface TaskPhaseInput {

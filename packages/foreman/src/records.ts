@@ -1,33 +1,30 @@
 import { Context, Effect, Layer, Option, Schema as S } from "effect";
 import { SqlClient } from "effect/sql";
 import {
-  Tasks,
-  TaskError,
   addRound,
   closeOpenRuns,
   deleteOpenRunOf,
   landAuthorRun,
   openRun,
   recordCheck,
-  nameExit,
+  recordExit,
   runsOf,
   type Ending,
   type CheckRun,
   type Item as TaskItem,
   type LogEntry,
-  type NamedExit,
   type NewRun,
   type Role,
   type Run,
-  type TaskEvent,
 } from "tasks";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import type { Rung } from "./ladder.ts";
+import { TasksTracker, Tracker, TrackerError } from "./tracker.ts";
 
 export type { Status as TaskStatus } from "tasks";
 
 /**
- * A task as foreman reads it: the store's item, the runs on it oldest first,
+ * A task as foreman reads it: the tracker's item, the runs on it oldest first,
  * and the tip of its branch.
  *
  * The tip is not in the store. The dispatcher's observation stamps it from git,
@@ -39,37 +36,51 @@ export interface Item extends TaskItem {
   readonly tip: string | undefined;
 }
 
+/** The endings a release closes a task's open runs with, per role. */
+export interface Endings {
+  readonly author?: Ending;
+  readonly review?: Ending;
+}
+
+/** The status move an exit makes, if any: back to the queue, or on to review. */
+export type ExitMove = "reopen" | "review";
+
 /**
- * The task store: foreman's labels on tasks, the runs on them, and which
- * status move each of foreman's operations is.
+ * Foreman's records of the work: the runs on each task (who worked it, on
+ * which rung, how it ended, on which commit) and the marks foreman keeps as
+ * labels (failures, attempts, walls, the operator's column, diagnostics).
+ * Reads join the tracker's tasks with their runs.
  *
- * Everything foreman knows about work comes through this service. The store is
- * the `tasks` package, in process. A write that goes with a status change
- * (opening a run, closing it) shares one transaction with the change.
+ * The runs live in the task store's database, keyed by task id. A records
+ * write that goes with a status move (closing runs as a task is released or
+ * completed) runs both in one transaction on that connection: atomic because
+ * `TasksTracker` writes on the same connection, which `layer` guarantees by
+ * building the two from one store.
  */
-export class Prog extends Context.Service<Prog>()("Prog", {
+export class Records extends Context.Service<Records>()("Records", {
   make: Effect.gen(function* () {
-    const tasks = yield* Tasks;
+    const tracker = yield* Tracker;
     const sql = yield* SqlClient.SqlClient;
 
-    /** Runs a store call, naming the operation in its failure. */
+    /** Runs a records write, naming the operation in its failure. */
     const as =
       (command: string) =>
-      <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, ProgError> =>
+      <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, RecordsError | TrackerError> =>
         effect.pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProgError({
-                command,
-                detail: cause instanceof TaskError ? cause.detail : String(cause),
-              }),
+          Effect.mapError((cause) =>
+            cause instanceof TrackerError
+              ? cause
+              : new RecordsError({
+                  command,
+                  detail:
+                    typeof cause === "object" && cause !== null && "detail" in cause
+                      ? String(cause.detail)
+                      : String(cause),
+                }),
           ),
         );
 
-    const send = (task: string, event: TaskEvent) =>
-      tasks.send(task, event).pipe(as(`${event} ${task}`), Effect.asVoid);
-
-    /** Runs a write on runs and a status change as one transaction. */
+    /** Runs records writes and status moves as one transaction. */
     const together = <A, E>(command: string, effect: Effect.Effect<A, E>) =>
       sql.withTransaction(effect).pipe(as(command));
 
@@ -90,7 +101,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
     /** The tasks with their runs, oldest first. */
     const withRuns = (
       items: ReadonlyArray<TaskItem>,
-    ): Effect.Effect<ReadonlyArray<Item>, ProgError> =>
+    ): Effect.Effect<ReadonlyArray<Item>, RecordsError | TrackerError> =>
       onStore(runsOf(items.map((item) => item.id))).pipe(
         Effect.map((byTask) =>
           items.map((item): Item => ({ ...item, runs: byTask.get(item.id) ?? [], tip: undefined })),
@@ -98,37 +109,34 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         as("read runs"),
       );
 
-    /** Rewrites a task's labels in one transaction, answering the ones it carried before. */
-    const relabel = (
-      task: string,
-      change: (labels: ReadonlyArray<string>) => ReadonlyArray<string>,
-    ) => tasks.relabel(task, change).pipe(as(`relabel ${task}`));
-
     /** Drops every label of the named kinds, whatever value each carries, then adds `added`. */
     const replaceKinds = (task: string, kinds: ReadonlyArray<string>, ...added: Array<string>) =>
-      relabel(task, (labels) => [
-        ...labels.filter((label) => !kinds.includes(kindOf(label))),
-        ...added,
-      ]).pipe(Effect.asVoid);
+      tracker
+        .relabel(task, (labels) => [
+          ...labels.filter((label) => !kinds.includes(kindOf(label))),
+          ...added,
+        ])
+        .pipe(Effect.asVoid);
 
     /** Drops the attempt count of one rung, leaving every other rung's alone, then adds `added`. */
     const replaceAttempts = (task: string, rung: string, added: string) =>
-      relabel(task, (labels) => [
-        ...labels.filter((label) => attemptFor(label, rung) === undefined),
-        added,
-      ]).pipe(Effect.asVoid);
+      tracker
+        .relabel(task, (labels) => [
+          ...labels.filter((label) => attemptFor(label, rung) === undefined),
+          added,
+        ])
+        .pipe(Effect.asVoid);
 
     /**
-     * One task, or nothing when the store has no such task.
+     * One task, or nothing when the tracker has no such task.
      *
      * "There is no such task" is an answer about the world, not a failure to
      * read it, and the two must not collapse: a workspace whose task was
-     * deleted is residue to surface, while a store that would not answer says
+     * deleted is residue to surface, while a tracker that would not answer says
      * nothing at all and must leave the workspace alone.
      */
     const lookup = (task: string) =>
-      tasks.get(task).pipe(
-        as(`show ${task}`),
+      tracker.lookup(task).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeed(Option.none<Item>()),
@@ -137,21 +145,43 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         ),
       );
 
-    /** One task, failing when the store has no such task. */
+    /** One task, failing when the tracker has no such task. */
     const show = (task: string) =>
       lookup(task).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () =>
-              new ProgError({ command: `show ${task}`, detail: "no such task in the store" }),
+              new TrackerError({ command: `show ${task}`, detail: "no such task in the store" }),
             onSome: Effect.succeed,
           }),
         ),
       );
 
+    /** Closes the task's open runs with these endings, `released` by default, and requeues it. */
+    const releasing = (task: string, endings: Endings) =>
+      onStore(
+        closeOpenRuns(task, {
+          author: endings.author ?? "released",
+          review: endings.review ?? "released",
+        }),
+      ).pipe(Effect.andThen(tracker.reopen(task)));
+
+    /**
+     * Returns a task to the queue and closes its open runs in one transaction,
+     * each `released` unless `endings` names another. An exit an agent named
+     * stands. A task already open stays open, and its runs still close.
+     *
+     * A reviewer that is over and a task that is open is exactly the shape a
+     * rejection leaves, so a review run left open on a requeued task would
+     * make the settle loop climb a rung for a rejection nobody gave. Closed,
+     * the run is not the task's reviewer.
+     */
+    const release = (task: string, endings: Endings = {}) =>
+      together(`release ${task}`, releasing(task, endings));
+
     /** The items that belong to one epic. */
     const children = (epic: string) =>
-      tasks.list({ parent: epic }).pipe(as(`list --parent ${epic}`), Effect.flatMap(withRuns));
+      tracker.list({ parent: epic }).pipe(Effect.flatMap(withRuns));
 
     /**
      * One project's tasks in a given status.
@@ -162,9 +192,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
      * dutifully hands them all back.
      */
     const byStatus = (project: string, status: "in_progress" | "reviewing" | "done") =>
-      tasks
-        .list({ project, status, type: "task" })
-        .pipe(as(`list -p ${project} --status ${status}`), Effect.flatMap(withRuns));
+      tracker.list({ project, status, type: "task" }).pipe(Effect.flatMap(withRuns));
 
     return {
       show,
@@ -172,7 +200,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
-        Effect.all([lookup(task), tasks.logs(task).pipe(as(`show ${task}`))]).pipe(
+        Effect.all([lookup(task), tracker.logs(task)]).pipe(
           Effect.map(([item, logs]) =>
             Option.map(item, (found): TaskDetail => ({ ...found, logs })),
           ),
@@ -180,7 +208,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
 
       /** Unblocked, unclaimed tasks, in every project or in one. */
       ready: (project: Option.Option<string>) =>
-        tasks.ready(Option.getOrUndefined(project)).pipe(as("ready"), Effect.flatMap(withRuns)),
+        tracker.ready(Option.getOrUndefined(project)).pipe(Effect.flatMap(withRuns)),
 
       /** Tasks whose author is finished and which are waiting to be reviewed. */
       awaitingReview: (project: string) => byStatus(project, "reviewing"),
@@ -193,8 +221,7 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * children of every other epic are not read.
        */
       epicsOver: (over: ReadonlyArray<{ readonly parent: string | undefined }>) =>
-        tasks.list({ status: "in_progress", type: "epic" }).pipe(
-          as("list --status in_progress --type epic"),
+        tracker.list({ status: "in_progress", type: "epic" }).pipe(
           Effect.flatMap(withRuns),
           Effect.flatMap((epics) =>
             Effect.forEach(
@@ -211,10 +238,15 @@ export class Prog extends Context.Service<Prog>()("Prog", {
       /**
        * Every completed task in one project.
        *
-       * The store has no limit, so the caller filters this to recent work by
+       * The tracker has no limit, so the caller filters this to recent work by
        * `lastActivityAt`; nothing above this file decides what "recent" is.
        */
       landed: (project: string) => byStatus(project, "done"),
+
+      /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
+      claimed: (project: string) => byStatus(project, "in_progress"),
+
+      children,
 
       /**
        * Records which rung of the ladder did the work, so review can pick the
@@ -224,9 +256,16 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * new lap (`lap.ts`): everything the last reviews said goes out of scope
        * with no code that clears it. The run carries its own correction count, so
        * a new author starts at none.
+       *
+       * Claims the task in the same transaction, so a claimed task always has
+       * its author run. A task already claimed, such as one whose author
+       * vanished, stays claimed.
        */
       attribute: (task: string, run: NewRun) =>
-        together(`attribute ${task}`, onStore(openRun(run)).pipe(Effect.asVoid)),
+        together(
+          `attribute ${task}`,
+          tracker.claim(task).pipe(Effect.andThen(onStore(openRun(run))), Effect.asVoid),
+        ),
 
       /**
        * Records how a check block's command ended on the commit it ran on. A
@@ -245,10 +284,16 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * Names the exit that ends the task's open agent run, with the commit it
        * is named on and the status move it makes, in one transaction.
        */
-      nameExit: (task: string, exit: NamedExit) =>
-        onStore(nameExit(task, exit).pipe(Effect.provideService(Tasks, tasks))).pipe(
-          Effect.asVoid,
-          as(`name exit ${exit.name} on ${task}`),
+      nameExit: (
+        task: string,
+        exit: { readonly name: string; readonly commit: string | undefined },
+        move: ExitMove | undefined,
+      ) =>
+        together(
+          `name exit ${exit.name} on ${task}`,
+          onStore(recordExit(task, exit)).pipe(
+            Effect.andThen(move === undefined ? Effect.void : tracker[move](task)),
+          ),
         ),
 
       /**
@@ -285,28 +330,57 @@ export class Prog extends Context.Service<Prog>()("Prog", {
         together(
           `abandon ${role} of ${task}`,
           onStore(deleteOpenRunOf(task, role)).pipe(
-            Effect.andThen(role === "author" ? tasks.send(task, "open") : Effect.void),
+            Effect.andThen(role === "author" ? tracker.reopen(task) : Effect.void),
           ),
         ),
 
-      /** Parks a task in the operator's column, whatever the ladder would say. */
-      parkForOperator: (task: string) =>
-        tasks.label(task, NEEDS_YOU).pipe(as(`label ${task} ${NEEDS_YOU}`)),
+      release,
+
+      /**
+       * Releases the task, as `release` does, and parks it in the operator's
+       * column, in one transaction: whatever the ladder would say, a person
+       * decides what comes next.
+       */
+      park: (task: string, endings: Endings = {}) =>
+        together(
+          `park ${task}`,
+          releasing(task, endings).pipe(Effect.andThen(tracker.label(task, NEEDS_YOU))),
+        ),
+
+      /**
+       * Marks work complete after foreman has landed its branch, and closes the
+       * task's runs in the same transaction: the reviewer's keeps its exit,
+       * and the lap's author run becomes `committed` (`answered` for research).
+       * Done first, so a task that cannot be completed fails on `done` itself.
+       * A wall label left on a done task is inert: nothing dispatches it.
+       */
+      complete: (task: Pick<Item, "id" | "labels">) =>
+        together(
+          `done ${task.id}`,
+          tracker
+            .complete(task.id)
+            .pipe(
+              Effect.andThen(
+                onStore(closeOpenRuns(task.id, { author: "released", review: "released" })),
+              ),
+              Effect.andThen(onStore(landAuthorRun(task.id, isResearch(task)))),
+              Effect.andThen(replaceKinds(task.id, [WALLED])),
+            ),
+        ),
 
       /** Records that the task's agent stopped on this account's usage wall. */
-      markWall: (task: string, provider: string) =>
-        tasks.label(task, `${WALLED}:${provider}`).pipe(as(`label ${task} ${WALLED}`)),
+      markWall: (task: string, provider: string) => tracker.label(task, `${WALLED}:${provider}`),
 
       /**
        * Records that a rung was tried on this task and was not enough.
        *
-       * Durable in the task store rather than in foreman's memory, because this
-       * is exactly what the next dispatch — possibly days later, possibly after
-       * a restart — reads to decide which model gets the work. It names the
-       * rung that failed, never the one that runs next: what runs next depends
-       * on which rungs are configured and paid for at the moment of dispatch,
-       * and a task that stated that in advance would be stranded by a config
-       * edit or a spent account.
+       * Durable rather than in foreman's memory, because this is exactly what
+       * the next dispatch — possibly days later, possibly after a restart —
+       * reads to decide which model gets the work. It names the rung that
+       * failed, never the one that runs next: what runs next depends on which
+       * rungs are configured and paid for at the moment of dispatch, and a task
+       * that stated that in advance would be stranded by a config edit or a
+       * spent account.
        *
        * The rung's attempt count goes with it. The count exists to decide when
        * the rung is spent; once it is spent, the count has been read for the
@@ -337,86 +411,26 @@ export class Prog extends Context.Service<Prog>()("Prog", {
        * deserved", and the work drops back to the model below.
        */
       clearFailure: (task: string, rung: string) =>
-        relabel(task, (labels) =>
-          labels.filter((label) => valueOf(label, FAILED_BY) !== rung),
-        ).pipe(Effect.asVoid),
+        tracker
+          .relabel(task, (labels) => labels.filter((label) => valueOf(label, FAILED_BY) !== rung))
+          .pipe(Effect.asVoid),
 
       /** Puts a task a person parked back in the queue at the rung it had earned. */
-      clearNeedsYou: (task: string) =>
-        tasks.unlabel(task, NEEDS_YOU).pipe(as(`unlabel ${task} ${NEEDS_YOU}`)),
+      clearNeedsYou: (task: string) => tracker.unlabel(task, NEEDS_YOU),
 
       markDiagnostic: (task: string, intent: DiagnosticIntent) =>
         replaceKinds(task, [DIAGNOSING], `${DIAGNOSING}:${intent}`),
 
       clearDiagnostic: (task: string) => replaceKinds(task, [DIAGNOSING]),
-
-      /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
-      claimed: (project: string) => byStatus(project, "in_progress"),
-
-      /** Creates a task and returns its id. */
-      add: (project: string, title: string, description: string, labels: ReadonlyArray<string>) =>
-        tasks.add({ project, title, description, labels }).pipe(as(`add ${title}`)),
-
-      /** Claims a task. After this the task is invisible to `ready`. */
-      claim: (task: string) => send(task, "start"),
-
-      /**
-       * Returns a task to the queue and closes its open runs in one
-       * transaction: the author's with `ending`, a reviewer's `released`.
-       *
-       * A reviewer that is over and a task that is open is exactly the shape a
-       * rejection leaves, so a review run left open on a requeued task would
-       * make the settle loop climb a rung for a rejection nobody gave. Closed,
-       * the run is not the task's reviewer.
-       */
-      release: (task: string, ending: Ending = "released") =>
-        together(
-          `release ${task}`,
-          onStore(closeOpenRuns(task, { author: ending, review: "released" })).pipe(
-            Effect.andThen(tasks.send(task, "open")),
-          ),
-        ),
-
-      /**
-       * Puts a task with an unread branch in front of a reviewer, from whatever
-       * state it was left in: the commits exist and nobody can say whether
-       * they are any good, which is the question a reviewer answers. From
-       * `reviewing` the ordinary loop takes over.
-       */
-      submit: (task: string) => send(task, "submit"),
-
-      /** Moves already-claimed work to formal review. */
-      review: (task: string) => send(task, "review"),
-
-      /** Appends to the task's audit trail. Also counts as activity. */
-      log: (task: string, message: string) => tasks.log(task, message).pipe(as(`log ${task}`)),
-
-      children,
-
-      /**
-       * Marks work complete after foreman has landed its branch, and closes the
-       * task's runs in the same transaction: the reviewer's keeps its exit,
-       * and the lap's author run becomes `committed` (`answered` for research).
-       * Done first, so a task that cannot be completed fails on `done` itself.
-       * A wall label left on a done task is inert: nothing dispatches it.
-       */
-      complete: (task: Pick<Item, "id" | "labels">) =>
-        together(
-          `done ${task.id}`,
-          tasks
-            .send(task.id, "done")
-            .pipe(
-              Effect.andThen(
-                onStore(closeOpenRuns(task.id, { author: "released", review: "released" })),
-              ),
-              Effect.andThen(onStore(landAuthorRun(task.id, isResearch(task)))),
-              Effect.andThen(replaceKinds(task.id, [WALLED])),
-            ),
-        ),
     } as const;
   }),
 }) {
-  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(Tasks.layerSql));
+  /**
+   * Records and the tasks tracker over one store connection, which the caller
+   * provides once. Both services come out, and they share that connection,
+   * which is what makes `together` atomic across them.
+   */
+  static readonly layer = Layer.effect(this, this.make).pipe(Layer.provideMerge(TasksTracker));
 }
 
 /** An epic being driven, and its direct children: how close it is to done. */
@@ -611,7 +625,7 @@ export const diagnosticIntent = (item: {
   return intent === "diagnose" || intent === "review" ? intent : undefined;
 };
 
-export class ProgError extends S.TaggedError<ProgError>()("ProgError", {
+export class RecordsError extends S.TaggedError<RecordsError>()("RecordsError", {
   command: S.String,
   detail: S.String,
 }) {
