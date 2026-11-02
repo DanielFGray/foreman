@@ -408,27 +408,37 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * whereas an unclaimed task has not started costing anything yet. Filling
      * slots with new work while reviews pile up is how a queue grows a
      * permanent tail of almost-done tasks.
+     *
+     * The tick answers `moved`, and acts no further, when `codeMoved` says the
+     * checkout this process loaded its code from has a new commit: the prompts
+     * and store migrations on disk then belong to code this process does not
+     * run. It asks before the reading and again before fill, because a
+     * landing in settle can move that checkout and fill renders prompts.
      */
-    const tick = Effect.gen(function* () {
-      const { current, providers } = yield* read;
-      if (modeOf(current.policy) !== "running") return;
-      yield* settle(current);
-      yield* tidy(current);
-      yield* reclaim(current);
-      yield* recover(current);
-      // The second reading is narrow, not stale. The passes above write to the
-      // store and to git, so what fill decides from has to be read after them —
-      // but a dispatch turns on ten fields, and the columns only a person reads
-      // cost a store read per branch and a `git status` per worktree to build.
-      // Reading them again here would be work whose one consumer is the
-      // discard.
-      yield* fill(yield* readDispatch(providers));
-      // A grant with nothing left to cover is removed, so the file says only
-      // what still holds.
-      if (current.policy.grants.length > 0) {
-        yield* writePolicy((policy) => expire(policy, current.scopes));
-      }
-    }).pipe(Effect.withSpan("foreman.tick"));
+    const tick = (codeMoved: Effect.Effect<boolean>) =>
+      Effect.gen(function* () {
+        if (yield* codeMoved) return "moved" as const;
+        const { current, providers } = yield* read;
+        if (modeOf(current.policy) !== "running") return "ran" as const;
+        yield* settle(current);
+        yield* tidy(current);
+        yield* reclaim(current);
+        yield* recover(current);
+        if (yield* codeMoved) return "moved" as const;
+        // The second reading is narrow, not stale. The passes above write to the
+        // store and to git, so what fill decides from has to be read after them —
+        // but a dispatch turns on ten fields, and the columns only a person reads
+        // cost a store read per branch and a `git status` per worktree to build.
+        // Reading them again here would be work whose one consumer is the
+        // discard.
+        yield* fill(yield* readDispatch(providers));
+        // A grant with nothing left to cover is removed, so the file says only
+        // what still holds.
+        if (current.policy.grants.length > 0) {
+          yield* writePolicy((policy) => expire(policy, current.scopes));
+        }
+        return "ran" as const;
+      }).pipe(Effect.withSpan("foreman.tick"));
 
     /**
      * What each account behind the ladder has left of its allowance.
@@ -2582,8 +2592,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // failures still position, but offering it would spawn nothing.
       rungs: dispatchableRungs(settings.ladder).map((rung) => rung.name),
 
-      /** Reads and settles the world once. `run` repeats it. */
-      tick,
+      /** Reads and settles the world once, never stopping for a code change. `run` repeats it. */
+      tick: Effect.asVoid(tick(Effect.succeed(false))),
 
       /**
        * Tells `run` to tick now instead of at the end of its poll interval. A
@@ -2595,22 +2605,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       /** Reads the world once without acting on it. */
       read: Effect.asVoid(read),
 
-      /** Runs until interrupted. */
-      run: Effect.gen(function* () {
-        yield* Effect.logInfo(
-          `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
-        );
-        yield* Effect.forkScoped(watchPolicy);
-        return yield* tick.pipe(
-          Effect.andThen(
-            Effect.raceFirst(
+      /**
+       * Runs until interrupted, or until `codeMoved` answers true. A host
+       * whose code comes from a checkout foreman lands into passes a check of
+       * that checkout, and starts a new process on the new code when `run`
+       * returns.
+       */
+      run: (codeMoved: Effect.Effect<boolean> = Effect.succeed(false)) =>
+        Effect.gen(function* () {
+          yield* Effect.logInfo(
+            `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
+          );
+          yield* Effect.forkScoped(watchPolicy);
+          while ((yield* tick(codeMoved)) === "ran") {
+            yield* Effect.raceFirst(
               Effect.sleep(Duration.seconds(settings.pollInterval)),
               Queue.take(wake),
-            ),
-          ),
-          Effect.forever,
-        );
-      }),
+            );
+          }
+          yield* Effect.logInfo(
+            "foreman's own code has a new commit: stopping so the host starts again on it",
+          );
+        }),
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
