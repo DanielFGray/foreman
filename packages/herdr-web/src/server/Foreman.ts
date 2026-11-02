@@ -72,11 +72,17 @@ export class Foreman extends Context.Service<Foreman>()("herdr-web/server/Forema
     }
 
     // An interruption is the bridge stopping, not a failure to recover from.
+    // The dispatcher returns only when foreman's own checkout has a new
+    // commit. A new dispatcher in this process would still run the old code,
+    // so the bridge shuts down the way `systemctl stop` does, and the
+    // service manager (Restart=always) starts it on the new code.
     yield* Effect.forkScoped(
       attempt.pipe(
         Effect.sandbox,
         Effect.tapError(failed),
         Effect.retry({ schedule: BACKOFF, while: (cause) => !Cause.hasInterruptsOnly(cause) }),
+        Effect.andThen(Effect.logInfo("foreman's code changed; the bridge stops so its service starts it again")),
+        Effect.andThen(Effect.sync(() => process.kill(process.pid, "SIGTERM"))),
       ),
     )
 

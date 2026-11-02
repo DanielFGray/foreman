@@ -1733,6 +1733,39 @@ describe("a usage wall", () => {
   });
 });
 
+describe("a new commit in foreman's own checkout", () => {
+  /** Runs the dispatcher with a code check that answers `answers` in turn, then true. */
+  const runWith = (world: World, answers: ReadonlyArray<boolean>) => {
+    const left = [...answers];
+    return Effect.runPromise(
+      Effect.scoped(
+        Dispatcher.use((dispatcher) =>
+          dispatcher.run(Effect.sync(() => left.shift() ?? true)).pipe(Effect.timeout("5 seconds")),
+        ),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+  };
+
+  test("leaves a queued task dispatched while the code stands still", async () => {
+    const world = new World(item("ts-fresh", "open", [], "test", []));
+    await tick(world);
+    expect(world.spawned).toEqual([["ts-fresh", "author"]]);
+  });
+
+  test("ends the run before it reads the world", async () => {
+    const world = new World(item("ts-fresh", "open", [], "test", []));
+    await runWith(world, []);
+    expect(world.spawned).toEqual([]);
+    expect(world.writes).toEqual([]);
+  });
+
+  test("ends the run before fill when the tick's own passes moved it", async () => {
+    const world = new World(item("ts-fresh", "open", [], "test", []));
+    await runWith(world, [false]);
+    expect(world.spawned).toEqual([]);
+  });
+});
+
 describe("a policy change", () => {
   test("is published within a second, not at the next poll", async () => {
     usePolicy({ ...ALLOWED, paused: true });
@@ -1740,7 +1773,7 @@ describe("a policy change", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const dispatcher = yield* Dispatcher;
-          yield* Effect.forkScoped(dispatcher.run);
+          yield* Effect.forkScoped(dispatcher.run());
           const read = SubscriptionRef.get(dispatcher.state);
           // The first tick has published once the reading carries a time; the
           // next one is a full poll interval (60 s) away.

@@ -110,11 +110,27 @@ export const queueOf = (project: Option.Option<string>) =>
 export const buildHost = Effect.gen(function* () {
   const context = yield* Layer.build(services);
   const dispatcher = Context.get(context, Dispatcher);
+  const repository = Context.get(context, Repository);
+  const headOfCode = repository.head(import.meta.dir).pipe(Effect.option);
+  loadedCommit ??= Option.getOrUndefined(yield* headOfCode);
+  const loaded = loadedCommit;
   return {
     /** Each reading of the world, replaced whole. */
     state: dispatcher.state,
-    /** Ticks until interrupted or until a tick fails. */
-    run: dispatcher.run.pipe(Effect.provideContext(context)),
+    /**
+     * Ticks until interrupted, until a tick fails, or until the checkout this
+     * process loaded foreman from has a new commit. It returns only in the
+     * last case, and the host then starts a new process on the new code.
+     */
+    run: dispatcher
+      .run(
+        headOfCode.pipe(
+          Effect.map(
+            (head) => loaded !== undefined && Option.isSome(head) && head.value !== loaded,
+          ),
+        ),
+      )
+      .pipe(Effect.provideContext(context)),
     /** Asks for a reading now, after a command changed the world. */
     wake: dispatcher.wake,
     /** The ranked queue for one project or every open one, as published rows. */
@@ -127,6 +143,13 @@ export const buildHost = Effect.gen(function* () {
 });
 
 export type Host = Effect.Success<typeof buildHost>;
+
+/**
+ * The commit of foreman's own checkout when this process first built a host:
+ * the code it runs. Kept per process, not per host, because a host built
+ * again after a failure still runs the code the process loaded.
+ */
+let loadedCommit: string | undefined;
 
 /**
  * What a host publishes while the dispatcher is down: its last reading if it
