@@ -7,8 +7,8 @@ import { LANDINGS, type Pipeline, type PipelineNode } from "foreman/pipeline"
 import { addRoute, addSource, configure, INSERTABLE, type Insertable, insertOn, rejoin, remove, removeRoute, swapEnd, type Wire } from "foreman/pipeline-belt"
 import { FOREMAN_STEPS } from "../shared/Foreman.ts"
 
-/** One way out of a block, as `pipeline-belt` names it: `next`, a router's `else`, or route `n`. */
-export const WirePort = S.Union([S.Literals(["next", "else"]), S.Int])
+/** One way out of a block, as `pipeline-belt` names it: `next`, a router's `else`, route `n`, or an agent's or check's `exit:<name>`. */
+export const WirePort = S.Union([S.Literals(["next", "else"]), S.Int, S.TemplateLiteral(["exit:", S.String])])
 
 export const WireRef = S.Struct({ from: S.String, port: WirePort })
 export type WireRef = typeof WireRef.Type
@@ -86,7 +86,8 @@ const settled = (now: Drafting): Drafting => ({
 export const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸", branch: "⎇", worktree: "▤", done: "✔" }
 
 /** A wire's way out in words: `next`, `else`, or `route n` counted from one. */
-export const portName = (wire: Pick<Wire, "port">): string => (typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port)
+export const portName = (wire: Pick<Wire, "port">): string =>
+  typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port.startsWith("exit:") ? wire.port.slice("exit:".length) : wire.port
 
 /** A block's settings in a few words, for its card. */
 export const summaryOf = (node: PipelineNode): string => {

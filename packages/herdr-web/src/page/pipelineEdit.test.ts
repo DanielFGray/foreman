@@ -28,7 +28,7 @@ test("a rejoin that would loop leaves the draft as it was", () => {
 
 test("a card says what its block does in a few words", () => {
   expect(summaryOf({ kind: "source", id: "q", filter: "", next: "x" })).toBe("every task")
-  expect(summaryOf({ kind: "agent", id: "a", role: "author", model: "ladder", slots: 2, next: "x" })).toBe("author · ladder ×2")
+  expect(summaryOf({ kind: "agent", id: "a", role: "author", model: "ladder", slots: 2, exits: [{ name: "done", to: "x" }, { name: "already-done", to: "x" }] })).toBe("author · ladder ×2")
 })
 
 test("a land's how is set in the inspector, and an end turns into a done", () => {

@@ -55,8 +55,9 @@ test("the standard pipeline draws as one belt with the retry branch", () => {
     { update, view },
     ...opened,
     expectAll(all.selector(".pipeline-station")).toHaveCount(STANDARD_PIPELINE.nodes.length),
-    // The router's two routes and its else are three wires, each labelled; the other blocks have one.
-    expectAll(all.selector(".pipeline-track")).toHaveCount(12),
+    // The router's two routes and its else are three wires, each labelled; the author's
+    // done and already-done are two; every other block has one.
+    expectAll(all.selector(".pipeline-track")).toHaveCount(13),
     expect(selector(".pipeline-wire-label[title='failed']")).toExist(),
     expect(selector(".pipeline-wire-label[title='else']")).toExist(),
     // The retry gate stands on a row of its own, below the main belt.
