@@ -173,10 +173,12 @@ move recorded on ts-4e763a.
   `exits` are added.
 - **One reader.** `factsOf` stays the only function that reads these records,
   so the rest of foreman sees facts, not rows.
-- **Where it lives.** The runs and the two tables are in the task store, which
-  is the world foreman reads each tick. So this keeps "Durable state beyond the
-  policy and pipelines files is a wall" (CLAUDE.md): foreman holds no new state
-  of its own.
+- **Where it lives.** The runs and the two tables are in foreman's database,
+  keyed by task id, so a tracker adapter carries only task state (decision on
+  ts-4e763a, 2026-11-01). Today that database is the same file as the built-in
+  task store. This replaces "Durable state beyond the policy and pipelines files
+  is a wall … the fix belongs in hc, herdr-app or prog" (AGENTS.md) for the
+  records foreman writes about its own runs.
 - **Migration.** A store migration turns each existing `failed-by:`,
   `attempt:`, `walled:` and `needs-you` label into the matching run fields or
   rows, then removes the label.
