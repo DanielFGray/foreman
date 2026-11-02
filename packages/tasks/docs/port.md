@@ -1,6 +1,8 @@
 # tasks: prog's task tracking, in the monorepo
 
-Status: plan, accepted for build. Steps are committed one at a time.
+Status: live since 2026-11-02. `tasks` and `prog` share one store. The `tasks`
+CLI does not yet have learnings (learn, context, concepts), so people and
+hooks still use `prog` for those.
 
 ## Why
 
@@ -57,9 +59,9 @@ It follows the rules the Go writer already follows on that file:
    `tasks`' `Item` directly, so no field mapping sits between them. Its queue
    ranks with `tasks`' `rank`.
 3. **Runs.** A `runs` table (task, role, rung, start, end, outcome, verdict)
-   replaces the dispatcher's labels. Open decision: the trials table in
-   `~/.agents/model-trials.db` already records one row per run for the herd
-   skill, so one of the two must be the authority.
+   replaces the dispatcher's labels. The `runs` table is the authority: the
+   trials of `~/.agents/model-trials.db` were imported into it at the cutover
+   (2026-11-02), and that file is now a read-only archive.
 4. **The `tasks` CLI**, for the commands agents run on tasks.
 5. **The pipeline engine** (`feat/pipeline-engine`), placing tasks from runs.
 
