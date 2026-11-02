@@ -3,6 +3,14 @@ workspace, logging and handoff; a skill may supply methods but does not change
 them. Where a skill expects a person to confirm, use the task's recorded decisions,
 or log the open decision and stop.
 
+## Workspace
+
+Run tests with `./scripts/test-changed.sh` instead of the full suite. This script
+runs tests only in workspace packages changed since the branch base commit
+(merge-base with develop). If root files outside any package are changed, it runs
+all package tests. The foreman landing verify (`scripts/verify.sh`) still runs
+everything.
+
 ## Start
 
 1. `git status` and the log of your work, as the workspace section says: an earlier
