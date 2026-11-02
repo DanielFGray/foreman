@@ -38,7 +38,8 @@ a claim made by hand.
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
 | Who authored this branch? | the rung of the task's latest author run |
 | Is a reviewer assigned? | an open review run in the task's current lap |
-| Has a reviewer accepted it? | the lap's last verdict is `approved`, and the branch tip is the commit that review read |
+| Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
+| Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
 | Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels |
 | How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
 | Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
@@ -180,12 +181,12 @@ abandoned one from one whose owner is away.
 
 Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
 a reviewer sending work back, a branch that broke the project's verification, or
-a rung spent by `attemptsPerRung` unfinished endings. A branch that merely would
+a rung spent by `attemptsPerRung` `stopped` endings. A branch that merely would
 not **merge** is none of them: every author cuts from the trunk's tip, so a
 branch whose tip has not moved fast-forwards and cannot conflict — a conflict
 therefore means the trunk moved afterwards, which no model is stronger at
 avoiding. It returns to the queue at the same rung, with the conflicting paths
-on its log, and the ordinary unfinished count still bounds a task that cannot
+on its log, and the ordinary attempt count still bounds a task that cannot
 get past it. An agent that merely stopped without
 finishing has said nothing about its model — a crash and a timeout end the same
 way — so the task stays on the rung and is tried again. The count of those
@@ -235,7 +236,7 @@ The dispatch gate cannot be the only gate, because a tree can go dirty in the
 hours between an agent starting and its branch being ready. `Repository.merge`
 asks the same question again before it proves anything (only the already-merged
 check below comes first) and returns `Held`: the landing is not attempted, the
-verdict stays on the task, and a later tick lands it. No prompt is involved,
+`approved` exit stays on the run, and a later tick lands it. No prompt is involved,
 because no agent merges.
 
 In a worktree, agents stay out of that checkout entirely. `git` commands there refresh the
@@ -497,23 +498,23 @@ hand, and the entry stays open. Every ending an author can reach there says
 something false — committing invents work, and stopping is indistinguishable
 from a crash, so the task climbs a rung and buys the same discovery again at a
 dearer model until the ladder runs out at the operator. So the author ends its
-run `satisfied` (`tasks verdict <task> satisfied`), and `reviewable` sends that
-one empty branch to a reviewer.
+run by naming the exit `already-done` (`foreman exit <task> already-done`), and
+`reviewable` sends that one empty branch to a reviewer.
 
 A task labelled `research` is the second such branch: its deliverable is a report
 in its own log, so it never has a diff to commit. That label is set when the task
 is filed and survives a requeue, because it names the kind of work rather than
 one attempt.
 
-Both are claims, never verdicts. "It is already done" is exactly what a model too
-weak for a task would say to escape it, so the reviewer confirms a `satisfied`
+Both are claims, never approvals. "It is already done" is exactly what a model too
+weak for a task would say to escape it, so the reviewer confirms an `already-done`
 claim against the trunk and a `research` report against its cited evidence, each
-part by part, and its `approved` verdict is what closes the task; a rejection
+part by part, and its `approved` exit is what closes the task; a rejection
 sends it back like any other. Landing needs no special case — an empty branch is
 contained by any checkout, so `merge` answers `Present` and completes the task
 without merging or verifying. The author run's ending and the `research` label
 tell the causes of `Present` apart in the log. A new author run starts a new
-lap, so a `satisfied` ending stops counting with no code that clears it, while
+lap, so an `already-done` exit stops counting with no code that clears it, while
 `research` names the work and stays.
 
 Nothing skips review. A task's priority and its labels are written before anyone
@@ -559,24 +560,27 @@ a new author run starts at zero. The council review the prompt
 asks for before approving is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
 
-**A reviewer that stops without a verdict is the reviewer's failure, not the
-author's.** The task stays in `reviewing`, and its review run ends `no-verdict`;
+**A reviewer that stops without naming an exit is the reviewer's failure, not the
+author's.** The task stays in `reviewing`, and its review run ends `stopped`;
 `reviewerFor` then reads above the author and every rung whose review in this
 lap ended that way. No attempt is charged to the author. When no rung is left
 the task is released and parked with `needs-you`. A reviewer stopped on a usage
 wall ends `walled` and charges no rung. A reviewer whose approval a later commit
-voided has not failed: the same rung may read the new tip.
+voided has not failed: the same rung may read the new tip. This is the review
+block's `stopped: retry`; a block drawn with `stopped: park` parks the task at
+the first stop instead.
 
 **Review state is the current lap's runs.** A lap is the task's latest author
 run and every run after it. A new author run leaves the last lap's reviews
 behind, so no transition clears review state, and no path can forget to.
 
-**A review passes one commit.** The reviewer runs `tasks verdict <task>
-approved|returned`, which ends its run and moves the status in one transaction;
-the run holds the branch tip its reviewer reads: the tip when it opened, moved
-to the new tip when a correction round ends (`foreman wait <task> --role author`
-returns), unless the run already states a verdict. Approval holds only while
-the tip is still that commit, so any other commit after it voids it. Foreman
+**A review passes one commit.** The reviewer runs `foreman exit <task>
+approved|returned`, which reads the task's tip by its route and writes the exit
+and that commit to its run, and moves the status the exit implies, in one
+transaction. A second exit in the same run replaces the first. The exit holds
+only while the tip is still that commit, so any other commit after it voids it,
+and a correction round needs no special case: the reviewer names its exit after
+the round, on the new tip. Foreman
 re-checks the checkout and the tip, merges the approved commit by its id, never
 the branch name, and only then completes the task. A tip that moved since the
 approval is refused, and the task goes to review again.
@@ -630,7 +634,7 @@ That distinction lives wholly in the proving ground. By the time the branch
 reaches the operator's checkout it is proved mergeable against exactly that
 commit, so a refusal there cannot be about content — it is `Held`, always.
 
-`Held` is also what keeps a verdict alive. It leaves the task in `reviewing` and
+`Held` is also what keeps an `approved` exit alive. It leaves the task in `reviewing` and
 the tip where it was, so a later tick lands the same reviewed commit; nothing
 about a lock invalidates a diff a reviewer already read.
 
@@ -665,7 +669,7 @@ already has the commits is not going to be written to, and holding there would
 strand the task for as long as the operator kept editing.
 
 Landing waits for the reviewer's terminal to stop working (`readyToLand`): it
-stays `working` from the moment the verdict is written until the turn ends, and
+stays `working` from the moment the exit is named until the turn ends, and
 teardown runs `worktree remove --force` on the directory the reviewer is
 standing in.
 
@@ -684,7 +688,7 @@ off one read per project:
 
 **`merged` cannot stand in for `empty`.** An author run proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run
-`tasks review` having committed nothing. Asking only "is this branch unmerged" and
+`foreman exit <task> done` having committed nothing. Asking only "is this branch unmerged" and
 reading "no" as "nothing was committed" hands finished, merged work back to the
 queue as empty. A merge landing keeps the first-parent line to the commits the
 checkout held before any branch touched it, but a fast-forward landing puts the
@@ -749,8 +753,10 @@ resident memory — enough of it that a full fleet exhausts this machine. `slots
 does not bound that: `busy` counts `working` and `blocked`, so a settled agent
 frees its slot and keeps its process. Each settle path that has already written
 its record to the store therefore ends with `stopAgents`: the reviewer that
-returned work, the reviewer that stopped without a verdict, and the reviewer
-waiting out a held project. The author that handed off is the exception until
+returned work, the reviewer that stopped without an exit, and the reviewer
+waiting out a held project. An agent that named an exit is ended once its pane
+is idle, and the next tick places its task where the exit leads. The author
+that named `done` is the exception until
 `coachWindowMinutes` pass (`handoffExpired`), so a reviewer can send it a
 correction with `foreman correct`. What the agent did is in the task's log,
 which is where the next one is told to read it.
@@ -879,8 +885,8 @@ not to have been earned.
   `src/prog.ts` collect the exit code and both streams; a new adapter must too.
 - **Module resolution breaks outside the project directory.** Scratch scripts
   that import `./src/*` must live in the repo root.
-- **Landing belongs to foreman, not the reviewer.** The reviewer records its
-  verdict with `tasks verdict`. Foreman owns the clean-checkout gate, merge,
+- **Landing belongs to foreman, not the reviewer.** The reviewer names its
+  exit with `foreman exit`. Foreman owns the clean-checkout gate, merge,
   verification and completing the task.
 
 ## House rules

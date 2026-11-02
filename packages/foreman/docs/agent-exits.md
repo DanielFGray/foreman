@@ -1,6 +1,33 @@
 # Agent exits: the operator designs the contract
 
-Status: proposed, 2026-11-02, for epic ep-dd7957. Nothing here is built.
+Status: rules 1 to 5 and the store's endings are built (ts-48b15f). Rules 6
+and 7, the State section and the page's exit editing are not. "What is built"
+says where the build differs from the text below; where they differ, that
+section is the rule.
+
+## What is built
+
+- **Schema and file.** Agent and check blocks have `exits`; agent blocks have
+  `stopped`. The pipelines file is `version: 3`, and version 2 and 1 read with
+  the standard exits wired as they were: `returned` and `failed` go to `queue`
+  with `fails: author`. The standard pipeline keeps its retry router and has no
+  cycle. Blocks have no `instructions` or `rounds` yet.
+- **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
+  ending. A migration renamed the old endings: `handed-off` to `done`,
+  `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
+  There is no `charged` column: `fails` still writes the `failed-by:` label.
+- **Placement.** An open agent run places the task at its block. Otherwise
+  the last named exit is followed, and an exit is void when the tip is not the
+  commit it was named on (an exit with no commit counts as moved) and either
+  the exit was named at a check or its walk reaches a land or a done. A void
+  exit drops back to the exit before it. A run that named an exit is `ended`
+  until settle closes it once the pane is idle; the next tick places the task
+  where the exit leads, so a landing comes one tick after the approval.
+- **Status.** `foreman exit` makes the status move the exit implies: an exit
+  to `queue` opens and releases the task; an author's exit puts it in
+  `reviewing`. `reviewing` and `role` stay (open questions 2 and 3).
+- **Prompts.** Only the lines that tell an agent how to end changed, to
+  `foreman exit`. The prompt files keep the rest of their text.
 
 Today the contract between an agent and foreman is fixed in two places: the
 prompts ("run `tasks verdict <id> approved|returned`") and the store
