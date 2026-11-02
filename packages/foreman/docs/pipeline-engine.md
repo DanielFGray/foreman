@@ -64,7 +64,7 @@ park.
 | agent | `role`, `model`, `slots?` | `next` | A work block. Dispatches an agent and waits for its run to end. |
 | land | — | (ends) | A work block. Today's `land`. Landing completes the task. |
 | park | — | (ends) | Parks the task for the operator (`needs-you`). |
-| check | `command` | `next` | A work block (stage 4). Runs a command in the task's worktree. |
+| check | `command` | `next` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
 
 A **work block** is one that runs something and takes time: agent, check, land.
 Sources, routers and gates decide at once.
@@ -76,6 +76,7 @@ Sources, routers and gates decide at once.
 | author agent | the author hands off committed work (status `reviewing`) | it stops unfinished or hands back an empty branch (`unfinished`: an attempt, and `failed-by` once the rung is spent) |
 | review agent | the reviewer's verdict is `approved` and the branch tip is still the commit it read | the reviewer sends it back (`climb`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
+| check | `command` exits 0 on the branch tip, or fails at the commit the branch was cut from as well | `command` fails twice on the tip and passes where the branch was cut (`climb`, with the output in the task's log) |
 
 A reviewer that stops without a verdict while a rung is left, a usage wall, a
 blocked agent and a dirty checkout are not endings: the task stays at the block,
@@ -101,6 +102,24 @@ This replaces today's rule that every transition which hands a task back must
 clear `approved` (`Prog.release`, `review`, `submit`, `clearReview`). That rule
 holds only while every path remembers it; a recorded commit holds by itself.
 `Held` still keeps a verdict: the tip has not moved, so the review still passes.
+
+### A check passes one commit
+
+A check runs its command where landing runs verify: in the project's proving
+ground, checked out at the branch tip, so it judges exactly that commit and
+writes to no tree a person or an agent uses. A failure is retried once, as a
+flake, and then run where the branch was cut from its trunk: a command red
+there too says nothing about the branch, so the check passes with a note in
+the task's log. A ground that is not ready, or a tip that moved while the
+command ran, records nothing, and a later tick checks again.
+
+The check records a run with the commit it ran on and the ending `passed` or
+`failed`. The run names no model: the views about models leave it out. Like a
+review, the block counts as passed only while the branch tip is still that
+commit, so a later commit places the task at the check again.
+
+The policy has no step of its own for a check, so the gate before a check
+names one of the existing steps.
 
 ### Models
 
@@ -140,6 +159,8 @@ Filters read facts, never label strings, so when runs replace labels only
    - `ended`: the agent ended its run (an author handed off, or a reviewer
      wrote its verdict), and settle has not closed the run yet.
      Settle closes it, and the walk goes on.
+   A land or a check is always `waiting`: each runs inside one tick and
+   leaves no open run.
 4. A park ends the walk with the task parked.
 
 A task with work in flight when pipelines start has runs from step 4, so it is
@@ -175,10 +196,15 @@ running a flow the operator did not draw is worse than stopping.
 - **Every path to a land passes a review agent after its last author.** With
   the reviewers taken out of the graph, no land is reachable from a source or
   an author.
-- Every agent has a gate on each path into it, and so does every land. With
-  the gates taken out, and the walk halted at each work block, no work block
-  is reachable from a source or from the work block before it. A step that
-  spends without a policy step would be one the operator cannot stop.
+- Every agent has a gate on each path into it, and so does every check and
+  every land. With the gates taken out, and the walk halted at each work
+  block, no work block is reachable from a source or from the work block
+  before it. A step that spends without a policy step would be one the
+  operator cannot stop.
+- Every path to a check passes an author first: a check before any author
+  runs on a branch with no work. A check is not a review, so a land after
+  a check still needs a review after its last author.
+- A check names a command.
 
 Both are reachability checks with `effect/Graph`, which also finds cycles and
 draws the pipeline as Mermaid (`foreman pipeline show`).
@@ -232,15 +258,17 @@ from the main checkout and lands into `develop` there.
 2. Done: `pipelines.json` and `foreman pipeline show|check|set|clear`.
 3. Done: herdr-web's Pipeline page: the editor. It draws, checks and saves
    through foreman's commands, and needs nothing from the dispatcher.
-4. Runs replace labels (tasks step 3b; design in `runs-replace-labels.md`); `factsOf` reads runs and each task's
+4. Done: runs replace labels (tasks step 3b; design in `runs-replace-labels.md`); `factsOf` reads runs and each task's
    branch tip. A review run records the commit it read, and land merges that
    commit by id. Pass criterion: a commit to an approved branch places the task
    at the review block again, with no clearing code on any path; land refuses a
    tip other than the recorded commit; the code that clears `approved` on
    requeue is gone.
-5. The dispatcher runs the standard pipeline through `place`. Pass criterion:
+5. Done: the dispatcher runs the standard pipeline through `place`. Pass criterion:
    the dispatcher tests pass with no test edited, a table test maps each
    `TaskPhase` and merge verdict to its old and its placed next step, and
    placement of the live tasks matches today's working, review and queue views.
 6. Live placement on the Pipeline page; blocks today's flow does not use
-   (pinned and capped agents, park, check).
+   (pinned and capped agents, park, check). The blocks are done: an agent
+   block's `slots` counts its running tasks from placement, and each block
+   has a dispatcher test on a drawn pipeline.
