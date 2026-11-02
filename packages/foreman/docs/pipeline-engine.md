@@ -218,9 +218,8 @@ and the policy step that holds the retry is unchanged.
   moved tip voids it (see "A review passes one commit"). `review-by:*` and
   `review-failed-by:*` go with the labels; the review run's open and close
   replace them.
-- "`satisfied` is cleared wherever `approved` is": open. `satisfied` is the
-  author's claim about its diff, so it likely belongs to the author run's
-  outcome; step 4 decides.
+- "`satisfied` is cleared wherever `approved` is": replaced. `satisfied` is the
+  ending of an author run (`runs-replace-labels.md`).
 - "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
   meaning. The tip has not moved, so the review still passes.
 
@@ -235,7 +234,7 @@ from the main checkout and lands into `develop` there.
 2. Done: `pipelines.json` and `foreman pipeline show|check|set|clear`.
 3. Done: herdr-web's Pipeline page: the editor. It draws, checks and saves
    through foreman's commands, and needs nothing from the dispatcher.
-4. Runs replace labels (tasks step 3b); `factsOf` reads runs and each task's
+4. Runs replace labels (tasks step 3b; design in `runs-replace-labels.md`); `factsOf` reads runs and each task's
    branch tip. A review run records the commit it read, and land merges that
    commit by id. Pass criterion: a commit to an approved branch places the task
    at the review block again, with no clearing code on any path; land refuses a
