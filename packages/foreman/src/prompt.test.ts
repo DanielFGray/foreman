@@ -34,7 +34,7 @@ const authorPrompt = (
   worktree: string,
   repository: string,
   workspace: Workspace,
-  base?: string,
+  base = "abc1234",
 ) =>
   prompts.agent(blockOf("author"), {
     task,
@@ -400,7 +400,7 @@ describe("Prompts", () => {
       "author: typo.md uses {{ title }}, which is no placeholder: use task, branch, base, worktree",
     ]);
     expect(instructionProblems(pipeline, new Map())).toEqual([
-      "author: no instructions file is named typo.md",
+      "author: no readable instructions file is named typo.md",
     ]);
     expect(
       instructionProblems(
@@ -425,10 +425,30 @@ describe("Prompts", () => {
             worktree: "/tmp/worktree",
             repository: "/tmp/repository",
             workspace: "worktree",
+            base: "abc1234",
           }),
         ).pipe(Effect.flip, Effect.provide(Prompts.Default)),
       );
       expect(failure.message).toContain("{{ title }} is no placeholder");
+    } finally {
+      if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = previous;
+    }
+  });
+
+  test("an operator's file wins over the instructions foreman ships", async () => {
+    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
+    writeFileSync(join(config, "foreman", "prompts", "author.md"), "Operator text for {{ task }}.");
+    const previous = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = config;
+    try {
+      const prompt = await run((prompts) =>
+        authorPrompt(prompts, ready, "/tmp/worktree", "/tmp/repository", "worktree"),
+      );
+      expect(prompt).toContain("Operator text for ts-123456.");
+      expect(prompt).not.toContain("You are working alone on one task");
+      expect(prompt).toContain("`foreman exit ts-123456 done`");
     } finally {
       if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
       else process.env["XDG_CONFIG_HOME"] = previous;

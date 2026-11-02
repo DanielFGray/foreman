@@ -62,10 +62,17 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       });
 
     return {
-      /** The instructions each name reads, for validation; a missing name is absent. */
+      /**
+       * The instructions each name reads, for validation. A name with no file,
+       * or one that cannot be read, is absent: that stops the projects whose
+       * blocks use it, not the whole reading.
+       */
       instructions: (names: ReadonlyArray<string>) =>
         Effect.forEach(new Set(names), (name) =>
-          read(name).pipe(Effect.map((text) => [name, text] as const)),
+          read(name).pipe(
+            Effect.orElseSucceed(() => undefined),
+            Effect.map((text) => [name, text] as const),
+          ),
         ).pipe(
           Effect.map(
             (pairs) =>
@@ -133,27 +140,28 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
 
 /**
  * What one agent run works on. `workspace` decides what the agent may do to
- * the checkout and how it reads trunk. `base` is the commit the work starts
- * from: a reviewer always has one, and an author has one on the operator's
- * own branch, where it is the only way to name the work. `verify` is the
- * project's own verification command, which a reviewer is told about.
+ * the checkout and how it reads trunk; with none, the task works in a
+ * worktree, as in the standard pipeline. `base` is the commit the work
+ * starts from, the only way to name the work on the operator's own branch.
+ * `verify` is the project's own verification command, which a reviewer is
+ * told about.
  */
 export interface AgentRun {
   readonly task: Item;
   readonly worktree: string;
   readonly repository: string;
   readonly workspace: Workspace | undefined;
-  readonly base?: string | undefined;
+  readonly base: string;
   readonly verify?: string | undefined;
 }
 
-type Values = Readonly<Record<string, string | undefined>>;
+type Values = Readonly<Record<string, string>>;
 
 /**
  * Replaces each `{{ name }}` in `body` with its value. A name with no entry
- * in `values`, or one whose value is unknown for this run, fails the render:
- * substituting nothing would hand an agent a prompt with a hole in it, a
- * degraded worker that still looks like it is running.
+ * in `values` fails the render: substituting nothing would hand an agent a
+ * prompt with a hole in it, a degraded worker that still looks like it is
+ * running.
  */
 const fill = (name: string, body: string, values: Values) =>
   Effect.gen(function* () {
@@ -162,12 +170,6 @@ const fill = (name: string, body: string, values: Values) =>
         return yield* new PromptError({
           template: name,
           detail: `{{ ${placeholder} }} is no placeholder: use ${Object.keys(values).join(", ")}`,
-        });
-      }
-      if (values[placeholder] === undefined) {
-        return yield* new PromptError({
-          template: name,
-          detail: `{{ ${placeholder} }} has no value for this run`,
         });
       }
     }
@@ -220,7 +222,7 @@ const workspaceSection = (block: AgentNode, run: AgentRun): string => {
   const author = block.role === "author";
   const branchLine =
     workspace === "none"
-      ? `Branch: the operator's own branch${base ? `; the work is every commit after ${base}` : ""}`
+      ? `Branch: the operator's own branch; the work is every commit after ${base}`
       : `Branch: ${branch}`;
   const rule =
     workspace === "none"
@@ -234,9 +236,7 @@ const workspaceSection = (block: AgentNode, run: AgentRun): string => {
         : author
           ? `Work only in ${worktree}, on ${branch}. Never enter ${repository} or switch branches, and do not read another task's worktree. To see trunk, find its commit with \`git worktree list --porcelain\` and use \`git show\` or \`git diff\` from here.`
           : `Run every command in ${worktree}. Never run git in ${repository}: foreman merges there, and a git command of yours mid-merge fails the landing. Do not read another task's worktree.`;
-  const work = base
-    ? `Your task's work: \`git log ${base}..HEAD\` and \`git diff ${base} HEAD\`.`
-    : `Your task's work: \`git log ${branch}\`, and its diff against trunk as the rule above says.`;
+  const work = `Your task's work: \`git log ${base}..HEAD\` and \`git diff ${base} HEAD\`.`;
   const landing =
     workspace === "none"
       ? "After an approval foreman completes the task; do not mark it done."

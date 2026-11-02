@@ -1918,6 +1918,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
+     * The commit an author's work starts from, which its prompt names as
+     * `{{ base }}`: the task's base, or the checkout's HEAD before there is
+     * one, since that is where a first direct run or a new branch starts.
+     */
+    const authorBaseOf = (task: Item, project: Project) =>
+      Effect.gen(function* () {
+        return (yield* baseOf(task, project)) ?? (yield* repository.head(project.directory));
+      });
+
+    /**
      * The workspace a task's agents run in, with its worktree made usable.
      *
      * Every dispatch goes through here so the setup step cannot drift between
@@ -2052,7 +2062,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         worktree: worker.directory,
         repository: project.directory,
         workspace,
-        base: directBase(task) ?? base,
+        base: yield* authorBaseOf(task, project),
       });
       yield* prog.claim(task.id);
       yield* prog
@@ -2665,12 +2675,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const workspace = workspaceOf(pipelines, task);
           const worktree = newWorkspace(workspace, project, task.id) ?? project.directory;
           const base =
-            workspace === "none"
-              ? directBase(task)
-              : role === "author"
-                ? undefined
-                : yield* repository.base(project.directory, labelFor(task.id));
-          if (role === "review" && !base) return undefined;
+            role === "author" ? yield* authorBaseOf(task, project) : yield* baseOf(task, project);
+          if (!base) return undefined;
           return yield* prompts.agent(block, {
             task,
             worktree,
@@ -2738,7 +2744,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               worktree: worker.directory,
               repository: project.directory,
               workspace: yield* routeOf(task),
-              base: directBase(task),
+              base: yield* authorBaseOf(task, project),
             });
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.

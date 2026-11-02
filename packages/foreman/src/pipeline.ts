@@ -591,7 +591,8 @@ export const instructionProblems = (
       return [`${node.id}: instructions ${name} is no file name: use a-z, 0-9 and -`];
     }
     const text = texts.get(name);
-    if (text === undefined) return [`${node.id}: no instructions file is named ${name}.md`];
+    if (text === undefined)
+      return [`${node.id}: no readable instructions file is named ${name}.md`];
     const allowed: ReadonlyArray<string> = PLACEHOLDERS;
     return placeholdersIn(text)
       .filter((placeholder) => !allowed.includes(placeholder))
