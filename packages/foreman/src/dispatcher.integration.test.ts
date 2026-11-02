@@ -2239,6 +2239,65 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(world.spawned.at(-1)).toEqual([id, "author"]);
     expect(authoredBy(world.tasks.get(id)!)).toBe("mid");
   });
+
+  test("a charging exit wired back to the author, not the queue, charges the author's rung when its run closes", async () => {
+    const drawn = join(policies, "pipelines.json");
+    const nodes = STANDARD_PIPELINE.nodes.map((node) =>
+      node.id === "review" && node.kind === "agent"
+        ? {
+            ...node,
+            exits: [
+              { name: "approved", to: "land-gate" },
+              { name: "returned", to: "start", fails: "author" as const },
+            ],
+          }
+        : node,
+    );
+    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
+    try {
+      const id = "ts-looped";
+      const world = new World(item(id, "open", []));
+      const exitNamed = (name: string) =>
+        Effect.runPromise(
+          Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
+            Effect.provide(layerFor(world)),
+          ),
+        );
+      const settle = (role: "author" | "review") =>
+        world.workers.set(id, {
+          ...world.workers.get(id)!,
+          roles: new Map([[role, "settled"]]),
+          state: "settled",
+        });
+
+      await tick(world);
+      world.branches.set(`foreman/${id}`, {
+        branch: `foreman/${id}`,
+        tip: "c1",
+        merged: false,
+        empty: false,
+        stale: undefined,
+      });
+      await exitNamed("done");
+      settle("author");
+      await tick(world);
+      await tick(world);
+      expect(world.spawned.at(-1)).toEqual([id, "review"]);
+
+      await exitNamed("returned");
+      expect(world.tasks.get(id)?.status).toBe("reviewing");
+      settle("review");
+      await tick(world);
+
+      expect(world.tasks.get(id)?.labels).toContain("failed-by:low");
+      // The wire leads back to the author, so the same tick dispatches the next
+      // author a rung up, with no trip through the queue.
+      expect(world.spawned.at(-1)).toEqual([id, "author"]);
+      expect(authoredBy(world.tasks.get(id)!)).toBe("mid");
+    } finally {
+      rmSync(drawn, { force: true });
+    }
+  });
 });
 
 describe("a drawn pipeline", () => {

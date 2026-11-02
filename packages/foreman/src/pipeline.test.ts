@@ -752,6 +752,24 @@ describe("a cycle", () => {
     expect(problemsOf(counted, RUNGS)).toEqual([]);
   });
 
+  test("is a problem when its router counts an exit no block on it declares", () => {
+    const miscounted: Pipeline = {
+      nodes: [
+        ...looped({ name: "returned", to: "count" }).nodes,
+        {
+          kind: "router",
+          id: "count",
+          routes: [{ when: "exits:rejected>=3", to: "operator" }],
+          else: "start",
+        },
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(problemsOf(miscounted, RUNGS)).toEqual([
+      "the wires loop through author, start, count, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+    ]);
+  });
+
   test("of only routers and gates is a problem", () => {
     const spin: Pipeline = {
       nodes: [

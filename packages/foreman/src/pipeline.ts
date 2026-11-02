@@ -499,13 +499,18 @@ const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
       problems.push(`the wires loop through ${path} with no work block on the loop`);
       continue;
     }
+    const named = new Set(
+      blocks.flatMap((node) =>
+        node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
+      ),
+    );
     const charges = blocks.some((node) =>
       wiresOf(node).some((wire) => wire.fails && ids.has(wire.to)),
     );
     const counts = blocks.some(
       (node) =>
         node.kind === "router" &&
-        node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when)),
+        node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when, named)),
     );
     if (!charges && !counts) {
       problems.push(
@@ -516,12 +521,19 @@ const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
   return problems;
 };
 
-/** Whether a filter holds a count that grows on each lap of a cycle, such as `exits:returned>=3`. */
-const growsEachLap = (filter: string): boolean =>
+/**
+ * Whether a filter holds a count that grows on each lap of a cycle, such as
+ * `exits:returned>=3`. An `exits:` count grows only when a block on the cycle,
+ * one of `named`, declares that exit.
+ */
+const growsEachLap = (filter: string, named: ReadonlySet<string>): boolean =>
   filter
     .trim()
     .split(/\s+/)
-    .some((term) => /^(exits:[a-z-]+|attempts)>=\d+$/.test(term));
+    .some((term) => {
+      const count = /^(?:exits:([a-z-]+)|attempts)>=\d+$/.exec(term);
+      return count !== null && (count[1] === undefined || named.has(count[1]));
+    });
 
 /**
  * The routes from an origin to a target that pass no block `passes` names:

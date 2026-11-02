@@ -1244,7 +1244,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // open while its pane finishes the turn, and the task stands at the block,
       // ended. Once the pane is idle its run closes with the exit it named (an
       // author handoff with no exit closes `done` at the tip), and the next tick
-      // places the task where the exit leads.
+      // places the task where the exit leads. The exit's `fails` is charged
+      // here, before the run closes, because a charging exit wired onward (a
+      // drawn cycle) never passes the return path that charges the others.
       yield* Effect.forEach(
         current.review.filter(({ task, worker }) => {
           const pipeline = pipelineOf(task);
@@ -1255,8 +1257,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
         }),
         ({ task }) =>
-          prog
-            .endRuns(task.id, { author: "done", review: "stopped", commit: task.tip })
+          charge(
+            task,
+            openExitOf(pipelineOf(task), task)?.fails,
+            openAgentOf(pipelineOf(task), task)?.run.rung,
+          )
+            .pipe(
+              Effect.andThen(
+                prog.endRuns(task.id, { author: "done", review: "stopped", commit: task.tip }),
+              ),
+            )
             .pipe(
               Effect.catch((error) =>
                 Effect.logWarning(`closing the handoff of ${task.id} failed: ${error}`),
