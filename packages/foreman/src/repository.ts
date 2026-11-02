@@ -733,9 +733,10 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * from `HEAD`, so "not unmerged" says nothing about whether an author
        * wrote anything. What separates them is where the tip sits: an untouched
        * branch still points at the trunk commit it was cut from, while a merged
-       * branch's tip arrives through a merge commit's second parent. Foreman
-       * merges without fast-forwarding either way, so the first-parent line is
-       * exactly the set of commits the checkout had before any branch landed.
+       * branch's tip arrives through a merge commit's second parent. A
+       * fast-forward landing puts the branch's own commits on the first-parent
+       * line, so a tip on that line is empty only when the branch's reflog
+       * says it was created there.
        *
        * `stale` is the third: whether a branch the checkout has not taken
        * would still merge into the current tip. Every author cuts from the
