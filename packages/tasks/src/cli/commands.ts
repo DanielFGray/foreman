@@ -11,7 +11,7 @@ import {
   type Verdict,
 } from "tasks";
 import { PRIME } from "./prime.ts";
-import { detail, json, lines } from "./render.ts";
+import { detail, detailJson, json, lines } from "./render.ts";
 import { prose } from "./text.ts";
 
 /**
@@ -87,20 +87,25 @@ const add = Command.make(
   ),
 );
 
-const show = Command.make("show", { id }, ({ id }) =>
+const show = Command.make("show", { id, json: asJson }, (args) =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
-    const item = yield* tasks.require(id);
-    const [dependencies, dependents, logs] = yield* Effect.all([
-      tasks.dependencies(id),
-      tasks.dependents(id),
-      tasks.logs(id),
+    const item = yield* tasks.require(args.id);
+    const [dependencies, dependents, children, logs] = yield* Effect.all([
+      tasks.dependencies(args.id),
+      tasks.dependents(args.id),
+      tasks.list({ parent: args.id }),
+      tasks.logs(args.id),
     ]);
-    yield* Console.log(detail(item, dependencies, dependents, logs));
+    yield* Console.log(
+      args.json
+        ? detailJson(item, dependencies, dependents, children, logs)
+        : detail(item, dependencies, dependents, logs),
+    );
   }),
 ).pipe(
   Command.withDescription(
-    "Show a task: status, description, definition of done, dependencies both ways, and the log",
+    "Show a task: status, description, definition of done, dependencies both ways, and the log. --json prints one object with those fields and the ids of an epic's children",
   ),
 );
 

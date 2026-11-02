@@ -15,22 +15,28 @@ export const lines = (items: ReadonlyArray<Item>): string =>
 
 /** The items as a JSON array, in the field names the Go `prog` prints with `--json`. */
 export const json = (items: ReadonlyArray<Item>): string =>
+  JSON.stringify(items.map(fieldsOf), null, 2);
+
+/**
+ * One task as a JSON object: the fields `json` prints, plus what `detail`
+ * shows (dependencies both ways and the log) and the ids of an epic's
+ * children, so a script reads any part with `jq` instead of parsing text.
+ */
+export const detailJson = (
+  item: Item,
+  dependencies: ReadonlyArray<string>,
+  dependents: ReadonlyArray<string>,
+  children: ReadonlyArray<Item>,
+  logs: ReadonlyArray<LogEntry>,
+): string =>
   JSON.stringify(
-    items.map((item) => ({
-      id: item.id,
-      title: item.title,
-      type: item.type,
-      status: item.status,
-      priority: item.priority,
-      project: item.project,
-      parent: item.parent ?? null,
-      description: item.description,
-      definition_of_done: item.definitionOfDone ?? null,
-      labels: item.labels,
-      created_at: item.createdAt.toISOString(),
-      updated_at: item.updatedAt.toISOString(),
-      last_activity_at: item.lastActivityAt.toISOString(),
-    })),
+    {
+      ...fieldsOf(item),
+      dependencies,
+      dependents,
+      children: children.map((child) => child.id),
+      logs: logs.map((log) => ({ message: log.message, created_at: log.createdAt.toISOString() })),
+    },
     null,
     2,
   );
@@ -79,3 +85,19 @@ const minute = (date: Date): string => {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
+
+const fieldsOf = (item: Item) => ({
+  id: item.id,
+  title: item.title,
+  type: item.type,
+  status: item.status,
+  priority: item.priority,
+  project: item.project,
+  parent: item.parent ?? null,
+  description: item.description,
+  definition_of_done: item.definitionOfDone ?? null,
+  labels: item.labels,
+  created_at: item.createdAt.toISOString(),
+  updated_at: item.updatedAt.toISOString(),
+  last_activity_at: item.lastActivityAt.toISOString(),
+});

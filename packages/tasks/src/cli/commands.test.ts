@@ -106,6 +106,25 @@ describe("tasks add, show, list and ready", () => {
     expect(await run(["show", child])).toContain(`Parent:      ${epic}`);
   });
 
+  test("show --json prints one object with the children, dependencies and log", async () => {
+    const epic = await created("Whole", "-p", "c", "-e", "-d", "the plan");
+    const first = await created("First", "-p", "c", "--parent", epic);
+    const second = await created("Second", "-p", "c", "--parent", epic);
+    await run(["blocks", first, second]);
+    await run(["log", second, "began"]);
+    const shownEpic = JSON.parse(await run(["show", epic, "--json"]));
+    expect(shownEpic).toMatchObject({ id: epic, description: "the plan", type: "epic" });
+    expect([...shownEpic.children].sort()).toEqual([first, second].sort());
+    const shown = JSON.parse(await run(["show", second, "--json"]));
+    expect(shown).toMatchObject({
+      parent: epic,
+      dependencies: [first],
+      dependents: [],
+      children: [],
+    });
+    expect(shown.logs.map((log: { message: string }) => log.message)).toEqual(["began"]);
+  });
+
   test("a bad parent or priority is refused in one line", async () => {
     const task = await created("Plain", "-p", "c");
     expect(await refusal(["add", "x", "-p", "c", "--parent", task])).toContain(

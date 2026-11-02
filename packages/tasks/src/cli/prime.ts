@@ -88,7 +88,7 @@ epic by hand.
     tasks status                 # overview: counts, work under way, questions, ready
     tasks ready                  # tasks ready to work on (-l <label>, --json)
     tasks list                   # -p, --status, --type, --parent, -l, --json
-    tasks show <id>              # full details
+    tasks show <id>              # full details (--json: one object, read fields with jq)
     tasks graph                  # dependency graph as a Mermaid flowchart
 
     # Working
