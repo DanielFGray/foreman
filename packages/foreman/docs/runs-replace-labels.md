@@ -106,7 +106,9 @@ changes, because runs are now the record foreman reads back.
 - Dispatch a reviewer: open a review run with `commit` = the branch tip now.
 - A spawn that fails: delete the open run in the same transaction that
   releases the task. The agent never ran, so the run never happened.
-- `correct` (a correction round): add one to the open author run's `rounds`.
+- `correct` (a correction round): add one to the `rounds` of the lap's author
+  run. That run has usually closed `handed-off`, because rounds go to an author
+  while its work is in review.
 - Settle: close the run, keeping the agent's ending if it wrote one, else
   writing its own; an author run that hands off records the tip as `commit`.
 - Land: set the lap's author run outcome to `committed` or `answered`, in the
