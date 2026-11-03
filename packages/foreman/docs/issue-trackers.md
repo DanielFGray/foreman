@@ -115,6 +115,7 @@ All reads of one project come from one GraphQL query per tick (section 5).
 | `label`, `unlabel` | `gh issue edit <n> --add-label` / `--remove-label`. A label the repo lacks is made first with `gh label create <name> --force`. |
 | `relabel(id, change)` | reads the labels, computes `change`, and writes the whole set in one call: `gh api -X PUT repos/<repo>/issues/<n>/labels` with `labels[]`. Answers the labels it read. |
 | `log(id, message)` | `gh issue comment <n> --body-file -`. |
+| `refresh(project)` | the project's GraphQL read (section 5). The dispatcher calls it for each project at the start of a reading; the snapshot holds until the next refresh or a write in that project, and a failure holds the project as `unreachable`. prog's adapter does nothing. |
 
 Each move skips an issue that already has the status it leads to, as
 `TasksTracker.move` does. So a move that failed half way is finished by the

@@ -830,7 +830,8 @@ rewrite.
 terms: tasks, their status moves, labels and logs. `ProjectTracker` there
 routes each call to the adapter of the project's tracker, chosen with
 `foreman policy tracker` (docs/issue-trackers.md); `TasksTracker`, over the
-`tasks` package, is the one built so far. `Records` (`src/records.ts`) holds foreman's
+`tasks` package, and `githubTracker` (`src/github-tracker.ts`), over `gh`, are
+built. Nothing above `src/github.ts` runs `gh`. `Records` (`src/records.ts`) holds foreman's
 own records beside it, keyed by task id: the runs, the charges and the parks. A
 records write that goes with a status move shares one transaction with it,
 which holds only while both run on one store connection;

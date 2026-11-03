@@ -498,7 +498,29 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // before knowing whether any of them is this dispatcher's — and it cannot
       // classify a workspace whose task has been deleted at all.
       const everyone = yield* fleet.roster;
-      const { projects, ambiguous } = yield* resolveProjects(everyone);
+      const resolved = yield* resolveProjects(everyone);
+
+      // Each project's tracker reads its tasks once for this reading. A
+      // project whose tracker did not answer leaves the project set: none of
+      // its workers is ours this reading, so none settles or reads as an
+      // orphan, and none of its branches is swept, because the tracker that
+      // would say which tasks still hold them said nothing.
+      const unreachable = yield* Effect.forEach(resolved.projects, (project) =>
+        tracker.refresh(project.name).pipe(
+          Effect.as<ReadonlyArray<Held>>([]),
+          Effect.catch((error) =>
+            Effect.logWarning(`holding ${project.name}: ${error.message}`).pipe(
+              Effect.as<ReadonlyArray<Held>>([
+                { project: project.name, reason: "unreachable", detail: error.message },
+              ]),
+            ),
+          ),
+        ),
+      ).pipe(Effect.map((rows) => rows.flat()));
+      const projects = resolved.projects.filter(
+        (project) => !unreachable.some((held) => held.project === project.name),
+      );
+      const { ambiguous } = resolved;
       const open = new Set(projects.filter((project) => project.open).map((p) => p.name));
       const roster = ours(everyone, new Set(projects.map((project) => project.directory)));
 
@@ -588,6 +610,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // is held rather than guessed at; closing one of the spaces resolves it.
       const checkoutHolds: ReadonlyArray<Held> = [
         ...checkouts,
+        ...unreachable,
         ...ambiguous.map((one): Held => ({
           project: one.name,
           reason: "ambiguous",
@@ -3777,11 +3800,13 @@ export interface StaleRow {
  * `reason` is what the dashboard gates actions on — only a `dirty` hold has
  * uncommitted work for an onboarding agent to salvage. `detail` is what the
  * operator reads; it comes from the same probe the landing verdict reads, so
- * the two never disagree about why a checkout is busy.
+ * the two never disagree about why a checkout is busy. An `unreachable` hold is
+ * the project's tracker, not its checkout: the tracker did not answer this
+ * reading, and the project takes no step until it does.
  */
 export interface Held {
   readonly project: string;
-  readonly reason: HoldReason;
+  readonly reason: HoldReason | "unreachable";
   readonly detail: string;
   /** For a `busy` hold, the task branch the checkout has out; that task is not held. */
   readonly branch?: string;
