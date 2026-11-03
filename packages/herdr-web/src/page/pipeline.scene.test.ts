@@ -221,6 +221,7 @@ const placed = (key: string, node: string, state: "waiting" | "running" | "ended
   node,
   state,
   gates,
+  runs: [],
 })
 
 const withReading = (change: Partial<ForemanReading>) => Message.ReceivedForeman({ state: { reading: Option.some({ ...reading, ...change }), problem: Option.none() } })
