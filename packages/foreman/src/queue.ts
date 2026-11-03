@@ -27,7 +27,7 @@ export const interleave = (
  * The dispatcher's tick and `foreman queue` both call this, so the order a client
  * shows and the order the fleet dispatches cannot disagree.
  *
- * - Parked: the task carries `needs-you`, or every configured rung has failed
+ * - Parked: the task has a park, or every configured rung has failed
  *   it. Whether a rung has room is not asked: a spent account makes a task
  *   wait in the queue, never park.
  * - Onboarding: a salvage run stands in a directory a person is using, so it

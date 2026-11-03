@@ -16,7 +16,16 @@ import {
   type WorkerState,
 } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import { kindOf, Records, type Endings, type ExitMove, type Item } from "./records.ts";
+import {
+  attemptsOf,
+  failuresOf,
+  kindOf,
+  Records,
+  walledBy,
+  type Endings,
+  type ExitMove,
+  type Item,
+} from "./records.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
@@ -24,7 +33,8 @@ import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
 import type { CheckRun, Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
-import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
+import type { Ladder } from "./ladder.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
 import { type AgentNode, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
 import { scratchStore } from "./scratch-store.ts";
@@ -54,10 +64,20 @@ const item = (
       updatedAt: new Date(0),
       definitionOfDone: undefined,
       runs: [],
+      charges: [],
+      parked: undefined,
       tip: undefined,
     },
     runs,
   );
+
+/**
+ * The id of the task's newest run; none when it has no runs. A new run takes
+ * the next id, so ids order runs the way the store's do, which charges and
+ * walls read.
+ */
+const newestRun = (task: Item): number | undefined =>
+  task.runs.length === 0 ? undefined : Math.max(...task.runs.map((run) => run.id));
 
 /** The rung of the task's open review run, if a reviewer is assigned. */
 const reviewerOf = (world: World, id: string) =>
@@ -262,57 +282,35 @@ class World {
           runs: task.runs.filter((run) => !(run.open && run.role === role)),
         }));
       }),
-    park: (id: string, endings: Endings = {}) =>
+    park: (id: string, reason: string, endings: Endings = {}) =>
       this.write("records.park", () => {
         this.closeRuns(id, {
           author: endings.author ?? "released",
           review: endings.review ?? "released",
         });
-        this.update(id, (task) => ({
-          ...task,
-          status: "open",
-          labels: [...task.labels, "needs-you"],
-        }));
+        this.update(id, (task) => ({ ...task, status: "open", parked: reason }));
       }),
     markFailure: (id: string, rung: string) =>
       this.write("records.markFailure", () =>
         this.update(id, (task) => ({
           ...task,
-          labels: [
-            ...task.labels.filter((label) => !label.startsWith(`attempt:${rung}:`)),
-            `failed-by:${rung}`,
-          ],
+          charges: [...task.charges, { rung, run: newestRun(task), forgiven: false }],
         })),
       ),
-    markAttempt: (id: string, rung: string, count: number) =>
-      this.write("records.markAttempt", () =>
-        this.update(id, (task) => ({
-          ...task,
-          labels: [
-            ...task.labels.filter((label) => !label.startsWith(`attempt:${rung}:`)),
-            `attempt:${rung}:${count}`,
-          ],
-        })),
-      ),
-    clearNeedsYou: (id: string) =>
-      this.write("records.clearNeedsYou", () =>
-        this.update(id, (task) => ({
-          ...task,
-          labels: task.labels.filter((label) => label !== "needs-you"),
-        })),
+    unpark: (id: string) =>
+      this.write("records.unpark", () =>
+        this.update(id, (task) => ({ ...task, parked: undefined })),
       ),
     clearFailure: (id: string, rung: string) =>
       this.write("records.clearFailure", () =>
         this.update(id, (task) => ({
           ...task,
-          labels: task.labels.filter((label) => label !== `failed-by:${rung}`),
+          charges: task.charges.map((one) =>
+            one.rung === rung ? { ...one, forgiven: true } : one,
+          ),
         })),
       ),
     markDiagnostic: () => this.write("records.markDiagnostic", () => undefined),
-    markWall: (id: string, provider: string) =>
-      this.write("records.markWall", () =>
-        this.update(id, (task) => ({ ...task, labels: [...task.labels, `walled:${provider}`] })),
-      ),
     clearDiagnostic: () => this.write("records.clearDiagnostic", () => undefined),
     release: (id: string, endings: Endings = {}) =>
       this.write("records.release", () => {
@@ -323,10 +321,20 @@ class World {
         this.update(id, (task) => ({ ...task, status: "open" }));
         return "open" as const;
       }),
+    // Lands the newest author run once it has closed, as `landAuthorRun` does.
     complete: (task: { id: string }) =>
       this.write("records.complete", () => {
         this.closeRuns(task.id, { author: "released", review: "released" });
-        this.update(task.id, (found) => ({ ...found, status: "done" }));
+        this.update(task.id, (found) => {
+          const landing = found.runs.findLast((run) => run.role === "author");
+          return {
+            ...found,
+            status: "done",
+            runs: found.runs.map((run) =>
+              run === landing && !run.open ? { ...run, landed: true } : run,
+            ),
+          };
+        });
       }),
     children: () => Effect.succeed([]),
     countRound: () => this.write("records.countRound", () => 1),
@@ -354,7 +362,7 @@ class World {
           runs: [
             ...task.runs,
             {
-              id: task.runs.length + 1,
+              id: (newestRun(task) ?? 0) + 1,
               task: check.task,
               role: "check" as const,
               rung: undefined,
@@ -364,6 +372,7 @@ class World {
               ending: check.ending,
               rounds: undefined,
               open: false,
+              landed: false,
             },
           ],
         })),
@@ -440,13 +449,14 @@ class World {
   }
 
   private openRun(id: string, run: NewRun): number {
-    const opened = (this.tasks.get(id)?.runs.length ?? 0) + 1;
+    const found = this.tasks.get(id);
+    const opened = (found === undefined ? 0 : (newestRun(found) ?? 0)) + 1;
     this.update(id, (task) => ({
       ...task,
       runs: [
         ...task.runs,
         {
-          id: task.runs.length + 1,
+          id: opened,
           task: id,
           role: run.work === "review" ? "review" : "author",
           rung: run.rung,
@@ -456,6 +466,7 @@ class World {
           ending: undefined,
           rounds: undefined,
           open: true,
+          landed: false,
         },
       ],
     }));
@@ -573,7 +584,10 @@ const exit = (world: World, id: string, name: string) =>
 
 describe("Dispatcher tick", () => {
   test("kills a live attempt, logs the reason, and requeues without climbing", async () => {
-    const task = item("ts-kill", "in_progress", ["attempt:cheap:1"], "test", [authorRun("cheap")]);
+    const task = item("ts-kill", "in_progress", [], "test", [
+      stoppedRun("cheap"),
+      authorRun("cheap"),
+    ]);
     const world = new World(task);
     const live = worker(task.id, "author", "working");
     world.workers.set(task.id, live);
@@ -587,14 +601,17 @@ describe("Dispatcher tick", () => {
     expect(world.stopped).toEqual([[task.id, "author"]]);
     expect(world.closed).toEqual([task.id]);
     expect(world.tasks.get(task.id)?.status).toBe("open");
-    expect(world.tasks.get(task.id)?.labels).toEqual(["attempt:cheap:1"]);
+    expect(world.tasks.get(task.id)?.labels).toEqual([]);
+    expect(world.tasks.get(task.id)?.charges).toEqual([]);
+    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
     expect(world.logs).toEqual([
       [task.id, "foreman: operator killed this attempt: tests caught the wrong path"],
     ]);
   });
 
   test("writes the bare kill note and refills the freed slot", async () => {
-    const task = item("ts-kill-default", "in_progress", ["attempt:cheap:1"], "test", [
+    const task = item("ts-kill-default", "in_progress", [], "test", [
+      stoppedRun("cheap"),
       authorDone("cheap"),
     ]);
     const world = new World(task);
@@ -609,7 +626,9 @@ describe("Dispatcher tick", () => {
     await tick(world);
 
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
-    expect(world.tasks.get(task.id)?.labels).toEqual(["attempt:cheap:1"]);
+    expect(world.tasks.get(task.id)?.labels).toEqual([]);
+    expect(world.tasks.get(task.id)?.charges).toEqual([]);
+    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
     expect(world.logs).toContainEqual([task.id, "foreman: operator killed this attempt"]);
     expect(world.spawned).toEqual([[task.id, "author"]]);
   });
@@ -629,6 +648,7 @@ describe("Dispatcher tick", () => {
     await tick(world);
 
     expect(world.tasks.get(task.id)?.labels).toEqual([]);
+    expect(world.tasks.get(task.id)?.charges).toEqual([]);
     expect(reviewerOf(world, task.id)).toBe("cheap");
     expect(world.spawned).toEqual([[task.id, "review"]]);
   });
@@ -671,12 +691,12 @@ describe("Dispatcher tick", () => {
       if (branch) world.branches.set(branch.branch, branch);
 
       await tick(world);
-      expect(world.tasks.get(task.id)?.labels).toContain("attempt:cheap:1");
+      expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
 
       world.workers.set(task.id, vanished);
       await tick(world);
 
-      expect(world.tasks.get(task.id)?.labels).toContain("failed-by:cheap");
+      expect(failuresOf(world.tasks.get(task.id)!)).toContain("cheap");
     }
   });
 
@@ -888,7 +908,7 @@ describe("Dispatcher tick", () => {
   });
 
   test("does not complete while focused ready work waits for a person", async () => {
-    const focused = item("ts-focus", "open", ["focus", "needs-you"]);
+    const focused = { ...item("ts-focus", "open", ["focus"]), parked: "waits for a person" };
     const world = new World(focused);
 
     await tick(world);
@@ -1387,13 +1407,17 @@ describe("a spent account and the reviewer above it", () => {
     // counted, so the task is read again unchanged once an allowance resets.
     expect(world.spawned).toEqual([]);
     expect(world.tasks.get("ts-walled")?.labels).toEqual([]);
+    expect(world.tasks.get("ts-walled")?.charges).toEqual([]);
     expect(world.tasks.get("ts-walled")?.status).toBe("in_progress");
   });
 
   test("substitutes a reviewer without climbing the task's own rung", async () => {
     // A dearer reviewer is what the wallet forced, not what the work earned, so
     // the task keeps the rung it had and its next author is unchanged.
-    const task = item("ts-rung", "in_progress", ["attempt:cheap:1"], "test", [authorDone("cheap")]);
+    const task = item("ts-rung", "in_progress", [], "test", [
+      stoppedRun("cheap"),
+      authorDone("cheap"),
+    ]);
     const world = new World(task);
     world.workers.set(task.id, worker(task.id, "author", "settled"));
     world.branches.set(`foreman/${task.id}`, {
@@ -1406,7 +1430,9 @@ describe("a spent account and the reviewer above it", () => {
 
     await tickWith(world, ["openai"]);
 
-    expect(world.tasks.get(task.id)?.labels).toEqual(["attempt:cheap:1"]);
+    expect(world.tasks.get(task.id)?.labels).toEqual([]);
+    expect(world.tasks.get(task.id)?.charges).toEqual([]);
+    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
 
@@ -1419,7 +1445,7 @@ describe("a spent account and the reviewer above it", () => {
   });
 
   test("takes the rung above a recorded failure", async () => {
-    const world = new World(item("ts-failed", "open", ["failed-by:cheap"]));
+    const world = new World({ ...item("ts-failed", "open", []), charges: [charged("cheap")] });
     await tickWith(world, []);
 
     expect(authoredBy(world.tasks.get("ts-failed")!)).toBe("dear");
@@ -1432,7 +1458,7 @@ describe("a spent account and the reviewer above it", () => {
     await tickWith(world, ["openai"]);
 
     expect(authoredBy(world.tasks.get("ts-money")!)).toBe("dear");
-    expect(world.tasks.get("ts-money")?.labels).not.toContain("failed-by:cheap");
+    expect(failuresOf(world.tasks.get("ts-money")!)).toEqual([]);
   });
 
   test("waits in the queue when every rung is walled, and records nothing", async () => {
@@ -1442,12 +1468,17 @@ describe("a spent account and the reviewer above it", () => {
     expect(world.spawned).toEqual([]);
     expect(world.tasks.get("ts-broke")?.status).toBe("open");
     expect(world.tasks.get("ts-broke")?.labels).toEqual([]);
+    expect(world.tasks.get("ts-broke")?.charges).toEqual([]);
+    expect(world.tasks.get("ts-broke")?.parked).toBeUndefined();
   });
 
   test("dispatches nothing for a task every rung has failed", async () => {
     // The ladder is exhausted by evidence, which is the operator's column —
     // and unlike a wall, no reset clears it.
-    const world = new World(item("ts-exhausted", "open", ["failed-by:cheap", "failed-by:dear"]));
+    const world = new World({
+      ...item("ts-exhausted", "open", []),
+      charges: [charged("cheap"), charged("dear")],
+    });
     await tickWith(world, []);
 
     expect(world.spawned).toEqual([]);
@@ -1476,9 +1507,7 @@ describe("a spent account and the reviewer above it", () => {
 
     await tickWith(world, []);
 
-    const labels = world.tasks.get(task.id)?.labels ?? [];
-    expect(labels).toContain("failed-by:cheap");
-    expect(labels.filter((label) => label.startsWith("failed-by:"))).toEqual(["failed-by:cheap"]);
+    expect(failuresOf(world.tasks.get(task.id)!)).toEqual(["cheap"]);
   });
 });
 
@@ -1618,20 +1647,16 @@ describe("unassign", () => {
 
 describe("a usage wall", () => {
   /** A free opencode rung, cheapest, then a rung on another account. */
+  const ladder: Ladder = [
+    { name: "free", harness: "opencode", model: "opencode/free-model", provider: undefined },
+    { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+  ];
   const layerFor = (world: World) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
-          ladder: [
-            {
-              name: "free",
-              harness: "opencode",
-              model: "opencode/free-model",
-              provider: undefined,
-            },
-            { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
-          ],
+          ladder,
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,
@@ -1683,12 +1708,12 @@ describe("a usage wall", () => {
 
     await tick(world);
 
-    const labels = world.tasks.get("ts-walled")?.labels ?? [];
+    const walled = world.tasks.get("ts-walled")!;
     expect(world.commits).toHaveLength(1);
     expect(world.commits[0]).toContain("stopped on a usage limit before verifying");
-    expect(labels).toContain("walled:opencode");
-    expect(labels.some((label) => label.startsWith("attempt:"))).toBe(false);
-    expect(labels.some((label) => label.startsWith("failed-by:"))).toBe(false);
+    expect(walledBy(walled, ladder)).toEqual(["opencode"]);
+    expect(attemptsOf(walled, "free")).toBe(0);
+    expect(failuresOf(walled)).toEqual([]);
     expect(world.tasks.get("ts-walled")?.runs[0]).toMatchObject({ open: false, ending: "walled" });
     expect(world.logs.map(([, message]) => message).join("\n")).toContain("opencode");
     // Settle runs before fill in the same tick, so the next author is already
@@ -1720,7 +1745,7 @@ describe("a usage wall", () => {
 
     const found = world.tasks.get(task.id);
     expect(found?.status).toBe("in_progress");
-    expect(found?.labels).toContain("walled:opencode");
+    expect(walledBy(found!, ladder)).toEqual(["opencode"]);
     expect(found?.runs.some((run) => run.ending === "stopped")).toBe(false);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
@@ -1735,7 +1760,7 @@ describe("a usage wall", () => {
     await tick(world);
 
     expect(world.commits).toHaveLength(0);
-    expect(world.tasks.get("ts-walled-clean")?.labels).toContain("walled:opencode");
+    expect(walledBy(world.tasks.get("ts-walled-clean")!, ladder)).toEqual(["opencode"]);
   });
 
   test("a stop with no wall text on its screen goes through the retry path as before", async () => {
@@ -1743,9 +1768,9 @@ describe("a usage wall", () => {
 
     await tick(world);
 
-    const labels = world.tasks.get("ts-plain")?.labels ?? [];
-    expect(labels).toContain("attempt:free:1");
-    expect(labels.some((label) => label.startsWith("walled:"))).toBe(false);
+    const plain = world.tasks.get("ts-plain")!;
+    expect(attemptsOf(plain, "free")).toBe(1);
+    expect(walledBy(plain, ladder)).toEqual([]);
     expect(world.commits).toHaveLength(0);
     expect(world.tasks.get("ts-plain")?.runs[0]).toMatchObject({
       open: false,
@@ -1783,7 +1808,7 @@ describe("a usage wall", () => {
 
     expect(world.stopped).toContainEqual(["ts-stalled", "author"]);
     expect(world.closed).not.toContain("ts-stalled");
-    expect(world.tasks.get("ts-stalled")?.labels).toContain("attempt:free:1");
+    expect(attemptsOf(world.tasks.get("ts-stalled")!, "free")).toBe(1);
     expect(world.logs.map(([, message]) => message).join("\n")).toContain(
       "continue from what is there",
     );
@@ -1808,9 +1833,7 @@ describe("a usage wall", () => {
 
     await tick(world);
 
-    expect(world.tasks.get("ts-quoted")?.labels.some((label) => label.startsWith("walled:"))).toBe(
-      false,
-    );
+    expect(walledBy(world.tasks.get("ts-quoted")!, ladder)).toEqual([]);
   });
 });
 
@@ -2274,6 +2297,8 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     const task = world.tasks.get("ts-stopped");
     expect(task?.status).toBe("in_progress");
     expect(task?.labels).toEqual([]);
+    expect(task?.charges).toEqual([]);
+    expect(task?.parked).toBeUndefined();
     expect(task?.runs.slice(1)).toMatchObject([
       { rung: "mid", open: false, ending: "stopped" },
       { rung: "high", open: true },
@@ -2309,7 +2334,8 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 
     const task = world.tasks.get("ts-last");
     expect(task?.status).toBe("open");
-    expect(task?.labels).toEqual(["needs-you"]);
+    expect(task?.labels).toEqual([]);
+    expect(task?.parked).toContain("no rung above it is left");
     expect(world.spawned).toEqual([]);
   });
 
@@ -2353,7 +2379,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
       Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
     );
 
-    expect(world.tasks.get(id)?.labels).toContain("failed-by:low");
+    expect(failuresOf(world.tasks.get(id)!)).toContain("low");
     expect(world.spawned.at(-1)).toEqual([id, "review"]);
     const store = scratchStore();
     const printed: string[] = [];
@@ -2429,7 +2455,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
       settle("review");
       await tick(world);
 
-      expect(world.tasks.get(id)?.labels).toContain("failed-by:low");
+      expect(failuresOf(world.tasks.get(id)!)).toContain("low");
       // The wire leads back to the author, so the same tick dispatches the next
       // author a rung up, with no trip through the queue.
       expect(world.spawned.at(-1)).toEqual([id, "author"]);
@@ -2531,7 +2557,8 @@ describe("a drawn pipeline", () => {
     await tick(world);
     await tick(world);
 
-    expect(world.tasks.get("ts-parked")?.labels).toEqual(["hold", "needs-you"]);
+    expect(world.tasks.get("ts-parked")?.labels).toEqual(["hold"]);
+    expect(world.tasks.get("ts-parked")?.parked).toBeDefined();
     expect(world.writes.filter((write) => write === "records.park")).toHaveLength(1);
     expect(world.spawned).toEqual([]);
   });
@@ -2594,7 +2621,7 @@ describe("a drawn pipeline", () => {
 
       const task = world.tasks.get("ts-red");
       expect(task?.status).toBe("open");
-      expect(task?.labels).toContain("failed-by:cheap");
+      expect(failuresOf(task!)).toContain("cheap");
       expect(task?.runs.at(-1)).toMatchObject({ role: "check", commit: "c1", ending: "failed" });
       expect(
         world.logs.some(([id, message]) => id === "ts-red" && message.includes("lint: 3 problems")),

@@ -36,7 +36,7 @@ describe("authorFor", () => {
 
   test("takes the cheapest rung above every rung that failed it", () => {
     expect(authorFor(ladder, ["cheap"])).toEqual({ _tag: "Dispatch", rung: middle });
-    // Order in the label set says nothing; the highest-ranked failure is the floor.
+    // Order among the charged rungs says nothing; the highest-ranked failure is the floor.
     expect(authorFor(ladder, ["middle", "cheap"])).toEqual({ _tag: "Dispatch", rung: top });
   });
 

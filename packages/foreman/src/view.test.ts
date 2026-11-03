@@ -4,7 +4,7 @@ import type { Usage } from "./quota.ts";
 import type { Worker, WorkerState } from "./fleet.ts";
 import { type Item, type TaskStatus } from "./records.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
-import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
+import { authoredOn, charged, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { STANDARD_PIPELINE, type AgentNode } from "./pipeline.ts";
@@ -37,6 +37,8 @@ const task = (id: string, status: TaskStatus, labels: ReadonlyArray<string>): It
   updatedAt: new Date(0),
   definitionOfDone: undefined,
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 });
 
@@ -55,6 +57,8 @@ const ready = (id: string, labels: ReadonlyArray<string> = [], description = "")
   type: "task",
   status: "open",
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 });
 
@@ -99,11 +103,11 @@ const state: FleetState = {
   projects: [],
   providers: [],
   orphans: [],
-  queue: [ready("ts-q1", [], LONG_DESCRIPTION), ready("ts-q2", ["failed-by:pro"])],
-  yours: [ready("ts-y1", ["needs-you"])],
+  queue: [ready("ts-q1", [], LONG_DESCRIPTION), { ...ready("ts-q2"), charges: [charged("pro")] }],
+  yours: [{ ...ready("ts-y1"), parked: "needs a decision" }],
   working: [
     active(
-      authoredOn(task("ts-w1", "in_progress", ["failed-by:flash"]), "flash"),
+      authoredOn({ ...task("ts-w1", "in_progress", []), charges: [charged("flash")] }, "flash"),
       worker("ts-w1", "working"),
     ),
   ],
@@ -131,9 +135,14 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: withRuns(authoredOn(task("ts-s1", "in_progress", ["failed-by:flash"]), "flash", true), [
-        reviewRun("pro"),
-      ]),
+      task: withRuns(
+        authoredOn(
+          { ...task("ts-s1", "in_progress", []), charges: [charged("flash")] },
+          "flash",
+          true,
+        ),
+        [reviewRun("pro")],
+      ),
       paths: ["src/old.ts", "src/gone.ts"],
       modifyDelete: true,
     },

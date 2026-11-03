@@ -110,8 +110,8 @@ stateDiagram-v2
   `named`, because an agent that named an exit started.
 - A check run is written `closed`; it has no agent.
 - A correction round changes `rounds`, which is data, not state.
-- `charged` (from ts-4e763a) is data on the run: the rung a `fails` exit or a
-  spent stop charged.
+- A charge (from ts-4e763a) is a row in `charges`, not data on the run: an
+  operator's floor charges rungs that never ran.
 
 ## Joint table
 
@@ -147,18 +147,11 @@ row's arguments.
 From the State section of `docs/agent-exits.md` (ts-4e763a). Labels stop
 carrying foreman's state:
 
-| Today | With this design |
-|---|---|
-| `failed-by:<rung>` | the runs' `charged` column |
-| `attempt:<rung>:<n>` | the count of `stopped` runs on the rung since its last charge |
-| `walled:<provider>` | the runs that ended `walled` |
-| `needs-you` | a `parks` row: task, reason, time |
-| `descend` removes `failed-by:` | a `forgiven` row: task, rung, time |
-
-The label writes in `Records` (`markFailure`, `markAttempt`, `markWall`,
-`parkForOperator`, `clearNeedsYou`, `clearFailure`) go. `park`, `unpark` and
-`forgive` write the two tables. The tracker then carries only task state and
-the operator's own labels (`size:N`, `research`).
+Built on ts-4e763a; `docs/agent-exits.md`, State, has the table. `Records`
+writes `charges` (`markFailure`, `clearFailure`) and `parks` (`park`,
+`unpark`); attempts and walls are read from the runs. The tracker carries only
+task state, the operator's own labels (`size:N`, `research`) and
+`diagnosing:<intent>`.
 
 ## Tests
 

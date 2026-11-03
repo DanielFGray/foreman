@@ -1,4 +1,4 @@
-import type { Run } from "tasks";
+import type { Charge, Run } from "tasks";
 import type { Item } from "./records.ts";
 
 /**
@@ -21,6 +21,7 @@ export const authorRun = (rung: string, over: Partial<Run> = {}): Run => ({
   ending: undefined,
   rounds: undefined,
   open: true,
+  landed: false,
   ...over,
 });
 
@@ -58,3 +59,10 @@ export const authoredOn = (task: Item, rung: string, ended = false): Item =>
 /** A check run at block `node` that ran on `commit` and ended `ending`. */
 export const checkRun = (node: string, commit: string, ending: "passed" | "failed"): Run =>
   authorRun("", { role: "check", rung: undefined, node, commit, ending, open: false });
+
+/** A closed author run on `rung` that ended without an exit: one attempt on that rung. */
+export const stoppedRun = (rung: string, ending: "stopped" | "vanished" = "stopped"): Run =>
+  authorRun(rung, { open: false, ending });
+
+/** A standing charge against `rung`, written after run `run` (none when the task had no runs). */
+export const charged = (rung: string, run?: number): Charge => ({ rung, run, forgiven: false });

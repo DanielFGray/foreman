@@ -3,13 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
-import { connectionAt, store } from "tasks";
+import { connectionAt, store, type Run } from "tasks";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
-import { agentLog, attemptsOf, type Item } from "./records.ts";
+import { agentLog, attemptsOf, type Item, walledBy } from "./records.ts";
 import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from "./lap.ts";
 import { newRunFor } from "./run-record.ts";
-import { authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 
 /** The run row a dispatch of `role` on `rung` opens for the task. */
 const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?: string) =>
@@ -35,14 +35,14 @@ const run = <A, E>(
     }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
   );
 
-const item = (labels: ReadonlyArray<string>): Item => ({
+const item = (): Item => ({
   id: "ts-123456",
   title: "Test task",
   status: "in_progress",
   project: "foreman",
   type: "task",
   priority: 1,
-  labels,
+  labels: [],
   description: "",
   parent: undefined,
   lastActivityAt: new Date(),
@@ -50,13 +50,18 @@ const item = (labels: ReadonlyArray<string>): Item => ({
   updatedAt: new Date(0),
   definitionOfDone: undefined,
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 });
+
+/** The task with these runs, oldest first. */
+const tried = (...runs: ReadonlyArray<Run>): Item => withRuns(item(), runs);
 
 describe("task attribution", () => {
   test("keeps author and current reviewer distinct", () => {
     const task = withRuns(
-      authoredOn(item([]), "opencode"),
+      authoredOn(item(), "opencode"),
       [reviewRun("claude", { ending: "approved", commit: "c1" })],
       "c1",
     );
@@ -101,34 +106,54 @@ describe("task attribution", () => {
 
 describe("stopped attempts on a rung", () => {
   test("reads zero for a rung that was never tried", () => {
-    expect(attemptsOf(item([]), "deepseek")).toBe(0);
-    expect(attemptsOf(authoredOn(item([]), "opencode"), "deepseek")).toBe(0);
+    expect(attemptsOf(item(), "deepseek")).toBe(0);
+    expect(attemptsOf(authoredOn(item(), "opencode"), "deepseek")).toBe(0);
   });
 
-  test("reads the count recorded for the named rung", () => {
-    expect(attemptsOf(item(["attempt:deepseek:1"]), "deepseek")).toBe(1);
-    expect(attemptsOf(item(["attempt:deepseek:2"]), "deepseek")).toBe(2);
+  test("counts the rung's author runs that stopped or vanished", () => {
+    expect(attemptsOf(tried(stoppedRun("deepseek")), "deepseek")).toBe(1);
+    expect(
+      attemptsOf(tried(stoppedRun("deepseek"), stoppedRun("deepseek", "vanished")), "deepseek"),
+    ).toBe(2);
   });
 
-  test("ignores a count a rung the task left recorded", () => {
+  test("ignores the runs of a rung the task left", () => {
     // The count follows its rung, so a task pinned elsewhere starts fresh and
     // a climb-away clears nothing it might meet again.
-    expect(attemptsOf(item(["attempt:deepseek:2"]), "sol")).toBe(0);
-    expect(attemptsOf(item(["attempt:deepseek:2", "attempt:sol:1"]), "sol")).toBe(1);
+    const deepseek = [stoppedRun("deepseek"), stoppedRun("deepseek")];
+    expect(attemptsOf(tried(...deepseek), "sol")).toBe(0);
+    expect(attemptsOf(tried(...deepseek, stoppedRun("sol")), "sol")).toBe(1);
   });
 
-  test("reads the newest count when more than one was written", () => {
-    expect(attemptsOf(item(["attempt:deepseek:1", "attempt:deepseek:3"]), "deepseek")).toBe(3);
+  test("counts only the runs after the rung's newest charge, forgiven or not", () => {
+    const runs = [stoppedRun("deepseek"), stoppedRun("deepseek"), stoppedRun("deepseek")];
+    const spent = runs[1]!;
+    const charge = charged("deepseek", spent.id);
+    expect(attemptsOf({ ...tried(...runs), charges: [charge] }, "deepseek")).toBe(1);
+    expect(
+      attemptsOf({ ...tried(...runs), charges: [{ ...charge, forgiven: true }] }, "deepseek"),
+    ).toBe(1);
+    // Another rung's charge ends nothing on this one.
+    expect(attemptsOf({ ...tried(...runs), charges: [charged("sol", spent.id)] }, "deepseek")).toBe(
+      3,
+    );
   });
 
   test("keeps two rungs whose names share a prefix apart", () => {
-    expect(attemptsOf(item(["attempt:deepseek-flash:2"]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["attempt:deepseek-flash:2"]), "deepseek-flash")).toBe(2);
+    const flash = [stoppedRun("deepseek-flash"), stoppedRun("deepseek-flash")];
+    expect(attemptsOf(tried(...flash), "deepseek")).toBe(0);
+    expect(attemptsOf(tried(...flash), "deepseek-flash")).toBe(2);
   });
 
-  test("ignores a count that is not a plain number", () => {
-    expect(attemptsOf(item(["attempt:deepseek:x"]), "deepseek")).toBe(0);
-    expect(attemptsOf(item(["attempt:deepseek:2.5"]), "deepseek")).toBe(0);
+  test("ignores runs that named an exit, were released, hit a wall, are open, or reviewed", () => {
+    const runs = [
+      authorRun("deepseek", { open: false, ending: "done" }),
+      authorRun("deepseek", { open: false, ending: "released" }),
+      authorRun("deepseek", { open: false, ending: "walled" }),
+      authorRun("deepseek"),
+      reviewRun("deepseek", { open: false, ending: "stopped" }),
+    ];
+    expect(attemptsOf(tried(...runs), "deepseek")).toBe(0);
   });
 });
 
@@ -232,6 +257,8 @@ describe("Records against a scratch store", () => {
     const after = await run((records) => records.show(id));
     expect(roundsOf(after)).toBe(0);
     expect(after.labels).toEqual([]);
+    expect(after.charges).toEqual([]);
+    expect(after.parked).toBeUndefined();
     expect(after.runs.at(-1)).toMatchObject({ role: "author", rung: "cheap", open: true });
   });
 
@@ -270,5 +297,22 @@ describe("Records against a scratch store", () => {
     expect(refused.detail).toContain("no open run");
     expect(after.status).toBe("in_progress");
     expect(after.runs).toEqual([]);
+  });
+});
+
+describe("usage walls", () => {
+  const ladder = [
+    { name: "free", harness: "opencode", model: "opencode/free" },
+    { name: "dear", harness: "claude", model: undefined },
+  ] as unknown as Parameters<typeof walledBy>[1];
+
+  test("a walled run names its rung's account until the task lands", () => {
+    const walled = authorRun("free", { open: false, ending: "walled" });
+    expect(walledBy({ runs: [walled] }, ladder)).toEqual(["opencode"]);
+    const landed = authorRun("dear", { open: false, ending: "done", landed: true });
+    expect(walledBy({ runs: [walled, landed] }, ladder)).toEqual([]);
+    expect(walledBy({ runs: [landed, { ...walled, id: landed.id + 1 }] }, ladder)).toEqual([
+      "opencode",
+    ]);
   });
 });

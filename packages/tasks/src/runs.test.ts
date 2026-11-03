@@ -350,12 +350,15 @@ describe("the exits migration", () => {
         yield* sql.unsafe(`DROP VIEW model_status`);
         yield* sql.unsafe(`DROP VIEW run_identity`);
         yield* sql.unsafe(`DROP VIEW herd_roster`);
+        yield* sql.unsafe(`DROP TABLE charges`);
+        yield* sql.unsafe(`DROP TABLE parks`);
         yield* sql.unsafe(`DROP TABLE runs`);
         yield* sql.unsafe(OLD_RUNS);
         // The migrator only runs ids above the latest recorded row, so later
         // migrations must go too or exits is skipped and the rename never runs.
         yield* sql.unsafe(
-          `DELETE FROM tasks_migrations WHERE name IN ('exits', 'ladder_roles', 'six_statuses')`,
+          `DELETE FROM tasks_migrations
+           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks')`,
         );
         const endings = [
           ["build", "handed-off"],

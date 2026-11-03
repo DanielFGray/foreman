@@ -64,6 +64,8 @@ export interface Run {
   readonly rounds: number | undefined;
   /** A run is open until it closes. */
   readonly open: boolean;
+  /** The author run foreman landed when the task completed. */
+  readonly landed: boolean;
 }
 
 /**
@@ -251,7 +253,7 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
     const grouped = new Map<string, Array<Run>>();
     if (tasks.length === 0) return grouped as ReadonlyMap<string, ReadonlyArray<Run>>;
     const rows =
-      yield* sql<RunRow>`SELECT id, task, work, rung, node, "commit", base, ending, rounds, closed_at
+      yield* sql<RunRow>`SELECT id, task, work, rung, node, "commit", base, ending, rounds, outcome, closed_at
       FROM runs WHERE ${sql.in("task", tasks)} ORDER BY id`;
     for (const row of rows) {
       const run: Run = {
@@ -265,6 +267,7 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
         ending: row.ending ?? undefined,
         rounds: row.rounds ?? undefined,
         open: row.closed_at === null,
+        landed: row.outcome === "committed" || row.outcome === "answered",
       };
       grouped.set(row.task, [...(grouped.get(row.task) ?? []), run]);
     }
@@ -286,6 +289,7 @@ interface RunRow {
   readonly base: string | null;
   readonly ending: Ending | null;
   readonly rounds: number | null;
+  readonly outcome: Outcome | null;
   readonly closed_at: string | null;
 }
 

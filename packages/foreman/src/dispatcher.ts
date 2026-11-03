@@ -115,7 +115,7 @@ import {
 } from "./lap.ts";
 import { hitWall } from "./harness.ts";
 import { newRunFor } from "./run-record.ts";
-import type { Ending, Run } from "tasks";
+import type { Charge, Ending, Run } from "tasks";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
 const runDuration = Metric.timer("foreman.run.duration", {
@@ -161,11 +161,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const quota = yield* Quota;
 
     const runAttributes = (
-      task: {
-        readonly id: string;
-        readonly project: string;
-        readonly labels: ReadonlyArray<string>;
-      },
+      task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
       rung: Rung,
       role: AgentRole,
     ) => ({
@@ -179,11 +175,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     });
 
     const instrumentRun = <A, E, R>(
-      task: {
-        readonly id: string;
-        readonly project: string;
-        readonly labels: ReadonlyArray<string>;
-      },
+      task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
       rung: Rung,
       role: AgentRole,
       effect: Effect.Effect<A, E, R>,
@@ -1214,15 +1206,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             `chore(foreman): WIP from ${task.id}: its agent stopped on a usage limit before verifying it`,
           );
         }
-        yield* records.markWall(task.id, wall.provider);
         yield* records.release(task.id, { author: "walled" });
         yield* stopAgents(worker);
 
-        const labels = [...task.labels, `walled:${wall.provider}`];
+        // The run just closed `walled` is not in `task`, so its account is added here.
         const next = authorFor(
           settings.ladder,
-          failuresOf({ labels }),
-          authorWalls(settings.ladder, { labels }, walled),
+          failuresOf(task),
+          new Set([
+            ...authorWalls(settings.ladder, task, walled),
+            ...rungsOn(settings.ladder, wall.provider),
+          ]),
         );
         const takeover =
           next._tag === "Dispatch"
@@ -1512,7 +1506,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                     records
                       .endReview(task.id, "walled")
                       .pipe(
-                        Effect.andThen(records.markWall(task.id, hit.provider)),
                         Effect.andThen(stopAgents(worker)),
                         Effect.andThen(
                           tracker.log(
@@ -1967,7 +1960,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const park = ({ task, why }: Park) =>
       Effect.gen(function* () {
-        yield* records.park(task.id);
+        yield* records.park(task.id, why);
         yield* tracker.log(task.id, `foreman: ${task.id} is yours now: ${why}`);
         yield* fleet.notify("Needs a decision", `${task.id} ${task.title}: ${why}`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
@@ -2284,16 +2277,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * A crash and a timeout end identically, so the task stays on the rung and
      * is tried again, up to `attemptsPerRung`; a usage wall is not routed here
      * at all (see `handOffWall`). The
-     * attempt that reaches the limit is the one that climbs, and the climb
-     * clears the count for the next rung. Every ending writes its count to the
-     * task, so a dispatch days later reads how many tries this rung has
-     * already had. A reviewer rejecting the work is a judgement and never
-     * passes through here.
-     *
-     * The task is released before the count is written. A release that fails
-     * leaves the task claimed, so a count written ahead of it would be read
-     * again on the next tick and climb the task a rung early; a count left
-     * unwritten by the opposite order merely gives the rung one more try.
+     * attempt that reaches the limit is the one that climbs, and the climb's
+     * charge ends the count. The count is the task's runs on this rung that
+     * ended without an exit (`attemptsOf`), so the release that closes this run
+     * is what counts it, and a dispatch days later reads the same number. A
+     * reviewer rejecting the work is a judgement and never passes through here.
      */
     const retryAttempt = (task: Climbing, detail: string, ending: Ending) =>
       Effect.gen(function* () {
@@ -2311,7 +2299,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             task.id,
             `${detail} Returned to the queue to try ${rung} again (attempt ${attempts} of ${settings.attemptsPerRung}).`,
           );
-          yield* records.markAttempt(task.id, rung, attempts);
         }
       });
 
@@ -2322,7 +2309,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const parkStopped = (task: Item, worker: Worker, what: string) =>
       Effect.gen(function* () {
-        yield* records.park(task.id, { author: "stopped", review: "stopped" });
+        yield* records.park(task.id, what, { author: "stopped", review: "stopped" });
         yield* tracker.log(
           task.id,
           `foreman: ${what}, and its block parks such a task. It is yours now.`,
@@ -2354,7 +2341,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ];
         const next = reviewerFor(settings.ladder, authoredBy(task), new Set(), failed);
         if (next === undefined) {
-          yield* records.park(task.id, { review: "stopped" });
+          yield* records.park(
+            task.id,
+            `reviewer ${ran} stopped without a verdict, and no rung above it is left`,
+            {
+              review: "stopped",
+            },
+          );
           yield* tracker.log(
             task.id,
             `foreman: reviewer ${ran} stopped without a verdict, and no rung above it is left to read ${task.id}. It is yours now.`,
@@ -2383,7 +2376,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const ranAt = (task: Climbing): string =>
       authoredBy(task) ?? nextRung(task)?.name ?? settings.ladder[0].name;
 
-    const nextRung = (task: { readonly labels: ReadonlyArray<string> }): Rung | undefined => {
+    const nextRung = (task: Pick<Item, "charges">): Rung | undefined => {
       const choice = authorFor(settings.ladder, failuresOf(task));
       return choice._tag === "Dispatch" ? choice.rung : undefined;
     };
@@ -2438,7 +2431,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (next._tag === "Yours") {
           yield* tracker.log(
             task.id,
-            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then remove the failures it recorded to put it back in the queue.`,
+            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then run \`foreman descend ${task.id}\` to take back its highest charge and put it back in the queue.`,
           );
           yield* fleet.notify("Needs a decision", `${task.id} ${task.title}`);
         }
@@ -2461,7 +2454,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // out of the operator's column and onto the strongest model — which is
         // where the failures it already carries put it. Removing the park is
         // that step; the failures are the next one.
-        if (needsYou(task)) return yield* records.clearNeedsYou(task.id);
+        if (needsYou(task)) return yield* records.unpark(task.id);
         const highest = highestFailure(settings.ladder, failuresOf(task));
         if (highest === undefined) return;
         yield* records.clearFailure(task.id, highest);
@@ -3666,6 +3659,8 @@ export interface Climbing {
   readonly title: string;
   readonly labels: ReadonlyArray<string>;
   readonly runs: ReadonlyArray<Run>;
+  readonly charges: ReadonlyArray<Charge>;
+  readonly parked: string | undefined;
 }
 
 /** History read above a stopped agent's screen when looking for a usage wall. */

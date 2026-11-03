@@ -152,21 +152,20 @@ export type Action = (typeof ACTIONS_LIST)[number];
  * does not change meaning between columns.
  *
  * The two corrections — `descend` and `unassign` — are offered wherever their
- * labels could have been written, and a row without the label ignores the key
- * rather than doing nothing to a claim. `descend` only reaches a row carrying
- * a `needs-you` label or a recorded failure: with nothing written against the
- * task there is nothing to take back. `unassign` only reaches a row whose
+ * records could have been written, and a row without one ignores the key
+ * rather than doing nothing to a claim. `descend` only reaches a row with a
+ * park or a charge: with nothing written against the task there is nothing to
+ * take back. `unassign` only reaches a row whose
  * open review run has no live reviewer behind it.
  *
  * `yours` takes no answer key, and that is the design rather than an omission.
  * A task waits there because a question about it is unanswered, and a single
  * key to put it back would hand the next agent the same unanswered question —
  * the exact failure the column exists to prevent. It leaves when the operator
- * writes the decision into the task and removes its `needs-you` label, in
- * that order, with prog. The two corrections do reach it: a task parked at the
- * operator is exactly the sort of judgement that can turn out to have been
- * written without being earned, and no other column shows a `needs-you` task
- * to take it back from.
+ * writes the decision into the task and then runs `descend`, which removes the
+ * park. The two corrections do reach it: a task parked at the operator is
+ * exactly the sort of judgement that can turn out to have been written without
+ * being earned, and no other column shows a parked task to take it back from.
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   queue: ["complete", "intervene", "descend", "unassign"],

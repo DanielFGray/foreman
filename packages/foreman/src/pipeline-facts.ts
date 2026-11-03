@@ -1,17 +1,17 @@
 import { isExit, type Run } from "tasks";
-import { failuresOf, type Item, valueOf } from "./records.ts";
+import { attemptsOf, failuresOf, type Item, valueOf } from "./records.ts";
 import { type Facts, type NamedExit, type Pipeline, type PipelineNode, QUEUE } from "./pipeline.ts";
 
 /**
  * What placement knows about `item` in `pipeline`, read from its status,
- * labels and runs. This is the one reader of runs for placement.
+ * labels, runs and charges. This is the one reader of runs for placement.
  *
  * The task's exits count from the last time it left a source: a return to the
  * queue, or an exit the drawing no longer has, starts the count again, because
  * either sends the task back to its source.
  */
 export const factsOf = (
-  item: Pick<Item, "status" | "priority" | "parent" | "labels" | "runs" | "tip">,
+  item: Pick<Item, "status" | "priority" | "parent" | "labels" | "runs" | "charges" | "tip">,
   pipeline: Pipeline,
 ): Facts => {
   const open = item.runs.findLast((run) => run.open && run.role !== "check");
@@ -23,7 +23,7 @@ export const factsOf = (
     size: sizeOf(item.labels),
     labels: new Set(item.labels),
     failedBy: new Set(failuresOf(item)),
-    attempts: attemptCount(item.labels),
+    attempts: attemptCount(item),
     tip: item.tip,
     running: open?.node === undefined ? undefined : { node: open.node, named: isExit(open.ending) },
     named: sinceSource(exits, pipeline),
@@ -66,15 +66,10 @@ const sizeOf = (labels: ReadonlyArray<string>): number => {
   return size === undefined ? 1 : Number(size);
 };
 
-/** The newest `attempt:<rung>:<n>` count of each rung, summed. */
-const attemptCount = (labels: ReadonlyArray<string>): number => {
-  const newest = new Map<string, number>();
-  for (const value of valuesOf(labels, "attempt")) {
-    const at = value.lastIndexOf(":");
-    const count = Number(value.slice(at + 1));
-    if (at <= 0 || !Number.isInteger(count)) continue;
-    const rung = value.slice(0, at);
-    newest.set(rung, Math.max(newest.get(rung) ?? 0, count));
-  }
-  return [...newest.values()].reduce((sum, n) => sum + n, 0);
+/** Each rung's attempt count (`attemptsOf`), summed over the rungs that authored the task. */
+const attemptCount = (item: Pick<Item, "runs" | "charges">): number => {
+  const rungs = new Set(
+    item.runs.flatMap((run) => (run.role === "author" && run.rung !== undefined ? [run.rung] : [])),
+  );
+  return [...rungs].reduce((sum, rung) => sum + attemptsOf(item, rung), 0);
 };

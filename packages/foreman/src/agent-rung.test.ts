@@ -3,7 +3,7 @@ import type { Run } from "tasks";
 import { rungAt } from "./agent-rung.ts";
 import type { Ladder } from "./ladder.ts";
 import type { AgentNode } from "./pipeline.ts";
-import { authorDone } from "./task-fixture.ts";
+import { authorDone, charged } from "./task-fixture.ts";
 
 const LADDER: Ladder = [
   { name: "cheap", harness: "test", model: undefined, provider: undefined },
@@ -32,7 +32,11 @@ const reviewer = (model: string): AgentNode => ({
   ],
 });
 
-const task = (labels: ReadonlyArray<string>, runs: ReadonlyArray<Run> = []) => ({ labels, runs });
+/** A task charged with failing on each rung in `failedBy`, with these runs. */
+const task = (failedBy: ReadonlyArray<string>, runs: ReadonlyArray<Run> = []) => ({
+  charges: failedBy.map((rung) => charged(rung)),
+  runs,
+});
 
 const rungOf = (choice: ReturnType<typeof rungAt>) =>
   choice._tag === "Dispatch" ? choice.rung.name : choice._tag;
@@ -40,14 +44,10 @@ const rungOf = (choice: ReturnType<typeof rungAt>) =>
 describe("the rung an agent block runs a task on", () => {
   test("ladder climbs above the task's failures", () => {
     expect(rungOf(rungAt(LADDER, author("ladder"), task([]), new Set()))).toBe("cheap");
-    expect(rungOf(rungAt(LADDER, author("ladder"), task(["failed-by:cheap"]), new Set()))).toBe(
-      "dear",
+    expect(rungOf(rungAt(LADDER, author("ladder"), task(["cheap"]), new Set()))).toBe("dear");
+    expect(rungOf(rungAt(LADDER, author("ladder"), task(["cheap", "dear"]), new Set()))).toBe(
+      "Exhausted",
     );
-    expect(
-      rungOf(
-        rungAt(LADDER, author("ladder"), task(["failed-by:cheap", "failed-by:dear"]), new Set()),
-      ),
-    ).toBe("Exhausted");
   });
 
   test("above takes the rung over the author", () => {
@@ -67,8 +67,6 @@ describe("the rung an agent block runs a task on", () => {
     expect(rungOf(rungAt(offDuty, author("dear"), task([]), new Set()))).toBe("Waiting");
     // A pinned block has no other rung to climb to, so a failure on it is the
     // operator's to answer.
-    expect(rungOf(rungAt(LADDER, author("cheap"), task(["failed-by:cheap"]), new Set()))).toBe(
-      "Exhausted",
-    );
+    expect(rungOf(rungAt(LADDER, author("cheap"), task(["cheap"]), new Set()))).toBe("Exhausted");
   });
 });

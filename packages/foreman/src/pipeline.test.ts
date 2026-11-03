@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Run } from "tasks";
-import { checkRun, authorDone, reviewRun } from "./task-fixture.ts";
+import { authorDone, authorRun, charged, checkRun, reviewRun, stoppedRun } from "./task-fixture.ts";
 import {
   type AgentNode,
   type CheckNode,
@@ -84,21 +84,24 @@ describe("filters", () => {
   });
 });
 
-describe("facts read from labels and runs", () => {
+describe("facts read from labels, runs and charges", () => {
   test("names failures, attempts, size, the exits and the open run", () => {
+    // Two stopped runs on strong are two attempts; a released run on x is none.
+    const cheap = authorDone("cheap");
     const read = factsOf(
       {
         status: "in_progress",
         priority: 1,
         parent: "ep-1",
-        labels: [
-          "failed-by:cheap",
-          "attempt:strong:1",
-          "attempt:strong:2",
-          "attempt:x:bad",
-          "size:3",
+        labels: ["size:3"],
+        runs: [
+          stoppedRun("strong"),
+          stoppedRun("strong"),
+          authorRun("x", { open: false, ending: "released" }),
+          cheap,
+          reviewRun("strong", { ending: "approved", commit: "c1" }),
         ],
-        runs: [authorDone("cheap"), reviewRun("strong", { ending: "approved", commit: "c1" })],
+        charges: [charged("cheap", cheap.id)],
         tip: "c1",
       },
       STANDARD_PIPELINE,
@@ -533,6 +536,7 @@ describe("a check block", () => {
           parent: undefined,
           labels: [],
           runs: [authorDone("cheap", "c1"), ...runs],
+          charges: [],
           tip,
         },
         checked,

@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
-import { runsOf, Tasks } from "tasks";
+import { chargesOf, parksOf, runsOf, Tasks } from "tasks";
 import { convert, reportLines } from "./cutover-runs.ts";
 import { reviewedBy, reviewFailedBy } from "./lap.ts";
+import { attemptsOf, failuresOf, needsYou } from "./records.ts";
 import { place, STANDARD_PIPELINE } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Repository } from "./repository.ts";
@@ -142,7 +143,7 @@ describe("the runs cutover", () => {
       }),
     ));
 
-  test("a task back in the queue loses its old labels and gains no runs", () =>
+  test("a task back in the queue loses its lap labels and gains no runs", () =>
     program(
       Effect.gen(function* () {
         const tasks = yield* Tasks;
@@ -152,11 +153,10 @@ describe("the runs cutover", () => {
         const report = yield* convert({ root, dryRun: false });
 
         expect((yield* runsOf([queued])).has(queued)).toBe(false);
-        expect((yield* tasks.require(queued)).labels.slice().sort()).toEqual([
-          "bug",
-          "failed-by:cheap",
-        ]);
+        expect((yield* tasks.require(queued)).labels).toEqual(["bug"]);
         expect(report.plans.find((plan) => plan.task === queued)?.runs).toEqual([]);
+        // Its failure is not lap state: it stays, as a charge.
+        expect((yield* chargesOf([queued])).get(queued)?.map((one) => one.rung)).toEqual(["cheap"]);
       }),
     ));
 
@@ -180,12 +180,51 @@ describe("the runs cutover", () => {
     ));
 });
 
+describe("the charges and parks cutover", () => {
+  test("a task's failures, attempts and park read the same after its labels go", () =>
+    program(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const queued = yield* taskWith(
+          "open",
+          ["failed-by:cheap", "attempt:strong:2", "needs-you", "walled:opencode", "size:2"],
+          false,
+        );
+        // A charge ends a rung's count, so a count beside one was written after it.
+        const recounted = yield* taskWith("open", ["failed-by:cheap", "attempt:cheap:1"], false);
+
+        yield* convert({ root, dryRun: false });
+        const ids = [queued, recounted];
+        const [runs, charges, parks] = [
+          yield* runsOf(ids),
+          yield* chargesOf(ids),
+          yield* parksOf(ids),
+        ];
+        const read = (id: string) => ({
+          runs: runs.get(id) ?? [],
+          charges: charges.get(id) ?? [],
+          parked: parks.get(id),
+        });
+
+        expect(failuresOf(read(queued))).toEqual(["cheap"]);
+        expect(attemptsOf(read(queued), "strong")).toBe(2);
+        expect(needsYou(read(queued))).toBe(true);
+        expect((yield* tasks.require(queued)).labels).toEqual(["size:2"]);
+        expect(attemptsOf(read(recounted), "cheap")).toBe(1);
+        expect(failuresOf(read(recounted))).toEqual(["cheap"]);
+
+        const again = yield* convert({ root, dryRun: false });
+        expect(again.plans.map((plan) => plan.task)).not.toContain(queued);
+      }),
+    ));
+});
+
 /** Whether a reviewing task with these runs stands at the land of the standard pipeline. */
 const landsAt = (task: { readonly runs: ReadonlyArray<Run>; readonly tip: string | undefined }) => {
   const placement = place(
     STANDARD_PIPELINE,
     factsOf(
-      { status: "in_progress", priority: 2, parent: undefined, labels: [], ...task },
+      { status: "in_progress", priority: 2, parent: undefined, labels: [], charges: [], ...task },
       STANDARD_PIPELINE,
     ),
   );

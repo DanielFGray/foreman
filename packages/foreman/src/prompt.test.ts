@@ -76,6 +76,8 @@ const item: Item = {
   updatedAt: new Date(0),
   definitionOfDone: undefined,
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 };
 
@@ -94,6 +96,8 @@ const ready = {
   type: "task",
   status: "open",
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 } as const;
 

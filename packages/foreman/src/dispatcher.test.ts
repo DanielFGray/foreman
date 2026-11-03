@@ -20,7 +20,7 @@ import {
 } from "./dispatcher.ts";
 import { diagnosticIntent, type Item, type TaskStatus } from "./records.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
-import { authorRun, authoredOn, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
 import { place, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
@@ -47,6 +47,8 @@ const task = (
   updatedAt: new Date(0),
   definitionOfDone: undefined,
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 });
 
@@ -368,16 +370,20 @@ const STANDARD_PIPELINES = new Map([
 ]);
 
 describe("the policy gate on dispatch", () => {
-  const ready = (id: string, labels: ReadonlyArray<string> = []) => ({
+  /** A queued task; `over` gives it the charges and runs of earlier attempts. */
+  const ready = (id: string, over: Partial<Pick<Item, "charges" | "runs">> = {}) => ({
     id,
     title: `Task ${id}`,
     priority: 1,
     project: "foreman",
-    labels,
+    labels: [],
     status: "open" as const,
     parent: undefined,
     runs: [],
+    charges: [],
+    parked: undefined,
     tip: undefined,
+    ...over,
   });
 
   const allowing = (
@@ -433,7 +439,7 @@ describe("the policy gate on dispatch", () => {
   test("a task an attempt already failed needs climb, not author", () => {
     const dispatches = dispatchesFor(
       dispatchState(allowing({ author: "on" }), {
-        queue: [ready("ts-retry", ["failed-by:cheap"]), ready("ts-fresh")],
+        queue: [ready("ts-retry", { charges: [charged("cheap")] }), ready("ts-fresh")],
       }),
     );
 
@@ -579,7 +585,7 @@ describe("the policy gate on dispatch", () => {
     const { dispatches, asks } = plan(
       dispatchState(allowing({ review: "ask", climb: "ask" }, { slots: 1 }), {
         workers: [worker("working", "ts-w1")],
-        queue: [ready("ts-c", ["attempt:cheap:1"])],
+        queue: [ready("ts-c", { runs: [stoppedRun("cheap")] })],
         review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
       }),
     );
@@ -603,9 +609,9 @@ describe("the policy gate on dispatch", () => {
         ),
         {
           queue: [
-            ready("ts-c1", ["attempt:cheap:1"]),
-            ready("ts-c2", ["attempt:cheap:1"]),
-            ready("ts-g", ["attempt:cheap:1"]),
+            ready("ts-c1", { runs: [stoppedRun("cheap")] }),
+            ready("ts-c2", { runs: [stoppedRun("cheap")] }),
+            ready("ts-g", { runs: [stoppedRun("cheap")] }),
           ],
           review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
           scopes: new Map([["ts-g", new Set(["ts-g"])]]),
@@ -799,6 +805,8 @@ describe("the quota gate", () => {
     status: "open" as const,
     parent: undefined,
     runs: [],
+    charges: [],
+    parked: undefined,
     tip: undefined,
   });
 

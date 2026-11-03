@@ -348,8 +348,10 @@ const schemaOf = (file: string) => {
   }
 };
 
-/** The registry tables `0002_registry` adds; Go does not create them. */
+/** The tables foreman's migrations add (`0002_registry`, `0007_charges_and_parks`); Go does not create them. */
 const OTHER_TABLES = [
+  "charges",
+  "parks",
   "providers",
   "pools",
   "pool_aliases",

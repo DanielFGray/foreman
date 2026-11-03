@@ -17,7 +17,7 @@ section is the rule.
 - **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
   ending. A migration renamed the old endings: `handed-off` to `done`,
   `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
-  There is no `charged` column: `fails` still writes the `failed-by:` label.
+  An exit's `fails` writes a row in `charges` (State).
 - **Placement.** An open agent run places the task at its block. Otherwise
   the last named exit is followed, and an exit is void when the tip is not the
   commit it was named on (an exit with no commit counts as moved) and either
@@ -162,19 +162,22 @@ a process outcome, not an exit.
 
 ## State
 
-Labels carry state today that foreman parses back each tick. Labels the operator
-sets, such as `size:N` and `research`, stay labels. Foreman's own state moves into
-the runs table and two small tables in the same SQLite store. This finishes the
-move recorded on ts-4e763a.
+Labels the operator sets, such as `size:N` and `research`, stay labels.
+Foreman's own state is in the runs table and two small tables in the same
+SQLite store (built on ts-4e763a). The one label foreman still writes is
+`diagnosing:<intent>`, during an intervention.
 
-| State | Today | With exits |
+| State | Before | Now |
 |---|---|---|
 | where the task is | the "passed" set, from run endings in the lap | the last named exit (rule 3) |
-| a rung failed the task | the label `failed-by:<rung>` | the runs: an exit with a charged rung, or a stop that spent the rung |
-| attempts on a rung | the label `attempt:<rung>:<n>` | the count of `stopped` runs on that rung since the last charge |
-| an account hit its limit on this task | the label `walled:<provider>` | the runs that ended `walled` |
-| the task waits for the operator | the label `needs-you` | a `parks` row: task, reason, time; removed when the operator acts |
-| the operator forgave a rung (`descend`) | the `failed-by:` label removed | a `forgiven` row: task, rung, time; it cancels the charges before it |
+| a rung failed the task | the label `failed-by:<rung>` | a `charges` row that is not forgiven: an exit's `fails`, a stop that spent the rung, or a floor the operator chose |
+| attempts on a rung | the label `attempt:<rung>:<n>` | the author runs on the rung that ended `stopped` or `vanished` after the rung's newest charge |
+| an account hit its limit on this task | the label `walled:<provider>` | the runs that ended `walled` after the task last landed |
+| the task waits for the operator | the label `needs-you` | a `parks` row: task, reason, time; removed by `descend` |
+| the operator forgave a rung (`descend`) | the `failed-by:` label removed | the rung's charges get `forgiven_at` |
+
+A charge records the newest run on the task when it was written (`run`), so
+"after the charge" compares run ids, not clock times.
 
 - **Facts.** `failedBy`, `attempts`, `approved` and `underReview` in `Facts`
   are read from the runs and the two tables, not from labels. `exit` and
@@ -184,12 +187,12 @@ move recorded on ts-4e763a.
 - **Where it lives.** The runs and the two tables are in foreman's database,
   keyed by task id, so a tracker adapter carries only task state (decision on
   ts-4e763a, 2026-11-01). Today that database is the same file as the built-in
-  task store. This replaces "Durable state beyond the policy and pipelines files
-  is a wall … the fix belongs in hc, herdr-app or prog" (AGENTS.md) for the
-  records foreman writes about its own runs.
-- **Migration.** A store migration turns each existing `failed-by:`,
-  `attempt:`, `walled:` and `needs-you` label into the matching run fields or
-  rows, then removes the label.
+  task store. AGENTS.md's durable-state rule names these records.
+- **Migration.** The store migration `0007_charges_and_parks` makes the two
+  tables. `foreman cutover runs` turns each `failed-by:` label of an
+  unfinished task into a charge, `needs-you` into a park, and each
+  `attempt:<rung>:<n>` into `n` stopped author runs (their `evidence` names the
+  label), then removes the labels. A `walled:` label is removed with no record.
 
 ## Validation
 
@@ -285,7 +288,7 @@ Each line names the old rule, where it stands, and what replaces it.
   sections that read labels ("Every label is `<kind>:<value>`", "`needs-you`
   is the one durable way into the operator's column", `descend` unwriting a
   `failed-by:*` label): the State section. The labels `failed-by:`,
-  `attempt:`, `walled:` and `needs-you` go away.
+  `attempt:`, `walled:` and `needs-you` are gone (done on ts-4e763a).
 - The epic's first description said "correction rounds become an exit wired
   back to the author". Rule 7 replaces it: a round keeps the reviewer live.
 

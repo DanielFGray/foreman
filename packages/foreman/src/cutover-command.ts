@@ -26,7 +26,7 @@ const runs = Command.make("runs", { dryRun, root }, (args) =>
   convert(args).pipe(Effect.flatMap((report) => Console.log(reportLines(report).join("\n")))),
 ).pipe(
   Command.withDescription(
-    "Turn the by, review-by, review-failed-by, rounds, approved and satisfied labels of unfinished tasks into runs, then remove the labels",
+    "Turn the by, review-by, review-failed-by, rounds, approved, satisfied, failed-by, attempt, walled and needs-you labels of unfinished tasks into runs, charges and parks, then remove the labels",
   ),
   Command.provide(
     Layer.mergeAll(Tasks.layerSql, Repository.Default).pipe(Layer.provideMerge(store)),

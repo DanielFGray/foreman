@@ -11,7 +11,7 @@ import {
 } from "./ladder.ts";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import type { AgentNode } from "./pipeline.ts";
-import { failuresOf, walledBy } from "./records.ts";
+import { failuresOf, type Item, walledBy } from "./records.ts";
 
 /**
  * The rung an agent block runs a task on, given this reading's allowances.
@@ -42,7 +42,7 @@ export type BlockRung =
 export const rungAt = (
   ladder: Ladder,
   block: AgentNode,
-  task: { readonly labels: ReadonlyArray<string>; readonly runs: ReadonlyArray<Run> },
+  task: Pick<Item, "runs" | "charges">,
   walled: ReadonlySet<string>,
   drawn: ReadonlySet<string> = new Set(),
 ): BlockRung => {
@@ -77,11 +77,11 @@ export const rungAt = (
 /**
  * The rungs an author may not take for this task: those on a spent account in
  * this tick's reading, and those on an account the task's agents stopped on a
- * usage wall. The second is per task, so it comes from the task's labels, not
+ * usage wall. The second is per task, so it comes from the task's runs, not
  * from the reading.
  */
 export const authorWalls = (
   ladder: Ladder,
-  task: { readonly labels: ReadonlyArray<string> },
+  task: Pick<Item, "runs">,
   walled: ReadonlySet<string>,
-): ReadonlySet<string> => new Set([...walled, ...rungsOnAccounts(ladder, walledBy(task))]);
+): ReadonlySet<string> => new Set([...walled, ...rungsOnAccounts(ladder, walledBy(task, ladder))]);

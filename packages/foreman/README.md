@@ -396,9 +396,9 @@ nothing about the work or the model.
 which keeps its rank: the failures already recorded against it still position
 every task that earned its way past it.
 
-A task names no rung. What it records is evidence: a `failed-by:<rung>` label for
-each rung that was tried and was not enough, and the retry count as an
-`attempt:<rung>:<n>` label. Foreman picks the author at dispatch — the cheapest
+A task names no rung. What foreman records is evidence: a charge for each rung
+that was tried and was not enough, and the runs that ended without an exit,
+which count the retries. Foreman picks the author at dispatch — the cheapest
 rung that is in the ladder, enabled, funded, and above every rung recorded as having
 failed this task. So a rung disabled in the registry, or an account with
 nothing left, moves work along instead of stranding it.
@@ -408,9 +408,10 @@ branch would not land, or the rung has been spent by `attemptsPerRung` attempts
 that ended without finishing. An agent that merely stopped unfinished has said
 nothing about its model — a crash, a timeout and a usage wall all end the same
 way — so nothing is recorded and the same rung is tried again. The evidence lives
-in the task store rather than in foreman's memory, because a dispatch days later,
-after a restart, is exactly what reads it. Label a task `failed-by:<rung>` by
-hand to hold it above a rung you know is not enough.
+in foreman's database rather than in its memory, because a dispatch days later,
+after a restart, is exactly what reads it. To start a task above a rung you know
+is not enough, launch it on the rung you want, or intervene and continue on it:
+either charges every rung below.
 
 Which rung runs is derived at dispatch, never inherited from which slot happened
 to be free.
@@ -436,23 +437,23 @@ below them would stall.
 
 A task reaches you two ways. Its recorded failures leave no rung above them,
 meaning nothing configured could finish it — a task the best model could not do
-should stop, not cycle. Or you park it with `tasks label <task> needs-you`, which
-is what work that was never specified needs: dispatching it once to discover that
-wastes a run.
+should stop, not cycle. Or a block parks it: the drawing routes it to a park,
+an agent stopped at a block drawn `stopped: park`, or no reviewer is left. Work
+that was never specified is a `draft` (`tasks draft <task>`), which keeps it out
+of the queue: dispatching it once to discover that wastes a run.
 
 It waits under dashboard **Attention**, and foreman notifies you, the same
 as for a blocked worker — a task that arrives at you silently waits forever. The
 column takes no answer key. That is the design: a key to put the task back would
 hand the next agent the same unanswered question. Write the decision into the
-task with `tasks append`, then `tasks unlabel <task> needs-you`, in that order.
-The next author reads the answer in the description.
+task with `tasks append`, then press `x` (`foreman descend <task>`), in that
+order. The next author reads the answer in the description.
 
-The one exception is `x`, which takes back one thing that put the task here: the
-`needs-you` label if you set it, otherwise the highest recorded failure. Evidence
-is only ever as good as the run that wrote it, and a bug or a killed run can
-write a failure that was never earned, so the operator taking one back is the
-same sort of correction `prog unlabel` used to be. `x` unwrites exactly the label
-foreman itself would have written.
+`x` takes back one thing that put the task here: its park, otherwise the
+highest charged rung. Evidence is only ever as good as the run that wrote it,
+and a bug or a killed run can charge a rung that never earned it, so the
+operator takes it back. The charge stays in foreman's database, marked
+forgiven.
 
 ## The queue
 
@@ -469,8 +470,8 @@ almost entirely at one priority otherwise sorts by age alone, which dispatches
 defects in the order they were discovered, behind whatever feature batch was
 entered first.
 
-Some ready tasks never enter the queue. One labelled `needs-you`, or one every rung
-has failed, parks under Needs you; one labelled `onboard` is held for the
+Some ready tasks never enter the queue. One that is parked, or one every rung
+has failed, waits under Needs you; one labelled `onboard` is held for the
 project's onboarding. A task whose dispatch failed twice in a row is held out
 by the dispatcher for as long as it runs; that count lives in its memory only.
 One function, `queueFrom` in `src/queue.ts`, makes this split for both the

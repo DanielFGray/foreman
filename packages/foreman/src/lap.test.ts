@@ -28,7 +28,7 @@ const blockOf = (runs: ReadonlyArray<Run>, tip: string | undefined) => {
   const placement = place(
     STANDARD_PIPELINE,
     factsOf(
-      { status: "in_progress", priority: 2, parent: undefined, labels: [], runs, tip },
+      { status: "in_progress", priority: 2, parent: undefined, labels: [], runs, charges: [], tip },
       STANDARD_PIPELINE,
     ),
   );

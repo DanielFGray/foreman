@@ -88,6 +88,13 @@ export const MIGRATIONS = Migrator.fromRecord({
     const sql = yield* SqlClient;
     yield* sql.unsafe(`UPDATE items SET status = 'in_progress' WHERE status = 'reviewing'`);
   }),
+  // Two records foreman kept as labels on the task and now keeps beside its
+  // runs, so a tracker carries only task state: the rungs charged with
+  // failing a task, and the tasks parked for the operator.
+  "0007_charges_and_parks": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    for (const statement of CHARGES_AND_PARKS) yield* sql.unsafe(statement);
+  }),
 });
 
 export const MIGRATIONS_TABLE = "tasks_migrations";
@@ -438,6 +445,31 @@ const REGISTRY = [
               WHERE m2.pool = p.pool AND m2.status = 'trial' AND COALESCE(m2.enabled, 1) = 1
               ORDER BY m2.rank NULLS LAST, m2.model LIMIT -1) s) AS on_trial
   FROM pools p`,
+];
+
+/**
+ * `charges`: one row each time a rung is charged with failing a task. `run` is
+ * the newest run on the task when the charge was written, so the runs after it
+ * are the ones the charge has not read; empty when the task had none.
+ * `forgiven_at` is set when the operator takes the charge back.
+ *
+ * `parks`: one row per task parked for the operator, removed when they act.
+ */
+const CHARGES_AND_PARKS = [
+  `CREATE TABLE charges (
+    id          INTEGER PRIMARY KEY,
+    task        TEXT NOT NULL,
+    rung        TEXT NOT NULL,
+    run         INTEGER REFERENCES runs(id),
+    at          TEXT NOT NULL DEFAULT (datetime('now')),
+    forgiven_at TEXT
+  )`,
+  `CREATE INDEX idx_charges_task ON charges(task)`,
+  `CREATE TABLE parks (
+    task   TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    at     TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 /** `PRAGMA user_version` after Go `prog`'s last migration. */

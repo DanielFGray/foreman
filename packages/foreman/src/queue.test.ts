@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
 import { interleave, queueFrom } from "./queue.ts";
 import type { Item } from "./records.ts";
+import { charged } from "./task-fixture.ts";
 
 const now = new Date("2026-08-14T00:00:00Z");
 
@@ -26,6 +27,8 @@ const task = (
   type: "task",
   status: "open",
   runs: [],
+  charges: [],
+  parked: undefined,
   tip: undefined,
 });
 
@@ -160,12 +163,12 @@ describe("queueFrom", () => {
   });
   const ids = (tasks: ReadonlyArray<Item>) => tasks.map(({ id }) => id);
 
-  test("parks a task every rung has failed, and one marked needs-you", () => {
+  test("parks a task every rung has failed, and one parked for the operator", () => {
     const split = queueFrom(
       reading([
-        task("spent", "a", 1, now, ["failed-by:cheap", "failed-by:top"]),
-        task("asked", "a", 1, now, ["needs-you"]),
-        task("ready", "a", 1, now, ["failed-by:cheap"]),
+        { ...task("spent", "a", 1), charges: [charged("cheap"), charged("top")] },
+        { ...task("asked", "a", 1), parked: "asked" },
+        { ...task("ready", "a", 1), charges: [charged("cheap")] },
       ]),
     );
     expect(ids(split.queue)).toEqual(["ready"]);
@@ -185,7 +188,7 @@ describe("queueFrom", () => {
 
   test("leaves out projects that take no new work", () => {
     const split = queueFrom(
-      reading([task("elsewhere", "b", 1), task("asked", "b", 1, now, ["needs-you"])]),
+      reading([task("elsewhere", "b", 1), { ...task("asked", "b", 1), parked: "asked" }]),
     );
     expect(split.queue).toEqual([]);
     expect(split.yours).toEqual([]);
@@ -207,6 +210,8 @@ describe("queueFrom", () => {
       definitionOfDone: undefined,
       parent: "ep",
       runs: [],
+      charges: [],
+      parked: undefined,
       tip: undefined,
     });
     const epic = { ...child("ep", "in_progress"), type: "epic" as const, parent: undefined };

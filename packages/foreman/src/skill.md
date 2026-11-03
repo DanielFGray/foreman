@@ -65,9 +65,9 @@ ready` reads edges, never the text of a description.
   definition of done with checkable facts.
 - **Decide first.** An agent given an open design question decides it without
   telling you. Answer it in the task, or file it with `-l question`.
-- **Answer what parks.** A task labelled `needs-you`, or one every rung has
-  failed, waits for you. Write the decision into the task, then remove the
-  label.
+- **Answer what parks.** A parked task, or one every rung has failed, waits
+  for you. Write the decision into the task, then run `foreman descend <id>`.
+  File work that is not ready for an agent as a `draft`.
 
 ## Use
 

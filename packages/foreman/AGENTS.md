@@ -40,9 +40,9 @@ a claim made by hand.
 | Is a reviewer assigned? | an open review run in the task's current lap |
 | Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
-| Which rung comes next? | the cheapest configured, enabled, author-on, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels; a reviewer is the next review-on rung above the author |
-| How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
-| Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
+| Which rung comes next? | the cheapest configured, enabled, author-on, funded rung above every rung charged with failing the task, off the accounts its runs ended `walled` on since it last landed; a reviewer is the next review-on rung above the author |
+| How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge |
+| Is this one waiting on a person? | every configured rung has failed it, or it has a park |
 | Is this task mine to review? | it has an author run |
 | Is this worker mine? | the checkout in its terminals' `fm.repo` label |
 | Which projects are in play? | the git checkouts of the operator's open herdr-app spaces |
@@ -120,9 +120,13 @@ The wake queue beside it holds no state: it only ends the poll wait early, after
 `commanded` in the dispatcher's own process or `wake` from its host once a
 one-shot command in another process changed the world.
 
-**Durable state beyond the policy, pipelines and drafts files is a wall.** Needing it means something
-the world should record is not being recorded, and the fix belongs in hc,
-herdr-app or prog.
+**Durable state beyond the policy, pipelines and drafts files and foreman's
+own records is a wall.** Foreman's own records are what it writes about its
+runs, in its database beside the task store and keyed by task id: the runs, the
+charges (a rung charged with failing a task) and the parks (a task waiting for
+the operator), so a tracker carries only task state. Needing any other state
+means something the world should record is not being recorded, and the fix
+belongs in hc, herdr-app or the tracker.
 
 ### Projects are the open spaces
 
@@ -197,8 +201,9 @@ on its log, and the ordinary attempt count still bounds a task that cannot
 get past it. An agent that merely stopped without
 finishing has said nothing about its model — a crash and a timeout end the same
 way — so the task stays on the rung and is tried again. The count of those
-endings lives on the task as an `attempt:<rung>:<n>` label, because a dispatch
-days later is exactly what reads it.
+endings is the task's runs on the rung that ended `stopped` or `vanished` since
+the rung's last charge (`attemptsOf`), so a dispatch days later reads the same
+number.
 
 An agent whose pane is idle without an exit is not stopped until it has sat
 idle for `stallGraceMinutes` (default 5), counted from the time hc reports
@@ -213,8 +218,8 @@ reports no status (cursor-agent) reads as working and never reaches this.
 A usage wall is the one stop that says something, and it says it about the
 account, not the model. Each harness's wall text is listed in `src/harness.ts`,
 read from the screen of the stopped author, and matched only at the foot of it.
-A wall writes `walled:<provider>` on the task and no attempt or failure, so the
-next author skips that account. The label clears when the task completes.
+The run ends `walled`, which is no attempt and no charge, and the next author
+skips that account (`walledBy`). Landing the task ends the wall.
 
 ### The operator's checkout is shared, so it is asked about
 
@@ -402,8 +407,8 @@ queue and the operator's column, and both the tick and `foreman queue` call it.
 
 The rung is chosen at the moment of dispatch, from what is configured, enabled,
 author-on and funded then — `authorFor` in `src/ladder.ts`. What the task
-durably carries is evidence: one `failed-by:<rung>` label per rung that was
-tried and was not enough. The author is the cheapest available author-on rung
+durably carries is evidence: a charge per rung that was tried and was not
+enough (`failuresOf`). The author is the cheapest available author-on rung
 above all of them. `foreman ladder role <rung> author|review on|off` turns a
 role off without retiring the rung.
 
@@ -422,14 +427,16 @@ which stays true however the ladder is edited afterwards.
   the queue, marked; every configured rung having failed it is a fact about the
   work, and only a person can answer that. Collapsing them asks the operator to
   decide something no decision changes.
-- **`needs-you` is the one durable way into the operator's column.** Everything
-  else there is derived, so it clears itself when a rung is added or an account
-  resets. `descend` takes back the park first and then the failures, one call
-  at a time, which is how the operator's column is left without an answer action.
-- **Every label is `<kind>:<value>`.** Rung names contain hyphens, so the older
-  `attempt-<rung>-<n>` could only be read by guessing where the model's name
-  ended — and durable labels make that guess again on every dispatch, forever.
-  `kindOf` and `valueOf` in `src/records.ts` are the whole parser.
+- **A park is the one durable way into the operator's column.** Only foreman
+  writes one, when a block parks a task or no reviewer is left. Everything else
+  there is derived, so it clears itself when a rung is added or an account
+  resets. `descend` takes back the park first and then the charges, one call
+  at a time, which is how the operator's column is left without an answer
+  action. Work that is not ready for an agent is a `draft`, not a park.
+- **Every label foreman reads is `<kind>:<value>`** (`size:N`,
+  `diagnosing:<intent>`). Rung names contain hyphens, so only a separator no
+  name holds can be split without guessing. `kindOf` and `valueOf` in
+  `src/records.ts` are the whole parser.
 
 ### An allowance belongs to an account, not to a rung
 
@@ -587,7 +594,7 @@ author's.** The task stays `in_progress` at its review step, and its review run
 ends `stopped`; `reviewerFor` then reads the next review-on rung above the
 author and every rung whose review in this lap ended that way. No attempt is
 charged to the author. When no review-on rung is left the task is released and
-parked with `needs-you`. A reviewer stopped on a usage wall ends `walled` and charges no
+parked. A reviewer stopped on a usage wall ends `walled` and charges no
 rung. A reviewer whose approval a later commit voided has not failed: the same
 rung may read the new tip. This is the review block's `stopped: retry`; a block
 drawn with `stopped: park` parks the task at the first stop instead.
@@ -899,11 +906,11 @@ refuses an action the row cannot take. Decisions are named from the task's
 status: only the status — neither claimed nor under review — marks a worker as
 residue.
 
-The two corrections follow the labels, not the views. `descend` takes back one
-recorded failure, because a rung is only ever as good as the evidence that wrote
+The two corrections follow the records, not the views. `descend` forgives one
+charged rung, because a rung is only ever as good as the evidence that wrote
 it and a bug, an OOM or a killed run all write one nothing earned; one step per
-call, unwriting exactly the `failed-by:*` label foreman itself would have
-written, and with nothing recorded there is nothing to take back. `unassign` ends
+call, and with nothing charged there is nothing to take back. A forgiven charge
+stays in the table, marked, so the history keeps it. `unassign` ends
 an open review run no reviewer is behind, as `released`, which charges no rung —
 the world records whether a reviewer was dispatched, not whether it is still
 alive, so only the operator can say the run is stale. Both write exactly what foreman itself would have written.
@@ -920,8 +927,8 @@ in-process intervention state exists.
 `yours` takes no answer action. A task waits there because a question about it is
 unanswered, and one action to requeue it would hand the next agent that same
 question — the failure the column exists to prevent. A task there for the
-durable reason leaves when the operator writes the decision into it and removes
-its `needs-you` label; one there because evidence exhausted the ladder leaves
+durable reason leaves when the operator writes the decision into it and runs
+`descend`, which removes the park; one there because evidence exhausted the ladder leaves
 when a rung is added or a failure is taken back. The two corrections do reach it,
 since a task parked at the operator is exactly the sort of rung that can turn out
 not to have been earned.

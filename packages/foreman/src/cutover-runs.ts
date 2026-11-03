@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 import { join } from "node:path";
-import { closeRun, openRun, Tasks, type Ending, type NewRun } from "tasks";
+import { charge, closeRun, openRun, park, Tasks, type Ending, type NewRun } from "tasks";
 import { labelFor } from "./fleet.ts";
 import { providerOf, type Ladder } from "./ladder.ts";
 import { countOf, type Item } from "./records.ts";
@@ -10,9 +10,10 @@ import { Repository } from "./repository.ts";
 import { newRunFor } from "./run-record.ts";
 
 /**
- * The one-time conversion from the labels foreman wrote before runs to runs.
+ * The one-time conversion from the labels foreman wrote before runs, charges
+ * and parks to those records.
  *
- * Before runs, foreman recorded what its agents did as labels on the task. The
+ * Before them, foreman recorded what its agents did as labels on the task. The
  * label names live here and nowhere else: after the conversion nothing writes
  * or reads them. A task that is done or canceled keeps its labels as history.
  */
@@ -23,6 +24,13 @@ const REVIEW_FAILED_BY = "review-failed-by:";
 const ROUNDS = "rounds";
 const APPROVED = "approved";
 const SATISFIED = "satisfied";
+const FAILED_BY = "failed-by:";
+const ATTEMPT = "attempt:";
+const WALLED = "walled:";
+const NEEDS_YOU = "needs-you";
+
+/** Why a task the `needs-you` label parked is parked; the task's log says the rest. */
+export const PARKED_BY_LABEL = "parked by the needs-you label; its log says why";
 
 /** Placeholder for the model and pool of a rung the ladder no longer has. */
 const UNKNOWN = "unknown";
@@ -41,6 +49,9 @@ export interface Plan {
   /** The labels this conversion removes. */
   readonly labels: ReadonlyArray<string>;
   readonly runs: ReadonlyArray<PlannedRun>;
+  /** The rungs charged with failing the task, written before its runs. */
+  readonly charges: ReadonlyArray<string>;
+  readonly park: boolean;
   /** The rungs the ladder no longer has. */
   readonly unknownRungs: ReadonlyArray<string>;
   /** The runs that need the branch tip, and the branch is gone. */
@@ -49,8 +60,8 @@ export interface Plan {
   readonly dropped: ReadonlyArray<string>;
 }
 
-/** The labels of the six kinds, which is all the conversion touches. */
-const isOld = (label: string): boolean =>
+/** The labels of the six kinds that describe a task's current lap. */
+const isLap = (label: string): boolean =>
   label.startsWith(BY) ||
   label.startsWith(REVIEW_BY) ||
   label.startsWith(REVIEW_FAILED_BY) ||
@@ -58,14 +69,31 @@ const isOld = (label: string): boolean =>
   label === APPROVED ||
   label === SATISFIED;
 
+/** The labels of the ten kinds, which is all the conversion touches. */
+const isOld = (label: string): boolean =>
+  isLap(label) ||
+  label.startsWith(FAILED_BY) ||
+  label.startsWith(ATTEMPT) ||
+  label.startsWith(WALLED) ||
+  label === NEEDS_YOU;
+
 /** The suffixes of the labels that start with `prefix`. */
 const after = (labels: ReadonlyArray<string>, prefix: string): ReadonlyArray<string> =>
   labels.flatMap((label) => (label.startsWith(prefix) ? [label.slice(prefix.length)] : []));
 
 /**
- * What runs a task's old labels stand for, oldest first so that the author run
- * opens its lap: the author, the reviewers that failed, the approval, then the
- * reviewer still at work.
+ * What records a task's old labels stand for.
+ *
+ * On any task: each `failed-by:<rung>` is a charge, `needs-you` is a park, and
+ * each `attempt:<rung>:<n>` is `n` author runs on the rung that ended
+ * `stopped`, written after the charges so that a count on a charged rung still
+ * reads `n`. A `walled:<provider>` label is removed with no record: a wall
+ * describes an account at one time, and the next dispatch finds it again if it
+ * still stands.
+ *
+ * On a task in progress, the lap's runs too, oldest first so that the author
+ * run opens its lap: the author, the reviewers that failed, the approval, then
+ * the reviewer still at work.
  *
  * `tip` is the branch tip, or nothing when the branch is gone. A run converted
  * without a commit never matches the tip, so an `approved` on a task whose
@@ -102,22 +130,30 @@ export const planOf = (
     };
   };
 
-  const planned: Array<PlannedRun> = [];
+  const stops = stopsOf(labels, (rung) => run(rung, "author"));
+  dropped.push(...stops.dropped, ...labels.filter((label) => label.startsWith(WALLED)));
+  const kept = {
+    task: task.id,
+    labels,
+    charges: after(labels, FAILED_BY),
+    park: labels.includes(NEEDS_YOU),
+  };
 
   // Only work in flight has a lap to keep. On a task back in the queue, `by:`
   // names an attempt that was released, not handed off, and nothing reads it:
-  // the next author is chosen from `failed-by`, which stays a label. A run made
-  // up for it would pass the author block and count in the model statistics.
+  // the next author is chosen from its charges. A run made up for it would
+  // pass the author block and count in the model statistics.
   if (task.status !== "in_progress") {
     return {
-      task: task.id,
-      labels,
-      runs: [],
-      unknownRungs: [],
+      ...kept,
+      runs: stops.runs,
+      unknownRungs: [...new Set(unknownRungs)],
       branchGone: false,
-      dropped: labels,
+      dropped: [...dropped, ...labels.filter(isLap)],
     };
   }
+
+  const planned: Array<PlannedRun> = [...stops.runs];
 
   // An open author run is work still being written. Handoff evidence used to
   // be the `reviewing` status; with six statuses it is the review labels.
@@ -155,13 +191,38 @@ export const planOf = (
   }
 
   return {
-    task: task.id,
-    labels,
+    ...kept,
     runs: planned,
     unknownRungs: [...new Set(unknownRungs)],
     branchGone: tip === undefined && planned.some(needsTip),
     dropped,
   };
+};
+
+/**
+ * The stopped author runs the `attempt:<rung>:<n>` labels stand for: `n` per
+ * label, each naming its label as evidence. A label whose count is not a
+ * positive integer is dropped.
+ */
+const stopsOf = (
+  labels: ReadonlyArray<string>,
+  authorOn: (rung: string) => NewRun,
+): { readonly runs: ReadonlyArray<PlannedRun>; readonly dropped: ReadonlyArray<string> } => {
+  const dropped: Array<string> = [];
+  const runs = after(labels, ATTEMPT).flatMap((value): ReadonlyArray<PlannedRun> => {
+    const at = value.lastIndexOf(":");
+    const count = Number(value.slice(at + 1));
+    if (at <= 0 || !Number.isInteger(count) || count < 1) {
+      dropped.push(`${ATTEMPT}${value}`);
+      return [];
+    }
+    const stopped: PlannedRun = {
+      run: { ...authorOn(value.slice(0, at)), evidence: `${ATTEMPT}${value}` },
+      ending: "stopped",
+    };
+    return Array.from({ length: count }, () => stopped);
+  });
+  return { runs, dropped };
 };
 
 /** A run records the tip when it reads one (review) or hands one off (a closed author run). */
@@ -208,23 +269,27 @@ export const convert = (options: { readonly root: string; readonly dryRun: boole
         .pipe(Effect.orElseSucceed(() => undefined));
       const plan = planOf(task, ladder, tip);
       plans.push(plan);
-      if (options.dryRun) continue;
-      yield* sql.withTransaction(
-        Effect.gen(function* () {
-          for (const { run, ending, closeCommit } of plan.runs) {
-            const id = yield* openRun(run);
-            if (ending !== undefined) {
-              yield* closeRun(id, {
-                ending,
-                ...(closeCommit === undefined ? {} : { commit: closeCommit }),
-              });
-            }
-          }
-          for (const label of plan.labels) yield* tasks.unlabel(task.id, label);
-        }),
-      );
+      if (!options.dryRun) yield* sql.withTransaction(write(plan));
     }
     return { plans, written: !options.dryRun } satisfies Report;
+  });
+
+/** Writes one task's plan and removes its old labels; the caller makes it one transaction. */
+const write = (plan: Plan) =>
+  Effect.gen(function* () {
+    const tasks = yield* Tasks;
+    for (const rung of plan.charges) yield* charge(plan.task, rung);
+    if (plan.park) yield* park(plan.task, PARKED_BY_LABEL);
+    for (const { run, ending, closeCommit } of plan.runs) {
+      const id = yield* openRun(run);
+      if (ending !== undefined) {
+        yield* closeRun(id, {
+          ending,
+          ...(closeCommit === undefined ? {} : { commit: closeCommit }),
+        });
+      }
+    }
+    for (const label of plan.labels) yield* tasks.unlabel(plan.task, label);
   });
 
 /** The report as the lines `foreman cutover runs` prints. */
@@ -232,11 +297,13 @@ export const reportLines = ({ plans, written }: Report): ReadonlyArray<string> =
   const verb = written ? "wrote" : "would write";
   const lines = plans.flatMap((plan) => [
     `${plan.task}: ${plan.labels.join(" ")}`,
+    ...plan.charges.map((rung) => `  ${verb} a charge on ${rung}`),
+    ...(plan.park ? [`  ${verb} a park`] : []),
     ...plan.runs.map(
       ({ run, ending }) =>
         `  ${verb} ${run.work} run on ${run.rung ?? "?"} ${ending ?? "open"}${run.commit === undefined ? "" : ` at ${run.commit.slice(0, 8)}`}`,
     ),
-    ...plan.dropped.map((label) => `  removes ${label}: no run stands for it`),
+    ...plan.dropped.map((label) => `  removes ${label}: no record stands for it`),
   ]);
   const unknown = plans.filter((plan) => plan.unknownRungs.length > 0);
   const gone = plans.filter((plan) => plan.branchGone);

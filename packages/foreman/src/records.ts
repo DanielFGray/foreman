@@ -2,13 +2,20 @@ import { Context, Effect, Layer, Option, Schema as S } from "effect";
 import { SqlClient } from "effect/sql";
 import {
   addRound,
+  charge,
+  chargesOf,
   closeOpenRuns,
   deleteOpenRunOf,
+  forgive,
   landAuthorRun,
   openRun,
+  park,
+  parksOf,
   recordCheck,
   recordExit,
   runsOf,
+  unpark,
+  type Charge,
   type Ending,
   type CheckRun,
   type Item as TaskItem,
@@ -18,13 +25,14 @@ import {
   type Run,
 } from "tasks";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
-import type { Rung } from "./ladder.ts";
+import { providerOf, type Ladder, type Rung } from "./ladder.ts";
 import { TasksTracker, Tracker, TrackerError } from "./tracker.ts";
 
 export type { Status as TaskStatus } from "tasks";
 
 /**
  * A task as foreman reads it: the tracker's item, the runs on it oldest first,
+ * the rungs charged with failing it, whether it is parked for the operator,
  * and the tip of its branch.
  *
  * The tip is not in the store. The dispatcher's observation stamps it from git,
@@ -33,6 +41,9 @@ export type { Status as TaskStatus } from "tasks";
  */
 export interface Item extends TaskItem {
   readonly runs: ReadonlyArray<Run>;
+  readonly charges: ReadonlyArray<Charge>;
+  /** Why the task is parked for the operator; empty when it is not. */
+  readonly parked: string | undefined;
   readonly tip: string | undefined;
 }
 
@@ -51,11 +62,13 @@ export type ExitMove = "reopen";
 
 /**
  * Foreman's records of the work: the runs on each task (who worked it, on
- * which rung, how it ended, on which commit) and the marks foreman keeps as
- * labels (failures, attempts, walls, the operator's column, diagnostics).
- * Reads join the tracker's tasks with their runs.
+ * which rung, how it ended, on which commit), the rungs charged with failing
+ * it, and the tasks parked for the operator. Reads join the tracker's tasks
+ * with these records; the one label foreman still writes is a diagnostic
+ * intervention's.
  *
- * The runs live in the task store's database, keyed by task id. A records
+ * The records live in the task store's database, keyed by task id, so a
+ * tracker carries only task state. A records
  * write that goes with a status move (closing runs as a task is released or
  * completed) runs both in one transaction on that connection: atomic because
  * `TasksTracker` writes on the same connection, which `layer` guarantees by
@@ -102,16 +115,24 @@ export class Records extends Context.Service<Records>()("Records", {
       },
     ) => together(`end runs of ${task}`, onStore(closeOpenRuns(task, endings)));
 
-    /** The tasks with their runs, oldest first. */
+    /** The tasks with their runs and charges, oldest first, and their parks. */
     const withRuns = (
       items: ReadonlyArray<TaskItem>,
-    ): Effect.Effect<ReadonlyArray<Item>, RecordsError | TrackerError> =>
-      onStore(runsOf(items.map((item) => item.id))).pipe(
-        Effect.map((byTask) =>
-          items.map((item): Item => ({ ...item, runs: byTask.get(item.id) ?? [], tip: undefined })),
+    ): Effect.Effect<ReadonlyArray<Item>, RecordsError | TrackerError> => {
+      const ids = items.map((item) => item.id);
+      return onStore(Effect.all([runsOf(ids), chargesOf(ids), parksOf(ids)])).pipe(
+        Effect.map(([runs, charges, parks]) =>
+          items.map((item): Item => ({
+            ...item,
+            runs: runs.get(item.id) ?? [],
+            charges: charges.get(item.id) ?? [],
+            parked: parks.get(item.id),
+            tip: undefined,
+          })),
         ),
         as("read runs"),
       );
+    };
 
     /** Drops every label of the named kinds, whatever value each carries, then adds `added`. */
     const replaceKinds = (task: string, kinds: ReadonlyArray<string>, ...added: Array<string>) =>
@@ -119,15 +140,6 @@ export class Records extends Context.Service<Records>()("Records", {
         .relabel(task, (labels) => [
           ...labels.filter((label) => !kinds.includes(kindOf(label))),
           ...added,
-        ])
-        .pipe(Effect.asVoid);
-
-    /** Drops the attempt count of one rung, leaving every other rung's alone, then adds `added`. */
-    const replaceAttempts = (task: string, rung: string, added: string) =>
-      tracker
-        .relabel(task, (labels) => [
-          ...labels.filter((label) => attemptFor(label, rung) === undefined),
-          added,
         ])
         .pipe(Effect.asVoid);
 
@@ -345,10 +357,10 @@ export class Records extends Context.Service<Records>()("Records", {
        * column, in one transaction: whatever the ladder would say, a person
        * decides what comes next.
        */
-      park: (task: string, endings: Endings = {}) =>
+      park: (task: string, reason: string, endings: Endings = {}) =>
         together(
           `park ${task}`,
-          releasing(task, endings).pipe(Effect.andThen(tracker.label(task, NEEDS_YOU))),
+          releasing(task, endings).pipe(Effect.andThen(onStore(park(task, reason)))),
         ),
 
       /**
@@ -356,7 +368,7 @@ export class Records extends Context.Service<Records>()("Records", {
        * task's runs in the same transaction: the reviewer's keeps its exit,
        * and the lap's author run becomes `committed` (`answered` for research).
        * Done first, so a task that cannot be completed fails on `done` itself.
-       * A wall label left on a done task is inert: nothing dispatches it.
+       * Landing the author run also ends the task's walls (`walledBy`).
        */
       complete: (task: Pick<Item, "id" | "labels">) =>
         together(
@@ -368,12 +380,8 @@ export class Records extends Context.Service<Records>()("Records", {
                 onStore(closeOpenRuns(task.id, { author: "released", review: "released" })),
               ),
               Effect.andThen(onStore(landAuthorRun(task.id, isResearch(task)))),
-              Effect.andThen(replaceKinds(task.id, [WALLED])),
             ),
         ),
-
-      /** Records that the task's agent stopped on this account's usage wall. */
-      markWall: (task: string, provider: string) => tracker.label(task, `${WALLED}:${provider}`),
 
       /**
        * Records that a rung was tried on this task and was not enough.
@@ -386,24 +394,12 @@ export class Records extends Context.Service<Records>()("Records", {
        * that stated that in advance would be stranded by a config edit or a
        * spent account.
        *
-       * The rung's attempt count goes with it. The count exists to decide when
-       * the rung is spent; once it is spent, the count has been read for the
-       * last time, and leaving it behind would let a task lowered back onto
-       * that rung inherit a verdict it has not earned again.
+       * The charge also ends the rung's attempt count (`attemptsOf`): the count
+       * decides when the rung is spent, and a task lowered back onto that rung
+       * must not inherit a verdict it has not earned again.
        */
       markFailure: (task: string, rung: string) =>
-        replaceAttempts(task, rung, `${FAILED_BY}:${rung}`),
-
-      /**
-       * Writes how many times the named rung has stopped on the task without an exit.
-       *
-       * The rung is named in the label, so a count follows its rung: reading
-       * ignores what a rung the task left recorded, and pinning a task by hand
-       * starts the pinned rung fresh. The old count for the same rung goes in
-       * the same write, so a rung holds at most one attempt label.
-       */
-      markAttempt: (task: string, rung: string, count: number) =>
-        replaceAttempts(task, rung, `${ATTEMPT}:${rung}:${count}`),
+        onStore(charge(task, rung)).pipe(as(`charge ${rung} on ${task}`)),
 
       /**
        * Takes back the record that one rung failed this task.
@@ -415,12 +411,10 @@ export class Records extends Context.Service<Records>()("Records", {
        * deserved", and the work drops back to the model below.
        */
       clearFailure: (task: string, rung: string) =>
-        tracker
-          .relabel(task, (labels) => labels.filter((label) => valueOf(label, FAILED_BY) !== rung))
-          .pipe(Effect.asVoid),
+        onStore(forgive(task, rung)).pipe(as(`forgive ${rung} on ${task}`)),
 
-      /** Puts a task a person parked back in the queue at the rung it had earned. */
-      clearNeedsYou: (task: string) => tracker.unlabel(task, NEEDS_YOU),
+      /** Puts a parked task back in the queue at the rung it had earned. */
+      unpark: (task: string) => onStore(unpark(task)).pipe(as(`unpark ${task}`)),
 
       markDiagnostic: (task: string, intent: DiagnosticIntent) =>
         replaceKinds(task, [DIAGNOSING], `${DIAGNOSING}:${intent}`),
@@ -496,37 +490,45 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
  * stopped without finishing leaves it standing until its attempts run out.
  */
 export const failuresOf = (item: {
-  readonly labels: ReadonlyArray<string>;
-}): ReadonlyArray<string> => valuesOfKind(item.labels, FAILED_BY);
+  readonly charges: ReadonlyArray<Charge>;
+}): ReadonlyArray<string> => [
+  ...new Set(item.charges.filter((one) => !one.forgiven).map((one) => one.rung)),
+];
 
 /**
- * Whether a person has parked this task, whatever the ladder would say.
+ * Whether the task is parked for the operator, whatever the ladder would say.
  *
  * The one durable way into the operator's column. Everything else there is
  * derived from the failures and the config, so it clears itself when a rung is
  * added or an allowance resets; this one is a decision and only a decision
  * removes it.
  */
-export const needsYou = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
-  item.labels.includes(NEEDS_YOU);
+export const needsYou = (item: { readonly parked: string | undefined }): boolean =>
+  item.parked !== undefined;
 
 /**
- * How many times the named rung has stopped on the task without an exit.
+ * How many author runs on the named rung ended without an exit (`stopped` or
+ * `vanished`) since the rung was last charged.
  *
- * `0` when the rung has never been tried, or when the failure it earned was
- * recorded and its count cleared with it. The label names its rung, so one
- * rung's count is never read as another's, and the count is what the
- * escalation reads on a dispatch days later.
+ * `0` when the rung has never been tried, or when every such run came before
+ * its charge: a charge ends the count. The count is what the escalation reads
+ * on a dispatch days later.
  */
 export const attemptsOf = (
-  item: { readonly labels: ReadonlyArray<string> },
+  item: { readonly runs: ReadonlyArray<Run>; readonly charges: ReadonlyArray<Charge> },
   rung: string,
 ): number => {
-  const counts = item.labels.flatMap((label) => {
-    const count = attemptFor(label, rung);
-    return count === undefined ? [] : [count];
-  });
-  return counts.length === 0 ? 0 : Math.max(...counts);
+  const after = Math.max(
+    -1,
+    ...item.charges.filter((one) => one.rung === rung).map((one) => one.run ?? -1),
+  );
+  return item.runs.filter(
+    (run) =>
+      run.role === "author" &&
+      run.rung === rung &&
+      run.id > after &&
+      (run.ending === "stopped" || run.ending === "vanished"),
+  ).length;
 };
 
 /**
@@ -554,19 +556,6 @@ const valuesOfKind = (labels: ReadonlyArray<string>, kind: string): ReadonlyArra
   });
 
 /**
- * The count an `attempt:<rung>:<n>` label carries for one rung.
- *
- * Both halves are checked, so a rung reads only its own counts and a label
- * whose tail is not a number is somebody else's convention rather than a zero.
- */
-const attemptFor = (label: string, rung: string): number | undefined => {
-  const [kind, named, count, ...rest] = label.split(":");
-  if (kind !== ATTEMPT || named !== rung || count === undefined || rest.length > 0)
-    return undefined;
-  return /^[0-9]+$/.test(count) ? Number(count) : undefined;
-};
-
-/**
  * How big a slice is, as the coordinator judged it when filing: `size:1` one
  * file or rule, `size:2` one package, `size:3` crosses packages. Larger is
  * allowed. An integer, so the trials record can compare sizes by order.
@@ -584,20 +573,11 @@ export const countOf = (
   return values.length === 0 ? undefined : Math.max(...values);
 };
 
-/** Kind of the label recording that a rung was tried here and was not enough. */
-export const FAILED_BY = "failed-by";
-
 /** The label that marks a task as a defect in shipped code rather than new work. */
 export const BUG = "bug";
 
 export const DIAGNOSING = "diagnosing";
 export const ONBOARD = "onboard";
-
-/** The label with which a person parks a task in their own column. */
-export const NEEDS_YOU = "needs-you";
-
-/** Prefix of the label counting a rung's stopped attempts: `attempt:<rung>:<n>`. */
-export const ATTEMPT = "attempt";
 
 /**
  * The label marking a task whose deliverable is a report, not code.
@@ -609,16 +589,28 @@ export const ATTEMPT = "attempt";
 export const RESEARCH = "research";
 
 /**
- * The account a task's agent stopped on, one label per provider. A stop on a
- * usage wall says nothing about the model, so the task is not failed; the label
- * only keeps rungs on that account off the task's next dispatch. Cleared when
- * the task completes, because the wall describes the account at that time.
+ * The accounts a task's agents have stopped on a usage wall: the providers of
+ * the rungs whose runs ended `walled` since the task last landed.
+ *
+ * A stop on a usage wall says nothing about the model, so the task is not
+ * failed; the wall only keeps rungs on that account off the task's next
+ * dispatch. Landing ends it, because the wall describes the account at that
+ * time. A rung the ladder no longer has names no account.
  */
-export const WALLED = "walled";
-
-/** The accounts a task's agents have stopped on a usage wall. */
-export const walledBy = (item: { readonly labels: ReadonlyArray<string> }): ReadonlyArray<string> =>
-  valuesOfKind(item.labels, WALLED);
+export const walledBy = (
+  item: { readonly runs: ReadonlyArray<Run> },
+  ladder: Ladder,
+): ReadonlyArray<string> => {
+  const landed = Math.max(-1, ...item.runs.filter((run) => run.landed).map((run) => run.id));
+  const providers = item.runs
+    .filter((run) => run.id > landed && run.ending === "walled")
+    .map((run) => ladder.find((rung) => rung.name === run.rung))
+    .flatMap((rung) => {
+      const provider = rung === undefined ? undefined : providerOf(rung);
+      return provider === undefined ? [] : [provider];
+    });
+  return [...new Set(providers)];
+};
 
 export type DiagnosticIntent = "diagnose" | "review";
 

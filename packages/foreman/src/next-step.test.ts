@@ -10,7 +10,7 @@ import type { Item, TaskStatus } from "./records.ts";
 import { queueFrom } from "./queue.ts";
 import type { Landing } from "./repository.ts";
 import type { TaskPhase } from "./task-phase.ts";
-import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
+import { authorRun, authorDone, charged, reviewRun, withRuns } from "./task-fixture.ts";
 
 /**
  * The step a task takes next after each way settle can find a run ended, and
@@ -24,7 +24,7 @@ import { authorRun, authorDone, reviewRun, withRuns } from "./task-fixture.ts";
  * stands in the standard pipeline: the block, its state, and the gate on the
  * route to it.
  *
- * A task parked `needs-you` is placed waiting at the author, and takes no
+ * A parked task is placed waiting at the author, and takes no
  * step because the queue leaves it out for the operator.
  */
 
@@ -33,9 +33,13 @@ const LADDER: Ladder = [
   { name: "dear", harness: "test", model: undefined, provider: undefined },
 ];
 
+/**
+ * The task with these runs, charged on each rung in `failedBy` after them (as
+ * settle charges a rung once its run has closed), and parked when `parked` says why.
+ */
 const task = (
   status: TaskStatus,
-  labels: ReadonlyArray<string>,
+  marks: { readonly failedBy?: ReadonlyArray<string>; readonly parked?: string },
   runs: ReadonlyArray<Run>,
   tip: string | undefined = "c1",
 ): Item =>
@@ -47,7 +51,7 @@ const task = (
       project: "foreman",
       type: "task",
       priority: 1,
-      labels,
+      labels: [],
       description: "",
       parent: undefined,
       lastActivityAt: new Date(),
@@ -55,6 +59,8 @@ const task = (
       updatedAt: new Date(0),
       definitionOfDone: undefined,
       runs: [],
+      charges: (marks.failedBy ?? []).map((rung) => charged(rung, runs.at(-1)?.id)),
+      parked: marks.parked,
       tip: undefined,
     },
     runs,
@@ -80,103 +86,96 @@ const PHASES: ReadonlyArray<{
   {
     phase: "Landed",
     after: "done",
-    task: task("done", [], [authorDone("cheap")]),
+    task: task("done", {}, [authorDone("cheap")]),
     step: "none",
     at: "outside",
   },
   {
     phase: "Canceled",
     after: "canceled",
-    task: task("canceled", [], [authorRun("cheap", { open: false, ending: "canceled" })]),
+    task: task("canceled", {}, [authorRun("cheap", { open: false, ending: "canceled" })]),
     step: "none",
     at: "outside",
   },
   {
     phase: "ReviewReturned",
     after: "released, the author's rung failed",
-    task: task("open", ["failed-by:cheap"], [authorDone("cheap"), returned()]),
+    task: task("open", { failedBy: ["cheap"] }, [authorDone("cheap"), returned()]),
     step: "climb",
     at: "author waiting via climb",
   },
   {
     phase: "VanishedAttached",
     after: "left claimed",
-    task: task("in_progress", [], [authorRun("cheap")]),
+    task: task("in_progress", {}, [authorRun("cheap")]),
     step: "none",
     at: "author running via start",
   },
   {
     phase: "VanishedWithWork",
     after: "released with one attempt",
-    task: task(
-      "open",
-      ["attempt:cheap:1"],
-      [authorRun("cheap", { open: false, ending: "vanished" })],
-    ),
+    task: task("open", {}, [authorRun("cheap", { open: false, ending: "vanished" })]),
     step: "climb",
     at: "author waiting via climb",
   },
   {
     phase: "VanishedEmpty",
     after: "released, the rung spent",
-    task: task(
-      "open",
-      ["failed-by:cheap"],
-      [authorRun("cheap", { open: false, ending: "vanished" })],
-    ),
+    task: task("open", { failedBy: ["cheap"] }, [
+      authorRun("cheap", { open: false, ending: "vanished" }),
+    ]),
     step: "climb",
     at: "author waiting via climb",
   },
   {
     phase: "Blocked",
     after: "left claimed",
-    task: task("in_progress", [], [authorRun("cheap")]),
+    task: task("in_progress", {}, [authorRun("cheap")]),
     step: "none",
     at: "author running via start",
   },
   {
     phase: "ReviewWaiting",
     after: "the author's run closed handed off",
-    task: task("in_progress", [], [authorDone("cheap", "c1")]),
+    task: task("in_progress", {}, [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewExpired",
     after: "the author's pane stopped",
-    task: task("in_progress", [], [authorDone("cheap", "c1")]),
+    task: task("in_progress", {}, [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewStopped",
     after: "the review run ended without a verdict, a rung left",
-    task: task("in_progress", [], [authorDone("cheap", "c1"), stoppedReview("cheap")]),
+    task: task("in_progress", {}, [authorDone("cheap", "c1"), stoppedReview("cheap")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewStopped",
     after: "no reviewer left: released and parked",
-    task: task("open", ["needs-you"], [authorDone("cheap", "c1"), stoppedReview("dear")]),
+    task: task("open", { parked: "no reviewer rung is left" }, [
+      authorDone("cheap", "c1"),
+      stoppedReview("dear"),
+    ]),
     step: "none",
     at: "author waiting via start",
   },
   {
     phase: "Residue",
     after: "its runs closed, still queued",
-    task: task("open", [], [authorRun("cheap", { open: false, ending: "released" })]),
+    task: task("open", {}, [authorRun("cheap", { open: false, ending: "released" })]),
     step: "author",
     at: "author waiting via start",
   },
   {
     phase: "AuthorStopped",
     after: "released with one attempt",
-    task: task(
-      "open",
-      ["attempt:cheap:1"],
-      [authorRun("cheap", { open: false, ending: "stopped" })],
-    ),
+    task: task("open", {}, [authorRun("cheap", { open: false, ending: "stopped" })]),
     step: "climb",
     at: "author waiting via climb",
   },
@@ -192,35 +191,35 @@ const LANDINGS: ReadonlyArray<{
   {
     result: "Merged",
     after: "completed",
-    task: task("done", [], [authorDone("cheap", "c1"), approved()]),
+    task: task("done", {}, [authorDone("cheap", "c1"), approved()]),
     step: "none",
     at: "outside",
   },
   {
     result: "Present",
     after: "completed",
-    task: task("done", [], [authorDone("cheap", "c1"), approved()]),
+    task: task("done", {}, [authorDone("cheap", "c1"), approved()]),
     step: "none",
     at: "outside",
   },
   {
     result: "Held",
     after: "still approved, the reviewer's run closed by settle",
-    task: task("in_progress", [], [authorDone("cheap", "c1"), { ...approved(), open: false }]),
+    task: task("in_progress", {}, [authorDone("cheap", "c1"), { ...approved(), open: false }]),
     step: "land",
     at: "land waiting via land-gate",
   },
   {
     result: "Rejected",
     after: "released with no evidence",
-    task: task("open", [], [authorDone("cheap", "c1"), approved()]),
+    task: task("open", {}, [authorDone("cheap", "c1"), approved()]),
     step: "author",
     at: "author waiting via start",
   },
   {
     result: "Broke",
     after: "released, the author's rung failed",
-    task: task("open", ["failed-by:cheap"], [authorDone("cheap", "c1"), approved()]),
+    task: task("open", { failedBy: ["cheap"] }, [authorDone("cheap", "c1"), approved()]),
     step: "climb",
     at: "author waiting via climb",
   },
