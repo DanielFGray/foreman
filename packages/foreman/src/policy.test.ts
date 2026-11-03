@@ -16,6 +16,7 @@ import {
   Policy,
   readPolicy,
   setProjectStep,
+  setProjectTracker,
   updatePolicy,
 } from "./policy.ts";
 
@@ -344,5 +345,21 @@ describe("per-project settings", () => {
       S.decodeEffect(S.fromJsonString(Policy))(JSON.stringify({ slots: 2 })),
     );
     expect(decoded.projects).toEqual({});
+  });
+});
+
+describe("setProjectTracker", () => {
+  const place = { team: "ENG", project: "Foreman" };
+
+  test("stores the Linear place with linear, keeps it on clear, and drops it on another tracker", () => {
+    const linear = setProjectTracker(DEFAULT_POLICY, "alpha", "linear", place);
+    expect(linear.projects).toEqual({ alpha: { tracker: "linear", linear: place } });
+    expect(clearProject(setProjectStep(linear, "alpha", "land", "ask"), "alpha").projects).toEqual(
+      linear.projects,
+    );
+    expect(setProjectTracker(linear, "alpha", "github").projects).toEqual({
+      alpha: { tracker: "github" },
+    });
+    expect(setProjectTracker(linear, "alpha", "prog").projects).toEqual({});
   });
 });
