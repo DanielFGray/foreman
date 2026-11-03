@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { connectionAt, store, type Run } from "tasks";
 import { Records } from "./records.ts";
@@ -11,6 +12,9 @@ import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from ".
 import { newRunFor } from "./run-record.ts";
 import { NO_WRITES, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
+
+// ProjectTracker reads the policy file; a path with no file is the default, every project on prog.
+process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy.json");
 
 /** The run row a dispatch of `role` on `rung` opens for the task. */
 const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?: string) =>
@@ -48,7 +52,9 @@ const run = <A, E>(
   Effect.runPromise(
     Effect.gen(function* () {
       return yield* f(yield* Records, yield* Tracker);
-    }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
+    }).pipe(
+      Effect.provide(Records.layer.pipe(Layer.provide(Layer.mergeAll(store, BunServices.layer)))),
+    ),
   );
 
 const item = (): Item => ({

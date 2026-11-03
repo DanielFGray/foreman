@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import type { CheckNode } from "./pipeline.ts";
@@ -10,6 +11,9 @@ import { type Item, Records } from "./records.ts";
 import { newRunFor } from "./run-record.ts";
 import { applyRow, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { Tracker } from "./tracker.ts";
+
+// ProjectTracker reads the policy file; a path with no file is the default, every project on prog.
+process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy.json");
 
 const rules: StepRules = {
   ladder: [
@@ -146,7 +150,9 @@ const run = <A, E>(
   Effect.runPromise(
     Effect.gen(function* () {
       return yield* f(yield* Records, yield* Tracker);
-    }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
+    }).pipe(
+      Effect.provide(Records.layer.pipe(Layer.provide(Layer.mergeAll(store, BunServices.layer)))),
+    ),
   );
 
 describe("applyRow agrees with the store", () => {

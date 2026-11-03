@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema as S } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Schema as S } from "effect";
 import {
   Tasks,
   TaskError,
@@ -9,6 +9,7 @@ import {
   type Status,
   type TaskEvent,
 } from "tasks";
+import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
 
 /**
  * The task tracker foreman takes its work from, in tracker terms: which tasks
@@ -17,7 +18,9 @@ import {
  * own labels; those are foreman's records (`records.ts`), kept beside the
  * tracker's tasks and keyed by task id.
  *
- * `TasksTracker` below is the one adapter: the `tasks` package's store.
+ * `TasksTracker` below is the one adapter built: the `tasks` package's store.
+ * `ProjectTracker` is the `Tracker` the rest of foreman sees: it sends each
+ * call to the adapter of the task's project, as the policy file chooses it.
  */
 export class Tracker extends Context.Service<
   Tracker,
@@ -81,9 +84,8 @@ export class TrackerError extends S.TaggedError<TrackerError>()("TrackerError", 
  * so a records write and a status move inside one `withTransaction` on that
  * connection commit or roll back together.
  */
-export const TasksTracker = Layer.effect(
-  Tracker,
-  Effect.gen(function* () {
+export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Effect.gen(
+  function* () {
     const tasks = yield* Tasks;
 
     /** Runs a store call, naming the operation in its failure. */
@@ -131,5 +133,142 @@ export const TasksTracker = Layer.effect(
       relabel: (task, change) => tasks.relabel(task, change).pipe(as(`relabel ${task}`)),
       log: (task, message) => tasks.log(task, message).pipe(as(`log ${task}`), Effect.asVoid),
     });
+  },
+);
+
+/**
+ * The `Tracker` foreman runs on: each call goes to the adapter of its
+ * project's tracker, read from the policy file on each call that needs it, so
+ * an operator's `foreman policy tracker` applies from the next call on.
+ *
+ * Built over the prog store's connection, which `Records.layer` shares, so
+ * `together` stays atomic for prog projects.
+ */
+export const ProjectTracker = Layer.effect(
+  Tracker,
+  Effect.gen(function* () {
+    const prog = yield* TasksTracker;
+    const fs = yield* FileSystem.FileSystem;
+    const choices = readPolicy(policyPath()).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.map(({ policy }) => policy),
+    );
+    return routeByProject({ prog, github: unbuilt("github"), linear: unbuilt("linear") }, choices);
   }),
 ).pipe(Layer.provide(Tasks.layerSql));
+
+/**
+ * Routes each call to `adapters[tracker of the call's project]`.
+ *
+ * A prog id carries no project, so an id without `<project>#` is prog's and
+ * needs no policy read. An issue id `<project>#<n>` names its project. Calls
+ * that take a project route by it; `list` by a parent routes by the parent's
+ * id, because an epic's children live in the epic's tracker.
+ *
+ * A read across every project (`ready(undefined)`, `list` with no project or
+ * parent) joins prog's rows of prog projects with each other project's own
+ * read. A project whose read fails is left out of the join, so one tracker
+ * that does not answer takes no step and does not stop the rest of the fleet.
+ */
+export const routeByProject = (
+  adapters: Readonly<Record<TrackerName, Tracker["Service"]>>,
+  choices: Effect.Effect<Policy>,
+): Tracker["Service"] => {
+  const forProject = (project: string) =>
+    choices.pipe(Effect.map((policy) => adapters[trackerOf(policy, project)]));
+  const forId = (id: string) => {
+    const project = projectOfId(id);
+    return project === undefined ? Effect.succeed(adapters.prog) : forProject(project);
+  };
+  const byId =
+    <A extends ReadonlyArray<unknown>, R>(
+      call: (
+        tracker: Tracker["Service"],
+        task: string,
+        ...rest: A
+      ) => Effect.Effect<R, TrackerError>,
+    ) =>
+    (task: string, ...rest: A) =>
+      forId(task).pipe(Effect.flatMap((tracker) => call(tracker, task, ...rest)));
+
+  /** prog's rows of prog projects, joined with each other project's own read. */
+  const everywhere = (
+    fromProg: Effect.Effect<ReadonlyArray<Item>, TrackerError>,
+    fromProject: (
+      tracker: Tracker["Service"],
+      project: string,
+    ) => Effect.Effect<ReadonlyArray<Item>, TrackerError>,
+  ) =>
+    Effect.gen(function* () {
+      const policy = yield* choices;
+      const elsewhere = Object.keys(policy.projects).filter(
+        (project) => trackerOf(policy, project) !== "prog",
+      );
+      const own = (yield* fromProg).filter((item) => !elsewhere.includes(item.project));
+      const others = yield* Effect.forEach(elsewhere, (project) =>
+        fromProject(adapters[trackerOf(policy, project)], project).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(`${project} left out: ${error.message}`).pipe(Effect.as([])),
+          ),
+        ),
+      );
+      return [...own, ...others.flat()];
+    });
+
+  return Tracker.of({
+    lookup: byId((tracker, task) => tracker.lookup(task)),
+    list: (filter) =>
+      filter.project !== undefined
+        ? forProject(filter.project).pipe(Effect.flatMap((tracker) => tracker.list(filter)))
+        : filter.parent !== undefined
+          ? forId(filter.parent).pipe(Effect.flatMap((tracker) => tracker.list(filter)))
+          : everywhere(adapters.prog.list(filter), (tracker, project) =>
+              tracker.list({ ...filter, project }),
+            ),
+    dependencies: (project) =>
+      forProject(project).pipe(Effect.flatMap((tracker) => tracker.dependencies(project))),
+    ready: (project) =>
+      project !== undefined
+        ? forProject(project).pipe(Effect.flatMap((tracker) => tracker.ready(project)))
+        : everywhere(adapters.prog.ready(undefined), (tracker, each) => tracker.ready(each)),
+    logs: byId((tracker, task) => tracker.logs(task)),
+    add: (task) => forProject(task.project).pipe(Effect.flatMap((tracker) => tracker.add(task))),
+    claim: byId((tracker, task) => tracker.claim(task)),
+    reopen: byId((tracker, task) => tracker.reopen(task)),
+    complete: byId((tracker, task) => tracker.complete(task)),
+    label: byId((tracker, task, label: string) => tracker.label(task, label)),
+    unlabel: byId((tracker, task, label: string) => tracker.unlabel(task, label)),
+    relabel: byId(
+      (tracker, task, change: (labels: ReadonlyArray<string>) => ReadonlyArray<string>) =>
+        tracker.relabel(task, change),
+    ),
+    log: byId((tracker, task, message: string) => tracker.log(task, message)),
+  });
+};
+
+/** The project an issue id `<project>#<n>` names; prog ids name none. */
+const projectOfId = (id: string): string | undefined => {
+  const hash = id.lastIndexOf("#");
+  return hash > 0 ? id.slice(0, hash) : undefined;
+};
+
+/** A tracker whose adapter does not exist yet: every call fails and names it. */
+const unbuilt = (name: TrackerName): Tracker["Service"] => {
+  const fail = () =>
+    Effect.fail(new TrackerError({ command: `${name} tracker`, detail: "adapter not built" }));
+  return Tracker.of({
+    lookup: fail,
+    list: fail,
+    dependencies: fail,
+    ready: fail,
+    logs: fail,
+    add: fail,
+    claim: fail,
+    reopen: fail,
+    complete: fail,
+    label: fail,
+    unlabel: fail,
+    relabel: fail,
+    log: fail,
+  });
+};
