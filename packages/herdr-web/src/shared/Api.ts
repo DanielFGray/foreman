@@ -5,7 +5,6 @@ import { Answer, ChatUpdate, InputBox, Question } from "./Chat.ts"
 import { Fleet } from "./Fleet.ts"
 import { ModelChoices } from "./Harness.ts"
 import { FontFamily } from "./Fonts.ts"
-import { ForemanCommand, ForemanName, ForemanRow, ForemanRung, ForemanState } from "./Foreman.ts"
 import { AlertEvent, PushSubscription } from "./Push.ts"
 import { ProviderId, Usage } from "./Usage.ts"
 import { SlashCommand } from "./SlashCommand.ts"
@@ -15,8 +14,7 @@ import { RepoCheckouts } from "./Worktree.ts"
 /**
  * A call that failed. `kind` is hc's error kind, `lost` or `protocol` for hc
  * itself, `transcript` when the agent's conversation cannot be read, `herdr-app`
- * when herdr-app's layout refuses the change, `git` when git refuses, or
- * `foreman` when foreman refuses a command or does not run.
+ * when herdr-app's layout refuses the change, or `git` when git refuses.
  */
 export class BridgeError extends S.TaggedError<BridgeError, { readonly brand: unique symbol }>()("BridgeError", {
   kind: S.String,
@@ -179,19 +177,6 @@ export const Api = RpcGroup.make(
   /** Reads one provider's usage, or every one's (none), now. */
   Rpc.make("refreshUsage", { payload: { provider: S.OptionFromNullOr(ProviderId) } }),
   /** The public half of the bridge's push key, which a browser subscribes with. */
-  /** What the bridge knows of foreman's fleet, now and after each change. */
-  Rpc.make("foreman", { success: ForemanState, stream: true }),
-  /** Runs one foreman command; the fleet as it then reads follows on the `foreman` stream. */
-  Rpc.make("runForeman", { payload: { command: ForemanCommand }, error: BridgeError }),
-  /** Asks the dispatcher to read the fleet now, without waiting for its next poll. */
-  Rpc.make("refreshForeman", {}),
-  /** Every rung of the ladder with its state, cheapest first. */
-  Rpc.make("foremanRungs", { success: S.Array(ForemanRung), error: BridgeError }),
-  /** The queue foreman would dispatch, for one project or (none) every open one. */
-  Rpc.make("foremanQueue", { payload: { project: S.OptionFromNullOr(ForemanName) }, success: S.Array(ForemanRow), error: BridgeError }),
-  /** What foreman records of one task: its description, for an epic row that expands. */
-  Rpc.make("foremanTask", { payload: { key: ForemanName }, success: S.Struct({ description: S.OptionFromNullOr(S.String) }), error: BridgeError }),
-
   Rpc.make("pushKey", { success: S.String, error: BridgeError }),
   /** Alerts the device behind the subscription for these events, from now on. */
   Rpc.make("subscribePush", { payload: { subscription: PushSubscription, events: S.Array(AlertEvent) }, error: BridgeError }),

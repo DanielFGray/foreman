@@ -15,7 +15,7 @@ const block = (terminal: string): Layout =>
 
 const fleet: Fleet = {
   connected: true,
-  git: { s1: { top: "/src/app", branch: Option.some("main"), changed: false, project: Option.none() } },
+  git: { s1: { top: "/src/app", branch: Option.some("main"), changed: false } },
   terminals: [],
   machines: [{ name: "here", isLocal: true, state: "connected", spaces: [{ id: "s1", name: "app", folder: "/src/app", tabs: [{ id: "a", name: "a", root: block("t1") }] }] }],
 }
@@ -29,7 +29,7 @@ const listed: RepoCheckouts = {
 }
 
 const start = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Tab({ tabId: "a", maybeFocus: Option.none() }), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model,
   bridge: Bridge.Watching({ fleet }),
 }
 

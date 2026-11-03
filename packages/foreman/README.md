@@ -478,8 +478,7 @@ One function, `queueFrom` in `src/queue.ts`, makes this split for both the
 dispatcher and `foreman queue`.
 
 The queue is not in `state.json`. The Foreman pane runs
-`foreman queue --project <name> --json`, and herdr-web makes the same read in
-its own process (`queueOf` in `src/host.ts`). It reads only the task store and
+`foreman queue --project <name> --json`. It reads only the task store and
 the open spaces, with no agent roster and no branch checks, so it answers in
 under a second.
 
@@ -536,7 +535,7 @@ project foreman touches.
 ## Running it
 
 `foreman serve` runs the dispatcher, supervised. A failure is logged, shown in
-the Foreman pane and herdr-web as `failed`, and the dispatcher starts again
+the Foreman pane as `failed`, and the dispatcher starts again
 after a pause that doubles from a second up to a minute. After each reading
 serve writes `state.json`. It holds a lock (`serve.lock`, beside `state.json`)
 for its life, so a second serve refuses to start. When foreman's own checkout

@@ -13,7 +13,6 @@ import { ClaudeChat } from "./claude/ClaudeChat.ts"
 import { ClaudeCommands } from "./claude/Commands.ts"
 import { FleetModel } from "./FleetModel.ts"
 import { FontRoutes, Fonts } from "./Fonts.ts"
-import { Foreman, ForemanHost } from "./Foreman.ts"
 import { toBridgeError } from "./hcError.ts"
 import { HerdrApp, type HerdrAppError } from "./HerdrApp.ts"
 import { type WorktreeError, Worktrees } from "./Worktrees.ts"
@@ -41,7 +40,6 @@ const Handlers = Api.toLayer(
     const fonts = yield* Fonts
     const usage = yield* Usage
     const push = yield* Push
-    const foreman = yield* Foreman
     return {
       watch: () => fleet.changes,
       chat: ({ terminal }) => Stream.unwrap(Effect.map(agents.use(terminal, "chat"), ({ terminal, implementation }) => implementation(terminal))),
@@ -98,12 +96,6 @@ const Handlers = Api.toLayer(
       fonts: () => Effect.succeed(fonts.families),
       usage: () => usage.changes,
       refreshUsage: ({ provider }) => usage.refresh(provider),
-      foreman: () => foreman.changes,
-      runForeman: ({ command }) => foreman.run(command),
-      refreshForeman: () => foreman.refresh,
-      foremanRungs: () => foreman.rungs,
-      foremanQueue: ({ project }) => foreman.queue(project),
-      foremanTask: ({ key }) => foreman.task(key),
       pushKey: () => push.publicKey,
       subscribePush: ({ subscription, events }) => push.subscribe(subscription, events),
       unsubscribePush: ({ endpoint }) => push.unsubscribe(endpoint),
@@ -133,7 +125,7 @@ const Bridge = Layer.unwrap(
   Layer.provide([
     // The agents paste into the box through the live terminals.
     Agents.layer.pipe(Layer.provide([ClaudeChat.layer, ClaudeCommands.layer, ScreenCells.layer, OpenCodeServer.layer]), Layer.provideMerge(LiveTerminals.layer)),
-    Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer, Push.layer, Foreman.layer.pipe(Layer.provide(ForemanHost.layer))]),
+    Worktrees.layer.pipe(Layer.provideMerge(HerdrApp.layer)), Fonts.layer, Usage.layer, Push.layer]),
   // The handlers and the live terminals read the same fleet.
   Layer.provideMerge(FleetModel.layer),
   Layer.provide([Hc.layer, BunServices.layer, FetchHttpClient.layer]),

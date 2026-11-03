@@ -1,12 +1,11 @@
 // The page's commands: each one call to the bridge or to this browser's storage.
-import { Data, Effect, Inspectable, Schema as S } from "effect"
+import { Effect, Inspectable, Schema as S } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
-import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { Message, OPEN_EPICS_KEY, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
+import { Message, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -329,76 +328,4 @@ export const WriteInputBox = Command.define("WriteInputBox", {
       const box = yield* client.writeInputBox({ terminal: address, expected, text })
       return Message.WroteInputBox({ address, text, box })
     }).pipe(reportFailure((reason) => Message.FailedWriteInputBox({ address, reason }))),
-})
-
-export const RunForeman = Command.define("RunForeman", {
-  args: { command: ForemanCommand },
-  messages: [Message.SucceededForemanCommand, Message.FailedForemanCommand],
-  execute: ({ command }) => {
-    const line = argvOf(command).join(" ")
-    return Effect.gen(function* () {
-      const client = yield* BridgeClient
-      yield* client.runForeman({ command })
-      return Message.SucceededForemanCommand({ line })
-    }).pipe(reportFailure((reason) => Message.FailedForemanCommand({ line, reason })))
-  },
-})
-
-export const ListRungs = Command.define("ListRungs", {
-  messages: [Message.ReceivedRungs, Message.FailedRungs],
-  execute: Effect.gen(function* () {
-    const client = yield* BridgeClient
-    return Message.ReceivedRungs({ rungs: yield* client.foremanRungs() })
-  }).pipe(reportFailure((reason) => Message.FailedRungs({ reason }))),
-})
-
-export const RefreshForeman = Command.define("RefreshForeman", {
-  messages: [Message.CompletedRefreshForeman],
-  execute: Effect.gen(function* () {
-    const client = yield* BridgeClient
-    yield* client.refreshForeman()
-  }).pipe(
-    Effect.catch((error) => Effect.logWarning("the bridge did not read foreman again", failureReason(error))),
-    Effect.as(Message.CompletedRefreshForeman()),
-  ),
-})
-
-export const SaveOpenEpics = Command.define("SaveOpenEpics", {
-  args: { openEpics: S.Array(S.String) },
-  messages: [Message.CompletedSaveOpenEpics],
-  execute: ({ openEpics }) => saveStored(OPEN_EPICS_KEY, S.Array(S.String), openEpics).pipe(Effect.as(Message.CompletedSaveOpenEpics())),
-})
-
-/** Reads one epic's description from foreman. */
-export const LoadForemanEpic = Command.define("LoadForemanEpic", {
-  args: { key: S.String },
-  messages: [Message.ReceivedForemanEpic, Message.FailedForemanEpic],
-  execute: ({ key }) =>
-    Effect.gen(function* () {
-      const client = yield* BridgeClient
-      const { description } = yield* client.foremanTask({ key })
-      return Message.ReceivedForemanEpic({ key, description })
-    }).pipe(reportFailure((reason) => Message.FailedForemanEpic({ key, reason }))),
-})
-
-
-/** setPointerCapture refuses a pointer that is no longer down. */
-class PointerNotCaptured extends Data.TaggedError("PointerNotCaptured")<{ readonly cause: unknown }> {}
-
-/**
- * Sends a dragged card's pointer events to the card until the pointer goes up,
- * so the drag goes on when the pointer leaves it. A card already gone from the
- * page, or a pointer already up, takes no capture, and the drag ends as usual.
- */
-export const CapturePointer = Command.define("CapturePointer", {
-  args: { elementId: S.String, pointerId: S.Finite },
-  messages: [Message.CompletedCapturePointer],
-  execute: ({ elementId, pointerId }) =>
-    Effect.try({
-      try: () => document.getElementById(elementId)?.setPointerCapture(pointerId),
-      catch: (cause) => new PointerNotCaptured({ cause }),
-    }).pipe(
-      Effect.catchTag("PointerNotCaptured", ({ cause }) => Effect.logDebug("a board card did not capture its pointer", cause)),
-      Effect.as(Message.CompletedCapturePointer()),
-    ),
 })

@@ -878,8 +878,7 @@ knows what happened, whatever the workflow.
 ## Front ends
 
 `foreman serve` writes every reading to `state.json` (`src/published.ts`).
-herdr-web reads it, and reads the queue in its own process (`queueOf` in
-`src/host.ts`). The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
+The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
 reads `state.json`, and reads the queue and a task's record through
 `foreman queue` and `foreman show` (`src/store-commands.ts`). Its Pipeline view
 draws the `drawing` that `foreman pipeline show --json` prints, laid out by

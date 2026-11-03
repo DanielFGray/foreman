@@ -68,9 +68,8 @@ project, posts a notification. The pane never runs `prog`.
 The pane keeps no state but the Tasks mode. It reads the file that
 `src/published.ts` writes, and the schema there is the contract; a row from
 `foreman queue --json` has the shape of a published row. herdr-web's server
-writes the file, and its Foreman page reads the same readings through its own
-copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in `foreman/main.js`,
-and `FOREMAN_VERSION` in herdr-web's `src/shared/Foreman.ts` together.
+writes the file. Bump `PUBLISHED_VERSION` and `VERSION` in `foreman/main.js`
+together.
 
 ## Install
 

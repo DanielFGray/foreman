@@ -2,7 +2,6 @@
 // works in now (see folderNow), with `git rev-parse --show-toplevel` and
 // `git status --porcelain=v2 --branch`, run through hc's machine.exec.
 import { Array, Effect, Option, Record, String } from "effect"
-import { projectOf } from "foreman"
 import type { Hc } from "../hc/Hc.ts"
 import type { SpaceGit } from "../shared/Fleet.ts"
 
@@ -36,13 +35,11 @@ const readSpaceGit = (hc: Pick<Hc["Service"], "exec">, { id, folder, on }: GitTa
   // An empty folder would run git where hc runs, not where the space is.
   return !String.isNonEmpty(folder)
     ? Effect.succeed(Option.none<SpaceGit>())
-    : Effect.all([git(["rev-parse", "--show-toplevel"]), git(["status", "--porcelain=v2", "--branch"]), git(["rev-parse", "--path-format=absolute", "--git-common-dir"])], { concurrency: 3 }).pipe(
-        // Outside the zip: when the common directory cannot be read, the branch and changed state still show, with no project.
-        Effect.map(([top, status, common]) =>
+    : Effect.all([git(["rev-parse", "--show-toplevel"]), git(["status", "--porcelain=v2", "--branch"])], { concurrency: 2 }).pipe(
+        Effect.map(([top, status]) =>
           Option.zipWith(top, status, (top, status): SpaceGit => ({
             top: String.trimEnd(top),
             ...parseStatus(status),
-            project: Option.map(common, (dir) => projectOf(String.trim(dir))),
           })),
         ),
         Effect.catchTag("HcError", (error) =>

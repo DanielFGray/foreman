@@ -10,7 +10,6 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
-import { BoardColumn, ForemanCommand, ForemanRow, ForemanRung, ForemanState, ForemanView } from "../shared/Foreman.ts"
 import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -29,7 +28,6 @@ export const RECENT_KEY = "herdr-web.recent"
 export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
 export const ZOOM_KEY = "herdr-web.zoom"
 export const VIEW_PICKS_KEY = "herdr-web.view-picks"
-export const OPEN_EPICS_KEY = "herdr-web.foreman-open-epics"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -167,81 +165,6 @@ export type WorktreeField = typeof WorktreeField.Type
 /** The Worktrees page: its checkouts, the branch and program typed for a new one, and what it is doing. */
 export const WorktreePage = S.Struct({ list: CheckoutList, branch: S.String, program: S.String, action: CheckoutAction })
 export type WorktreePage = typeof WorktreePage.Type
-
-/** The rungs of foreman's ladder, cheapest first, with their states. */
-export const RungList = defineTaggedUnion({
-  Loading: {},
-  Listed: { rungs: S.Array(ForemanRung) },
-  Unlisted: { reason: S.String },
-})
-export type RungList = typeof RungList.Type
-
-/**
- * The queue as last read for the picked project. A read for the project picked
- * before may show until the next arrives; the rows are filtered by project
- * like the fleet's, so it never shows another project's tasks.
- */
-export const ForemanQueue = defineTaggedUnion({
-  Unread: {},
-  Listed: { rows: S.Array(ForemanRow) },
-  Unlisted: { reason: S.String },
-})
-export type ForemanQueue = typeof ForemanQueue.Type
-
-/** One epic as foreman last recorded it: its description, or why foreman could not say. */
-export const EpicRecord = defineTaggedUnion({
-  Read: { description: S.Option(S.String) },
-  Unread: { reason: S.String },
-})
-export type EpicRecord = typeof EpicRecord.Type
-
-/** A position on the page, in CSS pixels from the viewport's top left. */
-export const Point = S.Struct({ x: S.Finite, y: S.Finite })
-export type Point = typeof Point.Type
-
-/**
- * A card on the board under the pointer. A touch first `Pressed`: held still,
- * it starts a drag, and moved first, it is a scroll. A mouse starts `Dragging`
- * at once. `start` is where the pointer went down and `at` where it is now.
- */
-export const BoardDrag = defineTaggedUnion({
-  Idle: {},
-  Pressed: { key: S.String, pointerId: S.Finite, start: Point },
-  Dragging: { key: S.String, pointerId: S.Finite, start: Point, at: Point },
-})
-export type BoardDrag = typeof BoardDrag.Type
-
-export const NO_SCROLL: Record<BoardColumn, number> = { queue: 0, "needs-you": 0, authoring: 0, review: 0, fixing: 0, landed: 0 }
-
-/** The Foreman column's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
-export const ForemanPage = S.Struct({
-  rungs: RungList,
-  /** The queued task whose rung picker is open. */
-  launching: S.Option(S.String),
-  /** A command that ends an agent or gives up a claim, waiting for its second click. */
-  armed: S.Option(S.String),
-  /** The commands under way. */
-  busy: S.Array(S.String),
-  /** Why the last command failed. */
-  refusal: S.Option(S.String),
-  /** Whether the column is on show beside the workspace. */
-  shown: S.Boolean,
-  /** Whether the column shows every project's rows, not the selected space's. */
-  all: S.Boolean,
-  /** The sections folded to their heading. */
-  folded: S.Array(ForemanView),
-  /** The epics shown expanded, in every space; any other epic shows its row alone. */
-  openEpics: S.Array(S.String),
-  /** What foreman recorded of each opened epic, by key. A key still absent is being read. */
-  epicRecords: S.Record(S.String, EpicRecord),
-  queue: ForemanQueue,
-  /** Whether the task board shows in place of the sections. */
-  isBoardShown: S.Boolean,
-  drag: BoardDrag,
-  /** How far each board column is scrolled, which places its cards on the page. */
-  scrolled: S.Record(BoardColumn, S.Finite),
-})
-export type ForemanPage = typeof ForemanPage.Type
 
 /** Where the new-space form's last try stands. */
 export const SpaceFormState = defineTaggedUnion({
@@ -410,9 +333,6 @@ export const Model = S.Struct({
   spaceDrag: SpaceDrag,
   spaceForm: SpaceForm,
   worktreePage: WorktreePage,
-  /** What the bridge knows of foreman's fleet; none before the Foreman column is first shown. */
-  foreman: S.Option(ForemanState),
-  foremanPage: ForemanPage,
   palette: Palette,
   /** The panes opened last, newest first, for the palette's Recent group. */
   recent: S.Array(S.String),
@@ -459,8 +379,6 @@ export const Flags = S.Struct({
   softKeys: S.Option(S.Array(SoftKey)),
   isZoomed: S.Boolean,
   viewPicks: S.Array(ViewPick),
-  /** The Foreman column's expanded epics. */
-  openEpics: S.Array(S.String),
 })
 export type Flags = typeof Flags.Type
 
@@ -472,7 +390,6 @@ export const loadFlags = Effect.all({
   softKeys: loadKept(SOFT_KEYS_KEY, S.Array(SoftKey)),
   isZoomed: loadStored(ZOOM_KEY, S.Boolean, false),
   viewPicks: loadStored(VIEW_PICKS_KEY, S.Array(ViewPick), []),
-  openEpics: loadStored(OPEN_EPICS_KEY, S.Array(S.String), []),
 })
 
 // MESSAGE
@@ -528,34 +445,6 @@ export const Message = defineMessageUnion({
   SucceededRemoveCheckout: {},
   SucceededCheckoutSpace: { tab: S.String },
   FailedCheckoutAction: { reason: S.String },
-  ClickedForeman: {},
-  ReceivedForeman: { state: ForemanState },
-  ReceivedRungs: { rungs: S.Array(ForemanRung) },
-  FailedRungs: { reason: S.String },
-  ReceivedForemanQueue: { rows: S.Array(ForemanRow) },
-  ToggledForemanEpic: { key: S.String },
-  ReceivedForemanEpic: { key: S.String, description: S.Option(S.String) },
-  FailedForemanEpic: { key: S.String, reason: S.String },
-  CompletedSaveOpenEpics: {},
-  FailedForemanQueue: { reason: S.String },
-  ClickedForemanCommand: { command: ForemanCommand },
-  SucceededForemanCommand: { line: S.String },
-  FailedForemanCommand: { line: S.String, reason: S.String },
-  ClickedLaunch: { key: S.String },
-  ToggledForemanAll: {},
-  ToggledForemanSection: { view: ForemanView },
-  ClickedRefreshForeman: {},
-  ClickedBoard: {},
-  /** A press on a card that can move; `pointerType` says whether it must be held first. */
-  PressedCard: { key: S.String, pointerId: S.Finite, pointerType: S.String, at: Point },
-  HeldCard: { key: S.String },
-  MovedPointer: { at: Point },
-  ReleasedPointer: {},
-  /** The browser took the pointer, as it does when a press turns into a scroll. */
-  CanceledPointer: {},
-  CompletedCapturePointer: {},
-  ScrolledBoardColumn: { column: BoardColumn, top: S.Finite },
-  CompletedRefreshForeman: {},
   FailedPaneAction: { reason: S.String },
   PressedSpace: { space: S.String },
   EnteredSpace: { space: S.String },
