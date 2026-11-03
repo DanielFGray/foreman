@@ -102,6 +102,11 @@ class World {
   readonly spawned: Array<[string, string]> = [];
   /** Tasks whose next spawn fails, as when a harness will not start. */
   readonly spawnFails = new Set<string>();
+  /**
+   * Tasks whose next completion fails after the records are written, as on a
+   * tracker that shares no transaction with them.
+   */
+  readonly completeFails = new Set<string>();
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
@@ -267,10 +272,22 @@ class World {
     // The rows the dispatcher writes are applied as the tracer applies them;
     // `run-step.test.ts` proves that agrees with the store.
     write: (id: string, row: Row) =>
-      this.write("records.write", () => {
-        this.rows.push(row);
-        this.update(id, (task) => applyRow(task, row));
-      }),
+      row.move === "complete" && this.completeFails.delete(id)
+        ? this.write("records.write", () => {
+            const records = { ...row, move: undefined };
+            this.rows.push(records);
+            this.update(id, (task) => applyRow(task, records));
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new TrackerError({ command: `done ${id}`, detail: "tracker unreachable" }),
+              ),
+            ),
+          )
+        : this.write("records.write", () => {
+            this.rows.push(row);
+            this.update(id, (task) => applyRow(task, row));
+          }),
     endReview: (id: string, ending: Ending) =>
       this.write("records.endReview", () => this.closeRuns(id, { review: ending })),
     endRuns: (id: string, endings: { author?: Ending; review?: Ending }) =>
@@ -1919,6 +1936,55 @@ describe("a route's workspace blocks", () => {
     expect(world.prompts).toEqual(["author", "review from base"]);
     expect(world.merged).toEqual(["c1"]);
     expect(authorRuns(world, task.id)[0]?.base).toBeUndefined();
+  });
+
+  test("a landing whose completion failed after its records is completed by the next landing", async () => {
+    const task = item("ts-unfinished", "open", []);
+    const world = new World(task);
+    world.completeFails.add(task.id);
+
+    await tick(world);
+    onBranch(world, task.id)();
+    await exit(world, task.id, "done");
+    settled(world, task.id, "author");
+    await tick(world);
+    await tick(world);
+    await exit(world, task.id, "approved");
+    settled(world, task.id, "review");
+    await tick(world);
+    await tick(world);
+
+    expect(world.merged).toEqual(["c1"]);
+    expect(world.tasks.get(task.id)?.status).toBe("in_progress");
+    expect(authorRuns(world, task.id).at(-1)?.landed).toBe(true);
+
+    // The commits are in, so the retry finds the branch in the checkout and
+    // completes the task without merging it again.
+    world.landing = { _tag: "Present" };
+    await tick(world);
+    expect(world.tasks.get(task.id)?.status).toBe("done");
+  });
+
+  test("direct: a completion that failed after its records is completed by the next tick", async () => {
+    draw(DIRECT);
+    const task = item("ts-direct-unfinished", "open", []);
+    const world = new World(task);
+    world.completeFails.add(task.id);
+
+    await tick(world);
+    world.headCommit = "h1";
+    await exit(world, task.id, "done");
+    settled(world, task.id, "author");
+    await tick(world);
+    await tick(world);
+    await exit(world, task.id, "approved");
+    settled(world, task.id, "review");
+    await tick(world);
+    await tick(world);
+    expect(world.tasks.get(task.id)?.status).toBe("in_progress");
+
+    await tick(world);
+    expect(world.tasks.get(task.id)?.status).toBe("done");
   });
 
   test("branch only: the author works in the operator's checkout, and the approved commit merges", async () => {

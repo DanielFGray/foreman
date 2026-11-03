@@ -48,6 +48,14 @@ export class Tracker extends Context.Service<
      * Takes the task: after this it is no longer ready. Open, done and
      * canceled work may all be claimed — done or canceled when an unread
      * branch on them needs a reader.
+     *
+     * Answers only once a read of the task shows the claim, because a tracker
+     * whose reads lag its writes would otherwise show the task as ready to
+     * the next dispatch, which starts a second worker on it. An adapter whose
+     * reads can lag re-reads until the claim shows, and fails with a
+     * `TrackerError` after 30 seconds; the claim then stays, and the release
+     * of stale claims reopens it. `TasksTracker` writes in one SQL
+     * transaction on the connection it reads from, so its write is its read.
      */
     readonly claim: (task: string) => Effect.Effect<void, TrackerError>;
     /** Puts the task back among the ready work. */

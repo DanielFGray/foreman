@@ -208,16 +208,17 @@ export class Records extends Context.Service<Records>()("Records", {
 
       /**
        * Writes one row of the joint table (`stepOf` in `run-step.ts`) in one
-       * transaction. A completion goes first, so a task that cannot be
-       * completed fails on `done` itself. Charges go after a check run and
-       * before a new run, because a charge records the newest run on the task
-       * when it is written.
+       * transaction. The records go first and the status move last, because a
+       * tracker may share no transaction with them: a landing whose completion
+       * fails then leaves a claimed task with a landed author run, and the next
+       * landing finds the branch in the checkout and completes it. Charges go
+       * after a check run and before a new run, because a charge records the
+       * newest run on the task when it is written.
        */
       write: (task: string, row: Row) =>
         together(
           `write ${task}`,
           Effect.gen(function* () {
-            if (row.move === "complete") yield* tracker.complete(task);
             if (row.close !== undefined) yield* onStore(closeOpenRuns(task, row.close));
             if (row.exit !== undefined) yield* onStore(recordExit(task, row.exit));
             if (row.check !== undefined) yield* onStore(recordCheck(row.check));
@@ -226,6 +227,7 @@ export class Records extends Context.Service<Records>()("Records", {
             if (row.open !== undefined) yield* onStore(openRun(row.open));
             if (row.land !== undefined)
               yield* onStore(landAuthorRun(task, row.land === "answered"));
+            if (row.move === "complete") yield* tracker.complete(task);
             if (row.move === "claim") yield* tracker.claim(task);
             if (row.move === "reopen") yield* tracker.reopen(task);
           }),
@@ -319,7 +321,7 @@ export class Records extends Context.Service<Records>()("Records", {
       park: (task: string, reason: string, endings: Endings = {}) =>
         together(
           `park ${task}`,
-          releasing(task, endings).pipe(Effect.andThen(onStore(park(task, reason)))),
+          onStore(park(task, reason)).pipe(Effect.andThen(releasing(task, endings))),
         ),
 
       /**

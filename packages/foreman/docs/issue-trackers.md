@@ -138,11 +138,13 @@ each move is idempotent:
 - **Release** (close runs, then reopen): a failed reopen leaves an
   `in_progress` issue with no open run of foreman's. The next tick's release of
   stale claims sees an author run of foreman's and reopens it.
-- **Complete** (record `Landed`, then close): a failed close leaves an open
-  issue whose last run landed. The next tick sees a `Landed` record on an open
-  task and runs `complete` again. This needs one new rule in settle, written
-  for every tracker, so it is not a GitHub path: a task whose latest run ended
-  `Landed` and that is not `done` is completed.
+- **Complete** (record `Landed`, then close): a failed close leaves a claimed
+  task at its land block (or done block) with the approved exit on the tip. The
+  next tick lands it again: a local merge answers Present because the checkout
+  holds the branch, a PR reads `MERGED`, and the landing completes the task. No
+  new settle rule is needed. A rule that completed any claimed task whose last
+  author run landed would complete a done task that was claimed again before
+  its next author run.
 - **Claim at dispatch** (claim, then open the run): unchanged order; a claim
   with no run is the hand-made claim case.
 
@@ -436,7 +438,7 @@ plan to tell agents `gh issue view` and `gh issue comment`.
 | `src/github-tracker.ts` | new: the adapter of section 1 and the reading of section 5. |
 | `src/linear-tracker.ts`, `src/linear-auth.ts` | new: section 7. |
 | `src/records.ts` | `layer` takes `Tracker` from `ProjectTracker`; `together` keeps the records half; records first, then the move (section 1). |
-| `src/dispatcher.ts` | settle completes a `Landed` task that is not `done`; `land` branches on `how: pull-request` to publish, read the PR, merge; the tip of a task at a PR landing is the PR head; a project whose tracker did not answer takes no step. |
+| `src/dispatcher.ts` | `land` branches on `how: pull-request` to publish, read the PR, merge; the tip of a task at a PR landing is the PR head; a project whose tracker did not answer takes no step. |
 | `src/repository.ts` | `push` (a commit to a remote branch) and `fetch` (the PR head into the task branch). |
 | `src/github.ts` | new: PR reads and writes (`gh pr create`, `list`, `review`, `merge`, `checks`) and the ETag cache, beside `Repository` so nothing above it runs `gh pr`. |
 | `src/pipeline.ts` | `LANDINGS` gains `pull-request`; a PR landing has a `publish` gate and a `land` gate; validation names a PR landing in a project with no GitHub repo. |
