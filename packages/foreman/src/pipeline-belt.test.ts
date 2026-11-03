@@ -92,7 +92,7 @@ describe("belt edits", () => {
     expect(problemsOf(pipeline, RUNGS)).toEqual([
       `${id}: a check runs a command, and it names none`,
     ]);
-    const named = configure(pipeline, id, { command: "bun run lint" });
+    const named = configure(pipeline, id, { kind: "check", command: "bun run lint" });
     expect(node(named, id)).toMatchObject({
       command: "bun run lint",
       exits: [
@@ -127,7 +127,7 @@ describe("belt edits", () => {
   });
 
   test("a land is set to merge or fast-forward", () => {
-    const pipeline = configure(STANDARD_PIPELINE, "land", { how: "fast-forward" });
+    const pipeline = configure(STANDARD_PIPELINE, "land", { kind: "land", how: "fast-forward" });
     expect(node(pipeline, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
     expect(problemsOf(pipeline, RUNGS)).toEqual([]);
   });
@@ -203,6 +203,7 @@ describe("belt edits", () => {
 
   test("configuring a block keeps its id and wires", () => {
     const pipeline = configure(STANDARD_PIPELINE, "author", {
+      kind: "agent",
       role: "author",
       model: "cheap",
       slots: 2,
@@ -219,13 +220,17 @@ describe("belt edits", () => {
       ],
     });
     const unslotted = configure(pipeline, "author", {
+      kind: "agent",
       role: "author",
       model: "cheap",
       slots: undefined,
     });
     expect(node(unslotted, "author")).not.toHaveProperty("slots");
     expect(
-      node(configure(STANDARD_PIPELINE, "retry", { route: 1, when: "attempts>=2" }), "retry"),
+      node(
+        configure(STANDARD_PIPELINE, "retry", { kind: "router", route: 1, when: "attempts>=2" }),
+        "retry",
+      ),
     ).toMatchObject({
       routes: [{ when: "failed" }, { when: "attempts>=2", to: "climb" }],
     });

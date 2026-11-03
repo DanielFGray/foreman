@@ -57,7 +57,7 @@ export class Editor {
     if (key === "newSource") { this.addingSource = false; this.inputs.newSource.set_value(""); change({ _tag: "AddSource", filter: value }); return; }
     const node = this.pane.selectedNode();
     if (node === undefined) return;
-    const configure = (setting) => change({ _tag: "Configure", id: node.id, setting });
+    const configure = (setting) => change({ _tag: "Configure", id: node.id, setting: { kind: node.kind, ...setting } });
     // `configure` sets an agent's role, model and slots together.
     const agent = { role: node.role, model: node.model, ...(node.slots === undefined ? {} : { slots: node.slots }) };
     switch (key) {
@@ -124,7 +124,7 @@ export class Editor {
   // What the selected block does, as `configure` and its neighbours change it.
   settings(t, node) {
     const change = (one, cx) => this.pane.change(one, cx);
-    const configure = (setting, cx) => change({ _tag: "Configure", id: node.id, setting }, cx);
+    const configure = (setting, cx) => change({ _tag: "Configure", id: node.id, setting: { kind: node.kind, ...setting } }, cx);
     const { choices } = this.pane.shown;
     const box = v_flex().gap(4).py(4);
     const next = ENDS[(ENDS.indexOf(node.kind) + 1) % ENDS.length];

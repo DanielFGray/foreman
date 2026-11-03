@@ -27,14 +27,14 @@ describe("changesOf", () => {
         { kind: "land", id: "land" },
       ],
     })
-    const rebuilt = edited(saved, { _tag: "Configure", id: "author", setting: { role: "author", model: "ladder", slots: 2 } })
+    const rebuilt = edited(saved, { _tag: "Configure", id: "author", setting: { kind: "agent", role: "author", model: "ladder", slots: 2 } })
     expect(JSON.stringify(rebuilt)).not.toEqual(JSON.stringify(saved))
     expect(changesOf(saved, rebuilt)).toEqual([])
   })
 
   it("tells an added block once, with where it stands, and not the wire it was put on", () => {
     const { draft, id } = inserted("check")
-    const named = edited(draft, { _tag: "Configure", id, setting: { command: "bun test" } })
+    const named = edited(draft, { _tag: "Configure", id, setting: { kind: "check", command: "bun test" } })
     expect(changesOf(STANDARD_PIPELINE, named)).toEqual([`added check ${id} (runs bun test) after author done`])
   })
 
@@ -43,7 +43,7 @@ describe("changesOf", () => {
   })
 
   it("tells a changed setting with its old and new value", () => {
-    const draft = edited(STANDARD_PIPELINE, { _tag: "Configure", id: "author", setting: { role: "author", model: "opus", slots: 2 } })
+    const draft = edited(STANDARD_PIPELINE, { _tag: "Configure", id: "author", setting: { kind: "agent", role: "author", model: "opus", slots: 2 } })
     expect(changesOf(STANDARD_PIPELINE, draft)).toEqual(["changed author's model from 'ladder' to 'opus'", "changed author's slots from no cap to '2'"])
   })
 
@@ -57,7 +57,7 @@ describe("changesOf", () => {
   })
 
   it("tells an added route and a changed route filter", () => {
-    const draft = edited(STANDARD_PIPELINE, { _tag: "AddRoute", router: "retry", when: "size>=3" }, { _tag: "Configure", id: "retry", setting: { route: 1, when: "attempts>=2" } })
+    const draft = edited(STANDARD_PIPELINE, { _tag: "AddRoute", router: "retry", when: "size>=3" }, { _tag: "Configure", id: "retry", setting: { kind: "router", route: 1, when: "attempts>=2" } })
     expect(changesOf(STANDARD_PIPELINE, draft)).toEqual(["changed retry's route 2 filter from 'attempts>=1' to 'attempts>=2'", "added route 3 ('size>=3') to retry"])
   })
 
@@ -78,8 +78,8 @@ describe("changesOf", () => {
       [withGate, { _tag: "Rejoin", wire: { from: "climb", port: "next" }, to: id }],
       [STANDARD_PIPELINE, { _tag: "AddSource", filter: "label:bug" }],
       [STANDARD_PIPELINE, { _tag: "SwapEnd", id: "land" }],
-      [STANDARD_PIPELINE, { _tag: "Configure", id: "queue", setting: { filter: "-label:question" } }],
-      [STANDARD_PIPELINE, { _tag: "Configure", id: "start", setting: { step: "review" } }],
+      [STANDARD_PIPELINE, { _tag: "Configure", id: "queue", setting: { kind: "source", filter: "-label:question" } }],
+      [STANDARD_PIPELINE, { _tag: "Configure", id: "start", setting: { kind: "gate", step: "review" } }],
     ]
     for (const [saved, change] of edits) {
       const draft = edited(saved, change)

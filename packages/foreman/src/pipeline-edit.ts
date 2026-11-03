@@ -27,18 +27,23 @@ export const WirePort = S.Union([
 export const WireRef = S.Struct({ from: S.String, port: WirePort });
 export type WireRef = typeof WireRef.Type;
 
-/** What a block does, as `configure` takes it. */
+/**
+ * What a block does, as `configure` takes it, named by the kind of block it is
+ * for. The kind lets a decoder say which setting failed and why, and lets
+ * `applyChange` refuse a setting sent to another kind of block.
+ */
 export const BlockSetting = S.Union([
-  S.Struct({ filter: S.String }),
-  S.Struct({ step: S.Literals(STEPS) }),
+  S.Struct({ kind: S.Literal("source"), filter: S.String }),
+  S.Struct({ kind: S.Literal("gate"), step: S.Literals(STEPS) }),
   S.Struct({
-    role: S.Literals(["author", "review"]),
+    kind: S.Literal("agent"),
+    role: AgentNode.fields.role,
     model: S.String,
     slots: AgentNode.fields.slots,
   }),
-  S.Struct({ route: S.Int, when: S.String }),
-  S.Struct({ command: S.String }),
-  S.Struct({ how: S.Literals(LANDINGS) }),
+  S.Struct({ kind: S.Literal("router"), route: S.Int, when: S.String }),
+  S.Struct({ kind: S.Literal("check"), command: S.String }),
+  S.Struct({ kind: S.Literal("land"), how: S.Literals(LANDINGS) }),
 ]);
 export type BlockSetting = typeof BlockSetting.Type;
 
@@ -58,7 +63,8 @@ export type PipelineChange = typeof PipelineChange.Type;
 /**
  * The pipeline after `change`, and the id of the block it added, if any. A
  * change the pipeline cannot take answers `refused`: a rejoin that would close
- * a loop, or one that names a block the pipeline lacks. A change that names a
+ * a loop or names a block the pipeline lacks, or a setting for another kind of
+ * block. A change that names a
  * block or wire the pipeline lacks otherwise leaves it as it was.
  */
 export const applyChange = (
@@ -95,7 +101,14 @@ export const applyChange = (
     }
     case "SwapEnd":
       return changed(swapEnd(pipeline, change.id));
-    case "Configure":
-      return changed(configure(pipeline, change.id, change.setting));
+    case "Configure": {
+      const node = pipeline.nodes.find((one) => one.id === change.id);
+      return node !== undefined && node.kind !== change.setting.kind
+        ? {
+            _tag: "Refused",
+            reason: `${change.id} is a ${node.kind}, so it takes no ${change.setting.kind} setting`,
+          }
+        : changed(configure(pipeline, change.id, change.setting));
+    }
   }
 };

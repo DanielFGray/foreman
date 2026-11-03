@@ -297,7 +297,7 @@ describe("drawing a draft", () => {
     await run(
       "edit",
       "amux",
-      change({ _tag: "Configure", id: "land", setting: { how: "fast-forward" } }),
+      change({ _tag: "Configure", id: "land", setting: { kind: "land", how: "fast-forward" } }),
     );
     await run("save", "amux");
     const saved = JSON.parse(readFileSync(path, "utf8")).pipelines.amux;
@@ -338,14 +338,26 @@ describe("drawing a draft", () => {
       change({
         _tag: "Configure",
         id: "author",
-        setting: { role: "author", model: "ladder", slots },
+        setting: { kind: "agent", role: "author", model: "ladder", slots },
       });
-    expect(await refusal("edit", "amux", setting(0))).toMatch(/is no change/);
+    const refused = await refusal("edit", "amux", setting(0));
+    expect(refused).toMatch(/greater than 0/);
+    expect(refused).not.toMatch(/Missing key/);
     expect(existsSync(drafts)).toBe(false);
     await run("edit", "amux", setting(2));
     expect(
       draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "author").slots,
     ).toBe(2);
+  });
+
+  test("a setting for another kind of block is refused by name", async () => {
+    const refused = await refusal(
+      "edit",
+      "amux",
+      change({ _tag: "Configure", id: "queue", setting: { kind: "check", command: "bun test" } }),
+    );
+    expect(refused).toMatch(/queue is a source, so it takes no check setting/);
+    expect(existsSync(drafts)).toBe(false);
   });
 
   test("discard drops the draft", async () => {

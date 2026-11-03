@@ -10,6 +10,7 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
+import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   type AgentNode,
   type Landing,
@@ -246,45 +247,41 @@ export const swapEnd = (pipeline: Pipeline, id: string): Pipeline =>
  * Changes what a block does, never where it is wired or what it is called:
  * the id is what a task's facts name, and the wires are the belt's to change.
  */
-export const configure = (
-  pipeline: Pipeline,
-  id: string,
-  change:
-    | { readonly filter: string }
-    | { readonly step: Extract<PipelineNode, { kind: "gate" }>["step"] }
-    | {
-        readonly role: AgentNode["role"];
-        readonly model: string;
-        readonly slots?: number | undefined;
-      }
-    | { readonly route: number; readonly when: string }
-    | { readonly command: string }
-    | { readonly how: Landing },
-): Pipeline =>
-  mapNode(pipeline, id, (node) => {
-    if ("filter" in change && node.kind === "source") return { ...node, filter: change.filter };
-    if ("command" in change && node.kind === "check") return { ...node, command: change.command };
-    if ("how" in change && node.kind === "land") return { ...node, how: change.how };
-    if ("step" in change && node.kind === "gate") return { ...node, step: change.step };
-    if ("role" in change && node.kind === "agent") {
+export const configure = (pipeline: Pipeline, id: string, setting: BlockSetting): Pipeline =>
+  mapNode(pipeline, id, (node) => settled(node, setting));
+
+/** A block with `setting` applied, or as it was when the setting is for another kind of block. */
+const settled = (node: PipelineNode, setting: BlockSetting): PipelineNode => {
+  switch (setting.kind) {
+    case "source":
+      return node.kind === "source" ? { ...node, filter: setting.filter } : node;
+    case "gate":
+      return node.kind === "gate" ? { ...node, step: setting.step } : node;
+    case "check":
+      return node.kind === "check" ? { ...node, command: setting.command } : node;
+    case "land":
+      return node.kind === "land" ? { ...node, how: setting.how } : node;
+    case "agent": {
+      if (node.kind !== "agent") return node;
       const { slots: _slots, ...rest } = node;
       return {
         ...rest,
-        role: change.role,
-        model: change.model,
-        ...(change.slots === undefined ? {} : { slots: change.slots }),
+        role: setting.role,
+        model: setting.model,
+        ...(setting.slots === undefined ? {} : { slots: setting.slots }),
       };
     }
-    if ("route" in change && node.kind === "router") {
-      return {
-        ...node,
-        routes: node.routes.map((route, at) =>
-          at === change.route ? { ...route, when: change.when } : route,
-        ),
-      };
-    }
-    return node;
-  });
+    case "router":
+      return node.kind === "router"
+        ? {
+            ...node,
+            routes: node.routes.map((route, at) =>
+              at === setting.route ? { ...route, when: setting.when } : route,
+            ),
+          }
+        : node;
+  }
+};
 
 /** Incoming wires after excluding edges that close a walk from a source. */
 const forwardInputsOf = (wires: ReadonlyArray<Wire>, sources: ReadonlyArray<string>) => {

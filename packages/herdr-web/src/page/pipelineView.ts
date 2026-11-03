@@ -278,18 +278,18 @@ const selectInput = (label: string, options: ReadonlyArray<string>, value: strin
 const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   switch (node.kind) {
     case "source":
-      return [field("Filter", textInput("filter", node.filter, (filter) => edit({ _tag: "Configure", id: node.id, setting: { filter } }), h), h)]
+      return [field("Filter", textInput("filter", node.filter, (filter) => edit({ _tag: "Configure", id: node.id, setting: { kind: "source", filter } }), h), h)]
     case "gate":
       return [
         field(
           "Step",
-          selectInput("step", FOREMAN_STEPS, node.step, (step) => edit({ _tag: "Configure", id: node.id, setting: { step: step as typeof node.step } }), h),
+          selectInput("step", FOREMAN_STEPS, node.step, (step) => edit({ _tag: "Configure", id: node.id, setting: { kind: "gate", step: step as typeof node.step } }), h),
           h,
         ),
       ]
     case "agent": {
       const change = (setting: { readonly role?: typeof node.role; readonly model?: string; readonly slots?: number | undefined }) =>
-        edit({ _tag: "Configure", id: node.id, setting: { role: node.role, model: node.model, slots: node.slots, ...setting } })
+        edit({ _tag: "Configure", id: node.id, setting: { kind: "agent", role: node.role, model: node.model, slots: node.slots, ...setting } })
       return [
         field("Role", selectInput("role", ["author", "review"], node.role, (role) => change({ role: role as typeof node.role }), h), h),
         field("Model", textInput("model", node.model, (model) => change({ model }), h), h),
@@ -307,7 +307,7 @@ const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArra
             [h.Class("pipeline-route")],
             [
               h.span([h.Class("pipeline-route-name")], [`Route ${index + 1}`]),
-              textInput(`route ${index + 1} filter`, route.when, (when) => edit({ _tag: "Configure", id: node.id, setting: { route: index, when } }), h),
+              textInput(`route ${index + 1} filter`, route.when, (when) => edit({ _tag: "Configure", id: node.id, setting: { kind: "router", route: index, when } }), h),
               h.button(
                 [h.Type("button"), h.Class("pipeline-remove"), h.Title("Remove this route"), h.AriaLabel(`remove route ${index + 1}`), h.OnClick(edit({ _tag: "RemoveRoute", router: node.id, index }))],
                 ["✕"],
@@ -318,12 +318,12 @@ const settingsView = (node: PipelineNode, h: HtmlBuilder<Message>): ReadonlyArra
         h.button([h.Type("button"), h.Class("chip"), h.OnClick(edit({ _tag: "AddRoute", router: node.id, when: "" }))], ["Add route"]),
       ]
     case "check":
-      return [field("Command", textInput("command", node.command, (command) => edit({ _tag: "Configure", id: node.id, setting: { command } }), h), h)]
+      return [field("Command", textInput("command", node.command, (command) => edit({ _tag: "Configure", id: node.id, setting: { kind: "check", command } }), h), h)]
     case "land":
       return [
         field(
           "How",
-          selectInput("how", LANDINGS, node.how ?? "merge", (how) => edit({ _tag: "Configure", id: node.id, setting: { how: Option.getOrElse(Array.findFirst(LANDINGS, (landing) => landing === how), () => "merge" as const) } }), h),
+          selectInput("how", LANDINGS, node.how ?? "merge", (how) => edit({ _tag: "Configure", id: node.id, setting: { kind: "land", how: Option.getOrElse(Array.findFirst(LANDINGS, (landing) => landing === how), () => "merge" as const) } }), h),
           h,
         ),
       ]

@@ -95,7 +95,7 @@ const edit = Command.make(
     Effect.gen(function* () {
       const decoded = yield* S.decodeEffect(S.fromJsonString(PipelineChange))(change).pipe(
         Effect.mapError(
-          (error) => new PipelineError({ detail: `${change} is no change: ${error.message}` }),
+          (error) => new PipelineError({ detail: `that change cannot be read: ${error.message}` }),
         ),
       );
       const draft = (yield* draftsNow)[project] ?? (yield* freshDraft(project));
