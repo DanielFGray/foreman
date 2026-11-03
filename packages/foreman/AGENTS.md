@@ -811,9 +811,9 @@ rewrite.
 `Tracker` (`src/tracker.ts`) is the whole task-tracker surface, in tracker
 terms: tasks, their status moves, labels and logs. `TasksTracker` there is the
 one adapter, the `tasks` package. `Records` (`src/records.ts`) holds foreman's
-own records beside it, keyed by task id: the runs, and the marks foreman keeps
-as labels. A records write that goes with a status move shares one transaction
-with it, which holds only while both run on one store connection;
+own records beside it, keyed by task id: the runs, the charges and the parks. A
+records write that goes with a status move shares one transaction with it,
+which holds only while both run on one store connection;
 `Records.layer` builds them that way.
 
 `Repository` (`src/repository.ts`) answers what foreman needs to know about a
