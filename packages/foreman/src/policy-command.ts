@@ -5,11 +5,13 @@ import {
   grant,
   pauseProject,
   setProjectStep,
+  setProjectTracker,
   Policy,
   policyPath,
   readPolicy,
   STEP_MODES,
   STEPS,
+  TRACKERS,
   updatePolicy,
   type Policy as PolicyType,
 } from "./policy.ts";
@@ -71,7 +73,21 @@ const set = Command.make("set", { step, setting, project: projectFlag }, (args) 
 
 const clear = Command.make("clear", { project: Flag.String("project") }, ({ project }) =>
   write((policy) => clearProject(policy, project)),
-).pipe(Command.withDescription("Drop a project's own settings, so it follows the default again"));
+).pipe(
+  Command.withDescription(
+    "Drop a project's step and pause settings, so it follows the default again; its tracker stays",
+  ),
+);
+
+const tracker = Command.make(
+  "tracker",
+  { tracker: Argument.Literals("tracker", TRACKERS), project: Flag.String("project") },
+  (args) => write((policy) => setProjectTracker(policy, args.project, args.tracker)),
+).pipe(
+  Command.withDescription(
+    "Choose where a project's tasks live: prog (the default), a GitHub repo's issues, or Linear",
+  ),
+);
 
 const count = Argument.Int("count").pipe(
   Argument.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -124,6 +140,7 @@ export const policyCommand = Command.make("policy", {}).pipe(
     pauseOrResume("resume"),
     set,
     clear,
+    tracker,
     slots,
     grantCommand,
     revoke,

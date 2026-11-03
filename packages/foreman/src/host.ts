@@ -52,11 +52,10 @@ export const services = Layer.provideMerge(
     Prompts.Default,
     Quota.Default,
     Repository.Default,
-    BunServices.layer,
     logging(),
     telemetry.pipe(Layer.provide(settings)),
   ),
-).pipe(Layer.provide(store));
+).pipe(Layer.provideMerge(BunServices.layer), Layer.provide(store));
 
 /** What the store reads need: the task store, and the open spaces for the queue's projects. */
 export const storeServices = Layer.mergeAll(
@@ -64,8 +63,7 @@ export const storeServices = Layer.mergeAll(
   settings,
   HcFleet,
   Repository.Default,
-  BunServices.layer,
-).pipe(Layer.provide(store));
+).pipe(Layer.provideMerge(BunServices.layer), Layer.provide(store));
 
 /**
  * The queue in the order the fleet would dispatch it, for one project or for
