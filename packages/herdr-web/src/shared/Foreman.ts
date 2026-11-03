@@ -80,6 +80,8 @@ export const ForemanPlacement = S.Struct({
   label: S.String,
   project: S.String,
   node: S.String,
+  /** The block a board draws the task on; `node` is the block it waits for or runs at. */
+  stands: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
   /** The task's runs, oldest first, as foreman publishes them. */

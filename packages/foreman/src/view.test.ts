@@ -504,6 +504,7 @@ describe("publishedOf", () => {
               state: "waiting",
               gates: [{ id: "start", step: "author" }],
               ahead: 3,
+              stands: "queue",
             },
           },
           { task: task("ts-b", "open", []), placement: { _tag: "Parked", node: "attention" } },
@@ -518,6 +519,7 @@ describe("publishedOf", () => {
         label: "task ts-a",
         project: "fibrae",
         node: author.id,
+        stands: "queue",
         state: "waiting",
         gates: [{ id: "start", step: "author" }],
         runs: [
@@ -530,6 +532,7 @@ describe("publishedOf", () => {
         label: "task ts-b",
         project: "fibrae",
         node: "attention",
+        stands: "attention",
         state: "parked",
         gates: [],
         runs: [],

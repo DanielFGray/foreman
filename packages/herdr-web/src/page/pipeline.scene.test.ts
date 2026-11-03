@@ -214,11 +214,12 @@ test("save sends the draft, and a refusal is shown", () => {
   )
 })
 
-const placed = (key: string, node: string, state: "waiting" | "running" | "ended", gates: ReadonlyArray<{ id: string; step: string }> = []) => ({
+const placed = (key: string, node: string, state: "waiting" | "running" | "ended", gates: ReadonlyArray<{ id: string; step: string }> = [], stands = node) => ({
   key,
   label: `Task ${key}`,
   project: "app",
   node,
+  stands,
   state,
   gates,
   runs: [],
@@ -238,8 +239,8 @@ test("tasks show at their block by state, and a later reading moves them", () =>
           ...reading,
           placements: [
             placed("ts-1", "author", "running"),
-            placed("ts-2", "author", "waiting", [{ id: "start", step: "author" }]),
-            placed("ts-3", "author", "waiting", [{ id: "start", step: "author" }]),
+            placed("ts-2", "author", "waiting", [{ id: "start", step: "author" }], "queue"),
+            placed("ts-3", "author", "waiting", [{ id: "climb", step: "climb" }], "climb"),
             placed("ts-4", "review", "ended"),
             { ...placed("ts-5", "author", "running"), project: "lib" },
           ],
@@ -247,15 +248,17 @@ test("tasks show at their block by state, and a later reading moves them", () =>
         problem: Option.none(),
       },
     })),
-    // The author block counts its three tasks; the other project's task is not shown.
-    expect(selector(".pipeline-station[aria-label='agent author'] .pipeline-count")).toHaveText("3"),
-    expect(selector(".pipeline-station[aria-label='agent author'] .pipeline-count")).toHaveAttr("title", "2 waiting, 1 running"),
+    // Each block counts the tasks foreman draws on it; the other project's task is not shown.
+    expect(selector(".pipeline-station[aria-label='agent author'] .pipeline-count")).toHaveText("1"),
+    expect(selector(".pipeline-station[aria-label='agent author'] .pipeline-count")).toHaveAttr("title", "1 running"),
     expect(selector(".pipeline-station[aria-label='agent review'] .pipeline-count")).toHaveText("1"),
-    // The gate shows how many tasks wait behind it.
-    expect(selector(".pipeline-station[aria-label='gate start'] .pipeline-count")).toHaveText("2"),
+    // A task not yet started waits at the queue, one sent back at the gate in front of its block.
+    expect(selector(".pipeline-station[aria-label='source queue'] .pipeline-count")).toHaveText("1"),
+    expect(selector(".pipeline-station[aria-label='gate climb'] .pipeline-count")).toHaveText("1"),
+    expect(selector(".pipeline-station[aria-label='gate start'] .pipeline-count")).not.toExist(),
     expect(selector(".pipeline-station[aria-label='land land'] .pipeline-count")).not.toExist(),
-    expectAll(all.selector(".pipeline-standing-block")).toHaveCount(2),
-    expect(selector("ul[aria-label='tasks at author']")).toContainText("ts-2 Task ts-2 (held by start for author)"),
+    expectAll(all.selector(".pipeline-standing-block")).toHaveCount(4),
+    expect(selector("ul[aria-label='tasks at queue']")).toContainText("ts-2 Task ts-2 (held by start for author)"),
     // A later reading moves a task on, and the view follows with no other message.
     Subscription.emit(Message.ReceivedForeman({
       state: { reading: Option.some({ ...reading, placements: [placed("ts-2", "review", "waiting")] }), problem: Option.none() },

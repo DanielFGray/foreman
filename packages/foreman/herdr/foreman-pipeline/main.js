@@ -343,10 +343,12 @@ const problemsView = (t, problems) =>
     .child(div().text_color(t.blocked).child("the draft cannot run yet:"))
     .children(problems.map((problem) => div().text_color(t.muted).child(problem)));
 
-// Each block's tasks, running first, then by key.
+// Each block's tasks, by the block foreman says a board draws them on
+// (`stands`): a task not yet started at its source, a waiting one at the gate
+// in front of its block. Running first, then by key.
 const byBlock = (placements) => {
   const at = new Map();
-  for (const placement of placements) at.set(placement.node, [...(at.get(placement.node) ?? []), placement]);
+  for (const placement of placements) at.set(placement.stands, [...(at.get(placement.stands) ?? []), placement]);
   for (const tasks of at.values()) tasks.sort((a, b) => (a.state === "running") === (b.state === "running") ? a.key.localeCompare(b.key) : a.state === "running" ? -1 : 1);
   return at;
 };
