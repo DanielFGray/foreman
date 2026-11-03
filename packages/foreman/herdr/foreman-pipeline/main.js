@@ -10,6 +10,9 @@
 // one herdr-web draws. Where each task stands is the dispatcher's placement in
 // state.json.
 //
+// Simulating (`simulate.js`) walks a pretend task through the draft with
+// `foreman pipeline trace`, and marks where it stands and the blocks it passed.
+//
 // Editing (`editor.js`) changes the project's draft, never the pipeline it
 // runs: each change is one `foreman pipeline edit`, and `foreman pipeline
 // save` checks the draft and makes it the pipeline. foreman owns the draft, so
@@ -22,6 +25,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, readTextFile, watchFolder, theme, props, home } from "herdr";
 import { Editor } from "./editor.js";
+import { Simulator } from "./simulate.js";
 import { chip, wiresLayer } from "./parts.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
@@ -43,6 +47,7 @@ export default class Pipeline extends View {
     // The drawing fits the pane until the operator zooms or pans it.
     this.fitted = true;
     this.editor = new Editor(this);
+    this.sim = new Simulator(this);
     this.loadPlacements(cx);
     this.watch(cx);
   }
@@ -117,6 +122,8 @@ export default class Pipeline extends View {
     this.shown = shown;
     if (this.selected !== null && !this.view().drawing.blocks.some((block) => block.id === this.selected)) this.select(null);
     if (this.fitted) this.fit(cx);
+    // A change to the draft can change every step after it.
+    if (this.sim.on) this.sim.run(cx);
   }
 
   // What the board draws: the draft while one is open, else the pipeline the project runs.
@@ -162,6 +169,7 @@ export default class Pipeline extends View {
     return root
       .child(this.header(t, at))
       .when(editing, (el) => el.child(this.editor.toolbar(t)))
+      .when(this.sim.on, (el) => el.child(this.sim.toolbar(t)))
       .when(draft !== null && draft.problems.length > 0, (el) => el.child(problemsView(t, draft.problems)))
       .child(div().id("board").relative().flex_1().overflow_hidden()
         .on_scroll_wheel((event, cx) => this.scroll(event, cx))
@@ -185,6 +193,7 @@ export default class Pipeline extends View {
         .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
         .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
       .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(); cx.notify(); }))
+      .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => this.sim.toggle(cx)))
       .child(div().flex_1())
       .when(this.busy, (el) => el.child(div().text_color(t.muted).child("…")))
       .when(this.problem !== null, (el) => el.child(div().text_color(t.blocked).child(this.problem)))
@@ -198,11 +207,14 @@ export default class Pipeline extends View {
     const z = this.zoom;
     const running = tasks.filter((task) => task.state === "running").length;
     const card = block.h >= 40;
-    const border = this.editor.rejoining !== null ? t.accent : running > 0 ? t.working : tasks.length > 0 ? t.accent : t.border;
+    const mark = this.sim.mark(block.id);
+    const border = this.editor.rejoining !== null ? t.accent
+      : mark === "here" ? t.working : mark === "passed" ? t.done
+      : running > 0 ? t.working : tasks.length > 0 ? t.accent : t.border;
     return div().id(`block-${block.id}`).absolute()
       .left(block.x * z).top(block.y * z).w(block.w * z).h(block.h * z)
       .bg(this.selected === block.id ? t.selected : t.surface)
-      .border(1).border_color(border)
+      .border(mark === "here" ? 2 : 1).border_color(border)
       .rounded(card ? 6 : 14).px(6 * z).overflow_hidden()
       .hover((s) => s.bg(t.hover))
       .on_click((_event, cx) => {
@@ -214,6 +226,7 @@ export default class Pipeline extends View {
         .child(h_flex().gap(4 * z).text_size(12 * z)
           .child(div().text_color(t.muted).child(block.icon))
           .child(div().font_semibold().truncate().child(block.id))
+          .when(mark === "here", (el) => el.child(div().text_color(t.working).child("◆")))
           .when(tasks.length > 0, (el) => el.child(div().text_color(running > 0 ? t.working : t.accent).child(String(tasks.length)))))
         .when(card, (el) => el.child(div().text_size(10 * z).text_color(t.muted).truncate().child(block.summary))));
   }

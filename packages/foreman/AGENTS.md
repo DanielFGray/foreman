@@ -862,7 +862,9 @@ draft with the events a front end chose, from scratch on each call
 (`src/pipeline-trace.ts`). It folds the dispatcher's own rows over a task held
 in memory, and after each event prints the placement, the route so far and the
 events the block offers next, so a front end shows what the dispatcher would do
-without a copy of its rules. Both act through
+without a copy of its rules. The pane's simulate controls
+(`herdr/foreman-pipeline/simulate.js`) call it after each choice and after each
+change to the draft. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 
