@@ -1,7 +1,7 @@
 /**
  * The fleet as other programs read it: one projection of a reading, printed by
  * `foreman status --json` and written to `state.json` by the host that runs
- * the dispatcher (herdr-web's server) after every reading.
+ * `foreman serve` after every reading.
  *
  * A view, not a memory. Nothing in foreman reads the file back, so a restart
  * loses nothing by overwriting it, and a reader that finds it stale is told so

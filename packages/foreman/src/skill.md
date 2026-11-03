@@ -16,7 +16,7 @@ these steps:
 
 Every command below reads the world (the task store, herdr, git) once, does one thing,
 and exits. Foreman keeps no state between runs. So you can run these commands
-while foreman's dispatcher runs inside herdr-web's server: it reads your
+while `foreman serve` runs the dispatcher: it reads your
 change on its next tick and continues the task from there. With the dispatcher
 stopped, paused or idle, nothing reviews or lands the task for you.
 

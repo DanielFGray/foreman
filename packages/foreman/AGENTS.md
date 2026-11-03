@@ -11,9 +11,11 @@ dates, no task ids as evidence, no counts, no proof-run narration.
 ## Status
 
 The tree is one `Dispatcher` service over `Fleet`, `Tracker`, `Records` and `Repository`. It
-runs in one place: herdr-web's server hosts it through `src/host.ts`
-(`buildHost`), supervised, and restarts it after a failure. `src/main.ts` is the
-command line, and every command there is one-shot.
+runs in one place: `foreman serve` (`src/serve.ts`) builds it through
+`src/host.ts` (`buildHost`), supervised, and restarts it after a failure. A
+lock beside `state.json` keeps a second serve from starting. A systemd user
+unit (`systemd/foreman.service`) starts serve at login. Every other command in
+`src/main.ts` is one-shot.
 
 Proven live: the author → review → merge pipeline end to end. The rig is in
 `e2e/` — read `e2e/README.md` before running it.
@@ -120,8 +122,8 @@ place for it. The tasks themselves stay safe in the queue either way.
 writes the one log line per failure instead of one per tick.
 
 The wake queue beside it holds no state: it only ends the poll wait early, after
-`commanded` in the dispatcher's own process or `wake` from its host once a
-one-shot command in another process changed the world.
+`commanded` in the dispatcher's own process. A one-shot command in another
+process does not wake it: the dispatcher reads its change on the next poll.
 
 **Durable state beyond the policy, pipelines and drafts files and foreman's
 own records is a wall.** Foreman's own records are what it writes about its
@@ -875,9 +877,9 @@ knows what happened, whatever the workflow.
 
 ## Front ends
 
-herdr-web's server publishes every reading to its pages and writes it to
-`state.json` (`src/published.ts`), and reads the queue in its own process
-(`queueOf` in `src/host.ts`). The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
+`foreman serve` writes every reading to `state.json` (`src/published.ts`).
+herdr-web reads it, and reads the queue in its own process (`queueOf` in
+`src/host.ts`). The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
 reads `state.json`, and reads the queue and a task's record through
 `foreman queue` and `foreman show` (`src/store-commands.ts`). Its Pipeline view
 draws the `drawing` that `foreman pipeline show --json` prints, laid out by
@@ -994,10 +996,10 @@ not to have been earned.
 
 ## Traps
 
-- **Do not start a second herdr-web server to check that it starts.** It hosts
+- **Do not run `foreman serve` to check that it starts.** It runs
   a dispatcher that reads your policy file and open spaces, so it dispatches live
   agents against the real backlog within one tick wherever the policy allows,
-  and races the running one's landings. Typecheck instead; for a live run,
+  and the serve lock refuses it while the service runs. Typecheck instead; for a live run,
   follow `e2e/README.md`. A smoke test's tasks enter the live queue whenever a
   herdr-app space is open on its project.
 - **A reader of stdout alone sees a refusal as success.** hc reports a

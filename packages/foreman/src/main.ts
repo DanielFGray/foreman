@@ -24,11 +24,11 @@ import {
   showCommand,
 } from "./store-commands.ts";
 import { services, storeServices } from "./host.ts";
+import { serveCommand } from "./serve.ts";
 
 /**
- * The one-shot command line. The dispatcher itself runs inside a host process
- * (herdr-web's server, through `host.ts`); every command here acts once on the
- * same world and exits.
+ * The command line. `foreman serve` runs the dispatcher (`serve.ts`); every
+ * other command here acts once on the same world and exits.
  */
 
 /**
@@ -134,6 +134,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
   }),
 ).pipe(
   Command.withSubcommands([
+    serveCommand,
     quotaCommand,
     Command.provide(ladderCommand, store),
     Command.provide(councilCommand, store),
