@@ -79,7 +79,8 @@ export interface Standing {
 /**
  * The tasks that moved at one time. The first frame holds every task; each
  * later one holds only the tasks whose block or state changed since the frame
- * before it, so the board at a frame is the fold of the frames up to it.
+ * before it, and a time when none moved has no frame, so the board at a frame
+ * is the fold of the frames up to it.
  */
 export interface Frame {
   /** Hours since the start. */
@@ -490,10 +491,12 @@ const resultOf = (sim: Sim): SimulatedRun => {
   });
   const count = (keep: (task: SimulatedTask) => boolean) => tasks.filter(keep).length;
   return {
-    frames: sim.frames.map((board, index) => ({
-      at: hoursOf(board.at),
-      moves: movesSince(sim.frames[index - 1], board),
-    })),
+    frames: sim.frames
+      .map((board, index) => ({
+        at: hoursOf(board.at),
+        moves: movesSince(sim.frames[index - 1], board),
+      }))
+      .filter((frame, index) => index === 0 || frame.moves.length > 0),
     tasks,
     runsByRung: Object.fromEntries(sim.runsByRung),
     landed: count((task) => task.landedAt !== null),

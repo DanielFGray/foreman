@@ -876,7 +876,9 @@ table's rates per rung, blended toward the role's pool (`src/run-rates.ts`).
 Landings and checks wait for the next tick, one poll interval after the tick
 before, as in the fleet. Each frame holds only the tasks that moved, so the
 board at a frame is the fold of the frames up to it. Its `assumes` names every
-fact it does not read from the world. Both act through
+fact it does not read from the world. The pane's fleet controls
+(`herdr/foreman-pipeline/fleet.js`) call it on demand and after each change to
+the draft, and draw the frames on the board up to a time the operator picks. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 
