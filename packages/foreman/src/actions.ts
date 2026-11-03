@@ -80,6 +80,8 @@ export const perform = (
       return row.unreviewed ? dispatcher.adopt(row.unreviewed) : undefined;
     case "approve":
       return row.ask ? dispatcher.approve(row.ask) : undefined;
+    case "preview":
+      return row.worker && row.preview ? dispatcher.preview(row.worker, row.preview) : undefined;
   }
 };
 
@@ -116,4 +118,6 @@ export const ACTION_HELP: Record<Action, string> = {
   onboard: "Send an agent to salvage the uncommitted work holding a project",
   adopt: "Put an unread branch in front of a reviewer",
   approve: "Allow the step a task is waiting on, once, for that task alone",
+  preview:
+    "Run the project's scripts/preview.sh in a task's worktree, in the terminal preview-<task>",
 };

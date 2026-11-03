@@ -54,8 +54,11 @@ const dirtyPaths = (status: string): ReadonlyArray<string> => {
  */
 const SETUP_SCRIPT = "scripts/worktree-setup.sh";
 
-/** The script a project keeps to decide whether it works; see `verifyOf`. */
+/** The script a project keeps to decide whether it works; see `scriptsOf`. */
 const VERIFY_SCRIPT = "scripts/verify.sh";
+
+/** The script a project keeps to serve a worktree for a look; see `scriptsOf`. */
+const PREVIEW_SCRIPT = "scripts/preview.sh";
 
 /**
  * The checkout a project's tasks branch from and merge back into.
@@ -1003,17 +1006,22 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         }),
 
       /**
-       * The command that decides whether the project works, when it keeps one.
+       * The commands the project keeps, each when its script exists: `verify`
+       * decides whether the project works, and `preview` serves a task's
+       * worktree for the operator to look at.
        *
-       * A script in the project for the same reason as `setup`: how a project
-       * is checked is a fact about the project. It is run in the proving
-       * ground, so the copy that runs is the one in the merged tree.
+       * Scripts in the project for the same reason as `setup`: how a project
+       * is checked or served is a fact about the project. Verify runs in the
+       * proving ground, so the copy that runs is the one in the merged tree.
        */
-      verifyOf: (directory: string) =>
-        fs.exists(`${directory}/${VERIFY_SCRIPT}`).pipe(
-          Effect.orElseSucceed(() => false),
-          Effect.map((present): string | undefined => (present ? `./${VERIFY_SCRIPT}` : undefined)),
-        ),
+      scriptsOf: (directory: string) => {
+        const scriptIn = (script: string) =>
+          fs.exists(`${directory}/${script}`).pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.map((present): string | undefined => (present ? `./${script}` : undefined)),
+          );
+        return Effect.all({ verify: scriptIn(VERIFY_SCRIPT), preview: scriptIn(PREVIEW_SCRIPT) });
+      },
 
       /**
        * The main checkout a folder sits in, or undefined when it is in none.

@@ -6,7 +6,7 @@ import { Effect } from "effect";
 import {
   type AgentNode,
   instructionProblems,
-  STANDARD_PIPELINE,
+  STANDARD_PIPELINES,
   type Workspace,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
@@ -21,7 +21,7 @@ const run = (f: (prompts: Prompts["Service"]) => Effect.Effect<string, unknown>)
   );
 
 const blockOf = (role: AgentNode["role"]): AgentNode => {
-  const block = STANDARD_PIPELINE.nodes.find(
+  const block = STANDARD_PIPELINES.worktree.nodes.find(
     (node): node is AgentNode => node.kind === "agent" && node.role === role,
   );
   if (block === undefined) throw new Error(`the standard pipeline has no ${role}`);
@@ -408,7 +408,7 @@ describe("Prompts", () => {
     ]);
     expect(
       instructionProblems(
-        STANDARD_PIPELINE,
+        STANDARD_PIPELINES.worktree,
         new Map([
           ["author", "{{ base }}"],
           ["review", ""],

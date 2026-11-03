@@ -14,7 +14,10 @@ import {
   problemsOf,
   QUEUE,
   routeWorkspace,
-  STANDARD_PIPELINE,
+  choiceOf,
+  DEFAULT_PIPELINE,
+  STANDARD_PIPELINES,
+  WORKSPACE_CHOICES,
   toMermaid,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
@@ -104,7 +107,7 @@ describe("facts read from labels, runs and charges", () => {
         charges: [charged("cheap", cheap.id)],
         tip: "c1",
       },
-      STANDARD_PIPELINE,
+      STANDARD_PIPELINES.worktree,
     );
     expect([...read.failedBy]).toEqual(["cheap"]);
     expect(read.attempts).toBe(2);
@@ -122,7 +125,7 @@ describe("facts read from labels, runs and charges", () => {
 describe("the block a board draws a task on", () => {
   const done = { node: "author", name: "done", commit: "c1" };
   const stands = (over: Partial<Facts>) => {
-    const placement = place(STANDARD_PIPELINE, facts(over));
+    const placement = place(STANDARD_PIPELINES.worktree, facts(over));
     return placement._tag === "At" ? placement.stands : placement._tag;
   };
 
@@ -227,13 +230,13 @@ describe("placement on the standard pipeline", () => {
       { node: "review", state: "waiting", gates: ["review-gate"], ahead: 1 },
     ],
   ])("%s", (_, over, expected) => {
-    expect(at(STANDARD_PIPELINE, over)).toEqual(expected);
+    expect(at(STANDARD_PIPELINES.worktree, over)).toEqual(expected);
   });
 
   test.each(["done", "canceled", "proposed", "draft", "blocked"] as const)(
     "a %s task is outside the flow",
     (status) => {
-      expect(place(STANDARD_PIPELINE, facts({ status }))._tag).toBe("Outside");
+      expect(place(STANDARD_PIPELINES.worktree, facts({ status }))._tag).toBe("Outside");
     },
   );
 });
@@ -306,10 +309,10 @@ describe("placement on a drawn pipeline", () => {
 
 describe("the block an agent started by hand runs at", () => {
   test("is the first block of its role on the route", () => {
-    expect(nextAgent(STANDARD_PIPELINE, facts(), "author")?.id).toBe("author");
+    expect(nextAgent(STANDARD_PIPELINES.worktree, facts(), "author")?.id).toBe("author");
     // A review started before the author handed off still runs at the review
     // block: the blocks before it count as passed.
-    expect(nextAgent(STANDARD_PIPELINE, facts(), "review")?.id).toBe("review");
+    expect(nextAgent(STANDARD_PIPELINES.worktree, facts(), "review")?.id).toBe("review");
   });
 
   test("is nothing when the route has no such block", () => {
@@ -325,7 +328,7 @@ describe("the block an agent started by hand runs at", () => {
 
 // An acyclic drawing lets each invalid-route test introduce its own defect.
 const forwardPipeline: Pipeline = {
-  nodes: STANDARD_PIPELINE.nodes.map((node) =>
+  nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
     node.kind === "agent" && node.role === "review"
       ? {
           ...node,
@@ -348,7 +351,30 @@ describe("validation", () => {
   )!;
 
   test("the standard pipeline is valid", () => {
-    expect(problemsOf(STANDARD_PIPELINE, RUNGS)).toEqual([]);
+    expect(problemsOf(STANDARD_PIPELINES.worktree, RUNGS)).toEqual([]);
+  });
+
+  test("the default pipeline works in the operator's checkout on the task's branch", () => {
+    expect(DEFAULT_PIPELINE).toBe(STANDARD_PIPELINES.checkout);
+    const kinds = DEFAULT_PIPELINE.nodes.map((node) => node.kind);
+    expect(kinds).toContain("branch");
+    expect(kinds).not.toContain("worktree");
+  });
+
+  test("each standard workspace choice is valid, and is named by its blocks", () => {
+    for (const choice of WORKSPACE_CHOICES) {
+      expect(problemsOf(STANDARD_PIPELINES[choice], RUNGS)).toEqual([]);
+      expect(choiceOf(STANDARD_PIPELINES[choice])).toBe(choice);
+    }
+    const kinds = STANDARD_PIPELINES.direct.nodes.map((node) => node.kind);
+    expect(kinds).not.toContain("branch");
+    expect(kinds).toContain("done");
+    const pinned = {
+      nodes: DEFAULT_PIPELINE.nodes.map((node) =>
+        node.id === "author" ? { ...node, model: "cheap" } : node,
+      ),
+    };
+    expect(choiceOf(pinned)).toBeUndefined();
   });
 
   test("names a duplicate block, a loose wire and a filter that means nothing", () => {
@@ -657,7 +683,7 @@ describe("a check block", () => {
 
 describe("the Mermaid drawing", () => {
   test("draws every block and one arrow per wire", () => {
-    const lines = toMermaid(STANDARD_PIPELINE).split("\n");
+    const lines = toMermaid(STANDARD_PIPELINES.worktree).split("\n");
     expect(lines[0]).toBe("flowchart LR");
     // The author's done and already-done are two arrows to the same gate.
     expect(lines.filter((line) => line.includes("-->"))).toHaveLength(14);
@@ -687,7 +713,7 @@ describe("workspace blocks", () => {
       .filter((node) => node.id !== id)
       .map((node) => ("next" in node && node.next === id ? { ...node, next } : node)),
   });
-  const branchOnly = drop(STANDARD_PIPELINE, "worktree", "retry");
+  const branchOnly = drop(STANDARD_PIPELINES.worktree, "worktree", "retry");
   const direct = swap(drop(branchOnly, "branch", "retry"), { kind: "done", id: "land" });
   const workspaceOf = (pipeline: Pipeline, over: Partial<Facts> = {}) => {
     const placement = place(pipeline, facts(over));
@@ -697,10 +723,10 @@ describe("workspace blocks", () => {
   };
 
   test("each of the three shapes is valid, and places the agent in its workspace", () => {
-    for (const pipeline of [STANDARD_PIPELINE, branchOnly, direct]) {
+    for (const pipeline of [STANDARD_PIPELINES.worktree, branchOnly, direct]) {
       expect(problemsOf(pipeline, RUNGS)).toEqual([]);
     }
-    expect(workspaceOf(STANDARD_PIPELINE)).toEqual(["author", "worktree"]);
+    expect(workspaceOf(STANDARD_PIPELINES.worktree)).toEqual(["author", "worktree"]);
     expect(workspaceOf(branchOnly)).toEqual(["author", "branch"]);
     expect(workspaceOf(direct)).toEqual(["author", "none"]);
   });
@@ -709,14 +735,14 @@ describe("workspace blocks", () => {
   const approved = { node: "review", name: "approved", commit: "c1" };
 
   test("a task in flight places at the same block as before the workspace blocks", () => {
-    const old = drop(drop(STANDARD_PIPELINE, "worktree", "retry"), "branch", "retry");
+    const old = drop(drop(STANDARD_PIPELINES.worktree, "worktree", "retry"), "branch", "retry");
     for (const over of [
       {},
       { status: "in_progress" as const },
       { status: "in_progress" as const, named: [done] },
       { status: "in_progress" as const, named: [done, approved] },
     ]) {
-      expect(at(STANDARD_PIPELINE, over)).toEqual(at(old, over));
+      expect(at(STANDARD_PIPELINES.worktree, over)).toEqual(at(old, over));
     }
   });
 
@@ -728,7 +754,7 @@ describe("workspace blocks", () => {
   });
 
   test("refuses a worktree with no branch before it", () => {
-    expect(problemsOf(drop(STANDARD_PIPELINE, "branch", "worktree"), RUNGS)).toEqual([
+    expect(problemsOf(drop(STANDARD_PIPELINES.worktree, "branch", "worktree"), RUNGS)).toEqual([
       "a route from queue reaches worktree with no branch before it",
       "a route from queue reaches land with no branch before it",
     ]);
@@ -741,9 +767,9 @@ describe("workspace blocks", () => {
   });
 
   test("refuses a route from a branch that ends at done", () => {
-    expect(problemsOf(swap(STANDARD_PIPELINE, { kind: "done", id: "land" }), RUNGS)).toEqual([
-      "a route from branch ends at land: work on this branch never lands",
-    ]);
+    expect(
+      problemsOf(swap(STANDARD_PIPELINES.worktree, { kind: "done", id: "land" }), RUNGS),
+    ).toEqual(["a route from branch ends at land: work on this branch never lands"]);
   });
 
   test("refuses a done that skips review, or that no gate stands before", () => {
@@ -798,7 +824,7 @@ describe("a cycle", () => {
   // The review sends a returned task straight back to the author's gate, a
   // wire inside the graph rather than a return to the queue.
   const looped = (returned: Exit): Pipeline => ({
-    nodes: STANDARD_PIPELINE.nodes.map((node) =>
+    nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
       node.id === "review" && node.kind === "agent"
         ? { ...node, exits: [{ name: "approved", to: "land-gate" }, returned] }
         : node,
@@ -873,7 +899,7 @@ describe("a cycle", () => {
 
 describe("exits", () => {
   const replace = (node: PipelineNode): Pipeline => ({
-    nodes: STANDARD_PIPELINE.nodes.map((n) => (n.id === node.id ? node : n)),
+    nodes: STANDARD_PIPELINES.worktree.nodes.map((n) => (n.id === node.id ? node : n)),
   });
   const review = (exits: ReadonlyArray<Exit>): PipelineNode => ({
     kind: "agent",

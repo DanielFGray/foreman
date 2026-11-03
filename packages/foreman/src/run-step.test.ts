@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import type { CheckNode } from "./pipeline.ts";
-import { QUEUE, STANDARD_PIPELINE } from "./pipeline.ts";
+import { QUEUE, STANDARD_PIPELINES } from "./pipeline.ts";
 import { type Item, Records } from "./records.ts";
 import { newRunFor } from "./run-record.ts";
 import { applyRow, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
@@ -17,7 +17,7 @@ const rules: StepRules = {
     { name: "dear", harness: "test", model: undefined, provider: undefined },
   ],
   attemptsPerRung: 2,
-  pipeline: STANDARD_PIPELINE,
+  pipeline: STANDARD_PIPELINES.worktree,
 };
 
 const lint: CheckNode = {

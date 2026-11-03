@@ -9,8 +9,10 @@ Today the dispatcher runs one flow, written into `settle`, `fill` and `land`:
 queue → author → review → land. A **pipeline** makes that flow data. Each
 project has one: a graph of **blocks** (nodes) joined by **wires**. The
 dispatcher places each task in the graph and runs the block it stands at. With
-no pipeline set, a project runs the **standard pipeline**, which is today's flow,
-so nothing changes until the operator draws one.
+no pipeline set, a project runs the **default pipeline**: the standard pipeline
+in the operator's checkout, on the task's branch. `foreman pipeline use
+<checkout|worktree|direct> --project <name>` draws one of the three standard
+workspace choices (`docs/workspace-blocks.md`).
 
 The executors stay: dispatching an agent into the task's worktree, reading how
 its run ended, landing, usage walls, trials, teardown. What the pipeline
@@ -20,7 +22,7 @@ replaces is the fixed answer to "which step does this task take next".
 
 | Question | Answered by |
 | --- | --- |
-| What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the standard pipeline |
+| What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the default pipeline (the standard checkout choice) |
 | Where is this task in it? | derived every tick by `place` from the task's facts |
 | Which block did it last leave? | a fact: the exit its last named run named, and the commit it was named on |
 | May this step run for this task? | the policy: the gate's step, its mode, grants (unchanged) |
@@ -247,8 +249,13 @@ draws the pipeline as Mermaid (`foreman pipeline show`).
 
 ## The standard pipeline
 
+The standard pipeline has three workspace choices. The blocks between the source
+and the router say where the agents work: `branch` (checkout, the default),
+`branch → worktree` (worktree), or none (direct). Direct ends at `done` in place
+of `land`.
+
 ```
-source(all)
+source(all) → workspace blocks
   → router: failed      → gate(climb)
             attempts>=1 → gate(climb)
             else           → gate(author)

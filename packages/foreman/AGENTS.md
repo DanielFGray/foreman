@@ -139,12 +139,16 @@ space sits in, named by the checkout's folder, which is also its prog project
 every checkout a foreman agent still runs in, so closing a space drains the work
 under way. Two checkouts with one name are held as `ambiguous`, because a task
 names a project, not a directory. A project's verify command is its own
-`scripts/verify.sh`.
+`scripts/verify.sh`, and its preview command is its own `scripts/preview.sh`:
+`foreman preview <task>` runs it in a task's worktree, in the hc terminal
+`preview-<task>`, which carries no fleet label, so the roster never reads it as
+an agent.
 
 ### One workspace per task
 
-The task's route says where it works (see "Workspace blocks" below): a worktree
-of its own in the standard pipeline, or the operator's checkout.
+The task's route says where it works (see "Workspace blocks" below): the
+operator's checkout by default, or a worktree of its own when the project draws
+the `worktree` choice with `foreman pipeline use`.
 
 `foreman/<task-id>` is the git branch. Each of the task's agents runs in an hc
 terminal labelled with the task (`fm.task`) and its role (`fm.role`), in
@@ -844,7 +848,7 @@ To change how foreman works, edit one of these.
 |---|---|
 | where tasks come from | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example |
 | where agents run | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example |
-| the steps a task goes through | `STANDARD_PIPELINE` in `src/pipeline.ts`, or draw one on the page |
+| the steps a task goes through | `STANDARD_PIPELINES` in `src/pipeline.ts` (`foreman pipeline use` draws one), or draw one on the page |
 | what an agent is told | the files in `~/.config/foreman/prompts/` |
 | which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`) |
 | what runs without asking | the policy file (author, climb, review, land) |

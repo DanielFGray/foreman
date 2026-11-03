@@ -75,7 +75,7 @@ import {
   type LandNode,
   type Pipeline,
   QUEUE,
-  STANDARD_PIPELINE,
+  DEFAULT_PIPELINE,
   type Placement,
   type Workspace,
 } from "./pipeline.ts";
@@ -614,7 +614,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         review: rung.review !== false,
       }));
       const instructions = yield* prompts.instructions(
-        [STANDARD_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
+        [DEFAULT_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
       );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
         projects.map((project) => [
@@ -2325,8 +2325,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const { projects, ambiguous } = projectSet(open, running);
         const verified = yield* Effect.forEach(projects, (project) =>
           repository
-            .verifyOf(project.directory)
-            .pipe(Effect.map((verify): Project => ({ ...project, verify }))),
+            .scriptsOf(project.directory)
+            .pipe(Effect.map((scripts): Project => ({ ...project, ...scripts }))),
         );
         return { projects: verified, ambiguous };
       });
@@ -2536,6 +2536,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       /** Brings a task's workspace to the front so you can take over. */
       focus: (worker: Worker) => fleet.focus(worker),
+
+      /** Runs the project's preview script in a task's worktree, and returns the terminal it runs in. */
+      preview: (worker: Worker, script: string) => fleet.preview(worker, script),
 
       /** Stops a live attempt, records why, and returns the task unchanged to the queue. */
       kill: (target: InterventionTarget, reason: Option.Option<string>) =>

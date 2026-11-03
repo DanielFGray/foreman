@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
-import { type Pipeline, problemsOf, STANDARD_PIPELINE } from "./pipeline.ts";
+import { type Pipeline, problemsOf, STANDARD_PIPELINES } from "./pipeline.ts";
 import {
   addRoute,
   addSource,
@@ -21,7 +21,7 @@ const at = (pipeline: Pipeline) =>
 
 describe("the standard pipeline as belts", () => {
   test("runs one belt, with the retry branch on a row of its own", () => {
-    expect(at(STANDARD_PIPELINE)).toEqual({
+    expect(at(STANDARD_PIPELINES.worktree)).toEqual({
       queue: [0, 0],
       branch: [1, 0],
       worktree: [2, 0],
@@ -34,7 +34,7 @@ describe("the standard pipeline as belts", () => {
       "land-gate": [8, 0],
       land: [9, 0],
     });
-    const belt = beltOf(STANDARD_PIPELINE);
+    const belt = beltOf(STANDARD_PIPELINES.worktree);
     expect([belt.columns, belt.rows]).toEqual([10, 2]);
     // The author's two exits onward are two wires to the same gate.
     expect(belt.wires).toHaveLength(14);
@@ -50,7 +50,7 @@ describe("the standard pipeline as belts", () => {
 describe("belt edits", () => {
   test("a block put on a wire runs on to where the wire went", () => {
     const { pipeline, id } = insertOn(
-      STANDARD_PIPELINE,
+      STANDARD_PIPELINES.worktree,
       { from: "review", port: "exit:approved" },
       "agent",
     );
@@ -76,7 +76,7 @@ describe("belt edits", () => {
 
   test("a check put on a wire names no command until the operator sets one", () => {
     const { pipeline, id } = insertOn(
-      STANDARD_PIPELINE,
+      STANDARD_PIPELINES.worktree,
       { from: "author", port: "exit:done" },
       "check",
     );
@@ -104,13 +104,13 @@ describe("belt edits", () => {
   });
 
   test("new blocks never reuse an id", () => {
-    const first = insertOn(STANDARD_PIPELINE, { from: "queue", port: "next" }, "gate");
+    const first = insertOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "gate");
     const second = insertOn(first.pipeline, { from: "queue", port: "next" }, "gate");
     expect(new Set(ids(second.pipeline)).size).toBe(ids(second.pipeline).length);
   });
 
   test("taking a block out joins the wires around it", () => {
-    const pipeline = remove(STANDARD_PIPELINE, "retry");
+    const pipeline = remove(STANDARD_PIPELINES.worktree, "retry");
     expect(node(pipeline, "worktree")).toMatchObject({ next: "start" });
     // The review's returned exit still reaches climb after the router goes.
     expect(ids(pipeline)).toContain("climb");
@@ -118,8 +118,8 @@ describe("belt edits", () => {
   });
 
   test("an end stays, and turns from land to done to park and back", () => {
-    expect(remove(STANDARD_PIPELINE, "land")).toBe(STANDARD_PIPELINE);
-    const done = swapEnd(STANDARD_PIPELINE, "land");
+    expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
+    const done = swapEnd(STANDARD_PIPELINES.worktree, "land");
     expect(node(done, "land")).toEqual({ kind: "done", id: "land" });
     const park = swapEnd(done, "land");
     expect(node(park, "land")).toEqual({ kind: "park", id: "land" });
@@ -127,19 +127,25 @@ describe("belt edits", () => {
   });
 
   test("a land is set to merge or fast-forward", () => {
-    const pipeline = configure(STANDARD_PIPELINE, "land", { kind: "land", how: "fast-forward" });
+    const pipeline = configure(STANDARD_PIPELINES.worktree, "land", {
+      kind: "land",
+      how: "fast-forward",
+    });
     expect(node(pipeline, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
     expect(problemsOf(pipeline, RUNGS)).toEqual([]);
   });
 
   test("taking the worktree out leaves the task's branch in the operator's checkout", () => {
-    const pipeline = remove(STANDARD_PIPELINE, "worktree");
+    const pipeline = remove(STANDARD_PIPELINES.worktree, "worktree");
     expect(node(pipeline, "branch")).toMatchObject({ next: "retry" });
     expect(problemsOf(pipeline, RUNGS)).toEqual([]);
   });
 
   test("a branch and a worktree go on a wire with nothing to set", () => {
-    const direct = swapEnd(remove(remove(STANDARD_PIPELINE, "worktree"), "branch"), "land");
+    const direct = swapEnd(
+      remove(remove(STANDARD_PIPELINES.worktree, "worktree"), "branch"),
+      "land",
+    );
     expect(problemsOf(direct, RUNGS)).toEqual([]);
     const branched = insertOn(direct, { from: "queue", port: "next" }, "branch");
     expect(node(branched.pipeline, branched.id)).toEqual({
@@ -153,7 +159,7 @@ describe("belt edits", () => {
   });
 
   test("a new route joins else at once, and blocks go on it", () => {
-    const routed = addRoute(STANDARD_PIPELINE, "retry", "size>=3");
+    const routed = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
     expect(node(routed, "retry")).toMatchObject({
       routes: [{}, {}, { when: "size>=3", to: "start" }],
     });
@@ -163,7 +169,7 @@ describe("belt edits", () => {
   });
 
   test("dropping a route drops the blocks only it reached", () => {
-    const routed = addRoute(STANDARD_PIPELINE, "retry", "size>=3");
+    const routed = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
     const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
     const pipeline = removeRoute(inserted.pipeline, "retry", 2);
     expect(ids(pipeline)).not.toContain(inserted.id);
@@ -172,37 +178,47 @@ describe("belt edits", () => {
   });
 
   test("a wire rejoins a later block, never an earlier one", () => {
-    const skip = rejoin(STANDARD_PIPELINE, { from: "climb", port: "next" }, "review-gate");
+    const skip = rejoin(
+      STANDARD_PIPELINES.worktree,
+      { from: "climb", port: "next" },
+      "review-gate",
+    );
     expect(Option.map(skip, (pipeline) => node(pipeline, "climb"))).toEqual(
       Option.some({ kind: "gate", id: "climb", step: "climb", next: "review-gate" }),
     );
-    expect(rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "author")).toEqual(
-      Option.none(),
-    );
     expect(
-      rejoin(STANDARD_PIPELINE, { from: "review", port: "exit:approved" }, "no-such-block"),
+      rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, "author"),
+    ).toEqual(Option.none());
+    expect(
+      rejoin(
+        STANDARD_PIPELINES.worktree,
+        { from: "review", port: "exit:approved" },
+        "no-such-block",
+      ),
     ).toEqual(Option.none());
   });
 
   test("a wire can rejoin an acyclic sibling in the same column", () => {
-    expect(at(STANDARD_PIPELINE).climb?.[0]).toBe(at(STANDARD_PIPELINE).start?.[0]);
-    const joined = rejoin(STANDARD_PIPELINE, { from: "climb", port: "next" }, "start");
+    expect(at(STANDARD_PIPELINES.worktree).climb?.[0]).toBe(
+      at(STANDARD_PIPELINES.worktree).start?.[0],
+    );
+    const joined = rejoin(STANDARD_PIPELINES.worktree, { from: "climb", port: "next" }, "start");
     expect(Option.map(joined, (pipeline) => node(pipeline, "climb"))).toEqual(
       Option.some({ kind: "gate", id: "climb", step: "climb", next: "start" }),
     );
     expect(Option.map(joined, (pipeline) => node(pipeline, "review"))).toEqual(
-      Option.some(node(STANDARD_PIPELINE, "review")),
+      Option.some(node(STANDARD_PIPELINES.worktree, "review")),
     );
   });
 
   test("a new source starts a belt that joins the first one", () => {
-    const { pipeline, id } = addSource(STANDARD_PIPELINE, "label:research");
+    const { pipeline, id } = addSource(STANDARD_PIPELINES.worktree, "label:research");
     expect(node(pipeline, id)).toMatchObject({ filter: "label:research", next: "branch" });
     expect(at(pipeline)[id]).toEqual([0, 2]);
   });
 
   test("configuring a block keeps its id and wires", () => {
-    const pipeline = configure(STANDARD_PIPELINE, "author", {
+    const pipeline = configure(STANDARD_PIPELINES.worktree, "author", {
       kind: "agent",
       role: "author",
       model: "cheap",
@@ -228,7 +244,11 @@ describe("belt edits", () => {
     expect(node(unslotted, "author")).not.toHaveProperty("slots");
     expect(
       node(
-        configure(STANDARD_PIPELINE, "retry", { kind: "router", route: 1, when: "attempts>=2" }),
+        configure(STANDARD_PIPELINES.worktree, "retry", {
+          kind: "router",
+          route: 1,
+          when: "attempts>=2",
+        }),
         "retry",
       ),
     ).toMatchObject({
@@ -238,7 +258,7 @@ describe("belt edits", () => {
 
   test("a looped file still draws", () => {
     const looped: Pipeline = {
-      nodes: STANDARD_PIPELINE.nodes.map((n) =>
+      nodes: STANDARD_PIPELINES.worktree.nodes.map((n) =>
         n.id === "land-gate" ? { ...n, next: "author" } : n,
       ),
     };

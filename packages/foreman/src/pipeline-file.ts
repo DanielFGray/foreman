@@ -15,7 +15,7 @@ import {
   WorktreeNode,
   instructionProblems,
   problemsOf,
-  STANDARD_PIPELINE,
+  DEFAULT_PIPELINE,
   standardExits,
 } from "./pipeline.ts";
 import { configDirectory, type Read, rewrite } from "./shared-file.ts";
@@ -24,7 +24,7 @@ import { configDirectory, type Read, rewrite } from "./shared-file.ts";
  * The pipelines the operator drew, one per project, in a file of their own
  * beside the policy.
  *
- * A project with no entry runs the standard pipeline. The file sits in the
+ * A project with no entry runs the default pipeline. The file sits in the
  * policy's directory, so the dispatcher's watch on that directory sees a
  * change to either file.
  */
@@ -171,7 +171,7 @@ export const pipelineFor = (
 ): { readonly pipeline: Pipeline; readonly drawn: boolean } => {
   const drawn = pipelines[project];
   return drawn === undefined
-    ? { pipeline: STANDARD_PIPELINE, drawn: false }
+    ? { pipeline: DEFAULT_PIPELINE, drawn: false }
     : { pipeline: drawn, drawn: true };
 };
 

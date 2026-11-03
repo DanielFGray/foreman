@@ -7,7 +7,7 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { authoredOn, charged, reviewRun, withRuns } from "./task-fixture.ts";
 import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
-import { STANDARD_PIPELINE, type AgentNode } from "./pipeline.ts";
+import { STANDARD_PIPELINES, type AgentNode } from "./pipeline.ts";
 import {
   Published,
   publishedOf,
@@ -291,6 +291,30 @@ describe("actionsFor", () => {
     expect(actionsFor("working", alone)).not.toContain("focus");
   });
 
+  test("offers preview only for a task with a worktree in a project that keeps the script", () => {
+    const fibrae = { name: "fibrae", directory: "/build/fibrae", verify: undefined, open: true };
+    const served = { ...state, projects: [{ ...fibrae, preview: "./scripts/preview.sh" }] };
+    const inWorktree = rowsForView("working", served).find((each) => each.key === "ts-w1");
+    expect(actionsFor("working", inWorktree)).toContain("preview");
+    expect(inWorktree?.preview).toBe("./scripts/preview.sh");
+
+    const noScript = { ...state, projects: [{ ...fibrae, preview: undefined }] };
+    const unserved = rowsForView("working", noScript).find((each) => each.key === "ts-w1");
+    expect(actionsFor("working", unserved)).not.toContain("preview");
+
+    const inCheckout = {
+      ...served,
+      working: [
+        active(authoredOn(task("ts-w1", "in_progress", []), "flash"), {
+          ...worker("ts-w1", "working"),
+          worktree: undefined,
+        }),
+      ],
+    };
+    const checkoutRow = rowsForView("working", inCheckout).find((each) => each.key === "ts-w1");
+    expect(actionsFor("working", checkoutRow)).not.toContain("preview");
+  });
+
   test("offers kill only for a live worker", () => {
     expect(actionsFor("working", row("working", "ts-w1"))).toContain("kill");
     const blocked = {
@@ -438,7 +462,15 @@ describe("publishedOf", () => {
     const published = publishedOf(
       {
         ...state,
-        projects: [{ name: "pty", directory: "/build/pty", verify: undefined, open: true }],
+        projects: [
+          {
+            name: "pty",
+            directory: "/build/pty",
+            verify: undefined,
+            preview: undefined,
+            open: true,
+          },
+        ],
       },
       Option.some(statusOf(state)),
     );
@@ -458,7 +490,7 @@ describe("publishedOf", () => {
   });
 
   test("publishes where each task stands and which projects are stopped", () => {
-    const author = STANDARD_PIPELINE.nodes.find(
+    const author = STANDARD_PIPELINES.worktree.nodes.find(
       (node): node is AgentNode => node.kind === "agent" && node.role === "author",
     )!;
     const published = publishedOf(

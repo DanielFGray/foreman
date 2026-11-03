@@ -46,7 +46,10 @@ const status = Command.make("status", { json }, ({ json }) =>
   Command.withDescription("List every row the dashboard would show, with the commands each takes"),
 );
 
-/** Runs one request against the row an id names, or says why it cannot. */
+/**
+ * Runs one request against the row an id names, or says why it cannot. A
+ * preview prints the terminal its server runs in; every other action says done.
+ */
 const act = (action: Action, key: string, request: Request) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
@@ -69,8 +72,10 @@ const act = (action: Action, key: string, request: Request) =>
           (offered.length === 0 ? ": no row has that key" : ` (it takes ${offered.join("; ")})`),
       });
     }
-    yield* command;
-    yield* Console.log(`${commandName(action)} ${key}: done`);
+    const result = yield* command;
+    yield* Console.log(
+      `${commandName(action)} ${key}: ${action === "preview" ? `running in hc terminal ${String(result)}` : "done"}`,
+    );
   });
 
 const reason = Flag.String("reason").pipe(Flag.withDescription("What the task log says"));

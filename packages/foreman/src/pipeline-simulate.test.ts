@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
-import { type Pipeline, STANDARD_PIPELINE, standardExits } from "./pipeline.ts";
+import { type Pipeline, STANDARD_PIPELINES, standardExits } from "./pipeline.ts";
 import { simulate, simulateReport, type Frame, type SimulateWorld } from "./pipeline-simulate.ts";
 import type { Item } from "./records.ts";
 import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
@@ -76,7 +76,7 @@ const played = (pipeline: Pipeline, measured: Measured, count = 5) =>
 
 /** The standard pipeline with its author block changed by `change`. */
 const withAuthor = (change: object): Pipeline => ({
-  nodes: STANDARD_PIPELINE.nodes.map((node) =>
+  nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
     node.id === "author" ? { ...node, ...change } : node,
   ),
 });
@@ -147,7 +147,10 @@ describe("simulate", () => {
     const report = () =>
       simulateReport(
         world(4),
-        { draft: undefined, live: { pipeline: STANDARD_PIPELINE, drawn: false, problems: [] } },
+        {
+          draft: undefined,
+          live: { pipeline: STANDARD_PIPELINES.worktree, drawn: false, problems: [] },
+        },
         ratesOf(measured),
         RULES,
         { seed: 7, hours: 48 },
@@ -156,7 +159,7 @@ describe("simulate", () => {
   });
 
   test("lands every task when every run succeeds, never running more agents than slots", () => {
-    const run = played(STANDARD_PIPELINE, always("approved"));
+    const run = played(STANDARD_PIPELINES.worktree, always("approved"));
     expect(run.landed).toBe(5);
     expect(run.tasks.every((task) => task.landedAt !== null)).toBe(true);
     for (const index of run.frames.keys()) {
@@ -179,7 +182,7 @@ describe("simulate", () => {
 
   test("ends when every rung has stopped on every task, which parks them", () => {
     const stops: Measured = { agents: [sample("cheap", "author", "stopped", 3)], checks: [] };
-    const run = played(STANDARD_PIPELINE, stops, 3);
+    const run = played(STANDARD_PIPELINES.worktree, stops, 3);
     expect(run.parked).toBe(3);
     // Two tries on each rung before the climb, as attemptsPerRung says.
     expect(run.runsByRung).toEqual({ cheap: 6, dear: 6 });
@@ -188,7 +191,7 @@ describe("simulate", () => {
   test("counts a task parked before the start as parked from the start", () => {
     const run = simulate({
       world: { ...world(1), ready: [item("ts-0", { parked: "the operator's" })] },
-      pipeline: STANDARD_PIPELINE,
+      pipeline: STANDARD_PIPELINES.worktree,
       drawn: false,
       rates: ratesOf(always("approved")),
       rules: RULES,
@@ -205,7 +208,7 @@ describe("simulateReport", () => {
       world(3),
       {
         draft: { pipeline: NO_REVIEW, problems: [] },
-        live: { pipeline: STANDARD_PIPELINE, drawn: true, problems: [] },
+        live: { pipeline: STANDARD_PIPELINES.worktree, drawn: true, problems: [] },
       },
       ratesOf(always("returned")),
       RULES,
@@ -222,7 +225,10 @@ describe("simulateReport", () => {
   test("plays only the saved pipeline when the project has no draft", () => {
     const report = simulateReport(
       world(1),
-      { draft: undefined, live: { pipeline: STANDARD_PIPELINE, drawn: false, problems: [] } },
+      {
+        draft: undefined,
+        live: { pipeline: STANDARD_PIPELINES.worktree, drawn: false, problems: [] },
+      },
       ratesOf(always("approved")),
       RULES,
       { seed: 1, hours: 72 },
