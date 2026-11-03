@@ -111,6 +111,9 @@ const EXIT_SPACING = 30;
 /** How deep the row of labels is that sits under a layer when the flow runs down. */
 const LABEL_ROW = 20;
 const LABEL_MAX = 84;
+/** The '+' an editor draws on a wire, and the room it needs beside a label. */
+const PLUS = 14;
+const PLUS_ROOM = PLUS + 4;
 
 /** How big a block draws before its exits widen it: gates and routers are chips, the rest are cards. */
 export const sizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly h: number } => {
@@ -278,9 +281,14 @@ const lengthsOf = (
 
 const exitsOf = (belt: Belt, id: string) => belt.wires.filter((wire) => wire.from === id);
 
-/** The room an exit takes across its block: down, its label stands on the exit, so the label's width. */
+/**
+ * The room an exit takes across its block: down, its label stands on the exit
+ * with its "+" beside it, so their widths.
+ */
 const slotOf = (wire: Wire, down: boolean) =>
-  down ? Math.max(EXIT_SPACING, labelWidth(wire.label) + 12) : EXIT_SPACING;
+  down
+    ? Math.max(EXIT_SPACING, labelWidth(wire.label) + 12 + (wire.label === "" ? 0 : PLUS_ROOM))
+    : EXIT_SPACING;
 
 /** A wire runs on a lane when a block stands in its own row between its two ends. */
 const onLane = (belt: Belt, cellOf: ReadonlyMap<string, Cell>, wire: Wire) => {
@@ -335,7 +343,10 @@ const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<Plac
   const points = dedupe(route.map(([a, b]) => (down ? [b, a] : [a, b])));
   if (!down) {
     const across = anchorOf(points);
-    return [{ wire, points, ...across, plus: across.anchor }];
+    // Across, a label sits above its stretch, so the "+" hangs just under it.
+    const [x, y] = across.anchor;
+    const plus: Point = wire.label === "" ? middleOfLongest(points) : [x, y + PLUS / 2 + 2];
+    return [{ wire, points, ...across, plus }];
   }
   if (lane) {
     const middle = (a1 + a2) / 2;
@@ -356,8 +367,8 @@ const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<Plac
       wire,
       points,
       anchor: [b0, row],
-      room: slotOf(wire, true) - 12,
-      plus: [half === 0 ? b0 : b0 + half + 10, row],
+      room: labelWidth(wire.label),
+      plus: [half === 0 ? b0 : b0 + half + 4 + PLUS / 2, row],
     },
   ];
 };
@@ -425,6 +436,17 @@ const anchorOf = (
     anchor: [(best.from[0] + best.to[0]) / 2, best.from[1]],
     room: best.to[0] - best.from[0],
   };
+};
+
+/** The middle of a route's longest segment, where a "+" has the most room. */
+const middleOfLongest = (points: ReadonlyArray<Point>): Point => {
+  const length = (i: number) =>
+    Math.abs(points[i + 1]![0] - points[i]![0]) + Math.abs(points[i + 1]![1] - points[i]![1]);
+  const longest = points
+    .slice(1)
+    .reduce((best, _point, i) => (length(i) > length(best) ? i : best), 0);
+  const [a, b] = [points[longest]!, points[longest + 1] ?? points[longest]!];
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 };
 
 /** The room between a block and the inspector floating beside it. */

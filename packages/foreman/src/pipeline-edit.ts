@@ -3,7 +3,7 @@
 // this module names each one, so herdr-web's editor and `foreman pipeline
 // edit` decode the same changes.
 import { Schema as S } from "effect";
-import { LANDINGS, type Pipeline } from "./pipeline.ts";
+import { AgentNode, LANDINGS, type Pipeline } from "./pipeline.ts";
 import {
   addRoute,
   addSource,
@@ -34,7 +34,7 @@ export const BlockSetting = S.Union([
   S.Struct({
     role: S.Literals(["author", "review"]),
     model: S.String,
-    slots: S.optional(S.Int),
+    slots: AgentNode.fields.slots,
   }),
   S.Struct({ route: S.Int, when: S.String }),
   S.Struct({ command: S.String }),

@@ -333,6 +333,21 @@ describe("drawing a draft", () => {
     expect(existsSync(drafts)).toBe(false);
   });
 
+  test("an agent setting takes the slots the block itself allows", async () => {
+    const setting = (slots: number) =>
+      change({
+        _tag: "Configure",
+        id: "author",
+        setting: { role: "author", model: "ladder", slots },
+      });
+    expect(await refusal("edit", "amux", setting(0))).toMatch(/is no change/);
+    expect(existsSync(drafts)).toBe(false);
+    await run("edit", "amux", setting(2));
+    expect(
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "author").slots,
+    ).toBe(2);
+  });
+
   test("discard drops the draft", async () => {
     await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
     await run("discard", "amux");

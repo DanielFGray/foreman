@@ -68,9 +68,10 @@ export class Editor {
   plus(wire, index, t) {
     const z = this.pane.zoom;
     const picked = this.inserting !== null && this.inserting.from === wire.from && this.inserting.port === wire.port;
-    return div().id(`plus-${index}`).absolute().left(wire.plus[0] * z - 7).top(wire.plus[1] * z - 7).size(14)
-      .rounded(7).border(1).border_color(t.accent).bg(picked ? t.accent : t.surface)
-      .text_size(10).text_color(picked ? t.canvas : t.accent).flex().items_center().justify_center()
+    // 14px at 100%, the size foreman's layout leaves room for.
+    return div().id(`plus-${index}`).absolute().left((wire.plus[0] - 7) * z).top((wire.plus[1] - 7) * z).size(14 * z)
+      .rounded(7 * z).border(1).border_color(t.accent).bg(picked ? t.accent : t.surface)
+      .text_size(10 * z).text_color(picked ? t.canvas : t.accent).flex().items_center().justify_center()
       .hover((s) => s.bg(t.hover))
       .on_click((_event, cx) => { this.inserting = picked ? null : wire; this.rejoining = null; cx.notify(); })
       .child("+");

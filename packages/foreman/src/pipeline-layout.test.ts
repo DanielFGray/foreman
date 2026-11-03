@@ -1,7 +1,14 @@
 import { STANDARD_PIPELINE } from "./pipeline.ts";
 import { addRoute, beltOf, insertOn } from "./pipeline-belt.ts";
 import { describe, expect, it } from "bun:test";
-import { besideOf, type Box, drawingOf, layoutOf, type Point } from "./pipeline-layout.ts";
+import {
+  besideOf,
+  type Box,
+  drawingOf,
+  labelWidth,
+  layoutOf,
+  type Point,
+} from "./pipeline-layout.ts";
 
 const branched = () => {
   const withRoute = addRoute(STANDARD_PIPELINE, "retry", "size>=3");
@@ -45,6 +52,44 @@ describe("layoutOf", () => {
         wires.map(({ plus }) => plus.join(",")),
       ])
         expect(new Set(at).size).toBe(at.length);
+    });
+
+    // The boxes the pipeline pane draws: a label is a 14px row centred on
+    // its anchor when the flow runs down, and sits above the line across;
+    // a "+" is 14px square on its point.
+    it(`${name}, ${flow}: no "+" covers a label, another "+" or a block`, () => {
+      const layout = layoutOf(beltOf(pipeline), flow);
+      const square = ([x, y]: Point, size: number): Box => ({
+        x: x - size / 2,
+        y: y - size / 2,
+        w: size,
+        h: size,
+      });
+      const labels = layout.wires
+        .filter(({ wire }) => wire.label !== "")
+        .map(({ wire, anchor: [x, y] }) => {
+          const w = labelWidth(wire.label);
+          return {
+            name: `label ${wire.label}`,
+            box: {
+              x: x - w / 2,
+              y: flow === "down" ? y - 7 : y - 14,
+              w,
+              h: flow === "down" ? 14 : 13,
+            },
+          };
+        });
+      const pluses = layout.wires.map(({ wire, plus }) => ({
+        name: `+ ${wire.from}/${wire.port}`,
+        box: square(plus, 14),
+      }));
+      const blocks = [...layout.boxes].map(([id, box]) => ({ name: id, box }));
+      const overlaps = (a: Box, b: Box) =>
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+      for (const plus of pluses)
+        for (const other of [...labels, ...pluses, ...blocks])
+          if (other !== plus)
+            expect(overlaps(plus.box, other.box), `${plus.name} covers ${other.name}`).toBe(false);
     });
   }
 
