@@ -1,4 +1,4 @@
-# Issue trackers: prog, GitHub issues and Linear; landing by pull request
+| `lookup(id)` | the snapshot, else `issues` filtered by team key and number; no node answers `None`. |# Issue trackers: prog, GitHub issues and Linear; landing by pull request
 
 Status: design, not built. The operator answered the open questions on
 2026-11-03; each answer is stated below as `Decision (operator)`. A choice
@@ -534,8 +534,10 @@ each of its statuses by type, then by a name fragment, team states first
 | `canceled` | type `canceled` |
 
 Reads map every state by its type, so a state with any name reads right.
-Writes pick the state by the table. A team with no state of a needed type
-reads as unreachable with that reason, because foreman cannot make that move.
+Writes pick the state by the table. foreman moves issues only to the
+`unstarted`, `started` and `completed` types, so a team with no state of one
+of those reads as unreachable with that reason, because foreman cannot make
+that move. A team with no `triage` or `backlog` state can still be worked.
 lalph falls back to a state of another type (`Linear.ts:228`); foreman does
 not, because a move to the wrong state type is a status the operator did not
 mean.
@@ -560,8 +562,11 @@ Two of lalph's gaps are fixed:
   (`Linear.ts:820-826`). foreman reads every issue of the project whose state
   type is not `completed` or `canceled`, with no assignee filter (a claim by
   another person is read from the assignee, as in section 1), and adds the
-  issues foreman holds runs on by id, as `issue(id:)` aliases in the same
-  query, so an issue closed on Linear reads as closed.
+  issues a `lookup` found outside that list, by Linear's issue id, with an
+  `issues(filter: { id: { in: [...] } })` field in the same query, so an
+  issue closed on Linear reads as closed. A filter, not one `issue(id:)`
+  alias per issue, because Linear answers `issue(id:)` for an issue it does
+  not have with an error that fails the whole query.
 
 ### Method by method
 

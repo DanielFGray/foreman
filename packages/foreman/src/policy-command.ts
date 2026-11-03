@@ -15,6 +15,9 @@ import {
   updatePolicy,
   type Policy as PolicyType,
 } from "./policy.ts";
+import { Linear } from "./linear.ts";
+import { checkPlace } from "./linear-tracker.ts";
+import { TrackerError } from "./tracker.ts";
 
 /**
  * `foreman policy`: read and change what the fleet may do by itself.
@@ -81,11 +84,34 @@ const clear = Command.make("clear", { project: Flag.String("project") }, ({ proj
 
 const tracker = Command.make(
   "tracker",
-  { tracker: Argument.Literals("tracker", TRACKERS), project: Flag.String("project") },
-  (args) => write((policy) => setProjectTracker(policy, args.project, args.tracker)),
+  {
+    tracker: Argument.Literals("tracker", TRACKERS),
+    project: Flag.String("project"),
+    team: Flag.String("team").pipe(
+      Flag.withDescription("The Linear team key, for example ENG; needed with linear"),
+      Flag.optional,
+    ),
+    linearProject: Flag.String("linear-project").pipe(
+      Flag.withDescription("The Linear project name; needed with linear"),
+      Flag.optional,
+    ),
+  },
+  (args) =>
+    Effect.gen(function* () {
+      if (args.tracker !== "linear")
+        return yield* write((policy) => setProjectTracker(policy, args.project, args.tracker));
+      if (Option.isNone(args.team) || Option.isNone(args.linearProject))
+        return yield* new TrackerError({
+          command: "policy tracker linear",
+          detail: "a Linear project needs --team <key> and --linear-project <name>",
+        });
+      const place = { team: args.team.value, project: args.linearProject.value };
+      yield* checkPlace(place).pipe(Effect.provide(Linear.layer));
+      return yield* write((policy) => setProjectTracker(policy, args.project, "linear", place));
+    }),
 ).pipe(
   Command.withDescription(
-    "Choose where a project's tasks live: prog (the default), a GitHub repo's issues, or Linear",
+    "Choose where a project's tasks live: prog (the default), a GitHub repo's issues, or a Linear project of a Linear team, checked against Linear",
   ),
 );
 
