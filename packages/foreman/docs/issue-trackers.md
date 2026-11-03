@@ -466,13 +466,21 @@ Linear source (`~/sources/lalph/src/Linear.ts`, `src/Linear/TokenManager.ts`,
 lalph's `TokenManager` does: a local callback server, a SHA-256 challenge, the
 `read,write` scope, and a code exchange at `https://api.linear.app/oauth/token`
 (`~/sources/lalph/src/Linear/TokenManager.ts:86-149`). foreman registers its
-own Linear OAuth application; lalph's client id is lalph's.
+own Linear OAuth application; lalph's client id is lalph's. The operator
+registers it at `https://linear.app/settings/api/applications/new` with the
+callback URL `http://localhost:34338/callback`, and sets
+`FOREMAN_LINEAR_CLIENT_ID` to its client id. With neither that nor
+`LINEAR_API_KEY` set, `foreman linear login` fails with these steps.
 
 - The token, refresh token and expiry are written to
   `~/.config/foreman/linear-token.json`, mode `0600`.
 - A token is refreshed 30 minutes before it expires, with the
-  `refresh_token` grant (`TokenManager.ts:151-164`, `192-198`). A failed
-  refresh removes the token.
+  `refresh_token` grant (`TokenManager.ts:151-164`, `192-198`). The refresh
+  sends the client id too, so it also needs `FOREMAN_LINEAR_CLIENT_ID`.
+- Only a 4xx answer to the refresh (for example `invalid_grant`) removes the
+  token: Linear refused it. A network error, a 5xx or no answer in 30 seconds
+  keeps the token file and fails the read, so the project reads unreachable
+  and the next tick tries again.
 - Every token read and refresh runs under one lock, as lalph's
   `Semaphore.withPermit` does (`TokenManager.ts:64-84`), so two calls in one
   tick do not refresh twice.
