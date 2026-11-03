@@ -38,6 +38,8 @@ import {
 import { factsOf } from "./pipeline-facts.ts";
 import { traceOf, type TraceEvent } from "./pipeline-trace.ts";
 import { scratchStore } from "./scratch-store.ts";
+import { fakeGh } from "./github-fixture.ts";
+import type { GhOptions, GhResult } from "./github.ts";
 
 const now = new Date();
 
@@ -133,6 +135,30 @@ class World {
   treeDirty = false;
   /** The commit the checkout's HEAD names. */
   headCommit = "h0";
+  /** Each push a landing made: the branch and the commit. */
+  readonly pushed: Array<[string, string]> = [];
+  /** The head of each branch on the remote, which a fetch takes. */
+  readonly remoteHeads = new Map<string, string>();
+  /** The `ancestor..descendant` pairs git would say descend. */
+  readonly ancestors = new Set<string>();
+  /** Every `gh` call the dispatcher made, with its options at the same index. */
+  readonly ghCalls: Array<ReadonlyArray<string>> = [];
+  readonly ghOptions: Array<GhOptions> = [];
+  /** How `gh` answers. With no GitHub in the world, every call fails. */
+  answerGh: (args: ReadonlyArray<string>) => GhResult = () => ({
+    exitCode: 1,
+    stdout: "",
+    stderr: "no GitHub in this world",
+  });
+
+  /** A `Github` over this world's `gh`. */
+  get github() {
+    return fakeGh((args, options) => {
+      this.ghCalls.push(args);
+      this.ghOptions.push(options);
+      return this.answerGh(args);
+    }).layer;
+  }
   /** Every prompt an agent was started with, in order. */
   readonly prompts: string[] = [];
   /** The directory of every workspace `open` was asked for, in order. */
@@ -233,10 +259,19 @@ class World {
     list: () => Effect.die("unused"),
     dependencies: () => Effect.die("unused"),
     ready: () => Effect.die("unused"),
-    logs: () => Effect.die("unused"),
+    logs: (id) =>
+      Effect.sync(() =>
+        this.logs
+          .filter(([task]) => task === id)
+          .map(([, message]) => ({ message, createdAt: now })),
+      ),
     add: () => Effect.die("unused"),
     reopen: () => Effect.die("unused"),
     complete: () => Effect.die("unused"),
+    cancel: (id) =>
+      this.write("tracker.cancel", () =>
+        this.update(id, (task) => ({ ...task, status: "canceled" })),
+      ),
     label: () => Effect.die("unused"),
     unlabel: () => Effect.die("unused"),
     relabel: () => Effect.die("unused"),
@@ -407,6 +442,32 @@ class World {
     restoreBranch: () => Effect.die("unused"),
     checkoutBranch: () => Effect.die("unused"),
     leaveBranch: () => Effect.die("unused"),
+    push: (_directory: string, commit: string, branch: string) =>
+      this.write("repository.push", () => void this.pushed.push([branch, commit])),
+    // The remote head named by `remoteHeads` comes into the branch when it
+    // descends from it, which `ancestors` says.
+    fetchBranch: (_directory: string, branch: string) =>
+      this.write("repository.fetchBranch", () => {
+        const head = this.remoteHeads.get(branch);
+        const local = this.branches.get(branch);
+        if (
+          head === undefined ||
+          local === undefined ||
+          !this.ancestors.has(`${local.tip}..${head}`)
+        ) {
+          return "Diverged" as const;
+        }
+        this.branches.set(branch, { ...local, tip: head });
+        return "Updated" as const;
+      }),
+    descends: (_directory: string, ancestor: string, descendant: string) =>
+      Effect.sync(() => this.ancestors.has(`${ancestor}..${descendant}`)),
+    dropBranch: (_directory: string, branch: string) =>
+      this.write("repository.dropBranch", () => {
+        this.removed.push(branch);
+        this.branches.delete(branch);
+      }),
+    trunkBranch: () => Effect.succeed("main"),
   };
 
   /**
@@ -542,6 +603,7 @@ const layerFor = (world: World) =>
       Layer.succeed(Records, world.records),
       Layer.succeed(Tracker, world.tracker),
       Layer.succeed(Repository, world.repository),
+      world.github,
       // Every rung in the test ladder names a bare harness, so no provider is
       // derivable and the gate has nothing to ask about — which is the point:
       // a ladder foreman cannot read quota for dispatches exactly as before.
@@ -1277,6 +1339,7 @@ describe("quota probing", () => {
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
+        world.github,
         quota,
         prompts,
         BunServices.layer,
@@ -1356,6 +1419,7 @@ describe("a spent account and the reviewer above it", () => {
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
+        world.github,
         quotaSpending(spent),
         prompts,
         BunServices.layer,
@@ -1686,6 +1750,7 @@ describe("a usage wall", () => {
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
+        world.github,
         Layer.succeed(Quota, {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
@@ -2325,6 +2390,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
+        world.github,
         Layer.succeed(Quota, {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
@@ -2585,6 +2651,7 @@ describe("a drawn pipeline", () => {
               Layer.succeed(Records, world.records),
               Layer.succeed(Tracker, world.tracker),
               Layer.succeed(Repository, world.repository),
+              world.github,
               Quota.Default,
               prompts,
               BunServices.layer,
@@ -2781,6 +2848,7 @@ describe("foreman pipeline trace", () => {
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
         Layer.succeed(Repository, world.repository),
+        world.github,
         Layer.succeed(Quota, {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
@@ -2970,5 +3038,375 @@ describe("foreman pipeline trace", () => {
     );
     expect(trace.steps.at(-1)?.parked).toContain("stopped without naming an exit");
     expect(trace.steps.at(-1)?.offers).toEqual([]);
+  });
+});
+
+describe("a pull-request landing", () => {
+  const drawn = join(policies, "pipelines.json");
+  // The standard worktree pipeline, landing by pull request, with a publish
+  // gate between the review and the land gate.
+  const PULL_REQUEST: Pipeline = {
+    nodes: [
+      ...STANDARD_PIPELINES.worktree.nodes.map((node): PipelineNode =>
+        node.kind === "land"
+          ? { ...node, how: "pull-request" }
+          : node.kind === "agent" && node.role === "review"
+            ? {
+                ...node,
+                exits: node.exits.map((exit) =>
+                  exit.to === "land-gate" ? { ...exit, to: "publish-gate" } : exit,
+                ),
+              }
+            : node,
+      ),
+      { kind: "gate", id: "publish-gate", step: "publish", next: "land-gate" },
+    ],
+  };
+  beforeEach(() =>
+    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: PULL_REQUEST } })),
+  );
+
+  const steps = (modes: { publish: string; land: string }, extra: object = {}) =>
+    usePolicy({
+      slots: 1,
+      default: { author: "off", climb: "off", review: "off", ...modes },
+      ...extra,
+    });
+
+  interface Pull {
+    readonly number: number;
+    readonly state: "OPEN" | "CLOSED" | "MERGED";
+    readonly headRefOid: string;
+    readonly mergeStateStatus: string;
+    readonly reviews: ReadonlyArray<{ readonly commit: { readonly oid: string } }>;
+  }
+  const pull = (overrides: Partial<Pull> = {}): Pull => ({
+    number: 7,
+    state: "OPEN",
+    headRefOid: "c1",
+    mergeStateStatus: "CLEAN",
+    reviews: [],
+    ...overrides,
+  });
+
+  /**
+   * A task approved on c1, whose branch the world holds at c1, over a GitHub
+   * that holds `pulls` for its branch and answers `checks` for any PR. A
+   * `pr create` fails while `createFails` is set.
+   */
+  const approvedOn = (
+    pulls: Array<Pull>,
+    checks: ReadonlyArray<{ name: string; bucket: string }> = [{ name: "ci", bucket: "pass" }],
+  ) => {
+    const task = item("ts-pr", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(task);
+    world.branches.set("foreman/ts-pr", {
+      branch: "foreman/ts-pr",
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    const github = { pulls, createFails: false };
+    world.answerGh = (args) => {
+      const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: "" });
+      const [noun, verb] = args;
+      if (noun === "repo") return ok("o/r\n");
+      if (noun !== "pr") return { exitCode: 1, stdout: "", stderr: `unexpected gh ${noun}` };
+      switch (verb) {
+        case "list":
+          return ok(JSON.stringify(github.pulls));
+        case "checks":
+          return checks.length === 0
+            ? {
+                exitCode: 1,
+                stdout: "",
+                stderr: "no required checks reported on the 'foreman/ts-pr' branch",
+              }
+            : ok(JSON.stringify(checks));
+        case "create":
+          if (github.createFails) return { exitCode: 1, stdout: "", stderr: "HTTP 502" };
+          github.pulls.push(pull());
+          return ok("https://github.com/o/r/pull/7\n");
+        default:
+          return ok("");
+      }
+    };
+    return { task, world, github };
+  };
+  const verbs = (world: World) =>
+    world.ghCalls.filter(([noun]) => noun === "pr").map(([, verb]) => verb);
+
+  test("publish pushes the approved commit and opens a pull request", async () => {
+    steps({ publish: "on", land: "off" });
+    const { world } = approvedOn([]);
+
+    await tick(world);
+
+    expect(world.pushed).toEqual([["foreman/ts-pr", "c1"]]);
+    const create = world.ghCalls.find(([noun, verb]) => noun === "pr" && verb === "create")!;
+    expect(create).toEqual(expect.arrayContaining(["--head", "foreman/ts-pr", "--base", "main"]));
+    expect(world.merged).toEqual([]);
+    expect(world.tasks.get("ts-pr")?.status).toBe("in_progress");
+  });
+
+  test("a publish stopped after its push pushes again and opens one pull request", async () => {
+    steps({ publish: "on", land: "off" });
+    const { world, github } = approvedOn([]);
+    github.createFails = true;
+
+    await tick(world);
+    expect(world.pushed).toEqual([["foreman/ts-pr", "c1"]]);
+    expect(github.pulls).toEqual([]);
+
+    github.createFails = false;
+    await tick(world);
+    await tick(world);
+
+    expect(world.pushed).toEqual([
+      ["foreman/ts-pr", "c1"],
+      ["foreman/ts-pr", "c1"],
+    ]);
+    expect(github.pulls).toHaveLength(1);
+    expect(verbs(world).filter((verb) => verb === "create")).toHaveLength(2);
+  });
+
+  test("an open pull request behind the approved commit takes the push and no new PR", async () => {
+    steps({ publish: "on", land: "off" });
+    const { world } = approvedOn([pull({ headRefOid: "c0" })]);
+    world.ancestors.add("c0..c1");
+
+    await tick(world);
+
+    expect(world.pushed).toEqual([["foreman/ts-pr", "c1"]]);
+    expect(verbs(world)).not.toContain("create");
+  });
+
+  test("publish off pushes nothing; publish ask asks for it", async () => {
+    steps({ publish: "off", land: "on" });
+    const { world } = approvedOn([]);
+    await tick(world);
+    expect(world.pushed).toEqual([]);
+
+    steps({ publish: "ask", land: "on" });
+    expect(await asksAfter(world)).toEqual([{ task: "ts-pr", step: "publish", rung: "cheap" }]);
+    expect(world.pushed).toEqual([]);
+  });
+
+  test("land on posts a comment review and merges at the approved commit", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull()]);
+
+    await tick(world);
+
+    const review = world.ghCalls.find(([, verb]) => verb === "review")!;
+    expect(review).toContain("--comment");
+    const merge = world.ghCalls.find(([, verb]) => verb === "merge")!;
+    expect(merge).toEqual(expect.arrayContaining(["--merge", "--match-head-commit", "c1"]));
+    // GitHub merges; the task completes on the reading that says so.
+    expect(world.tasks.get("ts-pr")?.status).toBe("in_progress");
+  });
+
+  test("a review already posted on the approved commit is not posted again", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull({ reviews: [{ commit: { oid: "c1" } }] })]);
+
+    await tick(world);
+
+    expect(verbs(world)).not.toContain("review");
+    expect(verbs(world)).toContain("merge");
+  });
+
+  test("the approve kind posts an approval with the token its variable names", async () => {
+    process.env["FOREMAN_TEST_REVIEW_TOKEN"] = "secret";
+    steps(
+      { publish: "on", land: "on" },
+      {
+        projects: {
+          test: { pullRequest: { review: "approve", reviewTokenEnv: "FOREMAN_TEST_REVIEW_TOKEN" } },
+        },
+      },
+    );
+    const { world } = approvedOn([pull()]);
+
+    await tick(world);
+    delete process.env["FOREMAN_TEST_REVIEW_TOKEN"];
+
+    const at = world.ghCalls.findIndex(([, verb]) => verb === "review");
+    expect(world.ghCalls[at]).toContain("--approve");
+    expect(world.ghOptions[at]?.env).toEqual({ GH_TOKEN: "secret" });
+  });
+
+  test("the approve kind with its variable unset reads as unreachable and takes no step", async () => {
+    steps(
+      { publish: "on", land: "on" },
+      {
+        projects: {
+          test: { pullRequest: { review: "approve", reviewTokenEnv: "FOREMAN_TEST_UNSET" } },
+        },
+      },
+    );
+    const { world } = approvedOn([pull()]);
+
+    await tick(world);
+
+    expect(verbs(world)).toEqual([]);
+  });
+
+  test("land ask posts the review, asks, and merges nothing until approved", async () => {
+    steps({ publish: "on", land: "ask" });
+    const { world } = approvedOn([pull()]);
+
+    expect(await asksAfter(world)).toEqual([{ task: "ts-pr", step: "land", rung: "cheap" }]);
+    expect(verbs(world)).toContain("review");
+    expect(verbs(world)).not.toContain("merge");
+
+    steps(
+      { publish: "on", land: "ask" },
+      { grants: [{ scope: "ts-pr", steps: ["land"], remaining: 1, admitted: [] }] },
+    );
+    await tick(world);
+    expect(verbs(world)).toContain("merge");
+  });
+
+  test("land off posts the review and leaves the merge to the operator", async () => {
+    steps({ publish: "on", land: "off" });
+    const { world, github } = approvedOn([pull()]);
+
+    await tick(world);
+    expect(verbs(world)).toContain("review");
+    expect(verbs(world)).not.toContain("merge");
+
+    github.pulls[0] = pull({ state: "MERGED" });
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.status).toBe("done");
+    expect(world.removed).toContain("foreman/ts-pr");
+    expect(world.closed).toContain("ts-pr");
+  });
+
+  test("required checks still pending hold the merge", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull()], [{ name: "ci", bucket: "pending" }]);
+
+    await tick(world);
+
+    expect(verbs(world)).not.toContain("merge");
+  });
+
+  test("a repo with no required checks merges on review alone, and says so", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull()], []);
+
+    await tick(world);
+
+    expect(verbs(world)).toContain("merge");
+    expect(world.logs.some(([, line]) => line.includes("merges on review alone"))).toBe(true);
+  });
+
+  test("a head that moved is fetched into the branch, which voids the approval", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull({ headRefOid: "c9" })]);
+    world.remoteHeads.set("foreman/ts-pr", "c9");
+    world.ancestors.add("c1..c9");
+
+    await tick(world);
+
+    expect(world.branches.get("foreman/ts-pr")?.tip).toBe("c9");
+    expect(verbs(world)).not.toContain("merge");
+    expect(world.pushed).toEqual([]);
+  });
+
+  test("a head rewritten past the branch parks the task", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull({ headRefOid: "c9" })]);
+    world.remoteHeads.set("foreman/ts-pr", "c9");
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.parked).toContain("was rewritten");
+  });
+
+  test("a conflict returns the task to the queue at the same rung", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull({ mergeStateStatus: "DIRTY" })]);
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.status).toBe("open");
+    expect(world.tasks.get("ts-pr")?.charges).toEqual([]);
+    expect(verbs(world)).not.toContain("merge");
+  });
+
+  test("a failed required check returns the task a rung up, with the checks in its log", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull()], [{ name: "ci", bucket: "fail" }]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-pr")!;
+    expect(task.status).toBe("open");
+    expect(failuresOf(task)).toEqual(["cheap"]);
+    expect(world.logs.some(([, line]) => line.includes("fail\tci"))).toBe(true);
+    expect(verbs(world)).not.toContain("merge");
+  });
+
+  test("a pull request closed without a merge parks the task by default", async () => {
+    steps({ publish: "on", land: "on" });
+    const { world } = approvedOn([pull({ state: "CLOSED" })]);
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.parked).toContain("closed without a merge");
+  });
+
+  test("closed: requeue returns the task to the queue with no charge", async () => {
+    steps(
+      { publish: "on", land: "on" },
+      { projects: { test: { pullRequest: { closed: "requeue" } } } },
+    );
+    const { world } = approvedOn([pull({ state: "CLOSED" })]);
+
+    await tick(world);
+
+    const task = world.tasks.get("ts-pr")!;
+    expect(task.status).toBe("open");
+    expect(task.parked).toBeUndefined();
+    expect(task.charges).toEqual([]);
+  });
+
+  test("closed: cancel cancels the task", async () => {
+    steps(
+      { publish: "on", land: "on" },
+      { projects: { test: { pullRequest: { closed: "cancel" } } } },
+    );
+    const { world } = approvedOn([pull({ state: "CLOSED" })]);
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.status).toBe("canceled");
+  });
+
+  test("a pull request closed at another commit is passed over, and publish opens a new one", async () => {
+    steps({ publish: "on", land: "off" });
+    const { world, github } = approvedOn([pull({ state: "CLOSED", headRefOid: "c0" })]);
+
+    await tick(world);
+
+    expect(world.pushed).toEqual([["foreman/ts-pr", "c1"]]);
+    expect(github.pulls).toHaveLength(2);
+  });
+
+  test("a paused project reads its pull request and writes nothing", async () => {
+    steps({ publish: "on", land: "on" }, { projects: { test: { paused: true } } });
+    const { world } = approvedOn([pull({ state: "MERGED" })]);
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-pr")?.status).toBe("in_progress");
+    expect(world.writes).toEqual([]);
   });
 });

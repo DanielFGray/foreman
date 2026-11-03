@@ -42,9 +42,27 @@ import {
   type Permit,
   type Policy,
   type Scopes,
+  pullRequestOf,
+  trackerOf,
   type Step,
   DEFAULT_POLICY,
 } from "./policy.ts";
+import {
+  createPullRequest,
+  Github,
+  mergePullRequest,
+  pullRequestsOf,
+  requiredChecksOf,
+  reviewPullRequest,
+} from "./github.ts";
+import { checkoutRepo } from "./github-tracker.ts";
+import {
+  closingLine,
+  MERGEABLE,
+  type PullRequestReading,
+  readingOf,
+  stepOf as pullRequestStep,
+} from "./pull-request-landing.ts";
 import { queueFrom } from "./queue.ts";
 import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
@@ -156,6 +174,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const prompts = yield* Prompts;
     const repository = yield* Repository;
     const quota = yield* Quota;
+    // The GitHub repo of each project, read from its checkout and never stored.
+    const repoOf = yield* checkoutRepo(fleet, repository);
+    // The pull-request calls run on the `Github` the trackers share.
+    const github = yield* Github;
 
     const runAttributes = (
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
@@ -692,6 +714,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue], checkoutHolds);
 
+      // The pull request of each task at a pull-request land block. It is the
+      // world's record of that landing, so it is read like git, every reading.
+      const pullRequests = new Map(
+        yield* Effect.forEach([...claimed, ...reviewing], (task) => {
+          const placement = placementIn(pipelines, task);
+          const project = projects.find((candidate) => candidate.name === task.project);
+          return placement?._tag === "At" &&
+            placement.node.kind === "land" &&
+            placement.node.how === "pull-request" &&
+            project !== undefined
+            ? readPullRequest(task, project, policy).pipe(
+                Effect.map((reading) => [[task.id, reading] as const]),
+              )
+            : Effect.succeed([]);
+        }).pipe(Effect.map((entries) => entries.flat())),
+      );
+
       return {
         projects,
         open,
@@ -711,6 +750,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         scopes,
         branches,
         dirty,
+        pullRequests,
       } as const;
     });
 
@@ -746,6 +786,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         scopes,
         branches,
         dirty,
+        pullRequests,
       } = observation;
 
       const tasks = new Map(
@@ -909,6 +950,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           pipelines,
           placed,
           dirty,
+          pullRequests,
         },
         failedIds,
         new Set(stale.map((row) => row.task.id)),
@@ -1191,8 +1233,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // plan holds only the landings the policy permits.
       yield* Effect.forEach(
         current.lands,
-        ({ task, worker, permits, block }) =>
-          land(task, worker, block).pipe(Effect.tap(() => admitted(permits, task.id))),
+        ({ task, worker, permits, block, pullRequest }) =>
+          land(task, worker, block, pullRequest, current.policy).pipe(
+            Effect.tap(() => admitted(permits, task.id)),
+          ),
         { discard: true },
       );
 
@@ -1508,10 +1552,231 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * or author, so every branch passes the same clean-checkout and verification
      * gate.
      */
+    /**
+     * What the pull request of a task's branch says about its approved
+     * commit. A failed read is `Unreadable`, logged, and the task takes no
+     * step there this reading.
+     */
+    const readPullRequest = (task: Item, project: Project, policy: Policy) =>
+      Effect.gen(function* () {
+        const approved = routedCommit(task);
+        if (approved === undefined) {
+          return { _tag: "Unreadable", detail: "no approved commit" } as const;
+        }
+        const settings = pullRequestOf(policy, task.project);
+        if (settings.review === "approve" && reviewToken(settings.reviewTokenEnv) === undefined) {
+          return {
+            _tag: "Unreadable",
+            detail: `${project.name} posts approving reviews, but ${settings.reviewTokenEnv ?? "no reviewTokenEnv"} names no token`,
+          } as const;
+        }
+        const repo = yield* repoOf(task.project);
+        const pulls = yield* pullRequestsOf(repo, labelFor(task.id));
+        const open = pulls.find((pr) => pr.state === "OPEN" && pr.head !== approved);
+        const behind =
+          open !== undefined &&
+          (yield* repository.descends(project.directory, open.head, approved));
+        const located = readingOf(pulls, approved, () => behind);
+        if (located._tag !== "Ready") return located;
+        const checks = yield* requiredChecksOf(repo, located.pr.number);
+        return { _tag: "Open", pr: located.pr, checks } as const;
+      }).pipe(
+        Effect.provideService(Github, github),
+        Effect.catch((error) =>
+          Effect.succeed({ _tag: "Unreadable", detail: error.message } as const),
+        ),
+        Effect.tap((reading: PullRequestReading) =>
+          reading._tag === "Unreadable"
+            ? Effect.logWarning(
+                `the pull request of ${task.id} (${project.name}) is unreadable: ${reading.detail}`,
+              )
+            : Effect.void,
+        ),
+      );
+
+    /**
+     * Takes the one step a pull-request landing's reading calls for
+     * (docs/issue-trackers.md, section 3). `merge` says the land step permits
+     * the merge; every other step was gated by the plan, or takes no gate.
+     *
+     * The local proving ground does not run: the repo's required checks are
+     * the verification, and the operator's checkout is never written.
+     */
+    const landPullRequest = Effect.fn("foreman.landPullRequest")(function* (
+      task: Item,
+      worker: Worker | undefined,
+      project: Project,
+      block: LandNode,
+      { reading, merge }: PullRequestLanding,
+      policy: Policy,
+    ) {
+      const branch = labelFor(task.id);
+      const approved = routedCommit(task);
+      if (approved === undefined) return;
+      const settings = pullRequestOf(policy, task.project);
+      switch (reading._tag) {
+        case "Unreadable":
+          return;
+
+        // Push first: a publish that stopped after the push finds no PR on
+        // the next reading, pushes the same commit again (a no-op) and opens
+        // the PR then. An open PR behind the approved commit only takes the push.
+        case "Unpublished": {
+          const repo = yield* repoOf(task.project);
+          yield* repository.push(project.directory, approved, branch);
+          if (reading.open !== undefined) {
+            return yield* Effect.logInfo(`pushed ${task.id} to PR #${reading.open.number}`);
+          }
+          const closes = closingLine(task.id, trackerOf(policy, task.project));
+          const number = yield* createPullRequest(repo, {
+            head: branch,
+            base: yield* repository.trunkBranch(project.directory),
+            title: task.title,
+            body: [`foreman: ${task.id}, reviewed and approved at ${block.id}.`, closes]
+              .filter((line) => line !== undefined)
+              .join("\n\n"),
+          });
+          yield* tracker.log(task.id, `foreman: opened pull request #${number} in ${repo}.`);
+          return yield* Effect.logInfo(`opened PR #${number} for ${task.id} (${project.name})`);
+        }
+
+        // Somebody pushed to the PR. The head is now the task's tip, so the
+        // approval is void and placement sends the task to review again.
+        case "Moved": {
+          const fetched = yield* repository.fetchBranch(project.directory, branch);
+          if (fetched === "Updated") {
+            return yield* tracker.log(
+              task.id,
+              `foreman: pull request #${reading.pr.number} has a new head, ${reading.pr.head}, which the review did not read. It is fetched into ${branch} for the next review.`,
+            );
+          }
+          return yield* park({
+            task,
+            worker,
+            why: `pull request #${reading.pr.number} was rewritten: its head ${reading.pr.head} does not descend from ${branch}`,
+          });
+        }
+
+        case "Merged": {
+          yield* tracker.log(
+            task.id,
+            `foreman: pull request #${reading.pr.number} is merged, so the work is on the remote trunk.`,
+          );
+          yield* Effect.logInfo(`landed ${task.id} (${project.name}) by PR #${reading.pr.number}`);
+          yield* record(task, { _tag: "Landed" }, undefined);
+          yield* fleet.notify("Task landed", `${task.id} ${task.title}`);
+          yield* teardown(task);
+          // The commits are on the remote trunk, which the checkout has not
+          // pulled, so `remove` keeps the branch as unmerged work.
+          return yield* repository.dropBranch(project.directory, branch);
+        }
+
+        case "Closed":
+          return yield* Match.value(settings.closed).pipe(
+            Match.when("park", () =>
+              park({
+                task,
+                worker,
+                why: `pull request #${reading.pr.number} was closed without a merge`,
+              }),
+            ),
+            Match.when("requeue", () =>
+              tracker
+                .log(
+                  task.id,
+                  `foreman: pull request #${reading.pr.number} was closed without a merge. Returned to the queue at the same rung; the next publish opens a new pull request.`,
+                )
+                .pipe(Effect.andThen(record(task, { _tag: "Withdrawn" }, undefined))),
+            ),
+            Match.when("cancel", () =>
+              tracker
+                .log(
+                  task.id,
+                  `foreman: pull request #${reading.pr.number} was closed without a merge, so the task is canceled.`,
+                )
+                .pipe(Effect.andThen(tracker.cancel(task.id))),
+            ),
+            Match.exhaustive,
+          );
+
+        case "Open": {
+          const { pr, checks } = reading;
+          const repo = yield* repoOf(task.project);
+          if (pr.mergeState === "DIRTY") {
+            yield* tracker.log(
+              task.id,
+              `foreman: pull request #${pr.number} no longer merges into its base, because the trunk moved after the branch was cut. Returned to the queue at the same rung. Merge the current trunk into ${branch} and resolve the conflicts before anything else.`,
+            );
+            yield* record(task, { _tag: "Conflicted" }, undefined);
+            return yield* fleet.notify("Landing failed", `${task.id}: PR #${pr.number} conflicts`);
+          }
+          if (checks.verdict === "fail") {
+            yield* tracker.log(
+              task.id,
+              `foreman: a required check failed on pull request #${pr.number}, so it was not merged and the task is back in the queue.\n\n${checks.output}`,
+            );
+            yield* record(task, { _tag: "Broke" }, undefined);
+            return yield* fleet.notify(
+              "Landing failed",
+              `${task.id}: PR #${pr.number} check failed`,
+            );
+          }
+          // The review run's verdict goes on the PR once per approved commit.
+          if (!pr.reviewed.includes(approved)) {
+            const token = reviewToken(settings.reviewTokenEnv);
+            yield* reviewPullRequest(
+              repo,
+              pr.number,
+              settings.review === "approve" && token !== undefined
+                ? { kind: "approve", token }
+                : { kind: "comment" },
+              yield* reviewSummary(task),
+            );
+          }
+          if (!merge || checks.verdict === "pending") return;
+          if (!MERGEABLE.has(pr.mergeState)) {
+            // A review GitHub still wants clears when the operator gives it;
+            // a branch that must be brought up to date does not clear by itself.
+            if (pr.mergeState === "BEHIND") {
+              yield* Effect.logWarning(
+                `PR #${pr.number} of ${task.id} must be brought up to date with its base before it merges`,
+              );
+            }
+            return;
+          }
+          if (checks.verdict === "none") {
+            yield* tracker.log(
+              task.id,
+              `foreman: ${repo} requires no checks, so pull request #${pr.number} merges on review alone.`,
+            );
+          }
+          yield* mergePullRequest(repo, pr.number, approved);
+          return yield* Effect.logInfo(`merged PR #${pr.number} of ${task.id} (${project.name})`);
+        }
+      }
+    });
+
+    /**
+     * The verdict a reviewer left in the task's log: its latest entry that
+     * foreman did not write.
+     */
+    const reviewSummary = (task: Item) =>
+      tracker
+        .logs(task.id)
+        .pipe(
+          Effect.map(
+            (logs) =>
+              logs.findLast((entry) => !entry.message.startsWith("foreman:"))?.message ??
+              `foreman: approved at ${routedCommit(task) ?? "?"}.`,
+          ),
+        );
+
     const land = Effect.fn("foreman.land")(function* (
       task: Item,
       worker: Worker | undefined,
       block: LandNode | DoneNode,
+      pullRequest: PullRequestLanding | undefined,
+      policy: Policy,
     ) {
       yield* Effect.gen(function* () {
         const project = yield* projectFor(task.project);
@@ -1540,6 +1805,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           return yield* teardown(task);
         }
 
+        // The plan reads the PR of every pull-request landing it makes.
+        const how = block.how ?? "merge";
+        if (how === "pull-request") {
+          if (pullRequest === undefined) return;
+          return yield* landPullRequest(task, worker, project, block, pullRequest, policy).pipe(
+            Effect.provideService(Github, github),
+          );
+        }
+
         // The commit the reviewer read is the commit that lands. A tip that moved
         // since the approval voids it, and the next review reads the new one.
         const approved = routedCommit(task);
@@ -1557,7 +1831,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           project.verify,
           verifyDirectoryFor(project.name),
           `Merge ${labelFor(task.id)}: ${task.title}`,
-          block.how ?? "merge",
+          how,
         );
         // The approval is a run that names the commit it read, so a later tick
         // lands from it with no pane at all — and a project can stay dirty for hours.
@@ -2978,6 +3252,44 @@ export const planFrom = (
     // waits for its turn to end, as it does at a landing.
     if (node.kind === "check" && (held(task) || (worker && isBusy(worker)))) continue;
 
+    // A pull-request landing takes the step its PR calls for. Publish answers
+    // to the publish gates and the merge to the others, because either can be
+    // on while the other is not. The steps with one right answer take no gate,
+    // so a task the operator merged on GitHub completes with land `off`.
+    if (node.kind === "land" && node.how === "pull-request") {
+      const reading = current.pullRequests.get(task.id);
+      if (reading === undefined || reading._tag === "Unreadable") continue;
+      if (policy.paused || policy.projects[task.project]?.paused) continue;
+      const step = pullRequestStep(reading);
+      if (step === undefined) {
+        lands.push({
+          task,
+          worker,
+          permits: [],
+          block: node,
+          pullRequest: { reading, merge: false },
+        });
+        continue;
+      }
+      const gates = placement.gates
+        .filter((gate) => (gate.step === "publish") === (step === "publish"))
+        .map((gate) => ({
+          step: gate.step,
+          given: permit(policy, current.scopes, task, gate.step),
+        }));
+      const denied = gates.some(({ given }) => given._tag === "Denied");
+      const asking = denied ? undefined : gates.find(({ given }) => given._tag === "Ask");
+      if (asking !== undefined) asks.push({ task, step: asking.step, rung: lastExit(task)?.rung });
+      const merge = !denied && asking === undefined;
+      // An open PR still takes its review post, and its conflicts and failed
+      // checks still return the task, while the merge waits for the operator.
+      if (step === "publish" && !merge) continue;
+      const permits = merge ? gates.map(({ given }) => given) : [];
+      for (const given of permits) admitting(given, task.id);
+      lands.push({ task, worker, permits, block: node, pullRequest: { reading, merge } });
+      continue;
+    }
+
     // Every gate on the route must permit the step. A gate on `ask` holds the
     // task for one approval of its own step; once approved, a later reading
     // asks about the next gate.
@@ -3008,7 +3320,7 @@ export const planFrom = (
     const permits = gates.map(({ given }) => given);
     if (node.kind === "land" || node.kind === "done") {
       for (const given of permits) admitting(given, task.id);
-      lands.push({ task, worker, permits, block: node });
+      lands.push({ task, worker, permits, block: node, pullRequest: undefined });
     } else if (node.kind === "check") {
       for (const given of permits) admitting(given, task.id);
       checks.push({ task, permits, block: node });
@@ -3157,6 +3469,8 @@ export interface DispatchState {
   readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
   /** The projects whose checkout has uncommitted changes. */
   readonly dirty: ReadonlySet<string>;
+  /** What the pull request of each task at a pull-request land block reads. */
+  readonly pullRequests: ReadonlyMap<string, PullRequestReading>;
 }
 
 /** What one tick would start, land, check, and hold for the operator's approval. */
@@ -3202,6 +3516,14 @@ export interface PlannedLanding {
   readonly worker: Worker | undefined;
   readonly permits: ReadonlyArray<Permit>;
   readonly block: LandNode | DoneNode;
+  /** For a pull-request land block: what its PR reads, and whether the land step permits the merge. */
+  readonly pullRequest: PullRequestLanding | undefined;
+}
+
+/** A pull-request landing's reading, and whether its land step permits the merge. */
+export interface PullRequestLanding {
+  readonly reading: PullRequestReading;
+  readonly merge: boolean;
 }
 
 /** A check the plan runs on the task's branch tip, with the permit each gate on its route gave. */
@@ -3930,3 +4252,7 @@ const newWorkspace = (
     : workspace === "branch"
       ? project.directory
       : directoryFor(project.name, task);
+
+/** The token in the environment variable `name`, for an approving review; none when it is unset or empty. */
+const reviewToken = (name: string | undefined): string | undefined =>
+  name === undefined ? undefined : process.env[name] || undefined;

@@ -78,6 +78,8 @@ export class Tracker extends Context.Service<
     /** Puts the task back among the ready work. */
     readonly reopen: (task: string) => Effect.Effect<void, TrackerError>;
     readonly complete: (task: string) => Effect.Effect<void, TrackerError>;
+    /** Closes the task as not to be done: `canceled` in prog, closed as not planned on GitHub. */
+    readonly cancel: (task: string) => Effect.Effect<void, TrackerError>;
     readonly label: (task: string, label: string) => Effect.Effect<void, TrackerError>;
     readonly unlabel: (task: string, label: string) => Effect.Effect<void, TrackerError>;
     /** Rewrites the task's labels in one write, answering the ones it carried before. */
@@ -151,6 +153,7 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
       claim: move("start", "in_progress"),
       reopen: move("open", "open"),
       complete: move("done", "done"),
+      cancel: move("cancel", "canceled"),
       label: (task, label) => tasks.label(task, label).pipe(as(`label ${task} ${label}`)),
       unlabel: (task, label) => tasks.unlabel(task, label).pipe(as(`unlabel ${task} ${label}`)),
       relabel: (task, change) => tasks.relabel(task, change).pipe(as(`relabel ${task}`)),
@@ -180,7 +183,12 @@ export const ProjectTracker = Layer.effect(
     );
     return routeByProject({ prog, github, linear: unbuilt("linear") }, choices);
   }),
-).pipe(Layer.provide([Tasks.layerSql, Github.layer, HcFleet, Repository.Default]));
+).pipe(
+  Layer.provide([Tasks.layerSql, HcFleet, Repository.Default]),
+  // The dispatcher's pull-request calls share this `Github`, so one ETag cache
+  // serves both.
+  Layer.provideMerge(Github.layer),
+);
 
 /**
  * Routes each call to `adapters[tracker of the call's project]`.
@@ -263,6 +271,7 @@ export const routeByProject = (
     claim: byId((tracker, task) => tracker.claim(task)),
     reopen: byId((tracker, task) => tracker.reopen(task)),
     complete: byId((tracker, task) => tracker.complete(task)),
+    cancel: byId((tracker, task) => tracker.cancel(task)),
     label: byId((tracker, task, label: string) => tracker.label(task, label)),
     unlabel: byId((tracker, task, label: string) => tracker.unlabel(task, label)),
     relabel: byId(
@@ -294,6 +303,7 @@ const unbuilt = (name: TrackerName): Tracker["Service"] => {
     claim: fail,
     reopen: fail,
     complete: fail,
+    cancel: fail,
     label: fail,
     unlabel: fail,
     relabel: fail,

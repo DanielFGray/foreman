@@ -17,6 +17,7 @@ import {
   readPolicy,
   setProjectStep,
   updatePolicy,
+  pullRequestOf,
 } from "./policy.ts";
 
 const withGrants = (...grants: Policy["grants"]): Policy => ({ ...DEFAULT_POLICY, grants });
@@ -57,7 +58,7 @@ describe("modeOf", () => {
   test("a pause wins over every step and grant", () => {
     const everything: Policy = {
       ...withGrants(solo),
-      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
+      default: { author: "on", climb: "on", review: "on", publish: "off", land: "on" } as const,
     };
     expect(modeOf({ ...everything, paused: true })).toBe("paused");
   });
@@ -113,7 +114,7 @@ describe("permit", () => {
     const policy: Policy = {
       ...withGrants({ scope: "ep-1", steps: ["author"], admitted: [] }),
       paused: true,
-      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
+      default: { author: "on", climb: "on", review: "on", publish: "off", land: "on" } as const,
     };
     expect(permit(policy, scopes, task("ts-a"), "author")._tag).toBe("Denied");
     expect(permit(policy, scopes, task("ts-x"), "review")._tag).toBe("Denied");
@@ -344,5 +345,36 @@ describe("per-project settings", () => {
       S.decodeEffect(S.fromJsonString(Policy))(JSON.stringify({ slots: 2 })),
     );
     expect(decoded.projects).toEqual({});
+  });
+
+  test("a policy file that names no publish step reads it as off", async () => {
+    const decoded = await Effect.runPromise(
+      S.decodeEffect(S.fromJsonString(Policy))(
+        JSON.stringify({ default: { author: "on", climb: "on", review: "on", land: "on" } }),
+      ),
+    );
+    expect(decoded.default.publish).toBe("off");
+  });
+
+  test("pull-request settings default to a comment review and a park, and survive a clear", () => {
+    expect(pullRequestOf(DEFAULT_POLICY, "alpha")).toEqual({
+      review: "comment",
+      reviewTokenEnv: undefined,
+      closed: "park",
+    });
+    const policy: Policy = {
+      ...DEFAULT_POLICY,
+      projects: {
+        alpha: { pullRequest: { review: "approve", reviewTokenEnv: "BOT_TOKEN" }, paused: true },
+      },
+    };
+    expect(pullRequestOf(policy, "alpha")).toEqual({
+      review: "approve",
+      reviewTokenEnv: "BOT_TOKEN",
+      closed: "park",
+    });
+    expect(clearProject(policy, "alpha").projects).toEqual({
+      alpha: { pullRequest: { review: "approve", reviewTokenEnv: "BOT_TOKEN" } },
+    });
   });
 });

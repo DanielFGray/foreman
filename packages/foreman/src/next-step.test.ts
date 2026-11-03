@@ -229,7 +229,7 @@ const LANDINGS: ReadonlyArray<{
 const ASKING: Policy = {
   ...DEFAULT_POLICY,
   slots: 3,
-  default: { author: "ask", climb: "ask", review: "ask", land: "ask" },
+  default: { author: "ask", climb: "ask", review: "ask", publish: "off", land: "ask" },
 };
 
 /** Where the task stands in the standard pipeline, in words. */
@@ -278,6 +278,7 @@ const placedStep = (item: Item): string => {
     ]),
     placed: [],
     dirty: new Set<string>(),
+    pullRequests: new Map(),
   }).asks.map(({ step }) => step);
   return steps.length === 0 ? "none" : steps.join(",");
 };

@@ -62,6 +62,11 @@ export type RunEvent =
   | { readonly _tag: "Landed" }
   /** The branch would not merge because the trunk moved after it was cut. */
   | { readonly _tag: "Conflicted" }
+  /**
+   * The operator closed the task's pull request without a merge, and the
+   * project returns such a task to the queue at the same rung.
+   */
+  | { readonly _tag: "Withdrawn" }
   /** The merged branch broke the project's verification. */
   | { readonly _tag: "Broke" }
   /** The operator moves the task one rung up for its next author. */
@@ -160,6 +165,7 @@ export const stepOf = (task: Stepping, event: RunEvent, rules: StepRules): RunSt
         land: isResearch(task) ? "answered" : "committed",
       });
     case "Conflicted":
+    case "Withdrawn":
       return step(releasing({}));
     case "Climbed":
       return climb(task, rules);

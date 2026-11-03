@@ -521,9 +521,11 @@ const askRow = (ask: Ask): ColumnRow => ({
 const askDetail = ({ step, rung }: Ask): string =>
   step === "land"
     ? `reviewed by ${rung ?? "?"} and approved; approve to land it`
-    : step === "review"
-      ? `authored by ${rung ?? "?"}; approve to start the review`
-      : `approve to start the ${step}`;
+    : step === "publish"
+      ? `reviewed by ${rung ?? "?"} and approved; approve to push it and open its pull request`
+      : step === "review"
+        ? `authored by ${rung ?? "?"}; approve to start the review`
+        : `approve to start the ${step}`;
 
 const orphanRow = (worker: Worker): ColumnRow => ({
   column: "orphans",

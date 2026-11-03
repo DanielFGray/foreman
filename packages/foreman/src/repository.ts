@@ -650,6 +650,67 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       head: (directory: string) => gitOutput(directory, "rev-parse", "HEAD"),
 
       /**
+       * Pushes `commit` to `branch` on the `origin` remote. git refuses a push
+       * that would drop commits the remote branch has, so a branch somebody
+       * else pushed to fails here rather than losing their work.
+       */
+      push: (directory: string, commit: string, branch: string) =>
+        gitOutput(directory, "push", "origin", `${commit}:refs/heads/${branch}`).pipe(
+          Effect.asVoid,
+        ),
+
+      /**
+       * Takes `branch` from the `origin` remote into the local branch of the
+       * same name, where it is checked out when it is: a fetch into a branch
+       * that a worktree has out is refused, so the worktree fast-forwards
+       * instead. `Diverged` means the remote branch does not descend from the
+       * local one (it was rewritten), and nothing changed.
+       */
+      fetchBranch: (directory: string, branch: string) =>
+        Effect.gen(function* () {
+          const listed = yield* gitOutput(directory, "worktree", "list", "--porcelain");
+          const where =
+            worktreesOf(listed).find((worktree) => worktree.branch === branch)?.path ?? directory;
+          yield* gitOutput(where, "fetch", "origin", `refs/heads/${branch}`);
+          const fetched = yield* gitOutput(where, "rev-parse", "FETCH_HEAD");
+          if (!(yield* contains(where, `refs/heads/${branch}`, fetched)))
+            return "Diverged" as const;
+          const out = (yield* headBranch(where)) === branch;
+          yield* out
+            ? gitOutput(where, "merge", "--ff-only", fetched)
+            : gitOutput(where, "update-ref", `refs/heads/${branch}`, fetched);
+          return "Updated" as const;
+        }),
+
+      /** Whether `descendant` has `ancestor`. A commit git does not hold is no ancestor. */
+      descends: (directory: string, ancestor: string, descendant: string) =>
+        contains(directory, ancestor, descendant).pipe(Effect.orElseSucceed(() => false)),
+
+      /**
+       * Deletes a branch whether or not the checkout holds its commits. Only
+       * for a branch whose work landed somewhere else, such as a pull request
+       * merged on the remote: `remove` keeps any branch the checkout has not
+       * merged.
+       */
+      dropBranch: (directory: string, branch: string) =>
+        gitOutput(directory, "branch", "-D", branch).pipe(Effect.asVoid),
+
+      /**
+       * The name of the branch the checkout's work lands on, which a pull
+       * request names as its base: `trunkOf`, read as a branch name. A
+       * detached checkout has none and fails.
+       */
+      trunkBranch: (directory: string) =>
+        Effect.gen(function* () {
+          const trunk = yield* trunkOf(directory);
+          const name = trunk === "HEAD" ? yield* headBranch(directory) : trunk;
+          if (name === undefined) {
+            return yield* new RepositoryError({ directory, detail: "HEAD names no branch" });
+          }
+          return name;
+        }),
+
+      /**
        * The commit a branch points at, or nothing when the branch does not
        * exist. A reviewer reads this commit and an approval is bound to it.
        */

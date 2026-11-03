@@ -8,7 +8,7 @@ import { Match, Schema as S } from "effect"
 /** The version of foreman's published shape this page reads. */
 export const FOREMAN_VERSION = 5
 
-export const FOREMAN_STEPS = ["author", "climb", "review", "land"] as const
+export const FOREMAN_STEPS = ["author", "climb", "review", "publish", "land"] as const
 export const FOREMAN_STEP_MODES = ["on", "ask", "off"] as const
 export const ForemanStep = S.Literals(FOREMAN_STEPS)
 export type ForemanStep = typeof ForemanStep.Type
@@ -33,7 +33,7 @@ export type ForemanStepMode = typeof ForemanStepMode.Type
 export const ForemanPolicy = S.Struct({
   paused: S.Boolean,
   slots: S.Int,
-  default: S.Struct({ author: ForemanStepMode, climb: ForemanStepMode, review: ForemanStepMode, land: ForemanStepMode }),
+  default: S.Struct({ author: ForemanStepMode, climb: ForemanStepMode, review: ForemanStepMode, publish: ForemanStepMode, land: ForemanStepMode }),
   grants: S.Array(ForemanGrant),
 })
 export type ForemanPolicy = typeof ForemanPolicy.Type

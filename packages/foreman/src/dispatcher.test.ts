@@ -422,6 +422,7 @@ describe("the policy gate on dispatch", () => {
     pipelines: PROJECT_PIPELINES,
     placed: [],
     dirty: new Set<string>(),
+    pullRequests: new Map(),
     ...overrides,
   });
 
@@ -835,12 +836,13 @@ describe("the quota gate", () => {
     policy: {
       ...DEFAULT_POLICY,
       slots: 3,
-      default: { author: "on", climb: "on", review: "on", land: "on" } as const,
+      default: { author: "on", climb: "on", review: "on", publish: "off", land: "on" } as const,
     },
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: PROJECT_PIPELINES,
     placed: [],
     dirty: new Set<string>(),
+    pullRequests: new Map(),
     ...overrides,
   });
 

@@ -1,9 +1,12 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
 import {
+  CLOSED_PULL_REQUESTS,
   clearProject,
   grant,
   pauseProject,
+  PULL_REQUEST_REVIEWS,
+  setPullRequest,
   setProjectStep,
   setProjectTracker,
   Policy,
@@ -75,7 +78,7 @@ const clear = Command.make("clear", { project: Flag.String("project") }, ({ proj
   write((policy) => clearProject(policy, project)),
 ).pipe(
   Command.withDescription(
-    "Drop a project's step and pause settings, so it follows the default again; its tracker stays",
+    "Drop a project's step and pause settings, so it follows the default again; its tracker and pull-request settings stay",
   ),
 );
 
@@ -86,6 +89,44 @@ const tracker = Command.make(
 ).pipe(
   Command.withDescription(
     "Choose where a project's tasks live: prog (the default), a GitHub repo's issues, or Linear",
+  ),
+);
+
+const pullRequest = Command.make(
+  "pull-request",
+  {
+    project: Flag.String("project"),
+    review: Flag.Literals("review", PULL_REQUEST_REVIEWS).pipe(
+      Flag.withDescription(
+        "comment posts the verdict as a comment review; approve posts a real approval with a second credential",
+      ),
+      Flag.optional,
+    ),
+    tokenEnv: Flag.String("token-env").pipe(
+      Flag.withDescription(
+        "The environment variable that holds the token an approving review runs with",
+      ),
+      Flag.optional,
+    ),
+    closed: Flag.Literals("closed", CLOSED_PULL_REQUESTS).pipe(
+      Flag.withDescription("What a pull request closed without a merge does to its task"),
+      Flag.optional,
+    ),
+  },
+  (args) =>
+    write((policy) =>
+      setPullRequest(policy, args.project, {
+        ...Option.match(args.review, { onNone: () => ({}), onSome: (review) => ({ review }) }),
+        ...Option.match(args.tokenEnv, {
+          onNone: () => ({}),
+          onSome: (reviewTokenEnv) => ({ reviewTokenEnv }),
+        }),
+        ...Option.match(args.closed, { onNone: () => ({}), onSome: (closed) => ({ closed }) }),
+      }),
+    ),
+).pipe(
+  Command.withDescription(
+    "Set how a project's pull-request landings post their review and treat a PR closed without a merge",
   ),
 );
 
@@ -138,6 +179,7 @@ export const policyCommand = Command.make("policy", {}).pipe(
     show,
     pauseOrResume("pause"),
     pauseOrResume("resume"),
+    pullRequest,
     set,
     clear,
     tracker,

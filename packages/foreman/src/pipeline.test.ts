@@ -354,6 +354,65 @@ describe("validation", () => {
     expect(problemsOf(STANDARD_PIPELINES.worktree, RUNGS)).toEqual([]);
   });
 
+  describe("a pull-request land", () => {
+    // The standard worktree pipeline landing by pull request, with `gates`
+    // between its review and its land.
+    const landingBy = (gates: ReadonlyArray<"publish" | "land">): Pipeline => {
+      const ids = gates.map((step) => `${step}-gate`);
+      return {
+        nodes: [
+          ...STANDARD_PIPELINES.worktree.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
+            node.kind === "land"
+              ? [{ ...node, how: "pull-request" }]
+              : node.kind === "gate" && node.step === "land"
+                ? []
+                : node.kind === "agent" && node.role === "review"
+                  ? [
+                      {
+                        ...node,
+                        exits: node.exits.map((exit) =>
+                          exit.to === "land-gate" ? { ...exit, to: ids[0] ?? "land" } : exit,
+                        ),
+                      },
+                    ]
+                  : [node],
+          ),
+          ...gates.map((step, at) => ({
+            kind: "gate" as const,
+            id: ids[at]!,
+            step,
+            next: ids[at + 1] ?? "land",
+          })),
+        ],
+      };
+    };
+
+    test("is valid with a publish gate and a land gate after the review", () => {
+      expect(problemsOf(landingBy(["publish", "land"]), RUNGS)).toEqual([]);
+    });
+
+    test("names the gate it is missing", () => {
+      expect(problemsOf(landingBy(["land"]), RUNGS)).toContain(
+        "a route from review reaches land with no publish gate after it",
+      );
+      expect(problemsOf(landingBy(["publish"]), RUNGS)).toContain(
+        "a route from review reaches land with no land gate after it",
+      );
+    });
+
+    test("refuses a publish gate before a land that merges in the checkout", () => {
+      const pipeline = landingBy(["publish", "land"]);
+      const merging = {
+        nodes: pipeline.nodes.map((node) =>
+          node.kind === "land" ? { ...node, how: "merge" as const } : node,
+        ),
+      };
+      expect(problemsOf(merging, RUNGS)).toContain(
+        "publish-gate gates publish, but no route from it reaches a pull-request land",
+      );
+    });
+  });
+
   test("the default pipeline works in the operator's checkout on the task's branch", () => {
     expect(DEFAULT_PIPELINE).toBe(STANDARD_PIPELINES.checkout);
     const kinds = DEFAULT_PIPELINE.nodes.map((node) => node.kind);
