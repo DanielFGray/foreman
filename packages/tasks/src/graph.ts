@@ -42,6 +42,43 @@ export const dependencyMermaid = (
     nodeLabel: (n) => `${n.id} ${n.status} - ${n.title.replaceAll('"', "'")}`,
   });
 
+/**
+ * Each of `ids` mapped to its column: 0 for an item nothing in `ids` blocks,
+ * else one more than the highest column among its blockers, so every item
+ * stands right of all it waits for. An edge to an id outside `ids` is left
+ * out. In a cycle, the edge that closes it is left out, so every column is
+ * finite.
+ */
+export const columnsOf = (
+  ids: ReadonlyArray<string>,
+  edges: ReadonlyArray<Dependency>,
+): ReadonlyMap<string, number> => {
+  const known = new Set(ids);
+  const blockers = new Map<string, Array<string>>();
+  for (const { item, dependsOn } of edges) {
+    if (!known.has(item) || !known.has(dependsOn)) continue;
+    blockers.set(item, [...(blockers.get(item) ?? []), dependsOn]);
+  }
+  const columns = new Map<string, number>();
+  const visiting = new Set<string>();
+  const columnOf = (id: string): number => {
+    const found = columns.get(id);
+    if (found !== undefined) return found;
+    visiting.add(id);
+    const column = Math.max(
+      0,
+      ...(blockers.get(id) ?? [])
+        .filter((blocker) => !visiting.has(blocker))
+        .map((blocker) => columnOf(blocker) + 1),
+    );
+    visiting.delete(id);
+    columns.set(id, column);
+    return column;
+  };
+  for (const id of ids) columnOf(id);
+  return columns;
+};
+
 const node = (id: string): GraphNode => ({ id, title: "", status: "" });
 
 /** Builds the graph; an edge to a task not in `nodes` adds that task as a bare node. */

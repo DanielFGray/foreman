@@ -17,7 +17,9 @@ import { readLadder } from "./registry.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { INSERTABLE } from "./pipeline-belt.ts";
-import { policyPath, readPolicy, STEPS } from "./policy.ts";
+import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
+import { graphReport } from "./pipeline-graph.ts";
+import { Tracker } from "./tracker.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
 import { Settings, settings } from "./config.ts";
@@ -303,9 +305,51 @@ const simulate = Command.make(
   ),
 );
 
+const graph = Command.make("graph", { project, json }, ({ project, json }) =>
+  Effect.gen(function* () {
+    const tracker = yield* Tracker;
+    const records = yield* Records;
+    const items = (yield* Effect.forEach(["open", "in_progress"] as const, (status) =>
+      tracker.list({ project, status }),
+    )).flat();
+    const dependencies = yield* tracker.dependencies(project);
+    const known = new Map(items.map((item) => [item.id, item.status]));
+    for (const id of new Set(dependencies.map((edge) => edge.dependsOn))) {
+      if (known.has(id)) continue;
+      const found = yield* tracker.lookup(id);
+      if (Option.isSome(found)) known.set(id, found.value.status);
+    }
+    const { policy } = yield* readPolicy(policyPath());
+    const report = graphReport({
+      project,
+      items,
+      dependencies,
+      statusOf: (id) => known.get(id),
+      policy,
+      scopes: yield* scopesOf(policy.grants, records.lookup, records.children),
+      pipeline: (yield* livePipeline(project)).pipeline,
+    });
+    if (json) return yield* Console.log(JSON.stringify(report));
+    for (const item of report.items) {
+      const waits = item.waitsFor.length === 0 ? "" : `  waits for ${item.waitsFor.join(", ")}`;
+      const granted = item.grant === null ? "" : `  granted by ${item.grant.scope}`;
+      yield* Console.log(
+        `${item.column} ${item.id} ${item.status} ${item.title}${waits}${granted}`,
+      );
+    }
+    yield* Console.log(
+      `a grant gives: ${report.grantSteps.join(" ") || "nothing; every gated step is on"}`,
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "Print a project's open and claimed tasks and epics in columns by what they wait for, with the grant that covers each and the steps a grant gives. Writes nothing",
+  ),
+);
+
 /**
  * `foreman pipeline`. `place` reads the dispatcher's view of the world, so it
- * takes the dispatcher's services; `simulate` reads the task store; the
+ * takes the dispatcher's services; `simulate` and `graph` read the task store; the
  * others read only the pipelines file and the ladder.
  */
 export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
@@ -321,6 +365,7 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       clear,
       Command.provide(trace, settings),
       Command.provide(simulate, Layer.mergeAll(Records.layer, settings)),
+      Command.provide(graph, Records.layer),
       Command.provide(place, services),
     ]),
   );

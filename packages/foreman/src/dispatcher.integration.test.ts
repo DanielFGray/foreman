@@ -217,6 +217,7 @@ class World {
   readonly tracker: Tracker["Service"] = {
     lookup: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
+    dependencies: () => Effect.die("unused"),
     ready: () => Effect.die("unused"),
     logs: () => Effect.die("unused"),
     add: () => Effect.die("unused"),

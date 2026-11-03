@@ -37,7 +37,7 @@ import {
   grant,
   policyPath,
   readPolicy,
-  scopeOf,
+  scopesOf,
   updatePolicy,
   type Permit,
   type Policy,
@@ -622,18 +622,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           projectPipeline(drawings, project.name, rungs, instructions),
         ]),
       );
-      const scopes: Scopes = new Map(
-        yield* Effect.forEach(policy.grants, (grant) =>
-          records.lookup(grant.scope).pipe(
-            Effect.flatMap((item) =>
-              Option.isSome(item)
-                ? scopeOf([item.value], (id) => records.children(id))
-                : Effect.succeed<ReadonlySet<string>>(new Set()),
-            ),
-            Effect.map((tasks) => [grant.scope, tasks] as const),
-          ),
-        ),
-      );
+      const scopes = yield* scopesOf(policy.grants, records.lookup, records.children);
 
       // Foreman's branches, in every project. One read, three questions: which
       // branches nothing in the pipeline accounts for, whether a task handed
