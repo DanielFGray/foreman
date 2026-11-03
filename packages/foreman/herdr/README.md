@@ -100,7 +100,10 @@ ln -s ~/build/foreman/packages/foreman/herdr/foreman-pipeline ~/.config/herdr-ap
 It draws the `drawing` that `foreman pipeline show <project> --json` prints
 (`src/pipeline-layout.ts`): every box and wire route in pixels. A mod cannot
 load foreman's modules, because the mod engine has no `TextEncoder`, so the
-layout is foreman's and the pane lays nothing out. It takes `state` and
+layout is foreman's and the pane lays nothing out. The pane asks for
+`--flow down` (top to bottom) when it is taller than it is wide, and for
+`--flow across` (left to right) otherwise, and asks again when its shape
+flips. It takes `state` and
 `command` props like the panel, and `project`.
 
 ## What it does not do yet

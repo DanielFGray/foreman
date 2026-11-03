@@ -3,6 +3,8 @@
 //
 // The drawing is foreman's (`foreman pipeline show <project> --json`, its
 // `drawing`): boxes and wire routes in pixels, so this pane lays nothing out.
+// It asks for a drawing that runs down when the pane is taller than it is
+// wide, and across otherwise, and asks again when the pane's shape flips.
 // A mod cannot load foreman's own modules (they need web globals the mod
 // engine lacks), and a second copy of the layout here would drift from the
 // one herdr-web draws. Where each task stands is the dispatcher's placement in
@@ -35,7 +37,7 @@ export default class Pipeline extends View {
     this.zoom = 1; this.pan = [0, 0]; this.size = null; this.selected = null;
     // The drawing fits the pane until the operator zooms or pans it.
     this.fitted = true;
-    this.load(cx);
+    this.loadPlacements(cx);
     this.watch(cx);
   }
 
@@ -52,24 +54,25 @@ export default class Pipeline extends View {
     cx.spawn(async (cx) => {
       for (;;) {
         try { await watchFolder(`${home()}/.config/foreman`); } catch { return; }
-        this.loadDrawing(cx);
+        if (this.size !== null) this.loadDrawing(cx);
       }
     });
   }
-
-  load(cx) { this.loadDrawing(cx); this.loadPlacements(cx); }
 
   loadDrawing(cx) {
     if (this.project === null) { this.problem = "open this pane with props {project}"; cx.notify(); return; }
     cx.spawn(async (cx) => {
       const [cmd, ...rest] = this.command;
-      const result = await exec(cmd, [...rest, "pipeline", "show", this.project, "--json"]);
+      const result = await exec(cmd, [...rest, "pipeline", "show", this.project, "--json", "--flow", this.flow()]);
       if (result.code !== 0) { this.problem = result.stderr.trim() || `foreman pipeline show exited ${result.code}`; cx.notify(); return; }
       try { this.shown = JSON.parse(result.stdout); this.problem = null; if (this.fitted) this.fit(cx); }
       catch (error) { this.problem = String(error.message ?? error); }
       cx.notify();
     });
   }
+
+  // The way the drawing should run in this pane: down a column, across a row.
+  flow() { return this.size !== null && this.size.height > this.size.width ? "down" : "across"; }
 
   loadPlacements(cx) {
     cx.spawn(async (cx) => {
@@ -87,7 +90,13 @@ export default class Pipeline extends View {
   render(cx) {
     const t = theme();
     const root = v_flex().id("root").size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
-      .on_size_change((size, cx) => { this.size = size; if (this.fitted) this.fit(cx); cx.notify(); });
+      .on_size_change((size, cx) => {
+        const before = this.size === null ? null : this.flow();
+        this.size = size;
+        if (this.flow() !== before) this.loadDrawing(cx);
+        else if (this.fitted) this.fit(cx);
+        cx.notify();
+      });
     if (this.shown === null) return root.p(12).child(div().text_color(t.muted).child(this.problem ?? "reading the pipeline…"));
     const drawing = this.shown.drawing;
     const at = byBlock(this.placements);
@@ -104,7 +113,7 @@ export default class Pipeline extends View {
   header(t, at) {
     const problems = this.shown.problems ?? [];
     const placed = [...at.values()].reduce((sum, tasks) => sum + tasks.length, 0);
-    return h_flex().px(10).py(6).gap(10).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+    return h_flex().flex_wrap().px(10).py(6).gap_x(10).gap_y(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().font_semibold().child(this.project))
       .child(div().text_color(t.muted).child(this.shown.drawn ? "its own pipeline" : "the standard pipeline"))
       .child(div().text_color(t.muted).child(`${placed} task${placed === 1 ? "" : "s"} placed`))
@@ -185,7 +194,9 @@ const byBlock = (placements) => {
   return at;
 };
 
-// Every wire as one stroked path over the whole drawing, with its label at its anchor.
+// Every wire as one stroked path over the whole drawing, with its label at its
+// anchor. Across, a label sits above its level stretch. Down, it sits on its
+// line as a tag, so the line reads as passing behind it.
 const wiresLayer = (drawing, z, t) => {
   const layer = div().absolute().left(0).top(0).size_full();
   const paths = drawing.wires.map((wire) => {
@@ -194,9 +205,12 @@ const wiresLayer = (drawing, z, t) => {
     for (const [x, y] of rest) path = path.line_to(x * z, y * z);
     return window.paint_path(path.build(), t.border).absolute().left(0).top(0).size_full();
   });
+  const down = drawing.flow === "down";
   const labels = drawing.wires.filter((wire) => wire.label !== "").map((wire) =>
-    div().absolute().left(wire.anchor[0] * z - 40 * z).top(wire.anchor[1] * z - 14 * z).w(80 * z)
-      .text_size(10 * z).text_color(t.muted).flex().justify_center().child(wire.label));
+    div().absolute().left(wire.anchor[0] * z - 50 * z).top(wire.anchor[1] * z - (down ? 7 : 14) * z).w(100 * z)
+      .flex().justify_center()
+      .child(div().text_size(10 * z).text_color(t.muted).when(down, (el) => el.px(3 * z).rounded(3).bg(t.canvas))
+        .child(wire.label)));
   return layer.children([...paths, ...labels]);
 };
 

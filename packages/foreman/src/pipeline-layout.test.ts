@@ -15,12 +15,14 @@ const crosses = (a: Point, b: Point, box: Box): boolean => {
 };
 
 describe("layoutOf", () => {
-  for (const [name, pipeline] of [
-    ["standard", STANDARD_PIPELINE],
-    ["branched", branched()],
+  for (const [name, pipeline, flow] of [
+    ["standard", STANDARD_PIPELINE, "across"],
+    ["branched", branched(), "across"],
+    ["standard", STANDARD_PIPELINE, "down"],
+    ["branched", branched(), "down"],
   ] as const) {
-    it(`${name}: no wire runs through a block other than its two ends`, () => {
-      const layout = layoutOf(beltOf(pipeline));
+    it(`${name}, ${flow}: no wire runs through a block other than its two ends`, () => {
+      const layout = layoutOf(beltOf(pipeline), flow);
       for (const { wire, points } of layout.wires) {
         for (const [id, box] of layout.boxes) {
           if (id === wire.from || id === wire.to) continue;
@@ -36,8 +38,8 @@ describe("layoutOf", () => {
       }
     });
 
-    it(`${name}: no two wires put their "+" at one place`, () => {
-      const anchors = layoutOf(beltOf(pipeline)).wires.map(({ anchor }) => anchor.join(","));
+    it(`${name}, ${flow}: no two wires put their "+" at one place`, () => {
+      const anchors = layoutOf(beltOf(pipeline), flow).wires.map(({ anchor }) => anchor.join(","));
       expect(new Set(anchors).size).toBe(anchors.length);
     });
   }
@@ -45,7 +47,7 @@ describe("layoutOf", () => {
   // Eleven blocks in ten columns: the branch and worktree chips are as narrow as a land.
   // Each agent exit is a labelled wire, and the author's `already-done` label widens its gap.
   it("the standard pipeline fits in about 1400px", () => {
-    const layout = layoutOf(beltOf(STANDARD_PIPELINE));
+    const layout = layoutOf(beltOf(STANDARD_PIPELINE), "across");
     expect(layout.width).toBeLessThan(1420);
   });
 });
@@ -69,8 +71,8 @@ describe("besideOf", () => {
 describe("drawingOf", () => {
   it("draws every block once, at its layout box, and survives JSON unchanged", () => {
     const pipeline = branched();
-    const drawing = drawingOf(pipeline);
-    const layout = layoutOf(beltOf(pipeline));
+    const drawing = drawingOf(pipeline, "across");
+    const layout = layoutOf(beltOf(pipeline), "across");
     expect(drawing.blocks.map((block) => block.id).sort()).toEqual(
       pipeline.nodes.map((node) => node.id).sort(),
     );

@@ -5,6 +5,9 @@
 import type { Pipeline, PipelineNode } from "./pipeline.ts";
 import { type Belt, beltOf, type Cell, type Port, type Wire } from "./pipeline-belt.ts";
 
+/** Which way work moves through a drawing: left to right, or top to bottom. */
+export type Flow = "across" | "down";
+
 export interface Box {
   readonly x: number;
   readonly y: number;
@@ -18,7 +21,7 @@ export interface PlacedWire {
   readonly wire: Wire;
   /** The corners of the wire's route, from the block it leaves to the block it enters. */
   readonly points: ReadonlyArray<Point>;
-  /** The middle of the stretch the wire's label and "+" sit on, and that stretch's length. */
+  /** Where the wire's label and "+" sit, and how wide the label may draw there. */
   readonly anchor: Point;
   readonly room: number;
 }
@@ -40,6 +43,7 @@ export interface Layout {
  * module, such as a herdr-app mod, draws the same picture as one that can.
  */
 export interface Drawing {
+  readonly flow: Flow;
   readonly width: number;
   readonly height: number;
   readonly blocks: ReadonlyArray<{
@@ -62,9 +66,10 @@ export interface Drawing {
   }>;
 }
 
-export const drawingOf = (pipeline: Pipeline): Drawing => {
-  const layout = layoutOf(beltOf(pipeline));
+export const drawingOf = (pipeline: Pipeline, flow: Flow): Drawing => {
+  const layout = layoutOf(beltOf(pipeline), flow);
   return {
+    flow,
     width: layout.width,
     height: layout.height,
     blocks: pipeline.nodes.flatMap((node) => {
@@ -93,18 +98,18 @@ export const drawingOf = (pipeline: Pipeline): Drawing => {
 };
 
 export const PAD = 12;
-const GAP_Y = 40;
-const MIN_GAP_X = 34;
+/** The gap between two lanes, which a lane wire runs down the middle of. */
+const LANE_GAP = 40;
+const MIN_GAP = 34;
 const STAGGER = 11;
-/** The height between the exits of a block with several wires, enough for a label above each. */
+/** How far apart a block's exits leave it when a flow runs across, enough for a label above each. */
 const EXIT_SPACING = 30;
+/** How deep the row of labels is that sits under a layer when the flow runs down. */
+const LABEL_ROW = 20;
 const LABEL_MAX = 84;
 
-/** How big a block draws: gates and routers are chips, the rest are cards. */
-export const sizeOf = (
-  kind: Cell["node"]["kind"],
-  exits: number,
-): { readonly w: number; readonly h: number } => {
+/** How big a block draws before its exits widen it: gates and routers are chips, the rest are cards. */
+export const sizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly h: number } => {
   switch (kind) {
     case "source":
       return { w: 100, h: 44 };
@@ -117,11 +122,10 @@ export const sizeOf = (
       return { w: 72, h: 44 };
     case "branch":
     case "worktree":
-      return { w: 72, h: 28 };
+    case "router":
+      return { w: kind === "router" ? 88 : 72, h: 28 };
     case "gate":
       return { w: 88, h: 28 };
-    case "router":
-      return { w: 88, h: Math.max(28, EXIT_SPACING * exits) };
   }
 };
 
@@ -129,112 +133,250 @@ export const sizeOf = (
 export const labelWidth = (label: string): number =>
   label === "" ? 0 : Math.min(LABEL_MAX, Math.ceil(label.length * 5.8) + 6);
 
-export const layoutOf = (belt: Belt): Layout => {
-  const exitsOf = (id: string) => belt.wires.filter((wire) => wire.from === id);
-  const sizes = new Map(
-    belt.cells.map((cell) => [cell.node.id, sizeOf(cell.node.kind, exitsOf(cell.node.id).length)]),
-  );
-  const sizeFor = (cell: Cell) => sizes.get(cell.node.id) ?? sizeOf(cell.node.kind, 1);
+/** A box in the flow's own axes: `a` runs the way work moves, `b` runs across the lanes. */
+interface Span {
+  readonly a: number;
+  readonly b: number;
+  readonly la: number;
+  readonly lb: number;
+}
 
-  const columnWidth = Array.from({ length: belt.columns }, (_, column) =>
-    Math.max(
-      0,
-      ...belt.cells.filter((cell) => cell.column === column).map((cell) => sizeFor(cell).w),
-    ),
-  );
-  const rowHeight = Array.from({ length: belt.rows }, (_, row) =>
-    Math.max(0, ...belt.cells.filter((cell) => cell.row === row).map((cell) => sizeFor(cell).h)),
-  );
-  const rowTop: Array<number> = [];
-  rowHeight.reduce((top, height, row) => ((rowTop[row] = top), top + height + GAP_Y), PAD);
+/** A belt measured out in the flow's own axes: where each layer and lane starts and how big it is. */
+interface Grid {
+  readonly belt: Belt;
+  readonly down: boolean;
+  readonly cellOf: ReadonlyMap<string, Cell>;
+  readonly laneWires: ReadonlyArray<Wire>;
+  readonly spans: ReadonlyMap<string, Span>;
+  readonly layerStart: ReadonlyArray<number>;
+  readonly layerLength: ReadonlyArray<number>;
+  readonly gap: ReadonlyArray<number>;
+  readonly laneStart: ReadonlyArray<number>;
+  readonly laneWidth: ReadonlyArray<number>;
+  readonly laneGap: ReadonlyArray<number>;
+}
 
-  // Boxes depend on the columns' left edges, which depend on the gaps before them,
-  // which depend on the wires that leave the columns before: so go column by column.
-  const columnLeft: Array<number> = [];
-  const gap: Array<number> = [];
-  const boxes = new Map<string, Box>();
-  const boxOf = (id: string) => boxes.get(id);
-  let left = PAD;
-  for (let column = 0; column < belt.columns; column++) {
-    columnLeft[column] = left;
-    const here = belt.cells.filter((cell) => cell.column === column);
-    for (const cell of here) {
-      const { w, h } = sizeFor(cell);
-      boxes.set(cell.node.id, {
-        x: left + (columnWidth[column]! - w) / 2,
-        y: rowTop[cell.row]! + (rowHeight[cell.row]! - h) / 2,
-        w,
-        h,
-      });
-    }
-    // A return's label has the whole backward route for room. Only forward
-    // wires need label space in the gap before the next column.
-    const leaving = belt.wires.filter(
-      (wire) =>
-        here.some((cell) => cell.node.id === wire.from) &&
-        belt.cells.some((cell) => cell.node.id === wire.to && cell.column > column),
-    );
-    gap[column] = Math.max(
-      MIN_GAP_X,
-      ...leaving.map((wire) => labelWidth(wire.label) + 18 + STAGGER * (leaving.length - 1)),
-    );
-    left += columnWidth[column]! + gap[column]!;
-  }
-
-  const columnOfId = new Map(belt.cells.map((cell) => [cell.node.id, cell]));
-  const wires = belt.wires.map((wire, index): PlacedWire | undefined => {
-    const from = columnOfId.get(wire.from);
-    const to = columnOfId.get(wire.to);
-    const fromBox = boxOf(wire.from);
-    const toBox = boxOf(wire.to);
-    if (from === undefined || to === undefined || fromBox === undefined || toBox === undefined)
-      return undefined;
-    const siblings = exitsOf(wire.from);
-    const at = siblings.findIndex((other) => other.port === wire.port);
-    const y0 =
-      siblings.length === 1
-        ? fromBox.y + fromBox.h / 2
-        : fromBox.y + EXIT_SPACING / 2 + EXIT_SPACING * at;
-    const y1 = toBox.y + toBox.h / 2;
-    const out: Point = [fromBox.x + fromBox.w, y0];
-    const into: Point = [toBox.x, y1];
-    const leavingColumn = belt.wires.filter(
-      (other) => columnOfId.get(other.from)?.column === from.column,
-    );
-    const k = leavingColumn.indexOf(wire);
-    const vx1 = columnLeft[from.column + 1]! - 12 - STAGGER * (k % 4);
-    const crossesCard = belt.cells.some(
-      (cell) => cell.column > from.column && cell.column < to.column && cell.row === to.row,
-    );
-    const points: ReadonlyArray<Point> = !crossesCard
-      ? [out, [vx1, y0], [vx1, y1], into]
-      : (() => {
-          // A lane runs between two rows, where no card stands.
-          const laneY =
-            (to.row < from.row
-              ? rowTop[from.row]! - GAP_Y / 2
-              : rowTop[from.row]! + rowHeight[from.row]! + GAP_Y / 2) +
-            ((index % 3) - 1) * 5;
-          const vx2 = columnLeft[to.column]! - 12 - STAGGER * (index % 3);
-          return [out, [vx1, y0], [vx1, laneY], [vx2, laneY], [vx2, y1], into];
-        })();
-    const corners = dedupe(points);
-    return { wire, points: corners, ...anchorOf(corners) };
-  });
-
+/**
+ * Lays a belt out in the flow's own axes and turns them into x and y at the
+ * end. A belt column is a layer the work passes through, and a belt row is a
+ * lane beside the others. A layer is as long as its longest block, a lane as
+ * wide as its widest, and a block is wide enough for its exits to leave it
+ * side by side.
+ *
+ * The flows differ only where labels go, because a label's text always runs
+ * across the page. Across, a label sits above the level stretch that leaves
+ * its block, so the gap after a layer must be as long as its widest label.
+ * Down, the labels of a layer sit in one row just under it, each on its own
+ * exit, so exits stand a label's width apart; a lane wire's label sits on the
+ * lane, so the gap between two lanes must be as wide as the labels there.
+ */
+export const layoutOf = (belt: Belt, flow: Flow): Layout => {
+  const grid = gridOf(belt, flow === "down");
+  const { down, layerLength, gap, laneStart, laneWidth, laneGap } = grid;
   const trackOf = (sizes: ReadonlyArray<number>, gaps: ReadonlyArray<number>) =>
     sizes.flatMap((size, index) => (index < sizes.length - 1 ? [size, gaps[index]!] : [size]));
+  const last = belt.rows - 1;
+  const along = grid.layerStart[belt.columns - 1]! + layerLength[belt.columns - 1]! + PAD;
+  const beside = (laneStart[last] ?? PAD) + (laneWidth[last] ?? 0) + (laneGap[last] ?? 0) / 2 + PAD;
+  const alongTracks = trackOf(layerLength, gap);
+  const besideTracks = trackOf(laneWidth, laneGap);
   return {
-    width: left - gap[belt.columns - 1]! + PAD,
-    height: (rowTop[belt.rows - 1] ?? PAD) + (rowHeight[belt.rows - 1] ?? 0) + GAP_Y / 2 + PAD,
-    columnTracks: trackOf(columnWidth, gap),
-    rowTracks: trackOf(
-      rowHeight,
-      rowHeight.map(() => GAP_Y),
+    width: down ? beside : along,
+    height: down ? along : beside,
+    columnTracks: down ? besideTracks : alongTracks,
+    rowTracks: down ? alongTracks : besideTracks,
+    boxes: new Map(
+      [...grid.spans].map(([id, { a, b, la, lb }]) => [
+        id,
+        down ? { x: b, y: a, w: lb, h: la } : { x: a, y: b, w: la, h: lb },
+      ]),
     ),
-    boxes,
-    wires: wires.filter((placed): placed is PlacedWire => placed !== undefined),
+    wires: belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index)),
   };
+};
+
+const gridOf = (belt: Belt, down: boolean): Grid => {
+  const cellOf = new Map(belt.cells.map((cell) => [cell.node.id, cell]));
+  const lengths = new Map(belt.cells.map((cell) => [cell.node.id, lengthsOf(belt, cell, down)]));
+  const lengthOf = (cell: Cell) => lengths.get(cell.node.id)!;
+  const laneWires = belt.wires.filter((wire) => onLane(belt, cellOf, wire));
+
+  const layerLength = Array.from({ length: belt.columns }, (_, column) =>
+    Math.max(
+      0,
+      ...belt.cells.filter((cell) => cell.column === column).map((cell) => lengthOf(cell).la),
+    ),
+  );
+  const laneWidth = Array.from({ length: belt.rows }, (_, row) =>
+    Math.max(0, ...belt.cells.filter((cell) => cell.row === row).map((cell) => lengthOf(cell).lb)),
+  );
+  const laneGap = laneWidth.map((_, row) =>
+    Math.max(
+      LANE_GAP,
+      ...(down ? laneWires : [])
+        .filter((wire) => laneIndexOf(cellOf, wire) === row)
+        .map((wire) => labelWidth(wire.label) + 16),
+    ),
+  );
+  const gap = layerLength.map((_, column) =>
+    down ? gapDown(belt, column, laneWires) : gapAcross(belt, column, cellOf),
+  );
+  const startsOf = (sizes: ReadonlyArray<number>, gaps: ReadonlyArray<number>) =>
+    sizes.reduce<Array<number>>(
+      (starts, size, index) => [
+        ...starts,
+        index === 0 ? PAD : starts[index - 1]! + sizes[index - 1]! + gaps[index - 1]!,
+      ],
+      [],
+    );
+  const layerStart = startsOf(layerLength, gap);
+  const laneStart = startsOf(laneWidth, laneGap);
+  const spans = new Map(
+    belt.cells.map((cell): [string, Span] => {
+      const { la, lb } = lengthOf(cell);
+      return [
+        cell.node.id,
+        {
+          a: layerStart[cell.column]! + (layerLength[cell.column]! - la) / 2,
+          b: laneStart[cell.row]! + (laneWidth[cell.row]! - lb) / 2,
+          la,
+          lb,
+        },
+      ];
+    }),
+  );
+  return {
+    belt,
+    down,
+    cellOf,
+    laneWires,
+    spans,
+    layerStart,
+    layerLength,
+    gap,
+    laneStart,
+    laneWidth,
+    laneGap,
+  };
+};
+
+/** A block's lengths in the flow's axes, wide enough across for each of several exits to have its slot. */
+const lengthsOf = (
+  belt: Belt,
+  cell: Cell,
+  down: boolean,
+): { readonly la: number; readonly lb: number } => {
+  const { w, h } = sizeOf(cell.node.kind);
+  const leaving = exitsOf(belt, cell.node.id);
+  const exits = leaving.length > 1 ? leaving.reduce((sum, wire) => sum + slotOf(wire, down), 0) : 0;
+  return down ? { la: h, lb: Math.max(w, exits) } : { la: w, lb: Math.max(h, exits) };
+};
+
+const exitsOf = (belt: Belt, id: string) => belt.wires.filter((wire) => wire.from === id);
+
+/** The room an exit takes across its block: down, its label stands on the exit, so the label's width. */
+const slotOf = (wire: Wire, down: boolean) =>
+  down ? Math.max(EXIT_SPACING, labelWidth(wire.label) + 12) : EXIT_SPACING;
+
+/** A wire runs on a lane when a block stands in its own row between its two ends. */
+const onLane = (belt: Belt, cellOf: ReadonlyMap<string, Cell>, wire: Wire) => {
+  const from = cellOf.get(wire.from);
+  const to = cellOf.get(wire.to);
+  return (
+    from !== undefined &&
+    to !== undefined &&
+    belt.cells.some(
+      (cell) => cell.column > from.column && cell.column < to.column && cell.row === to.row,
+    )
+  );
+};
+
+/** The gap a lane wire runs in: the one before its row when it climbs to an earlier row, else the one after. */
+const laneIndexOf = (cellOf: ReadonlyMap<string, Cell>, wire: Wire) => {
+  const from = cellOf.get(wire.from)!;
+  return cellOf.get(wire.to)!.row < from.row ? from.row - 1 : from.row;
+};
+
+/**
+ * A wire's route from its exit to the middle of the block it enters, turning
+ * just before the next layer. A lane wire turns onto its lane there instead,
+ * and off it just before the layer it enters.
+ */
+const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<PlacedWire> => {
+  const { belt, down, cellOf, spans, layerStart, laneStart, laneWidth, laneGap } = grid;
+  const from = cellOf.get(wire.from);
+  const to = cellOf.get(wire.to);
+  const fromSpan = spans.get(wire.from);
+  const toSpan = spans.get(wire.to);
+  if (from === undefined || to === undefined || fromSpan === undefined || toSpan === undefined)
+    return [];
+  const b0 = exitOf(grid, wire, fromSpan);
+  const b1 = toSpan.b + toSpan.lb / 2;
+  const out: Point = [fromSpan.a + fromSpan.la, b0];
+  const into: Point = [toSpan.a, b1];
+  const k = belt.wires
+    .filter((other) => cellOf.get(other.from)?.column === from.column)
+    .indexOf(wire);
+  const a1 = layerStart[from.column + 1]! - 12 - STAGGER * (k % 4);
+  const a2 = layerStart[to.column]! - 12 - STAGGER * (index % 3);
+  const lane = grid.laneWires.includes(wire);
+  const laneB =
+    (to.row < from.row
+      ? laneStart[from.row]! - laneGap[from.row - 1]! / 2
+      : laneStart[from.row]! + laneWidth[from.row]! + laneGap[from.row]! / 2) +
+    ((index % 3) - 1) * 5;
+  const route: ReadonlyArray<Point> = lane
+    ? [out, [a1, b0], [a1, laneB], [a2, laneB], [a2, b1], into]
+    : [out, [a1, b0], [a1, b1], into];
+  const points = dedupe(route.map(([a, b]) => (down ? [b, a] : [a, b])));
+  if (!down) return [{ wire, points, ...anchorOf(points) }];
+  const layerEnd = layerStart[from.column]! + grid.layerLength[from.column]!;
+  return [
+    lane
+      ? {
+          wire,
+          points,
+          anchor: [laneB, (a1 + a2) / 2],
+          room: laneGap[laneIndexOf(cellOf, wire)]! - 16,
+        }
+      : { wire, points, anchor: [b0, layerEnd + LABEL_ROW / 2], room: slotOf(wire, true) - 12 },
+  ];
+};
+
+/** Where a wire leaves its block across the flow: the middle of its slot, with the slots centred on the block. */
+const exitOf = (grid: Grid, wire: Wire, span: Span): number => {
+  const siblings = exitsOf(grid.belt, wire.from);
+  const slots = siblings.map((other) => slotOf(other, grid.down));
+  const at = siblings.findIndex((other) => other.port === wire.port);
+  const sum = (sizes: ReadonlyArray<number>) => sizes.reduce((total, size) => total + size, 0);
+  return span.b + (span.lb - sum(slots)) / 2 + sum(slots.slice(0, at)) + slots[at]! / 2;
+};
+
+/** Across, the gap after a layer holds the widest label of the wires that go on to a later layer. */
+const gapAcross = (belt: Belt, column: number, cellOf: ReadonlyMap<string, Cell>): number => {
+  const leaving = belt.wires.filter(
+    (wire) =>
+      cellOf.get(wire.from)?.column === column && (cellOf.get(wire.to)?.column ?? -1) > column,
+  );
+  return Math.max(
+    MIN_GAP,
+    ...leaving.map((wire) => labelWidth(wire.label) + 18 + STAGGER * (leaving.length - 1)),
+  );
+};
+
+/**
+ * Down, the gap after a layer holds the row of labels, then the staggered
+ * turns of the wires that leave the layer and of the lane wires that enter
+ * the next, so no turn runs through a label.
+ */
+const gapDown = (belt: Belt, column: number, laneWires: ReadonlyArray<Wire>): number => {
+  const columnOf = new Map(belt.cells.map((cell) => [cell.node.id, cell.column]));
+  const leaving = belt.wires.filter((wire) => columnOf.get(wire.from) === column).length;
+  const entering = belt.wires.flatMap((wire, index) =>
+    laneWires.includes(wire) && columnOf.get(wire.to) === column + 1 ? [index % 3] : [],
+  );
+  const stagger = Math.max(Math.min(leaving - 1, 3), ...entering, 0);
+  return Math.max(MIN_GAP, LABEL_ROW + 16 + STAGGER * stagger);
 };
 
 const dedupe = (points: ReadonlyArray<Point>): ReadonlyArray<Point> =>

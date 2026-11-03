@@ -30,8 +30,17 @@ const source = Argument.String("pipeline").pipe(
 
 const show = Command.make(
   "show",
-  { project, json: Flag.Boolean("json").pipe(Flag.withDefault(false)) },
-  ({ project, json }) =>
+  {
+    project,
+    json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
+    flow: Flag.Literals("flow", ["across", "down"]).pipe(
+      Flag.withDefault("across"),
+      Flag.withDescription(
+        "Which way the JSON drawing runs: across (left to right) or down (top to bottom)",
+      ),
+    ),
+  },
+  ({ project, json, flow }) =>
     Effect.gen(function* () {
       const read = yield* readPipelines(pipelinesPath());
       if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
@@ -40,7 +49,7 @@ const show = Command.make(
       if (json) {
         return yield* Console.log(
           JSON.stringify(
-            { project, drawn, pipeline, problems, drawing: drawingOf(pipeline) },
+            { project, drawn, pipeline, problems, drawing: drawingOf(pipeline, flow) },
             null,
             2,
           ),

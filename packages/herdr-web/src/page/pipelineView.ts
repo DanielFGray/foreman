@@ -106,7 +106,7 @@ const problemsView = (problems: Option.Option<ReadonlyArray<string>>, h: HtmlBui
 const INSPECTOR_WIDTH = 300
 
 const beltView = (belt: Belt, editing: Editing, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): Html => {
-  const layout = layoutOf(belt)
+  const layout = layoutOf(belt, "across")
   return h.div(
     [h.Class("pipeline-scroll")],
     [

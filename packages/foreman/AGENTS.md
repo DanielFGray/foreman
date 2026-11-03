@@ -832,7 +832,8 @@ herdr-web's server publishes every reading to its pages and writes it to
 reads `state.json`, and reads the queue and a task's record through
 `foreman queue` and `foreman show` (`src/store-commands.ts`). The pipeline pane (`herdr/foreman-pipeline/main.js`)
 draws the `drawing` that `foreman pipeline show --json` prints, laid out by
-`src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Both act through
+`src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Its
+`--flow` is `down` in a pane taller than it is wide, else `across`. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 
