@@ -1,13 +1,16 @@
 // A pretend task's walk through a pipeline, decided by the rules the
 // dispatcher runs: each pretend event is folded with `stepOf` and `applyRow`
 // over a task held in memory, and `place` reads where it stands after each.
-// Nothing is read from or written to the store.
+// Nothing is read from or written to the store. The simulator
+// (`pipeline-simulate.ts`) moves its tasks with the same events.
+import type { Run } from "tasks";
 import { type BlockRung, rungAt } from "./agent-rung.ts";
 import { wallAccountOf } from "./harness.ts";
 import { providerOf } from "./ladder.ts";
 import {
   type AgentNode,
   type CheckNode,
+  type Exit,
   type Pipeline,
   type Placement,
   place,
@@ -107,7 +110,6 @@ export const traceOf = (
   return { steps, refused: undefined };
 };
 
-/** The rules a trace reads: a step's, with the drawing it walks. */
 /** What `foreman pipeline trace` reads: the pretend task, and the events chosen so far. */
 export interface TraceRequest {
   readonly task: PretendTask;
@@ -163,10 +165,11 @@ const stepJson = (step: TraceStep) => ({
   offers: step.offers,
 });
 
-type TraceRules = StepRules & { readonly pipeline: Pipeline };
+/** The rules a trace reads: a step's, with the drawing it walks. */
+export type TraceRules = StepRules & { readonly pipeline: Pipeline };
 
-/** A task held in memory, which always has a tip: it is made up. */
-type Pretend = Pick<
+/** A task held in memory, which always has a tip: it is made up (`tipOf`). */
+export type Pretend = Pick<
   Item,
   | "id"
   | "title"
@@ -191,8 +194,15 @@ const pretend = (task: PretendTask): Pretend => ({
   runs: [],
   charges: [],
   parked: undefined,
-  tip: "c0",
+  tip: tipOf([]),
 });
+
+/**
+ * The tip a task held in memory starts from: the commit its newest run
+ * records, else `c0`. An author's exit names a new made-up commit (`atAgent`).
+ */
+export const tipOf = (runs: ReadonlyArray<Pick<Run, "commit">>): string =>
+  runs.findLast((run) => run.commit !== undefined)?.commit ?? "c0";
 
 /**
  * The task placed, after an agent block it waits at opens its run. A parked
@@ -218,20 +228,28 @@ const dispatched = (
   }
   const rung = rungAt(rules.ladder, placement.node, task, new Set());
   if (rung._tag !== "Dispatch") return { task, placement, rung };
-  const started = folded(task, [startOf(task, placement.node, rung.rung)], rules);
+  const opened = started(task, placement.node, rung.rung, rules);
   return {
-    task: started,
-    placement: place(rules.pipeline, factsOf(started, rules.pipeline)),
+    task: opened,
+    placement: place(rules.pipeline, factsOf(opened, rules.pipeline)),
     rung,
   };
 };
 
 /** The rung of the task's open agent run, as a dispatch chose it. */
-const openRung = (task: Pretend, rules: StepRules): BlockRung | undefined => {
+export const openRung = (task: Pretend, rules: StepRules): BlockRung | undefined => {
   const name = openAgentOf(rules.pipeline, task)?.run.rung;
   const rung = rules.ladder.find((candidate) => candidate.name === name);
   return rung === undefined ? undefined : { _tag: "Dispatch", rung };
 };
+
+/** The task once a dispatch at `block` opens its run on `rung`. */
+export const started = <T extends Pretend>(
+  task: T,
+  block: AgentNode,
+  rung: StepRules["ladder"][number],
+  rules: StepRules,
+): T => folded(task, [startOf(task, block, rung)], rules);
 
 /** The event a dispatch at `block` makes: a reviewer reads the task's tip. */
 const startOf = (task: Pretend, block: AgentNode, rung: StepRules["ladder"][number]): RunEvent => {
@@ -250,12 +268,12 @@ const startOf = (task: Pretend, block: AgentNode, rung: StepRules["ladder"][numb
 };
 
 /** The task after `event` at the block it stands at, with the events settle would observe after it. */
-const afterEvent = (
-  task: Pretend,
+export const afterEvent = <T extends Pretend>(
+  task: T,
   placement: Placement,
   event: TraceEvent,
   rules: TraceRules,
-): Pretend => {
+): T => {
   if (placement._tag !== "At") return task;
   const { node } = placement;
   if (node.kind === "agent") return atAgent(task, node, event, rules);
@@ -279,7 +297,12 @@ const LANDINGS: Readonly<Record<TraceEvent, RunEvent>> = {
  * idle, an exit wired onward hands off; one wired to the queue returns the
  * review, or requeues the author.
  */
-const atAgent = (task: Pretend, node: AgentNode, event: TraceEvent, rules: TraceRules): Pretend => {
+const atAgent = <T extends Pretend>(
+  task: T,
+  node: AgentNode,
+  event: TraceEvent,
+  rules: TraceRules,
+): T => {
   const ran = openAgentOf(rules.pipeline, task)?.run.rung;
   if (event === "stop") {
     const who = node.role === "review" ? `reviewer ${ran}` : (ran ?? "agent");
@@ -288,18 +311,37 @@ const atAgent = (task: Pretend, node: AgentNode, event: TraceEvent, rules: Trace
   if (event === "wall") return folded(task, [{ _tag: "Walled", role: node.role }], rules);
   const name = event.slice(EXIT.length);
   const exit = node.exits.find((candidate) => candidate.name === name);
-  const tip = node.role === "author" ? `c${Number(task.tip.slice(1)) + 1}` : task.tip;
+  // One made-up commit per author run, so no two handoffs of a task share a tip.
+  const tip =
+    node.role === "author"
+      ? `c${task.runs.filter((run) => run.role === "author").length}`
+      : task.tip;
+  const named = folded({ ...task, tip }, [{ _tag: "ExitNamed", name, commit: tip }], rules);
+  return handedOff(named, node, exit, rules);
+};
+
+/**
+ * The task once the pane of the agent that named `exit` at `node` is idle: an
+ * exit wired onward hands off at the task's tip, and one wired to the queue
+ * returns the review, or requeues the author.
+ */
+export const handedOff = <T extends Pretend>(
+  task: T,
+  node: AgentNode,
+  exit: Exit | undefined,
+  rules: StepRules,
+): T => {
   const settled: RunEvent =
     exit?.to !== QUEUE
-      ? { _tag: "HandedOff", tip }
+      ? { _tag: "HandedOff", tip: task.tip }
       : node.role === "review"
         ? { _tag: "ReviewReturned" }
         : { _tag: "Requeued" };
-  return folded({ ...task, tip }, [{ _tag: "ExitNamed", name, commit: tip }, settled], rules);
+  return folded(task, [settled], rules);
 };
 
 /** `task` after `events`, each written as the dispatcher writes it. */
-const folded = (task: Pretend, events: ReadonlyArray<RunEvent>, rules: StepRules): Pretend =>
+const folded = <T extends Pretend>(task: T, events: ReadonlyArray<RunEvent>, rules: StepRules): T =>
   events.reduce((before, next) => applyRow(before, stepOf(before, next, rules).row), task);
 
 const EXIT = "exit:";
@@ -321,7 +363,10 @@ const checkedAt = (task: Pretend, block: CheckNode, ending: "passed" | "failed")
  * The events the block a task stands at offers, in the words a trace takes.
  * A wall is offered only where the dispatcher can see one (`wallAccountOf`).
  */
-const offersAt = (placement: Placement, rung: BlockRung | undefined): ReadonlyArray<TraceEvent> => {
+export const offersAt = (
+  placement: Placement,
+  rung: BlockRung | undefined,
+): ReadonlyArray<TraceEvent> => {
   if (placement._tag !== "At") return [];
   const { node, state } = placement;
   switch (node.kind) {

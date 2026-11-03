@@ -17,11 +17,14 @@ import { readLadder } from "./registry.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { INSERTABLE } from "./pipeline-belt.ts";
-import { STEPS } from "./policy.ts";
+import { policyPath, readPolicy, STEPS } from "./policy.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
 import { Settings, settings } from "./config.ts";
 import { type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { runSummary, simulateReport } from "./pipeline-simulate.ts";
+import { Records } from "./records.ts";
+import { readMeasured, ratesOf } from "./run-rates.ts";
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -241,10 +244,61 @@ const trace = Command.make(
   ),
 );
 
+const simulate = Command.make(
+  "simulate",
+  {
+    project,
+    seed: Flag.Int("seed").pipe(
+      Flag.withDefault(1),
+      Flag.withDescription("Seeds the outcomes drawn; the same seed gives the same run"),
+    ),
+    hours: Flag.Finite("hours").pipe(
+      Flag.withDefault(72),
+      Flag.withDescription("How long the run goes on, in hours"),
+    ),
+    json,
+  },
+  ({ project, seed, hours, json }) =>
+    Effect.gen(function* () {
+      const records = yield* Records;
+      const ready = yield* records.ready(Option.some(project));
+      const claimed = yield* records.claimed(project);
+      const epics = yield* records.epicsOver(ready);
+      const { policy } = yield* readPolicy(policyPath());
+      const rates = ratesOf(yield* readMeasured);
+      const draft = (yield* draftsNow)[project];
+      const live = yield* livePipeline(project);
+      const { ladder, attemptsPerRung } = yield* Settings;
+      const report = simulateReport(
+        { project, ready, claimed, epics, now: new Date(), slots: policy.slots },
+        {
+          draft:
+            draft === undefined
+              ? undefined
+              : {
+                  pipeline: draft.pipeline,
+                  problems: yield* problemsAgainstLadder(draft.pipeline),
+                },
+          live: { ...live, problems: yield* problemsAgainstLadder(live.pipeline) },
+        },
+        rates,
+        { ladder, attemptsPerRung },
+        { seed, hours },
+      );
+      if (json) return yield* Console.log(JSON.stringify(report));
+      if (report.draft !== null) yield* Console.log(runSummary(report.draft));
+      yield* Console.log(runSummary(report.saved));
+    }),
+).pipe(
+  Command.withDescription(
+    "Play a project's ready and claimed tasks through its draft and through the pipeline it runs, on the same seed, with outcomes drawn from the measured rates of each rung, and print how each run went. Writes nothing",
+  ),
+);
+
 /**
  * `foreman pipeline`. `place` reads the dispatcher's view of the world, so it
- * takes the dispatcher's services; the others read only the pipelines file and
- * the ladder.
+ * takes the dispatcher's services; `simulate` reads the task store; the
+ * others read only the pipelines file and the ladder.
  */
 export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
   Command.make("pipeline", {}).pipe(
@@ -258,6 +312,7 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       discard,
       clear,
       Command.provide(trace, settings),
+      Command.provide(simulate, Layer.mergeAll(Records.layer, settings)),
       Command.provide(place, services),
     ]),
   );
