@@ -1,7 +1,8 @@
 import { Option } from "effect"
 import { type Pipeline, STANDARD_PIPELINE } from "foreman/pipeline"
 import { expect, test } from "vitest"
-import { applyEdit, type Drafting, summaryOf } from "./pipelineEdit.ts"
+import { summaryOf } from "foreman/pipeline-layout"
+import { applyEdit, type Drafting } from "./pipelineEdit.ts"
 
 const from = (draft: Pipeline, selected = Option.none<string>()): Drafting => ({ draft, selected, placing: Option.none() })
 

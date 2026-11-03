@@ -8,7 +8,7 @@ import { INSERTABLE } from "foreman/pipeline-belt"
 import type { ForemanRung } from "../shared/Foreman.ts"
 import { commandButton } from "./commandButton.ts"
 import { type ForemanPage, Message, PIPELINE_PANELS, type PipelinePanel, type PipelineView, RungList } from "./model.ts"
-import { KIND_ICON } from "./pipelineEdit.ts"
+import { KIND_ICON } from "foreman/pipeline-layout"
 import { edit } from "./pipelinePage.ts"
 
 type Editing = Extract<PipelineView, { _tag: "Editing" }>

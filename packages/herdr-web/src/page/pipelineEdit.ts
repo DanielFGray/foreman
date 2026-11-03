@@ -82,35 +82,3 @@ const settled = (now: Drafting): Drafting => ({
   selected: Option.filter(now.selected, (id) => now.draft.nodes.some((node) => node.id === id)),
 })
 
-/** How each kind of block is marked on its card and in the palette. */
-export const KIND_ICON: Record<PipelineNode["kind"], string> = { source: "⇥", router: "⑂", gate: "◧", agent: "⚙", check: "✓", land: "⤓", park: "⏸", branch: "⎇", worktree: "▤", done: "✔" }
-
-/** A wire's way out in words: `next`, `else`, or `route n` counted from one. */
-export const portName = (wire: Pick<Wire, "port">): string =>
-  typeof wire.port === "number" ? `route ${wire.port + 1}` : wire.port.startsWith("exit:") ? wire.port.slice("exit:".length) : wire.port
-
-/** A block's settings in a few words, for its card. */
-export const summaryOf = (node: PipelineNode): string => {
-  switch (node.kind) {
-    case "source":
-      return node.filter === "" ? "every task" : node.filter
-    case "router":
-      return node.routes.length === 1 ? "1 route" : `${node.routes.length} routes`
-    case "gate":
-      return `holds for ${node.step}`
-    case "agent":
-      return `${node.role} · ${node.model}${node.slots === undefined ? "" : ` ×${node.slots}`}`
-    case "check":
-      return node.command === "" ? "names no command" : `runs ${node.command}`
-    case "branch":
-      return "cuts foreman/<id> from trunk"
-    case "worktree":
-      return "a directory of its own"
-    case "land":
-      return node.how === "fast-forward" ? "fast-forwards" : "merges"
-    case "done":
-      return "completes"
-    case "park":
-      return "waits for you"
-  }
-}

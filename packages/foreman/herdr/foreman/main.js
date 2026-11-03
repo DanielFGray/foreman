@@ -10,7 +10,7 @@
 // foreman's src/published.ts; a queue row has the shape of one of its rows.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home } from "herdr";
+import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home, run } from "herdr";
 
 const VERSION = 5;
 const STEPS = ["author", "climb", "review", "land"];
@@ -383,6 +383,7 @@ export default class Foreman extends View {
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(tone).child(state))
         .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
         .child(div().flex_1())
+        .when(project !== null, (el) => el.child(chip("pipeline", "pipeline", () => run("pane.split", { direction: "right", mod: "foreman-pipeline", props: { project } }))))
         .child(chip("scope", this.all ? "all projects" : (project ?? "no project"), (cx) => { this.all = !this.all; this.loadQueue(cx); cx.notify(); })))
       .when(controls !== null, (el) => el.child(controls))
       .child(v_flex().id("foreman-rows").flex_1().min_h(0).overflow_y_scrollbar().px(4).pb(8)

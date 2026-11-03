@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./pipeline": "./src/pipeline.ts",
-    "./pipeline-belt": "./src/pipeline-belt.ts"
+    "./pipeline-belt": "./src/pipeline-belt.ts",
+    "./pipeline-layout": "./src/pipeline-layout.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

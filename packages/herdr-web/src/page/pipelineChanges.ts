@@ -3,7 +3,7 @@
 // of edits, so a revert, a reset or a fresh read can never leave it stale.
 import type { Pipeline, PipelineNode } from "foreman/pipeline"
 import { beltOf, type Wire } from "foreman/pipeline-belt"
-import { portName, summaryOf } from "./pipelineEdit.ts"
+import { portName, summaryOf } from "foreman/pipeline-layout"
 
 /**
  * One line per difference between the saved pipeline and the draft: blocks

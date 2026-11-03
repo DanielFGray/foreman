@@ -36,8 +36,8 @@ The panel keeps no state. It reads the file that `src/published.ts` writes, and
 the schema there is the contract; a row from `foreman queue --json` has the
 shape of a published row. herdr-web's server writes the file, and its Foreman
 page reads the same readings through its own copy of the schema. Bump `PUBLISHED_VERSION`, `VERSION` in
-`foreman/main.js`, and `FOREMAN_VERSION` in herdr-web's `src/shared/Foreman.ts`
-together.
+`foreman/main.js` and in `foreman-pipeline/main.js`, and `FOREMAN_VERSION` in
+herdr-web's `src/shared/Foreman.ts` together.
 
 ## Install
 
@@ -83,6 +83,25 @@ Both are optional, and are set on the block's `content.props`:
   cannot read environment variables, so a fleet with its own registry or
   config is reached through `env`:
   `["env", "FOREMAN_CONFIG=/abs/config.jsonc", "FOREMAN_POLICY=/abs/policy.json", "bun", "/abs/src/main.ts"]`.
+
+## The pipeline pane
+
+`foreman-pipeline/` is a second mod: one project's pipeline as a pane, with the
+tasks that stand at each block (the dispatcher's placements in `state.json`).
+The panel's `pipeline` button opens it beside the focused pane for the shown
+space's project, or run
+`herdr-app do pane.split '{"direction":"right","mod":"foreman-pipeline","props":{"project":"<name>"}}'`.
+Zoom the pane to give it the whole tab. Link it like the panel:
+
+```sh
+ln -s ~/build/foreman/packages/foreman/herdr/foreman-pipeline ~/.config/herdr-app/mods/foreman-pipeline
+```
+
+It draws the `drawing` that `foreman pipeline show <project> --json` prints
+(`src/pipeline-layout.ts`): every box and wire route in pixels. A mod cannot
+load foreman's modules, because the mod engine has no `TextEncoder`, so the
+layout is foreman's and the pane lays nothing out. It takes `state` and
+`command` props like the panel, and `project`.
 
 ## What it does not do yet
 

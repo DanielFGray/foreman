@@ -12,6 +12,7 @@ import {
 import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
 import { readLadder } from "./registry.ts";
+import { drawingOf } from "./pipeline-layout.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
 
 /**
@@ -37,7 +38,13 @@ const show = Command.make(
       const { pipeline, drawn } = pipelineFor(read.value, project);
       const problems = yield* problemsAgainstLadder(pipeline);
       if (json) {
-        return yield* Console.log(JSON.stringify({ project, drawn, pipeline, problems }, null, 2));
+        return yield* Console.log(
+          JSON.stringify(
+            { project, drawn, pipeline, problems, drawing: drawingOf(pipeline) },
+            null,
+            2,
+          ),
+        );
       }
       yield* Console.log(
         drawn ? `${project} runs its own pipeline:` : `${project} runs the standard pipeline:`,
