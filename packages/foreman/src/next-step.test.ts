@@ -4,7 +4,7 @@ import { planFrom, reviewable } from "./dispatcher.ts";
 import type { Ladder } from "./ladder.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
-import { place, type Placement, STANDARD_PIPELINE } from "./pipeline.ts";
+import { isUnderReview, place, type Placement, STANDARD_PIPELINE } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import type { Item, TaskStatus } from "./records.ts";
 import { queueFrom } from "./queue.ts";
@@ -137,21 +137,21 @@ const PHASES: ReadonlyArray<{
   {
     phase: "ReviewWaiting",
     after: "the author's run closed handed off",
-    task: task("reviewing", [], [authorDone("cheap", "c1")]),
+    task: task("in_progress", [], [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewExpired",
     after: "the author's pane stopped",
-    task: task("reviewing", [], [authorDone("cheap", "c1")]),
+    task: task("in_progress", [], [authorDone("cheap", "c1")]),
     step: "review",
     at: "review waiting via review-gate",
   },
   {
     phase: "ReviewStopped",
     after: "the review run ended without a verdict, a rung left",
-    task: task("reviewing", [], [authorDone("cheap", "c1"), stoppedReview("cheap")]),
+    task: task("in_progress", [], [authorDone("cheap", "c1"), stoppedReview("cheap")]),
     step: "review",
     at: "review waiting via review-gate",
   },
@@ -206,7 +206,7 @@ const LANDINGS: ReadonlyArray<{
   {
     result: "Held",
     after: "still approved, the reviewer's run closed by settle",
-    task: task("reviewing", [], [authorDone("cheap", "c1"), { ...approved(), open: false }]),
+    task: task("in_progress", [], [authorDone("cheap", "c1"), { ...approved(), open: false }]),
     step: "land",
     at: "land waiting via land-gate",
   },
@@ -258,13 +258,14 @@ const placedStep = (item: Item): string => {
           now: new Date(),
         }).queue
       : [];
-  const review =
-    item.status === "reviewing"
-      ? reviewable(
-          [{ task: item, worker: undefined, kind: reviewedBy(item) ?? authoredBy(item) }],
-          new Set([item.id]),
-        ).review
-      : [];
+  // Under review when placement puts the task past the author's running turn.
+  const placement = place(STANDARD_PIPELINE, factsOf(item, STANDARD_PIPELINE));
+  const review = isUnderReview(placement)
+    ? reviewable(
+        [{ task: item, worker: undefined, kind: reviewedBy(item) ?? authoredBy(item) }],
+        new Set([item.id]),
+      ).review
+    : [];
   const steps = planFrom({
     workers: [],
     outOfQuota: new Set<string>(),

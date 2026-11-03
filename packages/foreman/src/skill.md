@@ -10,7 +10,7 @@ its own git worktree and branch, `foreman/<task-id>`. One task goes through
 these steps:
 
 1. **Queue.** The task is ready in the task store.
-2. **Author.** An agent works in the task's worktree, commits, and runs `tasks review`.
+2. **Author.** An agent works in the task's worktree, commits, and names its exit.
 3. **Review.** An agent one rung up reads the diff and gives its verdict with `tasks verdict`: approved, or sent back.
 4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and runs `tasks done`.
 
@@ -74,8 +74,9 @@ ready` reads edges, never the text of a description.
 - Pick work with `foreman queue`, start it with `foreman dispatch`, and run
   `foreman wait` in the background. The ladder chooses the model, so you do
   not choose launch flags.
-- When `wait` returns, read the result with `foreman show <id>`. A task in
-  `reviewing` goes to a reviewer on the dispatcher's next tick.
+- When `wait` returns, read the result with `foreman show <id>`. A task
+  `in_progress` at a review step goes to a reviewer on the dispatcher's next
+  tick.
 - When an attempt is stuck, use `intervene`. Do not open the worktree and
   edit it yourself.
 - `foreman policy` sets what the dispatcher does without you: `pause`,

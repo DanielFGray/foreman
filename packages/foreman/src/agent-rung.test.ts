@@ -56,9 +56,15 @@ describe("the rung an agent block runs a task on", () => {
     expect(rungOf(rungAt(LADDER, reviewer("above"), authored, new Set(["dear"])))).toBe("Waiting");
   });
 
-  test("a pinned rung runs, waits for its account, or parks once it has failed the task", () => {
+  test("a pinned rung runs, waits for its account or for the operator to switch it on, or parks once it has failed the task", () => {
     expect(rungOf(rungAt(LADDER, author("dear"), task([]), new Set()))).toBe("dear");
     expect(rungOf(rungAt(LADDER, author("dear"), task([]), new Set(["dear"])))).toBe("Waiting");
+    const offDuty: Ladder = [
+      { ...LADDER[0]!, enabled: false },
+      { ...LADDER[1]!, author: false },
+    ];
+    expect(rungOf(rungAt(offDuty, author("cheap"), task([]), new Set()))).toBe("Waiting");
+    expect(rungOf(rungAt(offDuty, author("dear"), task([]), new Set()))).toBe("Waiting");
     // A pinned block has no other rung to climb to, so a failure on it is the
     // operator's to answer.
     expect(rungOf(rungAt(LADDER, author("cheap"), task(["failed-by:cheap"]), new Set()))).toBe(

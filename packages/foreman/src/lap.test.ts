@@ -28,7 +28,7 @@ const blockOf = (runs: ReadonlyArray<Run>, tip: string | undefined) => {
   const placement = place(
     STANDARD_PIPELINE,
     factsOf(
-      { status: "reviewing", priority: 2, parent: undefined, labels: [], runs, tip },
+      { status: "in_progress", priority: 2, parent: undefined, labels: [], runs, tip },
       STANDARD_PIPELINE,
     ),
   );
@@ -168,7 +168,7 @@ describe("the readers against a scratch store", () => {
       );
 
     await run((records) => records.attribute(id, dispatch("author", "low")));
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     await run((records) => records.assignReview(id, dispatch("review", "mid", "c1")));
     await Effect.runPromise(
       nameExit(id, { name: "approved", commit: "c1", event: undefined }).pipe(

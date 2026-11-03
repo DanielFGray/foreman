@@ -9,6 +9,8 @@ import { NonNegativeTokenCount, runSuggest } from "./model-advice-run.ts";
 import { Quota } from "./quota.ts";
 import {
   addRow,
+  changeRow,
+  moveRow,
   type LadderRow,
   knownModels,
   parseRows,
@@ -43,12 +45,15 @@ const list = Command.make("list", { json }, ({ json }) =>
         row.slices === 0
           ? "no trials"
           : `${row.succeeded}/${row.slices} landed, ${row.avgRounds ?? "?"} rounds avg`;
+      const roles = `author ${row.author ? "on" : "off"}  review ${row.review ? "on" : "off"}`;
       yield* Console.log(
-        `${String(index + 1).padStart(2)}  ${row.rung.padEnd(26)} ${row.state.padEnd(8)} ${row.model}  ${record}  ${launchHint(row)}`,
+        `${String(index + 1).padStart(2)}  ${row.rung.padEnd(26)} ${row.state.padEnd(8)} ${roles}  ${row.model}  ${record}  ${launchHint(row)}`,
       );
     }
   }),
-).pipe(Command.withDescription("Print the ladder: state, trial record and launch arguments"));
+).pipe(
+  Command.withDescription("Print the ladder: state, roles, trial record and launch arguments"),
+);
 
 /** Cost per landed slice by model and size: read it before starting a size a tier up. */
 const size = Command.make("size", {}, () =>
@@ -154,28 +159,21 @@ const note = Flag.String("note").pipe(Flag.withDescription("A note on the rung")
 
 const add = Command.make("add", { rung, model, above, below, disabled, note }, (args) =>
   Effect.gen(function* () {
-    if (Option.isSome(args.above) && Option.isSome(args.below)) {
-      return yield* new RegistryError({ detail: "give --above or --below, not both" });
-    }
-    const place: RungPlace = Option.isSome(args.above)
-      ? { _tag: "Above", rung: args.above.value }
-      : Option.isSome(args.below)
-        ? { _tag: "Below", rung: args.below.value }
-        : { _tag: "Bottom" };
+    const place = yield* placeOf(args);
     yield* addRow(
       {
         rung: args.rung,
         model: args.model,
         enabled: !args.disabled,
+        author: true,
+        review: true,
         provider: null,
         unmetered: false,
         note: Option.getOrNull(args.note),
       },
       place,
     );
-    const where =
-      place._tag === "Bottom" ? "at the bottom" : `${place._tag.toLowerCase()} ${place.rung}`;
-    yield* Console.log(`${args.rung}: added ${where}`);
+    yield* Console.log(`${args.rung}: added ${whereOf(place)}`);
   }),
 ).pipe(
   Command.withDescription(
@@ -183,18 +181,40 @@ const add = Command.make("add", { rung, model, above, below, disabled, note }, (
   ),
 );
 
+const move = Command.make("move", { rung, above, below }, (args) =>
+  Effect.gen(function* () {
+    const place = yield* placeOf(args);
+    yield* moveRow(args.rung, place);
+    yield* Console.log(`${args.rung}: moved ${whereOf(place)}`);
+  }),
+).pipe(
+  Command.withDescription(
+    "Re-rank a rung: --above or --below a rung, or to the bottom (the cheapest place)",
+  ),
+);
+
+/** The place the --above and --below flags name; neither is the bottom. */
+const placeOf = (args: {
+  readonly above: Option.Option<string>;
+  readonly below: Option.Option<string>;
+}): Effect.Effect<RungPlace, RegistryError> =>
+  Option.isSome(args.above) && Option.isSome(args.below)
+    ? Effect.fail(new RegistryError({ detail: "give --above or --below, not both" }))
+    : Effect.succeed(
+        Option.isSome(args.above)
+          ? { _tag: "Above", rung: args.above.value }
+          : Option.isSome(args.below)
+            ? { _tag: "Below", rung: args.below.value }
+            : { _tag: "Bottom" },
+      );
+
+const whereOf = (place: RungPlace) =>
+  place._tag === "Bottom" ? "to the bottom" : `${place._tag.toLowerCase()} ${place.rung}`;
+
 const toggle = (name: "enable" | "disable") =>
   Command.make(name, { rung }, (args) =>
     Effect.gen(function* () {
-      const rows = yield* readRows;
-      if (!rows.some((row) => row.rung === args.rung)) {
-        return yield* new RegistryError({
-          detail: `no rung ${args.rung}; rungs: ${rows.map((row) => row.rung).join(", ")}`,
-        });
-      }
-      yield* writeRows(
-        rows.map((row) => (row.rung === args.rung ? { ...row, enabled: name === "enable" } : row)),
-      );
+      yield* changeRow(args.rung, (row) => ({ ...row, enabled: name === "enable" }));
       yield* Console.log(`${args.rung}: ${name}d`);
     }),
   ).pipe(
@@ -204,6 +224,37 @@ const toggle = (name: "enable" | "disable") =>
         : "Stop dispatching a rung; it keeps its rank so old failures still position",
     ),
   );
+
+const which = Argument.String("which").pipe(
+  Argument.withDescription("Which role: author or review"),
+);
+const switch_ = Argument.String("switch").pipe(Argument.withDescription("on or off"));
+
+/**
+ * Turn a rung's author or review role on or off without retiring it: a free
+ * model may write and never read, or the reverse.
+ */
+const role = Command.make("role", { rung, which, switch: switch_ }, (args) =>
+  Effect.gen(function* () {
+    if (args.which !== "author" && args.which !== "review") {
+      return yield* new RegistryError({
+        detail: `role is author or review, not ${args.which}`,
+      });
+    }
+    if (args.switch !== "on" && args.switch !== "off") {
+      return yield* new RegistryError({
+        detail: `switch is on or off, not ${args.switch}`,
+      });
+    }
+    const on = args.switch === "on";
+    yield* changeRow(args.rung, (row) => ({ ...row, [args.which]: on }));
+    yield* Console.log(`${args.rung}: ${args.which} ${args.switch}`);
+  }),
+).pipe(
+  Command.withDescription(
+    "Turn a rung's author or review role on or off; it keeps its rank either way",
+  ),
+);
 
 const catalog = Flag.String("catalog").pipe(
   Flag.withDescription("Local models.dev api.json path (offline / tests)"),
@@ -290,6 +341,8 @@ export const ladderCommand = Command.make("ladder", {}).pipe(
     add,
     toggle("enable"),
     toggle("disable"),
+    role,
+    move,
   ]),
 );
 

@@ -22,6 +22,7 @@ import {
   type ForemanView,
   launchableRungs,
 } from "../shared/Foreman.ts"
+import { commandButton, lineOf } from "./commandButton.ts"
 import { ListRungs, LoadForemanEpic, RunForeman, SaveOpenEpics } from "./commands.ts"
 import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, PipelineView, RungList, type UpdateReturn } from "./model.ts"
 import { pipelineSectionView } from "./pipelineView.ts"
@@ -101,6 +102,9 @@ export const clickedForemanCommand = (model: Model, command: ForemanCommand): Up
     commands: [RunForeman({ command })],
   }
 }
+
+/** What the page reads again after a command succeeds: a ladder edit changes the rungs, which the fleet's state does not carry. */
+export const rereadAfter = (line: string) => (line.startsWith("ladder ") ? [ListRungs()] : [])
 
 export const finishedForemanCommand = (model: Model, line: string, refusal: Option.Option<string>): Model =>
   withPage(model, (page) => ({ ...page, busy: Array.filter(page.busy, (other) => other !== line), refusal: Option.orElse(refusal, () => page.refusal) }))
@@ -209,8 +213,6 @@ export const dispatcherStateOf = (reading: ForemanReading, now: number): Foreman
 const failureOf = (state: ForemanState) =>
   Option.flatMap(state.reading, ({ dispatcher }) => (dispatcher.state === "failed" ? Option.some(dispatcher.detail) : Option.none()))
 
-const lineOf = (command: ForemanCommand) => argvOf(command).join(" ")
-
 const isDestructive = (command: ForemanCommand) => command._tag === "Act" && Array.contains(DESTRUCTIVE_ACTIONS, command.action)
 
 const headingView = (state: ForemanState, now: number, h: HtmlBuilder<Message>): Html => {
@@ -224,24 +226,6 @@ const headingView = (state: ForemanState, now: number, h: HtmlBuilder<Message>):
       h.span([h.Class("note")], [Option.match(read, { onNone: () => "", onSome: (at) => `Read ${ago(Date.parse(at), now)} ago` })]),
       h.button([h.Type("button"), h.Class("chip"), h.AriaLabel("read the fleet again"), h.OnClick(Message.ClickedRefreshForeman())], ["Refresh"]),
     ],
-  )
-}
-
-/** A button that runs one command: `name…` while it runs, `name?` while it waits for its second click. */
-const commandButton = (text: string, label: string, command: ForemanCommand, page: ForemanPage, h: HtmlBuilder<Message>, isOn = false): Html => {
-  const line = lineOf(command)
-  const isBusy = Array.contains(page.busy, line)
-  const isArmed = Option.contains(page.armed, line)
-  return h.button(
-    [
-      h.Type("button"),
-      h.Class(isArmed ? "chip armed" : isOn ? "chip on" : "chip"),
-      h.Title(line),
-      h.AriaLabel(label),
-      h.Disabled(isBusy),
-      h.OnClick(Message.ClickedForemanCommand({ command })),
-    ],
-    [isBusy ? `${text}…` : isArmed ? `${text}?` : text],
   )
 }
 

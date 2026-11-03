@@ -77,7 +77,7 @@ test("the sidebar row shows the column, which reads the ladder's rungs, and hide
     given({ ...start, bridge: Bridge.Watching({ fleet }) }),
     click(role("button", { name: "Foreman" })),
     Command.expectExact(ListRungs()),
-    Command.resolve(ListRungs, Message.ReceivedRungs({ rungs: [{ rung: "sonnet", state: "proven" }] })),
+    Command.resolve(ListRungs, Message.ReceivedRungs({ rungs: [{ rung: "sonnet", state: "proven", author: true, review: true }] })),
     expect(selector(".foreman .note")).toHaveText("Asking the bridge…"),
     click(role("button", { name: "Foreman" })),
     expect(selector(".foreman-column")).not.toExist(),
@@ -220,7 +220,7 @@ test("an epic leads its queued tasks and takes no launch", () => {
 test("the queue starts folded, and a queued task launches on a picked rung", () => {
   scene(
     { update, view },
-    given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: [{ rung: "haiku", state: "proven" }, { rung: "sonnet", state: "trial" }, { rung: "opus", state: "disabled" }] } } }),
+    given({ ...open, foremanPage: { ...open.foremanPage, rungs: { _tag: "Listed", rungs: [{ rung: "haiku", state: "proven", author: true, review: true }, { rung: "sonnet", state: "trial", author: true, review: true }, { rung: "opus", state: "disabled", author: true, review: true }] } } }),
     expect(role("list", { name: "Queue" })).not.toExist(),
     click(role("button", { name: "Queue 1" })),
     expectAll(all.selector(".foreman-row")).toHaveCount(5),

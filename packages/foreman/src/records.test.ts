@@ -38,7 +38,7 @@ const run = <A, E>(
 const item = (labels: ReadonlyArray<string>): Item => ({
   id: "ts-123456",
   title: "Test task",
-  status: "reviewing",
+  status: "in_progress",
   project: "foreman",
   type: "task",
   priority: 1,
@@ -150,12 +150,12 @@ describe("Records against a scratch store", () => {
     const id = (await Bun.$`prog add "review cycle" -p foreman`.text()).trim();
     await run((_, tracker) => tracker.claim(id));
     await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
     await run((records) => records.nameExit(id, { name: "returned", commit: "c1" }, undefined));
     await run((records) => records.endRuns(id, { review: "stopped" }));
 
-    expect((await run((records) => records.show(id))).status).toBe("reviewing");
+    expect((await run((records) => records.show(id))).status).toBe("in_progress");
     await run((_, tracker) => tracker.claim(id));
     await run((records) => records.attribute(id, dispatchOf(id, "author", "dear")));
     const after = await run((records) => records.show(id));
@@ -173,7 +173,7 @@ describe("Records against a scratch store", () => {
   test("release closes the review run and requeues the task", async () => {
     const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
     await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
     await run((records) => records.release(id));
@@ -190,7 +190,7 @@ describe("Records against a scratch store", () => {
   test("assigning a reviewer ends the review run it replaces as released", async () => {
     const id = (await Bun.$`prog add "vanished reviewer" -p foreman`.text()).trim();
     await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     await run((records) => records.assignReview(id, dispatchOf(id, "review", "cheap", "c1")));
     await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
 
@@ -222,7 +222,7 @@ describe("Records against a scratch store", () => {
     await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
 
     expect(await run((records) => records.countRound(id))).toBe(1);
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
     expect(await run((records) => records.countRound(id))).toBe(2);
     expect(roundsOf(await run((records) => records.show(id)))).toBe(2);
@@ -244,35 +244,31 @@ describe("Records against a scratch store", () => {
     expect(error.detail).toContain("not found");
   });
 
-  test("submits a done task with an unread branch for review", async () => {
+  test("claims a done task with an unread branch back into the pipeline", async () => {
     const id = (await Bun.$`prog add "unread branch" -p foreman`.text()).trim();
     await Bun.$`prog done ${id}`.quiet();
 
-    await run((_, tracker) => tracker.submit(id));
+    await run((_, tracker) => tracker.claim(id));
     const after = await run((records) => records.show(id));
 
-    expect(after.status).toBe("reviewing");
+    expect(after.status).toBe("in_progress");
   });
 
-  // The records and the tracker share one connection, so a status move the
-  // tracker refuses takes the records write in its transaction back with it.
-  // A done task cannot go to review by `review`, so that move is refused.
-  test("an exit whose status move is refused is not recorded", async () => {
+  // The records and the tracker share one connection, so a failed exit write
+  // takes the status move in its transaction back with it.
+  test("a failed exit write leaves the status untouched", async () => {
     const id = await run((_, tracker) =>
-      tracker.add({ project: "foreman", title: "refused move", description: "", labels: [] }),
+      tracker.add({ project: "foreman", title: "no open run", description: "", labels: [] }),
     );
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
-    await run((_, tracker) => tracker.complete(id));
+    await run((_, tracker) => tracker.claim(id));
 
     const refused = await run((records) =>
-      Effect.flip(records.nameExit(id, { name: "done", commit: "c1" }, "review")),
+      Effect.flip(records.nameExit(id, { name: "returned", commit: "c1" }, "reopen")),
     );
     const after = await run((records) => records.show(id));
 
-    expect(refused.detail).toContain("review");
-    expect(after.status).toBe("done");
-    expect(after.runs.map((r) => [r.role, r.open, r.ending, r.commit])).toEqual([
-      ["author", true, undefined, undefined],
-    ]);
+    expect(refused.detail).toContain("no open run");
+    expect(after.status).toBe("in_progress");
+    expect(after.runs).toEqual([]);
   });
 });

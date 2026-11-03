@@ -81,11 +81,13 @@ An agent states how its run ended with one command:
 `tasks verdict <task> approved|returned|satisfied`. It writes the ending on the
 task's open run of the matching work (review for `approved` and `returned`,
 author for `satisfied`), and makes the status change that goes with it in the
-same transaction: `returned` sends the task back to `open`, `satisfied` sends it
-to `reviewing`, `approved` leaves the status alone. A second verdict on the same
-run replaces the first, so a reviewer that approves and then returns in one turn
-leaves `returned`. There is no open run to write to after settle closes it, so
-a verdict cannot change a closed run. The review and author prompts use this
+same transaction: `returned` reopens the task when its wire goes to the queue
+(otherwise the task stays `in_progress` and placement reads the step from the
+exit), `satisfied` leaves the task `in_progress` at the review step, and
+`approved` leaves the status alone. A second verdict on the same run replaces
+the first, so a reviewer that approves and then returns in one turn leaves
+`returned`. There is no open run to write to after settle closes it, so a
+verdict cannot change a closed run. The review and author prompts use this
 command in place of `prog label … approved`, `prog open` and
 `prog label … satisfied`.
 
@@ -177,5 +179,6 @@ it runs on the live store.
 - "`satisfied` is cleared wherever `approved` is": replaced. `satisfied` is the
   ending of an author run, so a new lap leaves it behind.
 - "`review-failed-by:*` goes with the author": kept in meaning, by the lap.
-- "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
-  meaning. The tip has not moved.
+- "`Held` … leaves the task in `reviewing` with its `approved` label": the task
+  stays `in_progress` at its land step; the tip has not moved, so the review
+  still passes.

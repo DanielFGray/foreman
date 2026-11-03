@@ -9,6 +9,7 @@ const input = (overrides: Partial<TaskPhaseInput> = {}): TaskPhaseInput => ({
   committed: false,
   holdsWork: false,
   handoffExpired: false,
+  underReview: false,
   ...overrides,
 });
 
@@ -27,12 +28,12 @@ describe("task phases", () => {
 
   test("keeps blocked and waiting work untouched", () => {
     expect(phaseOf(input({ worker: "blocked" }))).toBe("Blocked");
-    expect(phaseOf(input({ status: "reviewing" }))).toBe("ReviewWaiting");
-    expect(phaseOf(input({ status: "reviewing", handoffExpired: true }))).toBe("ReviewExpired");
+    expect(phaseOf(input({ underReview: true }))).toBe("ReviewWaiting");
+    expect(phaseOf(input({ underReview: true, handoffExpired: true }))).toBe("ReviewExpired");
   });
 
   test("distinguishes stopped review, residue, and a stopped author", () => {
-    expect(phaseOf(input({ status: "reviewing", reviewer: "claude" }))).toBe("ReviewStopped");
+    expect(phaseOf(input({ underReview: true, reviewer: "claude" }))).toBe("ReviewStopped");
     expect(phaseOf(input({ status: "open" }))).toBe("Residue");
     expect(phaseOf(input())).toBe("AuthorStopped");
   });

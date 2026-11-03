@@ -9,6 +9,7 @@ import {
   ParkNode,
   Pipeline,
   type PipelineNode,
+  type RungOffer,
   RouterNode,
   SourceNode,
   WorktreeNode,
@@ -192,7 +193,7 @@ export type ProjectPipeline =
 export const projectPipeline = (
   read: { readonly value: Pipelines; readonly error: string | undefined },
   project: string,
-  rungs: ReadonlyArray<string>,
+  rungs: ReadonlyArray<RungOffer>,
   instructions: ReadonlyMap<string, string>,
 ): ProjectPipeline => {
   if (read.error !== undefined) return { _tag: "Stopped", problems: [read.error] };

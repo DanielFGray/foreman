@@ -11,7 +11,6 @@ export const STATUSES = [
   "open",
   "in_progress",
   "blocked",
-  "reviewing",
   "done",
   "canceled",
 ] as const;
@@ -46,16 +45,7 @@ export interface Item {
   readonly lastActivityAt: Date;
 }
 
-export const TASK_EVENTS = [
-  "propose",
-  "draft",
-  "open",
-  "start",
-  "review",
-  "submit",
-  "done",
-  "cancel",
-] as const;
+export const TASK_EVENTS = ["propose", "draft", "open", "start", "done", "cancel"] as const;
 export type TaskEvent = (typeof TASK_EVENTS)[number];
 
 const STORED: ReadonlyArray<TaskState> = STATUSES.filter(
@@ -65,20 +55,18 @@ const STORED: ReadonlyArray<TaskState> = STATUSES.filter(
 /**
  * A task's status, and the moves between statuses.
  *
- * - A proposal (nobody authorised it) and a draft (still being scoped) become
- *   open work, and open work can go back to either.
- * - Open or reviewed work starts, and only started work goes to review.
- * - A branch nobody read is submitted for review from wherever its task stands:
- *   queued, started, done or canceled. The commits exist, and whether they are
- *   worth landing is what a reviewer answers. A proposal or a draft has no
- *   authorised work to submit.
- * - Reviewed work can start again without a release when its pipeline sends
- *   it to another author.
- * - Started or reviewed work returns to `open`: a release, a rejection, a
- *   landing that conflicted.
- * - Reviewed work is done when it lands. Open or started work can be closed by
- *   hand, when the trunk already does what it asked. A proposal or a draft
- *   cannot be done: nobody agreed to do it, so it is canceled instead.
+ * Status answers only the task's life: draft (being scoped), proposed (scoped,
+ * awaiting authorisation), open (authorised, ready), in_progress (claimed, at
+ * any step of the drawing), done, canceled. A task's step in its pipeline is
+ * the block placement puts it at, not a status.
+ *
+ * - A proposal and a draft become open work, and open work can go back to either.
+ * - Open, done or canceled work starts (claim). Done or canceled start again
+ *   when an unread branch on them needs a reader, or a person restarts them.
+ * - Started work returns to `open`: a release, a rejection, a landing that
+ *   conflicted.
+ * - Open or started work can be closed by hand. A proposal or a draft cannot
+ *   be done: nobody agreed to do it, so it is canceled instead.
  * - Anything unfinished can be canceled, and done or canceled work reopens.
  */
 export const TASK_MACHINE: Machine<TaskState, TaskEvent> = {
@@ -93,25 +81,16 @@ export const TASK_MACHINE: Machine<TaskState, TaskEvent> = {
       proposed: "open",
       draft: "open",
       in_progress: "open",
-      reviewing: "open",
       done: "open",
       canceled: "open",
     },
-    start: { open: "in_progress", reviewing: "in_progress" },
-    review: { in_progress: "reviewing" },
-    submit: {
-      open: "reviewing",
-      in_progress: "reviewing",
-      done: "reviewing",
-      canceled: "reviewing",
-    },
-    done: { open: "done", in_progress: "done", reviewing: "done" },
+    start: { open: "in_progress", done: "in_progress", canceled: "in_progress" },
+    done: { open: "done", in_progress: "done" },
     cancel: {
       proposed: "canceled",
       draft: "canceled",
       open: "canceled",
       in_progress: "canceled",
-      reviewing: "canceled",
     },
   },
 };
@@ -132,7 +111,7 @@ export const epicStatus = (stored: Status, children: ReadonlyArray<Status>): Sta
   const unresolved = children.length - count("done", "canceled");
   if (unresolved === 0) return "done";
   if (count("blocked") === unresolved) return "blocked";
-  if (count("in_progress", "reviewing", "done") > 0) return "in_progress";
+  if (count("in_progress", "done") > 0) return "in_progress";
   if (count("draft", "proposed") === unresolved) return "draft";
   return "open";
 };

@@ -26,7 +26,6 @@ with no task needs no \`tasks\` entry.
    Run the relevant commands to confirm outputs match the code.
 
 3. Update task status:
-   - tasks review <id>   # the work waits for a reviewer
    - tasks done <id>     # if complete
    - tasks open <id>     # reopen if needed
 
@@ -76,7 +75,10 @@ If a task has a definition of done:
 
 ## Statuses
 
-proposed, draft, open, in_progress, reviewing, done, canceled.
+proposed, draft, open, in_progress, done, canceled.
+
+\`in_progress\` means claimed, at any step of its pipeline. The step itself is
+not a status: foreman derives it from the task's last exit and the drawing.
 
 A status change that the rules do not allow gives an error that names the status and
 the command. An epic's status comes from its tasks. Only \`done\` and \`cancel\` close an
@@ -92,9 +94,8 @@ epic by hand.
     tasks graph                  # dependency graph as a Mermaid flowchart
 
     # Working
-    tasks start <id>             # claim a task
+    tasks start <id>             # claim a task (open, done or canceled)
     tasks log <id> "message"     # log a result or a decision
-    tasks review <id>            # mark as reviewing (awaiting merge)
     tasks done <id>              # mark as done
     tasks open <id>              # reopen a task, or authorise a proposal or draft
     tasks cancel <id> [reason]   # cancel without completing

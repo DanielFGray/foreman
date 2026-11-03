@@ -52,7 +52,7 @@ It follows the rules the Go writer already follows on that file:
    order, Mermaid output) arrives with the `blocks` command in step 4.
    Pass criterion: a differential test that runs Go `prog` and `Tasks` on two
    copies of one database for every command foreman uses (ready, list, show,
-   label, unlabel, start, review, open, done, log, add) and compares the JSON
+   label, unlabel, start, open, done, log, add) and compares the JSON
    and the resulting rows.
 2. **foreman's `Prog` layer runs in process.** `Prog` keeps its operations and
    runs them on `Tasks`; each label rewrite is one transaction. foreman uses

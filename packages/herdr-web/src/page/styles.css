@@ -749,7 +749,9 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
 .pipeline-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
 .pipeline-rungs, .pipeline-changes-list { margin: 0; padding-left: 22px; }
 .pipeline-rungs li { display: flex; justify-content: space-between; gap: 8px; }
-.pipeline-rungs li.off { opacity: 0.45; }
+.pipeline-rungs li.off > .pipeline-rung, .pipeline-rungs li.off > .note { opacity: 0.45; }
+.pipeline-rungs li { flex-wrap: wrap; align-items: center; }
+.pipeline-rung-switches { display: flex; gap: 4px; margin-left: auto; }
 .pipeline-rung { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* On a phone there is no room beside the belt, so the panels stand under it instead. The inspector still floats on the drawing and keeps its room under the belt. */
 @media (max-width: 720px) {

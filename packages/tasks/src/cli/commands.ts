@@ -5,7 +5,6 @@ import {
   STATUSES,
   TaskError,
   Tasks,
-  handOff,
   nameExit,
   runsOf,
   type TaskEvent,
@@ -317,7 +316,6 @@ const status = Command.make(
       const open = (item: (typeof found)[number]) =>
         item.status !== "done" && item.status !== "canceled";
       yield* section("In progress", of("in_progress"));
-      yield* section("Reviewing", of("reviewing"));
       yield* section("Proposals awaiting authorisation", of("proposed"));
       yield* section(
         "Questions (open decisions)",
@@ -358,7 +356,7 @@ const graph = Command.make("graph", {}, () =>
 const VERDICT_MOVES = {
   approved: undefined,
   returned: "open",
-  "already-done": "review",
+  "already-done": undefined,
 } as const satisfies Record<string, TaskEvent | undefined>;
 type VerdictName = keyof typeof VERDICT_MOVES;
 
@@ -377,15 +375,7 @@ const verdictCommand = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Name the exit that ends your run: approved or returned (a reviewer), already-done (an author whose task the trunk already does). returned reopens the task and already-done sends it to review; a second verdict replaces the first",
-  ),
-);
-
-const review = Command.make("review", { id }, ({ id }) =>
-  handOff(id).pipe(Effect.andThen(Console.log(`Moved to review: ${id}`))),
-).pipe(
-  Command.withDescription(
-    "Mark started work as waiting for a reviewer. An open author run ends with the exit done",
+    "Name the exit that ends your run: approved or returned (a reviewer), already-done (an author whose task the trunk already does). returned reopens the task; already-done leaves the status and records the exit; a second verdict replaces the first",
   ),
 );
 
@@ -400,13 +390,12 @@ export const tasksCommand = root.pipe(
     show,
     list,
     ready,
-    move("start", "Started", "Start open or reviewed work: it becomes in_progress"),
-    review,
+    move("start", "Started", "Start open, done or canceled work: it becomes in_progress"),
     move("done", "Completed", "Mark a task done"),
     move(
       "open",
       "Opened",
-      "Authorise a proposal or draft, or reopen a started, reviewed, done or canceled task",
+      "Authorise a proposal or draft, or reopen a started, done or canceled task",
     ),
     cancel,
     move(

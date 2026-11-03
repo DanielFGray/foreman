@@ -52,6 +52,8 @@ import { Quota, type Usage, walledRungs } from "./quota.ts";
 import {
   authorFor,
   dispatchable as dispatchableRungs,
+  isEnabled,
+  mayAuthor,
   rankOf,
   highestFailure,
   providersOf,
@@ -60,12 +62,12 @@ import {
   type Rung,
   rungSpent,
   rungsOn,
-  topOf,
 } from "./ladder.ts";
 import { authorWalls, rungAt } from "./agent-rung.ts";
 import {
   instructionNames,
   nextAgent,
+  isUnderReview,
   place,
   routeWorkspace,
   type AgentNode,
@@ -604,10 +606,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         })),
       ];
 
-      const claimed = yield* eachProject(projects, (project) => records.claimed(project.name));
-      const reviewing = yield* eachProject(projects, (project) =>
-        records.awaitingReview(project.name),
-      );
+      // Every claimed task is `in_progress`. Placement splits working authors
+      // from tasks under review once the pipelines and tips are loaded below.
+      const inFlight = yield* eachProject(projects, (project) => records.claimed(project.name));
       // One query, gated by prog: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
       // allowlist is applied afterwards, to prog's answer rather than to the
@@ -618,7 +619,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Each project's pipeline, read with the policy and checked against the
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
-      const rungs = settings.ladder.map((rung) => rung.name);
+      const rungs = settings.ladder.map((rung) => ({
+        name: rung.name,
+        author: rung.author !== false,
+        review: rung.review !== false,
+      }));
       const instructions = yield* prompts.instructions(
         [STANDARD_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
       );
@@ -669,6 +674,27 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // carries the tip its work has in this reading: its branch's, or, for a
       // task on the operator's own branch, the checkout's while it occupies it.
       const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
+
+      const withTip = (task: Item): Item => ({
+        ...task,
+        tip:
+          workspaceOf(pipelines, task) === "none"
+            ? occupies(pipelines, task)
+              ? heads.get(task.project)
+              : undefined
+            : tips.get(task.id),
+      });
+
+      const tipped = inFlight.map(withTip);
+      const placementOf = (task: Item): Placement => {
+        const pipeline = runningPipeline(pipelines, task.project);
+        return pipeline === undefined
+          ? { _tag: "Outside" }
+          : place(pipeline, factsOf(task, pipeline));
+      };
+      const claimed = tipped.filter((task) => !isUnderReview(placementOf(task)));
+      const reviewing = tipped.filter((task) => isUnderReview(placementOf(task)));
+
       // A task that works in the checkout holds it against every other task
       // (rule 2 of docs/workspace-blocks.md), as a `busy` hold that names it. A
       // branch-only task's branch out in the checkout already reads as one.
@@ -687,16 +713,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           branch: labelFor(task.id),
         }));
 
-      const withTip = (task: Item): Item => ({
-        ...task,
-        tip:
-          workspaceOf(pipelines, task) === "none"
-            ? occupies(pipelines, task)
-              ? heads.get(task.project)
-              : undefined
-            : tips.get(task.id),
-      });
-
       return {
         projects,
         open,
@@ -706,8 +722,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         })),
         roster,
         held: [...checkoutHolds, ...occupancy],
-        claimed: claimed.map(withTip),
-        reviewing: reviewing.map(withTip),
+        claimed,
+        reviewing,
         epics,
         queue: queue.map(withTip),
         policy,
@@ -896,8 +912,20 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // agent for, nor the reverse. A rung on a spent account holds the task
       // back; a block with no rung left for it parks it.
       const reviews = reviewable(reviewingActive, committed);
+      // A returned review wired back to the author leaves the task claimed and
+      // waiting at that block (still `in_progress`). It is not under review, so
+      // fill must take it from the claimed column or it never runs again.
+      const continuing = claimedActive.filter(({ task }) => {
+        const placement = placementOf(task);
+        return (
+          placement._tag === "At" &&
+          placement.state === "waiting" &&
+          placement.node.kind === "agent"
+        );
+      });
       const candidates: ReadonlyArray<Active> = [
         ...reviews.review,
+        ...continuing,
         ...ordered.map((task) => ({ task, worker: undefined, kind: undefined })),
       ];
       const rungs = candidates.flatMap(({ task, worker }) => {
@@ -946,7 +974,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           outOfQuota,
           queue: ordered.filter((task) => !parked.has(task.id)),
           held,
-          review: reviews.review.filter(({ task }) => !parked.has(task.id)),
+          // Continuing claimed authors sit with reviews so they keep ahead of
+          // the queue, as a returned task did when its status was `reviewing`.
+          review: [...reviews.review, ...continuing].filter(({ task }) => !parked.has(task.id)),
           policy,
           scopes,
           pipelines,
@@ -1353,6 +1383,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               worker.state === "gone" && !isOnboarding(task)
                 ? yield* repository.holdsWork(worker.directory, labelFor(task.id))
                 : false;
+            const pipeline = pipelineOf(task);
+            const at =
+              pipeline === undefined ? undefined : place(pipeline, factsOf(task, pipeline));
             const phase = phaseOf({
               status: task.status,
               reviewer,
@@ -1361,6 +1394,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               committed: current.committed.has(task.id),
               holdsWork,
               handoffExpired: handoffExpired(task, coachCutoff),
+              underReview: at !== undefined && isUnderReview(at),
             });
 
             // The rung that actually ran, which is what an outcome is about —
@@ -1861,10 +1895,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const oldest = current.unreviewed.find(recoverable);
         if (!oldest) return;
-        yield* tracker.submit(oldest.task);
+        yield* tracker.claim(oldest.task);
         yield* tracker.log(
           oldest.task,
-          `foreman: ${oldest.task} is done, but ${oldest.branch} still holds commits ${oldest.project} never took, so the landing never completed. Nothing in the pipeline reaches a done task, so it is back in review to decide whether the work is worth landing.`,
+          `foreman: ${oldest.task} is done, but ${oldest.branch} still holds commits ${oldest.project} never took, so the landing never completed. Nothing in the pipeline reaches a done task, so it is claimed again for its step to decide whether the work is worth landing.`,
         );
         yield* Effect.logInfo(`recovered ${oldest.task} (${oldest.project}) for review`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`recovering a branch failed: ${error}`)));
@@ -2191,7 +2225,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       project: Project,
     ) {
-      const rung = topOf(settings.ladder);
+      // Salvage needs judgement; the dearest author-enabled rung takes it.
+      const authors = settings.ladder.filter((rung) => isEnabled(rung) && mayAuthor(rung));
+      const rung = authors[authors.length - 1];
+      if (rung === undefined) return;
       const block = yield* blockFor(task, "author");
       if (block === undefined) return;
 
@@ -2277,7 +2314,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * Hands a task to the next reviewer after one stopped without a verdict.
      *
-     * The task stays in `reviewing` and the author is not charged: the stop says
+     * The task stays `in_progress` at its review step and the author is not charged: the stop says
      * nothing about the author's work. The reviewer's rung is recorded so the
      * next one is chosen above it. With no rung left the review cannot proceed,
      * and a person decides: the task is released and parked, which also clears
@@ -2524,8 +2561,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (task.status === "done" || task.status === "canceled") return;
         yield* stopAgents(target.worker);
         if (reviewedBy(task) !== undefined) yield* records.endReview(task.id, "released");
-        if (task.status === "open") yield* tracker.claim(task.id);
-        yield* tracker.review(task.id);
+        if (task.status !== "in_progress") yield* tracker.claim(task.id);
         yield* handReview(yield* records.show(task.id));
       });
 
@@ -2731,13 +2767,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }
                 return;
               }
-              return yield* (
-                task.status === "reviewing" ? handReview(task) : handAuthor(task)
-              ).pipe(Effect.catch((error) => recordFailure(task.id, error)));
+              const pipeline = runningPipeline(
+                (yield* SubscriptionRef.get(state)).pipelines,
+                task.project,
+              );
+              const atReview =
+                pipeline !== undefined && isUnderReview(place(pipeline, factsOf(task, pipeline)));
+              return yield* (atReview ? handReview(task) : handAuthor(task)).pipe(
+                Effect.catch((error) => recordFailure(task.id, error)),
+              );
             }
 
-            if (task.status === "reviewing") {
-              return yield* handReview(task);
+            {
+              const pipeline = runningPipeline(
+                (yield* SubscriptionRef.get(state)).pipelines,
+                task.project,
+              );
+              if (
+                pipeline !== undefined &&
+                isUnderReview(place(pipeline, factsOf(task, pipeline)))
+              ) {
+                return yield* handReview(task);
+              }
             }
 
             // A salvage run that stopped is retried as a salvage run. Sending an
@@ -2861,8 +2912,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * HEAD on a direct route), so a correction round needs no special case:
        * the reviewer names its exit after the round, on the tip the round left. The
        * status move is the one the exit's wire implies: a return to the queue
-       * reopens the task, and settle releases it; an author's exit onward sends
-       * it to review; a reviewer's exit onward leaves the status as it is.
+       * reopens the task, and settle releases it; a wire to another block leaves
+       * the status alone — the task stays `in_progress` and placement reads the
+       * step from the exit.
        */
       exit: (id: string, name: string) =>
         commanded(
@@ -2889,30 +2941,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             yield* records.nameExit(
               task.id,
               { name, commit },
-              exit.to === QUEUE
-                ? "reopen"
-                : block.role === "author" && task.status === "in_progress"
-                  ? "review"
-                  : undefined,
+              exit.to === QUEUE ? "reopen" : undefined,
             );
             return { _tag: "Named", block: block.id, commit } as const;
           }),
         ),
 
-      /**
-       * Puts an unread branch in front of a reviewer.
-       *
-       * Nobody can say from the outside whether commits nothing is reading are
-       * worth keeping, and that judgement is exactly a review. The task moves
-       * to `reviewing`, the next tick's review pass dispatches a reviewer at
-       * the ladder's rung, and it either approves — which lands the branch
-       * through the ordinary gate — or returns it with findings. Writing the
-       * status rather than spawning here is what keeps reviews ahead of new
-       * work: the operator names the branch, and fill still decides the order.
-       *
-       * A branch whose task is gone is skipped: it has no id to dispatch
-       * against, so it stays on the list until a person deals with it.
-       */
       /**
        * Answers an ask with one grant: the step it holds, on that one task,
        * counted once. The grant is an ordinary one, so the next tick takes the
@@ -2926,15 +2960,24 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             Effect.asVoid,
           ),
         ),
+      /**
+       * Puts an unread branch back in the pipeline. Claiming a done or canceled
+       * task starts it again; placement then stands it where its exits lead,
+       * and the next tick's fill dispatches there. Writing a claim rather than
+       * spawning here is what keeps reviews ahead of new work.
+       *
+       * A branch whose task is gone is skipped: it has no id to dispatch
+       * against, so it stays on the list until a person deals with it.
+       */
       adopt: (branch: Unreviewed) =>
         commanded(
           branch.status === undefined
             ? Effect.void
-            : tracker.submit(branch.task).pipe(
+            : tracker.claim(branch.task).pipe(
                 Effect.andThen(
                   tracker.log(
                     branch.task,
-                    `foreman: ${branch.branch} holds commits ${branch.project} never took, and nothing was going to read them. Sent for review to decide whether they are worth landing.`,
+                    `foreman: ${branch.branch} holds commits ${branch.project} never took, and nothing was going to read them. Claimed so its step can decide whether they are worth landing.`,
                   ),
                 ),
                 Effect.catch((error) =>
@@ -3239,15 +3282,15 @@ const occupies = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): 
  * A finished branch whose fate is landing rather than the ordinary settle path,
  * whatever its pane is doing: the task is placed at a land or a done block.
  *
- * `reviewing` means the author stopped writing, not that the diff has been read:
- * a pipeline reaches a land block only past a review, and a review is passed
- * only by an approval of the branch tip. So no task size or priority routes
- * around it.
+ * Placement at land or done means the author stopped writing and a review
+ * passed — a pipeline reaches a land block only past a review, and a review
+ * is passed only by an approval of the branch tip. So no task size or priority
+ * routes around it.
  */
 export const awaitingLanding = (pipeline: Pipeline, task: Item): boolean => {
   const placement = place(pipeline, factsOf(task, pipeline));
   return (
-    task.status === "reviewing" &&
+    task.status === "in_progress" &&
     placement._tag === "At" &&
     (placement.node.kind === "land" || placement.node.kind === "done")
   );
@@ -3355,10 +3398,7 @@ export const decisionsOf = (
       !reviewerNamed(task) &&
       (worker === undefined || worker.state === "gone"),
   ),
-  ...owned.filter(
-    ({ task, worker }) =>
-      task.status !== "in_progress" && task.status !== "reviewing" && worker.roles.size === 0,
-  ),
+  ...owned.filter(({ task, worker }) => task.status !== "in_progress" && worker.roles.size === 0),
 ];
 
 /**
@@ -3420,11 +3460,11 @@ export const failedTasks = (
  * The statuses from which a task still reaches an agent on its own.
  *
  * `open` is the queue, which resumes the branch rather than reading it, and
- * orders by age already. `in_progress` is a claim — worked, or vanished and
- * therefore a decision, and reclaimed back to `open` when it goes stale.
- * `reviewing` is the review pass. Every one of them ends with the branch read.
+ * orders by age already. `in_progress` is a claim — at any step of the drawing,
+ * worked or vanished — and is reclaimed back to `open` when it goes stale.
+ * Every one of them ends with the branch read.
  */
-const REACHABLE: ReadonlySet<string> = new Set(["open", "in_progress", "reviewing"]);
+const REACHABLE: ReadonlySet<string> = new Set(["open", "in_progress"]);
 
 /**
  * Whether a branch holds commits that nothing is ever going to pick up.
@@ -3503,9 +3543,9 @@ export const landedColumn = (
  *
  * Two proofs are needed, and prog can only give one. The `by-*` label proves
  * foreman authored the branch; only a commit on that branch proves the author
- * produced something. An agent can move a task to `reviewing` having written
- * nothing, and then a reviewer is paid to read an empty diff — or, on a task
- * small enough to skip review, an empty merge commit lands.
+ * produced something. An agent can hand off having written nothing, and then a
+ * reviewer is paid to read an empty diff — or, on a task small enough to skip
+ * review, an empty merge commit lands.
  *
  * `committed` holds the tasks whose branch carries commits of its own, which is
  * the same read that finds unread branches. Of its own, not merely of ones

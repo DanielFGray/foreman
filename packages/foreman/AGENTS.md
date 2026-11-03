@@ -40,7 +40,7 @@ a claim made by hand.
 | Is a reviewer assigned? | an open review run in the task's current lap |
 | Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
-| Which rung comes next? | the cheapest configured, enabled, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels |
+| Which rung comes next? | the cheapest configured, enabled, author-on, funded rung above every `failed-by:<rung>` label, off the accounts in the task's `walled:<provider>` labels; a reviewer is the next review-on rung above the author |
 | How many tries has this rung had? | the task's `attempt:<rung>:<n>` label |
 | Is this one waiting on a person? | every configured rung has failed it, or it carries `needs-you` |
 | Is this task mine to review? | it has an author run |
@@ -383,10 +383,12 @@ queue and the operator's column, and both the tick and `foreman queue` call it.
 
 ### A task records what failed it, never what runs next
 
-The rung is chosen at the moment of dispatch, from what is configured, enabled
-and funded then — `authorFor` in `src/ladder.ts`. What the task durably carries
-is evidence: one `failed-by:<rung>` label per rung that was tried and was not
-enough. The author is the cheapest available rung above all of them.
+The rung is chosen at the moment of dispatch, from what is configured, enabled,
+author-on and funded then — `authorFor` in `src/ladder.ts`. What the task
+durably carries is evidence: one `failed-by:<rung>` label per rung that was
+tried and was not enough. The author is the cheapest available author-on rung
+above all of them. `foreman ladder role <rung> author|review on|off` turns a
+role off without retiring the rung.
 
 A task that named its next model would be a pointer into the ladder, and the
 ladder outlives no task: remove a rung and every task holding its name
@@ -479,18 +481,21 @@ a model — so the ordinary rung is chosen again once the account resets.
 
 ### The review gate
 
-`reviewing` is a status anything can set, including tasks that predate foreman
-and have no branch behind them. Dispatching a reviewer to one gives it no diff to
-read and nothing to merge; it will invent something.
+A task under review is still `in_progress`. Its step is the block placement puts
+it at — the name the operator drew — derived from the last exit and the drawing.
+Status answers only the task's life; storing a review step as a status kept one
+fact twice and let the two disagree.
 
 A task is foreman's to review only if it has an author run, which foreman opens
 when an agent actually starts. **Do not weaken this into "has a worker"** — the
-worker can legitimately be absent while the run is not.
+worker can legitimately be absent while the run is not. Tasks that predate
+foreman and have no branch behind them are not reviewed: a reviewer given no
+diff invents one.
 
-`reviewing` also does not say whether a reviewer was dispatched: it covers both
-the author's completed handoff and the whole review run. An open review run
-records the latter, so a vanished worker behind one is a question for the
-operator rather than grounds for silently launching another reviewer.
+An open review run records that a reviewer was dispatched, so a vanished worker
+behind one is a question for the operator rather than grounds for silently
+launching another reviewer. Placement standing at the review block covers both
+the author's completed handoff and the whole review run.
 
 **An empty branch is unfinished work, except when it is a finding.** A backlog
 outlives the code it describes: work goes in under another task's branch or by
@@ -561,14 +566,14 @@ asks for before approving is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
 
 **A reviewer that stops without naming an exit is the reviewer's failure, not the
-author's.** The task stays in `reviewing`, and its review run ends `stopped`;
-`reviewerFor` then reads above the author and every rung whose review in this
-lap ended that way. No attempt is charged to the author. When no rung is left
-the task is released and parked with `needs-you`. A reviewer stopped on a usage
-wall ends `walled` and charges no rung. A reviewer whose approval a later commit
-voided has not failed: the same rung may read the new tip. This is the review
-block's `stopped: retry`; a block drawn with `stopped: park` parks the task at
-the first stop instead.
+author's.** The task stays `in_progress` at its review step, and its review run
+ends `stopped`; `reviewerFor` then reads the next review-on rung above the
+author and every rung whose review in this lap ended that way. No attempt is
+charged to the author. When no review-on rung is left the task is released and
+parked with `needs-you`. A reviewer stopped on a usage wall ends `walled` and charges no
+rung. A reviewer whose approval a later commit voided has not failed: the same
+rung may read the new tip. This is the review block's `stopped: retry`; a block
+drawn with `stopped: park` parks the task at the first stop instead.
 
 **Review state is the current lap's runs.** A lap is the task's latest author
 run and every run after it. A new author run leaves the last lap's reviews
@@ -639,9 +644,10 @@ That distinction lives wholly in the proving ground. By the time the branch
 reaches the operator's checkout it is proved mergeable against exactly that
 commit, so a refusal there cannot be about content — it is `Held`, always.
 
-`Held` is also what keeps an `approved` exit alive. It leaves the task in `reviewing` and
-the tip where it was, so a later tick lands the same reviewed commit; nothing
-about a lock invalidates a diff a reviewer already read.
+`Held` is also what keeps an `approved` exit alive. It leaves the task
+`in_progress` at its land step and the tip where it was, so a later tick lands
+the same reviewed commit; nothing about a lock invalidates a diff a reviewer
+already read.
 
 Landing also runs `verify`. Only a ground that was green and reproducibly went red
 is the branch's fault: the output is logged and the task returns to the queue.
@@ -715,10 +721,10 @@ whose teardown failed does not leave the branch pinned forever; one with
 uncommitted or untracked work refuses, and the branch waits.
 
 What is left over is **unreviewed**, and `isUnread` is the whole rule: unmerged,
-and its task in no status that still reaches an agent. `open`, `in_progress` and
-`reviewing` all end with the branch read — the queue resumes it, a claim is
-worked or reclaimed, a review reads it — so a queued task with commits behind it
-is not abandoned but next in line, and the queue already works oldest first.
+and its task in no status that still reaches an agent. `open` and `in_progress`
+both end with the branch read — the queue resumes it, a claim is worked or
+reclaimed, a review reads it — so a queued task with commits behind it is not
+abandoned but next in line, and the queue already works oldest first.
 Listing those names the ordinary case as an exception, and dispatching a
 reviewer at one reads a diff its author is half way through.
 

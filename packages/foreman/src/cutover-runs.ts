@@ -108,7 +108,7 @@ export const planOf = (
   // names an attempt that was released, not handed off, and nothing reads it:
   // the next author is chosen from `failed-by`, which stays a label. A run made
   // up for it would pass the author block and count in the model statistics.
-  if (task.status !== "in_progress" && task.status !== "reviewing") {
+  if (task.status !== "in_progress") {
     return {
       task: task.id,
       labels,
@@ -119,7 +119,12 @@ export const planOf = (
     };
   }
 
-  const open = task.status === "in_progress";
+  // An open author run is work still being written. Handoff evidence used to
+  // be the `reviewing` status; with six statuses it is the review labels.
+  const open =
+    !labels.includes(SATISFIED) &&
+    !labels.includes(APPROVED) &&
+    !labels.some((label) => label.startsWith(REVIEW_BY));
   const [author] = after(labels, BY);
   if (author !== undefined) {
     const rounds = countOf({ labels }, ROUNDS);

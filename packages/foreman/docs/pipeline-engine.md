@@ -83,7 +83,7 @@ done. Sources, routers, gates, branches and worktrees decide at once.
 
 | Block | Advances when | Returns when |
 | --- | --- | --- |
-| author agent | the author names `done` or `already-done` (status `reviewing`) | it stops with no exit or hands back an empty branch (`stopped: retry`: an attempt, and `failed-by` once the rung is spent) |
+| author agent | the author names `done` or `already-done` (stays `in_progress`; placement follows the exit) | it stops with no exit or hands back an empty branch (`stopped: retry`: an attempt, and `failed-by` once the rung is spent) |
 | review agent | the reviewer names `approved` and the branch tip is still the commit it named it on | the reviewer names `returned` (`fails: author`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
 | done | the approval holds for the checkout's HEAD (the task is done) | — |
@@ -142,12 +142,13 @@ names one of the existing steps.
 
 ### Models
 
-`model` is `ladder` (author: the cheapest rung above the task's failures),
-`above` (review: the next rung above the author and any failed reviewers), or a
-rung name (pinned). A pinned block that has a `failed-by` for its rung has no
-rung left, so the task parks. A router in front of it is how a pipeline sends
-such a task elsewhere. `slots` caps how many of the block's tasks run at once,
-inside the fleet's `slots`.
+`model` is `ladder` (author: the cheapest author-on rung above the task's
+failures), `above` (review: the next review-on rung above the author and any
+failed reviewers), or a rung name (pinned). A pin must allow the block's role;
+a pinned block that has a `failed-by` for its rung has no rung left, so the
+task parks. A router in front of it is how a pipeline sends such a task
+elsewhere. `slots` caps how many of the block's tasks run at once, inside the
+fleet's `slots`.
 
 ### Filters
 
@@ -171,9 +172,8 @@ Filters read facts, never label strings, so when runs replace labels only
 1. Start at the first source whose filter matches the task. No match: the task
    is not in this pipeline.
 2. A task with an open agent run is **at** that run's block: `ended` when the
-   run named an exit (or the author's task is already `reviewing`), else
-   `running`. Settle closes an ended run once the agent's pane is idle, and
-   the next tick places the task where the exit leads.
+   run named an exit, else `running`. Settle closes an ended run once the
+   agent's pane is idle, and the next tick places the task where the exit leads.
 3. Otherwise take the task's last named exit, find it on its block in the
    drawing as it is now, and walk from its wire. An open task, a return, a
    missing block or exit, or no exit at all: walk from the source.
@@ -280,8 +280,9 @@ and the policy step that holds the retry is unchanged.
   replace them.
 - "`satisfied` is cleared wherever `approved` is": replaced. `already-done` is
   an exit of the author block.
-- "`Held` … leaves the task in `reviewing` with its `approved` label": kept in
-  meaning. The tip has not moved, so the review still passes.
+- "`Held` … leaves the task in `reviewing` with its `approved` label": the task
+  stays `in_progress` at its land step; the tip has not moved, so the review
+  still passes.
 
 ## Build order
 

@@ -17,7 +17,7 @@ import { Alerts, Asking, Bridge, CheckoutAction, CheckoutList, ChoiceList, Conve
 import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, tabAfterClosing, whenFocused, withView } from "./selection.ts"
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
-import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
+import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, rereadAfter, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
 import { clickedReset, clickedRevert, clickedSave, closedPipeline, editedPipeline, failedChange, failedPipeline, openedPipeline, receivedPipeline, succeededChange, toggledPanel } from "./pipelinePage.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
@@ -312,7 +312,10 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     ClickedForemanCommand: ({ command }) => clickedForemanCommand(model, command),
 
-    SucceededForemanCommand: ({ line }) => ({ model: finishedForemanCommand(model, line, Option.none()) }),
+    SucceededForemanCommand: ({ line }) => ({
+      model: finishedForemanCommand(model, line, Option.none()),
+      commands: rereadAfter(line),
+    }),
 
     FailedForemanCommand: ({ line, reason }) => ({ model: finishedForemanCommand(model, line, Option.some(reason)) }),
 

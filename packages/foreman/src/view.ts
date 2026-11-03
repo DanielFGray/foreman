@@ -63,7 +63,7 @@ export type DecisionKind =
 export const decisionKind = (task: Item, failure: string | undefined = undefined): DecisionKind =>
   failure !== undefined
     ? "dispatch failed"
-    : task.status === "reviewing"
+    : reviewedBy(task) !== undefined
       ? "reviewer vanished"
       : task.status === "in_progress"
         ? "author vanished"
@@ -75,10 +75,10 @@ export const decisionKind = (task: Item, failure: string | undefined = undefined
  * The world records whether a reviewer was dispatched, not whether that
  * reviewer is still alive. A task that is open — waiting in the queue — with an
  * open review run is stale by definition, because a real review keeps the
- * task in `reviewing` with its reviewer beside it; the run only survives on
- * an open task when the review is already over. A workspace that is gone, or a
- * reviewer that settled, is nobody behind the run. Only the operator can say
- * the run is stale, and this is the only place that asks.
+ * task `in_progress` at its review step with its reviewer beside it; the run
+ * only survives on an open task when the review is already over. A workspace
+ * that is gone, or a reviewer that settled, is nobody behind the run. Only the
+ * operator can say the run is stale, and this is the only place that asks.
  */
 export const staleReview = (
   task: Pick<Item, "runs"> & { readonly status?: string },
@@ -396,24 +396,33 @@ const activeRow = (
   { task, worker, kind }: Active,
   column: "working" | "review",
   state: FleetState,
-): ColumnRow => ({
-  column,
-  key: task.id,
-  label: `${diagnosticIntent(task) ?? kind ?? "?"}  ${task.title}`,
-  detail: undefined,
-  task,
-  ready: undefined,
-  worker,
-  project: undefined,
-  reason: undefined,
-  unreviewed: undefined,
-  stale: undefined,
-  ask: undefined,
-  failure: undefined,
-  provider: undefined,
-  hasWork: worker !== undefined || state.resumable.has(task.id),
-  committed: state.committed.has(task.id),
-});
+): ColumnRow => {
+  const placement = state.placed.find((entry) => entry.task.id === task.id)?.placement;
+  const step =
+    placement?._tag === "At"
+      ? placement.node.id
+      : placement?._tag === "Parked"
+        ? placement.node
+        : undefined;
+  return {
+    column,
+    key: task.id,
+    label: `${diagnosticIntent(task) ?? kind ?? "?"}  ${task.title}`,
+    detail: step === undefined ? undefined : `at ${step}`,
+    task,
+    ready: undefined,
+    worker,
+    project: undefined,
+    reason: undefined,
+    unreviewed: undefined,
+    stale: undefined,
+    ask: undefined,
+    failure: undefined,
+    provider: undefined,
+    hasWork: worker !== undefined || state.resumable.has(task.id),
+    committed: state.committed.has(task.id),
+  };
+};
 
 const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   column: "landed",

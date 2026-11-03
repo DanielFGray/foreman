@@ -98,6 +98,11 @@ describe("authorFor", () => {
       walled: ["top"],
     });
   });
+
+  test("skips a rung whose author role is off", () => {
+    const roles: Ladder = [rung("cheap", { author: false }), middle, top];
+    expect(authorFor(roles, [])).toEqual({ _tag: "Dispatch", rung: middle });
+  });
 });
 
 describe("floorFor", () => {
@@ -173,13 +178,40 @@ describe("reviewerFor", () => {
   test("never dispatches a retired rung", () => {
     const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
     expect(reviewerFor(retired, "cheap")?.name).toBe("top");
-    expect(topOf(retired).name).toBe("top");
+    expect(topOf(retired)?.name).toBe("top");
   });
 
   test("reviews with the top of a one-rung ladder", () => {
     const uniform: Ladder = [rung("only")];
     expect(reviewerFor(uniform, "only")?.name).toBe("only");
-    expect(topOf(uniform).name).toBe("only");
+    expect(topOf(uniform)?.name).toBe("only");
+  });
+
+  test("skips a rung whose review role is off", () => {
+    const roles: Ladder = [cheap, rung("middle", { review: false }), top];
+    expect(reviewerFor(roles, "cheap")?.name).toBe("top");
+  });
+
+  test("parks when no review-enabled rung stands above the author", () => {
+    const roles: Ladder = [
+      cheap,
+      rung("middle", { review: false }),
+      rung("top", { review: false }),
+    ];
+    // Cheap is still review-on, but nothing above the author may review — park,
+    // rather than handing the author's own work back to itself.
+    expect(reviewerFor(roles, "cheap")).toBeUndefined();
+    expect(topOf(roles)?.name).toBe("cheap");
+  });
+
+  test("has no review top when every rung has review off", () => {
+    const none: Ladder = [
+      rung("cheap", { review: false }),
+      rung("middle", { review: false }),
+      rung("top", { review: false }),
+    ];
+    expect(topOf(none)).toBeUndefined();
+    expect(reviewerFor(none, "cheap")).toBeUndefined();
   });
 
   test("steps past a spent account to the next rung that can be paid for", () => {

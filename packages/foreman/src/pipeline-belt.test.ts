@@ -13,7 +13,7 @@ import {
   swapEnd,
 } from "./pipeline-belt.ts";
 
-const RUNGS = ["cheap", "strong"];
+const RUNGS = ["cheap", "strong"].map((name) => ({ name, author: true, review: true }));
 const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
 const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
 const at = (pipeline: Pipeline) =>

@@ -15,7 +15,6 @@ import {
   recordCheck,
   outcomeOf,
   runsOf,
-  handOff,
   nameExit,
   type NewRun,
 } from "./runs.ts";
@@ -282,7 +281,6 @@ describe("naming an exit", () => {
         const tasks = yield* Tasks;
         const id = yield* filed;
         yield* tasks.send(id, "start");
-        yield* tasks.send(id, "review");
         yield* openRun(run({ task: id, work: "review", node: "review" }));
         yield* nameExit(id, { name: "approved", commit: "c1", event: undefined });
         yield* nameExit(id, { name: "returned", commit: "c2", event: "open" });
@@ -315,27 +313,6 @@ describe("naming an exit", () => {
       }),
     );
     expect([none, process, status]).toEqual(["TaskError", "TaskError", "in_progress"]);
-  });
-
-  test("a hand-off names done on an open author run, and moves a task with none", async () => {
-    const [endings, statuses] = await inTasks(
-      Effect.gen(function* () {
-        const tasks = yield* Tasks;
-        const withRun = yield* filed;
-        yield* tasks.send(withRun, "start");
-        yield* openRun(run({ task: withRun }));
-        yield* handOff(withRun);
-        const alone = yield* filed;
-        yield* tasks.send(alone, "start");
-        yield* handOff(alone);
-        return [
-          (yield* runsOf([withRun])).get(withRun)?.map((r) => r.ending),
-          [(yield* tasks.require(withRun)).status, (yield* tasks.require(alone)).status],
-        ] as const;
-      }),
-    );
-    expect(endings).toEqual(["done"]);
-    expect(statuses).toEqual(["reviewing", "reviewing"]);
   });
 });
 
@@ -375,7 +352,11 @@ describe("the exits migration", () => {
         yield* sql.unsafe(`DROP VIEW herd_roster`);
         yield* sql.unsafe(`DROP TABLE runs`);
         yield* sql.unsafe(OLD_RUNS);
-        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'exits'`);
+        // The migrator only runs ids above the latest recorded row, so later
+        // migrations must go too or exits is skipped and the rename never runs.
+        yield* sql.unsafe(
+          `DELETE FROM tasks_migrations WHERE name IN ('exits', 'ladder_roles', 'six_statuses')`,
+        );
         const endings = [
           ["build", "handed-off"],
           ["build", "satisfied"],

@@ -25,11 +25,11 @@ section is the rule.
   exit drops back to the exit before it. A run that named an exit is `ended`
   until settle closes it once the pane is idle; the next tick places the task
   where the exit leads, so a landing comes one tick after the approval.
-- **Status.** `foreman exit` makes the status move the exit implies: an exit
-  to `queue` opens and releases the task; an author's exit puts it in
-  `reviewing`. A returned review wired to another block keeps `reviewing`
-  until the next author starts, moving directly to `in_progress`.
-  `reviewing` and `role` stay (open questions 2 and 3).
+- **Status.** Six life statuses (ts-881e9e). `foreman exit` reopens the task
+  only when the exit wires to `queue`; a wire to another block leaves the
+  status as `in_progress` and placement reads the step from the exit. A task
+  under review is `in_progress` at the review block. `role` stays (open
+  question 3); open question 2 is answered.
 - **Prompts.** Rule 6 is built (`src/prompt.ts`). The operator's directory
   is `prompts/` in foreman's config directory (`~/.config/foreman/prompts/`).
   An unknown placeholder or a missing instructions file stops the pipeline.
@@ -241,9 +241,9 @@ The standard pipeline has no check block. The store's author ending
 - **The store.** An agent run's `ending` holds an exit name or a process
   ending. The store accepts any exit name for an agent run, because only
   foreman knows the block, and foreman validates it. Runs get a `charged`
-  column (the rung an exit charged). `VERDICTS` is removed. `tasks verdict` and
-  `tasks review` stay for people who use `tasks` without foreman, and foreman's
-  prompts stop naming them.
+  column (the rung an exit charged). `VERDICTS` is removed. `tasks verdict`
+  stays for people who use `tasks` without foreman; `tasks review` is removed
+  (ts-881e9e). Foreman's prompts stop naming them.
 - **Laps.** A lap today starts at an author run. Rule 3 and the State table read
   the last exit and per-rung counts instead, so `lapOf` remains only where a
   rule needs "since the last author run", such as `rounds`.
@@ -297,9 +297,8 @@ Each line names the old rule, where it stands, and what replaces it.
    safe from commits made after the exit, but not from unreviewed work.
    CLAUDE.md says "Nothing skips review" for the same reason. Should
    this become a hint, so that an operator can draw a pipeline with no review?
-2. **The `reviewing` status.** Placement reads exits, not statuses. `reviewing`
-   could mean "past the first agent block", or go away for foreman's tasks.
-   `tasks` users see this status, so changing it is a decision.
+2. **The `reviewing` status.** Answered by ts-881e9e: it is gone. A task under
+   review is `in_progress`, and its step is the block placement puts it at.
 3. **Roles.** `role` now selects only the model rule (`ladder` or `above`) and
    whether `rounds` applies. It could become those two settings, so that a user
    can draw agents that are neither author nor reviewer.

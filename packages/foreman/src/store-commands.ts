@@ -4,6 +4,9 @@ import { Records } from "./records.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
 import { queueOf } from "./host.ts";
 import { Refused } from "./commands.ts";
+import { place, type Placement } from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
+import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
 
 /**
  * Reads of the task store that a client makes every few seconds.
@@ -44,7 +47,15 @@ export const queueCommand = Command.make("queue", { json, project }, (args) =>
 
 const id = Argument.String("id").pipe(Argument.withDescription("A task id"));
 
-/** One task whole: its fields, what done means, and its log. */
+/** The block placement puts the task at, named for a human reader. */
+const stepOf = (placement: Placement): string | undefined =>
+  placement._tag === "At"
+    ? placement.node.id
+    : placement._tag === "Parked"
+      ? placement.node
+      : undefined;
+
+/** One task whole: its fields, what done means, its step, and its log. */
 export const showCommand = Command.make("show", { id, json }, (args) =>
   Effect.gen(function* () {
     const task = yield* (yield* Records).detail(args.id).pipe(
@@ -55,11 +66,14 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
         }),
       ),
     );
+    const drawings = yield* readPipelines(pipelinesPath());
+    const { pipeline } = pipelineFor(drawings.value, task.project);
+    const step = stepOf(place(pipeline, factsOf(task, pipeline)));
     if (args.json) {
-      return yield* Console.log(JSON.stringify(task));
+      return yield* Console.log(JSON.stringify({ ...task, step }));
     }
     yield* Console.log(
-      `${task.id} [${task.project}] ${task.status} p${task.priority} ${task.title}`,
+      `${task.id} [${task.project}] ${task.status}${step === undefined ? "" : ` at ${step}`} p${task.priority} ${task.title}`,
     );
     if (task.labels.length > 0) yield* Console.log(task.labels.join(" "));
     if (task.description) yield* Console.log(`\n${task.description}`);
@@ -67,4 +81,4 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
     for (const log of task.logs)
       yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);
   }),
-).pipe(Command.withDescription("Print one task with its definition of done and its log"));
+).pipe(Command.withDescription("Print one task with its definition of done, its step and its log"));

@@ -67,14 +67,15 @@ export const GateNode = S.Struct({
 /**
  * Runs an agent on the task.
  *
- * `model` is `ladder` (an author on the cheapest rung above the task's
- * failures), `above` (a reviewer on the next rung above the author), or a rung
- * name, which pins the block to that rung. `slots` caps how many of this
- * block's tasks run at once, inside the fleet's own limit. `exits` are the
- * names the agent may end its run with. `stopped` is what follows a run that
- * named none: `retry` (the default) keeps the task at the block, and the
- * model rule picks the next rung; `park` parks it. `instructions` names the
- * operator's text for the agent, a file `<name>.md`; it defaults to the role.
+ * `model` is `ladder` (an author on the cheapest author-enabled rung above the
+ * task's failures), `above` (a reviewer on the next review-enabled rung above
+ * the author), or a rung name, which pins the block to that rung — and that
+ * rung must allow the block's role. `slots` caps how many of this block's
+ * tasks run at once, inside the fleet's own limit. `exits` are the names the
+ * agent may end its run with. `stopped` is what follows a run that named none:
+ * `retry` (the default) keeps the task at the block, and the model rule picks
+ * the next rung; `park` parks it. `instructions` names the operator's text for
+ * the agent, a file `<name>.md`; it defaults to the role.
  */
 export const AgentNode = S.Struct({
   kind: S.Literal("agent"),
@@ -246,11 +247,12 @@ export type Placement =
  * the tip has moved: the task is placed by the exit before it, which stands
  * it at the block that named the void one.
  *
- * A task with no run at all (work launched by hand) is placed by its status at
- * an author: running while `in_progress`, ended once `reviewing`.
+ * A task with no run and no named exit (work launched by hand) is placed at
+ * an author as running while `in_progress`. Its step otherwise comes from its
+ * named exits, and an author reached that way is waiting.
  */
 export const place = (pipeline: Pipeline, facts: Facts): Placement => {
-  if (facts.status !== "open" && facts.status !== "in_progress" && facts.status !== "reviewing") {
+  if (facts.status !== "open" && facts.status !== "in_progress") {
     return { _tag: "Outside" };
   }
   const nodes = indexOf(pipeline);
@@ -260,6 +262,9 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
 
   const named = facts.status === "open" ? [] : facts.named;
   let reached = walk(nodes, source.next, facts, bound);
+  // A named exit that still wires places the task; one that no longer does
+  // leaves the walk at the source, as a hand launch does.
+  let viaExit = false;
   for (let last = named.length - 1; last >= 0; last--) {
     const exit = named[last]!;
     const wire = exitOf(nodes, exit);
@@ -274,6 +279,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       target.node?.kind === "done";
     if (moved && binds) continue;
     reached = target;
+    viaExit = true;
     break;
   }
 
@@ -283,12 +289,9 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
     return {
       _tag: "At",
       node: runningAt,
-      // A reviewing status is itself the evidence an author handed off, named
-      // exit or not: a recovered or adopted branch is submitted with none.
-      state:
-        open.named || (facts.status === "reviewing" && runningAt.role === "author")
-          ? "ended"
-          : "running",
+      // A named exit is the evidence the agent handed off; settle closes the
+      // run once the pane is idle, and the next tick places where the exit leads.
+      state: open.named ? "ended" : "running",
       gates: reached.node?.id === runningAt.id ? reached.gates : [],
       ahead: aheadOf(nodes, runningAt, facts, bound),
     };
@@ -299,7 +302,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   return {
     _tag: "At",
     node,
-    state: stateByStatus(node, facts),
+    state: stateByStatus(node, facts, viaExit),
     gates,
     ahead: aheadOf(nodes, node, facts, bound),
   };
@@ -367,6 +370,13 @@ export const nextAgent = (
   return undefined;
 };
 
+/** A rung a block may pin, and whether it may author and review. */
+export interface RungOffer {
+  readonly name: string;
+  readonly author: boolean;
+  readonly review: boolean;
+}
+
 /**
  * Why a pipeline cannot run, or nothing when it can.
  *
@@ -376,7 +386,7 @@ export const nextAgent = (
  */
 export const problemsOf = (
   pipeline: Pipeline,
-  rungs: ReadonlyArray<string>,
+  rungs: ReadonlyArray<RungOffer>,
 ): ReadonlyArray<string> => {
   const shape = shapeProblems(pipeline, rungs);
   if (shape.length > 0) return shape;
@@ -761,7 +771,7 @@ const termTest = (term: string): Term["test"] | undefined => {
 };
 
 /** The checks that need no walk: names, wires, exits, filters and models. */
-const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<string>): Array<string> => {
+const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<RungOffer>): Array<string> => {
   const problems: Array<string> = [];
   const ids = new Set<string>();
   for (const node of pipeline.nodes) {
@@ -814,7 +824,7 @@ const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
   return problems;
 };
 
-const modelProblems = (node: AgentNode, rungs: ReadonlyArray<string>): ReadonlyArray<string> => {
+const modelProblems = (node: AgentNode, rungs: ReadonlyArray<RungOffer>): ReadonlyArray<string> => {
   if (node.model === "ladder") {
     return node.role === "author"
       ? []
@@ -823,7 +833,15 @@ const modelProblems = (node: AgentNode, rungs: ReadonlyArray<string>): ReadonlyA
   if (node.model === "above") {
     return node.role === "review" ? [] : [`${node.id}: an author has no author to read above`];
   }
-  return rungs.includes(node.model) ? [] : [`${node.id}: ${node.model} is no rung on the ladder`];
+  const offer = rungs.find((rung) => rung.name === node.model);
+  if (offer === undefined) return [`${node.id}: ${node.model} is no rung on the ladder`];
+  if (node.role === "author" && !offer.author) {
+    return [`${node.id}: ${node.model} may not author`];
+  }
+  if (node.role === "review" && !offer.review) {
+    return [`${node.id}: ${node.model} may not review`];
+  }
+  return [];
 };
 
 /**
@@ -967,17 +985,32 @@ const walk = (
 /**
  * The state at a block the walk reached, with no open agent run there. A
  * check, a land and a done run inside one tick and leave no open run, so a
- * task at one is always waiting there. An author with no run at all is work
- * launched by hand, and its status is the only signal of it.
+ * task at one is always waiting there. An author with no run is work launched
+ * by hand when no exit placed it (`in_progress` means running); an author a
+ * named exit walked to (a returned review through climb) is waiting for its
+ * next dispatch, still `in_progress`.
  */
-const stateByStatus = (node: WorkNode, facts: Facts): RunState =>
+const stateByStatus = (node: WorkNode, facts: Facts, viaExit: boolean): RunState =>
   node.kind === "agent" && node.role === "author" && facts.running === undefined
-    ? facts.status === "in_progress"
+    ? facts.status === "in_progress" && !viaExit
       ? "running"
-      : facts.status === "reviewing" && facts.exit === undefined
-        ? "ended"
-        : "waiting"
+      : "waiting"
     : "waiting";
+
+/**
+ * Whether placement puts the task past the author's running turn: an author
+ * that named its exit, or any later block (review, check, land, done). The
+ * dispatcher splits `in_progress` work into working vs review by this — the
+ * review column and fill's check/land candidates both read that half. A
+ * returned author waiting at climb stays claimed; fill picks it up from the
+ * claimed waiting set, not from this half.
+ */
+export const isUnderReview = (placement: Placement): boolean => {
+  if (placement._tag !== "At") return false;
+  const { node, state } = placement;
+  if (node.kind === "agent" && node.role === "author") return state === "ended";
+  return true;
+};
 
 /** Work blocks after `from` on the route the facts take now, each passed by its advance. */
 const aheadOf = (

@@ -44,11 +44,7 @@ const program = <A, E>(effect: Effect.Effect<A, E, Tasks | Repository | SqlClien
   Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<A, E>);
 
 /** A task with these labels, in this status; its branch exists when `branch` is true. */
-const taskWith = (
-  status: "open" | "in_progress" | "reviewing" | "done",
-  labels: Array<string>,
-  branch = true,
-) =>
+const taskWith = (status: "open" | "in_progress" | "done", labels: Array<string>, branch = true) =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
     const id = yield* tasks.add({
@@ -72,8 +68,13 @@ describe("the runs cutover", () => {
           "rounds:1",
           "review-failed-by:strong",
         ]);
-        const settled = yield* taskWith("reviewing", ["by:cheap", "satisfied", "approved", "bug"]);
-        const reviewing = yield* taskWith("reviewing", ["by:cheap", "review-by:strong"]);
+        const settled = yield* taskWith("in_progress", [
+          "by:cheap",
+          "satisfied",
+          "approved",
+          "bug",
+        ]);
+        const reviewing = yield* taskWith("in_progress", ["by:cheap", "review-by:strong"]);
         const finished = yield* taskWith("done", ["by:cheap", "approved"]);
 
         const report = yield* convert({ root, dryRun: false });
@@ -122,7 +123,7 @@ describe("the runs cutover", () => {
   test("names a rung the ladder lost and a branch that is gone, and an approval on it does not hold", () =>
     program(
       Effect.gen(function* () {
-        const lost = yield* taskWith("reviewing", ["by:retired", "approved"], false);
+        const lost = yield* taskWith("in_progress", ["by:retired", "approved"], false);
 
         const report = yield* convert({ root, dryRun: false });
         const runs = (yield* runsOf([lost])).get(lost)!;
@@ -184,7 +185,7 @@ const landsAt = (task: { readonly runs: ReadonlyArray<Run>; readonly tip: string
   const placement = place(
     STANDARD_PIPELINE,
     factsOf(
-      { status: "reviewing", priority: 2, parent: undefined, labels: [], ...task },
+      { status: "in_progress", priority: 2, parent: undefined, labels: [], ...task },
       STANDARD_PIPELINE,
     ),
   );

@@ -209,8 +209,8 @@ author eventually sent to it resumes the work rather than reading it.
 Foreman therefore asks git directly for its own branches the checkout has not
 taken, and sets aside every task that still reaches an agent on its own. A task
 in the queue with commits behind it is not abandoned — it is next in line, and
-the queue already works oldest first. The same goes for a claim and for
-anything in `reviewing`. A queue row does not show the branch, because
+the queue already works oldest first. The same goes for a claim at any step
+of its pipeline. A queue row does not show the branch, because
 `foreman queue` reads the task store only; a parked row under Needs you shows
 it as `resume`.
 
@@ -255,21 +255,21 @@ Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
 ## Review
 
-An author commits to its branch and runs `tasks review`, which hands the task to
-the review queue.
+An author commits to its branch and names an exit (`foreman exit <task> done`),
+which places the task at the next block the drawing wires that exit to — review,
+in the standard pipeline. The task stays `in_progress`; its step is the block's
+name, not a status.
 
-Only tasks foreman authored are reviewed. `reviewing` is a status anything can
-set, and a task put there by a person or an earlier orchestrator has no branch
-behind it — no diff to read, and nothing to merge. Foreman labels each task
-`by:<kind>` when an agent actually starts, and that label is what marks the task
+Only tasks foreman authored are reviewed. A task with no author run has no
+branch behind it — no diff to read, and nothing to merge. Foreman opens an
+author run when an agent actually starts, and that run is what marks the task
 as its own.
 
-The branch must also hold a commit. An agent can run `tasks review` having
-written nothing, and the label alone would send a second agent to read an empty
-diff. Foreman asks git for the branches carrying commits the checkout does not
-have, and a handoff missing from that list goes straight back to the queue with
-a log line saying so. Nothing committed is unfinished work, whatever the status
-says.
+The branch must also hold a commit. An agent can name `done` having written
+nothing, and the run alone would send a second agent to read an empty diff.
+Foreman asks git for the branches carrying commits the checkout does not have,
+and a handoff missing from that list goes straight back to the queue with a log
+line saying so. Nothing committed is unfinished work, whatever the status says.
 
 Two empty branches are worth a reviewer. The first is the author that found the
 trunk already does what the task asks. A backlog outlives the code it describes,
@@ -284,11 +284,11 @@ evidence, part by part, and only its `approved` closes the task — with nothing
 merged and nothing verified, because there is nothing to merge. A claim the
 reviewer cannot confirm is returned like any other work.
 
-When a reviewer starts, foreman also writes `review-by:<kind>`. Status
-`reviewing` alone cannot say whether the author just handed off or a reviewer is
-already running; the label makes that role survive restarts and vanished panes.
-The matching agent pane is labelled `foreman-<role>`, so old settled output
-cannot mask the current role's state.
+When a reviewer starts, foreman opens a review run. Placement at the review
+block covers both the author's completed handoff and the whole review run; an
+open review run is what says a reviewer was dispatched, so a vanished worker
+behind one is a question for the operator. The matching agent pane is labelled
+`foreman-<role>`, so old settled output cannot mask the current role's state.
 
 The world records that a reviewer was dispatched, not whether it is still alive.
 A task that is open in the queue with a `review-by:*` label and no live reviewer

@@ -122,6 +122,10 @@ export const DESTRUCTIVE_ACTIONS: ReadonlyArray<ForemanAction> = ["kill", "close
 // read as an option, so a name starts with a letter or digit.
 export const ForemanName = S.String.check(S.isPattern(/^[A-Za-z0-9][\w.:@/-]*$/))
 
+/** A role a rung may fill: writing a task's branch, or reading it. */
+export const RungRole = S.Literals(["author", "review"])
+export type RungRole = typeof RungRole.Type
+
 export const ForemanCommand = S.Union([
   S.TaggedStruct("Act", { action: ForemanAction, key: ForemanName }),
   /** Starts a queued task on a picked rung; the operator's click is the permission, so the policy does not gate it. */
@@ -133,6 +137,12 @@ export const ForemanCommand = S.Union([
   S.TaggedStruct("SetStep", { step: ForemanStep, setting: ForemanStepMode }),
   S.TaggedStruct("SetSlots", { slots: S.Int.check(S.isGreaterThan(0)) }),
   S.TaggedStruct("Revoke", { scope: ForemanName }),
+  /** Lets foreman dispatch a rung, or stops it; a disabled rung keeps its rank. */
+  S.TaggedStruct("SetRung", { rung: ForemanName, on: S.Boolean }),
+  /** Lets a rung fill a role, or keeps it out of that role. */
+  S.TaggedStruct("SetRole", { rung: ForemanName, role: RungRole, on: S.Boolean }),
+  /** Moves a rung to just above (dearer than) or just below (cheaper than) another. */
+  S.TaggedStruct("MoveRung", { rung: ForemanName, side: S.Literals(["above", "below"]), of: ForemanName }),
 ])
 export type ForemanCommand = typeof ForemanCommand.Type
 
@@ -147,6 +157,9 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
     SetStep: ({ step, setting }) => ["policy", "set", step, setting],
     SetSlots: ({ slots }) => ["policy", "slots", String(slots)],
     Revoke: ({ scope }) => ["policy", "revoke", scope],
+    SetRung: ({ rung, on }) => ["ladder", on ? "enable" : "disable", rung],
+    SetRole: ({ rung, role, on }) => ["ladder", "role", rung, role, on ? "on" : "off"],
+    MoveRung: ({ rung, side, of }) => ["ladder", "move", rung, `--`, of],
   })
 
 /**
@@ -162,7 +175,13 @@ export type ForemanPipeline = typeof ForemanPipeline.Type
  * prints it. `state` is `disabled`, `retired`, or the model's record (`proven`,
  * `trial`); it stays a string so a state foreman adds later still reads.
  */
-export const ForemanRung = S.Struct({ rung: S.String, state: S.String })
+export const ForemanRung = S.Struct({
+  rung: S.String,
+  state: S.String,
+  /** Whether foreman may give the rung authoring work, and review work. */
+  author: S.Boolean,
+  review: S.Boolean,
+})
 export type ForemanRung = typeof ForemanRung.Type
 
 /** The rungs a queued task can be launched on: every one not disabled. */

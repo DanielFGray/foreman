@@ -29,7 +29,7 @@ import { factsOf } from "./pipeline-facts.ts";
 const task = (
   id: string,
   labels: ReadonlyArray<string>,
-  status: TaskStatus = "reviewing",
+  status: TaskStatus = "in_progress",
   priority = 1,
   project = "foreman",
 ): Item => ({
@@ -51,9 +51,9 @@ const task = (
 });
 
 /** A task in review whose reviewer approved the tip, and whose run settle has closed. */
-const approvedTask = (id: string, status: TaskStatus = "reviewing"): Item =>
+const approvedTask = (id: string, status: TaskStatus = "in_progress"): Item =>
   withRuns(
-    authoredOn(task(id, [], status), "opencode"),
+    authoredOn(task(id, [], status), "opencode", true),
     [reviewRun("claude", { ending: "approved", commit: "c1", open: false })],
     "c1",
   );
@@ -61,14 +61,14 @@ const approvedTask = (id: string, status: TaskStatus = "reviewing"): Item =>
 /** A task whose reviewer named `approved` on the tip, with its run still open. */
 const namedApproval = (id: string): Item =>
   withRuns(
-    authoredOn(task(id, [], "reviewing"), "opencode"),
+    authoredOn(task(id, [], "in_progress"), "opencode", true),
     [reviewRun("claude", { ending: "approved", commit: "c1" })],
     "c1",
   );
 
 /** A task in review with a reviewer dispatched and no verdict yet. */
-const underReview = (id: string, status: TaskStatus = "reviewing"): Item =>
-  withRuns(authoredOn(task(id, [], status), "opencode"), [reviewRun("claude")]);
+const underReview = (id: string, status: TaskStatus = "in_progress"): Item =>
+  withRuns(authoredOn(task(id, [], status), "opencode", true), [reviewRun("claude")]);
 
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   task: id,
@@ -136,11 +136,10 @@ describe("landing a reviewed branch", () => {
     );
   });
 
-  test("ignores a task without a verdict, and one that already left review", () => {
+  test("ignores a task without a verdict, and one that already left the pipeline", () => {
     expect(awaitingLanding(STANDARD_PIPELINE, underReview("ts-123456"))).toBe(false);
-    expect(awaitingLanding(STANDARD_PIPELINE, approvedTask("ts-123456", "in_progress"))).toBe(
-      false,
-    );
+    // Back in the queue: placement is outside once the status is open.
+    expect(awaitingLanding(STANDARD_PIPELINE, approvedTask("ts-123456", "open"))).toBe(false);
   });
 
   test("lands nothing on size or priority alone", () => {
@@ -152,7 +151,7 @@ describe("landing a reviewed branch", () => {
     expect(
       awaitingLanding(
         STANDARD_PIPELINE,
-        authoredOn(task("ts-123456", [], "reviewing", 3), "opencode"),
+        authoredOn(task("ts-123456", [], "in_progress", 3), "opencode"),
       ),
     ).toBe(false);
   });
@@ -270,7 +269,7 @@ describe("decisions", () => {
   test("keeps claimed and reviewing workspaces out of the orphaned kind", () => {
     const ownedWorkspaces = [
       owned("ts-1", "in_progress", []),
-      owned("ts-2", "reviewing", [], [], "claude"),
+      owned("ts-2", "in_progress", [], [], "claude"),
     ];
 
     expect(decisionsOf([], [], ownedWorkspaces)).toEqual([]);
@@ -350,7 +349,7 @@ describe("work handed back for review", () => {
   });
 
   test("leaves work foreman did not author alone, committed or not", () => {
-    // `reviewing` is a status anyone can set by hand. Without a by-* label the
+    // A task under review with no author run is not fleet work. Without a by-* label the
     // branch is not foreman's to review, land or return to its queue.
     const theirs = active(task("ts-333333", []), undefined);
     const { review, unbacked } = reviewable([theirs], new Set(["ts-333333"]));
@@ -412,7 +411,7 @@ describe("the policy gate on dispatch", () => {
     const dispatches = dispatchesFor(
       dispatchState(policy, {
         queue: [ready("ts-a")],
-        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
       }),
     );
 
@@ -423,7 +422,7 @@ describe("the policy gate on dispatch", () => {
     const dispatches = dispatchesFor(
       dispatchState(allowing({ review: "on" }), {
         queue: [ready("ts-a")],
-        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
       }),
     );
 
@@ -506,7 +505,7 @@ describe("the policy gate on dispatch", () => {
           ]
         : [node],
     );
-    const handed = active(authoredOn(task("ts-c", []), "cheap"), undefined);
+    const handed = active(authoredOn(task("ts-c", []), "cheap", true), undefined);
     const planFor = (steps: Partial<Policy["default"]>) =>
       plan(
         dispatchState(allowing(steps, { slots: 1 }), {
@@ -543,7 +542,7 @@ describe("the policy gate on dispatch", () => {
   test("a review step set to ask is listed with the author's rung, and not dispatched", () => {
     const { dispatches, asks } = plan(
       dispatchState(allowing({ review: "ask" }), {
-        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
       }),
     );
 
@@ -580,7 +579,7 @@ describe("the policy gate on dispatch", () => {
       dispatchState(allowing({ review: "ask", climb: "ask" }, { slots: 1 }), {
         workers: [worker("working", "ts-w1")],
         queue: [ready("ts-c", ["attempt:cheap:1"])],
-        review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
+        review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
       }),
     );
 
@@ -607,7 +606,7 @@ describe("the policy gate on dispatch", () => {
             ready("ts-c2", ["attempt:cheap:1"]),
             ready("ts-g", ["attempt:cheap:1"]),
           ],
-          review: [active(authoredOn(task("ts-r", []), "cheap"), undefined)],
+          review: [active(authoredOn(task("ts-r", []), "cheap", true), undefined)],
           scopes: new Map([["ts-g", new Set(["ts-g"])]]),
         },
       ),
@@ -744,7 +743,6 @@ describe("unread branches", () => {
     // A claim: worked, or vanished and therefore already a decision, and
     // reclaimed back to the queue once it goes stale.
     expect(isUnread(branch(false, "in_progress"))).toBe(false);
-    expect(isUnread(branch(false, "reviewing"))).toBe(false);
     // Merged, so the commits are in and the sweep takes the ref. An untouched
     // branch is merged by definition, so nothing empty reaches the column.
     expect(isUnread(branch(true, "done"))).toBe(false);
@@ -834,7 +832,7 @@ describe("the quota gate", () => {
     // stopped by an account the author never touched.
     const dispatches = dispatchesFor(
       state({
-        review: [active(authoredOn(task("ts-walled", []), "cheap"), undefined)],
+        review: [active(authoredOn(task("ts-walled", []), "cheap", true), undefined)],
         outOfQuota: new Set(["ts-walled"]),
       }),
     );

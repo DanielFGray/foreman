@@ -11,31 +11,26 @@ describe("the task machine", () => {
     ["proposed", "open", "open"],
     ["draft", "open", "open"],
     ["open", "start", "in_progress"],
-    ["reviewing", "start", "in_progress"],
-    ["in_progress", "review", "reviewing"],
-    ["reviewing", "open", "open"],
-    ["reviewing", "done", "done"],
+    ["done", "start", "in_progress"],
+    ["canceled", "start", "in_progress"],
+    ["in_progress", "open", "open"],
+    ["in_progress", "done", "done"],
     ["open", "done", "done"],
     ["done", "open", "open"],
     ["canceled", "open", "open"],
-    ["done", "submit", "reviewing"],
-    ["canceled", "submit", "reviewing"],
   ])("%s --%s--> %s", (from, event, to) => {
     expect(move(from, event)).toBe(to);
   });
 
   test.each<[TaskState, TaskEvent]>([
-    ["done", "start"],
     ["proposed", "start"],
     ["draft", "start"],
-    ["open", "review"],
+    ["in_progress", "start"],
     ["proposed", "done"],
     ["draft", "done"],
     ["done", "cancel"],
     ["canceled", "done"],
     ["open", "open"],
-    ["reviewing", "submit"],
-    ["proposed", "submit"],
   ])("refuses %s --%s-->", (from, event) => {
     expect(move(from, event)).toBeUndefined();
   });
@@ -46,6 +41,9 @@ describe("the task machine", () => {
       .split("\n")
       .filter((line) => / --> \w+: /.test(line));
     expect(arrows).toHaveLength(moves.length);
-    expect(arrows).toContain("  in_progress --> reviewing: review");
+    expect(arrows).toContain("  open --> in_progress: start");
+    expect(arrows).toContain("  done --> in_progress: start");
+    expect(arrows).toContain("  canceled --> in_progress: start");
+    expect(arrows.every((arrow) => !arrow.includes("reviewing"))).toBe(true);
   });
 });

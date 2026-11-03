@@ -66,6 +66,28 @@ export const MIGRATIONS = Migrator.fromRecord({
     yield* sql.unsafe(`CREATE INDEX idx_runs_task ON runs(task)`);
     for (const view of views) yield* sql.unsafe(view);
   }),
+  // Which roles a rung may fill. The operator turns author or review off per
+  // rung so a free model can write but never read, without retiring it.
+  "0005_ladder_roles": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const columns = yield* sql.unsafe<{ name: string }>(
+      `SELECT name FROM pragma_table_info('ladder')`,
+    );
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("author")) {
+      yield* sql.unsafe(`ALTER TABLE ladder ADD COLUMN author INTEGER NOT NULL DEFAULT 1`);
+    }
+    if (!names.has("review")) {
+      yield* sql.unsafe(`ALTER TABLE ladder ADD COLUMN review INTEGER NOT NULL DEFAULT 1`);
+    }
+  }),
+  // Six life statuses: `reviewing` named a pipeline step that placement already
+  // derives from the last exit, so storing it kept one fact twice. Existing
+  // reviewing tasks become in_progress; their placement is unchanged.
+  "0006_six_statuses": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    yield* sql.unsafe(`UPDATE items SET status = 'in_progress' WHERE status = 'reviewing'`);
+  }),
 });
 
 export const MIGRATIONS_TABLE = "tasks_migrations";
@@ -302,7 +324,9 @@ const REGISTRY = [
     enabled   INTEGER NOT NULL DEFAULT 1,
     provider  TEXT,                      -- foreman provider field, when one is set
     note      TEXT,
-    unmetered INTEGER NOT NULL DEFAULT 0
+    unmetered INTEGER NOT NULL DEFAULT 0,
+    author    INTEGER NOT NULL DEFAULT 1, -- may take the ladder (author) rule
+    review    INTEGER NOT NULL DEFAULT 1  -- may take the above (review) rule
   )`,
   `CREATE TABLE prices (
     model       TEXT PRIMARY KEY,        -- as in runs.model

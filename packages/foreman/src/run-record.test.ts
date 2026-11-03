@@ -8,7 +8,7 @@ const task = (overrides: Partial<Item> = {}) =>
     title: "Measure the stack-safety candidates",
     project: "quill",
     labels: [],
-    status: "reviewing",
+    status: "in_progress",
     ...overrides,
   }) as unknown as Item;
 

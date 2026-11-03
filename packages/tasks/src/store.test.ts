@@ -186,11 +186,10 @@ describe.skipIf(!hasProg)("writes leave the same rows as prog", () => {
     expect(rows(pairOf.ts)).toEqual(rows(pairOf.go));
   };
 
-  test("start, review, open, done", () =>
+  test("start, open, done", () =>
     same(
       (db) => {
         prog(db, "start", ids.first!);
-        prog(db, "review", ids.first!);
         prog(db, "open", ids.first!);
         prog(db, "done", ids.second!);
       },
@@ -198,7 +197,6 @@ describe.skipIf(!hasProg)("writes leave the same rows as prog", () => {
         tasks
           .send(ids.first!, "start")
           .pipe(
-            Effect.andThen(tasks.send(ids.first!, "review")),
             Effect.andThen(tasks.send(ids.first!, "open")),
             Effect.andThen(tasks.send(ids.second!, "done")),
           ),
@@ -279,14 +277,14 @@ describe.skipIf(!hasProg)("writes leave the same rows as prog", () => {
 });
 
 describe.skipIf(!hasProg)("refusals match prog", () => {
-  test("review is refused unless the task is in progress", async () => {
+  test("start from in_progress is refused", async () => {
     const { ts } = copies();
     const refused = await withTasks(ts, (tasks) =>
-      tasks.send(ids.first!, "review").pipe(Effect.flip),
+      tasks.send(ids.working!, "start").pipe(Effect.flip),
     );
     expect(refused).toMatchObject({
       _tag: "TaskError",
-      detail: "cannot review an item that is open",
+      detail: "cannot start an item that is in_progress",
     });
   });
 

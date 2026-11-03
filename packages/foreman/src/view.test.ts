@@ -108,7 +108,7 @@ const state: FleetState = {
   ],
   review: [
     active(
-      withRuns(authoredOn(task("ts-r1", "reviewing", []), "flash"), [reviewRun("pro")]),
+      withRuns(authoredOn(task("ts-r1", "in_progress", []), "flash", true), [reviewRun("pro")]),
       worker("ts-r1", "working"),
     ),
   ],
@@ -130,7 +130,7 @@ const state: FleetState = {
     {
       project: "fibrae",
       branch: "foreman/ts-s1",
-      task: withRuns(authoredOn(task("ts-s1", "reviewing", ["failed-by:flash"]), "flash"), [
+      task: withRuns(authoredOn(task("ts-s1", "in_progress", ["failed-by:flash"]), "flash", true), [
         reviewRun("pro"),
       ]),
       paths: ["src/old.ts", "src/gone.ts"],
@@ -154,13 +154,15 @@ const row = (view: Parameters<typeof rowsForView>[0], key: string) => {
 };
 
 describe("decisionKind", () => {
-  test("names the kind from the status, and a failure over any of them", () => {
+  test("names the kind from the runs and status, and a failure over any of them", () => {
     expect(decisionKind(authoredOn(task("ts-1", "in_progress", []), "flash"))).toBe(
       "author vanished",
     );
-    expect(decisionKind(authoredOn(task("ts-1", "reviewing", []), "flash"))).toBe(
-      "reviewer vanished",
-    );
+    expect(
+      decisionKind(
+        withRuns(authoredOn(task("ts-1", "in_progress", []), "flash", true), [reviewRun("pro")]),
+      ),
+    ).toBe("reviewer vanished");
     expect(decisionKind(authoredOn(task("ts-1", "done", []), "flash"))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
@@ -178,7 +180,7 @@ describe("staleReview", () => {
     expect(staleReview({ runs, status: "open" }, worker("ts-1", "gone"))).toBe(true);
     // A live review is not stale, and neither is a task with no open review run.
     expect(staleReview({ runs, status: "open" }, worker("ts-1", "working"))).toBe(false);
-    expect(staleReview({ runs, status: "reviewing" }, undefined)).toBe(false);
+    expect(staleReview({ runs, status: "in_progress" }, undefined)).toBe(false);
     expect(staleReview({ runs: [], status: "open" }, undefined)).toBe(false);
   });
 });
@@ -204,7 +206,7 @@ describe("views", () => {
     expect(row("attention", "foreman/ts-s1").detail).toBe(
       "cannot land: trunk deleted src/old.ts, src/gone.ts",
     );
-    expect(row("attention", "foreman/ts-s1").task?.status).toBe("reviewing");
+    expect(row("attention", "foreman/ts-s1").task?.status).toBe("in_progress");
   });
 
   // The reason is why the row exists. On its own line it survives a narrow
@@ -565,7 +567,7 @@ describe("asks", () => {
     asks: [
       {
         task: withRuns(
-          authoredOn(task("ts-k1", "reviewing", []), "cheap"),
+          authoredOn(task("ts-k1", "in_progress", []), "cheap", true),
           [reviewRun("cheap", { ending: "approved", commit: "c1" })],
           "c1",
         ),

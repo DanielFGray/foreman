@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { addRow, parseRows, readLadder, readRows, renderRows, writeRows } from "./registry.ts";
+import {
+  addRow,
+  moveRow,
+  parseRows,
+  readLadder,
+  readRows,
+  renderRows,
+  writeRows,
+} from "./registry.ts";
 import { withStore } from "./scratch-store.ts";
 
 const rig = readFileSync(join(import.meta.dir, "..", "e2e", "registry.sql"), "utf8");
@@ -56,6 +64,26 @@ describe("the registry ladder", () => {
           (yield* Effect.flip(addRow({ ...row, rung: "x" }, { _tag: "Above", rung: "nope" })))
             .detail,
         ).toMatch(/no rung nope/);
+      }),
+    ));
+
+  test("a moved rung keeps its row and takes its new place", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const before = yield* readRows;
+        yield* moveRow("cheap", { _tag: "Above", rung: "promo" });
+        const after = yield* readRows;
+        expect(after.map((r) => r.rung)).toEqual(["strong", "promo", "cheap"]);
+        expect(after[2]).toEqual(before[0]!);
+        yield* moveRow("cheap", { _tag: "Bottom" });
+        expect((yield* readRows).map((r) => r.rung)).toEqual(["cheap", "strong", "promo"]);
+        expect(
+          (yield* Effect.flip(moveRow("cheap", { _tag: "Below", rung: "cheap" }))).detail,
+        ).toMatch(/next to itself/);
+        expect((yield* Effect.flip(moveRow("nope", { _tag: "Bottom" }))).detail).toMatch(
+          /no rung nope/,
+        );
       }),
     ));
 

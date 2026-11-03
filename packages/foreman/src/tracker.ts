@@ -40,15 +40,13 @@ export class Tracker extends Context.Service<
      * The status moves. Each skips a task that already has the status it
      * leads to, so a caller need not check the status first.
      *
-     * Takes the task: after this it is no longer ready.
+     * Takes the task: after this it is no longer ready. Open, done and
+     * canceled work may all be claimed — done or canceled when an unread
+     * branch on them needs a reader.
      */
     readonly claim: (task: string) => Effect.Effect<void, TrackerError>;
     /** Puts the task back among the ready work. */
     readonly reopen: (task: string) => Effect.Effect<void, TrackerError>;
-    /** Puts the task in review from whatever status it was left in. */
-    readonly submit: (task: string) => Effect.Effect<void, TrackerError>;
-    /** Moves claimed work to review. */
-    readonly review: (task: string) => Effect.Effect<void, TrackerError>;
     readonly complete: (task: string) => Effect.Effect<void, TrackerError>;
     readonly label: (task: string, label: string) => Effect.Effect<void, TrackerError>;
     readonly unlabel: (task: string, label: string) => Effect.Effect<void, TrackerError>;
@@ -120,8 +118,6 @@ export const TasksTracker = Layer.effect(
       add: (task) => tasks.add(task).pipe(as(`add ${task.title}`)),
       claim: move("start", "in_progress"),
       reopen: move("open", "open"),
-      submit: move("submit", "reviewing"),
-      review: move("review", "reviewing"),
       complete: move("done", "done"),
       label: (task, label) => tasks.label(task, label).pipe(as(`label ${task} ${label}`)),
       unlabel: (task, label) => tasks.unlabel(task, label).pipe(as(`unlabel ${task} ${label}`)),

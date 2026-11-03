@@ -43,9 +43,17 @@ export const withRuns = (task: Item, runs: ReadonlyArray<Run>, tip?: string): It
   tip: tip ?? task.tip,
 });
 
-/** The task with its author's run first: open while the task is in progress, else handed off. */
-export const authoredOn = (task: Item, rung: string): Item =>
-  withRuns(task, [task.status === "in_progress" ? authorRun(rung) : authorDone(rung)], task.tip);
+/**
+ * The task with its author's run first. Open while the author is still writing
+ * (`in_progress` and not `ended`); closed with `done` once handed off (under
+ * review, landed, or any status other than `in_progress`).
+ */
+export const authoredOn = (task: Item, rung: string, ended = false): Item =>
+  withRuns(
+    task,
+    [ended || task.status !== "in_progress" ? authorDone(rung) : authorRun(rung)],
+    task.tip,
+  );
 
 /** A check run at block `node` that ran on `commit` and ended `ending`. */
 export const checkRun = (node: string, commit: string, ending: "passed" | "failed"): Run =>

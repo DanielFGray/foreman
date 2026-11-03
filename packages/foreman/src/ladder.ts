@@ -3,8 +3,9 @@
  *
  * Order is the rating. There are no price or power numbers to drift out of step
  * with the list, and no map from author to reviewer: the reviewer is the next
- * rung up, and a task that fails a rung records that failure. Both fall out of
- * the order.
+ * review-on rung up, and a task that fails a rung records that failure. Both
+ * fall out of the order. Per-rung `author` and `review` switches narrow which
+ * rungs each rule may pick, without changing the order.
  *
  * A task never names the model that runs next. It records which models have
  * already failed it, and the rung is chosen here from what is available now —
@@ -58,6 +59,25 @@ export interface Rung {
   readonly enabled?: boolean | undefined;
 
   /**
+   * Whether this rung may author. Absent means yes.
+   *
+   * Independent of `enabled`: a free model that must never review stays on the
+   * ladder with `review: false`, and one that must never write keeps `author:
+   * false`, without retiring either. The `ladder` model rule and a pin to this
+   * rung as an author both require it on.
+   */
+  readonly author?: boolean | undefined;
+
+  /**
+   * Whether this rung may review. Absent means yes.
+   *
+   * The `above` model rule and a pin to this rung as a reviewer both require
+   * it on. A ladder whose every higher rung has review off parks the task for
+   * the operator, the same as when every reviewer has already stopped.
+   */
+  readonly review?: boolean | undefined;
+
+  /**
    * Whether the account's allowance says nothing about this rung's room.
    * Absent means the allowance describes it.
    *
@@ -85,6 +105,12 @@ export interface Rung {
 
 /** Whether foreman may dispatch a rung: everything but an explicit retirement. */
 export const isEnabled = (rung: Rung): boolean => rung.enabled !== false;
+
+/** Whether this rung may take an author block (`ladder` or a pin). */
+export const mayAuthor = (rung: Rung): boolean => rung.author !== false;
+
+/** Whether this rung may take a review block (`above` or a pin). */
+export const mayReview = (rung: Rung): boolean => rung.review !== false;
 
 /** Whether this rung's room is described by the allowance of its account. */
 export const isMetered = (rung: Rung): boolean => rung.unmetered !== true;
@@ -135,7 +161,9 @@ export const authorFor = (
   walled: ReadonlySet<string> = new Set(),
   drawn: ReadonlySet<string> = new Set(),
 ): Choice => {
-  const candidates = ladder.slice(floorFor(ladder, failures)).filter(isEnabled);
+  const candidates = ladder
+    .slice(floorFor(ladder, failures))
+    .filter((candidate) => isEnabled(candidate) && mayAuthor(candidate));
   const affordable = candidates.filter((candidate) => !walled.has(candidate.name));
   const rung =
     affordable.find((candidate) => !drawn.has(providerOf(candidate) ?? "")) ?? affordable[0];
@@ -241,19 +269,34 @@ export const reviewerFor = (
   const failedRanks = failed.flatMap(rankOfName);
   const ranks = [...(author === undefined ? [] : rankOfName(author)), ...failedRanks];
   const rank = ranks.length === 0 ? undefined : Math.max(...ranks);
-  const above = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
-  // An unrecognised author and the top rung both fall back to the top, which
-  // reviews itself. Only the top's own failure leaves no one: a failed reviewer
+  const higher = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
+  const above = higher.filter(mayReview);
+  // An unrecognised author, and an author already at the top, fall back to the
+  // top review-on rung, which reviews itself. Enabled rungs above with review
+  // off are not that case: nobody may read this, so the answer is none — the
+  // same park as when every reviewer has already stopped. A failed reviewer
   // ranked below the author (the ladder was reordered since) rules out nothing.
   const top = topOf(ladder);
-  const candidates = above.length > 0 ? above : failed.includes(top.name) ? [] : [top];
+  const topRank = top === undefined ? undefined : rankOf(ladder, top.name);
+  const candidates =
+    above.length > 0
+      ? above
+      : higher.length === 0 &&
+          top !== undefined &&
+          !failed.includes(top.name) &&
+          (rank === undefined || (topRank !== undefined && topRank >= rank))
+        ? [top]
+        : [];
   return candidates.find((rung) => !walled.has(rung.name));
 };
 
-/** Reading a hundred files of abandoned work is what cheap models are worst at. */
-export const topOf = (ladder: Ladder): Rung => {
-  const enabled = ladder.filter(isEnabled);
-  return enabled[enabled.length - 1] ?? ladder[0];
+/**
+ * The dearest review-enabled rung, which reviews itself when nothing stands
+ * above the author. Absent when every rung has review off.
+ */
+export const topOf = (ladder: Ladder): Rung | undefined => {
+  const reviewable = ladder.filter((rung) => isEnabled(rung) && mayReview(rung));
+  return reviewable[reviewable.length - 1];
 };
 
 /** The rungs foreman may dispatch, in rating order — what a chooser offers. */

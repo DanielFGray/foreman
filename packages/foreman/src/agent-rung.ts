@@ -2,6 +2,8 @@ import type { Run } from "tasks";
 import {
   authorFor,
   isEnabled,
+  mayAuthor,
+  mayReview,
   reviewerFor,
   rungsOnAccounts,
   type Ladder,
@@ -62,9 +64,14 @@ export const rungAt = (
   const failed = block.role === "author" ? failuresOf(task) : reviewFailedBy(task);
   if (failed.includes(block.model)) return { _tag: "Exhausted" };
   const rung = ladder.find((candidate) => candidate.name === block.model);
-  return rung === undefined || !isEnabled(rung) || spent.has(rung.name)
-    ? { _tag: "Waiting" }
-    : { _tag: "Dispatch", rung };
+  // The operator can enable a rung or switch its role on again, so a pin to a
+  // rung that may not take the block now waits, as it does for a spent account.
+  const mayTake =
+    rung !== undefined &&
+    isEnabled(rung) &&
+    (block.role === "author" ? mayAuthor(rung) : mayReview(rung)) &&
+    !spent.has(rung.name);
+  return mayTake ? { _tag: "Dispatch", rung } : { _tag: "Waiting" };
 };
 
 /**

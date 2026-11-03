@@ -232,25 +232,6 @@ export const recordExit = (task: string, exit: Omit<NamedExit, "event">) =>
   });
 
 /**
- * Sends the task to review and names `done` on its open author run, when it
- * has one, in one transaction. A task worked without foreman has no run, and
- * moves all the same.
- */
-export const handOff = (task: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    const tasks = yield* Tasks;
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`UPDATE runs SET ending = 'done'
-          WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
-                        AND ${ofRole(sql, "author")})`;
-        yield* tasks.send(task, "review");
-      }),
-    );
-  });
-
-/**
  * Sets the outcome of the task's latest closed author run to what landing made
  * of its work: code `committed`, a report `answered`. Runs in the transaction
  * that completes the task.

@@ -163,16 +163,14 @@ describe("tasks add, show, list and ready", () => {
 });
 
 describe("tasks status changes", () => {
-  test("start, review and done follow the task machine", async () => {
+  test("start and done follow the task machine, and start takes done work again", async () => {
     const id = await created("Flow", "-p", "d");
     expect(await run(["start", id])).toBe(`Started ${id}`);
     expect(await run(["show", id])).toContain("Status:      in_progress");
-    await run(["review", id]);
-    expect(await run(["start", id])).toBe(`Started ${id}`);
-    expect(await run(["show", id])).toContain("Status:      in_progress");
-    await run(["review", id]);
     await run(["done", id]);
     expect(await run(["list", "-p", "d", "--status", "done"])).toContain(id);
+    expect(await run(["start", id])).toBe(`Started ${id}`);
+    expect(await run(["show", id])).toContain("Status:      in_progress");
     await run(["open", id]);
     expect(await run(["list", "-p", "d", "--status", "open"])).toContain(id);
   });
@@ -180,8 +178,7 @@ describe("tasks status changes", () => {
   test("a refused move names the status and the command", async () => {
     const id = await created("Stuck", "-p", "d");
     await run(["start", id]);
-    await run(["done", id]);
-    expect(await refusal(["start", id])).toBe(`${id}: cannot start an item that is done`);
+    expect(await refusal(["start", id])).toBe(`${id}: cannot start an item that is in_progress`);
     expect(await refusal(["start", "ts-000000"])).toBe("ts-000000: item not found: ts-000000");
   });
 

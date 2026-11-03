@@ -18,7 +18,7 @@ export const RESET_LINE = "pipeline clear"
  * rungs decide which models are valid, so no answer is better than a wrong one.
  */
 export const problemsFor = (page: ForemanPage, editing: Editing): Option.Option<ReadonlyArray<string>> =>
-  page.rungs._tag === "Listed" ? Option.some(problemsOf(editing.draft, page.rungs.rungs.map(({ rung }) => rung))) : Option.none()
+  page.rungs._tag === "Listed" ? Option.some(problemsOf(editing.draft, page.rungs.rungs.map(({ rung, author, review }) => ({ name: rung, author, review })))) : Option.none()
 
 /** Opens the editor on the selected space's project, or reads it again. */
 export const openedPipeline = (model: Model): UpdateReturn =>

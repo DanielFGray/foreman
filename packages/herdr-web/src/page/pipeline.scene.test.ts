@@ -4,7 +4,7 @@ import { all, click, Command, expect, expectAll, given, role, scene, selector, S
 import { test } from "vitest"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import type { ForemanReading } from "../shared/Foreman.ts"
-import { LoadForemanPipeline, SaveClosedPanels, SaveForemanPipeline } from "./commands.ts"
+import { ListRungs, LoadForemanPipeline, RunForeman, SaveClosedPanels, SaveForemanPipeline } from "./commands.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, RungList, Selection } from "./model.ts"
 import { DEFAULT_SETTINGS } from "./settings.ts"
@@ -39,7 +39,7 @@ const open = {
   selection: Selection.Tab({ tabId: "tab-s1", maybeFocus: Option.none() }),
   bridge: Bridge.Watching({ fleet }),
   foreman: Option.some({ reading: Option.some(reading), problem: Option.none() }),
-  foremanPage: { ...start.foremanPage, shown: true, rungs: RungList.Listed({ rungs: [{ rung: "haiku", state: "proven" }, { rung: "sonnet", state: "trial" }, { rung: "opus", state: "disabled" }] }) },
+  foremanPage: { ...start.foremanPage, shown: true, rungs: RungList.Listed({ rungs: [{ rung: "haiku", state: "proven", author: true, review: true }, { rung: "sonnet", state: "trial", author: true, review: true }, { rung: "opus", state: "disabled", author: true, review: true }] }) },
   now: NOW,
 }
 
@@ -116,8 +116,33 @@ test("the ladder panel lists the rungs in order with their states", () => {
     { update, view },
     ...opened,
     expectAll(all.selector(".pipeline-rungs li")).toHaveCount(3),
-    expect(selector(".pipeline-rungs")).toHaveText("haikuprovensonnettrialopusdisabled"),
-    expect(selector(".pipeline-rungs li.off")).toHaveText("opusdisabled"),
+    expectAll(all.selector(".pipeline-rungs .pipeline-rung")).toHaveCount(3),
+    expect(selector(".pipeline-rungs li.off .pipeline-rung")).toHaveText("opus"),
+  )
+})
+
+// Each switch runs one foreman command; the panel reads the ladder again once it is done.
+test("a ladder switch runs its foreman command and reads the ladder again", () => {
+  const disable = { _tag: "SetRung", rung: "sonnet", on: false } as const
+  const cheaper = { _tag: "MoveRung", rung: "sonnet", side: "below", of: "haiku" } as const
+  scene(
+    { update, view },
+    ...opened,
+    expect(role("button", { name: "move haiku below sonnet" })).not.toExist(),
+    click(role("button", { name: "disable sonnet" })),
+    Command.expectHas(RunForeman({ command: disable })),
+    Command.resolve(RunForeman({ command: disable }), Message.SucceededForemanCommand({ line: "ladder disable sonnet" })),
+    Command.expectHas(ListRungs()),
+    Command.resolve(ListRungs(), Message.ReceivedRungs({ rungs: [{ rung: "haiku", state: "proven", author: true, review: true }, { rung: "sonnet", state: "disabled", author: true, review: true }, { rung: "opus", state: "disabled", author: true, review: true }] })),
+    expect(role("button", { name: "enable sonnet" })).toExist(),
+    click(role("button", { name: "keep opus out of review" })),
+    Command.expectHas(RunForeman({ command: { _tag: "SetRole", rung: "opus", role: "review", on: false } })),
+    Command.resolve(RunForeman({ command: { _tag: "SetRole", rung: "opus", role: "review", on: false } }), Message.SucceededForemanCommand({ line: "ladder role opus review off" })),
+    Command.resolve(ListRungs(), Message.ReceivedRungs({ rungs: [{ rung: "haiku", state: "proven", author: true, review: true }, { rung: "sonnet", state: "disabled", author: true, review: true }, { rung: "opus", state: "disabled", author: true, review: false }] })),
+    expect(role("button", { name: "let opus review" })).toExist(),
+    click(role("button", { name: "move sonnet below haiku" })),
+    Command.expectHas(RunForeman({ command: cheaper })),
+    Command.resolve(RunForeman({ command: cheaper }), Message.FailedForemanCommand({ line: "ladder move sonnet --below haiku", reason: "no such rung" })),
   )
 })
 

@@ -15,6 +15,12 @@ export interface TaskPhaseInput {
   readonly committed: boolean;
   readonly holdsWork: boolean;
   readonly handoffExpired: boolean;
+  /**
+   * Placement puts the task past the author's running turn (at review, land
+   * or done, or an author that named its exit). Replaces the old `reviewing`
+   * status as the signal that the author has handed off.
+   */
+  readonly underReview: boolean;
 }
 
 /** One settled task's next handling, derived from the current world. */
@@ -50,7 +56,7 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
 
   if (input.worker === "blocked") return "Blocked";
 
-  if (input.status === "reviewing") {
+  if (input.underReview) {
     if (input.reviewer === undefined) {
       return input.handoffExpired ? "ReviewExpired" : "ReviewWaiting";
     }

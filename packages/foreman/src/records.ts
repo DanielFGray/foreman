@@ -42,8 +42,12 @@ export interface Endings {
   readonly review?: Ending;
 }
 
-/** The status move an exit makes, if any: back to the queue, or on to review. */
-export type ExitMove = "reopen" | "review";
+/**
+ * The status move an exit makes, if any. A wire to the queue reopens the task;
+ * a wire to another block leaves the status alone — the task stays
+ * `in_progress` and placement reads the step from the exit.
+ */
+export type ExitMove = "reopen";
 
 /**
  * Foreman's records of the work: the runs on each task (who worked it, on
@@ -191,7 +195,7 @@ export class Records extends Context.Service<Records>()("Records", {
      * the backlog as an ancient claim with no worker behind it — and the sweep
      * dutifully hands them all back.
      */
-    const byStatus = (project: string, status: "in_progress" | "reviewing" | "done") =>
+    const byStatus = (project: string, status: "in_progress" | "done") =>
       tracker.list({ project, status, type: "task" }).pipe(Effect.flatMap(withRuns));
 
     return {
@@ -209,9 +213,6 @@ export class Records extends Context.Service<Records>()("Records", {
       /** Unblocked, unclaimed tasks, in every project or in one. */
       ready: (project: Option.Option<string>) =>
         tracker.ready(Option.getOrUndefined(project)).pipe(Effect.flatMap(withRuns)),
-
-      /** Tasks whose author is finished and which are waiting to be reviewed. */
-      awaitingReview: (project: string) => byStatus(project, "reviewing"),
 
       /**
        * The epics being driven that these tasks sit under, each with its
@@ -243,7 +244,10 @@ export class Records extends Context.Service<Records>()("Records", {
        */
       landed: (project: string) => byStatus(project, "done"),
 
-      /** Claimed tasks in one project, carrying the timestamps a sweep needs. */
+      /**
+       * Claimed tasks in one project. A task under review is still
+       * `in_progress`; the dispatcher splits the list by placement.
+       */
       claimed: (project: string) => byStatus(project, "in_progress"),
 
       children,
@@ -292,7 +296,7 @@ export class Records extends Context.Service<Records>()("Records", {
         together(
           `name exit ${exit.name} on ${task}`,
           onStore(recordExit(task, exit)).pipe(
-            Effect.andThen(move === undefined ? Effect.void : tracker[move](task)),
+            Effect.andThen(move === undefined ? Effect.void : tracker.reopen(task)),
           ),
         ),
 

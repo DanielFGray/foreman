@@ -12,6 +12,7 @@ import {
 import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
 import { readLadder } from "./registry.ts";
+import { mayAuthor, mayReview } from "./ladder.ts";
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -97,14 +98,14 @@ const place = Command.make(
         for (const problem of found.problems) yield* Console.error(`  ${problem}`);
       }
       const rows = placed.filter(({ task }) => shown(task.project));
-      if (rows.length === 0) return yield* Console.log("no open, claimed or reviewing task");
+      if (rows.length === 0) return yield* Console.log("no open or in-progress task in a pipeline");
       for (const { task, placement } of rows) {
         yield* Console.log(`${task.id}  ${task.project}  ${whereIs(placement)}  ${task.title}`);
       }
     }),
 ).pipe(
   Command.withDescription(
-    "Print where each open, claimed and reviewing task stands in its pipeline: block, state, gates and work blocks left. Dispatches nothing",
+    "Print where each open or in-progress task stands in its pipeline: block, state, gates and work blocks left. Dispatches nothing",
   ),
 );
 
@@ -142,7 +143,11 @@ const problemsAgainstLadder = (pipeline: Pipeline) =>
     return [
       ...problemsOf(
         pipeline,
-        ladder.map((rung) => rung.name),
+        ladder.map((rung) => ({
+          name: rung.name,
+          author: mayAuthor(rung),
+          review: mayReview(rung),
+        })),
       ),
       ...instructionProblems(pipeline, texts),
     ];
