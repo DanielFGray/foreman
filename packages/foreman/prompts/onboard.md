@@ -15,7 +15,7 @@ to finish it, and not to tidy it.
 
 Read `git -C {{ repository }} status` and `git -C {{ repository }} diff`, then
 `git -C {{ repository }} log -5` for what the branch was doing before the changes.
-Read the project's CLAUDE.md or AGENTS.md, and `tasks list -p {{ project }}` for tasks
+Read the project's CLAUDE.md or AGENTS.md, and `foreman list -p {{ project }}` for tasks
 that describe this work — half-finished changes usually have a task behind them.
 
 Answer three questions, and write the answers down as you go:
@@ -51,15 +51,15 @@ know what.
 
 ## Report it
 
-Write the summary to `tasks append {{ task }}`: what the work was doing, how far it
+Write the summary to `foreman log {{ task }} -`: what the work was doing, how far it
 got, what passes and what fails, which untracked files you took and which you left,
 and the branch name it is all on. Someone who never saw the diff should be able to
 decide from your summary alone whether to continue this work or drop it.
 
 File each real problem you found as its own task with
-`tasks add "<title>" -p {{ project }} -d "<what fails, and the output>"`. Failing types
+`foreman add "<title>" -p {{ project }} -d "<what fails, and the output>"`. Failing types
 and failing tests are ordinary work; they belong in the backlog where the fleet can
-pick them up, not in this task. Then run `tasks done {{ task }}`.
+pick them up, not in this task. Then run `foreman exit {{ task }} done`.
 
 Do not fix anything you found. Do not merge, rebase, push, or delete a branch. Do not
 run `git stash`, `git reset`, `git checkout -- <file>`, or `git clean` — every one of

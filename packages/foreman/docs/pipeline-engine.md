@@ -243,6 +243,12 @@ running a flow the operator did not draw is worse than stopping.
   runs on a branch with no work. A check is not a review, so a land after
   a check still needs a review after its last author.
 - A check names a command.
+- A pull-request land (`how: pull-request`) takes two gates on every path into
+  it after the last agent or check: a `publish` gate, which pushes and opens the
+  pull request, and a `land` gate, which merges it. Either step can be on while
+  the other is off, so one gate cannot stand for both. A `publish` gate from
+  which no route reaches a pull-request land is a problem: it would hold a step
+  that never comes.
 
 These are reachability checks with `effect/Graph`, which also finds cycles and
 draws the pipeline as Mermaid (`foreman pipeline show`).

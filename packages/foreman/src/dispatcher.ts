@@ -117,7 +117,7 @@ import {
   ONBOARD,
   Records,
 } from "./records.ts";
-import { Tracker } from "./tracker.ts";
+import { Tracker, TrackerError } from "./tracker.ts";
 import {
   authoredBy,
   directBase,
@@ -178,6 +178,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const repoOf = yield* checkoutRepo(fleet, repository);
     // The pull-request calls run on the `Github` the trackers share.
     const github = yield* Github;
+    // Why `gh` is not signed in, asked once when `run` starts: a sign-in
+    // changes only by the operator's hand, and asking each tick costs a process
+    // per GitHub project. While it is set, every GitHub project reads
+    // unreachable with this reason, and a restart asks again. A one-shot
+    // command never runs the loop, so it does not ask; its GitHub reads fail
+    // with gh's own error instead.
+    const signedOut = yield* Ref.make(Option.none<string>());
 
     const runAttributes = (
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
@@ -522,13 +529,25 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const everyone = yield* fleet.roster;
       const resolved = yield* resolveProjects(everyone);
 
+      // The operator's policy, read every pass so an edit takes effect on the
+      // next one.
+      const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
+        Effect.provideContext(platform),
+      );
+
       // Each project's tracker reads its tasks once for this reading. A
       // project whose tracker did not answer leaves the project set: none of
       // its workers is ours this reading, so none settles or reads as an
       // orphan, and none of its branches is swept, because the tracker that
       // would say which tasks still hold them said nothing.
       const unreachable = yield* Effect.forEach(resolved.projects, (project) =>
-        tracker.refresh(project.name).pipe(
+        Effect.gen(function* () {
+          const reason = yield* Ref.get(signedOut);
+          if (trackerOf(policy, project.name) === "github" && Option.isSome(reason)) {
+            return yield* new TrackerError({ command: "gh auth status", detail: reason.value });
+          }
+          yield* tracker.refresh(project.name);
+        }).pipe(
           Effect.as<ReadonlyArray<Held>>([]),
           Effect.catch((error) =>
             Effect.logWarning(`holding ${project.name}: ${error.message}`).pipe(
@@ -566,12 +585,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ),
         ),
       ).pipe(Effect.map((entries) => entries.flat()));
-
-      // The operator's policy, read every pass so an edit takes effect on the
-      // next one.
-      const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
-        Effect.provideContext(platform),
-      );
 
       // Each checkout's tip and whether it has uncommitted changes. A task that
       // works in the operator's checkout starts only from a clean tree, and a
@@ -731,6 +744,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }).pipe(Effect.map((entries) => entries.flat())),
       );
 
+      // The page of each task in hand, for the front ends. It comes from the
+      // read the refresh above made, so it asks nothing new.
+      const urls = new Map(
+        yield* Effect.forEach([...claimed, ...reviewing, ...queue], (task) =>
+          tracker.url(task.id).pipe(
+            Effect.map(
+              Option.match({ onNone: () => [], onSome: (url) => [[task.id, url] as const] }),
+            ),
+            Effect.orElseSucceed(() => []),
+          ),
+        ).pipe(Effect.map((entries) => entries.flat())),
+      );
+
       return {
         projects,
         open,
@@ -751,6 +777,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         branches,
         dirty,
         pullRequests,
+        urls,
+        everyProject: resolved.projects,
       } as const;
     });
 
@@ -787,6 +815,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         branches,
         dirty,
         pullRequests,
+        urls,
+        everyProject,
       } = observation;
 
       const tasks = new Map(
@@ -957,7 +987,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       );
 
       return {
-        projects,
+        projects: everyProject,
+        urls,
+        pullRequests,
         workers,
         owned,
         held,
@@ -970,6 +1002,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ...reviews,
         dispatches: plan.dispatches,
         lands: plan.lands,
+        merging: new Set(
+          plan.lands.flatMap((land) => (land.pullRequest?.merge === true ? [land.task.id] : [])),
+        ),
         checks: plan.checks,
         parks,
         asks: plan.asks,
@@ -1101,6 +1136,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ),
         ).pipe(Effect.map((rows) => rows.filter((row): row is Active => row !== undefined)));
 
+        // The GitHub repo of each project whose checkout is on GitHub, whatever
+        // its tracker: the same read the pull-request landing makes, cached per
+        // checkout once it answers. A checkout with no GitHub remote has none.
+        const repos = new Map(
+          yield* Effect.forEach(observation.everyProject, (project) =>
+            repoOf(project.name).pipe(
+              Effect.map((repo) => [[project.name, repo] as const]),
+              Effect.orElseSucceed(() => []),
+            ),
+          ).pipe(Effect.map((entries) => entries.flat())),
+        );
+
         return {
           ...current,
           resumable,
@@ -1109,6 +1156,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           // grouped by project in config order rather than by when work landed.
           landed: landedColumn(landed, now, settings.landedWindow),
           decisions: [...current.decisions, ...failedDecisions],
+          repos,
           observedAt: now,
         } satisfies Interpretation;
       });
@@ -2819,6 +2867,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           yield* Effect.logInfo(
             `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,
           );
+          yield* github.run(["auth", "status"]).pipe(
+            Effect.as(Option.none<string>()),
+            Effect.catch((error) => Effect.succeedSome(error.detail)),
+            Effect.flatMap((reason) => Ref.set(signedOut, reason)),
+          );
           yield* Effect.forkScoped(watchPolicy);
           while ((yield* tick(codeMoved)) === "ran") {
             yield* Effect.raceFirst(
@@ -3975,7 +4028,10 @@ const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => (
 
 /** Everything the dashboard draws, and everything the loop decided from. */
 export interface FleetState {
-  /** The projects this reading covers; see `src/projects.ts`. */
+  /**
+   * The projects this reading covers (`src/projects.ts`), with those whose
+   * tracker did not answer, which are also held `unreachable`.
+   */
   readonly projects: ReadonlyArray<Project>;
   /** Ready work in dispatch order. */
   readonly queue: ReadonlyArray<Item>;
@@ -4066,6 +4122,14 @@ export interface FleetState {
   readonly scopes: Scopes;
   /** Steps the policy holds for one approval; see `Ask`. */
   readonly asks: ReadonlyArray<Ask>;
+  /** The GitHub repo of each project whose checkout is on GitHub, whatever its tracker. */
+  readonly repos: ReadonlyMap<string, string>;
+  /** The web page of each queued and claimed task whose tracker has one. */
+  readonly urls: ReadonlyMap<string, string>;
+  /** What the pull request of each task at a pull-request land block reads. */
+  readonly pullRequests: ReadonlyMap<string, PullRequestReading>;
+  /** The tasks whose pull request the plan merges this reading: every land gate permits it. */
+  readonly merging: ReadonlySet<string>;
 
   /**
    * When this reading of the world was taken.
@@ -4234,6 +4298,10 @@ export const EMPTY_FLEET: FleetState = {
   placed: [],
   scopes: new Map(),
   asks: [],
+  repos: new Map(),
+  urls: new Map(),
+  pullRequests: new Map(),
+  merging: new Set(),
   observedAt: undefined,
 };
 

@@ -70,6 +70,7 @@ describe("pull requests", () => {
       JSON.stringify([
         {
           number: 3,
+          url: "https://github.com/o/r/pull/3",
           state: "OPEN",
           headRefOid: "c1",
           mergeStateStatus: "CLEAN",
@@ -81,7 +82,14 @@ describe("pull requests", () => {
       pullRequestsOf("o/r", "foreman/ts-1").pipe(Effect.provide(layer)),
     );
     expect(pulls).toEqual([
-      { number: 3, state: "OPEN", head: "c1", mergeState: "CLEAN", reviewed: ["c0"] },
+      {
+        number: 3,
+        url: "https://github.com/o/r/pull/3",
+        state: "OPEN",
+        head: "c1",
+        mergeState: "CLEAN",
+        reviewed: ["c0"],
+      },
     ]);
   });
 

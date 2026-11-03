@@ -11,7 +11,11 @@ policy setting.
 - **worktree**: checks the task's branch out in a separate directory. It runs no
   agent. It needs a branch block before it.
 - **land**: puts the approved commit onto the trunk. Prop `how`: `merge` (a merge
-  commit; the default) or `fast-forward`. It needs a branch block before it.
+  commit; the default), `fast-forward`, or `pull-request`: foreman pushes the
+  branch, opens a pull request, and merges it on GitHub once the repo's required
+  checks pass. A pull-request land needs a `publish` gate and a `land` gate
+  before it (`docs/pipeline-engine.md`, Validation), and the local proving ground
+  does not run for it. It needs a branch block before it.
   After landing it removes the worktree and the branch, or gives your checkout
   back.
 - **done**: completes the task. It is the end of a route with no branch, which

@@ -239,6 +239,7 @@ export const parseResponse = (
  */
 export interface PullRequest {
   readonly number: number;
+  readonly url: string;
   readonly state: "OPEN" | "CLOSED" | "MERGED";
   readonly head: string;
   /** GitHub's `mergeStateStatus`: `CLEAN`, `DIRTY` (a conflict), `BLOCKED`, `BEHIND` and others. */
@@ -256,6 +257,7 @@ const PullRequestJson = S.Array(
   S.Struct({
     number: S.Finite,
     state: S.Literals(["OPEN", "CLOSED", "MERGED"]),
+    url: S.String,
     headRefOid: S.String,
     mergeStateStatus: S.String,
     reviews: S.Array(S.Struct({ commit: S.NullOr(S.Struct({ oid: S.String })) })),
@@ -264,7 +266,7 @@ const PullRequestJson = S.Array(
 
 const ChecksJson = S.Array(S.Struct({ name: S.String, bucket: S.String }));
 
-const PULL_REQUEST_FIELDS = "number,state,headRefOid,mergeStateStatus,reviews";
+const PULL_REQUEST_FIELDS = "number,url,state,headRefOid,mergeStateStatus,reviews";
 
 /**
  * Every pull request whose head is `branch`, open, closed and merged. One
@@ -295,6 +297,7 @@ export const pullRequestsOf = (repo: string, branch: string) =>
     );
     return rows.map((row): PullRequest => ({
       number: row.number,
+      url: row.url,
       state: row.state,
       head: row.headRefOid,
       mergeState: row.mergeStateStatus,

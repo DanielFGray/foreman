@@ -8,10 +8,10 @@
 // layout where a card would stand in each state it can reach (see drag.ts).
 import { Array, Option, pipe, Record } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
-import { BOARD_COLUMNS, type BoardColumn, type ForemanCommand, type ForemanReading, type ForemanRow } from "../shared/Foreman.ts"
+import { BOARD_COLUMNS, type BoardColumn, type ForemanCommand, type ForemanPlacement, type ForemanReading, type ForemanRow } from "../shared/Foreman.ts"
 import { CapturePointer } from "./commands.ts"
 import { centreOf, closest, distanceOf, floating, type Rect, type Target } from "./drag.ts"
-import { clickedForemanCommand, isInScope, rowButtonsView, withPage } from "./foreman.ts"
+import { clickedForemanCommand, isInScope, keyView, pullRequestView, rowButtonsView, withPage } from "./foreman.ts"
 import { BoardDrag, Message, type Model, NO_SCROLL, type Point, type UpdateReturn } from "./model.ts"
 import { ago } from "./usage.ts"
 
@@ -46,6 +46,9 @@ export interface Card {
   readonly label: string
   readonly project: string
   readonly column: BoardColumn
+  /** The task's page in its tracker, and its pull request. */
+  readonly url: Option.Option<string>
+  readonly pr: ForemanPlacement["pr"]
   /** When it landed, for a Landed card. */
   readonly landedAt: Option.Option<string>
 }
@@ -64,7 +67,7 @@ export const cardsOf = (model: Model, reading: ForemanReading): ReadonlyArray<Ca
   ...pipe(
     reading.landed,
     Array.filter((done) => isInScope(model, Option.some(done.project))),
-    Array.map((done): Card => ({ key: done.key, label: done.label, project: done.project, column: "landed", landedAt: Option.some(done.landedAt) })),
+    Array.map((done): Card => ({ key: done.key, label: done.label, project: done.project, column: "landed", url: Option.none(), pr: Option.none(), landedAt: Option.some(done.landedAt) })),
   ),
 ]
 
@@ -199,7 +202,14 @@ export const boardView = (model: Model, reading: ForemanReading, h: HtmlBuilder<
   const cards = cardsOf(model, reading)
   const layout = layoutOf(cards)
   const stopped = Array.filter(reading.stopped, ({ project }) => isInScope(model, Option.some(project)))
+  const unreachable = Array.filter(reading.projects, ({ name, unreachable }) => Option.isSome(unreachable) && isInScope(model, Option.some(name)))
   return [
+    ...Array.map(unreachable, ({ name, tracker, unreachable }) =>
+      h.section(
+        [h.Class("board-stopped"), h.Role("alert"), h.AriaLabel(`${name} is unreachable`)],
+        [h.p([h.Class("note error")], [`The ${tracker} tracker of ${name} did not answer, so no task takes a step: ${Option.getOrElse(unreachable, () => "")}`])],
+      ),
+    ),
     ...Array.map(stopped, ({ project, problems }) =>
       h.section(
         [h.Class("board-stopped"), h.Role("alert"), h.AriaLabel(`${project} is stopped`)],
@@ -279,8 +289,9 @@ const columnView = (
 }
 
 const cardBody = (card: Card, row: Option.Option<ForemanRow>, model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
-  h.div([h.Class("board-card-head")], [h.span([h.Class("foreman-key")], [card.key]), h.span([h.Class("note")], [card.project])]),
+  h.div([h.Class("board-card-head")], [keyView(card.key, card.url, h), h.span([h.Class("note")], [card.project])]),
   h.div([h.Class("board-label"), h.Title(card.label)], [card.label]),
+  ...pullRequestView(card.pr, h),
   ...Option.match(card.landedAt, { onNone: () => [], onSome: (at) => [h.span([h.Class("note")], [`landed ${ago(Date.parse(at), model.now)} ago`])] }),
   ...(card.column === "needs-you"
     ? Option.match(row, {

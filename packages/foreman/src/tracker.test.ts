@@ -25,6 +25,7 @@ const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item
     unlabel: (task, label) => note(`unlabel ${task} ${label}`),
     relabel: (task) => note(`relabel ${task}`).pipe(Effect.as([])),
     log: (task) => note(`log ${task}`),
+    url: (task) => note(`url ${task}`).pipe(Effect.as(Option.none())),
   });
 };
 
@@ -45,6 +46,7 @@ const failing = Tracker.of(
       "unlabel",
       "relabel",
       "log",
+      "url",
     ].map((method) => [
       method,
       () =>
@@ -88,6 +90,21 @@ describe("routeByProject", () => {
     await Effect.runPromise(tracker.complete("beta#7"));
     await Effect.runPromise(tracker.lookup("alpha#3"));
     expect(calls).toEqual(["github complete beta#7", "prog lookup alpha#3"]);
+  });
+
+  test("show, log and url route a prog, a GitHub and a Linear id to its tracker", async () => {
+    const { tracker, calls } = world(setProjectTracker(onGithub, "gamma", "linear"));
+    for (const id of ["ts-1", "beta#7", "gamma#ENG-3"]) {
+      await Effect.runPromise(tracker.lookup(id));
+      await Effect.runPromise(tracker.logs(id));
+      await Effect.runPromise(tracker.log(id, "note"));
+      await Effect.runPromise(tracker.url(id));
+    }
+    expect(calls).toEqual([
+      ...["lookup", "logs", "log", "url"].map((call) => `prog ${call} ts-1`),
+      ...["lookup", "logs", "log", "url"].map((call) => `github ${call} beta#7`),
+      ...["lookup", "logs", "log", "url"].map((call) => `linear ${call} gamma#ENG-3`),
+    ]);
   });
 
   test("calls that name a project or a parent route by it", async () => {

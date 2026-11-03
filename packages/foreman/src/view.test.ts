@@ -5,7 +5,14 @@ import type { Worker, WorkerState } from "./fleet.ts";
 import { type Item, type TaskStatus } from "./records.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
 import { authoredOn, charged, reviewRun, withRuns } from "./task-fixture.ts";
-import { actionsFor, decisionKind, queueRow, rowsForView, staleReview } from "./view.ts";
+import {
+  actionsFor,
+  decisionKind,
+  pullRequestView,
+  queueRow,
+  rowsForView,
+  staleReview,
+} from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { STANDARD_PIPELINES, type AgentNode } from "./pipeline.ts";
 import {
@@ -101,6 +108,10 @@ const LONG_DESCRIPTION = [
 
 const state: FleetState = {
   projects: [],
+  repos: new Map(),
+  urls: new Map(),
+  pullRequests: new Map(),
+  merging: new Set(),
   providers: [],
   orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), { ...ready("ts-q2"), charges: [charged("pro")] }],
@@ -556,6 +567,8 @@ describe("publishedOf", () => {
         gates: [{ id: "start", step: "author" }],
         column: "queue",
         grant: null,
+        url: null,
+        pr: null,
         runs: [
           { node: author.id, role: "author", rung: "cheap", open: false, ending: "done" },
           { node: null, role: "review", rung: null, open: true, ending: null },
@@ -571,6 +584,8 @@ describe("publishedOf", () => {
         gates: [],
         column: "needs-you",
         grant: null,
+        url: null,
+        pr: null,
         runs: [],
       },
     ]);
@@ -580,9 +595,10 @@ describe("publishedOf", () => {
     );
   });
 
-  test("prints a queued task with the commands its queue row takes", () => {
+  test("prints a queued task with the commands its queue row takes and its page", () => {
     const failed = state.queue[1]!;
-    expect(publishedRow("queue")(queueRow(failed))).toEqual({
+    const linked = { ...state, urls: new Map([[failed.id, "https://github.com/o/r/issues/2"]]) };
+    expect(publishedRow("queue", linked)(queueRow(failed))).toEqual({
       view: "queue",
       key: failed.id,
       label: `${failed.project}  ${failed.title}`,
@@ -591,6 +607,8 @@ describe("publishedOf", () => {
       parent: null,
       epic: false,
       actions: ["complete", "intervene", "descend"],
+      url: "https://github.com/o/r/issues/2",
+      pr: null,
     });
   });
 
@@ -677,5 +695,92 @@ describe("asks", () => {
 
   test("a row without an ask takes no approve", () => {
     expect(actionsFor("asks", row("attention", "ts-d1"))).toEqual([]);
+  });
+});
+
+describe("pull requests and projects in the published reading", () => {
+  const pr = {
+    number: 7,
+    url: "https://github.com/o/r/pull/7",
+    state: "OPEN",
+    head: "c1",
+    mergeState: "CLEAN",
+    reviewed: [],
+  } as const;
+  const atLand = task("ts-pr", "in_progress", []);
+  // The land gate as the plan decided it: merged now, asked, or denied.
+  const reading = (
+    checks: "pending" | "pass" | "fail" | "none",
+    gate: "merge" | "ask" | "deny",
+  ): FleetState => ({
+    ...state,
+    merging: new Set(gate === "merge" ? [atLand.id] : []),
+    placed: [{ task: atLand, placement: { _tag: "Outside" } }],
+    asks: gate === "ask" ? [{ task: atLand, step: "land", rung: undefined }] : [],
+    pullRequests: new Map([
+      [atLand.id, { _tag: "Open", pr, checks: { verdict: checks, output: "" } }],
+    ]),
+  });
+
+  test("an open PR waits on its checks, then on the plan's land gate", () => {
+    expect(pullRequestView(reading("pending", "merge"), atLand.id)).toEqual({
+      number: 7,
+      url: pr.url,
+      state: "open",
+      checks: "pending",
+      waiting: "checks",
+    });
+    expect(pullRequestView(reading("pass", "ask"), atLand.id)?.waiting).toBe("you");
+    expect(pullRequestView(reading("none", "deny"), atLand.id)?.waiting).toBe("github");
+    expect(pullRequestView(reading("pass", "merge"), atLand.id)?.waiting).toBeUndefined();
+    expect(pullRequestView(reading("fail", "deny"), atLand.id)).toMatchObject({
+      checks: "failing",
+      waiting: undefined,
+    });
+  });
+
+  test("a merged PR reads merged, and no reading shows no PR", () => {
+    const merged: FleetState = {
+      ...state,
+      pullRequests: new Map([[atLand.id, { _tag: "Merged", pr: { ...pr, state: "MERGED" } }]]),
+    };
+    expect(pullRequestView(merged, atLand.id)?.state).toBe("merged");
+    expect(pullRequestView(state, atLand.id)).toBeUndefined();
+  });
+
+  test("each project carries its tracker, its repo and why it is unreachable", () => {
+    const project = (name: string) => ({
+      name,
+      directory: `/src/${name}`,
+      verify: undefined,
+      preview: undefined,
+      open: true,
+    });
+    const published = publishedOf(
+      {
+        ...state,
+        projects: [project("alpha"), project("beta")],
+        policy: { ...DEFAULT_POLICY, projects: { beta: { tracker: "github" } } },
+        repos: new Map([["beta", "o/beta"]]),
+        held: [{ project: "beta", reason: "unreachable", detail: "gh auth status: signed out" }],
+      },
+      Option.none(),
+    );
+    expect(
+      published.projects.map(({ name, tracker, repo, unreachable }) => ({
+        name,
+        tracker,
+        repo,
+        unreachable,
+      })),
+    ).toEqual([
+      { name: "alpha", tracker: "prog", repo: null, unreachable: null },
+      {
+        name: "beta",
+        tracker: "github",
+        repo: "o/beta",
+        unreachable: "gh auth status: signed out",
+      },
+    ]);
   });
 });

@@ -311,6 +311,12 @@ export const githubTracker = (
                 all.filter((item) => item.status === "open" && item.type === "task"),
               ),
             ),
+      url: (task) =>
+        Effect.gen(function* () {
+          const { project, number } = yield* issueOf(task);
+          const { repo } = yield* snapshot(project);
+          return Option.some(`https://github.com/${repo}/issues/${number}`);
+        }),
       logs: (task) =>
         Effect.gen(function* () {
           const { project, number } = yield* issueOf(task);

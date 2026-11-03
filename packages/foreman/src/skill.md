@@ -11,8 +11,8 @@ these steps:
 
 1. **Queue.** The task is ready in the task store.
 2. **Author.** An agent works in the task's worktree, commits, and names its exit.
-3. **Review.** An agent one rung up reads the diff and gives its verdict with `tasks verdict`: approved, or sent back.
-4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and runs `tasks done`.
+3. **Review.** An agent one rung up reads the diff and names its exit with `foreman exit <id> approved` or `foreman exit <id> returned`.
+4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and marks the task done in its tracker. A pull-request landing opens a pull request instead, and merges it once its required checks pass.
 
 Every command below reads the world (the task store, herdr, git) once, does one thing,
 and exits. Foreman keeps no state between runs. So you can run these commands
@@ -28,6 +28,9 @@ Run `foreman <command> --help` for the options.
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `foreman queue [--project P] [--json]`            | Prints ready tasks in dispatch order, from the task store only                                |
 | `foreman show <id> [--json]`                      | Prints one task with its definition of done and its log                                       |
+| `foreman log <id> <message\|->`                   | Appends to the task's log in its project's tracker; `-` reads stdin                           |
+| `foreman list -p <project> [--json]`              | Prints every task of a project from its tracker, any status                                   |
+| `foreman add "<title>" -p <project> [-d <text>]`  | Files a task in the project's tracker and prints its id                                       |
 | `foreman status [--json]`                         | Prints every row and the commands each takes; `--json` is the shape written to `state.json`   |
 | `foreman dispatch <id> [--rung R]`                | Starts a queued task's author now                                                             |
 | `foreman wait <id> [--role R]`                    | Blocks until the task's agents (or one role) stop working, then prints its status             |
@@ -60,7 +63,7 @@ ready` reads edges, never the text of a description.
   package) or `size:3` (crosses packages); larger is allowed. Foreman writes
   it into the run rows, which is how the record learns which rung each size
   needs.
-- **Brief.** Write the task so a stranger can do it from `tasks show <id>`:
+- **Brief.** Write the task so a stranger can do it from `foreman show <id>`:
   the goal, the files in scope, the design decisions you already made, and a
   definition of done with checkable facts.
 - **Decide first.** An agent given an open design question decides it without

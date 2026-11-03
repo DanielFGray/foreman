@@ -7,11 +7,11 @@ decisions, or log the open decision and stop.
 
 - If you repair the workspace by hand, add the step to `scripts/worktree-setup.sh` and
   commit it; reject a setup step that is not safe to run twice.
-- Log each decision with `tasks log {{ task }} "Decision. ... Evidence. ... Result. ..."`.
+- Log each decision with `foreman log {{ task }} "Decision. ... Evidence. ... Result. ..."`.
 
 ## Read
 
-1. `tasks show {{ task }}`, the project's AGENTS.md or CLAUDE.md, and
+1. `foreman show {{ task }}`, the project's AGENTS.md or CLAUDE.md, and
    `~/.agents/skills/blast-radius/SKILL.md`.
 2. The author's work: `git -C {{ worktree }} diff {{ base }} HEAD`, then `git status`.
    Approval means everything worth landing is committed. Commit valid uncommitted

@@ -17,6 +17,7 @@ const STATES: ReadonlyArray<WorkflowState> = [
 const node = (number: number, change: Partial<IssueNode> = {}): IssueNode => ({
   id: `uuid-${number}`,
   identifier: `ENG-${number}`,
+  url: `https://linear.app/acme/issue/ENG-${number}`,
   title: `issue ${number}`,
   description: `Body of ${number}.\n\n## Definition of done\nIt works.`,
   priority: 3,
@@ -165,6 +166,18 @@ const fakeLinear = (
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
 describe("linearTracker", () => {
+  test("an issue's page is its Linear url", async () => {
+    const linear = fakeLinear({ issues: [node(1)] });
+    const result = await run(
+      Effect.gen(function* () {
+        const t = yield* linear.tracker;
+        yield* t.refresh("foreman");
+        return yield* t.url("foreman#ENG-1");
+      }),
+    );
+    expect(result).toEqual(Option.some("https://linear.app/acme/issue/ENG-1"));
+  });
+
   test("reads an issue as an Item, with status by state type and Linear priority mapped", async () => {
     const linear = fakeLinear({
       issues: [

@@ -261,6 +261,14 @@ export const linearTracker = (
     return Tracker.of({
       refresh: (project) => refresh(project).pipe(Effect.mapError(fail(`read ${project}`))),
       lookup,
+      // A closed issue the open list leaves out joins the snapshot at its first
+      // `lookup`, so an issue still unknown here has no page to name.
+      url: (task) =>
+        Effect.gen(function* () {
+          const { project, identifier } = yield* issueOf(task);
+          const read = yield* snapshot(project);
+          return Option.fromUndefinedOr(read.issues.get(identifier)?.url);
+        }).pipe(Effect.mapError(fail(`url of ${task}`))),
       list: (filter) =>
         filter.project === undefined && filter.parent === undefined
           ? Effect.fail(
@@ -489,7 +497,7 @@ const decode =
     );
 
 const ISSUE_FIELDS = `
-  id identifier title description priority createdAt updatedAt
+  id identifier url title description priority createdAt updatedAt
   state { type }
   assignee { id }
   project { id }
@@ -601,6 +609,7 @@ export type WorkflowState = typeof WorkflowState.Type;
 const IssueNode = S.Struct({
   id: S.String,
   identifier: S.String,
+  url: S.String,
   title: S.String,
   description: S.NullOr(S.String),
   priority: S.Finite,

@@ -1,6 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
 import { Records } from "./records.ts";
+import { Tracker } from "./tracker.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
 import { queueOf } from "./host.ts";
 import { Refused } from "./commands.ts";
@@ -9,7 +10,9 @@ import { factsOf } from "./pipeline-facts.ts";
 import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
 
 /**
- * Reads of the task store that a client makes every few seconds.
+ * Reads of the task store that a client makes every few seconds, and the
+ * tracker commands an agent runs: show, log, list and add. Each goes through
+ * `ProjectTracker`, so one prompt serves every tracker.
  *
  * The panel and herdr-web show the queue and a task's record through these,
  * so neither speaks to the task store itself, and a store other than prog is
@@ -82,3 +85,62 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
       yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);
   }),
 ).pipe(Command.withDescription("Print one task with its definition of done, its step and its log"));
+
+const message = Argument.String("message").pipe(
+  Argument.withDescription("What to log, or - to read it from stdin"),
+);
+
+/**
+ * Appends to a task's log in its project's tracker, which `ProjectTracker`
+ * picks from the id. Agents log through this rather than the tracker's own
+ * tool, so one prompt serves every tracker.
+ */
+export const logCommand = Command.make("log", { id, message }, (args) =>
+  Effect.gen(function* () {
+    const text =
+      args.message === "-" ? yield* Effect.promise(() => Bun.stdin.text()) : args.message;
+    if (text.trim() === "") return yield* new Refused({ detail: "the message is empty" });
+    yield* (yield* Tracker).log(args.id, text.trim());
+  }),
+).pipe(Command.withDescription("Append to a task's log in its project's tracker"));
+
+const inProject = Flag.String("project").pipe(
+  Flag.withAlias("p"),
+  Flag.withDescription("The project, which picks its tracker"),
+);
+
+/**
+ * Every task of one project in its tracker, any status: the backlog an agent
+ * searches before it files a new task.
+ */
+export const listCommand = Command.make("list", { project: inProject, json }, (args) =>
+  Effect.gen(function* () {
+    const items = yield* (yield* Tracker).list({ project: args.project });
+    if (args.json) return yield* Console.log(JSON.stringify(items));
+    if (items.length === 0) return yield* Console.log(`no tasks in ${args.project}`);
+    for (const item of items) {
+      yield* Console.log(`${item.id} ${item.status} p${item.priority} ${item.title}`);
+    }
+  }),
+).pipe(Command.withDescription("Print every task of a project from its tracker"));
+
+const title = Argument.String("title").pipe(Argument.withDescription("The new task's title"));
+
+const description = Flag.String("description").pipe(
+  Flag.withAlias("d"),
+  Flag.withDescription("What the task is, and what done means"),
+  Flag.withDefault(""),
+);
+
+/** Files a task in the project's tracker and prints its id. */
+export const addCommand = Command.make("add", { title, project: inProject, description }, (args) =>
+  Effect.gen(function* () {
+    const id = yield* (yield* Tracker).add({
+      project: args.project,
+      title: args.title,
+      description: args.description,
+      labels: [],
+    });
+    yield* Console.log(id);
+  }),
+).pipe(Command.withDescription("File a task in a project's tracker and print its id"));

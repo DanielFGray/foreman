@@ -657,3 +657,69 @@ const staleRow = (branch: StaleRow): ColumnRow => ({
   hasWork: true,
   committed: true,
 });
+
+/**
+ * What a reader is shown of a task's pull request: its state, its required
+ * checks, and what the merge waits for. Absent while no pull request is open
+ * or merged or closed for the task, and while GitHub did not answer.
+ *
+ * `checks` is absent until the PR's head is the approved commit, because the
+ * checks of any other head say nothing about the merge. `waiting` is absent
+ * when nothing outside foreman holds the merge: foreman merges at its next
+ * tick, or the PR already merged or closed, or a failed check returns the task.
+ * It is `you` while a land gate asks, and `github` while a land gate denies
+ * the merge, so a person merges it on GitHub. Both come from the plan's own
+ * gate decision (`FleetState.merging`), grants included.
+ */
+export interface PullRequestView {
+  readonly number: number;
+  readonly url: string;
+  readonly state: "open" | "merged" | "closed";
+  readonly checks: "pending" | "passing" | "failing" | undefined;
+  readonly waiting: "checks" | "you" | "github" | undefined;
+}
+
+export const pullRequestView = (state: FleetState, task: string): PullRequestView | undefined => {
+  const reading = state.pullRequests.get(task);
+  if (reading === undefined) return undefined;
+  switch (reading._tag) {
+    case "Unreadable":
+      return undefined;
+    case "Unpublished":
+      return reading.open === undefined ? undefined : opened(reading.open);
+    case "Moved":
+      return opened(reading.pr);
+    case "Merged":
+      return { ...opened(reading.pr), state: "merged" };
+    case "Closed":
+      return { ...opened(reading.pr), state: "closed" };
+    case "Open": {
+      const checks =
+        reading.checks.verdict === "pending"
+          ? "pending"
+          : reading.checks.verdict === "fail"
+            ? "failing"
+            : "passing";
+      const asked = state.asks.some((ask) => ask.task.id === task && ask.step === "land");
+      const waiting =
+        checks === "pending"
+          ? "checks"
+          : checks === "failing"
+            ? undefined
+            : asked
+              ? "you"
+              : state.merging.has(task)
+                ? undefined
+                : "github";
+      return { ...opened(reading.pr), checks, waiting };
+    }
+  }
+};
+
+const opened = (pr: { readonly number: number; readonly url: string }): PullRequestView => ({
+  number: pr.number,
+  url: pr.url,
+  state: "open",
+  checks: undefined,
+  waiting: undefined,
+});

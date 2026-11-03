@@ -92,6 +92,8 @@ export class Tracker extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<string>, TrackerError>;
     /** Appends to the task's log. Also counts as activity. */
     readonly log: (task: string, message: string) => Effect.Effect<void, TrackerError>;
+    /** The web page of the task in its tracker, or nothing when the tracker has none. */
+    readonly url: (task: string) => Effect.Effect<Option.Option<string>, TrackerError>;
   }
 >()("Tracker") {}
 
@@ -161,6 +163,7 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
       unlabel: (task, label) => tasks.unlabel(task, label).pipe(as(`unlabel ${task} ${label}`)),
       relabel: (task, change) => tasks.relabel(task, change).pipe(as(`relabel ${task}`)),
       log: (task, message) => tasks.log(task, message).pipe(as(`log ${task}`), Effect.asVoid),
+      url: () => Effect.succeedNone,
     });
   },
 );
@@ -298,6 +301,7 @@ export const routeByProject = (
         tracker.relabel(task, change),
     ),
     log: byId((tracker, task, message: string) => tracker.log(task, message)),
+    url: byId((tracker, task) => tracker.url(task)),
   });
 };
 
