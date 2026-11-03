@@ -4,6 +4,7 @@ import { BunServices } from "@effect/platform-bun";
 import {
   Clock,
   Context,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -27,6 +28,13 @@ import {
  * number every provider agrees to state. A provider reports several windows —
  * a rolling hour, a week, a month — and any one of them at 100% stops the rung.
  */
+/**
+ * How long one provider's reading may take. The dispatcher reads every
+ * provider in its tick, so a probe that never answers stops the whole fleet:
+ * `codex app-server` can wait forever for a reply after the machine sleeps.
+ */
+const PROBE_TIMEOUT = Duration.seconds(30);
+
 export class Quota extends Context.Service<Quota>()("Quota", {
   make: Effect.gen(function* () {
     const [go, codex, claude, cursor] = yield* Effect.all([
@@ -65,7 +73,10 @@ export class Quota extends Context.Service<Quota>()("Quota", {
         ),
       );
 
-    const usage = heldWhileSpent(probe, yield* Ref.make(new Map<string, Spent>()));
+    const usage = heldWhileSpent(
+      boundedBy(PROBE_TIMEOUT, probe),
+      yield* Ref.make(new Map<string, Spent>()),
+    );
 
     return { usage } as const;
   }),
@@ -135,6 +146,28 @@ export interface Spent {
  * The hold is in-process, like the dispatch tally: a restart forgets it and
  * pays one probe per provider to relearn it.
  */
+/**
+ * `probe` with a time limit. A probe that runs out of time is interrupted,
+ * which kills any process it started, and fails as a transient `QuotaError`,
+ * so the provider counts as unreadable until the next tick reads it again.
+ */
+export const boundedBy =
+  <R>(limit: Duration.Duration, probe: (provider: string) => Effect.Effect<Usage, QuotaError, R>) =>
+  (provider: string): Effect.Effect<Usage, QuotaError, R> =>
+    probe(provider).pipe(
+      Effect.timeoutOrElse({
+        duration: limit,
+        orElse: () =>
+          Effect.fail(
+            new QuotaError({
+              provider,
+              detail: `no answer in ${Duration.format(limit)}`,
+              permanent: false,
+            }),
+          ),
+      }),
+    );
+
 export const heldWhileSpent =
   (
     probe: (provider: string) => Effect.Effect<Usage, QuotaError>,
