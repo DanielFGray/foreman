@@ -18,7 +18,7 @@ import { lastFleet, maybeFocus, openAs, selected, shownTerminals, supportsAt, ta
 import { confirmedCloseSpace, editedSpaceForm, EMPTY_SPACE_FORM, openedSpace, openedSpaceForm, refusedSpace, startedRename, submittedSpaceForm, submittedSpaceName, typedSpaceName } from "./spaces.ts"
 import { checkoutTab, confirmedRemoveCheckout, editedWorktreeField, EMPTY_WORKTREE_PAGE, listedWorktrees, openedCheckoutSpace, openedNewCheckout, openedWorktrees, removedCheckout, submittedWorktree, withAction } from "./worktrees.ts"
 import { clickedForemanCommand, EMPTY_FOREMAN_PAGE, finishedForemanCommand, queueScopeOf, rereadAfter, recordedEpic, toggledColumn, toggledEpic, toggledLaunch, toggledSection, withPage } from "./foreman.ts"
-import { clickedReset, clickedRevert, clickedSave, closedPipeline, editedPipeline, failedChange, failedPipeline, openedPipeline, receivedPipeline, succeededChange, toggledPanel } from "./pipelinePage.ts"
+import { canceledPointer, heldCard, HOLD_MS, movedPointer, pressedCard, releasedPointer, scrolledColumn, toggledBoard } from "./board.ts"
 import { listedCommands, pickedCommand, updatedPrompt } from "./slash.ts"
 import { clickedModelTag, listedChoices } from "./modelMenu.ts"
 import { receivedTodos, watchedTodos } from "./todos.ts"
@@ -50,7 +50,7 @@ const TYPING_PAUSE = "500 millis"
 
 // INIT
 
-export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks, openEpics, closedPanels }: Flags): UpdateReturn => ({
+export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZoomed, viewPicks, openEpics }: Flags): UpdateReturn => ({
   model: {
     bridge: Bridge.Waiting(),
     // A page that opens on a remembered tab shows it at once, on a phone too.
@@ -73,7 +73,7 @@ export const init = ({ settings, selection, sidebarWidth, recent, softKeys, isZo
     spaceForm: EMPTY_SPACE_FORM,
     worktreePage: EMPTY_WORKTREE_PAGE,
     foreman: Option.none(),
-    foremanPage: { ...EMPTY_FOREMAN_PAGE, openEpics, closedPanels },
+    foremanPage: { ...EMPTY_FOREMAN_PAGE, openEpics },
     palette: Palette.Closed(),
     recent,
     settings,
@@ -335,27 +335,21 @@ const respond = (model: Model, message: Message): UpdateReturn =>
 
     ClickedRefreshForeman: () => ({ model, commands: [RefreshForeman()] }),
 
-    ClickedPipeline: () => openedPipeline(model),
+    ClickedBoard: () => ({ model: toggledBoard(model) }),
 
-    ClosedPipeline: () => ({ model: closedPipeline(model) }),
+    PressedCard: ({ key, pointerId, pointerType, at }) => pressedCard(model, key, pointerId, pointerType, at),
 
-    ReceivedPipeline: ({ project, drawn, pipeline }) => ({ model: receivedPipeline(model, project, drawn, pipeline) }),
+    HeldCard: ({ key }) => heldCard(model, key),
 
-    FailedPipeline: ({ project, reason }) => ({ model: failedPipeline(model, project, reason) }),
+    MovedPointer: ({ at }) => ({ model: movedPointer(model, at) }),
 
-    EditedPipeline: ({ edit }) => ({ model: editedPipeline(model, edit) }),
+    ReleasedPointer: () => releasedPointer(model),
 
-    ClickedSavePipeline: () => clickedSave(model),
+    CanceledPointer: () => ({ model: canceledPointer(model) }),
 
-    ClickedRevertPipeline: () => ({ model: clickedRevert(model) }),
+    CompletedCapturePointer: () => ({ model }),
 
-    ClickedResetPipeline: () => clickedReset(model),
-    ToggledPipelinePanel: ({ panel }) => toggledPanel(model, panel),
-    CompletedSaveClosedPanels: () => ({ model }),
-
-    SucceededPipelineChange: ({ project }) => succeededChange(model, project),
-
-    FailedPipelineChange: ({ project, reason }) => ({ model: failedChange(model, project, reason) }),
+    ScrolledBoardColumn: ({ column, top }) => ({ model: scrolledColumn(model, column, top) }),
 
     CompletedRefreshForeman: () => ({ model }),
 
@@ -886,6 +880,44 @@ export const subscriptions = Subscription.make<Model, Message, BridgeClient>()((
               Dom.streamFromEvent({ target: () => window, type: "pointerup", mapEvent: () => Message.ReleasedSidebarEdge() }),
             )
           : Stream.empty,
+    },
+  ),
+
+  // The pointer anywhere on the page while a board card is pressed or dragged.
+  // A held touch becomes a drag after HOLD_MS. While a card drags, the page
+  // stops each touchmove's default, so the finger moves the card and does not
+  // scroll the board; this needs a listener that is not passive.
+  boardPointer: entry(
+    { drag: S.Literals(["Idle", "Pressed", "Dragging"]), key: S.String },
+    {
+      modelToDependencies: (model) => {
+        const drag = model.foremanPage.drag
+        return { drag: drag._tag, key: drag._tag === "Idle" ? "" : drag.key }
+      },
+      dependenciesToStream: ({ drag, key }) => {
+        if (drag === "Idle") return Stream.empty
+        const pointer = Stream.merge(
+          Dom.streamFromEvent({ target: () => window, type: "pointermove", mapEvent: ({ clientX, clientY }) => Message.MovedPointer({ at: { x: clientX, y: clientY } }) }),
+          Stream.merge(
+            Dom.streamFromEvent({ target: () => window, type: "pointerup", mapEvent: () => Message.ReleasedPointer() }),
+            Dom.streamFromEvent({ target: () => window, type: "pointercancel", mapEvent: () => Message.CanceledPointer() }),
+          ),
+        )
+        return drag === "Pressed"
+          ? Stream.merge(pointer, Stream.fromEffect(Effect.as(Effect.sleep(HOLD_MS), Message.HeldCard({ key }))))
+          : Stream.merge(
+              pointer,
+              Dom.streamFromEventFilterMap({
+                target: () => window,
+                type: "touchmove",
+                options: { passive: false },
+                filterMapEvent: (event) => {
+                  event.preventDefault()
+                  return Option.none()
+                },
+              }),
+            )
+      },
     },
   ),
 

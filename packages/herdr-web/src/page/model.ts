@@ -10,10 +10,7 @@ import { Answer, ChatUpdate, Entry, InputBox, Question } from "../shared/Chat.ts
 import { Fleet } from "../shared/Fleet.ts"
 import { ModelChoices } from "../shared/Harness.ts"
 import { FontFamily } from "../shared/Fonts.ts"
-import { ForemanCommand, ForemanRow, ForemanRung, ForemanState, ForemanView } from "../shared/Foreman.ts"
-import { Pipeline } from "foreman/pipeline"
-import { INSERTABLE } from "foreman/pipeline-belt"
-import { PipelineEdit } from "./pipelineEdit.ts"
+import { BoardColumn, ForemanCommand, ForemanRow, ForemanRung, ForemanState, ForemanView } from "../shared/Foreman.ts"
 import { AlertEvent, PushSubscription } from "../shared/Push.ts"
 import { ProviderId, Usage } from "../shared/Usage.ts"
 import { Checkout, RepoCheckouts } from "../shared/Worktree.ts"
@@ -33,7 +30,6 @@ export const SOFT_KEYS_KEY = "herdr-web.soft-keys"
 export const ZOOM_KEY = "herdr-web.zoom"
 export const VIEW_PICKS_KEY = "herdr-web.view-picks"
 export const OPEN_EPICS_KEY = "herdr-web.foreman-open-epics"
-export const CLOSED_PANELS_KEY = "herdr-web.pipeline-closed-panels"
 
 export const Bridge = defineTaggedUnion({
   Waiting: {},
@@ -199,35 +195,23 @@ export const EpicRecord = defineTaggedUnion({
 })
 export type EpicRecord = typeof EpicRecord.Type
 
-/**
- * The Pipeline editor: closed, being read, unreadable, or open on a project's
- * pipeline as foreman saved it and the draft the operator is changing. The
- * problems are not kept: the view derives them from the draft and the ladder.
- */
-export const PipelineView = defineTaggedUnion({
-  Closed: {},
-  Loading: { project: S.String },
-  Unlisted: { project: S.String, reason: S.String },
-  Editing: {
-    project: S.String,
-    /** Whether the project has its own pipeline, or runs the standard one. */
-    drawn: S.Boolean,
-    saved: Pipeline,
-    draft: Pipeline,
-    selected: S.Option(S.String),
-    /** The kind of block picked in the palette, which a "+" on a belt puts there. */
-    placing: S.Option(S.Literals(INSERTABLE)),
-    saving: S.Boolean,
-    /** Foreman's reason for refusing the last save or reset. */
-    refusal: S.Option(S.String),
-  },
-})
-export type PipelineView = typeof PipelineView.Type
+/** A position on the page, in CSS pixels from the viewport's top left. */
+export const Point = S.Struct({ x: S.Finite, y: S.Finite })
+export type Point = typeof Point.Type
 
-/** The panels that float over the pipeline drawing, which a viewer closes and opens again. */
-export const PIPELINE_PANELS = ["blocks", "ladder", "changes"] as const
-export const PipelinePanel = S.Literals(PIPELINE_PANELS)
-export type PipelinePanel = typeof PipelinePanel.Type
+/**
+ * A card on the board under the pointer. A touch first `Pressed`: held still,
+ * it starts a drag, and moved first, it is a scroll. A mouse starts `Dragging`
+ * at once. `start` is where the pointer went down and `at` where it is now.
+ */
+export const BoardDrag = defineTaggedUnion({
+  Idle: {},
+  Pressed: { key: S.String, pointerId: S.Finite, start: Point },
+  Dragging: { key: S.String, pointerId: S.Finite, start: Point, at: Point },
+})
+export type BoardDrag = typeof BoardDrag.Type
+
+export const NO_SCROLL: Record<BoardColumn, number> = { queue: 0, "needs-you": 0, authoring: 0, review: 0, fixing: 0, landed: 0 }
 
 /** The Foreman column's own state; the fleet itself is the model's `foreman`. A command is named by its command line. */
 export const ForemanPage = S.Struct({
@@ -248,12 +232,14 @@ export const ForemanPage = S.Struct({
   folded: S.Array(ForemanView),
   /** The epics shown expanded, in every space; any other epic shows its row alone. */
   openEpics: S.Array(S.String),
-  /** The pipeline panels this viewer closed; every other one is open. */
-  closedPanels: S.Array(PipelinePanel),
   /** What foreman recorded of each opened epic, by key. A key still absent is being read. */
   epicRecords: S.Record(S.String, EpicRecord),
   queue: ForemanQueue,
-  pipeline: PipelineView,
+  /** Whether the task board shows in place of the sections. */
+  isBoardShown: S.Boolean,
+  drag: BoardDrag,
+  /** How far each board column is scrolled, which places its cards on the page. */
+  scrolled: S.Record(BoardColumn, S.Finite),
 })
 export type ForemanPage = typeof ForemanPage.Type
 
@@ -475,8 +461,6 @@ export const Flags = S.Struct({
   viewPicks: S.Array(ViewPick),
   /** The Foreman column's expanded epics. */
   openEpics: S.Array(S.String),
-  /** The pipeline panels this viewer closed. */
-  closedPanels: S.Array(PipelinePanel),
 })
 export type Flags = typeof Flags.Type
 
@@ -489,7 +473,6 @@ export const loadFlags = Effect.all({
   isZoomed: loadStored(ZOOM_KEY, S.Boolean, false),
   viewPicks: loadStored(VIEW_PICKS_KEY, S.Array(ViewPick), []),
   openEpics: loadStored(OPEN_EPICS_KEY, S.Array(S.String), []),
-  closedPanels: loadStored(CLOSED_PANELS_KEY, S.Array(PipelinePanel), []),
 })
 
 // MESSAGE
@@ -562,18 +545,16 @@ export const Message = defineMessageUnion({
   ToggledForemanAll: {},
   ToggledForemanSection: { view: ForemanView },
   ClickedRefreshForeman: {},
-  ClickedPipeline: {},
-  ClosedPipeline: {},
-  ReceivedPipeline: { project: S.String, drawn: S.Boolean, pipeline: Pipeline },
-  FailedPipeline: { project: S.String, reason: S.String },
-  EditedPipeline: { edit: PipelineEdit },
-  ClickedSavePipeline: {},
-  ClickedRevertPipeline: {},
-  ClickedResetPipeline: {},
-  ToggledPipelinePanel: { panel: PipelinePanel },
-  CompletedSaveClosedPanels: {},
-  SucceededPipelineChange: { project: S.String },
-  FailedPipelineChange: { project: S.String, reason: S.String },
+  ClickedBoard: {},
+  /** A press on a card that can move; `pointerType` says whether it must be held first. */
+  PressedCard: { key: S.String, pointerId: S.Finite, pointerType: S.String, at: Point },
+  HeldCard: { key: S.String },
+  MovedPointer: { at: Point },
+  ReleasedPointer: {},
+  /** The browser took the pointer, as it does when a press turns into a scroll. */
+  CanceledPointer: {},
+  CompletedCapturePointer: {},
+  ScrolledBoardColumn: { column: BoardColumn, top: S.Finite },
   CompletedRefreshForeman: {},
   FailedPaneAction: { reason: S.String },
   PressedSpace: { space: S.String },

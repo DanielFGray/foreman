@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, test } from "vitest"
-import { ForemanCommand, type ForemanState } from "../shared/Foreman.ts"
+import { argvOf, ForemanCommand, type ForemanState } from "../shared/Foreman.ts"
 import { Foreman, ForemanHost } from "./Foreman.ts"
 
 // foreman reads where to publish and where its policy lives from the
@@ -73,4 +73,19 @@ test("a command refuses a name foreman would read as an option", () => {
   const decode = S.decodeUnknownResult(ForemanCommand)
   expect(Result.isFailure(decode({ _tag: "Act", action: "kill", key: "--all" }))).toBe(true)
   expect(Result.isSuccess(decode({ _tag: "Act", action: "kill", key: "ts-1a2b" }))).toBe(true)
+})
+
+test("a grant names its scope and at least one step, and runs as `foreman policy grant`", () => {
+  const decode = S.decodeUnknownResult(ForemanCommand)
+  expect(Result.isFailure(decode({ _tag: "Grant", scope: "ts-1", steps: [] }))).toBe(true)
+  expect(Result.isFailure(decode({ _tag: "Grant", scope: "--all", steps: ["author"] }))).toBe(true)
+  expect(Result.isFailure(decode({ _tag: "Grant", scope: "ts-1", steps: ["author"], count: 0 }))).toBe(true)
+  const limited = decode({ _tag: "Grant", scope: "ep-1", steps: ["author", "review"], count: 2 })
+  const open = decode({ _tag: "Grant", scope: "ts-1", steps: ["author"] })
+  expect(Result.map(limited, argvOf)).toEqual(Result.succeed(["policy", "grant", "ep-1", "author", "review", "--count", "2"]))
+  expect(Result.map(open, argvOf)).toEqual(Result.succeed(["policy", "grant", "ts-1", "author"]))
+})
+
+test("a rung move names the side it goes to", () => {
+  expect(argvOf({ _tag: "MoveRung", rung: "sonnet", side: "below", of: "haiku" })).toEqual(["ladder", "move", "sonnet", "--below", "haiku"])
 })

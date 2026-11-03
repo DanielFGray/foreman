@@ -20,7 +20,7 @@ const fleet: Fleet = {
 
 /** The model with a tab of space `id` on show, the column shown or not, and the scope `all` or not. */
 const modelOn = (id: string, { shown, all }: { shown: boolean; all: boolean }): Model => {
-  const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
+  const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
   return {
     ...start,
     selection: Selection.Tab({ tabId: `tab-${id}`, maybeFocus: Option.none() }),
