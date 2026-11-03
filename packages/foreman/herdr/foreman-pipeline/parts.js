@@ -36,5 +36,12 @@ export const picker = (t, label, choices, current, onPick) =>
       .on_click((_event, cx) => { if (choice !== current) onPick(choice, cx); })
       .child(choice)));
 
+// What a refused foreman command said: its error's message, without the log
+// prefix and the stack under it.
+export const refusalOf = (result) => {
+  const text = result.stderr.split("\n    at ")[0].trim();
+  return text.replace(/^.*?Error: /s, "") || `foreman exited ${result.code}`;
+};
+
 // A wire's way out of its block in words: its label, or the port foreman names it by.
 export const portName = (wire) => wire.label || (typeof wire.port === "number" ? `route ${wire.port}` : String(wire.port));
