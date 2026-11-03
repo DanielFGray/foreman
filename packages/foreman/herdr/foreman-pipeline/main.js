@@ -125,7 +125,11 @@ export default class Pipeline extends View {
   // The way the drawing should run in this pane: down a column, across a row.
   flow() { return this.size !== null && this.size.height > this.size.width ? "down" : "across"; }
 
-  select(id) { this.selected = id; this.editor.forget(); }
+  select(id) { this.selected = id; this.editor.load(this.selectedNode()); }
+
+  selectedNode() {
+    return this.selected === null ? undefined : this.view().pipeline.nodes.find((node) => node.id === this.selected);
+  }
 
   loadPlacements(cx) {
     cx.spawn(async (cx) => {
@@ -217,9 +221,9 @@ export default class Pipeline extends View {
   // The selected block: its words, every task standing there, and, while
   // editing, its settings and the wires that leave it.
   detail(t, at) {
-    const { drawing, pipeline } = this.view();
+    const { drawing } = this.view();
     const block = drawing.blocks.find((one) => one.id === this.selected);
-    const node = pipeline.nodes.find((one) => one.id === this.selected);
+    const node = this.selectedNode();
     if (block === undefined || node === undefined) return div();
     const tasks = at.get(block.id) ?? [];
     return v_flex().id("detail").max_h(320).overflow_y_scrollbar().p(10).gap(4).bg(t.surface).border_t(1).border_color(t.border)
