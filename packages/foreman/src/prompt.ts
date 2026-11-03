@@ -186,13 +186,13 @@ const taskSection = (block: AgentNode, { task, workspace }: AgentRun): string =>
     "## Task",
     "",
     `${task.id} — ${task.title}`,
-    `Project: ${task.project}. Read the task with \`tasks show ${task.id}\`; the project's backlog is \`tasks list -p ${task.project}\`.`,
+    `Project: ${task.project}. Read the task with \`foreman show ${task.id}\`; the project's backlog is \`foreman list -p ${task.project}\`.`,
   ];
   const research = task.labels.includes("research");
   if (block.role === "author" && research) {
     lines.push(
       "",
-      `This task is labelled \`research\`: the deliverable is a report, not code. Write it to \`tasks log ${task.id}\` with the commands you ran and what they showed, so a reviewer can check every claim. Make no commits of your own.${workspace === "none" ? "" : " The branch stays empty."}`,
+      `This task is labelled \`research\`: the deliverable is a report, not code. Write it to \`foreman log ${task.id} -\` with the commands you ran and what they showed, so a reviewer can check every claim. Make no commits of your own.${workspace === "none" ? "" : " The branch stays empty."}`,
     );
   }
   if (block.role === "review" && claimsAlreadyDone(task)) {

@@ -55,7 +55,7 @@ The policy file (`src/policy.ts`), the pipelines file (`src/pipeline-file.ts`)
 and the drafts file beside it (`src/pipeline-draft.ts`)
 are the only durable things foreman holds, because nothing in the world records
 the operator's intention. The policy holds `paused`,
-`slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
+`slots`, a default for each spending step (`author`, `climb`, `review`, `publish`, `land`)
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
 project's own `paused`, its own mode for any step, which replace the
@@ -230,9 +230,10 @@ skips that account (`walledBy`). Landing the task ends the wall.
 
 ### The operator's checkout is shared, so it is asked about
 
-Every task with a branch ends by merging into the project's main checkout, and a
+Every task with a local landing ends by merging into the project's main checkout, and a
 direct task commits there from the start: the checkout is the one the operator
-edits in. `Repository.isFree` is the dispatch gate: a project it answers `Held`
+edits in. A pull-request landing merges into the remote trunk instead, and the
+operator's checkout takes it by its own pull. `Repository.isFree` is the dispatch gate: a project it answers `Held`
 for is **held**, and `fill` passes over its tasks in both the review and the
 author pass. It is read every tick, so a project frees itself the moment the
 cause clears.
@@ -563,8 +564,8 @@ has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is
 most likely to have stubbed. An approving reviewer is the only thing that makes
 a branch landable, and landing is the only code path that moves the
-operator's branch for a task with a branch, so no prompt gives an agent merge
-rights. A direct route is the operator's choice to let the author commit there,
+operator's branch for a task with a local landing; a pull-request landing moves
+the remote trunk instead. So no prompt gives an agent merge rights. A direct route is the operator's choice to let the author commit there,
 and its `done` still waits for an approval.
 
 The author critiques its own diff before handing off, reading `git diff` rather
@@ -637,7 +638,9 @@ keeps the claim and workspace and waits at the `climb` gate before the next
 author. See "The standard pipeline, drawn with exits" in `docs/agent-exits.md`.
 Saved pipelines keep their drawn returns to the queue.
 
-**A landing is proved somewhere disposable before it is applied.** The merge is
+**A local landing is proved somewhere disposable before it is applied.** A
+pull-request landing is proved by the repo's required checks instead, and the
+proving ground does not run. The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
 `verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the
 checkout's current tip. Check blocks run their command there too, at the task's
@@ -834,10 +837,11 @@ routes each call to the adapter of the project's tracker, chosen with
 `linearTracker` (`src/linear-tracker.ts`), over Linear's GraphQL API, are
 built. Nothing above `src/github.ts` runs `gh`, and nothing above
 `src/linear.ts` sends HTTP to Linear. `Records` (`src/records.ts`) holds foreman's
-own records beside it, keyed by task id: the runs, the charges and the parks. A
-records write that goes with a status move shares one transaction with it,
-which holds only while both run on one store connection;
-`Records.layer` builds them that way. The writes a pipeline event makes are one
+own records beside it, keyed by task id: the runs, the charges and the parks.
+For a prog project, a records write that goes with a status move shares one
+transaction with it, which holds only while both run on one store connection;
+`Records.layer` builds them that way. A GitHub or Linear project writes the
+records first, then the move (`docs/issue-trackers.md`, section 1). The writes a pipeline event makes are one
 row of the joint table: `stepOf` in `src/run-step.ts` decides the row from the
 task and the rules alone, and `Records.write` writes it. A path that writes
 for one of its `RunEvent`s builds the event and calls `stepOf`; it does not
@@ -862,7 +866,7 @@ To change how foreman works, edit one of these.
 | the steps a task goes through | `STANDARD_PIPELINES` in `src/pipeline.ts` (`foreman pipeline use` draws one), or draw one on the page |
 | what an agent is told | the files in `~/.config/foreman/prompts/` |
 | which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`) |
-| what runs without asking | the policy file (author, climb, review, land) |
+| what runs without asking | the policy file (author, climb, review, publish, land) |
 
 Keep `Records` and `Repository` as they are: the runs and git are how foreman
 knows what happened, whatever the workflow.
@@ -915,6 +919,10 @@ the world and the operator's two files are the only channels, so what it changes
 dispatcher reads on its next tick. **Settle, land and tick have no command.**
 Landings and checks are serialised by the dispatcher's one fiber over one
 proving ground per project, checks after the landings; a second process landing races it.
+
+Agents read, log and file tasks with `foreman show <id>`, `foreman log <id> -`,
+`foreman list -p <project>` and `foreman add`, which route through
+`ProjectTracker`, so no prompt names a tracker's own CLI.
 
 `foreman --skill` prints `src/skill.md`, read at runtime like the prompts, so
 the usage an agent reads ships with the binary it describes.

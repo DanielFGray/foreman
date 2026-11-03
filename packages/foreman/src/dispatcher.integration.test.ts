@@ -259,6 +259,7 @@ class World {
     list: () => Effect.die("unused"),
     dependencies: () => Effect.die("unused"),
     ready: () => Effect.die("unused"),
+    url: () => Effect.succeedNone,
     logs: (id) =>
       Effect.sync(() =>
         this.logs
@@ -1269,6 +1270,36 @@ describe("a fleet that is not running", () => {
     await tick(world);
 
     expect(world.writes).toEqual(expect.arrayContaining(["repository.remove", "fleet.spawn"]));
+  });
+
+  test("a GitHub project reads unreachable while gh is signed out, asked once when the loop starts", async () => {
+    usePolicy({ ...everything, projects: { test: { tracker: "github" } } });
+    const world = busy();
+    world.answerGh = (args) =>
+      args.join(" ") === "auth status"
+        ? { exitCode: 1, stdout: "", stderr: "You are not logged into any GitHub hosts." }
+        : { exitCode: 0, stdout: "", stderr: "" };
+
+    // A one-shot reading never runs the loop, so it asks nothing of gh's sign-in.
+    await tick(world);
+    expect(world.ghCalls.filter((args) => args.join(" ") === "auth status")).toHaveLength(0);
+
+    const left = [false];
+    const state = await Effect.runPromise(
+      Effect.gen(function* () {
+        const dispatcher = yield* Dispatcher;
+        yield* dispatcher
+          .run(Effect.sync(() => left.shift() ?? true))
+          .pipe(Effect.timeout("5 seconds"));
+        return yield* SubscriptionRef.get(dispatcher.state);
+      }).pipe(Effect.scoped, Effect.provide(layerFor(world))),
+    );
+
+    const held = state.held.find((one) => one.project === "test");
+    expect(held?.reason).toBe("unreachable");
+    expect(held?.detail).toContain("not logged into any GitHub hosts");
+    expect(state.projects.map((project) => project.name)).toContain("test");
+    expect(world.ghCalls.filter((args) => args.join(" ") === "auth status")).toHaveLength(1);
   });
 
   test("a running tick releases a stale claim only when foreman's agent made it", async () => {
@@ -3098,6 +3129,7 @@ describe("a pull-request landing", () => {
 
   interface Pull {
     readonly number: number;
+    readonly url: string;
     readonly state: "OPEN" | "CLOSED" | "MERGED";
     readonly headRefOid: string;
     readonly mergeStateStatus: string;
@@ -3105,6 +3137,7 @@ describe("a pull-request landing", () => {
   }
   const pull = (overrides: Partial<Pull> = {}): Pull => ({
     number: 7,
+    url: "https://github.com/o/r/pull/7",
     state: "OPEN",
     headRefOid: "c1",
     mergeStateStatus: "CLEAN",
@@ -3293,6 +3326,27 @@ describe("a pull-request landing", () => {
     );
     await tick(world);
     expect(verbs(world)).toContain("merge");
+  });
+
+  test("the reading says which pull requests the plan merges, a land grant included", async () => {
+    const mergingAfter = (world: World) =>
+      Effect.runPromise(
+        Dispatcher.use((dispatcher) =>
+          dispatcher.tick.pipe(
+            Effect.andThen(SubscriptionRef.get(dispatcher.state)),
+            Effect.map((state) => [...state.merging]),
+          ),
+        ).pipe(Effect.provide(layerFor(world))),
+      );
+    steps({ publish: "on", land: "off" });
+    const { world } = approvedOn([pull()]);
+    expect(await mergingAfter(world)).toEqual([]);
+
+    steps(
+      { publish: "on", land: "off" },
+      { grants: [{ scope: "ts-pr", steps: ["land"], remaining: 1, admitted: [] }] },
+    );
+    expect(await mergingAfter(world)).toEqual(["ts-pr"]);
   });
 
   test("land off posts the review and leaves the merge to the operator", async () => {

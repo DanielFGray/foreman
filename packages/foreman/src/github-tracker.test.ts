@@ -99,6 +99,19 @@ describe("githubTracker reads", () => {
     expect(graphqlCalls(calls)).toBe(1);
   });
 
+  test("an issue's page comes from the project's read", async () => {
+    const { calls, tracker } = github();
+    const url = await Effect.runPromise(
+      Effect.gen(function* () {
+        const t = yield* tracker;
+        yield* t.refresh("beta");
+        return yield* t.url("beta#2");
+      }),
+    );
+    expect(url).toEqual(Option.some("https://github.com/o/r/issues/2"));
+    expect(graphqlCalls(calls)).toBe(1);
+  });
+
   test("a failed read fails every read until the next refresh", async () => {
     const { calls, tracker } = github({ failRead: true });
     const exits = await Effect.runPromise(

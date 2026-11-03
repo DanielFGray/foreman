@@ -176,10 +176,12 @@ describe("Prompts", () => {
       authorPrompt(prompts, ready, "/tmp/worktree", "/tmp/repository", "worktree"),
     );
 
-    expect(prompt).toContain("tasks list -p foreman");
+    expect(prompt).toContain("foreman list -p foreman");
+    expect(prompt).toContain("foreman show ts-123456");
+    expect(prompt).not.toMatch(/tasks (show|log)/);
     expect(prompt).toContain("match on the test name, not on");
     expect(prompt).toContain("do not file a new one");
-    expect(prompt).toContain('tasks log <id> "<what failed>"');
+    expect(prompt).toContain('foreman log <id> "<what failed>"');
     expect(prompt).toContain("only when nothing in the backlog describes it");
   });
 
@@ -272,7 +274,7 @@ describe("Prompts", () => {
     );
 
     expect(prompt).toContain("Diagnose why this attempt appears stuck");
-    expect(prompt).toContain("tasks log ts-123456");
+    expect(prompt).toContain("foreman log ts-123456 -");
     expect(prompt).toContain("Do not take over the implementation");
     expect(prompt).not.toContain("tasks open ts-123456");
   });

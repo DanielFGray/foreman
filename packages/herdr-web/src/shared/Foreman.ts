@@ -42,6 +42,22 @@ export const FOREMAN_VIEWS = ["attention", "working", "review", "queue", "quota"
 export const ForemanView = S.Literals(FOREMAN_VIEWS)
 export type ForemanView = typeof ForemanView.Type
 
+/** A task's pull request: what the merge waits for (`checks`, `you`, `github`), and a summary of its required checks. */
+export const ForemanPullRequest = S.Struct({
+  number: S.Int,
+  url: S.String,
+  state: S.Literals(["open", "merged", "closed"]),
+  checks: S.OptionFromNullOr(S.Literals(["pending", "passing", "failing"])),
+  waiting: S.OptionFromNullOr(S.Literals(["checks", "you", "github"])),
+})
+export type ForemanPullRequest = typeof ForemanPullRequest.Type
+
+/** Where a task lives on the web: its page in its tracker, and its pull request. */
+const ForemanLinks = {
+  url: S.OptionFromNullOr(S.String),
+  pr: S.OptionFromNullOr(ForemanPullRequest),
+}
+
 /** One task, workspace or account; `actions` are the subcommands `foreman <action> <key>` it takes. */
 export const ForemanRow = S.Struct({
   view: ForemanView,
@@ -54,6 +70,7 @@ export const ForemanRow = S.Struct({
   /** An epic has no branch and no worker, so it takes no launch. */
   epic: S.Boolean,
   actions: S.Array(S.String),
+  ...ForemanLinks,
 })
 export type ForemanRow = typeof ForemanRow.Type
 
@@ -75,7 +92,7 @@ export const BoardColumn = S.Literals(BOARD_COLUMNS)
 export type BoardColumn = typeof BoardColumn.Type
 
 /** One task on the board, in the column foreman puts it in. */
-export const ForemanPlacement = S.Struct({ key: S.String, label: S.String, project: S.String, column: BoardColumn })
+export const ForemanPlacement = S.Struct({ key: S.String, label: S.String, project: S.String, column: BoardColumn, ...ForemanLinks })
 export type ForemanPlacement = typeof ForemanPlacement.Type
 
 /** One reading of the fleet, made by the dispatcher the bridge runs. */
@@ -87,8 +104,21 @@ export const ForemanReading = S.Struct({
   policyError: S.OptionFromNullOr(S.String),
   /** ISO instant of the reading; none when the dispatcher failed before its first. */
   observedAt: S.OptionFromNullOr(S.String),
-  /** The managed projects; a board takes no drop where `grantSteps` (the steps a grant gives) is empty. */
-  projects: S.Array(S.Struct({ name: S.String, grantSteps: S.Array(ForemanStep) })),
+  /**
+   * The managed projects; a board takes no drop where `grantSteps` (the steps a
+   * grant gives) is empty. `tracker` keeps the project's tasks, `repo` is its
+   * GitHub repo, and `unreachable` says why its tracker did not answer, which
+   * holds the project.
+   */
+  projects: S.Array(
+    S.Struct({
+      name: S.String,
+      grantSteps: S.Array(ForemanStep),
+      tracker: S.Literals(["prog", "github", "linear"]),
+      repo: S.OptionFromNullOr(S.String),
+      unreachable: S.OptionFromNullOr(S.String),
+    }),
+  ),
   rows: S.Array(ForemanRow),
   /** Each task on the board; a landed one shows from `landed`. */
   placements: S.Array(ForemanPlacement),

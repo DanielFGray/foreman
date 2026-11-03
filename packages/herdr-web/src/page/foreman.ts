@@ -15,6 +15,7 @@ import {
   type ForemanCommand,
   type ForemanDispatcher,
   type ForemanPolicy,
+  type ForemanPullRequest,
   type ForemanReading,
   type ForemanRow,
   type ForemanState,
@@ -350,12 +351,13 @@ const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: For
         [h.Class("foreman-row-head")],
         [
           ...(row.epic ? [epicToggle(row.key, isOpen, h)] : []),
-          h.span([h.Class("foreman-key")], [row.key]),
+          keyView(row.key, row.url, h),
           h.span([h.Class("foreman-label")], [row.label]),
           ...(row.epic && !isOpen ? [h.span([h.Class("note foreman-count")], [children.length === 1 ? "1 subtask" : `${children.length} subtasks`])] : []),
         ],
       ),
       ...(row.epic && isOpen ? [epicBodyView(page.epicRecords[row.key], h)] : []),
+      ...pullRequestView(row.pr, h),
       ...Option.match(row.detail, { onNone: () => [], onSome: (detail) => [h.div([h.Class("foreman-detail"), h.Title(detail)], [detail])] }),
       ...(Array.isReadonlyArrayNonEmpty(buttons) ? [h.div([h.Class("foreman-actions")], buttons)] : []),
       ...(isLaunching ? [rungsView(row.key, page, h)] : []),
@@ -404,3 +406,29 @@ const epicBodyView = (record: EpicRecord | undefined, h: HtmlBuilder<Message>): 
     : record._tag === "Unread"
       ? h.p([h.Class("note error")], [record.reason])
       : h.p([h.Class("foreman-description")], [Option.getOrElse(record.description, () => "No description.")])
+
+/** A task's id, linked to its page in its tracker when it has one. */
+export const keyView = (key: string, url: Option.Option<string>, h: HtmlBuilder<Message>): Html =>
+  Option.match(url, {
+    onNone: () => h.span([h.Class("foreman-key")], [key]),
+    onSome: (href) => h.a([h.Class("foreman-key"), h.Href(href), h.Target("_blank"), h.Rel("noopener noreferrer")], [key]),
+  })
+
+const WAITING = { checks: "waits for its checks", you: "waits for your approval", github: "waits for a merge on GitHub" } as const
+
+/** A task's pull request as one line: its number, linked, its state, its checks, and what the merge waits for. */
+export const pullRequestView = (pr: Option.Option<ForemanPullRequest>, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  Option.match(pr, {
+    onNone: () => [],
+    onSome: ({ number, url, state, checks, waiting }) => [
+      h.div(
+        [h.Class("foreman-detail")],
+        [
+          h.a([h.Href(url), h.Target("_blank"), h.Rel("noopener noreferrer")], [`PR #${number}`]),
+          ` ${state}`,
+          ...Option.match(checks, { onNone: () => [], onSome: (verdict) => [`, checks ${verdict}`] }),
+          ...Option.match(waiting, { onNone: () => [], onSome: (what) => [`, ${WAITING[what]}`] }),
+        ],
+      ),
+    ],
+  })

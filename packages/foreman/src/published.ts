@@ -16,9 +16,10 @@ import type { EpicProgress, Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
 import { BOARD_COLUMNS, columnOf, recentlyLanded } from "./board.ts";
 import { coveringOf, gatedSteps } from "./pipeline-graph.ts";
-import { MODES, modeOf, Policy } from "./policy.ts";
+import { MODES, modeOf, Policy, TRACKERS, trackerOf } from "./policy.ts";
 import {
   actionsFor,
+  pullRequestView,
   queueRows,
   rowsForView,
   VIEWS,
@@ -42,6 +43,25 @@ export const PUBLISHED_VERSION = 5;
  */
 export const PUBLISHED_VIEWS = VIEWS.filter((view) => view !== "queue");
 
+/**
+ * A task's pull request as a reader sees it (`pullRequestView`): `waiting`
+ * names what holds the merge, `checks` sums up its required checks.
+ */
+export const PublishedPullRequest = S.Struct({
+  number: S.Int,
+  url: S.String,
+  state: S.Literals(["open", "merged", "closed"]),
+  checks: S.NullOr(S.Literals(["pending", "passing", "failing"])),
+  waiting: S.NullOr(S.Literals(["checks", "you", "github"])),
+});
+export type PublishedPullRequest = typeof PublishedPullRequest.Type;
+
+/** Where a task lives on the web: its page in its tracker, and its pull request. */
+const Links = {
+  url: S.NullOr(S.String),
+  pr: S.NullOr(PublishedPullRequest),
+};
+
 export const PublishedRow = S.Struct({
   view: S.Literals(VIEWS),
   key: S.String,
@@ -54,6 +74,7 @@ export const PublishedRow = S.Struct({
   epic: S.Boolean,
   /** The one-shot subcommands this row takes: `foreman <action> <key>`. */
   actions: S.Array(S.String),
+  ...Links,
 });
 export type PublishedRow = typeof PublishedRow.Type;
 
@@ -73,6 +94,7 @@ export const PublishedPlacement = S.Struct({
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
   /** The board column the task shows in (`columnOf`). */
   column: S.Literals(BOARD_COLUMNS),
+  ...Links,
   /**
    * The grant that lets the dispatcher take some of the project's
    * `grantSteps` for the task, and how many tasks it admits still.
@@ -125,9 +147,19 @@ export const Published = S.Struct({
    * The managed projects and their checkouts, for a reader that offers a
    * choice of project. `grantSteps` are the steps a grant from a board gives a
    * task (`gatedSteps`); a reader takes no drop where they are empty.
+   * `tracker` keeps the project's tasks, `repo` is the GitHub repo they live
+   * in, and `unreachable` says why the tracker did not answer this reading,
+   * which holds the project.
    */
   projects: S.Array(
-    S.Struct({ name: S.String, directory: S.String, grantSteps: S.Array(S.String) }),
+    S.Struct({
+      name: S.String,
+      directory: S.String,
+      grantSteps: S.Array(S.String),
+      tracker: S.Literals(TRACKERS),
+      repo: S.NullOr(S.String),
+      unreachable: S.NullOr(S.String),
+    }),
   ),
   rows: S.Array(PublishedRow),
   /**
@@ -167,8 +199,15 @@ export const publishedOf = (
       name,
       directory,
       grantSteps: grantStepsOf(name),
+      tracker: trackerOf(state.policy, name),
+      repo: state.repos.get(name) ?? null,
+      unreachable:
+        state.held.find((held) => held.project === name && held.reason === "unreachable")?.detail ??
+        null,
     })),
-    rows: PUBLISHED_VIEWS.flatMap((view) => rowsForView(view, state).map(publishedRow(view))),
+    rows: PUBLISHED_VIEWS.flatMap((view) =>
+      rowsForView(view, state).map(publishedRow(view, state)),
+    ),
     placements: state.placed.flatMap(({ task, placement }) =>
       placement._tag === "Outside"
         ? []
@@ -179,6 +218,7 @@ export const publishedOf = (
               project: task.project,
               ...placementOf(placement),
               column: columnOf(task, placement, asksYou.has(task.id)),
+              ...linksOf(state, task.id),
               grant: coveringOf(state.policy, state.scopes, task, grantStepsOf(task.project)),
               runs: task.runs.map((run) => ({
                 node: run.node ?? null,
@@ -221,9 +261,12 @@ const placementOf = (
   }
 };
 
-/** One row as a reader sees it, with the commands it takes. `foreman queue` prints these too. */
+/**
+ * One row as a reader sees it, with the commands it takes. `foreman queue`
+ * prints these too, from no reading, so its rows carry no links.
+ */
 export const publishedRow =
-  (view: ViewName) =>
+  (view: ViewName, state: FleetState | undefined) =>
   (row: ColumnRow): PublishedRow => ({
     view,
     key: row.key,
@@ -233,13 +276,24 @@ export const publishedRow =
     parent: row.task?.parent ?? row.ready?.parent ?? null,
     epic: row.task?.type === "epic",
     actions: actionsFor(row.column, row).map(commandName),
+    ...(state === undefined
+      ? { url: null, pr: null }
+      : linksOf(state, row.task?.id ?? row.ready?.id ?? row.key)),
   });
+
+const linksOf = (state: FleetState, task: string): Pick<PublishedRow, "url" | "pr"> => {
+  const pr = pullRequestView(state, task);
+  return {
+    url: state.urls.get(task) ?? null,
+    pr: pr === undefined ? null : { ...pr, checks: pr.checks ?? null, waiting: pr.waiting ?? null },
+  };
+};
 
 /** The queue as a reader sees it, each epic before its first task: what `foreman queue --json` prints. */
 export const publishedQueue = (
   queue: ReadonlyArray<Item>,
   epics: ReadonlyArray<EpicProgress>,
-): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue"));
+): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue", undefined));
 /** An action as a command line writes it: `takeOver` is `take-over`. */
 export const commandName = (action: Action): string =>
   action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);

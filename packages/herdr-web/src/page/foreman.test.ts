@@ -38,6 +38,8 @@ const row = (key: string, project: Option.Option<string>): ForemanRow => ({
   parent: Option.none(),
   epic: false,
   actions: [],
+  url: Option.none(),
+  pr: Option.none(),
 })
 
 test("the queue is read for the selected space's project, every project for all, and not at all when hidden or in no project", () => {

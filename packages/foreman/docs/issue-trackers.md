@@ -172,17 +172,29 @@ the task list, so they do not move to GitHub.
   no quotes in `foreman exit foreman#42 approved`.
 - hc labels (`fm.task`) take the id as is.
 
-The board, the queue and `state.json` (`src/published.ts`) show the issue id as
-the task id. Each task row of a GitHub project also carries:
+The board and `state.json` (`src/published.ts`) show the issue id as the task
+id. Each queued, claimed and reviewing row and placement also carries:
 
-- `url`: `https://github.com/<repo>/issues/<n>`.
+- `url`: the task's page from `Tracker.url`. A GitHub issue is
+  `https://github.com/<repo>/issues/<n>`, a Linear issue is the `url` Linear
+  answers, and a prog task has none. `foreman queue --json` reads no tracker
+  snapshot, so its rows carry `url: null`.
 - At a PR landing: `pr` with `number`, `url`, `state` (`open`, `merged`,
   `closed`), `checks` (`pending`, `passing`, `failing`), and `waiting` (what
-  the merge waits for: `checks`, `you` in `ask` mode, `github` in `off` mode).
+  the merge waits for: `checks`; `you` while a land gate asks; `github` while a
+  land gate denies the merge). `waiting` comes from the plan's own land-gate
+  decision (`FleetState.merging`), grants included, so a front end applies no
+  policy rule of its own.
 
 Each project in the reading carries `tracker` (`prog`, `github` or `linear`), `repo` when
-its checkout is on GitHub, and `unreachable` for a GitHub or Linear project
+its checkout is on GitHub, whatever its tracker (the same `checkoutRepo` read the
+PR landing makes), and `unreachable` for a GitHub or Linear project
 (sections 5 and 7).
+
+Agents read and write a task through foreman, never a tracker's own CLI:
+`foreman show <id>`, `foreman log <id> -`, `foreman list -p <project>` and
+`foreman add "<title>" -p <project> -d <text>` route through `ProjectTracker`.
+An onboarding agent ends with `foreman exit <id> done`, like any author.
 
 ## 3. Landing by pull request
 
@@ -369,8 +381,8 @@ The tick's GraphQL read takes no cache: GitHub gives GraphQL no ETag.
 ### Auth
 
 foreman holds no token. Every call is `gh`, which uses the account
-`gh auth login` set up (or `GH_TOKEN`). `gh auth status` at startup names a
-missing login once, and each GitHub project then reads as unreachable with that
+`gh auth login` set up (or `GH_TOKEN`). `gh auth status` when the dispatcher's loop starts names a
+missing login once (a one-shot command does not ask), and each GitHub project then reads as unreachable with that
 reason, like an unreadable quota account. `GH_HOST` selects GitHub Enterprise.
 
 ### When GitHub cannot be reached

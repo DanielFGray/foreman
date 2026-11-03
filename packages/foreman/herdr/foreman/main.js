@@ -3,7 +3,7 @@
 // one-shot commands as buttons.
 //
 // It reads state.json, asks `foreman queue` and `foreman show` for the queue
-// and a task's record, and runs `foreman <action> <id>` and `foreman policy ...`.
+// and a task's record, shows each task's pull request and its tracker's page, and runs `foreman <action> <id>` and `foreman policy ...`.
 // It keeps nothing of its own and never speaks to the task store itself. The
 // policy is the dispatcher's to read: a button here rewrites the file through the
 // CLI, and the next reading shows it. The file's shape is `Published` in
@@ -33,8 +33,11 @@ const NEEDS_INPUT = new Set(["complete", "intervene"]);
 // These end an agent or give up a claim, so a first click only arms them.
 const DESTRUCTIVE = new Set(["kill", "close", "release"]);
 // A row's key is a task id, a workspace label that holds one (`foreman/<id>`),
-// or a project or account name, which has no task to show.
-const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b/;
+// or a project or account name, which has no task to show. A prog id is
+// `ts-` or `ep-` and six hex digits; an issue id is `<project>#<number>` on
+// GitHub and `<project>#<TEAM-number>` on Linear.
+const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b|[\w.-]+#(?:[A-Za-z][A-Za-z0-9]*-)?\d+\b/;
+const WAITING = { checks: "waits for its checks", you: "waits for your approval", github: "waits for a merge on GitHub" };
 // An open row shows this many of its task's newest log entries.
 const LOGS_SHOWN = 3;
 // The epics shown expanded, kept in the mod's own storage so they stay open
@@ -293,6 +296,8 @@ export default class Foreman extends View {
             .child(childCount === 1 ? "1 subtask" : `${childCount} subtasks`))))
         .when(isEpic && this.expanded.has(r.key), (el) => el.child(epicBody(r)))
         .when(Boolean(r.detail), (el) => el.child(div().text_size(11).text_color(t.muted).when(!open, (el) => el.truncate()).child(r.detail)))
+        .when(Boolean(r.pr), (el) => el.child(div().text_size(11).text_color(t.muted).child(pullRequestLine(r.pr))))
+        .when(open && Boolean(r.url), (el) => el.child(div().text_size(11).text_color(t.dim).child(r.url)))
         .when(actions.length > 0 || launchable, (el) => el.child(h_flex().gap(4).flex_wrap()
           .when(launchable, (el) => el.child(chip(`launch-${r.key}`, this.launching === r.key ? "cancel" : "launch",
             (cx) => { this.launching = this.launching === r.key ? null : r.key; cx.notify(); }, t.working)))
@@ -356,6 +361,9 @@ export default class Foreman extends View {
       });
     };
 
+    // A project whose tracker did not answer takes no step until it does.
+    const unreachable = (published?.projects ?? []).filter((p) => p.unreachable && (this.all || p.name === project));
+
     const tone = state === "running" ? t.working : state === "stale" || state === "failed" ? t.blocked : t.muted;
 
     // The policy: pause, the steps the fleet takes for every task, and the
@@ -363,6 +371,7 @@ export default class Foreman extends View {
     const controls = !policy ? null : v_flex().px(14).py(6).gap(4).border_b(1).border_color(t.border)
       .when(Boolean(published.policyError), (el) => el.child(div().text_size(11).text_color(t.blocked).child(published.policyError)))
       .when(dispatcher?.state === "failed", (el) => el.child(div().text_size(11).text_color(t.blocked).child(`dispatcher failed, restarting: ${dispatcher.detail}`)))
+      .children(unreachable.map((p) => div().text_size(11).text_color(t.blocked).child(`${p.name}: the ${p.tracker} tracker did not answer, so no task takes a step: ${p.unreachable}`)))
       .child(h_flex().gap(4).flex_wrap().items_center()
         .child(chip("pause", policy.paused ? "resume" : "pause", (cx) => this.act(["policy", policy.paused ? "resume" : "pause"], cx), policy.paused ? t.working : t.blocked))
         .children(STEPS.map((step) => chip(`step-${step}`, `${step} ${policy.default[step]}`,
@@ -394,3 +403,8 @@ export default class Foreman extends View {
         .children(SECTIONS.map(section).filter(Boolean)));
   }
 }
+
+// A task's pull request as one line: its number, state, checks and what the merge waits for.
+const pullRequestLine = (pr) =>
+  [`PR #${pr.number} ${pr.state}`, pr.checks ? `checks ${pr.checks}` : null, pr.waiting ? WAITING[pr.waiting] : null, pr.url]
+    .filter(Boolean).join(" · ");

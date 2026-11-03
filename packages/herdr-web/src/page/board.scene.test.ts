@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS } from "./settings.ts"
 
 const NOW = Date.parse("2026-10-30T01:00:00Z")
 
-const placed = (key: string, column: ForemanPlacement["column"], project = "app"): ForemanPlacement => ({ key, label: `task ${key}`, project, column })
+const placed = (key: string, column: ForemanPlacement["column"], project = "app"): ForemanPlacement => ({ key, label: `task ${key}`, project, column, url: Option.none(), pr: Option.none() })
 
 const reading: ForemanReading = {
   version: 5,
@@ -20,11 +20,11 @@ const reading: ForemanReading = {
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
   projects: [
-    { name: "app", grantSteps: ["author"] },
-    { name: "lib", grantSteps: [] },
+    { name: "app", grantSteps: ["author"], tracker: "prog", repo: Option.none(), unreachable: Option.none() },
+    { name: "lib", grantSteps: [], tracker: "prog", repo: Option.none(), unreachable: Option.none() },
   ],
   rows: [
-    { view: "attention", key: "ts-ask", label: "task ts-ask", detail: Option.some("claimed, but no agent works on it"), project: Option.some("app"), parent: Option.none(), epic: false, actions: ["release", "retry"] },
+    { view: "attention", key: "ts-ask", label: "task ts-ask", detail: Option.some("claimed, but no agent works on it"), project: Option.some("app"), parent: Option.none(), epic: false, actions: ["release", "retry"], url: Option.none(), pr: Option.none() },
   ],
   placements: [placed("ts-q1", "queue"), placed("ts-ask", "needs-you"), placed("ts-a1", "authoring"), placed("ts-r1", "review"), placed("ts-f1", "fixing"), placed("ts-done", "landed"), placed("ts-lib", "queue", "lib")],
   stopped: [],
@@ -234,5 +234,25 @@ test("a board shown again drags from where its cards now stand", () => {
     Subscription.emit(Message.ReleasedPointer()),
     Command.expectExact(RunForeman({ command: grant })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "policy grant ts-q1 author" })),
+  )
+})
+
+test("a card links its issue and shows its pull request, and an unreachable project says why", () => {
+  const issue = "https://github.com/o/app/issues/7"
+  const pr = { number: 9, url: "https://github.com/o/app/pull/9", state: "open", checks: Option.some("passing" as const), waiting: Option.some("you" as const) } as const
+  scene(
+    { update, view },
+    given(open),
+    Subscription.emit(
+      withReading({
+        placements: [{ ...placed("app#7", "review"), url: Option.some(issue), pr: Option.some(pr) }],
+        projects: [{ name: "app", grantSteps: [], tracker: "github", repo: Option.some("o/app"), unreachable: Option.some("gh auth status: not signed in") }],
+      }),
+    ),
+    expect(selector(`.board-column.review a[href="${issue}"]`)).toContainText("app#7"),
+    expect(selector(`.board-column.review a[href="${pr.url}"]`)).toContainText("PR #9"),
+    expect(selector(".board-column.review")).toContainText("checks passing, waits for your approval"),
+    expect(selector(".board-stopped")).toContainText("The github tracker of app did not answer"),
+    expect(selector(".board-stopped")).toContainText("gh auth status: not signed in"),
   )
 })

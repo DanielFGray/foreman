@@ -19,6 +19,8 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
   parent: Option.none(),
   epic: false,
   actions,
+  url: Option.none(),
+  pr: Option.none(),
 })
 
 const reading: ForemanReading = {
@@ -27,7 +29,7 @@ const reading: ForemanReading = {
   policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", publish: "off", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
-  projects: [{ name: "app", grantSteps: [] }, { name: "lib", grantSteps: [] }],
+  projects: [{ name: "app", grantSteps: [], tracker: "prog", repo: Option.none(), unreachable: Option.none() }, { name: "lib", grantSteps: [], tracker: "prog", repo: Option.none(), unreachable: Option.none() }],
   rows: [
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),

@@ -15,7 +15,7 @@ everything.
 
 1. `git status` and the log of your work, as the workspace section says: an earlier
    author may have left work here.
-2. `tasks show {{ task }}`, then `prog context` for its concepts, then the project's
+2. `foreman show {{ task }}`, then `prog context` for its concepts, then the project's
    AGENTS.md or CLAUDE.md.
 3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
    or uncertain change, `~/.agents/skills/figure-it-out/SKILL.md`.
@@ -28,16 +28,16 @@ everything.
   and commit it. Foreman runs that script before every dispatch, so each step must be
   safe to run twice.
 - Commit each logical unit. Log each settled decision with
-  `tasks log {{ task }} "Decision. ... Evidence. ... Result. ..."`. git log and the
-  tasks log must be enough for another agent to continue.
+  `foreman log {{ task }} "Decision. ... Evidence. ... Result. ..."`. git log and the
+  task log must be enough for another agent to continue.
 - No stubs, and no workaround that needs a paragraph to defend it. Never weaken, skip
   or delete a test to green the suite: log why it is wrong and leave it failing.
 - Prove the behavior through the project's real user-facing interface, and record the
   evidence in the task log.
 - A failure that is already on trunk is not yours. Search the project's backlog (the
   task section names the command) and match on the test name, not on wording. If a
-  task describes it, do not file a new one: `tasks log <id> "<what failed>"` and name
-  that task in your log. File with `tasks add` only when nothing in the backlog
+  task describes it, do not file a new one: `foreman log <id> "<what failed>"` and name
+  that task in your log. File with `foreman add` only when nothing in the backlog
   describes it.
 
 ## Finish
@@ -51,7 +51,7 @@ everything.
    exactly that, commit, stop again.
 
 If trunk already does everything the task asks, prove it part by part in
-`tasks log {{ task }}` (code, tests, commits), then name the exit `already-done`,
+`foreman log {{ task }} -` (code, tests, commits), then name the exit `already-done`,
 which also sends the task to review. Partly done is not done; a claim you cannot
 point at line by line is rejected.
 
