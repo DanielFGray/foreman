@@ -873,7 +873,10 @@ runs, on one seed, so the pane can compare the two and animate the draft
 own `candidatesFrom` and `planFrom` and folds the trace's events; only each
 run's outcome and minutes, and each check's result, are drawn, from the runs
 table's rates per rung, blended toward the role's pool (`src/run-rates.ts`).
-Its `assumes` names every fact it does not read from the world. Both act through
+Landings and checks wait for the next tick, one poll interval after the tick
+before, as in the fleet. Each frame holds only the tasks that moved, so the
+board at a frame is the fold of the frames up to it. Its `assumes` names every
+fact it does not read from the world. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 

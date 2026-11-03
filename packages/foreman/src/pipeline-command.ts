@@ -268,9 +268,17 @@ const simulate = Command.make(
       const rates = ratesOf(yield* readMeasured);
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const { ladder, attemptsPerRung } = yield* Settings;
+      const { ladder, attemptsPerRung, pollInterval } = yield* Settings;
       const report = simulateReport(
-        { project, ready, claimed, epics, now: new Date(), slots: policy.slots },
+        {
+          project,
+          ready,
+          claimed,
+          epics,
+          now: new Date(),
+          slots: policy.slots,
+          pollSeconds: pollInterval,
+        },
         {
           draft:
             draft === undefined

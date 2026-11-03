@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
 import { type Pipeline, STANDARD_PIPELINE, standardExits } from "./pipeline.ts";
-import { simulate, simulateReport, type SimulateWorld } from "./pipeline-simulate.ts";
+import { simulate, simulateReport, type Frame, type SimulateWorld } from "./pipeline-simulate.ts";
 import type { Item } from "./records.ts";
 import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
 
@@ -41,6 +41,7 @@ const world = (count: number, slots = 2): SimulateWorld => ({
   epics: [],
   now: new Date(0),
   slots,
+  pollSeconds: 60,
 });
 
 const sample = (
@@ -55,6 +56,12 @@ const always = (review: string): Measured => ({
   agents: [sample("cheap", "author", "done", 30), sample("dear", "review", review, 10)],
   checks: [],
 });
+
+/** Where each task stands after the frame at `index`: the fold of the moves up to it. */
+const boardAt = (frames: ReadonlyArray<Frame>, index: number) =>
+  new Map(
+    frames.slice(0, index + 1).flatMap((frame) => frame.moves.map((move) => [move.task, move])),
+  );
 
 const played = (pipeline: Pipeline, measured: Measured, count = 5) =>
   simulate({
@@ -90,6 +97,43 @@ const NO_REVIEW: Pipeline = {
 };
 
 describe("simulate", () => {
+  test("repeats a check that fails back into itself once a tick, and ends at the horizon", () => {
+    const looping: Pipeline = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "author" },
+        {
+          kind: "agent",
+          id: "author",
+          role: "author",
+          model: "ladder",
+          exits: [{ name: "done", to: "lint" }],
+        },
+        {
+          kind: "check",
+          id: "lint",
+          command: "false",
+          exits: [
+            { name: "passed", to: "land" },
+            { name: "failed", to: "lint" },
+          ],
+        },
+        { kind: "land", id: "land", how: "merge" },
+      ],
+    };
+    const run = simulate({
+      world: world(1),
+      pipeline: looping,
+      drawn: true,
+      rates: ratesOf({ ...always("approved"), checks: [{ node: "lint", passed: false }] }),
+      rules: RULES,
+      seed: 1,
+      hours: 2,
+    });
+    expect(run.landed).toBe(0);
+    expect(run.inFlight).toBe(1);
+    expect(boardAt(run.frames, run.frames.length - 1).get("ts-0")?.node).toBe("lint");
+  });
+
   test("gives the same run for the same seed", () => {
     const measured: Measured = {
       agents: [
@@ -115,8 +159,11 @@ describe("simulate", () => {
     const run = played(STANDARD_PIPELINE, always("approved"));
     expect(run.landed).toBe(5);
     expect(run.tasks.every((task) => task.landedAt !== null)).toBe(true);
-    for (const frame of run.frames) {
-      expect(frame.placements.filter((at) => at.state === "running").length).toBeLessThanOrEqual(2);
+    for (const index of run.frames.keys()) {
+      const running = [...boardAt(run.frames, index).values()].filter(
+        (standing) => standing.state === "running",
+      );
+      expect(running.length).toBeLessThanOrEqual(2);
     }
     expect(run.runsByRung).toEqual({ cheap: 5, dear: 5 });
   });

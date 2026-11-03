@@ -34,7 +34,8 @@ export const SIMULATE_ASSUMES = {
   accounts: TRACE_ASSUMES.accounts,
   gates:
     "Every step is on and every gate is granted, whatever the policy says. Only the policy's slots are read.",
-  landings: "Every landing merges and verifies. A landing and a check take no time.",
+  landings:
+    "Every landing merges and verifies. Landings and checks happen on the dispatcher's ticks, one poll interval apart, and take no time of their own.",
   checks:
     "A check passes at its block's measured rate. A check block with no run passes every time (Assumed).",
   outcomes:
@@ -62,19 +63,34 @@ export interface SimulateWorld {
   readonly now: Date;
   /** How many agents may work at once, from the policy. */
   readonly slots: number;
+  /** Seconds between the dispatcher's ticks, from the config. */
+  readonly pollSeconds: number;
 }
 
 /** Where a task stands in a frame: a block's run state, or out of the pipeline for good or for now. */
 export type FrameState = RunState | "landed" | "parked" | "outside";
 
+export interface Standing {
+  readonly task: string;
+  readonly node: string | null;
+  readonly state: FrameState;
+}
+
+/**
+ * The tasks that moved at one time. The first frame holds every task; each
+ * later one holds only the tasks whose block or state changed since the frame
+ * before it, so the board at a frame is the fold of the frames up to it.
+ */
 export interface Frame {
   /** Hours since the start. */
   readonly at: number;
-  readonly placements: ReadonlyArray<{
-    readonly task: string;
-    readonly node: string | null;
-    readonly state: FrameState;
-  }>;
+  readonly moves: ReadonlyArray<Standing>;
+}
+
+/** Where every task stands at a time: a frame before the moves are taken out. */
+interface Board {
+  readonly at: number;
+  readonly standings: ReadonlyArray<Standing>;
 }
 
 export interface SimulatedTask {
@@ -121,11 +137,16 @@ export const simulate = (input: {
   const sim = startOf(input);
   settle(sim, 0);
   snapshot(sim, 0);
-  for (let due = nextDue(sim); due !== undefined && due.end <= input.hours; due = nextDue(sim)) {
-    sim.pending.delete(due.id);
-    step(sim, sim.tasks.get(due.id)!, due.event, due.end);
-    settle(sim, due.end);
-    snapshot(sim, due.end);
+  for (;;) {
+    const due = nextDue(sim);
+    const at = Math.min(due?.end ?? Infinity, sim.tick ?? Infinity);
+    if (at > input.hours) break;
+    if (due !== undefined && due.end === at) {
+      sim.pending.delete(due.id);
+      step(sim, sim.tasks.get(due.id)!, due.event, at);
+    }
+    settle(sim, at);
+    snapshot(sim, at);
     if (live(sim).every((task) => placementOf(sim, task)._tag === "Outside")) break;
   }
   return resultOf(sim);
@@ -274,7 +295,9 @@ interface Sim {
     { readonly at: number; readonly node: string | null; readonly how: "landed" | "parked" }
   >;
   readonly runsByRung: Map<string, number>;
-  readonly frames: Array<Frame>;
+  readonly frames: Array<Board>;
+  /** When the next tick settles again, after a tick that landed, checked or parked something. */
+  tick: number | undefined;
 }
 
 /**
@@ -307,6 +330,7 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
     ended: new Map(),
     runsByRung: new Map(),
     frames: [],
+    tick: undefined,
   };
   for (const task of live(sim)) {
     const placement = placementOf(sim, task);
@@ -323,25 +347,26 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
 };
 
 /**
- * Takes every step due at `now`, as one tick of the dispatcher would: the
- * parks, landings and checks, planned again after each pass until none is
- * left, then the dispatches of the last plan.
+ * One tick of the dispatcher at `now`: the parks, landings and checks its plan
+ * holds, then the dispatches of a plan read again after them, as a tick reads
+ * the world again before it fills. A tick that took a step asks for the next
+ * one a poll interval later, because what it moved may have a step of its own
+ * (a check before a land); a check that fails back into itself then repeats
+ * once a tick, as in the fleet.
  */
 const settle = (sim: Sim, now: number) => {
-  for (;;) {
-    const { parks, plan } = planOf(sim);
-    for (const task of parks) {
-      sim.ended.set(task.id, { at: now, node: nodeOf(placementOf(sim, task)), how: "parked" });
-    }
-    if (parks.length === 0 && plan.lands.length === 0 && plan.checks.length === 0) {
-      return dispatch(sim, plan.dispatches, now);
-    }
-    for (const { task } of plan.lands) step(sim, sim.tasks.get(task.id)!, "landed", now);
-    for (const { task, block } of plan.checks) {
-      const passed = sim.random() < sim.rates.check(block.id).pass;
-      step(sim, sim.tasks.get(task.id)!, passed ? "passed" : "failed", now);
-    }
+  const first = planOf(sim);
+  for (const task of first.parks) {
+    sim.ended.set(task.id, { at: now, node: nodeOf(placementOf(sim, task)), how: "parked" });
   }
+  for (const { task } of first.plan.lands) step(sim, sim.tasks.get(task.id)!, "landed", now);
+  for (const { task, block } of first.plan.checks) {
+    const passed = sim.random() < sim.rates.check(block.id).pass;
+    step(sim, sim.tasks.get(task.id)!, passed ? "passed" : "failed", now);
+  }
+  const acted = first.parks.length + first.plan.lands.length + first.plan.checks.length > 0;
+  dispatch(sim, (acted ? planOf(sim) : first).plan.dispatches, now);
+  sim.tick = acted ? now + sim.world.pollSeconds / 3600 : undefined;
 };
 
 /** The dispatcher's reading of the tasks as they stand, and its plan. */
@@ -432,7 +457,7 @@ const nextDue = (sim: Sim) =>
 
 /** Writes where each task stands at `now`, over the last frame when it is closer than the window. */
 const snapshot = (sim: Sim, now: number) => {
-  const placements = sim.order.map((id) => {
+  const standings = sim.order.map((id): Standing => {
     const end = sim.ended.get(id);
     if (end !== undefined) return { task: id, node: end.node, state: end.how };
     const placement = placementOf(sim, sim.tasks.get(id)!);
@@ -446,7 +471,7 @@ const snapshot = (sim: Sim, now: number) => {
   });
   const last = sim.frames.at(-1);
   if (sim.frames.length > 1 && last !== undefined && now - last.at < sim.window) sim.frames.pop();
-  sim.frames.push({ at: now, placements });
+  sim.frames.push({ at: now, standings });
 };
 
 /** How each task ended, or where it stands at the end. */
@@ -465,7 +490,10 @@ const resultOf = (sim: Sim): SimulatedRun => {
   });
   const count = (keep: (task: SimulatedTask) => boolean) => tasks.filter(keep).length;
   return {
-    frames: sim.frames.map((frame) => ({ ...frame, at: hoursOf(frame.at) })),
+    frames: sim.frames.map((board, index) => ({
+      at: hoursOf(board.at),
+      moves: movesSince(sim.frames[index - 1], board),
+    })),
     tasks,
     runsByRung: Object.fromEntries(sim.runsByRung),
     landed: count((task) => task.landedAt !== null),
@@ -476,6 +504,13 @@ const resultOf = (sim: Sim): SimulatedRun => {
 };
 
 /** The tasks that have not landed or parked, in the queue's order at the start. */
+/** The standings in `board` that differ from `before`'s; all of them when there is none. */
+const movesSince = (before: Board | undefined, board: Board): ReadonlyArray<Standing> =>
+  board.standings.filter((standing, index) => {
+    const was = before?.standings[index];
+    return was === undefined || was.node !== standing.node || was.state !== standing.state;
+  });
+
 const live = (sim: Sim): ReadonlyArray<Simulated> =>
   sim.order.flatMap((id) => (sim.ended.has(id) ? [] : [sim.tasks.get(id)!]));
 
