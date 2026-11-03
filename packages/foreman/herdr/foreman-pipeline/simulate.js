@@ -85,7 +85,7 @@ export class Simulator {
 }
 
 // The block a placement stands the task at, if any.
-const standsAt = (placement) => placement._tag === "At" ? placement.node.id : placement._tag === "Parked" ? placement.node : null;
+const standsAt = (placement) => placement._tag === "At" ? placement.stands : placement._tag === "Parked" ? placement.node : null;
 
 // One step in words: where the task stands, on which rung, or why it stopped.
 const whereNow = (step) => {

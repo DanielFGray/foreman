@@ -65,6 +65,8 @@ export const PublishedPlacement = S.Struct({
   label: S.String,
   project: S.String,
   node: S.String,
+  /** The block a board draws the task on (`stands` on a placement); `node` is the block it waits for or runs at. */
+  stands: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
   /**
@@ -159,15 +161,16 @@ export const publishedOf = (
 
 const placementOf = (
   placement: Placement,
-): Pick<PublishedPlacement, "node" | "state" | "gates"> | undefined => {
+): Pick<PublishedPlacement, "node" | "stands" | "state" | "gates"> | undefined => {
   switch (placement._tag) {
     case "Outside":
       return undefined;
     case "Parked":
-      return { node: placement.node, state: "parked", gates: [] };
+      return { node: placement.node, stands: placement.node, state: "parked", gates: [] };
     case "At":
       return {
         node: placement.node.id,
+        stands: placement.stands,
         state: placement.state,
         gates: placement.gates.map(({ id, step }) => ({ id, step })),
       };

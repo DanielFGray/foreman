@@ -3,14 +3,14 @@ import type { PipelineNode } from "foreman/pipeline"
 import type { ForemanPlacement } from "../shared/Foreman.ts"
 import { countsOf, tasksAt } from "./pipelineStanding.ts"
 
-const at = (key: string, node: string, state: ForemanPlacement["state"], gates: ForemanPlacement["gates"] = []): ForemanPlacement => ({ key, label: key, project: "app", node, state, gates, runs: [] })
+const at = (key: string, node: string, state: ForemanPlacement["state"], gates: ForemanPlacement["gates"] = [], stands = node): ForemanPlacement => ({ key, label: key, project: "app", node, stands, state, gates, runs: [] })
 
 const park: PipelineNode = { kind: "park", id: "attention" }
 const gate: PipelineNode = { kind: "gate", id: "start", step: "author", next: "author" }
 const router: PipelineNode = { kind: "router", id: "retry", routes: [], else: "start" }
 
-test("a park block holds the tasks parked at it, and a gate those it holds back", () => {
-  const tasks = [at("a", "attention", "parked"), at("b", "author", "waiting", [{ id: "start", step: "author" }]), at("c", "author", "running")]
+test("a block holds the tasks foreman draws on it", () => {
+  const tasks = [at("a", "attention", "parked"), at("b", "author", "waiting", [{ id: "start", step: "author" }], "start"), at("c", "author", "running")]
   expect(tasksAt(park, tasks).map((t) => t.key)).toEqual(["a"])
   expect(tasksAt(gate, tasks).map((t) => t.key)).toEqual(["b"])
   expect(tasksAt(router, tasks)).toEqual([])

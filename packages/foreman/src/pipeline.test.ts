@@ -119,6 +119,28 @@ describe("facts read from labels, runs and charges", () => {
   });
 });
 
+describe("the block a board draws a task on", () => {
+  const done = { node: "author", name: "done", commit: "c1" };
+  const stands = (over: Partial<Facts>) => {
+    const placement = place(STANDARD_PIPELINE, facts(over));
+    return placement._tag === "At" ? placement.stands : placement._tag;
+  };
+
+  test.each<[string, Partial<Facts>, string]>([
+    ["a task that has not started stands at the queue", {}, "queue"],
+    ["a failed task stands at the climb gate", { failedBy: new Set(["cheap"]) }, "climb"],
+    ["a stopped attempt stands at the climb gate", { attempts: 1 }, "climb"],
+    [
+      "a finished author stands at the review gate",
+      { status: "in_progress", named: [done] },
+      "review-gate",
+    ],
+    ["a running author stands at the author", { status: "in_progress" }, "author"],
+  ])("%s", (_name, over, expected) => {
+    expect(stands(over)).toBe(expected);
+  });
+});
+
 describe("placement on the standard pipeline", () => {
   const done = { node: "author", name: "done", commit: "c1" };
   const approved = { node: "review", name: "approved", commit: "c1" };

@@ -25,13 +25,11 @@ export const standingOf = (model: Model, project: string): Standing =>
   })
 
 /**
- * The tasks a block holds: those standing at it, or for a gate, those it holds back.
- * Only work blocks and parks are ever a placement's node, so a source or router holds none.
+ * The tasks a block holds: those foreman draws on it (`stands`). A task not yet
+ * started stands at its source, a waiting one at the gate in front of its block.
  */
 export const tasksAt = (node: PipelineNode, tasks: ReadonlyArray<ForemanPlacement>): ReadonlyArray<ForemanPlacement> =>
-  node.kind === "gate"
-    ? Array.filter(tasks, (placed) => Array.some(placed.gates, (gate) => gate.id === node.id))
-    : Array.filter(tasks, (placed) => placed.node === node.id)
+  Array.filter(tasks, (placed) => placed.stands === node.id)
 
 /** "2 waiting, 1 running": the tasks at a block counted by state, in the order a task goes through them. */
 export const countsOf = (tasks: ReadonlyArray<ForemanPlacement>): string =>
@@ -68,7 +66,7 @@ export const stoppedView = (project: string, problems: ReadonlyArray<string>, h:
 
 /** Under the drawing: each block that holds tasks, with a list of them that opens and shuts. */
 export const standingView = (belt: Belt, tasks: ReadonlyArray<ForemanPlacement>, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
-  const blocks = Array.flatMap(belt.cells, ({ node }) => (node.kind === "gate" ? [] : [[node, tasksAt(node, tasks)] as const]))
+  const blocks = Array.map(belt.cells, ({ node }) => [node, tasksAt(node, tasks)] as const)
   const held = Array.filter(blocks, ([, here]) => Array.isReadonlyArrayNonEmpty(here))
   if (!Array.isReadonlyArrayNonEmpty(held)) return [h.p([h.Class("note")], ["No task stands at a block."])]
   return [

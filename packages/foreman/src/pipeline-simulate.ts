@@ -72,6 +72,7 @@ export type FrameState = RunState | "landed" | "parked" | "outside";
 
 export interface Standing {
   readonly task: string;
+  /** The block a board draws the task on (a placement's `stands`), or null outside the pipeline. */
   readonly node: string | null;
   readonly state: FrameState;
 }
@@ -535,7 +536,7 @@ const workerOf = (sim: Sim, task: Item): Worker | undefined =>
 
 /** The block a placement names, if any. */
 const nodeOf = (placement: Placement): string | null =>
-  placement._tag === "At" ? placement.node.id : placement._tag === "Parked" ? placement.node : null;
+  placement._tag === "At" ? placement.stands : placement._tag === "Parked" ? placement.node : null;
 
 const hoursOf = (hours: number): number => Math.round(hours * 100) / 100;
 

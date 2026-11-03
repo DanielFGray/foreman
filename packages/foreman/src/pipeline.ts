@@ -229,6 +229,14 @@ export type Placement =
       readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
       /** Work blocks after this one, on the route its facts take now. */
       readonly ahead: number;
+      /**
+       * The block a board draws the task on. A waiting task that has not
+       * started (no exit placed it, no attempt, no failure) stands at the
+       * source that took it; any other waiting task stands at the gate in
+       * front of its block, else at the block. A running task stands at its
+       * block.
+       */
+      readonly stands: string;
     };
 
 /**
@@ -294,17 +302,25 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       state: open.named ? "ended" : "running",
       gates: reached.node?.id === runningAt.id ? reached.gates : [],
       ahead: aheadOf(nodes, runningAt, facts, bound),
+      stands: runningAt.id,
     };
   }
   const { node, gates } = reached;
   if (node === undefined) return { _tag: "Outside" };
   if (node.kind === "park") return { _tag: "Parked", node: node.id };
+  const state = stateByStatus(node, facts, viaExit);
   return {
     _tag: "At",
     node,
-    state: stateByStatus(node, facts, viaExit),
+    state,
     gates,
     ahead: aheadOf(nodes, node, facts, bound),
+    stands:
+      state !== "waiting"
+        ? node.id
+        : !viaExit && facts.attempts === 0 && facts.failedBy.size === 0
+          ? source.id
+          : (gates.at(-1)?.id ?? node.id),
   };
 };
 
