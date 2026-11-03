@@ -107,6 +107,11 @@ const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
     (id) => checked(id, "passed", "c1"),
     (id) => checked(id, "failed", "c1"),
   ],
+  "a requeued task closes its open run, and its exit stands": [
+    authorOn("cheap"),
+    fixed({ _tag: "ExitNamed", name: "already-done", commit: "c1" }),
+    fixed({ _tag: "Requeued" }),
+  ],
   "a landing that conflicts, breaks, and is climbed by hand": [
     authorOn("cheap"),
     fixed({ _tag: "ExitNamed", name: "done", commit: "c1" }),

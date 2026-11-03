@@ -4,6 +4,7 @@
  */
 
 import { Option } from "effect";
+import { providerOf, type Rung } from "./ladder.ts";
 
 /** A program to start: its argv and the environment it needs on top. */
 export interface Launch {
@@ -134,6 +135,14 @@ export const hitWall = (kind: string, screen: string): Option.Option<string> => 
     .join("\n");
   return Option.fromNullishOr(wallTexts(kind).find((text) => tail.includes(text)));
 };
+
+/**
+ * Whether a run on `rung` can stop on a wall foreman sees: its account has a
+ * name, and its harness prints a wall text listed below. On any other rung a
+ * wall reads as an ordinary stop.
+ */
+export const showsWall = (rung: Rung): boolean =>
+  providerOf(rung) !== undefined && wallTexts(rung.harness).length > 0;
 
 /**
  * How many non-blank lines at the bottom of a screen are read for a wall. A

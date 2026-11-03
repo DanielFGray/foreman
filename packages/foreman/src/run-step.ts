@@ -40,6 +40,11 @@ export type RunEvent =
   /** A reviewer's exit sent the task back to the queue. */
   | { readonly _tag: "ReviewReturned" }
   /**
+   * The task is back in the queue, and an agent's run is still open: an
+   * author's exit wired to the queue, or a task reopened by hand.
+   */
+  | { readonly _tag: "Requeued" }
+  /**
    * An agent sat idle past the stall grace without naming an exit. `who` names
    * it in the park reason, as the operator knows it.
    */
@@ -128,30 +133,16 @@ export const stepOf = (task: Stepping, event: RunEvent, rules: StepRules): RunSt
         close: { author: "done", review: "released", commit: event.run.commit },
         open: event.run,
       });
-    case "ExitNamed": {
-      const exit = openAgentOf(rules.pipeline, task)?.block.exits.find(
-        (candidate) => candidate.name === event.name,
-      );
-      return step({
-        exit: { name: event.name, commit: event.commit },
-        move: exit?.to === QUEUE ? "reopen" : undefined,
-      });
-    }
+    case "ExitNamed":
+      return named(task, event, rules);
     case "HandedOff":
-      return adding(
-        charge(
-          task,
-          openExitOf(rules.pipeline, task)?.fails,
-          openAgentOf(rules.pipeline, task)?.run.rung,
-          rules,
-        ),
-        { close: { author: "done", review: "stopped", commit: event.tip } },
-      );
+      return adding(exitCharge(task, openAgentOf(rules.pipeline, task)?.run.rung, rules), {
+        close: { author: "done", review: "stopped", commit: event.tip },
+      });
     case "ReviewReturned":
-      return adding(
-        charge(task, openExitOf(rules.pipeline, task)?.fails, reviewedBy(task), rules),
-        { close: { review: "released" } },
-      );
+      return adding(exitCharge(task, reviewedBy(task), rules), { close: { review: "released" } });
+    case "Requeued":
+      return step({ close: { author: "released", review: "released" } });
     case "Stalled":
       return stalled(task, event, rules);
     case "Stopped":
@@ -270,6 +261,25 @@ const adding = (stepped: RunStep, row: Partial<Row>): RunStep => ({
   ...stepped,
   row: { ...stepped.row, ...row },
 });
+
+/** Names the exit on the open agent run; an exit wired to the queue reopens the task. */
+const named = (
+  task: Stepping,
+  event: Extract<RunEvent, { _tag: "ExitNamed" }>,
+  rules: StepRules,
+): RunStep => {
+  const exit = openAgentOf(rules.pipeline, task)?.block.exits.find(
+    (candidate) => candidate.name === event.name,
+  );
+  return step({
+    exit: { name: event.name, commit: event.commit },
+    move: exit?.to === QUEUE ? "reopen" : undefined,
+  });
+};
+
+/** Charges what the exit the open agent run named says, `self` being `rung`. */
+const exitCharge = (task: Stepping, rung: string | undefined, rules: StepRules): RunStep =>
+  charge(task, openExitOf(rules.pipeline, task)?.fails, rung, rules);
 
 /**
  * An agent idle past the stall grace with no exit: parked when its block says

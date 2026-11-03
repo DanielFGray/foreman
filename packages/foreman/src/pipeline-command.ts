@@ -20,6 +20,8 @@ import { INSERTABLE } from "./pipeline-belt.ts";
 import { STEPS } from "./policy.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
+import { Settings, settings } from "./config.ts";
+import { TRACE_ASSUMES, traceOf, type TraceStep } from "./pipeline-trace.ts";
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -189,6 +191,65 @@ const place = Command.make(
   ),
 );
 
+const trace = Command.make(
+  "trace",
+  {
+    project,
+    request: Argument.String("request").pipe(
+      Argument.withDescription(
+        'The pretend task and its events as JSON, or - to read it from stdin, such as {"task":{"labels":[],"size":2},"events":["exit:done"]}',
+      ),
+      Argument.withDefault("-"),
+    ),
+    json,
+  },
+  ({ project, request, json }) =>
+    Effect.gen(function* () {
+      const text = request === "-" ? yield* Effect.promise(() => Bun.stdin.text()) : request;
+      const { task, events } = yield* S.decodeEffect(S.fromJsonString(TraceRequest))(text).pipe(
+        Effect.mapError(
+          (error) => new PipelineError({ detail: `that trace cannot be read: ${error.message}` }),
+        ),
+      );
+      const draft = (yield* draftsNow)[project];
+      const live = yield* livePipeline(project);
+      const pipeline = draft?.pipeline ?? live.pipeline;
+      const { ladder, attemptsPerRung } = yield* Settings;
+      const traced = traceOf(
+        { labels: task.labels, size: task.size, priority: task.priority, parent: task.parent },
+        events,
+        { ladder, attemptsPerRung, pipeline },
+      );
+      if (!json) {
+        for (const step of traced.steps) yield* Console.log(traceLine(step));
+        if (traced.refused !== undefined)
+          yield* Console.error(
+            `refused ${traced.refused.event}: the block offers ${traced.refused.offers.join(", ") || "nothing"}`,
+          );
+        return;
+      }
+      yield* Console.log(
+        JSON.stringify(
+          {
+            project,
+            source: draft !== undefined ? "draft" : live.drawn ? "saved" : "standard",
+            assumes: TRACE_ASSUMES,
+            ladder: ladder.map((rung) => rung.name),
+            attemptsPerRung,
+            steps: traced.steps.map(stepJson),
+            refused: traced.refused ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Walk a pretend task through a project's draft, else the pipeline it runs, with the events you choose, and print where it stands after each and what its block offers next. Writes nothing",
+  ),
+);
+
 /**
  * `foreman pipeline`. `place` reads the dispatcher's view of the world, so it
  * takes the dispatcher's services; the others read only the pipelines file and
@@ -205,6 +266,7 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       save,
       discard,
       clear,
+      Command.provide(trace, settings),
       Command.provide(place, services),
     ]),
   );
@@ -216,6 +278,45 @@ const whereIs = (placement: Placement): string =>
     : placement._tag === "Parked"
       ? `parked at ${placement.node}`
       : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
+
+/** What `trace` reads: the pretend task, and the events chosen so far. */
+const TraceRequest = S.Struct({
+  task: S.Struct({
+    labels: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+    size: S.optional(S.Int),
+    priority: S.Int.pipe(S.withDecodingDefault(Effect.succeed(2))),
+    parent: S.optional(S.String),
+  }),
+  events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+});
+
+/** A trace step as JSON: an absent value is `null`, and a rung is named. */
+const stepJson = (step: TraceStep) => ({
+  event: step.event ?? null,
+  placement: step.placement,
+  rung:
+    step.rung === undefined
+      ? null
+      : step.rung._tag === "Dispatch"
+        ? { _tag: "Dispatch", name: step.rung.rung.name }
+        : step.rung,
+  parked: step.parked ?? null,
+  tip: step.tip,
+  route: step.route,
+  offers: step.offers,
+});
+
+/** A trace step in words: the event, where the task stands, and what comes next. */
+const traceLine = (step: TraceStep): string =>
+  [
+    step.event ?? "start",
+    whereIs(step.placement),
+    step.rung?._tag === "Dispatch" ? `on ${step.rung.rung.name}` : (step.rung?._tag ?? ""),
+    step.parked === undefined ? "" : `parked: ${step.parked}`,
+    `offers: ${step.offers.join(", ") || "nothing"}`,
+  ]
+    .filter((part) => part !== "")
+    .join("  ");
 
 export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError", {
   detail: S.String,

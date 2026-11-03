@@ -76,7 +76,8 @@ pipeline the draft began from. A draft may not run yet, so the dispatcher never
 reads it. `foreman pipeline edit` changes it one `PipelineChange`
 (`src/pipeline-edit.ts`) at a time, and `foreman pipeline save` checks it and
 writes it through the same `runPipeline` as `set`, refusing when the drawn
-pipeline changed since the draft began.
+pipeline changed since the draft began. `foreman pipeline trace` reads the
+draft, else the drawn pipeline, else the standard one, and writes nothing.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything
@@ -814,7 +815,13 @@ one adapter, the `tasks` package. `Records` (`src/records.ts`) holds foreman's
 own records beside it, keyed by task id: the runs, the charges and the parks. A
 records write that goes with a status move shares one transaction with it,
 which holds only while both run on one store connection;
-`Records.layer` builds them that way.
+`Records.layer` builds them that way. The writes a pipeline event makes are one
+row of the joint table: `stepOf` in `src/run-step.ts` decides the row from the
+task and the rules alone, and `Records.write` writes it. A path that writes
+for one of its `RunEvent`s builds the event and calls `stepOf`; it does not
+call the run, charge or status writes itself, so the tracer reads the same
+rules. The moves no `RunEvent` covers are listed under "Not in the table" in
+`docs/task-and-run-machines.md`.
 
 `Repository` (`src/repository.ts`) answers what foreman needs to know about a
 project's git checkout. Nothing above that file runs `git`.
@@ -849,7 +856,13 @@ draws the `drawing` that `foreman pipeline show --json` prints, laid out by
 `src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Its
 `--flow` is `down` in a pane taller than it is wide, else `across`. It edits a
 project's draft through `foreman pipeline edit`, `save` and `discard`, and the
-block kinds, steps, roles and landings it offers are the `choices` in that JSON. Both act through
+block kinds, steps, roles and landings it offers are the `choices` in that JSON.
+`foreman pipeline trace <project> --json` walks a pretend task through the
+draft with the events a front end chose, from scratch on each call
+(`src/pipeline-trace.ts`). It folds the dispatcher's own rows over a task held
+in memory, and after each event prints the placement, the route so far and the
+events the block offers next, so a front end shows what the dispatcher would do
+without a copy of its rules. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 

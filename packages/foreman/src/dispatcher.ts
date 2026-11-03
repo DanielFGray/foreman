@@ -1504,7 +1504,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 }),
               ),
               Match.when("Residue", () =>
-                records.endRuns(task.id, { author: "released", review: "released" }).pipe(
+                record(task, { _tag: "Requeued" }, pipelineOf(task)).pipe(
                   Effect.andThen(
                     Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
                       discard: true,

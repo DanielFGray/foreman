@@ -4,9 +4,9 @@ Status: partly built. Approved on 2026-11-02, then cut to what pays now: the
 tracker seam, one-transaction `Records` functions for the paired writes listed
 under Problem, and six statuses. The records beside the runs were built on
 ts-4e763a, because the pipeline tracer needs them. The joint table is built
-as a pure step (`src/run-step.ts`), because the tracer folds the same rows the
-dispatcher writes. The run machine and the in-memory test world wait until the
-hand-written rules cause a failure.
+as a pure step (`src/run-step.ts`), and `foreman pipeline trace` folds the
+same rows over a pretend task (`src/pipeline-trace.ts`). The run machine and
+the in-memory test world wait until the hand-written rules cause a failure.
 
 ## Problem
 
@@ -81,6 +81,11 @@ the drawing, and a task's runs already name the blocks it was at.
 
 ## Run machine
 
+Not built: there is no `RUN_MACHINE` and no `stateOf`. The SQL in
+`packages/tasks/src/runs.ts` makes these moves, and `applyRow` in
+`src/run-step.ts` makes the same moves on runs held in memory. The rest of
+this section is the design.
+
 A run's state comes from its columns. There is no state column.
 
 | State | Columns |
@@ -123,7 +128,9 @@ task's drawing). `stepOf` returns one row. `Records.write` writes the row in
 one transaction, on the connection the tracker writes on. Then the dispatcher
 does its own I/O: logs, notices, git, stopping panes. `applyRow` makes the
 same writes on a task held in memory; `src/run-step.test.ts` proves that it
-agrees with the store.
+agrees with the store. `foreman pipeline trace` folds `stepOf` and `applyRow`
+over a pretend task, and the integration tests check that it places the task
+where the dispatcher does after each event.
 
 A row writes in this order: complete, close, name the exit, record the check,
 charge, park, open, land, then claim or reopen. A charge records the task's
@@ -138,6 +145,7 @@ the row opens.
 | `ExitNamed` | reopen if the exit's wire goes to `queue` | name the exit on the open agent run | the same | | |
 | `HandedOff` | | close `done` at the tip | close `stopped` | the exit's `fails` | |
 | `ReviewReturned` | | | close `released` | the exit's `fails`, `self` = the reviewer's rung | |
+| `Requeued` | | close `released` | close `released` | | |
 | `Stalled`, block says `park` | reopen | close `stopped` | close `stopped` | park | |
 | `Stalled` reviewer, a rung above is left | | | close `stopped` | | |
 | `Stalled` reviewer, none left | reopen | close `released` | close `stopped` | park | |
@@ -161,9 +169,11 @@ the row opens.
 - **Exit moves come from the drawing.** The exit's wire decides whether naming
   it reopens the task.
 - **Not in the table.** The operator's own moves (release, kill, unassign,
-  descend, the floor, adopt), the tidy passes, a park block, abandoning a run
-  that never started, and correction rounds still call `Records` methods
-  directly. Each is one write, or a move no pipeline event makes.
+  descend, the floor, adopt, diagnose), the tidy passes, a park block, a block
+  with no rung left, settle's close of a task completed or canceled by hand,
+  abandoning a run that never started, and correction rounds still call
+  `Records` methods directly. Each is one write, or a move the tracer does not
+  make.
 
 ## Records beside the runs
 
@@ -177,6 +187,10 @@ task state, the operator's own labels (`size:N`, `research`) and
 `diagnosing:<intent>`.
 
 ## Tests
+
+Built in part: the fake world's `records.write` applies each row with
+`applyRow`, so it holds no copy of the joint table. Its other `Records`
+methods are still written by hand. The plan:
 
 The integration tests run the real `Records` and `TasksTracker` over an
 in-memory SQLite store, so no fake copies either machine. The fake world keeps

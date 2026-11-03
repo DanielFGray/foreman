@@ -17,7 +17,7 @@ import {
 } from "./fleet.ts";
 import { Settings } from "./config.ts";
 import { attemptsOf, failuresOf, Records, walledBy, type Endings, type Item } from "./records.ts";
-import { applyRow, NO_WRITES, type Row } from "./run-step.ts";
+import { applyRow, NO_WRITES, openAgentOf, type Row } from "./run-step.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
@@ -28,7 +28,15 @@ import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { Ladder } from "./ladder.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
-import { type AgentNode, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
+import {
+  type AgentNode,
+  type Pipeline,
+  type PipelineNode,
+  place,
+  STANDARD_PIPELINE,
+} from "./pipeline.ts";
+import { factsOf } from "./pipeline-facts.ts";
+import { traceOf, type TraceEvent } from "./pipeline-trace.ts";
 import { scratchStore } from "./scratch-store.ts";
 
 const now = new Date();
@@ -2629,5 +2637,226 @@ describe("foreman pipeline place", () => {
     ]);
     expect(world.writes).toEqual([]);
     expect(world.spawned).toEqual([]);
+  });
+});
+
+describe("foreman pipeline trace", () => {
+  const drawn = join(policies, "pipelines.json");
+  afterEach(() => rmSync(drawn, { force: true }));
+  /** Three rungs on one bare harness, so a review always has a rung above its author. */
+  const THREE: Ladder = [
+    { name: "low", harness: "test", model: "a/low", provider: undefined },
+    { name: "mid", harness: "test", model: "b/mid", provider: undefined },
+    { name: "high", harness: "test", model: "c/high", provider: undefined },
+  ];
+  /** A free opencode rung, whose screen can show a usage wall, then a rung on another account. */
+  const WALLED: Ladder = [
+    { name: "free", harness: "opencode", model: "opencode/free-model", provider: undefined },
+    { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+  ];
+
+  const layerWith = (world: World, ladder: Ladder) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          ladder,
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          stallGrace: 5,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
+        Layer.succeed(Repository, world.repository),
+        Layer.succeed(Quota, {
+          usage: (provider: string) =>
+            Effect.succeed({ provider, plan: undefined, allowances: [] }),
+        }),
+        prompts,
+        BunServices.layer,
+      ),
+    );
+
+  /**
+   * Plays the events in a world, as an agent's pane, the operator and the
+   * proving ground would make them, and answers where the task stands after
+   * the start and after each event. A check or a landing is held until its
+   * event says how it ends, so the task waits at that block as the trace's
+   * does.
+   */
+  const played = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
+    const id = "ts-traced";
+    const branch = `foreman/${id}`;
+    const world = new World(item(id, "open", []));
+    world.branches.set(branch, {
+      branch,
+      tip: "c0",
+      merged: false,
+      empty: false,
+      stale: undefined,
+    });
+    const run = <A, E>(effect: Effect.Effect<A, E, Dispatcher>) =>
+      Effect.runPromise(effect.pipe(Effect.provide(layerWith(world, ladder))));
+    const settle = async () => {
+      for (let round = 0; round < 3; round++) await run(Dispatcher.use((d) => d.tick));
+      hold(world);
+      world.screens.delete(id);
+      const task = world.tasks.get(id)!;
+      return place(pipeline, factsOf({ ...task, tip: world.branches.get(branch)!.tip }, pipeline));
+    };
+
+    hold(world);
+    const placements = [await settle()];
+    for (const event of events) {
+      await happen(world, id, event, pipeline, run);
+      placements.push(await settle());
+    }
+    return { placements, parked: world.tasks.get(id)!.parked };
+  };
+
+  const hold = (world: World) => {
+    world.checking = { _tag: "Held", detail: "held for the trace" };
+    world.landing = { _tag: "Held", detail: "held for the trace" };
+  };
+
+  /** How the proving ground ends a held check or landing, by the trace's event. */
+  const OUTCOMES: Record<string, (world: World) => void> = {
+    passed: (world) => (world.checking = { _tag: "Passed", verified: true }),
+    failed: (world) => (world.checking = { _tag: "Failed", output: "lint: 3 problems" }),
+    landed: (world) => (world.landing = { _tag: "Merged", verified: true }),
+  };
+
+  /**
+   * Makes one event happen to the task's open agent: an author commits on the
+   * next made-up commit before its exit, a wall shows on its screen, and its
+   * pane goes idle. A check's or a landing's event sets its outcome.
+   */
+  const happen = async (
+    world: World,
+    id: string,
+    event: TraceEvent,
+    pipeline: Pipeline,
+    run: (effect: Effect.Effect<unknown, unknown, Dispatcher>) => Promise<unknown>,
+  ) => {
+    OUTCOMES[event]?.(world);
+    const role = openAgentOf(pipeline, world.tasks.get(id)!)?.block.role;
+    if (role === undefined) return;
+    const branch = world.branches.get(`foreman/${id}`)!;
+    if (event.startsWith("exit:")) {
+      if (role === "author") {
+        world.branches.set(branch.branch, {
+          ...branch,
+          tip: `c${Number(branch.tip.slice(1)) + 1}`,
+        });
+      }
+      await run(Dispatcher.use((d) => d.exit(id, event.slice("exit:".length))));
+    }
+    if (event === "wall") world.screens.set(id, "Free usage limit reached. Connect a provider");
+    world.workers.set(id, {
+      ...world.workers.get(id)!,
+      roles: new Map([[role, { state: "settled", since: undefined }]]),
+      state: "settled",
+    });
+  };
+
+  /** Runs the events through the dispatcher and through the trace, and compares where each puts the task. */
+  const agree = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
+    if (pipeline !== STANDARD_PIPELINE) {
+      writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: pipeline } }));
+    }
+    const world = await played(ladder, pipeline, events);
+    const trace = traceOf({ labels: [], size: undefined, priority: 1, parent: undefined }, events, {
+      ladder,
+      attemptsPerRung: 2,
+      pipeline,
+    });
+    expect(trace.refused).toBeUndefined();
+    expect(trace.steps.map((step) => step.placement)).toEqual(world.placements);
+    expect(trace.steps.at(-1)?.parked).toBe(world.parked);
+    return trace;
+  };
+
+  /** The standard pipeline with `change` made to its author block. */
+  const withAuthor = (change: (author: AgentNode) => ReadonlyArray<PipelineNode>): Pipeline => ({
+    nodes: STANDARD_PIPELINE.nodes.flatMap((node) =>
+      node.kind === "agent" && node.id === "author" ? change(node) : [node],
+    ),
+  });
+
+  test("an approved review lands", async () => {
+    const trace = await agree(THREE, STANDARD_PIPELINE, ["exit:done", "exit:approved", "landed"]);
+    expect(trace.steps.at(-1)?.placement).toEqual({ _tag: "Outside" });
+  });
+
+  test("a returned review fails its author, and the next author climbs", async () => {
+    const trace = await agree(THREE, STANDARD_PIPELINE, [
+      "exit:done",
+      "exit:returned",
+      "exit:done",
+      "exit:approved",
+    ]);
+    expect(
+      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.rung.name),
+    ).toEqual(["low", "mid", "mid", "high", false]);
+    expect(trace.steps.at(-1)?.tip).toBe("c2");
+  });
+
+  test("stops spend a rung's attempts, then climb", async () => {
+    const trace = await agree(THREE, STANDARD_PIPELINE, ["stop", "stop", "stop"]);
+    expect(
+      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.rung.name),
+    ).toEqual(["low", "low", "mid", "mid"]);
+    // The test harness prints no wall text foreman knows, so a wall reads as a stop.
+    expect(trace.steps[0]?.offers).not.toContain("wall");
+  });
+
+  test("a wall moves the author to another account", async () => {
+    const trace = await agree(WALLED, STANDARD_PIPELINE, ["wall"]);
+    expect(trace.steps[0]?.offers).toContain("wall");
+    expect(trace.steps.at(-1)?.rung).toMatchObject({ _tag: "Dispatch", rung: { name: "dear" } });
+  });
+
+  test("a failed check returns the task, and a pass sends it on to review", async () => {
+    const trace = await agree(
+      THREE,
+      withAuthor((author) => [
+        { ...author, exits: author.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
+        { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+        {
+          kind: "check",
+          id: "lint",
+          command: "bun run lint",
+          exits: [
+            { name: "passed", to: "review-gate" },
+            { name: "failed", to: "queue", fails: "author" },
+          ],
+        },
+      ]),
+      ["exit:done", "failed", "exit:done", "passed", "exit:approved", "landed"],
+    );
+    expect(trace.steps.map((step) => step.offers[0])).toEqual([
+      "exit:done",
+      "passed",
+      "exit:done",
+      "passed",
+      "exit:approved",
+      "landed",
+      undefined,
+    ]);
+  });
+
+  test("a block that parks a stop parks the task, and offers nothing", async () => {
+    const trace = await agree(
+      THREE,
+      withAuthor((author) => [{ ...author, stopped: "park" }]),
+      ["stop"],
+    );
+    expect(trace.steps.at(-1)?.parked).toContain("stopped without naming an exit");
+    expect(trace.steps.at(-1)?.offers).toEqual([]);
   });
 });
