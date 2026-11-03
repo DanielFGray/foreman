@@ -221,6 +221,13 @@ describe("decisions", () => {
     expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-1", "ts-2"]);
   });
 
+  // A session that claims a task and ends leaves it in progress with nobody on
+  // it, and nothing else would ever send an agent to it.
+  test("surfaces a claim made outside foreman that no worker holds", () => {
+    const claimed = [active(task("ts-1", [], "in_progress"), undefined)];
+    expect(decisionsOf(claimed, [], []).map((decision) => decision.task.id)).toEqual(["ts-1"]);
+  });
+
   test("ignores a claimed or reviewing task that is still being worked", () => {
     const claimed = [
       active(authoredOn(task("ts-1", [], "in_progress"), "opencode"), worker("working", "ts-1")),

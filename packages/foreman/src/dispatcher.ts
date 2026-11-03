@@ -3312,10 +3312,21 @@ export const readyToLand = (pipeline: Pipeline, task: Item, worker: Worker | und
   awaitingLanding(pipeline, task) && (worker === undefined || worker.state !== "working");
 
 /**
+ * Whether a claimed task is the fleet's: foreman labelled its author, or one of
+ * its workers holds it. Any other claim was made by hand or by another session,
+ * so the working column leaves it out; `decisionsOf` reports it while no
+ * worker holds it.
+ */
+export const isFleetWork = (claimed: Active): boolean =>
+  claimed.worker !== undefined || authoredBy(claimed.task) !== undefined;
+
+/**
  * What the dashboard must ask about.
  *
- * Three kinds, and each answers differently. A claimed task with a by-* label
- * and an empty workspace is an author that vanished and can be retried; a
+ * Three kinds, and each answers differently. A claimed task with no worker in
+ * its workspace is an author that vanished and can be retried: foreman's own
+ * author, or a claim made by hand or by another session, which foreman cannot
+ * see working and so reports for the operator to send an agent to; a
  * reviewing task with an open review run and an empty workspace is a reviewer
  * that vanished mid-verdict; a workspace whose task is neither claimed nor
  * under review is residue — the task is unclaimed, so nobody owns the
@@ -3329,23 +3340,12 @@ export const readyToLand = (pipeline: Pipeline, task: Item, worker: Worker | und
  * within the tick, or one that died between opening and spawning, which nothing
  * else clears if the task is never offered again.
  */
-/**
- * Whether a claimed task is the fleet's: foreman labelled its author, or one of
- * its workers holds it. Any other claim was made by hand or by another session
- * and is that person's work in progress, not an agent the fleet is running.
- */
-export const isFleetWork = (claimed: Active): boolean =>
-  claimed.worker !== undefined || authoredBy(claimed.task) !== undefined;
-
 export const decisionsOf = (
   claimed: ReadonlyArray<Active>,
   reviewing: ReadonlyArray<Active>,
   owned: ReadonlyArray<Owned>,
 ): ReadonlyArray<Active> => [
-  ...claimed.filter(
-    ({ task, worker }) =>
-      authoredBy(task) !== undefined && (worker === undefined || worker.state === "gone"),
-  ),
+  ...claimed.filter(({ worker }) => worker === undefined || worker.state === "gone"),
   ...reviewing.filter(
     ({ task, worker }) =>
       reviewedBy(task) !== undefined &&

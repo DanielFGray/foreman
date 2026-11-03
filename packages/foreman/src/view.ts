@@ -451,13 +451,13 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   // left it: done and canceled are pure cleanup, a queued task will be
   // dispatched again into a fresh workspace once this one is closed. A
   // dispatch failure names the error, because that is what the operator must
-  // clear before retrying.
+  // clear before retrying. A claim with no rung was made outside foreman.
   label: decisionKind(task, failure),
   detail:
     failure ??
     (task.status === "done" || task.status === "canceled" || task.status === "open"
       ? task.status
-      : (kind ?? "?")),
+      : (kind ?? "claimed outside foreman")),
   task,
   ready: undefined,
   worker,
