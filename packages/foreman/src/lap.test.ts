@@ -20,6 +20,7 @@ import { place, STANDARD_PIPELINE } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
+import { type RunEvent, stepOf } from "./run-step.ts";
 import { newRunFor } from "./run-record.ts";
 import { authorRun, authorDone, reviewRun } from "./task-fixture.ts";
 
@@ -167,9 +168,21 @@ describe("the readers against a scratch store", () => {
         }).pipe(Effect.provide(Records.layer.pipe(Layer.provide(store)))),
       );
 
-    await run((records) => records.attribute(id, dispatch("author", "low")));
+    // Starting an agent reads nothing of the task but its id.
+    const started = (event: RunEvent) =>
+      run((records) =>
+        records.write(
+          id,
+          stepOf({ id, labels: [], runs: [], charges: [] }, event, {
+            ladder: [{ name: "low", harness: "test", model: undefined, provider: undefined }],
+            attemptsPerRung: 2,
+            pipeline: undefined,
+          }).row,
+        ),
+      );
+    await started({ _tag: "AuthorStarted", run: dispatch("author", "low") });
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.assignReview(id, dispatch("review", "mid", "c1")));
+    await started({ _tag: "ReviewStarted", run: dispatch("review", "mid", "c1") });
     await Effect.runPromise(
       nameExit(id, { name: "approved", commit: "c1", event: undefined }).pipe(
         Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),

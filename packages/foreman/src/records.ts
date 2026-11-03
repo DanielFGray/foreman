@@ -17,15 +17,14 @@ import {
   unpark,
   type Charge,
   type Ending,
-  type CheckRun,
   type Item as TaskItem,
   type LogEntry,
-  type NewRun,
   type Role,
   type Run,
 } from "tasks";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import { providerOf, type Ladder, type Rung } from "./ladder.ts";
+import type { Row } from "./run-step.ts";
 import { TasksTracker, Tracker, TrackerError } from "./tracker.ts";
 
 export type { Status as TaskStatus } from "tasks";
@@ -52,13 +51,6 @@ export interface Endings {
   readonly author?: Ending;
   readonly review?: Ending;
 }
-
-/**
- * The status move an exit makes, if any. A wire to the queue reopens the task;
- * a wire to another block leaves the status alone — the task stays
- * `in_progress` and placement reads the step from the exit.
- */
-export type ExitMove = "reopen";
 
 /**
  * Foreman's records of the work: the runs on each task (who worked it, on
@@ -214,6 +206,31 @@ export class Records extends Context.Service<Records>()("Records", {
       show,
       lookup,
 
+      /**
+       * Writes one row of the joint table (`stepOf` in `run-step.ts`) in one
+       * transaction. A completion goes first, so a task that cannot be
+       * completed fails on `done` itself. Charges go after a check run and
+       * before a new run, because a charge records the newest run on the task
+       * when it is written.
+       */
+      write: (task: string, row: Row) =>
+        together(
+          `write ${task}`,
+          Effect.gen(function* () {
+            if (row.move === "complete") yield* tracker.complete(task);
+            if (row.close !== undefined) yield* onStore(closeOpenRuns(task, row.close));
+            if (row.exit !== undefined) yield* onStore(recordExit(task, row.exit));
+            if (row.check !== undefined) yield* onStore(recordCheck(row.check));
+            for (const rung of row.charges) yield* onStore(charge(task, rung));
+            if (row.park !== undefined) yield* onStore(park(task, row.park));
+            if (row.open !== undefined) yield* onStore(openRun(row.open));
+            if (row.land !== undefined)
+              yield* onStore(landAuthorRun(task, row.land === "answered"));
+            if (row.move === "claim") yield* tracker.claim(task);
+            if (row.move === "reopen") yield* tracker.reopen(task);
+          }),
+        ),
+
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
         Effect.all([lookup(task), tracker.logs(task)]).pipe(
@@ -265,68 +282,10 @@ export class Records extends Context.Service<Records>()("Records", {
       children,
 
       /**
-       * Records which rung of the ladder did the work, so review can pick the
-       * next, and opens the author run.
-       *
-       * A task can be attempted more than once, and its next author starts a
-       * new lap (`lap.ts`): everything the last reviews said goes out of scope
-       * with no code that clears it. The run carries its own correction count, so
-       * a new author starts at none.
-       *
-       * Claims the task in the same transaction, so a claimed task always has
-       * its author run. A task already claimed, such as one whose author
-       * vanished, stays claimed.
-       */
-      attribute: (task: string, run: NewRun) =>
-        together(
-          `attribute ${task}`,
-          tracker.claim(task).pipe(Effect.andThen(onStore(openRun(run))), Effect.asVoid),
-        ),
-
-      /**
-       * Records how a check block's command ended on the commit it ran on. A
-       * check opens no run, so nothing has to close one.
-       */
-      recordCheck: (check: CheckRun) =>
-        onStore(recordCheck(check)).pipe(as(`record check ${check.node} on ${check.task}`)),
-
-      /**
        * Counts one more correction round sent to the current author, and
        * answers the new count.
        */
       countRound: (task: string) => onStore(addRound(task)).pipe(as(`count round ${task}`)),
-
-      /**
-       * Names the exit that ends the task's open agent run, with the commit it
-       * is named on and the status move it makes, in one transaction.
-       */
-      nameExit: (
-        task: string,
-        exit: { readonly name: string; readonly commit: string | undefined },
-        move: ExitMove | undefined,
-      ) =>
-        together(
-          `name exit ${exit.name} on ${task}`,
-          onStore(recordExit(task, exit)).pipe(
-            Effect.andThen(move === undefined ? Effect.void : tracker.reopen(task)),
-          ),
-        ),
-
-      /**
-       * Puts a reviewer on the task: opens its review run at the branch tip it
-       * reads, and closes the author's run in one transaction. An author that
-       * named no exit is closed `done` at that same tip: its task reached review,
-       * which is the move `done` makes. The author's work is what the reviewer reads. A review
-       * run still open belongs to a reviewer this one replaces, such as one that
-       * vanished; it ends `released`, which charges its rung nothing.
-       */
-      assignReview: (task: string, run: NewRun) =>
-        together(
-          `assign review ${task}`,
-          onStore(
-            closeOpenRuns(task, { author: "done", review: "released", commit: run.commit }),
-          ).pipe(Effect.andThen(onStore(openRun(run)))),
-        ),
 
       /**
        * Ends the task's open review run with a reason the reviewer did not
@@ -361,26 +320,6 @@ export class Records extends Context.Service<Records>()("Records", {
         together(
           `park ${task}`,
           releasing(task, endings).pipe(Effect.andThen(onStore(park(task, reason)))),
-        ),
-
-      /**
-       * Marks work complete after foreman has landed its branch, and closes the
-       * task's runs in the same transaction: the reviewer's keeps its exit,
-       * and the lap's author run becomes `committed` (`answered` for research).
-       * Done first, so a task that cannot be completed fails on `done` itself.
-       * Landing the author run also ends the task's walls (`walledBy`).
-       */
-      complete: (task: Pick<Item, "id" | "labels">) =>
-        together(
-          `done ${task.id}`,
-          tracker
-            .complete(task.id)
-            .pipe(
-              Effect.andThen(
-                onStore(closeOpenRuns(task.id, { author: "released", review: "released" })),
-              ),
-              Effect.andThen(onStore(landAuthorRun(task.id, isResearch(task)))),
-            ),
         ),
 
       /**

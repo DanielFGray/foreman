@@ -9,6 +9,7 @@ import { Tracker } from "./tracker.ts";
 import { agentLog, attemptsOf, type Item, walledBy } from "./records.ts";
 import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from "./lap.ts";
 import { newRunFor } from "./run-record.ts";
+import { NO_WRITES, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 
 /** The run row a dispatch of `role` on `rung` opens for the task. */
@@ -24,6 +25,21 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
     node: role,
     commit,
   });
+
+/** One rung and no drawing: the rules the store tests below need. */
+const RULES: StepRules = {
+  ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
+  attemptsPerRung: 2,
+  pipeline: undefined,
+};
+
+/** Writes the row `event` makes on the task as the store holds it, with no drawing. */
+const record = (id: string, event: RunEvent) =>
+  run((records) =>
+    records
+      .show(id)
+      .pipe(Effect.flatMap((task) => records.write(id, stepOf(task, event, RULES).row))),
+  );
 
 /** Runs `f` against foreman's records and the tracker, over one store connection. */
 const run = <A, E>(
@@ -174,15 +190,15 @@ describe("Records against a scratch store", () => {
   test("a returned review starts its next author without reopening the task", async () => {
     const id = (await Bun.$`prog add "review cycle" -p foreman`.text()).trim();
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
-    await run((records) => records.nameExit(id, { name: "returned", commit: "c1" }, undefined));
+    await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
+    await record(id, { _tag: "ExitNamed", name: "returned", commit: "c1" });
     await run((records) => records.endRuns(id, { review: "stopped" }));
 
     expect((await run((records) => records.show(id))).status).toBe("in_progress");
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "dear")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "dear") });
     const after = await run((records) => records.show(id));
     expect(after.status).toBe("in_progress");
     expect(after.runs.map((run) => [run.role, run.ending])).toEqual([
@@ -197,9 +213,9 @@ describe("Records against a scratch store", () => {
   // opened it and the requeued task is not read as still under review.
   test("release closes the review run and requeues the task", async () => {
     const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
 
     await run((records) => records.release(id));
     const after = await run((records) => records.show(id));
@@ -214,10 +230,10 @@ describe("Records against a scratch store", () => {
   // A retried review replaces a reviewer that vanished, so the lap holds one open review run.
   test("assigning a reviewer ends the review run it replaces as released", async () => {
     const id = (await Bun.$`prog add "vanished reviewer" -p foreman`.text()).trim();
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.assignReview(id, dispatchOf(id, "review", "cheap", "c1")));
-    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "cheap", "c1") });
+    await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
 
     const after = await run((records) => records.show(id));
     expect(after.runs.map((r) => [r.role, r.rung, r.open, r.ending])).toEqual([
@@ -244,15 +260,15 @@ describe("Records against a scratch store", () => {
   // author's trial row must not inherit it.
   test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
     const id = (await Bun.$`prog add "round" -p foreman`.text()).trim().split("\n")[0]!;
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
 
     expect(await run((records) => records.countRound(id))).toBe(1);
     await run((_, tracker) => tracker.claim(id));
-    await run((records) => records.assignReview(id, dispatchOf(id, "review", "dear", "c1")));
+    await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
     expect(await run((records) => records.countRound(id))).toBe(2);
     expect(roundsOf(await run((records) => records.show(id)))).toBe(2);
     await run((records) => records.release(id));
-    await run((records) => records.attribute(id, dispatchOf(id, "author", "cheap")));
+    await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
 
     const after = await run((records) => records.show(id));
     expect(roundsOf(after)).toBe(0);
@@ -264,7 +280,9 @@ describe("Records against a scratch store", () => {
 
   test("names the operation a store failure came from", async () => {
     const error = await run((records) =>
-      Effect.flip(records.complete({ id: "ts-does-not-exist", labels: [] })),
+      Effect.flip(
+        records.write("ts-does-not-exist", stepOf(item(), { _tag: "Landed" }, RULES).row),
+      ),
     );
 
     expect(error.command).toBe("done ts-does-not-exist");
@@ -290,7 +308,13 @@ describe("Records against a scratch store", () => {
     await run((_, tracker) => tracker.claim(id));
 
     const refused = await run((records) =>
-      Effect.flip(records.nameExit(id, { name: "returned", commit: "c1" }, "reopen")),
+      Effect.flip(
+        records.write(id, {
+          ...NO_WRITES,
+          exit: { name: "returned", commit: "c1" },
+          move: "reopen",
+        }),
+      ),
     );
     const after = await run((records) => records.show(id));
 

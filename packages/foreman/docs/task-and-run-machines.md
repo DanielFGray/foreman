@@ -3,9 +3,10 @@
 Status: partly built. Approved on 2026-11-02, then cut to what pays now: the
 tracker seam, one-transaction `Records` functions for the paired writes listed
 under Problem, and six statuses. The records beside the runs were built on
-ts-4e763a, because the pipeline tracer needs them. The run machine, the joint
-table and the in-memory test world wait until the hand-written rules cause a
-failure.
+ts-4e763a, because the pipeline tracer needs them. The joint table is built
+as a pure step (`src/run-step.ts`), because the tracer folds the same rows the
+dispatcher writes. The run machine and the in-memory test world wait until the
+hand-written rules cause a failure.
 
 ## Problem
 
@@ -116,32 +117,53 @@ stateDiagram-v2
 
 ## Joint table
 
-Written for six statuses. `Records` runs each row in one transaction, on the
-connection the tracker writes on. `<ending>`, `<exit>` and `<rung>` are the
-row's arguments.
+Built in `src/run-step.ts`. The dispatcher observes an event and gives it to
+`stepOf`, with the task and the rules (the ladder, `attemptsPerRung`, the
+task's drawing). `stepOf` returns one row. `Records.write` writes the row in
+one transaction, on the connection the tracker writes on. Then the dispatcher
+does its own I/O: logs, notices, git, stopping panes. `applyRow` makes the
+same writes on a task held in memory; `src/run-step.test.ts` proves that it
+agrees with the store.
 
-| Event | Tracker move | Author run | Review run | Opens |
-|---|---|---|---|---|
-| dispatch author | claim | | | author |
-| redispatch author | | close `vanished` | | author |
-| dispatch review | | close `done` at the tip | close `released` | review |
-| name exit, wire to `queue` | reopen | name `<exit>`, charge `<rung>` if `fails` | the same, on the open agent run | |
-| name exit, wire to a block | | name `<exit>`, charge `<rung>` if `fails` | the same, on the open agent run | |
-| stop | reopen | close `stopped`, charge `<rung>` if spent | close `stopped` | |
-| end review | | | close `<ending>` | |
-| release | reopen | close `<ending>` | close `released` | |
-| abandon author | reopen | abandon | | |
-| abandon review | | | abandon | |
-| complete | complete | close `released`, then land | close `released` | |
-| resume branch | claim | | | |
-| check | | | | check, written closed |
+A row writes in this order: complete, close, name the exit, record the check,
+charge, park, open, land, then claim or reopen. A charge records the task's
+newest run, so it follows the check run it is about and comes before the run
+the row opens.
 
+| Event | Tracker move | Author run | Review run | Charges, park | Opens |
+|---|---|---|---|---|---|
+| `AuthorStarted` | claim | | | | author |
+| `AuthorReplaced` | claim | close `vanished` | | | author |
+| `ReviewStarted` | | close `done` at the run's commit | close `released` | | review |
+| `ExitNamed` | reopen if the exit's wire goes to `queue` | name the exit on the open agent run | the same | | |
+| `HandedOff` | | close `done` at the tip | close `stopped` | the exit's `fails` | |
+| `ReviewReturned` | | | close `released` | the exit's `fails`, `self` = the reviewer's rung | |
+| `Stalled`, block says `park` | reopen | close `stopped` | close `stopped` | park | |
+| `Stalled` reviewer, a rung above is left | | | close `stopped` | | |
+| `Stalled` reviewer, none left | reopen | close `released` | close `stopped` | park | |
+| `Stalled` author, `Stopped` | reopen | close `stopped` or `vanished` | close `released` | climb if the stop spends the rung | |
+| `Walled` author | reopen | close `walled` | close `released` | | |
+| `Walled` reviewer | | | close `walled` | | |
+| `Checked`, passed | | | | | check, written closed |
+| `Checked`, failed | reopen if `failed` goes to `queue` | close `released` if it reopens | close `released` if it reopens | the `failed` exit's `fails` | check, written closed |
+| `Landed` | complete | close `released`, then land | close `released` | | |
+| `Conflicted` | reopen | close `released` | close `released` | | |
+| `Broke` | reopen | close `released` | close `released` | climb | |
+| `Climbed` | | | | climb | |
+
+- **An exit stands.** A close writes its ending only on a run with no exit.
+  An author run that named an exit keeps the commit it named it on.
+- **Charges.** `fails: author` is a climb: it charges the rung of the task's
+  last author run. `fails: self` charges the rung of the block that named the
+  exit; a check has no rung, so it charges nothing.
 - **Skip rule.** `Records` skips a tracker move to the status the task already
-  has. This replaces the five `task.status !== "open"` checks.
-- **Exit moves come from the drawing.** The exit's wire decides between the
-  two "name exit" rows. The dispatcher's conditional on role and status goes.
-- **Legal by test.** A pure test checks each row: its tracker move against
-  `TASK_MACHINE`, and its run moves against `RUN_MACHINE`.
+  has.
+- **Exit moves come from the drawing.** The exit's wire decides whether naming
+  it reopens the task.
+- **Not in the table.** The operator's own moves (release, kill, unassign,
+  descend, the floor, adopt), the tidy passes, a park block, abandoning a run
+  that never started, and correction rounds still call `Records` methods
+  directly. Each is one write, or a move no pipeline event makes.
 
 ## Records beside the runs
 
@@ -170,7 +192,8 @@ One branch, in this order. Each step passes the gate (tests, typecheck, lint,
    `reviewing` to `in_progress`, and `tasks review` removed.
 3. Run machine in the tasks package: `RUN_MACHINE`, `stateOf`, checked
    writes, and the `charged` column.
-4. Joint table in `Records`; the dispatcher's paired writes become rows.
+4. Joint table; the dispatcher's paired writes become rows (built as
+   `src/run-step.ts` and `Records.write`).
 5. `parks` and `forgiven` tables, and the label migration.
 6. Integration tests on the in-memory store; the fake records go.
 

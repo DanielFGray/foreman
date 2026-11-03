@@ -16,22 +16,14 @@ import {
   type WorkerState,
 } from "./fleet.ts";
 import { Settings } from "./config.ts";
-import {
-  attemptsOf,
-  failuresOf,
-  kindOf,
-  Records,
-  walledBy,
-  type Endings,
-  type ExitMove,
-  type Item,
-} from "./records.ts";
+import { attemptsOf, failuresOf, Records, walledBy, type Endings, type Item } from "./records.ts";
+import { applyRow, NO_WRITES, type Row } from "./run-step.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
-import type { CheckRun, Ending, NewRun, Role } from "tasks";
+import type { Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { Ladder } from "./ladder.ts";
@@ -117,6 +109,8 @@ class World {
   readonly screens = new Map<string, string>();
   /** The name of every write any fake made, in order. */
   readonly writes: string[] = [];
+  /** The rows `records.write` received, oldest first. */
+  readonly rows: Row[] = [];
   clean: "clean" | "held" = "clean";
   /** The task branch the project's checkout has out (branch mode), if any. */
   checkedOut: string | undefined = undefined;
@@ -260,15 +254,12 @@ class World {
           (task) => task.project === project && task.status === "in_progress",
         ),
       ),
-    attribute: (id: string, run: NewRun) =>
-      this.write("records.attribute", () => {
-        this.update(id, (task) => ({ ...task, status: "in_progress" }));
-        return this.openRun(id, run);
-      }),
-    assignReview: (id: string, run: NewRun) =>
-      this.write("records.assignReview", () => {
-        this.closeRuns(id, { author: "done", review: "released", commit: run.commit });
-        return this.openRun(id, run);
+    // The rows the dispatcher writes are applied as the tracer applies them;
+    // `run-step.test.ts` proves that agrees with the store.
+    write: (id: string, row: Row) =>
+      this.write("records.write", () => {
+        this.rows.push(row);
+        this.update(id, (task) => applyRow(task, row));
       }),
     endReview: (id: string, ending: Ending) =>
       this.write("records.endReview", () => this.closeRuns(id, { review: ending })),
@@ -321,62 +312,8 @@ class World {
         this.update(id, (task) => ({ ...task, status: "open" }));
         return "open" as const;
       }),
-    // Lands the newest author run once it has closed, as `landAuthorRun` does.
-    complete: (task: { id: string }) =>
-      this.write("records.complete", () => {
-        this.closeRuns(task.id, { author: "released", review: "released" });
-        this.update(task.id, (found) => {
-          const landing = found.runs.findLast((run) => run.role === "author");
-          return {
-            ...found,
-            status: "done",
-            runs: found.runs.map((run) =>
-              run === landing && !run.open ? { ...run, landed: true } : run,
-            ),
-          };
-        });
-      }),
     children: () => Effect.succeed([]),
     countRound: () => this.write("records.countRound", () => 1),
-    nameExit: (
-      id: string,
-      exit: { name: string; commit: string | undefined },
-      move: ExitMove | undefined,
-    ) =>
-      this.write("records.nameExit", () =>
-        this.update(id, (task) => {
-          const open = task.runs.findLast((run) => run.open && run.role !== "check");
-          return {
-            ...task,
-            status: move === "reopen" ? "open" : task.status,
-            runs: task.runs.map((run) =>
-              run === open ? { ...run, ending: exit.name, commit: exit.commit ?? run.commit } : run,
-            ),
-          };
-        }),
-      ),
-    recordCheck: (check: CheckRun) =>
-      this.write("records.recordCheck", () =>
-        this.update(check.task, (task) => ({
-          ...task,
-          runs: [
-            ...task.runs,
-            {
-              id: (newestRun(task) ?? 0) + 1,
-              task: check.task,
-              role: "check" as const,
-              rung: undefined,
-              node: check.node,
-              commit: check.commit,
-              base: undefined,
-              ending: check.ending,
-              rounds: undefined,
-              open: false,
-              landed: false,
-            },
-          ],
-        })),
-      ),
   };
 
   readonly repository = {
@@ -1192,8 +1129,7 @@ describe("a fleet that is not running", () => {
         "repository.merge",
         "repository.remove",
         "records.release",
-        "tracker.claim",
-        "records.attribute",
+        "records.write",
         "fleet.spawn",
       ]),
     );
@@ -2103,7 +2039,14 @@ describe("a route's workspace blocks", () => {
       await tick(world);
       expect(world.spawned.map(([id]) => id)).not.toContain(second.id);
 
-      await Effect.runPromise(world.records.complete({ id: first.id }));
+      await Effect.runPromise(
+        world.records.write(first.id, {
+          ...NO_WRITES,
+          move: "complete",
+          close: { author: "released", review: "released" },
+          land: "committed",
+        }),
+      );
       await tick(world);
       expect(world.spawned.at(-1)).toEqual([second.id, "author"]);
     });
@@ -2199,7 +2142,14 @@ describe("a route's workspace blocks", () => {
       },
     ]);
 
-    await Effect.runPromise(world.records.complete({ id: direct.id }));
+    await Effect.runPromise(
+      world.records.write(direct.id, {
+        ...NO_WRITES,
+        move: "complete",
+        close: { author: "released", review: "released" },
+        land: "committed",
+      }),
+    );
     await tick(world);
     expect(world.merged).toEqual(["c1"]);
   });
@@ -2402,6 +2352,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(world.workers.get(id)?.directory).toBe(workspace);
     expect(world.opened.every((directory) => directory === workspace)).toBe(true);
     expect(world.writes).not.toContain("records.release");
+    expect(world.rows.map((row) => row.move)).not.toContain("reopen");
     expect(world.closed).toEqual([]);
     expect(world.removed).toEqual([]);
   });
