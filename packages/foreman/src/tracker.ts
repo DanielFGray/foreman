@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Schema as S } from "effect";
 import {
   Tasks,
   TaskError,
+  type Dependency,
   type Item,
   type ListFilter,
   type LogEntry,
@@ -24,6 +25,10 @@ export class Tracker extends Context.Service<
     /** One task, or nothing when the tracker has no such task. */
     readonly lookup: (task: string) => Effect.Effect<Option.Option<Item>, TrackerError>;
     readonly list: (filter: ListFilter) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
+    /** Every dependency edge from an item of `project`, whatever the status of either end. */
+    readonly dependencies: (
+      project: string,
+    ) => Effect.Effect<ReadonlyArray<Dependency>, TrackerError>;
     /** Unblocked, unclaimed tasks, in every project or in one. */
     readonly ready: (
       project: string | undefined,
@@ -113,6 +118,8 @@ export const TasksTracker = Layer.effect(
     return Tracker.of({
       lookup: (task) => tasks.get(task).pipe(as(`show ${task}`)),
       list: (filter) => tasks.list(filter).pipe(as(`list ${JSON.stringify(filter)}`)),
+      dependencies: (project) =>
+        tasks.allDependencies(project).pipe(as(`dependencies of ${project}`)),
       ready: (project) => tasks.ready(project).pipe(as("ready")),
       logs: (task) => tasks.logs(task).pipe(as(`show ${task}`)),
       add: (task) => tasks.add(task).pipe(as(`add ${task.title}`)),

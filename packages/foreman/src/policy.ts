@@ -264,6 +264,26 @@ export const scopeOf = <E>(
     return tasks;
   });
 
+/**
+ * Each grant's scope, mapped to the unfinished tasks it reaches. A scope the
+ * tracker has no item for reaches none.
+ */
+export const scopesOf = <E>(
+  grants: ReadonlyArray<Grant>,
+  lookup: (id: string) => Effect.Effect<Option.Option<Item>, E>,
+  children: (id: string) => Effect.Effect<ReadonlyArray<Item>, E>,
+): Effect.Effect<Scopes, E> =>
+  Effect.forEach(grants, (grant) =>
+    lookup(grant.scope).pipe(
+      Effect.flatMap((item) =>
+        Option.isSome(item)
+          ? scopeOf([item.value], children)
+          : Effect.succeed<ReadonlySet<string>>(new Set()),
+      ),
+      Effect.map((tasks) => [grant.scope, tasks] as const),
+    ),
+  ).pipe(Effect.map((entries): Scopes => new Map(entries)));
+
 const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
 
 /** Where the policy lives: `$FOREMAN_POLICY`, else beside the config. */

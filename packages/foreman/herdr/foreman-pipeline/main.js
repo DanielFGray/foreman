@@ -18,6 +18,10 @@
 // simulated tasks on the board in place of the dispatcher's. One of the two
 // shows at a time.
 //
+// The task graph (`tasks.js`) shows the project's open and claimed work in
+// columns by what it waits for (`foreman pipeline graph`), and grants a card's
+// task or epic the pipeline's steps when it is dropped on the board.
+//
 // Editing (`editor.js`) changes the project's draft, never the pipeline it
 // runs: each change is one `foreman pipeline edit`, and `foreman pipeline
 // save` checks the draft and makes it the pipeline. foreman owns the draft, so
@@ -32,7 +36,8 @@ import { exec, readTextFile, watchFolder, theme, props, home } from "herdr";
 import { Editor } from "./editor.js";
 import { Simulator } from "./simulate.js";
 import { Fleet } from "./fleet.js";
-import { chip, wiresLayer } from "./parts.js";
+import { Tasks } from "./tasks.js";
+import { chip, refusalOf, wiresLayer } from "./parts.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
 const VERSION = 5;
@@ -55,24 +60,29 @@ export default class Pipeline extends View {
     this.editor = new Editor(this);
     this.sim = new Simulator(this);
     this.fleet = new Fleet(this);
+    this.tasks = new Tasks(this);
     this.loadPlacements(cx);
     this.watch(cx);
   }
 
   // Reads the drawing again when the pipelines or drafts file changes, and the
-  // standings when the dispatcher publishes. Both live in folders herdr can watch.
+  // standings when the dispatcher publishes. Both live in folders herdr can
+  // watch. The task graph is read again on both: grants live in the policy
+  // file beside the pipelines, and a publish follows each change to the tasks.
   watch(cx) {
     const stateFolder = this.state.slice(0, this.state.lastIndexOf("/"));
     cx.spawn(async (cx) => {
       for (;;) {
         try { await watchFolder(stateFolder); } catch { return; }
         this.loadPlacements(cx);
+        if (this.tasks.on) this.tasks.load(cx);
       }
     });
     cx.spawn(async (cx) => {
       for (;;) {
         try { await watchFolder(`${home()}/.config/foreman`); } catch { return; }
         if (this.size !== null) this.loadDrawing(cx);
+        if (this.tasks.on) this.tasks.load(cx);
       }
     });
   }
@@ -179,7 +189,10 @@ export default class Pipeline extends View {
 
   render(cx) {
     const t = theme();
-    const root = v_flex().id("root").size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
+    const root = v_flex().id("root").relative().size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
+      .on_mouse_down("left", () => this.tasks.pressed())
+      .on_mouse_move((event, cx) => this.tasks.moved(event, cx))
+      .on_mouse_up("left", (event, cx) => this.tasks.released(event, cx))
       .on_size_change((size, cx) => {
         const before = this.size === null ? null : this.flow();
         this.size = size;
@@ -198,13 +211,18 @@ export default class Pipeline extends View {
       .when(this.sim.on, (el) => el.child(this.sim.toolbar(t)))
       .when(this.fleet.on, (el) => el.child(this.fleet.toolbar(t)))
       .when(draft !== null && draft.problems.length > 0, (el) => el.child(problemsView(t, draft.problems)))
-      .child(div().id("board").relative().flex_1().overflow_hidden()
-        .on_scroll_wheel((event, cx) => this.scroll(event, cx))
-        .child(div().absolute().left(this.pan[0]).top(this.pan[1]).w(drawing.width * this.zoom).h(drawing.height * this.zoom)
-          .child(wiresLayer(drawing, this.zoom, t))
-          .children(drawing.blocks.map((block) => this.blockView(block, at.get(block.id) ?? [], t)))
-          .when(editing, (el) => el.children(drawing.wires.map((wire, index) => this.editor.plus(wire, index, t))))))
-      .when(this.selected !== null, (el) => el.child(this.detail(t, at)));
+      .child(h_flex().flex_1().min_h(0).items_start()
+        .when(this.tasks.on, (el) => el.child(this.tasks.view(t)))
+        .child(div().id("board").relative().flex_1().h_full().overflow_hidden()
+          .when(this.tasks.dropping(), (el) => el.border(2).border_color(t.accent))
+          .on_mouse_move((event, _cx) => this.tasks.overMoved(event))
+          .on_scroll_wheel((event, cx) => this.scroll(event, cx))
+          .child(div().absolute().left(this.pan[0]).top(this.pan[1]).w(drawing.width * this.zoom).h(drawing.height * this.zoom)
+            .child(wiresLayer(drawing, this.zoom, t))
+            .children(drawing.blocks.map((block) => this.blockView(block, at.get(block.id) ?? [], t)))
+            .when(editing, (el) => el.children(drawing.wires.map((wire, index) => this.editor.plus(wire, index, t)))))))
+      .when(this.selected !== null, (el) => el.child(this.detail(t, at)))
+      .child(this.tasks.ghost(t) ?? div());
   }
 
   header(t, at) {
@@ -222,6 +240,7 @@ export default class Pipeline extends View {
       .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(); cx.notify(); }))
       .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => { if (this.fleet.on) this.fleet.toggle(cx); this.sim.toggle(cx); }))
       .child(chip(t, this.fleet.on ? "stop the fleet" : "fleet", "fleet", (cx) => { if (this.sim.on) this.sim.toggle(cx); this.fleet.toggle(cx); }))
+      .child(chip(t, this.tasks.on ? "hide tasks" : "tasks", "tasks", (cx) => { this.tasks.toggle(cx); if (this.fitted) this.fit(cx); }))
       .child(div().flex_1())
       .when(this.busy, (el) => el.child(div().text_color(t.muted).child("…")))
       .when(this.problem !== null, (el) => el.child(div().text_color(t.blocked).child(this.problem)))
@@ -311,19 +330,13 @@ export default class Pipeline extends View {
   fit(cx) {
     if (this.size === null || this.shown === null) return;
     const { width, height } = this.view().drawing;
-    this.zoom = Math.min(1, Math.max(FIT_MIN, Math.min(this.size.width / width, (this.size.height - 40) / height)));
+    const room = this.size.width - this.tasks.width();
+    this.zoom = Math.min(1, Math.max(FIT_MIN, Math.min(room / width, (this.size.height - 40) / height)));
     this.pan = [0, 0];
     this.fitted = true;
     cx.notify();
   }
 }
-
-// What a refused foreman command said: its error's message, without the log
-// prefix and the stack under it.
-const refusalOf = (result) => {
-  const text = result.stderr.split("\n    at ")[0].trim();
-  return text.replace(/^.*?Error: /s, "") || `foreman exited ${result.code}`;
-};
 
 const problemsView = (t, problems) =>
   v_flex().id("problems").max_h(90).overflow_y_scrollbar().px(10).py(4).gap(2).bg(t.surface).border_b(1).border_color(t.border)
