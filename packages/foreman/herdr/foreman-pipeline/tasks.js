@@ -9,8 +9,9 @@
 // under it. The mod has no element drag and drop, so a drag is built from the
 // pointer: a press on a card, then a move of more than DRAG_START pixels,
 // then a release over the board. A shorter move is a click, which picks the
-// card. A release outside the window never arrives, so a drag left over ends
-// at the next release anywhere in the pane.
+// card. A release outside the window never arrives, so a drag left over is
+// dropped at the next press anywhere in the pane, before that press's release
+// could grant it.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { chip, refusalOf } from "./parts.js";
@@ -92,15 +93,23 @@ export class Tasks {
 
   revoke(scope, cx) { this.run([["policy", "revoke", scope]], cx); }
 
+  // A click picks the card alone, or unpicks it when it was the one picked; a
+  // shift-click adds it to the picked cards or takes it out.
   pick(id, add, cx) {
-    const picked = add ? new Set(this.picked) : new Set(this.picked.has(id) && this.picked.size === 1 ? [] : [id]);
-    if (add && picked.has(id)) picked.delete(id); else picked.add(id);
-    this.picked = picked;
+    const had = this.picked.has(id);
+    if (add) {
+      const picked = new Set(this.picked);
+      if (had) picked.delete(id); else picked.add(id);
+      this.picked = picked;
+    } else this.picked = new Set(had && this.picked.size === 1 ? [] : [id]);
     cx.notify();
   }
 
-  // The pane root's pointer handlers. The root hears every move and release,
-  // so a drag follows the pointer anywhere in the pane.
+  // The pane root's pointer handlers. The root hears every press, move and
+  // release, so a drag follows the pointer anywhere in the pane. A card's own
+  // press starts a drag that has not moved, which this keeps whichever runs first.
+  pressed() { if (this.drag?.dragging === true) this.drag = null; }
+
   moved(event, cx) {
     if (this.drag === null) return;
     const { from } = this.drag;
@@ -183,7 +192,7 @@ export class Tasks {
         .child(div().text_color(t.muted).child(item.type === "epic" ? `epic ${item.id}` : item.id))
         .child(div().flex_1())
         .when(item.grant !== null, (el) => el.child(div().text_color(t.done)
-          .child(item.grant.scope === item.id ? "granted" : `by ${item.grant.scope}`))))
+          .child(grantMark(item, this.report.grantSteps)))))
       .child(div().text_size(11).truncate().child(item.title))
       .child(div().text_size(10).text_color(t.dim).truncate().child(this.standing(item)));
   }
@@ -208,3 +217,11 @@ const stepsLine = (steps, grantSteps) => {
 };
 
 const words = (list) => list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`;
+
+// A card's grant in a few words: whether it is its own or its epic's, and
+// which steps, when it gives only some of the steps a grant from here gives.
+const grantMark = (item, grantSteps) => {
+  const some = item.type === "task" && item.grant.steps.length < grantSteps.length;
+  const what = some ? `${item.grant.steps.join(", ")} granted` : "granted";
+  return item.grant.scope === item.id ? what : `${what} by ${item.grant.scope}`;
+};

@@ -190,6 +190,7 @@ export default class Pipeline extends View {
   render(cx) {
     const t = theme();
     const root = v_flex().id("root").relative().size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
+      .on_mouse_down("left", () => this.tasks.pressed())
       .on_mouse_move((event, cx) => this.tasks.moved(event, cx))
       .on_mouse_up("left", (event, cx) => this.tasks.released(event, cx))
       .on_size_change((size, cx) => {

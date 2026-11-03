@@ -72,6 +72,30 @@ describe("graphReport", () => {
     expect(report.items.find((it) => it.id === "t")!.grant!.left).toBe(2);
   });
 
+  test("marks no task the dispatcher would not grant", () => {
+    // One grant has admitted its one task; the other covers a step a pane grant does not give.
+    const policy = {
+      ...DEFAULT_POLICY,
+      default: { author: "off", climb: "off", review: "on", land: "on" },
+      grants: [
+        { scope: "ep", steps: ["author"], remaining: 1, admitted: ["t"] },
+        { scope: "v", steps: ["review"], admitted: [] },
+      ],
+    } as const;
+    const report = graphReport(
+      world({
+        items: [item("t", { parent: "ep" }), item("u", { parent: "ep" }), item("v")],
+        policy,
+        scopes: new Map([
+          ["ep", new Set(["t", "u"])],
+          ["v", new Set(["v"])],
+        ]),
+      }),
+    );
+    const marks = Object.fromEntries(report.items.map((it) => [it.id, it.grant?.steps ?? null]));
+    expect(marks).toEqual({ t: ["author"], u: null, v: null });
+  });
+
   test("grants the gated steps that are not on", () => {
     const policy = {
       ...DEFAULT_POLICY,

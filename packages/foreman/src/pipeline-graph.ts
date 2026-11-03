@@ -8,6 +8,7 @@ import type { Pipeline } from "./pipeline.ts";
 import {
   type Grant,
   modeFor,
+  permit,
   type Policy,
   type Scopes,
   type Step,
@@ -39,12 +40,13 @@ export interface GraphItem {
   readonly row: number;
   /** Every unfinished item it waits for, shown or not. */
   readonly waitsFor: ReadonlyArray<string>;
-  /** The grant that covers it, if one does. */
+  /** The grant that lets the dispatcher take some of `grantSteps` for it, if one does. */
   readonly grant: CoveringGrant | null;
 }
 
 export interface CoveringGrant {
   readonly scope: string;
+  /** For a task, the steps of `grantSteps` it lets the dispatcher take; for an epic, the grant's steps. */
   readonly steps: ReadonlyArray<Step>;
   /** How many more tasks the grant admits, when it has a count. */
   readonly left: number | null;
@@ -65,9 +67,7 @@ export interface GraphWorld {
 }
 
 /**
- * The project's graph. An item's grant is the first grant that names it as
- * its scope, has admitted it, or reaches it through its scope, the order
- * `permit` reads them in.
+ * The project's graph, with the grant that covers each item (`coveringOf`).
  */
 export const graphReport = (world: GraphWorld): GraphReport => {
   const { project, items, dependencies, statusOf, policy, scopes, pipeline } = world;
@@ -100,6 +100,7 @@ export const graphReport = (world: GraphWorld): GraphReport => {
     step,
     mode: modeFor(policy, project, step),
   }));
+  const grantSteps = steps.filter(({ mode }) => mode !== "on").map(({ step }) => step);
   return {
     project,
     items: ordered.map((item) => ({
@@ -112,32 +113,48 @@ export const graphReport = (world: GraphWorld): GraphReport => {
       column: columns.get(item.id) ?? 0,
       row: rows.get(item.id) ?? 0,
       waitsFor: unfinished.filter((edge) => edge.item === item.id).map((edge) => edge.dependsOn),
-      grant: coveringOf(policy.grants, scopes, item.id),
+      grant: coveringOf(policy, scopes, item, grantSteps),
     })),
     edges,
     steps,
-    grantSteps: steps.filter(({ mode }) => mode !== "on").map(({ step }) => step),
+    grantSteps,
   };
 };
 
+/**
+ * The grant that lets the dispatcher take `grantSteps` for an item. For a
+ * task it is what `permit` answers for each step, so a spent count or a grant
+ * on other steps marks nothing. An epic is never dispatched itself, so its
+ * grant is the one on its own id, which is the one a revoke on its card
+ * removes.
+ */
 const coveringOf = (
-  grants: ReadonlyArray<Grant>,
+  policy: Policy,
   scopes: Scopes,
-  id: string,
+  item: Item,
+  grantSteps: ReadonlyArray<Step>,
 ): CoveringGrant | null => {
-  const grant = grants.find(
-    (g) => g.scope === id || g.admitted.includes(id) || scopes.get(g.scope)?.has(id),
-  );
+  const covering = (grant: Grant, steps: ReadonlyArray<Step>): CoveringGrant => ({
+    scope: grant.scope,
+    steps,
+    left:
+      grant.remaining === undefined ? null : Math.max(0, grant.remaining - grant.admitted.length),
+  });
+  if (item.type === "epic") {
+    const own = policy.grants.find((grant) => grant.scope === item.id);
+    return own === undefined ? null : covering(own, own.steps);
+  }
+  const granted = grantSteps.flatMap((step) => {
+    const answer = permit(policy, scopes, item, step);
+    return answer._tag === "Granted" ? [{ step, scope: answer.scope }] : [];
+  });
+  const grant = policy.grants.find((one) => one.scope === granted[0]?.scope);
   return grant === undefined
     ? null
-    : {
-        scope: grant.scope,
-        steps: grant.steps,
-        left:
-          grant.remaining === undefined
-            ? null
-            : Math.max(0, grant.remaining - grant.admitted.length),
-      };
+    : covering(
+        grant,
+        granted.map(({ step }) => step),
+      );
 };
 
 const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
