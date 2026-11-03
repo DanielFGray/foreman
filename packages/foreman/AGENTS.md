@@ -628,9 +628,11 @@ and that commit to its run, and moves the status the exit implies, in one
 transaction. A second exit in the same run replaces the first. The exit holds
 only while the tip is still that commit, so any other commit after it voids it,
 and a correction round needs no special case: the reviewer names its exit after
-the round, on the new tip. Foreman
+the round, on the new tip. For a local landing, foreman
 re-checks the checkout and the tip, merges the approved commit by its id, never
-the branch name, and only then completes the task. A tip that moved since the
+the branch name, and only then completes the task. A pull-request landing
+merges with `--match-head-commit`, and the task completes when foreman reads
+the PR merged. A tip that moved since the
 approval is refused, and the task goes to review again.
 
 The drawing decides where a returned review goes. In the standard pipeline it
@@ -694,7 +696,7 @@ commit, so a refusal there cannot be about content — it is `Held`, always.
 the same reviewed commit; nothing about a lock invalidates a diff a reviewer
 already read.
 
-Landing also runs `verify`. Only a ground that was green and reproducibly went red
+A local landing also runs `verify`. Only a ground that was green and reproducibly went red
 is the branch's fault: the output is logged and the task returns to the queue.
 A checkout already red still accepts the merge, because a branch cannot be
 blamed for damage that predates it and one broken test would otherwise freeze the
@@ -1005,7 +1007,9 @@ not to have been earned.
   that import `./src/*` must live in the repo root.
 - **Landing belongs to foreman, not the reviewer.** The reviewer names its
   exit with `foreman exit`. Foreman owns the clean-checkout gate, merge,
-  verification and completing the task.
+  verification and completing the task. With a pull-request landing and land
+  off, the operator merges on GitHub, and foreman completes the task when it
+  reads the merge.
 
 ## House rules
 
