@@ -25,7 +25,7 @@ import {
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import { providerOf, type Ladder, type Rung } from "./ladder.ts";
 import type { Row } from "./run-step.ts";
-import { TasksTracker, Tracker, TrackerError } from "./tracker.ts";
+import { ProjectTracker, Tracker, TrackerError } from "./tracker.ts";
 
 export type { Status as TaskStatus } from "tasks";
 
@@ -62,9 +62,9 @@ export interface Endings {
  * The records live in the task store's database, keyed by task id, so a
  * tracker carries only task state. A records
  * write that goes with a status move (closing runs as a task is released or
- * completed) runs both in one transaction on that connection: atomic because
- * `TasksTracker` writes on the same connection, which `layer` guarantees by
- * building the two from one store.
+ * completed) runs both in one transaction on that connection. This is atomic
+ * only for a prog project, whose `TasksTracker` writes on the same connection,
+ * which `layer` guarantees by building the two from one store.
  */
 export class Records extends Context.Service<Records>()("Records", {
   make: Effect.gen(function* () {
@@ -369,7 +369,7 @@ export class Records extends Context.Service<Records>()("Records", {
    * provides once. Both services come out, and they share that connection,
    * which is what makes `together` atomic across them.
    */
-  static readonly layer = Layer.effect(this, this.make).pipe(Layer.provideMerge(TasksTracker));
+  static readonly layer = Layer.effect(this, this.make).pipe(Layer.provideMerge(ProjectTracker));
 }
 
 /** An epic being driven, and its direct children: how close it is to done. */

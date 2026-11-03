@@ -69,3 +69,24 @@ describe("foreman policy --project", () => {
     expect(JSON.parse(lines.join("\n")).projects).toEqual({ amux: { steps: { review: "on" } } });
   });
 });
+
+describe("foreman policy tracker", () => {
+  test("writes the choice and keeps the project's other settings", async () => {
+    await run("set", "author", "on", "--project", "amux");
+    await run("tracker", "github", "--project", "amux");
+    expect(written().projects).toEqual({ amux: { steps: { author: "on" }, tracker: "github" } });
+  });
+
+  test("prog is the default, so choosing it drops the key", async () => {
+    await run("tracker", "linear", "--project", "amux");
+    await run("tracker", "prog", "--project", "amux");
+    expect(written().projects).toEqual({});
+  });
+
+  test("clear keeps the tracker", async () => {
+    await run("tracker", "github", "--project", "amux");
+    await run("set", "land", "ask", "--project", "amux");
+    await run("clear", "--project", "amux");
+    expect(written().projects).toEqual({ amux: { tracker: "github" } });
+  });
+});

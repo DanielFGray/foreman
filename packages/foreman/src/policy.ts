@@ -47,6 +47,13 @@ export const STEP_MODES = ["on", "ask", "off"] as const;
 export type StepMode = (typeof STEP_MODES)[number];
 
 /**
+ * The tracker a project takes its tasks from. `prog` is the `tasks` store;
+ * `github` and `linear` are the adapters of docs/issue-trackers.md.
+ */
+export const TRACKERS = ["prog", "github", "linear"] as const;
+export type TrackerName = (typeof TRACKERS)[number];
+
+/**
  * A widening of the default for one task or epic.
  *
  * `remaining` counts tasks, not steps: a grant admits at most that many
@@ -65,10 +72,13 @@ export type Grant = typeof Grant.Type;
 
 /**
  * One project's own settings. A step set here replaces the fleet default for
- * that project's tasks; a paused project takes no step, grants included.
+ * that project's tasks; a paused project takes no step, grants included;
+ * `tracker` names where the project's tasks live.
  */
 export const ProjectPolicy = S.Struct({
   paused: S.optional(S.Boolean),
+  /** Absent means `prog`. */
+  tracker: S.optional(S.Literals(TRACKERS)),
   steps: S.optional(
     S.Struct({
       author: S.optional(S.Literals(STEP_MODES)),
@@ -354,7 +364,10 @@ const editProject = (
 ): Policy => {
   const next = edit(policy.projects[project] ?? {});
   const { [project]: _dropped, ...others } = policy.projects;
-  const empty = next.paused === undefined && Object.keys(next.steps ?? {}).length === 0;
+  const empty =
+    next.paused === undefined &&
+    next.tracker === undefined &&
+    Object.keys(next.steps ?? {}).length === 0;
   return { ...policy, projects: empty ? others : { ...others, [project]: next } };
 };
 
@@ -373,6 +386,20 @@ export const setProjectStep = (
 ): Policy =>
   editProject(policy, project, (entry) => ({ ...entry, steps: { ...entry.steps, [step]: mode } }));
 
-/** Drops a project's entry, so it follows the fleet default again. */
+/**
+ * Drops a project's step and pause settings, so it follows the fleet default
+ * again. The tracker choice stays: it is where the tasks live, not a setting
+ * with a fleet default, and dropping it would move the project to prog.
+ */
 export const clearProject = (policy: Policy, project: string): Policy =>
-  editProject(policy, project, () => ({}));
+  editProject(policy, project, ({ tracker }) => (tracker === undefined ? {} : { tracker }));
+
+/** The tracker `project` takes its tasks from. */
+export const trackerOf = (policy: Policy, project: string): TrackerName =>
+  policy.projects[project]?.tracker ?? "prog";
+
+/** Chooses one project's tracker. `prog` removes the key rather than storing the default. */
+export const setProjectTracker = (policy: Policy, project: string, tracker: TrackerName): Policy =>
+  editProject(policy, project, ({ tracker: _was, ...rest }) =>
+    tracker === "prog" ? rest : { ...rest, tracker },
+  );
