@@ -5,7 +5,7 @@
  * The dispatcher has one way to run: inside a host, which today is
  * herdr-web's server. The host builds a `Host` in a scope, runs its `run`
  * supervised, reads `state` for its pages, and writes each reading to
- * `state.json` for the herdr-app panel.
+ * `state.json` for the herdr-app Foreman pane.
  */
 import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, Layer, Option } from "effect";

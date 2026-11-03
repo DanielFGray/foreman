@@ -26,7 +26,7 @@ import { TrackerError } from "./tracker.ts";
  * `foreman policy`: read and change what the fleet may do by itself.
  *
  * Every subcommand writes through `updatePolicy` and prints the policy that
- * results, so the panel and a person at the shell change the file the same
+ * results, so the Foreman pane and a person at the shell change the file the same
  * way and see the same answer. The dispatcher reads the file on its next tick.
  */
 

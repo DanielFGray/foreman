@@ -54,7 +54,7 @@ describe("layoutOf", () => {
         expect(new Set(at).size).toBe(at.length);
     });
 
-    // The boxes the pipeline pane draws: a label is a 14px row centred on
+    // The boxes the Foreman pane draws: a label is a 14px row centred on
     // its anchor when the flow runs down, and sits above the line across;
     // a "+" is 14px square on its point.
     it(`${name}, ${flow}: no "+" covers a label, another "+" or a block`, () => {

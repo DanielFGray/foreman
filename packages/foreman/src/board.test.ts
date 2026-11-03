@@ -168,6 +168,35 @@ describe("the task board", () => {
     expect(stopped.projects[0]?.grantSteps).toEqual([]);
   });
 
+  test("publishes each step's mode for the project, its own before the default", () => {
+    const policy = S.decodeSync(Policy)({
+      default: { author: "off", climb: "ask", review: "on", land: "on" },
+      projects: { fibrae: { steps: { review: "ask" } } },
+    });
+    expect(board([], { policy }).projects[0]?.steps).toEqual({
+      author: "off",
+      climb: "ask",
+      review: "ask",
+      publish: policy.default.publish,
+      land: "on",
+    });
+  });
+
+  test("publishes each account with the rungs it pays for", () => {
+    const published = board([], {
+      providers: [
+        {
+          provider: "claude",
+          plan: undefined,
+          allowances: [],
+          rungs: ["opus"],
+          unreadable: undefined,
+        },
+      ],
+    });
+    expect(published.accounts).toEqual([{ provider: "claude", rungs: ["opus"] }]);
+  });
+
   test("shows the tasks that landed in the last day, newest first", () => {
     const now = new Date("2026-11-03T12:00:00Z");
     const landedAt = (id: string, when: string): Item => ({

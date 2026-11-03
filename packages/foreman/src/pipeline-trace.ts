@@ -126,7 +126,7 @@ export interface TraceSources {
 /**
  * The trace `foreman pipeline trace --json` prints: through the project's
  * draft when it has one, else the pipeline it runs. An absent value is `null`
- * and a chosen rung is named, so the pipeline pane reads plain JSON.
+ * and a chosen rung is named, so the Foreman pane reads plain JSON.
  */
 export const traceReport = (
   project: string,

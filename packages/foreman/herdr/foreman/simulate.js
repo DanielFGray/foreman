@@ -1,4 +1,4 @@
-// The pipeline pane's simulator: a pretend task walked through the project's
+// The Pipeline view's simulator: a pretend task walked through the project's
 // draft (else the pipeline it runs), one event at a time. foreman decides
 // every step with the dispatcher's own rules (`foreman pipeline trace`), so
 // this file holds only the pretend task and the events chosen so far, and
@@ -33,7 +33,7 @@ export class Simulator {
     const labels = this.labels.value().split(/[\s,]+/).filter((label) => label !== "");
     const request = { task: { labels, size: Number(this.size) }, events: this.events };
     cx.spawn(async (cx) => {
-      const result = await this.pane.foreman(["pipeline", "trace", this.pane.project, JSON.stringify(request), "--json"]);
+      const result = await this.pane.foreman(["pipeline", "trace", this.pane.project(), JSON.stringify(request), "--json"]);
       if (result.code !== 0) this.problem = result.stderr.trim().split("\n").at(-1) || `foreman exited ${result.code}`;
       else {
         try { this.trace = JSON.parse(result.stdout); this.problem = null; }

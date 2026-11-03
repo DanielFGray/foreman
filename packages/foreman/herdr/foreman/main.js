@@ -1,231 +1,126 @@
-// The foreman panel: the fleet as the dispatcher last published it and the queue
-// as foreman ranks it, filtered to the shown space's project, with each row's
-// one-shot commands as buttons.
+// The Foreman pane: the project of the shown herdr-app space, as the
+// dispatcher last published it in state.json and as foreman draws, ranks and
+// records it. Three views, picked in the header (`header.js`):
 //
-// It reads state.json, asks `foreman queue` and `foreman show` for the queue
-// and a task's record, shows each task's pull request and its tracker's page, and runs `foreman <action> <id>` and `foreman policy ...`.
-// It keeps nothing of its own and never speaks to the task store itself. The
-// policy is the dispatcher's to read: a button here rewrites the file through the
-// CLI, and the next reading shows it. The file's shape is `Published` in
-// foreman's src/published.ts; a queue row has the shape of one of its rows.
+// - Pipeline: the project's pipeline as foreman draws it, the tasks that
+//   stand at each block, each gate's mode for this project, and an editor for
+//   the project's draft.
+// - Tasks: in Board mode (`board.js`), the dispatcher's board columns, with a
+//   detail strip for the selected card (`detail.js`); in Graph mode
+//   (`tasks.js`), the task graph by what each task waits for.
+// - Models (`models.js`): the ladder, the council and the accounts.
+//
+// The project is the one foreman uses: the folder name of the main checkout
+// the shown space's folder sits in, asked of git, so it holds while no
+// dispatcher runs. The pane follows the space when the operator switches.
+//
+// The drawing is foreman's (`foreman pipeline show <project> --json`, its
+// `drawing`): boxes and wire routes in pixels, so this pane lays nothing out.
+// It asks for a drawing that runs down when the pane is taller than it is
+// wide, and across otherwise, and asks again when the pane's shape flips.
+// A mod cannot load foreman's own modules (they need web globals the mod
+// engine lacks), and a second copy of the layout here would drift from the
+// one herdr-web draws. Where each task stands is the dispatcher's placement in
+// state.json, with the task's runs so far; a task waiting at an ask is the
+// dispatcher's attention row that offers `approve`, which a button here runs.
+// A gate shows the mode its step has for this project, which state.json
+// publishes (`projects[].steps`), and a click sets the next one with
+// `foreman policy set <step> <mode> --project <project>`.
+//
+// Simulating (`simulate.js`) walks a pretend task through the draft with
+// `foreman pipeline trace`, and marks where it stands and the blocks it passed.
+// The fleet simulation (`fleet.js`) plays the project's real tasks through the
+// draft and the pipeline it runs with `foreman pipeline simulate`, and puts the
+// simulated tasks on the drawing in place of the dispatcher's. One of the two
+// shows at a time.
+//
+// Editing (`editor.js`) changes the project's draft, never the pipeline it
+// runs: each change is one `foreman pipeline edit`, and `foreman pipeline
+// save` checks the draft and makes it the pipeline. foreman owns the draft, so
+// it outlives this pane.
+//
+// The queue is not in state.json: the pane reads `foreman queue --project
+// <name> --json` every 5 seconds, for the Queue cards' actions and epics. A
+// row that newly appears under Landed posts a notification. The pane keeps no
+// state of its own but the Tasks view's mode, and never runs `prog`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home, run } from "herdr";
+import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify } from "herdr";
+import { Editor } from "./editor.js";
+import { Simulator } from "./simulate.js";
+import { Fleet } from "./fleet.js";
+import { Tasks } from "./tasks.js";
+import { Board } from "./board.js";
+import { Detail } from "./detail.js";
+import { Header } from "./header.js";
+import { Models } from "./models.js";
+import { Drag } from "./drag.js";
+import { chip, refusalOf, wiresLayer } from "./parts.js";
+import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir } from "./status.js";
 
-const VERSION = 5;
-const STEPS = ["author", "climb", "review", "publish", "land"];
-// A step cycles through its modes: on runs it, ask waits for one approval per task, off does nothing.
-const NEXT_MODE = { on: "ask", ask: "off", off: "on" };
-// Older than this, the reading is no longer the dispatcher working: its host is
-// gone or it is wedged inside a tick, and the panel says so rather than showing
-// it as live.
-const STALE_MS = 120000;
-const SECTIONS = [
-  ["attention", "Needs you"],
-  ["working", "Working"],
-  ["review", "Review"],
-  ["queue", "Queue"],
-  ["quota", "Accounts"],
-  ["landed", "Landed"],
-];
-// These take an answer the panel has no input for yet; the CLI takes them.
-const NEEDS_INPUT = new Set(["complete", "intervene"]);
-// These end an agent or give up a claim, so a first click only arms them.
-const DESTRUCTIVE = new Set(["kill", "close", "release"]);
-// A row's key is a task id, a workspace label that holds one (`foreman/<id>`),
-// or a project or account name, which has no task to show. A prog id is
-// `ts-` or `ep-` and six hex digits; an issue id is `<project>#<number>` on
-// GitHub and `<project>#<TEAM-number>` on Linear.
-const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b|[\w.-]+#(?:[A-Za-z][A-Za-z0-9]*-)?\d+\b/;
-const WAITING = { checks: "waits for its checks", you: "waits for your approval", github: "waits for a merge on GitHub" };
-// An open row shows this many of its task's newest log entries.
-const LOGS_SHOWN = 3;
-// The epics shown expanded, kept in the mod's own storage so they stay open
-// across restarts and spaces. An epic not listed is collapsed.
-const EXPANDED_KEY = "expanded-epics";
+// The state.json version this pane reads; bumped with PUBLISHED_VERSION.
+const VERSION = 6;
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 2.5;
+// Fit never shrinks the drawing past this, so its words stay legible; a
+// narrow pane scrolls across it instead.
+const FIT_MIN = 0.75;
+// The Tasks view's mode, kept in the mod's own storage.
+const TASKS_MODE_KEY = "tasks-mode";
 const PENDING = Symbol("pending");
-// The queue's scope while the panel shows every project.
-const ALL = Symbol("all");
+// The published view whose row carries a board column's actions.
+const VIEW_OF_COLUMN = { queue: "queue", "needs-you": "attention", authoring: "working", fixing: "working", review: "review", landed: "landed" };
 
 export default class Foreman extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.path = p.state ?? `${home()}/.local/state/foreman/state.json`;
+    this.state = p.state ?? `${home()}/.local/state/foreman/state.json`;
     this.command = p.command ?? ["foreman"];
-    this.published = null; this.problem = null; this.all = false;
-    this.launching = null; this.rungs = []; this.busy = new Set(); this.landed = null;
-    // The row shown whole, and each task's record as last read, by task id.
-    this.opened = null; this.tasks = new Map();
-    // The epics shown expanded, and each one's record as last read, by task id.
-    this.expanded = new Set(this.storedExpanded()); this.epics = new Map();
+    this.published = null; this.problem = null; this.busy = false;
+    this.shown = null; this.queue = null; this.queueReading = false;
+    // The Landed keys at the last reading, or null before the first.
+    this.landedKeys = null;
     // Each space folder's project: a name, null for a folder in no checkout,
     // or PENDING while git is asked.
     this.checkouts = new Map();
-    // The queue as last read: the scope it was read for (a project name, or
-    // ALL), and its rows or why they could not be read.
-    this.queue = null;
+    // The project the pane last read for, so a switch of space reads again.
+    // Undefined before the first read, which a space in no project also needs.
+    this.following = undefined;
+    this.zoom = 1; this.pan = [0, 0]; this.size = null; this.selected = null;
+    // The drawing fits the pane until the operator zooms or pans it.
+    this.fitted = true;
+    this.header = new Header(this);
+    this.editor = new Editor(this);
+    this.sim = new Simulator(this);
+    this.fleet = new Fleet(this);
+    this.tasks = new Tasks(this);
+    this.board = new Board(this);
+    this.detail = new Detail(this);
+    this.models = new Models(this);
+    // The pane's one drag, which the Tasks board and the Models view use.
+    this.drag = new Drag();
+    // The pane root's bounds in the window, from the last move over it.
+    this.origin = null;
+    this.mode = "tasks";
+    this.tasksMode = storedTasksMode();
     this.reload(cx);
-    for (const key of this.expanded) this.loadEpic(key, cx);
-    this.loadRungs(cx);
     this.watch(cx);
     this.resolveCheckouts(cx);
-    // The age line counts up between readings, a watch that failed is tried
-    // again (the folder does not exist until a dispatcher first publishes), and
-    // the queue is read again, since no dispatcher publishes it.
-    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.resolveCheckouts(cx); this.loadQueue(cx); cx.notify(); });
+    // Render runs on every change to herdr's live data and starts no work, so
+    // the timer notices a switch of space. A watch that failed is tried again:
+    // the state folder does not exist until a dispatcher first publishes.
+    cx.timer.every(1000, (cx) => { this.resolveCheckouts(cx); this.follow(cx); cx.notify(); });
+    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.loadQueue(cx); });
   }
 
-  watch(cx) {
-    const folder = this.path.slice(0, this.path.lastIndexOf("/"));
-    this.watching = true;
-    cx.spawn(async (cx) => {
-      try {
-        for (;;) {
-          const changed = await watchFolder(folder);
-          if (changed.includes(this.path)) this.reload(cx);
-        }
-      } catch {
-        this.watching = false;
-        this.reload(cx);
-      }
-    });
-  }
-
-  reload(cx) {
-    cx.spawn(async (cx) => {
-      const text = await readTextFile(this.path);
-      if (text === null) { this.published = null; this.problem = "no foreman dispatcher has published yet"; cx.notify(); return; }
-      try {
-        const published = JSON.parse(text);
-        if (published.version !== VERSION) throw new Error(`state.json is version ${published.version}; this panel reads ${VERSION}`);
-        this.announce(published);
-        this.published = published; this.problem = null;
-      } catch (error) { this.problem = String(error.message ?? error); }
-      cx.notify();
-    });
-  }
-
-  // Posts what the fleet finished since the last reading. The first reading
-  // only records, so opening the panel does not replay history.
-  announce(published) {
-    const landed = new Set(published.rows.filter((row) => row.view === "landed").map((row) => row.key));
-    if (this.landed) for (const row of published.rows) {
-      if (row.view === "landed" && !this.landed.has(row.key)) notify({ title: `Landed ${row.key}`, body: row.label, level: "success", timeout: 8000 });
-    }
-    this.landed = landed;
-  }
-
-  loadRungs(cx) {
-    cx.spawn(async (cx) => {
-      const result = await this.foreman(["ladder", "list", "--json"]);
-      if (result.code === 0) { try { this.rungs = JSON.parse(result.stdout).filter((rung) => rung.state !== "disabled"); } catch {} }
-      cx.notify();
-    });
-  }
-
-  // What the queue shows: every project, the shown space's, or nothing for a
-  // space in no project.
-  queueScope() {
-    return this.all ? ALL : this.project();
-  }
-
-  // Reads the queue for the scope shown now, one read at a time. The timer, a
-  // resolved space, a toggled scope and a finished command ask again.
-  loadQueue(cx) {
-    const scope = this.queueScope();
-    if (scope === null) { this.queue = null; return; }
-    if (this.queueReading) return;
-    this.queueReading = true;
-    cx.spawn(async (cx) => {
-      const result = await this.foreman(["queue", ...(scope === ALL ? [] : ["--project", scope]), "--json"]);
-      this.queueReading = false;
-      try {
-        this.queue = { scope, ...(result.code === 0 ? { rows: JSON.parse(result.stdout) } : { error: (result.stderr || result.stdout).trim().slice(-400) }) };
-      } catch (error) { this.queue = { scope, error: `foreman queue's answer is not JSON: ${error.message}` }; }
-      // The scope moved while this read ran, so read for the one shown now.
-      if (this.queueScope() !== scope) this.loadQueue(cx);
-      cx.notify();
-    });
-  }
-
-  // Opens a row whole, and reads its task again each time it opens: the
-  // reading only carries a title, and a log grows while the task is worked.
-  toggleDetail(key, cx) {
-    this.opened = this.opened === key ? null : key;
-    cx.notify();
-    const id = this.opened && key.match(TASK_ID)?.[0];
-    if (!id) return;
-    cx.spawn(async (cx) => {
-      const result = await this.foreman(["show", id, "--json"]);
-      try {
-        this.tasks.set(id, result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() });
-      } catch (error) { this.tasks.set(id, { error: `foreman show's answer is not JSON: ${error.message}` }); }
-      cx.notify();
-    });
-  }
-
-  storedExpanded() {
-    try {
-      const kept = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]");
-      return Array.isArray(kept) ? kept.filter((key) => typeof key === "string") : [];
-    } catch { return []; }
-  }
-
-  // Expands or collapses one epic, in every space and project filter. Expanding
-  // reads the epic's description again, since it may have changed while collapsed.
-  toggleEpic(key, cx) {
-    if (this.expanded.delete(key)) this.epics.delete(key);
-    else { this.expanded.add(key); this.loadEpic(key, cx); }
-    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...this.expanded]));
-    cx.notify();
-  }
-
-  loadEpic(key, cx) {
-    cx.spawn(async (cx) => {
-      const result = await this.foreman(["show", key, "--json"]);
-      let epic;
-      try {
-        epic = result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() };
-      } catch (error) { epic = { error: `foreman show's answer is not JSON: ${error.message}` }; }
-      // Collapsed while the read ran: nothing shows it.
-      if (this.expanded.has(key)) { this.epics.set(key, epic); cx.notify(); }
-    });
-  }
-
-  foreman(args) {
-    const [program, ...rest] = this.command;
-    return exec(program, [...rest, ...args]);
-  }
-
-  // Runs one command for a row, then reads the file and the queue again: a
-  // one-shot command changes the world, not the dispatcher, so its effect on
-  // the file shows on the next tick.
-  act(args, cx) {
-    const id = args.join(" ");
-    if (this.busy.has(id)) return;
-    this.busy.add(id); this.launching = null; this.armed = null; cx.notify();
-    cx.spawn(async (cx) => {
-      const result = await this.foreman(args);
-      this.busy.delete(id);
-      if (result.code !== 0) notify({ title: `foreman ${id} failed`, body: (result.stderr || result.stdout).trim().slice(-400), level: "error" });
-      this.reload(cx);
-      this.loadQueue(cx);
-    });
-  }
-
-  // The project the shown space is in, by the rule foreman uses: the folder
-  // name of the main checkout the space's folder sits in, so a space on a
-  // task's worktree reads as its project. Asked of git, not of the reading, so
-  // it holds with no dispatcher running. A space's name is only a label. A space in
-  // no checkout shows only the rows that belong to no project.
+  // The project of the shown space, or null for a space in no checkout.
   project() {
     const folder = spaces().find((space) => space.active)?.folder;
     const name = folder ? this.checkouts.get(folder) : null;
     return typeof name === "string" ? name : null;
   }
 
-  // Asks git once for each space folder not yet resolved. Runs on the timer:
-  // render runs on every change to herdr's live data and starts no work.
+  // Asks git once for each space folder not yet resolved.
   resolveCheckouts(cx) {
     const unresolved = spaces().filter((space) => space.folder && !this.checkouts.has(space.folder));
     if (unresolved.length === 0) return;
@@ -234,177 +129,426 @@ export default class Foreman extends View {
       for (const space of unresolved) {
         // on: a space on another machine runs git there.
         const result = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: space.folder, on: space.machine });
-        const common = result.code === 0 ? result.stdout.trim() : "";
-        const checkout = common.slice(0, common.lastIndexOf("/"));
-        this.checkouts.set(space.folder, checkout ? checkout.slice(checkout.lastIndexOf("/") + 1) : null);
+        this.checkouts.set(space.folder, result.code === 0 ? projectOfCommonDir(result.stdout.trim()) : null);
       }
-      this.loadQueue(cx);
+      this.follow(cx);
       cx.notify();
     });
   }
 
+  // Drops what was read for the last project and reads for the shown one.
+  follow(cx) {
+    const project = this.project();
+    if (project === this.following) return;
+    this.following = project;
+    this.shown = null; this.selected = null; this.queue = null; this.problem = null;
+    if (this.editor.on) this.editor.toggle();
+    if (this.sim.on) this.sim.toggle(cx);
+    if (this.fleet.on) this.fleet.toggle(cx);
+    this.tasks.clear(); this.detail.clear();
+    this.loadQueue(cx);
+    this.loadView(cx);
+  }
+
+  // Reads what the shown view draws from foreman.
+  loadView(cx) {
+    if (this.mode === "pipeline" && this.shown === null) this.loadDrawing(cx);
+    if (this.mode === "tasks" && this.tasksMode === "graph") this.tasks.load(cx);
+    if (this.mode === "models") this.models.load(cx);
+  }
+
+  show(mode, cx) {
+    if (this.mode === mode) return;
+    this.mode = mode; this.drag.pressedAnywhere();
+    this.loadView(cx);
+    cx.notify();
+  }
+
+  showTasks(tasksMode, cx) {
+    this.tasksMode = tasksMode;
+    try { localStorage.setItem(TASKS_MODE_KEY, tasksMode); } catch {}
+    this.loadView(cx);
+    cx.notify();
+  }
+
+  // Reads the drawing again when the pipelines, drafts or policy file
+  // changes, and the published file when the dispatcher publishes. Both live
+  // in folders herdr can watch. The task graph is read again on both: grants
+  // live in the policy file, and a publish follows each change to the tasks.
+  watch(cx) {
+    const stateFolder = this.state.slice(0, this.state.lastIndexOf("/"));
+    this.watching = true;
+    cx.spawn(async (cx) => {
+      try {
+        for (;;) {
+          const changed = await watchFolder(stateFolder);
+          if (changed.includes(this.state)) this.reload(cx);
+          if (this.tasks.report !== null) this.tasks.load(cx);
+        }
+      } catch { this.watching = false; this.reload(cx); }
+    });
+    cx.spawn(async (cx) => {
+      for (;;) {
+        try { await watchFolder(`${home()}/.config/foreman`); } catch { return; }
+        if (this.size !== null && this.shown !== null) this.loadDrawing(cx);
+        if (this.tasks.report !== null) this.tasks.load(cx);
+      }
+    });
+  }
+
+  reload(cx) {
+    cx.spawn(async (cx) => {
+      const text = await readTextFile(this.state);
+      if (text === null) { this.published = null; cx.notify(); return; }
+      try {
+        const published = JSON.parse(text);
+        if (published.version !== VERSION) throw new Error(`state.json is version ${published.version}; this pane reads ${VERSION}`);
+        this.announce(published);
+        this.published = published;
+      } catch (error) { this.problem = String(error.message ?? error); }
+      cx.notify();
+    });
+  }
+
+  // Posts what the fleet landed since the last reading, in every project.
+  announce(published) {
+    const landed = published.rows.filter((row) => row.view === "landed");
+    const fresh = new Set(newlyLanded(this.landedKeys, landed.map((row) => row.key)));
+    for (const row of landed) if (fresh.has(row.key)) notify({ title: `Landed ${row.key}`, body: row.label, level: "success", timeout: 8000 });
+    this.landedKeys = new Set(landed.map((row) => row.key));
+  }
+
+  // Reads the project's queue, one read at a time.
+  loadQueue(cx) {
+    const project = this.project();
+    if (project === null || this.queueReading) return;
+    this.queueReading = true;
+    cx.spawn(async (cx) => {
+      const result = await this.foreman(["queue", "--project", project, "--json"]);
+      this.queueReading = false;
+      if (this.project() !== project) { this.loadQueue(cx); return; }
+      try { this.queue = result.code === 0 ? JSON.parse(result.stdout) : null; } catch { this.queue = null; }
+      cx.notify();
+    });
+  }
+
+  // The shown project's placements, landed tasks and published rows.
+  placements() { return (this.published?.placements ?? []).filter((one) => one.project === this.project()); }
+  landed() { return (this.published?.landed ?? []).filter((one) => one.project === this.project()); }
+  // A row in no project (an orphaned worker, a spent account, a branch whose
+  // task is gone) shows in every project, so no space hides it.
+  rows() { return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === this.project()); }
+
+  // The row a board card stands for: the one from the view its column shows,
+  // since actions are per view, else any row of its task. A row's key may be
+  // a workspace label that holds the task id.
+  rowOf(key, column) {
+    const mine = [...this.rows(), ...(this.queue ?? [])].filter((row) => row.view !== "quota" && row.key.match(TASK_ID)?.[0] === key);
+    return mine.find((row) => row.view === VIEW_OF_COLUMN[column]) ?? mine[0] ?? null;
+  }
+
+  // The asks the drawing shows: none while it shows simulated tasks.
+  shownAsks() {
+    if (this.fleet.on) return new Map();
+    return new Map(this.rows().filter((row) => row.actions.includes("approve")).map((row) => [row.key, row]));
+  }
+
+  // The shown project as state.json publishes it.
+  projectInfo() { return this.published?.projects.find((one) => one.name === this.project()); }
+
+  // The steps a grant from a board gives a task of this project.
+  grantSteps() { return this.projectInfo()?.grantSteps ?? []; }
+
+  loadDrawing(cx) {
+    const project = this.project();
+    if (project === null) { this.problem = "this space is in no git checkout, so it has no project"; cx.notify(); return; }
+    this.ask(["pipeline", "show", project, "--json", "--flow", this.flow()], cx);
+  }
+
+  // Sends one change to the draft. foreman answers the new reading, and the
+  // block the change added, which the pane then selects.
+  change(change, cx) {
+    this.ask(["pipeline", "edit", this.project(), JSON.stringify(change), "--json", "--flow", this.flow()], cx, (shown) => {
+      if (shown.added !== null) this.select(shown.added);
+    });
+  }
+
+  // Runs a foreman command that changes something, shows its refusal if it
+  // refuses, and then calls `after` either way.
+  act(args, cx, after) {
+    this.busy = true; this.problem = null; cx.notify();
+    cx.spawn(async (cx) => {
+      const result = await this.foreman(args);
+      this.busy = false;
+      if (result.code !== 0) this.problem = refusalOf(result);
+      after(result.code === 0, cx);
+    });
+  }
+
+  // Runs `foreman approve <task>`. The dispatcher starts the step on its next
+  // tick and publishes, and the watch reads the file again then.
+  approve(key, cx) { this.act(["approve", key], cx, (_done, cx) => cx.notify()); }
+
+  // Runs `foreman pipeline save` or `discard`, then reads the pipeline again.
+  finish(verb, cx) {
+    this.act(["pipeline", verb, this.project()], cx, (done, cx) => {
+      if (done && verb === "save" && this.editor.on) this.editor.toggle();
+      this.loadDrawing(cx);
+    });
+  }
+
+  // Runs a foreman command that answers a reading, and takes the reading.
+  ask(args, cx, then = () => {}) {
+    this.busy = true; cx.notify();
+    cx.spawn(async (cx) => {
+      const result = await this.foreman(args);
+      this.busy = false;
+      if (result.code !== 0) { this.problem = refusalOf(result); cx.notify(); return; }
+      try {
+        const shown = JSON.parse(result.stdout);
+        this.problem = null;
+        this.showing(shown, cx);
+        then(shown);
+      } catch (error) { this.problem = String(error.message ?? error); }
+      cx.notify();
+    });
+  }
+
+  foreman(args) {
+    const [cmd, ...rest] = this.command;
+    return exec(cmd, [...rest, ...args]);
+  }
+
+  // Takes a reading of the pipeline, and drops a pick that names a block it no longer has.
+  showing(shown, cx) {
+    this.shown = shown;
+    if (this.selected !== null && !this.view().drawing.blocks.some((block) => block.id === this.selected)) this.select(null);
+    if (this.fitted) this.fit(cx);
+    // A change to the draft can change every step after it.
+    if (this.sim.on) this.sim.run(cx);
+    if (this.fleet.on) this.fleet.run(cx);
+  }
+
+  // What the drawing shows: the draft while one is open, else the pipeline the project runs.
+  view() { return this.shown.draft ?? this.shown; }
+
+  // The way the drawing should run in this pane: down a column, across a row.
+  flow() { return this.size !== null && this.size.height > this.size.width ? "down" : "across"; }
+
+  select(id) { this.selected = id; this.editor.load(this.selectedNode()); }
+
+  selectedNode() {
+    return this.selected === null ? undefined : this.view().pipeline.nodes.find((node) => node.id === this.selected);
+  }
+
   render(cx) {
-    const t = theme(), published = this.published, project = this.project();
-    const age = published?.observedAt ? Date.now() - Date.parse(published.observedAt) : null;
-    const live = age !== null && age < STALE_MS;
-    const policy = published?.policy;
-    // The dispatcher names its own state: running, paused, idle (no step on and
-    // no grant) or failed (its host is starting it again). A file a one-shot
-    // `foreman status` wrote names none.
-    const dispatcher = published?.dispatcher;
-    const state = !published ? "offline" : !dispatcher ? "no dispatcher" : dispatcher.state === "failed" ? "failed" : !live ? "stale" : dispatcher.state;
-    const fleet = (published?.rows ?? []).filter((row) => this.all || row.project === null || row.project === project);
-    const hidden = (published?.rows.length ?? 0) - fleet.length;
-    // A queue read for another scope is not shown: the space changed, and the
-    // read for this one is on its way.
-    const queue = this.queue?.scope === this.queueScope() ? this.queue : null;
-    const rows = [...fleet, ...(queue?.rows ?? [])];
+    const t = theme();
+    const root = v_flex().id("root").relative().size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
+      .on_mouse_down("left", () => this.drag.pressedAnywhere())
+      .on_mouse_move((event, cx) => { this.origin = event.bounds; if (this.drag.moved(event.position)) cx.notify(); })
+      .on_mouse_up("left", (event, cx) => {
+        const target = this.drag.released();
+        if (target?.run != null) target.run(cx);
+        cx.notify();
+      })
+      .on_size_change((size, cx) => {
+        const before = this.size === null ? null : this.flow();
+        this.size = size;
+        if (this.mode === "pipeline" && this.flow() !== before) this.loadDrawing(cx);
+        else if (this.fitted) this.fit(cx);
+        cx.notify();
+      })
+      .child(this.header.view(t));
+    if (this.mode === "tasks") return root.child(this.tasksSwitch(t)).child(this.tasksMode === "board" ? this.board.view(t) : this.tasks.view(t));
+    if (this.mode === "models") return root.child(this.models.view(t));
+    if (this.shown === null) return root.child(div().p(12).text_color(t.muted).child(this.problem === null ? "reading the pipeline…" : ""));
+    const { drawing } = this.view();
+    const draft = this.shown.draft;
+    const at = byBlock(this.fleet.placements() ?? this.placements());
+    const editing = this.editor.on;
+    return root
+      .child(this.toolbar(t, at))
+      .when(editing, (el) => el.child(this.editor.toolbar(t)))
+      .when(this.sim.on, (el) => el.child(this.sim.toolbar(t)))
+      .when(this.fleet.on, (el) => el.child(this.fleet.toolbar(t)))
+      .when(draft !== null && draft.problems.length > 0, (el) => el.child(problemsView(t, draft.problems)))
+      .child(div().id("drawing").relative().flex_1().w_full().min_h(0).overflow_hidden()
+        .on_scroll_wheel((event, cx) => this.scroll(event, cx))
+        .child(div().absolute().left(this.pan[0]).top(this.pan[1]).w(drawing.width * this.zoom).h(drawing.height * this.zoom)
+          .child(wiresLayer(drawing, this.zoom, t))
+          .children(drawing.blocks.map((block) => this.blockView(block, at.get(block.id) ?? [], t)))
+          .when(editing, (el) => el.children(drawing.wires.map((wire, index) => this.editor.plus(wire, index, t))))))
+      .when(this.selected !== null, (el) => el.child(this.blockDetail(t, at)));
+  }
 
-    const chip = (id, label, onClick, tone) => div().id(id).px(6).py(1).rounded(5).text_size(11).cursor_pointer()
-      .bg(t.raised).text_color(tone ?? t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); }).child(label);
+  // The Board / Graph switch inside the Tasks view.
+  tasksSwitch(t) {
+    return h_flex().flex_none().px(10).py(4).gap(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+      .children([["board", "Board"], ["graph", "Graph"]].map(([mode, label]) =>
+        div().id(`tasks-${mode}`).px(6).rounded(4).border(1)
+          .border_color(this.tasksMode === mode ? t.accent : t.border).text_color(this.tasksMode === mode ? t.accent : t.foreground)
+          .hover((s) => s.bg(t.hover))
+          .on_click((_event, cx) => { if (this.tasksMode !== mode) this.showTasks(mode, cx); })
+          .child(label)));
+  }
 
-    // The control that leads an epic row: "+" when collapsed, "−" when expanded.
-    const epicToggle = (r) => div().id(`epic-toggle-${r.key}`).flex_none().w(16).text_size(13).text_color(t.muted).cursor_pointer()
-      .hover((s) => s.text_color(t.foreground))
-      .on_click((_e, cx) => { cx.stop_propagation(); this.toggleEpic(r.key, cx); })
-      .child(this.expanded.has(r.key) ? "−" : "+");
+  // The bar over the drawing: which pipeline it is, and its tools.
+  toolbar(t, at) {
+    const problems = this.shown.problems ?? [];
+    const placed = [...at.values()].reduce((sum, tasks) => sum + tasks.length, 0);
+    return h_flex().flex_wrap().px(10).py(6).gap_x(10).gap_y(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+      .child(div().text_color(t.muted).child(this.shown.drawn ? "its own pipeline" : "the standard pipeline"))
+      .child(div().text_color(t.muted).child(`${placed} task${placed === 1 ? "" : "s"} ${this.fleet.on ? "simulated" : "placed"}`))
+      .when(problems.length > 0, (el) => el.child(div().text_color(t.blocked).child(`${problems.length} problem${problems.length === 1 ? "" : "s"}`)))
+      .when(this.shown.draft !== null, (el) => el
+        .child(div().text_color(t.accent).child("showing the draft"))
+        .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
+        .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
+      .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(); cx.notify(); }))
+      .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => { if (this.fleet.on) this.fleet.toggle(cx); this.sim.toggle(cx); }))
+      .child(chip(t, this.fleet.on ? "stop the fleet" : "fleet", "fleet", (cx) => { if (this.sim.on) this.sim.toggle(cx); this.fleet.toggle(cx); }))
+      .child(div().flex_1())
+      .child(chip(t, "−", "zoom-out", (cx) => this.zoomBy(1 / 1.2, cx)))
+      .child(div().text_color(t.muted).child(`${Math.round(this.zoom * 100)}%`))
+      .child(chip(t, "+", "zoom-in", (cx) => this.zoomBy(1.2, cx)))
+      .child(chip(t, "fit", "zoom-fit", (cx) => this.fit(cx)));
+  }
 
-    // An expanded epic shows its description under its title.
-    const epicBody = (r) => {
-      const epic = this.epics.get(r.key);
-      const note = (text, tone) => div().text_size(12).text_color(tone ?? t.muted).child(text);
-      if (!epic) return note("reading the epic…");
-      if (epic.error) return note(epic.error, t.blocked);
-      return epic.description ? div().text_size(12).child(epic.description) : note("no description");
-    };
+  // A window rectangle in pane coordinates, for what the pane draws over itself.
+  local(rect) {
+    const origin = this.origin ?? { x: 0, y: 0 };
+    return { ...rect, x: rect.x - origin.x, y: rect.y - origin.y };
+  }
 
-    // childCount is given for an epic row only: its subtasks in this section.
-    const row = (r, childCount) => {
-      const isEpic = childCount !== undefined;
-      const actions = r.actions.filter((action) => !NEEDS_INPUT.has(action));
-      const launchable = r.view === "queue" && !r.epic;
-      const open = this.opened === r.key;
-      return v_flex().id(`row-${r.view}-${r.key}`).px(10).py(6).gap(3).rounded(7).cursor_pointer()
-        .when(open, (el) => el.bg(t.raised)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.armed = null; this.toggleDetail(r.key, cx); })
-        .child(h_flex().gap(8).items_start().min_w(0)
-          .when(isEpic, (el) => el.child(epicToggle(r)))
-          .child(div().flex_none().text_size(11).text_color(t.dim).child(r.key))
-          .child(div().flex_1().min_w(0).when(!open, (el) => el.truncate()).child(r.label))
-          .when(isEpic && !this.expanded.has(r.key), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim)
-            .child(childCount === 1 ? "1 subtask" : `${childCount} subtasks`))))
-        .when(isEpic && this.expanded.has(r.key), (el) => el.child(epicBody(r)))
-        .when(Boolean(r.detail), (el) => el.child(div().text_size(11).text_color(t.muted).when(!open, (el) => el.truncate()).child(r.detail)))
-        .when(Boolean(r.pr), (el) => el.child(div().text_size(11).text_color(t.muted).child(pullRequestLine(r.pr))))
-        .when(open && Boolean(r.url), (el) => el.child(div().text_size(11).text_color(t.dim).child(r.url)))
-        .when(actions.length > 0 || launchable, (el) => el.child(h_flex().gap(4).flex_wrap()
-          .when(launchable, (el) => el.child(chip(`launch-${r.key}`, this.launching === r.key ? "cancel" : "launch",
-            (cx) => { this.launching = this.launching === r.key ? null : r.key; cx.notify(); }, t.working)))
-          .when(r.view === "review", (el) => el.children(["review", "land"].map((step) =>
-            chip(`allow-${step}-${r.key}`, this.busy.has(`policy grant ${r.key} ${step} --count 1`) ? `${step}…` : `allow ${step}`,
-              (cx) => this.act(["policy", "grant", r.key, step, "--count", "1"], cx)))))
-          .children(actions.map((action) => {
-            const id = `${action} ${r.key}`, armed = this.armed === id;
-            const label = this.busy.has(id) ? `${action}…` : armed ? `${action}?` : action;
-            return chip(`${action}-${r.key}`, label, (cx) => {
-              if (DESTRUCTIVE.has(action) && !armed) { this.armed = id; cx.notify(); return; }
-              this.act([action, r.key], cx);
-            }, armed ? t.blocked : undefined);
-          }))))
-        .when(this.launching === r.key, (el) => el.child(h_flex().gap(4).flex_wrap()
-          .children(this.rungs.map((rung) => chip(`rung-${r.key}-${rung.rung}`, rung.rung,
-            (cx) => this.act(["dispatch", r.key, "--rung", rung.rung], cx), t.foreground)))))
-        .when(open, (el) => el.child(taskView(r.key)));
-    };
+  // A gate's mode chip: the mode its step has for this project, as state.json
+  // publishes it. A click sets the next mode for this project only.
+  gateMode(block, t) {
+    const node = this.view().pipeline.nodes.find((one) => one.id === block.id);
+    const mode = node?.kind === "gate" ? this.projectInfo()?.steps[node.step] : undefined;
+    if (mode === undefined) return null;
+    const tone = mode === "on" ? t.working : mode === "ask" ? t.blocked : t.muted;
+    return div().id(`gate-mode-${block.id}`).flex_none().px(4 * this.zoom).rounded(4).border(1).border_color(tone).text_color(tone)
+      .hover((s) => s.bg(t.hover))
+      .on_click((_event, cx) => {
+        cx.stop_propagation();
+        this.act(["policy", "set", node.step, NEXT_MODE[mode], "--project", this.project()], cx, (_done, cx) => cx.notify());
+      })
+      .child(mode);
+  }
 
-    // The open row's task as the task store records it; a row with no task id shows only its whole title and detail.
-    const taskView = (key) => {
-      const id = key.match(TASK_ID)?.[0];
-      const task = id ? this.tasks.get(id) : undefined;
-      const note = (text, tone) => div().text_size(11).text_color(tone ?? t.muted).child(text);
-      if (!id) return div();
-      if (!task) return note("reading the task…");
-      if (task.error) return note(task.error, t.blocked);
-      const facts = [task.type === "epic" ? "epic" : null, task.status, `priority ${task.priority}`, task.project, task.parent ? `under ${task.parent}` : null, ...task.labels].filter(Boolean);
-      const logs = task.logs.slice(-LOGS_SHOWN).reverse();
-      return v_flex().gap(6).pt(4).border_t(1).border_color(t.border)
-        .child(note(facts.join(" · ")))
-        .when(Boolean(task.description), (el) => el.child(div().text_size(12).child(task.description)))
-        .when(Boolean(task.definitionOfDone), (el) => el.child(note(`Done when: ${task.definitionOfDone}`)))
-        .children(logs.map((log, i) => v_flex().id(`log-${id}-${i}`).gap(1)
-          .child(note(log.createdAt.slice(0, 16).replace("T", " "), t.dim))
-          .child(div().text_size(11).child(log.message))))
-        .when(task.logs.length > LOGS_SHOWN, (el) => el.child(note(`${task.logs.length - LOGS_SHOWN} older log entries: foreman show ${id}`, t.dim)));
-    };
+  blockView(block, tasks, t) {
+    const z = this.zoom;
+    const running = tasks.filter((task) => task.state === "running").length;
+    const asks = this.shownAsks();
+    const asking = tasks.filter((task) => asks.has(task.key)).length;
+    const card = block.h >= 40;
+    const mark = this.sim.mark(block.id);
+    const gate = this.gateMode(block, t);
+    const border = this.editor.rejoining !== null ? t.accent
+      : mark === "here" ? t.working : mark === "passed" ? t.done
+      : running > 0 ? t.working : tasks.length > 0 ? t.accent : t.border;
+    return div().id(`block-${block.id}`).absolute()
+      .left(block.x * z).top(block.y * z).w(block.w * z).h(block.h * z)
+      .bg(this.selected === block.id ? t.selected : t.surface)
+      .border(mark === "here" ? 2 : 1).border_color(border)
+      .rounded(card ? 6 : 14).px(6 * z).overflow_hidden()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_event, cx) => {
+        if (this.editor.clickedBlock(block, cx)) return;
+        this.select(this.selected === block.id ? null : block.id);
+        cx.notify();
+      })
+      .child(v_flex().size_full().justify_center()
+        .child(h_flex().gap(4 * z).text_size(12 * z)
+          .child(div().text_color(t.muted).child(block.icon))
+          .child(div().font_semibold().truncate().child(block.id))
+          .when(gate !== null, (el) => el.child(gate))
+          .when(mark === "here", (el) => el.child(div().text_color(t.working).child("◆")))
+          .when(tasks.length > 0, (el) => el.child(div().text_color(running > 0 ? t.working : t.accent).child(String(tasks.length))))
+          .when(asking > 0, (el) => el.child(div().text_color(t.blocked).child(`${asking} ask${asking === 1 ? "" : "s"}`))))
+        .when(card, (el) => el.child(div().text_size(10 * z).text_color(t.muted).truncate().child(block.summary))));
+  }
 
-    const section = ([view, title]) => {
-      const mine = rows.filter((r) => r.view === view);
-      if (mine.length === 0) return null;
-      return v_flex().gap(1).pt(8)
-        .child(h_flex().px(10).gap(6).text_size(11).text_color(view === "attention" ? t.blocked : t.dim)
-          .child(title.toUpperCase()).child(String(mine.length)))
-        .children(grouped(mine));
-    };
+  // The selected block: its words, every task standing there, and, while
+  // editing, its settings and the wires that leave it.
+  blockDetail(t, at) {
+    const { drawing } = this.view();
+    const block = drawing.blocks.find((one) => one.id === this.selected);
+    const node = this.selectedNode();
+    if (block === undefined || node === undefined) return div();
+    const tasks = at.get(block.id) ?? [];
+    return v_flex().id("detail").max_h(320).overflow_y_scrollbar().p(10).gap(4).bg(t.surface).border_t(1).border_color(t.border)
+      .child(h_flex().flex_wrap().gap(6).child(div().font_semibold().child(`${block.icon} ${block.id}`)).child(div().text_color(t.muted).child(`${block.kind} · ${block.summary}`)))
+      .when(this.editor.on, (el) => el.child(this.editor.settings(t, node)).child(this.editor.exits(t, drawing, node)))
+      .when(tasks.length === 0, (el) => el.child(div().text_color(t.dim).child("no task stands here")))
+      .children(tasks.slice(0, 50).map((task) => this.taskView(task, t)))
+      .when(tasks.length > 50, (el) => el.child(div().text_color(t.dim).child(`and ${tasks.length - 50} more`)));
+  }
 
-    // Each epic row leads its own tasks, indented under it while the epic is
-    // expanded. A task whose epic has no row in the view stays at the top
-    // level, in the given order.
-    const grouped = (mine) => {
-      const epics = new Set(mine.filter((r) => r.epic).map((r) => r.key));
-      return mine.filter((r) => !epics.has(r.parent)).map((r) => {
-        if (!r.epic) return row(r);
-        const children = mine.filter((child) => child.parent === r.key);
-        return v_flex().id(`group-${r.key}`).child(row(r, children.length))
-          .when(this.expanded.has(r.key) && children.length > 0, (el) => el.child(v_flex().ml(14).pl(4).border_l(1).border_color(t.border)
-            .children(children.map((child) => row(child)))));
-      });
-    };
+  // One task at the selected block: its state, its ask and the button that
+  // answers it, and the runs it took to get here.
+  taskView(task, t) {
+    const ask = this.shownAsks().get(task.key);
+    return v_flex().gap(1)
+      .child(h_flex().gap(8).items_center()
+        .child(div().w(70).text_color(stateColor(task.state, t)).child(task.state))
+        .child(div().w(80).text_color(t.muted).child(task.key))
+        .child(div().flex_1().truncate().child(task.label))
+        .when(task.gates.length > 0, (el) => el.child(div().text_color(t.dim).child(`at ${task.gates.map((gate) => gate.step).join(", ")}`)))
+        .when(ask !== undefined, (el) => el.child(chip(t, "approve", `approve-${task.key}`, (cx) => this.approve(task.key, cx)))))
+      .when(ask !== undefined, (el) => el.child(div().pl(78).text_color(t.blocked).child(ask.detail ?? ask.label)))
+      .when(task.runs.length > 0, (el) => el.child(div().pl(78).text_color(t.dim).truncate().child(pathOf(task.runs))));
+  }
 
-    // A project whose tracker did not answer takes no step until it does.
-    const unreachable = (published?.projects ?? []).filter((p) => p.unreachable && (this.all || p.name === project));
+  scroll(event, cx) {
+    const [dx, dy] = event.delta ? [event.delta.x ?? 0, event.delta.y ?? 0] : [0, 0];
+    if (event.modifiers?.control || event.modifiers?.platform) { this.zoomBy(dy > 0 ? 1.1 : 1 / 1.1, cx); return; }
+    this.fitted = false;
+    this.pan = [this.pan[0] + dx, this.pan[1] + dy];
+    cx.notify();
+  }
 
-    const tone = state === "running" ? t.working : state === "stale" || state === "failed" ? t.blocked : t.muted;
+  zoomBy(factor, cx) {
+    this.fitted = false;
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoom * factor));
+    cx.notify();
+  }
 
-    // The policy: pause, the steps the fleet takes for every task, and the
-    // agent limit. A grant for one task is the "allow" chip on its row.
-    const controls = !policy ? null : v_flex().px(14).py(6).gap(4).border_b(1).border_color(t.border)
-      .when(Boolean(published.policyError), (el) => el.child(div().text_size(11).text_color(t.blocked).child(published.policyError)))
-      .when(dispatcher?.state === "failed", (el) => el.child(div().text_size(11).text_color(t.blocked).child(`dispatcher failed, restarting: ${dispatcher.detail}`)))
-      .children(unreachable.map((p) => div().text_size(11).text_color(t.blocked).child(`${p.name}: the ${p.tracker} tracker did not answer, so no task takes a step: ${p.unreachable}`)))
-      .child(h_flex().gap(4).flex_wrap().items_center()
-        .child(chip("pause", policy.paused ? "resume" : "pause", (cx) => this.act(["policy", policy.paused ? "resume" : "pause"], cx), policy.paused ? t.working : t.blocked))
-        .children(STEPS.map((step) => chip(`step-${step}`, `${step} ${policy.default[step]}`,
-          (cx) => this.act(["policy", "set", step, NEXT_MODE[policy.default[step]]], cx), policy.default[step] === "off" ? t.muted : t.foreground)))
-        .child(div().flex_1())
-        // One group, so a narrow dock wraps the agent limit whole.
-        .child(h_flex().flex_none().gap(4).items_center()
-          .child(chip("slots-down", "−", (cx) => this.act(["policy", "slots", String(Math.max(1, policy.slots - 1))], cx)))
-          .child(div().text_size(11).text_color(t.muted).child(`${policy.slots} agents`))
-          .child(chip("slots-up", "+", (cx) => this.act(["policy", "slots", String(policy.slots + 1)], cx)))))
-      .when(policy.grants.length > 0, (el) => el.children(policy.grants.map((g) => h_flex().gap(6).items_center().text_size(11).text_color(t.muted)
-        .child(div().flex_1().min_w(0).truncate().child(`${g.scope}: ${g.steps.join(", ")}${g.remaining === undefined ? "" : ` · ${g.admitted.length}/${g.remaining} tasks`}`))
-        .child(chip(`revoke-${g.scope}`, "revoke", (cx) => this.act(["policy", "revoke", g.scope], cx))))));
-    return v_flex().id("foreman").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .on_click((_e, cx) => { if (this.armed) { this.armed = null; cx.notify(); } })
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().child("Foreman"))
-        .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(tone).child(state))
-        .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
-        .child(div().flex_1())
-        .when(project !== null, (el) => el.child(chip("pipeline", "pipeline", () => run("pane.split", { direction: "right", mod: "foreman-pipeline", props: { project } }))))
-        .child(chip("scope", this.all ? "all projects" : (project ?? "no project"), (cx) => { this.all = !this.all; this.loadQueue(cx); cx.notify(); })))
-      .when(controls !== null, (el) => el.child(controls))
-      .child(v_flex().id("foreman-rows").flex_1().min_h(0).overflow_y_scrollbar().px(4).pb(8)
-        .when(Boolean(this.problem), (el) => el.child(div().p(12).text_color(t.muted).child(this.problem)))
-        .when(Boolean(queue?.error), (el) => el.child(div().p(12).text_color(t.blocked).child(queue.error)))
-        .when(!this.problem && rows.length === 0, (el) => el.child(div().p(12).text_color(t.muted)
-          .child(hidden > 0 ? `nothing for ${project ?? "this space"}; ${hidden} rows in other projects` : "nothing queued, working or waiting")))
-        .children(SECTIONS.map(section).filter(Boolean)));
+  // Fits the whole drawing into the pane, which a narrow pane and a zoomed tab both need.
+  fit(cx) {
+    if (this.size === null || this.shown === null) return;
+    const { width, height } = this.view().drawing;
+    this.zoom = Math.min(1, Math.max(FIT_MIN, Math.min(this.size.width / width, (this.size.height - 80) / height)));
+    this.pan = [0, 0];
+    this.fitted = true;
+    cx.notify();
   }
 }
 
-// A task's pull request as one line: its number, state, checks and what the merge waits for.
-const pullRequestLine = (pr) =>
-  [`PR #${pr.number} ${pr.state}`, pr.checks ? `checks ${pr.checks}` : null, pr.waiting ? WAITING[pr.waiting] : null, pr.url]
-    .filter(Boolean).join(" · ");
+const storedTasksMode = () => {
+  try { return localStorage.getItem(TASKS_MODE_KEY) === "graph" ? "graph" : "board"; } catch { return "board"; }
+};
+
+const problemsView = (t, problems) =>
+  v_flex().id("problems").max_h(90).overflow_y_scrollbar().px(10).py(4).gap(2).bg(t.surface).border_b(1).border_color(t.border)
+    .child(div().text_color(t.blocked).child("the draft cannot run yet:"))
+    .children(problems.map((problem) => div().text_color(t.muted).child(problem)));
+
+// Each block's tasks, by the block foreman says a board draws them on
+// (`stands`): a task not yet started at its source, a waiting one at the gate
+// in front of its block. Running first, then by key.
+const byBlock = (placements) => {
+  const at = new Map();
+  for (const placement of placements) at.set(placement.stands, [...(at.get(placement.stands) ?? []), placement]);
+  for (const tasks of at.values()) tasks.sort((a, b) => (a.state === "running") === (b.state === "running") ? a.key.localeCompare(b.key) : a.state === "running" ? -1 : 1);
+  return at;
+};
+
+// A task's runs in a line, newest last: the block (or the role, for a run that
+// names none), the rung, and how it ended.
+const pathOf = (runs) => runs.slice(-8).map((run) =>
+  `${run.node ?? run.role}${run.rung === null ? "" : ` on ${run.rung}`}: ${run.open ? "running" : run.ending ?? "not settled"}`)
+  .join("  →  ")
+  .replace(/^/, runs.length > 8 ? `${runs.length - 8} earlier  →  ` : "");
+
+const stateColor = (state, t) => state === "running" ? t.working : state === "parked" ? t.blocked : state === "ended" || state === "landed" ? t.done : t.muted;

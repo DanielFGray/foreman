@@ -2,7 +2,7 @@ import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, role, scene, selector, Subscription } from "foldkit/scene"
 import { describe, test } from "vitest"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
-import type { ForemanReading, ForemanRow, ForemanState } from "../shared/Foreman.ts"
+import { FOREMAN_VERSION, type ForemanReading, type ForemanRow, type ForemanState } from "../shared/Foreman.ts"
 import { ListRungs, LoadForemanEpic, RefreshForeman, RunForeman, SaveOpenEpics, SaveSelection } from "./commands.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, EpicRecord, ForemanQueue, Message, Selection } from "./model.ts"
@@ -24,7 +24,7 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
 })
 
 const reading: ForemanReading = {
-  version: 5,
+  version: FOREMAN_VERSION,
   dispatcher: { state: "running" },
   policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", publish: "off", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),

@@ -6,7 +6,7 @@
 import { Match, Schema as S } from "effect"
 
 /** The version of foreman's published shape this page reads. */
-export const FOREMAN_VERSION = 5
+export const FOREMAN_VERSION = 6
 
 export const FOREMAN_STEPS = ["author", "climb", "review", "publish", "land"] as const
 export const FOREMAN_STEP_MODES = ["on", "ask", "off"] as const

@@ -5,7 +5,7 @@
  *
  * A view, not a memory. Nothing in foreman reads the file back, so a restart
  * loses nothing by overwriting it, and a reader that finds it stale is told so
- * by `observedAt`. The herdr-app panel is the reader it is shaped for: plain
+ * by `observedAt`. The herdr-app Foreman pane is the reader it is shaped for: plain
  * JavaScript that cannot share these types, which is why the shape carries a
  * `version` and is encoded through a schema rather than whatever
  * `JSON.stringify` makes of the state.
@@ -16,7 +16,16 @@ import type { EpicProgress, Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
 import { BOARD_COLUMNS, columnOf, recentlyLanded } from "./board.ts";
 import { coveringOf, gatedSteps } from "./pipeline-graph.ts";
-import { MODES, modeOf, Policy, TRACKERS, trackerOf } from "./policy.ts";
+import {
+  MODES,
+  modeOf,
+  Policy,
+  STEP_MODES,
+  STEPS,
+  stepModesFor,
+  TRACKERS,
+  trackerOf,
+} from "./policy.ts";
 import {
   actionsFor,
   pullRequestView,
@@ -30,10 +39,10 @@ import {
 
 /**
  * Bumped whenever a field a reader relies on changes meaning or goes away.
- * Two readers check it: the herdr-app panel (`herdr/foreman/main.js`) and
+ * Two readers check it: the herdr-app Foreman pane (`herdr/foreman/main.js`) and
  * herdr-web's Foreman page (`src/shared/Foreman.ts` there).
  */
-export const PUBLISHED_VERSION = 5;
+export const PUBLISHED_VERSION = 6;
 
 /**
  * The views the file carries: foreman's own. The queue is not one of them.
@@ -149,7 +158,8 @@ export const Published = S.Struct({
    * task (`gatedSteps`); a reader takes no drop where they are empty.
    * `tracker` keeps the project's tasks, `repo` is the GitHub repo they live
    * in, and `unreachable` says why the tracker did not answer this reading,
-   * which holds the project.
+   * which holds the project. `steps` is the mode each step has for this
+   * project, as the dispatcher reads it (`modeFor`).
    */
   projects: S.Array(
     S.Struct({
@@ -159,8 +169,14 @@ export const Published = S.Struct({
       tracker: S.Literals(TRACKERS),
       repo: S.NullOr(S.String),
       unreachable: S.NullOr(S.String),
+      steps: S.Record(S.Literals(STEPS), S.Literals(STEP_MODES)),
     }),
   ),
+  /**
+   * Each account the ladder draws on, with the rungs it pays for. The quota
+   * rows describe the same accounts by `provider`.
+   */
+  accounts: S.Array(S.Struct({ provider: S.String, rungs: S.Array(S.String) })),
   rows: S.Array(PublishedRow),
   /**
    * Each task that stands at a block, in the order the dispatcher placed
@@ -204,7 +220,9 @@ export const publishedOf = (
       unreachable:
         state.held.find((held) => held.project === name && held.reason === "unreachable")?.detail ??
         null,
+      steps: stepModesFor(state.policy, name),
     })),
+    accounts: state.providers.map(({ provider, rungs }) => ({ provider, rungs })),
     rows: PUBLISHED_VIEWS.flatMap((view) =>
       rowsForView(view, state).map(publishedRow(view, state)),
     ),

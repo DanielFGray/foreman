@@ -1,4 +1,4 @@
-// The pipeline pane's Board view: the shown project's tasks in the six board
+// The Tasks view's Board mode: the shown project's tasks in the six board
 // columns, as the dispatcher publishes them in state.json. A placement's
 // `column` names its column, the top-level `landed` list fills Landed, and
 // cards keep the order of `placements`, which is the queue in dispatch order.
@@ -7,29 +7,23 @@
 //
 // A Queue card dragged onto Authoring runs `foreman policy grant <task>
 // <steps>` with the project's `grantSteps`; with none, the card lists no
-// target but where it stands. A Needs-you card shows its attention row's
-// detail and actions, and an action runs `foreman <action> <key>`.
+// target but where it stands. A click selects a card and opens its detail
+// under the board (`detail.js`), where its row's actions run. A Queue card
+// under an epic names the epic, from the queue foreman ranks.
 //
 // The board lays its cards out itself, in absolute rectangles from `layout`,
 // so a drag's targets are the rectangles the same layout gives the card where
 // it stands and where the drop would put it (`drag.js`).
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { chip } from "./parts.js";
+import { TASK_ID } from "./status.js";
 
 const PAD = 12;
 const GAP = 10;
 const HEAD = 30;
 const CARD_H = 50;
-const DETAIL_H = 16;
-const ACTIONS_H = 22;
+const LINE_H = 16;
 const STRIPE = 3;
-
-// The panel's rule for row actions: these need the operator to type, so a
-// card does not offer them, and these end an agent or give up a claim, so a
-// first click only arms them.
-const NEEDS_INPUT = new Set(["complete", "intervene"]);
-const DESTRUCTIVE = new Set(["kill", "close", "release"]);
 
 const COLUMNS = [
   { key: "queue", label: "Queue", color: (t) => t.muted },
@@ -47,22 +41,33 @@ export class Board {
     // The board's bounds in the window, from the last move over it.
     this.bounds = null;
     this.scroll = 0;
-    // The Needs-you action armed by a first click, as `<action> <key>`.
-    this.armed = null;
   }
 
-  // Each column's cards: a placement, or a landed task, with the attention
-  // row a Needs-you card shows.
+  // Each column's cards: a placement, or a landed task, with the row it
+  // stands for (`rowOf`), which carries its detail, epic and actions. An
+  // attention row with no placement (a held project, an orphaned worker, an
+  // unreviewed branch, a spent account) is a Needs-you card of its own, keyed
+  // by the row.
   columns() {
     const columns = COLUMNS.map(() => []);
-    for (const placement of this.pane.placements) {
+    const placements = this.pane.placements();
+    for (const placement of placements) {
       const index = COLUMNS.findIndex((column) => column.key === placement.column);
-      const row = placement.column === "needs-you" ? this.pane.rows.find((one) => one.view === "attention" && one.key === placement.key) : undefined;
-      columns[index].push({ ...placement, row: row ?? null });
+      columns[index].push({ ...placement, row: this.pane.rowOf(placement.key, placement.column) });
     }
-    columns[COLUMNS.length - 1] = this.pane.landed.map((task) => ({ ...task, column: "landed", grant: null, runs: [], row: null }));
+    const placed = new Set(placements.map((placement) => placement.key));
+    const needsYou = COLUMNS.findIndex((column) => column.key === "needs-you");
+    for (const row of this.pane.rows()) {
+      if (row.view !== "attention" || placed.has(row.key.match(TASK_ID)?.[0])) continue;
+      columns[needsYou].push({ key: row.key, label: row.label, column: "needs-you", grant: null, runs: [], gates: [], url: row.url, pr: row.pr, row });
+    }
+    columns[COLUMNS.length - 1] = this.pane.landed()
+      .map((task) => ({ ...task, column: "landed", grant: null, runs: [], gates: [], url: null, pr: null, row: this.pane.rowOf(task.key, "landed") }));
     return columns;
   }
+
+  // The selected card, as the board shows it now.
+  selected() { return this.columns().flat().find((card) => card.key === this.pane.detail.key); }
 
   // Every card's rectangle in board coordinates, and each column's x and width.
   layout(columns) {
@@ -73,7 +78,7 @@ export class Board {
     columns.forEach((cards, index) => {
       let y = PAD + HEAD - this.scroll;
       for (const card of cards) {
-        const height = heightOf(card);
+        const height = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
         rects.set(card.key, { x: xs[index], y, width: columnW, height });
         y += height + GAP;
       }
@@ -108,13 +113,6 @@ export class Board {
     cx.notify();
   }
 
-  run(action, key, cx) {
-    const id = `${action} ${key}`;
-    if (DESTRUCTIVE.has(action) && this.armed !== id) { this.armed = id; cx.notify(); return; }
-    this.armed = null;
-    this.pane.act([action, key], cx, (_done, cx) => cx.notify());
-  }
-
   view(t) {
     const columns = this.columns();
     const { rects, xs, columnW } = this.layout(columns);
@@ -123,7 +121,7 @@ export class Board {
     const origin = this.bounds ?? { x: 0, y: 0 };
     const dragged = columns.flat().find((card) => drag.dragging(card.key));
     const floating = dragged === undefined ? null : drag.floating();
-    return div().id("task-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
+    const board = div().id("task-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => this.scrolled(event, cx))
       .children(COLUMNS.map((column, index) => h_flex().absolute().left(xs[index]).top(PAD).w(columnW).h(HEAD - 6)
@@ -139,17 +137,21 @@ export class Board {
       .when(floating !== null, (el) => el.child(
         this.card(dragged, COLUMNS.find((column) => column.key === dragged.column), { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false)
           .opacity(0.9)));
+    return v_flex().flex_1().min_h(0).child(board).child(this.pane.detail.view(t, this.selected()));
   }
 
   card(card, column, rect, t, ghost) {
     const color = column.color(t);
     const rung = card.runs.findLast((run) => run.open)?.rung ?? null;
     const movable = card.column === "queue";
+    const selected = this.pane.detail.key === card.key;
+    const line = lineOf(card);
     return h_flex().id(`board-card-${card.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
-      .rounded(6).overflow_hidden().bg(t.surface).border(1).border_color(t.border)
+      .rounded(6).overflow_hidden().bg(selected ? t.selected : t.surface).border(1).border_color(selected ? color : t.border)
       .when(ghost, (el) => el.opacity(0.35))
       .hover((s) => s.border_color(color))
       .when(movable, (el) => el.cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event)))
+      .on_click((_event, cx) => this.pane.detail.toggle(card.key, cx))
       .child(div().w(STRIPE).h_full().bg(color).flex_none())
       .child(v_flex().flex_1().min_w(0).px(8).py(5).gap(2)
         .child(h_flex().gap(6).text_size(10).text_color(t.muted)
@@ -158,19 +160,15 @@ export class Board {
           .when(rung !== null, (el) => el.child(div().flex_none().child(rung)))
           .when(card.grant !== null, (el) => el.child(div().flex_none().text_color(t.done).child(grantMark(card)))))
         .child(div().text_size(12).truncate().child(card.label))
-        .when(card.row?.detail != null, (el) => el.child(div().text_size(10).text_color(t.blocked).truncate().child(card.row.detail)))
-        .when(actionsOf(card).length > 0, (el) => el.child(h_flex().gap(4)
-          .children(actionsOf(card).map((action) => {
-            const armed = this.armed === `${action} ${card.key}`;
-            return chip(t, armed ? `${action}?` : action, `board-${action}-${card.key}`, (cx) => this.run(action, card.key, cx));
-          })))));
+        .when(line !== null, (el) => el.child(div().text_size(10).text_color(card.column === "needs-you" ? t.blocked : t.dim).truncate().child(line))));
   }
 }
 
-const actionsOf = (card) => (card.row?.actions ?? []).filter((action) => !NEEDS_INPUT.has(action));
-
-const heightOf = (card) =>
-  CARD_H + (card.row?.detail != null ? DETAIL_H : 0) + (actionsOf(card).length > 0 ? ACTIONS_H : 0);
+// The card's third line: why a Needs-you card waits, or the epic a Queue card sits under.
+const lineOf = (card) =>
+  card.column === "needs-you" ? card.row?.detail ?? null
+  : card.column === "queue" && card.row?.parent != null ? `under ${card.row.parent}`
+  : null;
 
 // Where the drop would put the card, drawn as an empty slot.
 const outline = (rect, origin, t) =>

@@ -1,4 +1,4 @@
-// Small pieces the pipeline pane and its editor both draw.
+// Small pieces the Foreman pane's views draw.
 import { div, PathBuilder } from "gpui-kit";
 import { h_flex } from "gpui-base";
 

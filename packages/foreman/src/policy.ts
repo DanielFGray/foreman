@@ -24,11 +24,11 @@
  *
  * The policy is an intention, and an intention is the one thing foreman cannot
  * read back from the world. It lives in a file the operator edits through
- * `foreman policy` or the panel, so it survives a restart and both front ends
+ * `foreman policy` or the Foreman pane, so it survives a restart and both front ends
  * write it through `updatePolicy`. The dispatcher writes it too, to record
  * which tasks a grant has admitted.
  *
- * Commands the operator gives by hand (`foreman dispatch`, the panel's launch)
+ * Commands the operator gives by hand (`foreman dispatch`, the Foreman pane's launch)
  * are not gated: the operator pressing the key is the permission.
  */
 import { Effect, FileSystem, Option, Schema as S } from "effect";
@@ -176,6 +176,15 @@ export type Mode = (typeof MODES)[number];
 /** What `step` is set to for `project`: its own entry, else the fleet default. */
 export const modeFor = (policy: Policy, project: string, step: Step): StepMode =>
   policy.projects[project]?.steps?.[step] ?? policy.default[step];
+
+/** Every step's mode for `project`, by `modeFor`. */
+export const stepModesFor = (policy: Policy, project: string): Record<Step, StepMode> => ({
+  author: modeFor(policy, project, "author"),
+  climb: modeFor(policy, project, "climb"),
+  review: modeFor(policy, project, "review"),
+  publish: modeFor(policy, project, "publish"),
+  land: modeFor(policy, project, "land"),
+});
 
 /**
  * Running when any project could take a step: a default step is on, a project
