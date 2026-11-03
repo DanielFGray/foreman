@@ -10,6 +10,7 @@ const item = (id: string, project: string) => ({ id, project }) as unknown as It
 const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item>) => {
   const note = (call: string) => Effect.sync(() => void calls.push(`${name} ${call}`));
   return Tracker.of({
+    refresh: (project) => note(`refresh ${project}`),
     lookup: (task) => note(`lookup ${task}`).pipe(Effect.as(Option.none())),
     list: (filter) => note(`list ${JSON.stringify(filter)}`).pipe(Effect.as(items)),
     dependencies: (project) => note(`dependencies ${project}`).pipe(Effect.as([])),
@@ -29,6 +30,7 @@ const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item
 const failing = Tracker.of(
   Object.fromEntries(
     [
+      "refresh",
       "lookup",
       "list",
       "dependencies",

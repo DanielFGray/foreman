@@ -9,6 +9,11 @@ import {
   type Status,
   type TaskEvent,
 } from "tasks";
+import { Fleet } from "./fleet.ts";
+import { HcFleet } from "./hc.ts";
+import { checkoutRepo, githubTracker } from "./github-tracker.ts";
+import { Github } from "./github.ts";
+import { Repository } from "./repository.ts";
 import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
 
 /**
@@ -18,13 +23,22 @@ import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from
  * own labels; those are foreman's records (`records.ts`), kept beside the
  * tracker's tasks and keyed by task id.
  *
- * `TasksTracker` below is the one adapter built: the `tasks` package's store.
+ * `TasksTracker` below is the `tasks` package's store; `githubTracker` in
+ * `github-tracker.ts` is GitHub issues over `gh`.
  * `ProjectTracker` is the `Tracker` the rest of foreman sees: it sends each
  * call to the adapter of the task's project, as the policy file chooses it.
  */
 export class Tracker extends Context.Service<
   Tracker,
   {
+    /**
+     * Reads `project` anew. The reads after it answer from what it read until
+     * the next refresh or a write in the project, so the dispatcher calls it
+     * once at the start of each reading of the world. Its failure says the
+     * tracker did not answer: the dispatcher then takes no step in the project.
+     * A tracker that reads its store on every call has nothing to refresh.
+     */
+    readonly refresh: (project: string) => Effect.Effect<void, TrackerError>;
     /** One task, or nothing when the tracker has no such task. */
     readonly lookup: (task: string) => Effect.Effect<Option.Option<Item>, TrackerError>;
     readonly list: (filter: ListFilter) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
@@ -126,6 +140,7 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
       );
 
     return Tracker.of({
+      refresh: () => Effect.void,
       lookup: (task) => tasks.get(task).pipe(as(`show ${task}`)),
       list: (filter) => tasks.list(filter).pipe(as(`list ${JSON.stringify(filter)}`)),
       dependencies: (project) =>
@@ -150,20 +165,22 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
  * an operator's `foreman policy tracker` applies from the next call on.
  *
  * Built over the prog store's connection, which `Records.layer` shares, so
- * `together` stays atomic for prog projects.
+ * `together` stays atomic for prog projects. A GitHub project's repo is read
+ * from its checkout, found among the open spaces and the running workers.
  */
 export const ProjectTracker = Layer.effect(
   Tracker,
   Effect.gen(function* () {
     const prog = yield* TasksTracker;
     const fs = yield* FileSystem.FileSystem;
+    const github = yield* githubTracker(yield* checkoutRepo(yield* Fleet, yield* Repository));
     const choices = readPolicy(policyPath()).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.map(({ policy }) => policy),
     );
-    return routeByProject({ prog, github: unbuilt("github"), linear: unbuilt("linear") }, choices);
+    return routeByProject({ prog, github, linear: unbuilt("linear") }, choices);
   }),
-).pipe(Layer.provide(Tasks.layerSql));
+).pipe(Layer.provide([Tasks.layerSql, Github.layer, HcFleet, Repository.Default]));
 
 /**
  * Routes each call to `adapters[tracker of the call's project]`.
@@ -224,6 +241,8 @@ export const routeByProject = (
     });
 
   return Tracker.of({
+    refresh: (project) =>
+      forProject(project).pipe(Effect.flatMap((tracker) => tracker.refresh(project))),
     lookup: byId((tracker, task) => tracker.lookup(task)),
     list: (filter) =>
       filter.project !== undefined
@@ -265,6 +284,7 @@ const unbuilt = (name: TrackerName): Tracker["Service"] => {
   const fail = () =>
     Effect.fail(new TrackerError({ command: `${name} tracker`, detail: "adapter not built" }));
   return Tracker.of({
+    refresh: fail,
     lookup: fail,
     list: fail,
     dependencies: fail,

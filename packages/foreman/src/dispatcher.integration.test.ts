@@ -107,6 +107,8 @@ class World {
    * tracker that shares no transaction with them.
    */
   readonly completeFails = new Set<string>();
+  /** Projects whose tracker does not answer, as GitHub does when it cannot be reached. */
+  readonly unreachable = new Set<string>();
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
@@ -221,6 +223,12 @@ class World {
 
   /** The tracker's status moves and log, the calls the dispatcher makes on it directly. */
   readonly tracker: Tracker["Service"] = {
+    refresh: (project) =>
+      this.unreachable.has(project)
+        ? Effect.fail(
+            new TrackerError({ command: `read ${project}`, detail: "tracker unreachable" }),
+          )
+        : Effect.void,
     lookup: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
     dependencies: () => Effect.die("unused"),
@@ -1171,6 +1179,36 @@ describe("a fleet that is not running", () => {
     expect(policyText()).not.toBe(before);
   });
 
+  test("a project whose tracker does not answer takes no step and orphans no worker", async () => {
+    usePolicy(everything);
+    const world = busy();
+    // The fixture's workers stand in a checkout named `project`, its spaces in `test`.
+    for (const project of ["test", "project"]) world.unreachable.add(project);
+    world.workers.set("ts-gone", worker("ts-gone", "author", "working"));
+
+    const state = await Effect.runPromise(
+      Effect.gen(function* () {
+        const dispatcher = yield* Dispatcher;
+        yield* dispatcher.tick;
+        return yield* SubscriptionRef.get(dispatcher.state);
+      }).pipe(Effect.provide(layerFor(world))),
+    );
+
+    expect(world.writes).toEqual([]);
+    expect(state.orphans).toEqual([]);
+    expect(state.held.map((held) => [held.project, held.reason])).toEqual([
+      ["test", "unreachable"],
+      ["project", "unreachable"],
+    ]);
+    expect(world.branches.has("foreman/ts-swept")).toBe(true);
+
+    // The control: the same world, once the tracker answers, writes from every pass.
+    world.unreachable.clear();
+    await tick(world);
+
+    expect(world.writes).toEqual(expect.arrayContaining(["repository.remove", "fleet.spawn"]));
+  });
+
   test("a running tick releases a stale claim only when foreman's agent made it", async () => {
     usePolicy(everything);
     const old = new Date(now.getTime() - 48 * 60 * 60 * 1000);
@@ -1413,6 +1451,14 @@ describe("a spent account and the reviewer above it", () => {
 
     expect(world.spawned).toEqual([["ts-fresh", "author"]]);
     expect(authoredBy(world.tasks.get("ts-fresh")!)).toBe("cheap");
+  });
+
+  test("dispatches an issue id, `<project>#<number>`, into a worktree of that name", async () => {
+    const world = new World(item("test#7", "open", []));
+    await tickWith(world, []);
+
+    expect(world.spawned).toEqual([["test#7", "author"]]);
+    expect(world.opened[0]).toEndWith("/worktrees/test/test#7");
   });
 
   test("takes the rung above a recorded failure", async () => {
