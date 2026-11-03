@@ -462,7 +462,7 @@ plan to tell agents `gh issue view` and `gh issue comment`.
 | `src/store-commands.ts` | `foreman log <id> -`. |
 | `src/published.ts`, `src/view.ts` | `url`, `pr`, project `tracker`, `repo`, `unreachable` (section 2). |
 | herdr-web | the board links the id to the issue, shows the PR column (`waiting`), and shows an unreachable project as held. |
-| herdr-app panes | the foreman panel shows the same fields from `state.json`; the pipeline pane offers `pull-request` from `choices`, with no code of its own. |
+| herdr-app pane | the Foreman pane shows the same fields from `state.json`, and offers `pull-request` from `choices`, with no code of its own. |
 | AGENTS.md | "Every task with a branch ends by merging into the project's main checkout" and "landing is the only code path that moves the operator's branch" hold for local landings only; a PR landing moves the remote trunk, and the operator's checkout takes it by its own pull. The policy steps list gains `publish`. |
 
 ## 7. Linear

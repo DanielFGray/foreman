@@ -1,4 +1,4 @@
-// A project's unfinished work as a graph, for the pipeline pane to draw: each
+// A project's unfinished work as a graph, for the Foreman pane to draw: each
 // task and epic in a column right of the items it waits for, the grant that
 // covers it, and the steps the project's pipeline gates on. The pane lays
 // nothing out and picks no steps itself: dropping a card on the board grants

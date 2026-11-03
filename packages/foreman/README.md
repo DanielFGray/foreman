@@ -91,9 +91,9 @@ workspace whose agent stopped stays open until the fleet runs again.
 
 Change it with `foreman policy` (`pause`, `resume`, `set <step> on|ask|off`,
 `slots <n>`, `grant <id> <steps...> [--count n]`, `revoke <id>`) or from the
-panel. Both write the file the same way, and the dispatcher reads it on every
+Foreman pane. Both write the file the same way, and the dispatcher reads it on every
 tick. With no file the fleet takes no step. A file that does not decode pauses
-the fleet, and the panel shows why.
+the fleet, and the Foreman pane shows why.
 
 `foreman dispatch` is not gated: it starts the author you asked for.
 
@@ -477,7 +477,7 @@ by the dispatcher for as long as it runs; that count lives in its memory only.
 One function, `queueFrom` in `src/queue.ts`, makes this split for both the
 dispatcher and `foreman queue`.
 
-The queue is not in `state.json`. The panel runs
+The queue is not in `state.json`. The Foreman pane runs
 `foreman queue --project <name> --json`, and herdr-web makes the same read in
 its own process (`queueOf` in `src/host.ts`). It reads only the task store and
 the open spaces, with no agent roster and no branch checks, so it answers in
@@ -537,10 +537,10 @@ project foreman touches.
 
 The dispatcher runs inside herdr-web's server (`packages/herdr-web`): start
 that, and the fleet runs with it. The server supervises the dispatcher. A
-failure is logged, shown in the Foreman column and in the panel as `failed`, and
+failure is logged, shown in the Foreman column and in the Foreman pane as `failed`, and
 the dispatcher starts again after a pause that doubles from a second up to a
 minute; the server keeps serving meanwhile. After each reading the server
-writes `state.json` for the panel.
+writes `state.json` for the Foreman pane.
 
 The server's PATH must hold every program the dispatcher runs: `prog`, `hc`,
 `git` and each rung's harness. The command line stays for one-shot

@@ -1,4 +1,4 @@
-// The pipeline pane's editor: what a click on a "+", a block or an exit asks
+// The Pipeline view's editor: what a click on a "+", a block or an exit asks
 // for next, and the settings of the selected block. It holds only what the
 // operator is in the middle of; every change goes to the pane's `change`,
 // which sends it to foreman, and the choices it offers are foreman's.

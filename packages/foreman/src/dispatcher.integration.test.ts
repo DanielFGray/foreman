@@ -1648,7 +1648,7 @@ describe("a spent account and the reviewer above it", () => {
 
 /**
  * Ticks once, then reads back the asks that tick published. Asks are part of
- * the reading, so the test sees what `foreman approve` and the panel would.
+ * the reading, so the test sees what `foreman approve` and the Foreman pane would.
  */
 const asksAfter = (world: World) =>
   Effect.runPromise(

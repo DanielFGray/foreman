@@ -3,7 +3,7 @@ import { Option } from "effect"
 import { all, click, Command, expect, expectAll, given, pointerDown, role, scene, selector, Subscription } from "foldkit/scene"
 import { test } from "vitest"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
-import type { ForemanPlacement, ForemanReading } from "../shared/Foreman.ts"
+import { FOREMAN_VERSION, type ForemanPlacement, type ForemanReading } from "../shared/Foreman.ts"
 import { CapturePointer, ListRungs, RunForeman } from "./commands.ts"
 import { init, update, view } from "./main.ts"
 import { Bridge, Message, RungList, Selection } from "./model.ts"
@@ -14,7 +14,7 @@ const NOW = Date.parse("2026-10-30T01:00:00Z")
 const placed = (key: string, column: ForemanPlacement["column"], project = "app"): ForemanPlacement => ({ key, label: `task ${key}`, project, column, url: Option.none(), pr: Option.none() })
 
 const reading: ForemanReading = {
-  version: 5,
+  version: FOREMAN_VERSION,
   dispatcher: { state: "running" },
   policy: { paused: false, slots: 2, default: { author: "ask", climb: "on", review: "on", publish: "on", land: "on" }, grants: [] },
   policyError: Option.none(),

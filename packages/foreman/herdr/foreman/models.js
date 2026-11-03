@@ -1,4 +1,4 @@
-// The pipeline pane's Models view: the ladder's rungs and the council, from
+// The Foreman pane's Models view: the ladder's rungs and the council, from
 // one `foreman ladder --json`. A model can be a worker, a council member, both
 // or neither, so three columns show it: Workers (the rungs, cheapest first,
 // in rank order), Models (the models that are neither) and Council.
@@ -12,6 +12,10 @@
 //
 // The view lays its cards out itself, so a drag's targets are the rectangles
 // the same layout gives the card in each state it can reach (`drag.js`).
+//
+// Under the columns, Accounts lists each account the ladder draws on: its
+// quota row from state.json (what it has left, or why it is unreadable) and
+// the rungs it pays for (`accounts` there). A worker card names its account.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { moveArgs } from "./ladder-order.js";
@@ -126,7 +130,7 @@ export class Models {
     const origin = this.bounds ?? { x: 0, y: 0 };
     const dragged = columns.flat().find((card) => drag.dragging(card.key));
     const floating = dragged === undefined ? null : drag.floating();
-    return div().id("models-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
+    const board = div().id("models-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => { this.scroll = Math.max(0, this.scroll + (event.delta?.y ?? 0)); cx.notify(); })
       .children(COLUMNS.map((column, index) => h_flex().absolute().left(xs[index]).top(PAD).w(columnW).h(HEAD - 6)
@@ -143,6 +147,29 @@ export class Models {
       .when(floating !== null, (el) => el.child(
         this.card(dragged, COLUMNS[columns.findIndex((cards) => cards.includes(dragged))], { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false)
           .opacity(0.9)));
+    return v_flex().flex_1().min_h(0).child(board).child(this.accounts(t));
+  }
+
+  // Each account: its quota row, and the rungs that draw on it.
+  accounts(t) {
+    const published = this.pane.published;
+    const quota = (published?.rows ?? []).filter((row) => row.view === "quota");
+    return v_flex().id("accounts").flex_none().max_h(200).overflow_y_scrollbar().px(PAD).py(6).gap(4).bg(t.surface).border_t(1).border_color(t.border)
+      .child(div().text_size(11).text_color(t.dim).child("ACCOUNTS"))
+      .when(quota.length === 0, (el) => el.child(div().text_color(t.muted).child("no account reading yet")))
+      .children(quota.map((row) => {
+        const rungs = published.accounts.find((account) => account.provider === row.key)?.rungs ?? [];
+        return v_flex().gap(1)
+          .child(h_flex().gap(8)
+            .child(div().font_semibold().child(row.label))
+            .child(div().text_color(t.muted).truncate().child(rungs.length === 0 ? "no rung draws on it" : rungs.join(", "))))
+          .when(row.detail != null, (el) => el.child(div().text_size(11).text_color(t.muted).child(row.detail)));
+      }));
+  }
+
+  // The account a rung draws on, as state.json names it.
+  accountOf(rung) {
+    return this.pane.published?.accounts.find((account) => account.rungs.includes(rung))?.provider ?? null;
   }
 
   card(card, column, rect, t, ghost) {
@@ -150,7 +177,8 @@ export class Models {
     const rung = card.kind === "worker" ? card.rung : null;
     const dim = rung !== null && !rung.enabled;
     const tier = rung?.tier ?? card.entry.tier;
-    const detail = rung === null ? card.entry.harness : `${rung.model} · ${rung.thinking}`;
+    const account = rung === null ? null : this.accountOf(rung.rung);
+    const detail = rung === null ? card.entry.harness : [rung.model, rung.thinking, account].filter(Boolean).join(" · ");
     return h_flex().id(`models-card-${card.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
       .rounded(6).overflow_hidden().bg(t.surface).border(1).border_color(t.border)
       .when(ghost, (el) => el.opacity(0.35))

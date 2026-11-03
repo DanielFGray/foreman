@@ -1,4 +1,4 @@
-// The pipeline pane's fleet simulation: the project's real tasks played
+// The Pipeline view's fleet simulation: the project's real tasks played
 // through its draft and through the pipeline it runs, on one seed, by
 // `foreman pipeline simulate`. foreman plans and steps every task with the
 // dispatcher's own rules and draws outcomes from measured rates, so this file
@@ -41,7 +41,7 @@ export class Fleet {
   run(cx) {
     this.stop();
     this.running = true; cx.notify();
-    const args = ["pipeline", "simulate", this.pane.project, "--seed", String(this.seed), "--hours", this.hours, "--json"];
+    const args = ["pipeline", "simulate", this.pane.project(), "--seed", String(this.seed), "--hours", this.hours, "--json"];
     cx.spawn(async (cx) => {
       const result = await this.pane.foreman(args);
       this.running = false;
