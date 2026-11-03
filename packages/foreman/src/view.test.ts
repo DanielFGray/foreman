@@ -522,6 +522,8 @@ describe("publishedOf", () => {
         stands: "queue",
         state: "waiting",
         gates: [{ id: "start", step: "author" }],
+        column: "queue",
+        grant: null,
         runs: [
           { node: author.id, role: "author", rung: "cheap", open: false, ending: "done" },
           { node: null, role: "review", rung: null, open: true, ending: null },
@@ -535,6 +537,8 @@ describe("publishedOf", () => {
         stands: "attention",
         state: "parked",
         gates: [],
+        column: "needs-you",
+        grant: null,
         runs: [],
       },
     ]);

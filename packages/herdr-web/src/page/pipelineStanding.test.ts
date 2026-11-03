@@ -3,7 +3,7 @@ import type { PipelineNode } from "foreman/pipeline"
 import type { ForemanPlacement } from "../shared/Foreman.ts"
 import { countsOf, tasksAt } from "./pipelineStanding.ts"
 
-const at = (key: string, node: string, state: ForemanPlacement["state"], gates: ForemanPlacement["gates"] = [], stands = node): ForemanPlacement => ({ key, label: key, project: "app", node, stands, state, gates, runs: [] })
+const at = (key: string, node: string, state: ForemanPlacement["state"], gates: ForemanPlacement["gates"] = [], stands = node): ForemanPlacement => ({ key, label: key, project: "app", node, stands, state, gates, column: "queue", grant: null, runs: [] })
 
 const park: PipelineNode = { kind: "park", id: "attention" }
 const gate: PipelineNode = { kind: "gate", id: "start", step: "author", next: "author" }

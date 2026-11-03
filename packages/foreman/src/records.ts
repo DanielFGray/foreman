@@ -540,15 +540,23 @@ export const walledBy = (
   item: { readonly runs: ReadonlyArray<Run> },
   ladder: Ladder,
 ): ReadonlyArray<string> => {
-  const landed = Math.max(-1, ...item.runs.filter((run) => run.landed).map((run) => run.id));
-  const providers = item.runs
-    .filter((run) => run.id > landed && run.ending === "walled")
+  const providers = sinceLanded(item)
+    .filter((run) => run.ending === "walled")
     .map((run) => ladder.find((rung) => rung.name === run.rung))
     .flatMap((rung) => {
       const provider = rung === undefined ? undefined : providerOf(rung);
       return provider === undefined ? [] : [provider];
     });
   return [...new Set(providers)];
+};
+
+/**
+ * The task's runs after the author run foreman last landed, oldest first: the
+ * work on it since it was last done. A task never landed has all its runs.
+ */
+export const sinceLanded = (item: { readonly runs: ReadonlyArray<Run> }): ReadonlyArray<Run> => {
+  const landed = Math.max(-1, ...item.runs.filter((run) => run.landed).map((run) => run.id));
+  return item.runs.filter((run) => run.id > landed);
 };
 
 export type DiagnosticIntent = "diagnose" | "review";

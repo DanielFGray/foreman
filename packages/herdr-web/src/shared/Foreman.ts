@@ -71,6 +71,10 @@ export const ForemanDispatcher = S.Union([
 ])
 export type ForemanDispatcher = typeof ForemanDispatcher.Type
 
+/** The board's columns, left to right, as foreman names them. */
+export const BOARD_COLUMNS = ["queue", "needs-you", "authoring", "review", "fixing", "landed"] as const
+export type BoardColumn = (typeof BOARD_COLUMNS)[number]
+
 /**
  * Where one task stands at a block of its project's pipeline: the run's state
  * at a work block, or `parked` at a park block. `gates` hold it before the block.
@@ -84,6 +88,10 @@ export const ForemanPlacement = S.Struct({
   stands: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+  /** The board column foreman puts the task in. */
+  column: S.Literals(BOARD_COLUMNS),
+  /** The grant that lets the dispatcher take some of the project's `grantSteps` for the task. */
+  grant: S.NullOr(S.Struct({ scope: S.String, steps: S.Array(S.String), left: S.NullOr(S.Int) })),
   /** The task's runs, oldest first, as foreman publishes them. */
   runs: S.Array(
     S.Struct({
@@ -106,12 +114,15 @@ export const ForemanReading = S.Struct({
   policyError: S.OptionFromNullOr(S.String),
   /** ISO instant of the reading; none when the dispatcher failed before its first. */
   observedAt: S.OptionFromNullOr(S.String),
-  projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
+  /** The managed projects; a board takes no drop where `grantSteps` (the steps a grant gives) is empty. */
+  projects: S.Array(S.Struct({ name: S.String, directory: S.String, grantSteps: S.Array(S.String) })),
   rows: S.Array(ForemanRow),
   /** Each task that stands at a block of its project's pipeline. */
   placements: S.Array(ForemanPlacement),
   /** The projects whose pipeline cannot run, and why. */
   stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
+  /** The board's Landed column: tasks that landed in the last day, newest first. */
+  landed: S.Array(S.Struct({ key: S.String, label: S.String, project: S.String, landedAt: S.String })),
 })
 export type ForemanReading = typeof ForemanReading.Type
 

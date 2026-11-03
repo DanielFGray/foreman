@@ -27,7 +27,7 @@ const reading: ForemanReading = {
   policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
-  projects: [{ name: "app", directory: "/src/app" }, { name: "lib", directory: "/src/lib" }],
+  projects: [{ name: "app", directory: "/src/app", grantSteps: [] }, { name: "lib", directory: "/src/lib", grantSteps: [] }],
   rows: [
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),
@@ -37,6 +37,7 @@ const reading: ForemanReading = {
   ],
   placements: [],
   stopped: [],
+  landed: [],
 }
 
 // The queue comes from `foreman queue`, not from the reading.

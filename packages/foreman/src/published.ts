@@ -14,6 +14,8 @@ import { DateTime, Effect, FileSystem, Option, Path, Schema as S } from "effect"
 import type { FleetState } from "./dispatcher.ts";
 import type { EpicProgress, Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
+import { BOARD_COLUMNS, columnOf, recentlyLanded } from "./board.ts";
+import { coveringOf, gatedSteps } from "./pipeline-graph.ts";
 import { MODES, modeOf, Policy } from "./policy.ts";
 import {
   actionsFor,
@@ -69,6 +71,13 @@ export const PublishedPlacement = S.Struct({
   stands: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+  /** The board column the task shows in (`columnOf`). */
+  column: S.Literals(BOARD_COLUMNS),
+  /**
+   * The grant that lets the dispatcher take some of the project's
+   * `grantSteps` for the task, and how many tasks it admits still.
+   */
+  grant: S.NullOr(S.Struct({ scope: S.String, steps: S.Array(S.String), left: S.NullOr(S.Int) })),
   /**
    * The task's runs, oldest first: the block each ran at, its role, its rung,
    * whether it is still open, and how it ended. A closed run that foreman did
@@ -112,13 +121,27 @@ export const Published = S.Struct({
   policyError: S.NullOr(S.String),
   /** ISO instant of the reading, or null before the first one completes. */
   observedAt: S.NullOr(S.String),
-  /** The managed projects and their checkouts, for a reader that offers a choice of project. */
-  projects: S.Array(S.Struct({ name: S.String, directory: S.String })),
+  /**
+   * The managed projects and their checkouts, for a reader that offers a
+   * choice of project. `grantSteps` are the steps a grant from a board gives a
+   * task (`gatedSteps`); a reader takes no drop where they are empty.
+   */
+  projects: S.Array(
+    S.Struct({ name: S.String, directory: S.String, grantSteps: S.Array(S.String) }),
+  ),
   rows: S.Array(PublishedRow),
-  /** Each task that stands at a block, by project. A task outside any pipeline is left out. */
+  /**
+   * Each task that stands at a block, in the order the dispatcher placed
+   * them: the queue first, in dispatch order. A task outside any pipeline is
+   * left out.
+   */
   placements: S.Array(PublishedPlacement),
   /** The projects whose pipeline cannot run, and why. Such a project places no task. */
   stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
+  /** The board's Landed column: tasks that landed in the last `LANDED_HOURS`, newest first. */
+  landed: S.Array(
+    S.Struct({ key: S.String, label: S.String, project: S.String, landedAt: S.String }),
+  ),
 });
 export type Published = typeof Published.Type;
 
@@ -126,45 +149,66 @@ export type Published = typeof Published.Type;
 export const publishedOf = (
   state: FleetState,
   dispatcher: Option.Option<DispatcherStatus>,
-): Published => ({
-  version: PUBLISHED_VERSION,
-  dispatcher: Option.getOrNull(dispatcher),
-  policy: state.policy,
-  policyError: state.policyError ?? null,
-  observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
-  projects: state.projects.map(({ name, directory }) => ({ name, directory })),
-  rows: PUBLISHED_VIEWS.flatMap((view) => rowsForView(view, state).map(publishedRow(view))),
-  placements: state.placed.flatMap(({ task, placement }) => {
-    const found = placementOf(placement);
-    return found === undefined
-      ? []
-      : [
-          {
-            key: task.id,
-            label: task.title,
-            project: task.project,
-            ...found,
-            runs: task.runs.map((run) => ({
-              node: run.node ?? null,
-              role: run.role,
-              rung: run.rung ?? null,
-              open: run.open,
-              ending: run.ending ?? null,
-            })),
-          },
-        ];
-  }),
-  stopped: [...state.pipelines].flatMap(([project, found]) =>
-    found._tag === "Stopped" ? [{ project, problems: [...found.problems] }] : [],
-  ),
-});
+): Published => {
+  const grantStepsOf = (project: string) => {
+    const found = state.pipelines.get(project);
+    return found?._tag === "Runs"
+      ? gatedSteps(found.pipeline, state.policy, project).grantSteps
+      : [];
+  };
+  const asked = new Set(state.asks.map(({ task }) => task.id));
+  return {
+    version: PUBLISHED_VERSION,
+    dispatcher: Option.getOrNull(dispatcher),
+    policy: state.policy,
+    policyError: state.policyError ?? null,
+    observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
+    projects: state.projects.map(({ name, directory }) => ({
+      name,
+      directory,
+      grantSteps: grantStepsOf(name),
+    })),
+    rows: PUBLISHED_VIEWS.flatMap((view) => rowsForView(view, state).map(publishedRow(view))),
+    placements: state.placed.flatMap(({ task, placement }) =>
+      placement._tag === "Outside"
+        ? []
+        : [
+            {
+              key: task.id,
+              label: task.title,
+              project: task.project,
+              ...placementOf(placement),
+              column: columnOf(task, placement, asked.has(task.id)),
+              grant: coveringOf(state.policy, state.scopes, task, grantStepsOf(task.project)),
+              runs: task.runs.map((run) => ({
+                node: run.node ?? null,
+                role: run.role,
+                rung: run.rung ?? null,
+                open: run.open,
+                ending: run.ending ?? null,
+              })),
+            },
+          ],
+    ),
+    stopped: [...state.pipelines].flatMap(([project, found]) =>
+      found._tag === "Stopped" ? [{ project, problems: [...found.problems] }] : [],
+    ),
+    landed:
+      state.observedAt === undefined
+        ? []
+        : recentlyLanded(state.landed, state.observedAt).map((item) => ({
+            key: item.id,
+            label: item.title,
+            project: item.project,
+            landedAt: item.lastActivityAt.toISOString(),
+          })),
+  };
+};
 
 const placementOf = (
-  placement: Placement,
-): Pick<PublishedPlacement, "node" | "stands" | "state" | "gates"> | undefined => {
+  placement: Exclude<Placement, { readonly _tag: "Outside" }>,
+): Pick<PublishedPlacement, "node" | "stands" | "state" | "gates"> => {
   switch (placement._tag) {
-    case "Outside":
-      return undefined;
     case "Parked":
       return { node: placement.node, stands: placement.node, state: "parked", gates: [] };
     case "At":

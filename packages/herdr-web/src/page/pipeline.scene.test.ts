@@ -17,10 +17,11 @@ const reading: ForemanReading = {
   policy: { paused: false, slots: 2, default: { author: "on", climb: "on", review: "on", land: "on" }, grants: [] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
-  projects: [{ name: "app", directory: "/src/app" }],
+  projects: [{ name: "app", directory: "/src/app", grantSteps: [] }],
   rows: [],
   placements: [],
   stopped: [],
+  landed: [],
 }
 
 const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
@@ -222,6 +223,8 @@ const placed = (key: string, node: string, state: "waiting" | "running" | "ended
   stands,
   state,
   gates,
+  column: "queue" as const,
+  grant: null,
   runs: [],
 })
 
