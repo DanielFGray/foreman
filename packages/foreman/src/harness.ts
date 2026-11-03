@@ -137,12 +137,12 @@ export const hitWall = (kind: string, screen: string): Option.Option<string> => 
 };
 
 /**
- * Whether a run on `rung` can stop on a wall foreman sees: its account has a
- * name, and its harness prints a wall text listed below. On any other rung a
- * wall reads as an ordinary stop.
+ * The account a run on `rung` can stop on a wall of, when foreman can see that
+ * wall: the account has a name, and the harness prints a wall text listed
+ * below. On any other rung a wall reads as an ordinary stop.
  */
-export const showsWall = (rung: Rung): boolean =>
-  providerOf(rung) !== undefined && wallTexts(rung.harness).length > 0;
+export const wallAccountOf = (rung: Rung): string | undefined =>
+  wallTexts(rung.harness).length > 0 ? providerOf(rung) : undefined;
 
 /**
  * How many non-blank lines at the bottom of a screen are read for a wall. A

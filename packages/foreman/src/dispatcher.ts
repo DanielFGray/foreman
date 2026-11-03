@@ -108,7 +108,7 @@ import {
   routedCommit,
   reviewedBy,
 } from "./lap.ts";
-import { hitWall } from "./harness.ts";
+import { hitWall, wallAccountOf } from "./harness.ts";
 import { newRunFor } from "./run-record.ts";
 import { openAgentOf, type RunEvent, type RunStep, stepOf, stoppedAt } from "./run-step.ts";
 import type { Charge, Run } from "tasks";
@@ -1157,7 +1157,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       rung: Rung,
       role: AgentRole,
     ): Effect.Effect<Option.Option<UsageWall>> => {
-      const provider = providerOf(rung);
+      const provider = wallAccountOf(rung);
       if (provider === undefined) return Effect.succeed(Option.none());
       return fleet.screen(worker, role, WALL_READ_LINES).pipe(
         Effect.map((screen) =>

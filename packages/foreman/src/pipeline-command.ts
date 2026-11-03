@@ -21,7 +21,7 @@ import { STEPS } from "./policy.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
 import { Settings, settings } from "./config.ts";
-import { TRACE_ASSUMES, traceOf, type TraceStep } from "./pipeline-trace.ts";
+import { type TraceReport, traceReport } from "./pipeline-trace.ts";
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -213,36 +213,27 @@ const trace = Command.make(
       );
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const pipeline = draft?.pipeline ?? live.pipeline;
       const { ladder, attemptsPerRung } = yield* Settings;
-      const traced = traceOf(
-        { labels: task.labels, size: task.size, priority: task.priority, parent: task.parent },
-        events,
-        { ladder, attemptsPerRung, pipeline },
-      );
-      if (!json) {
-        for (const step of traced.steps) yield* Console.log(traceLine(step));
-        if (traced.refused !== undefined)
-          yield* Console.error(
-            `refused ${traced.refused.event}: the block offers ${traced.refused.offers.join(", ") || "nothing"}`,
-          );
-        return;
-      }
-      yield* Console.log(
-        JSON.stringify(
-          {
-            project,
-            source: draft !== undefined ? "draft" : live.drawn ? "saved" : "standard",
-            assumes: TRACE_ASSUMES,
-            ladder: ladder.map((rung) => rung.name),
-            attemptsPerRung,
-            steps: traced.steps.map(stepJson),
-            refused: traced.refused ?? null,
+      const report = traceReport(
+        project,
+        {
+          task: {
+            labels: task.labels,
+            size: task.size,
+            priority: task.priority,
+            parent: task.parent,
           },
-          null,
-          2,
-        ),
+          events,
+        },
+        { draft: draft?.pipeline, live },
+        { ladder, attemptsPerRung },
       );
+      if (json) return yield* Console.log(JSON.stringify(report, null, 2));
+      for (const step of report.steps) yield* Console.log(traceLine(step));
+      if (report.refused !== null)
+        yield* Console.error(
+          `refused ${report.refused.event}: the block offers ${report.refused.offers.join(", ") || "nothing"}`,
+        );
     }),
 ).pipe(
   Command.withDescription(
@@ -290,29 +281,17 @@ const TraceRequest = S.Struct({
   events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
 });
 
-/** A trace step as JSON: an absent value is `null`, and a rung is named. */
-const stepJson = (step: TraceStep) => ({
-  event: step.event ?? null,
-  placement: step.placement,
-  rung:
-    step.rung === undefined
-      ? null
-      : step.rung._tag === "Dispatch"
-        ? { _tag: "Dispatch", name: step.rung.rung.name }
-        : step.rung,
-  parked: step.parked ?? null,
-  tip: step.tip,
-  route: step.route,
-  offers: step.offers,
-});
-
 /** A trace step in words: the event, where the task stands, and what comes next. */
-const traceLine = (step: TraceStep): string =>
+const traceLine = (step: TraceReport["steps"][number]): string =>
   [
     step.event ?? "start",
     whereIs(step.placement),
-    step.rung?._tag === "Dispatch" ? `on ${step.rung.rung.name}` : (step.rung?._tag ?? ""),
-    step.parked === undefined ? "" : `parked: ${step.parked}`,
+    step.rung === null
+      ? ""
+      : step.rung._tag === "Dispatch"
+        ? `on ${step.rung.name}`
+        : step.rung._tag,
+    step.parked === null ? "" : `parked: ${step.parked}`,
     `offers: ${step.offers.join(", ") || "nothing"}`,
   ]
     .filter((part) => part !== "")

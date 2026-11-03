@@ -3,7 +3,7 @@
 // over a task held in memory, and `place` reads where it stands after each.
 // Nothing is read from or written to the store.
 import { type BlockRung, rungAt } from "./agent-rung.ts";
-import { showsWall } from "./harness.ts";
+import { wallAccountOf } from "./harness.ts";
 import { providerOf } from "./ladder.ts";
 import {
   type AgentNode,
@@ -108,6 +108,61 @@ export const traceOf = (
 };
 
 /** The rules a trace reads: a step's, with the drawing it walks. */
+/** What `foreman pipeline trace` reads: the pretend task, and the events chosen so far. */
+export interface TraceRequest {
+  readonly task: PretendTask;
+  readonly events: ReadonlyArray<TraceEvent>;
+}
+
+/** The pipelines a project could be traced through: its draft, if any, and the one it runs. */
+export interface TraceSources {
+  readonly draft: Pipeline | undefined;
+  /** The pipeline the project runs, and whether the operator drew it or it is the standard one. */
+  readonly live: { readonly pipeline: Pipeline; readonly drawn: boolean };
+}
+
+/**
+ * The trace `foreman pipeline trace --json` prints: through the project's
+ * draft when it has one, else the pipeline it runs. An absent value is `null`
+ * and a chosen rung is named, so the pipeline pane reads plain JSON.
+ */
+export const traceReport = (
+  project: string,
+  request: TraceRequest,
+  sources: TraceSources,
+  rules: Omit<StepRules, "pipeline">,
+) => {
+  const pipeline = sources.draft ?? sources.live.pipeline;
+  const traced = traceOf(request.task, request.events, { ...rules, pipeline });
+  return {
+    project,
+    source: sources.draft !== undefined ? "draft" : sources.live.drawn ? "saved" : "standard",
+    assumes: TRACE_ASSUMES,
+    ladder: rules.ladder.map((rung) => rung.name),
+    attemptsPerRung: rules.attemptsPerRung,
+    steps: traced.steps.map(stepJson),
+    refused: traced.refused ?? null,
+  };
+};
+
+export type TraceReport = ReturnType<typeof traceReport>;
+
+/** A trace step as JSON: an absent value is `null`, and a rung is named. */
+const stepJson = (step: TraceStep) => ({
+  event: step.event ?? null,
+  placement: step.placement,
+  rung:
+    step.rung === undefined
+      ? null
+      : step.rung._tag === "Dispatch"
+        ? { _tag: "Dispatch", name: step.rung.rung.name }
+        : step.rung,
+  parked: step.parked ?? null,
+  tip: step.tip,
+  route: step.route,
+  offers: step.offers,
+});
+
 type TraceRules = StepRules & { readonly pipeline: Pipeline };
 
 /** A task held in memory, which always has a tip: it is made up. */
@@ -264,7 +319,7 @@ const checkedAt = (task: Pretend, block: CheckNode, ending: "passed" | "failed")
 
 /**
  * The events the block a task stands at offers, in the words a trace takes.
- * A wall is offered only where the dispatcher can see one (`showsWall`).
+ * A wall is offered only where the dispatcher can see one (`wallAccountOf`).
  */
 const offersAt = (placement: Placement, rung: BlockRung | undefined): ReadonlyArray<TraceEvent> => {
   if (placement._tag !== "At") return [];
@@ -272,7 +327,7 @@ const offersAt = (placement: Placement, rung: BlockRung | undefined): ReadonlyAr
   switch (node.kind) {
     case "agent": {
       if (state !== "running") return [];
-      const named = rung?._tag === "Dispatch" && showsWall(rung.rung);
+      const named = rung?._tag === "Dispatch" && wallAccountOf(rung.rung) !== undefined;
       return [
         ...node.exits.map((exit) => `${EXIT}${exit.name}`),
         "stop",
