@@ -73,7 +73,7 @@ claim and workspace. See "The standard pipeline, drawn with exits" in
 | agent | `role`, `model`, `slots?`, `stopped?` | `exits` | A work block. Dispatches an agent and waits for it to name an exit or stop. |
 | land | `how?`: `merge` (default) or `fast-forward` | (ends) | A work block. Lands the approved commit, which completes the task. |
 | done | — | (ends) | A work block. Completes a task that has no branch: its commits are already on the operator's branch. |
-| park | — | (ends) | Parks the task for the operator (`needs-you`). |
+| park | — | (ends) | Parks the task for the operator (a row in `parks`). |
 | check | `command` | `exits`: `passed`, `failed` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
 
 A **work block** is one that runs something and takes time: agent, check, land,

@@ -108,8 +108,8 @@ a process outcome, not an exit.
    declare is refused, and the refusal lists the declared names.
 2. **An exit records the commit it was named on.** `foreman exit` reads the
    task's tip by its route (the branch tip, or the checkout's HEAD on a direct
-   route) and writes the exit, the commit and any charged rung to the run, in
-   one transaction. A land, commit or done block refuses when the tip differs
+   route) and writes the exit and the commit to the run, and any charged rung
+   to `charges`, in one transaction. A land, commit or done block refuses when the tip differs
    from the commit of the exit that routed the task there. This replaces the
    idea of an approval: any route into a land is safe, whatever its exits are
    called. A correction round needs no special case, because the reviewer names
@@ -243,8 +243,8 @@ The standard pipeline has no check block. The store's author ending
   and win over the defaults. The `FOREMAN_PROMPTS` variable is removed.
 - **The store.** An agent run's `ending` holds an exit name or a process
   ending. The store accepts any exit name for an agent run, because only
-  foreman knows the block, and foreman validates it. Runs get a `charged`
-  column (the rung an exit charged). `VERDICTS` is removed. `tasks verdict`
+  foreman knows the block, and foreman validates it. The rung an exit charges is a
+  row in `charges` (State). `VERDICTS` is removed. `tasks verdict`
   stays for people who use `tasks` without foreman; `tasks review` is removed
   (ts-881e9e). Foreman's prompts stop naming them.
 - **Laps.** A lap today starts at an author run. Rule 3 and the State table read

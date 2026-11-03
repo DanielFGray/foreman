@@ -1,10 +1,11 @@
 # Task and run machines
 
-Status: deferred plan. Approved on 2026-11-02, then cut to what pays now: the
+Status: partly built. Approved on 2026-11-02, then cut to what pays now: the
 tracker seam, one-transaction `Records` functions for the paired writes listed
-under Problem, and six statuses. The run machine, the joint table, the records
-beside the runs and the in-memory test world wait until the hand-written rules
-cause a failure.
+under Problem, and six statuses. The records beside the runs were built on
+ts-4e763a, because the pipeline tracer needs them. The run machine, the joint
+table and the in-memory test world wait until the hand-written rules cause a
+failure.
 
 ## Problem
 
