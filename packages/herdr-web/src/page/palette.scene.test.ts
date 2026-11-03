@@ -30,7 +30,7 @@ const agent: Terminal = {
 
 const fleet: Fleet = {
   connected: true,
-  git: { s2: { top: "/srv/web", branch: Option.some("feat/login"), changed: false, project: Option.none() } },
+  git: { s2: { top: "/srv/web", branch: Option.some("feat/login"), changed: false } },
   terminals: [agent],
   machines: [
     {
@@ -54,7 +54,7 @@ const fleet: Fleet = {
 }
 
 const start = {
-  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model,
+  ...init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model,
   bridge: Bridge.Watching({ fleet }),
 }
 

@@ -19,7 +19,6 @@ It shows the spaces, tabs and panes of your herdr-app window, live:
 - On a phone, the ⋯ soft key opens a Send keys sheet: any key hc can send (Esc, Tab, arrows, F1–F12, one character) with Ctrl, Alt, Shift or Super, shown before it goes. Pin a key to the soft-key row, then reorder, remove or restore the row; each browser keeps its own.
 - A tap on a web address in a terminal, or a Ctrl or Cmd click, shows the whole address first, with Open and Copy. Only http and https addresses open.
 - Check how much of your Claude, Codex, Cursor and OpenCode plans is left, in the bar at the bottom.
-- Run the foreman fleet from **Foreman** at the bottom of the sidebar, which shows or hides a column beside the selected space. The column shows the rows of the space's project and the fleet's own rows (accounts); **All projects** widens it to every project. A space in no project shows only the fleet's own rows. The bridge runs foreman's dispatcher in its own process: the column shows each reading as it lands, and the queue for the shown project, read every 5 seconds while the column is open. The badge says what the dispatcher is doing: running, paused, idle (no step on and no grant, so it only reads the world), stale (no reading for two minutes) or failed (the bridge logs why, shows it, and starts the dispatcher again after a pause of up to a minute). Pause or resume the fleet, choose which steps it takes by itself and how many agents may work, and revoke grants. Launch a queued task on a rung you pick, allow one review or landing, and run each task's own commands. Kill, close and release take a second click. Commands run the `foreman` on the bridge's PATH, and the dispatcher reads the world again as soon as each one finishes. The dispatcher needs `hc`, `git`, `jj` and each rung's harness on that PATH too, and its agents need `prog` and `tasks`. The bridge also writes every reading to foreman's `state.json` for the herdr-app panel.
 - On a phone, the sidebar is a drawer, and a row of soft keys gives you Esc, Tab, Ctrl, the arrows and more.
 
 herdr-web is a bridge, a small Bun server on the computer that runs herdr. The page talks to the bridge, and the bridge talks to herdr-core, which also keeps herdr-app's layout.
@@ -44,7 +43,7 @@ Open http://127.0.0.1:4180.
 
 `bun run start` builds the page into `dist/` and then starts the bridge, which serves it from there, so a restart always serves the checked-out page. `bun run build` builds the page alone; the running bridge serves the new build at the next page load.
 
-The bridge exits by itself when the foreman checkout it runs from gets a new commit, such as a landing foreman made, so that it never dispatches with prompts its code does not know. Run it under a service manager that starts it again, for example as a systemd user service:
+To keep the bridge running, start it under a service manager, for example as a systemd user service:
 
 ```sh
 systemd-run --user --unit herdr-web -p Restart=always -p RestartSec=2 \

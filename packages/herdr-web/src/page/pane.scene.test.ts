@@ -62,7 +62,7 @@ const remembered = Selection.Tab({ tabId: "a", maybeFocus: Option.some("t1") })
 test("a pane shows its terminal first, and only an agent's pane offers a chat, with the prompt inside it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -81,14 +81,14 @@ test("a pane shows its terminal first, and only an agent's pane offers a chat, w
 })
 
 test("a reload opens on the remembered tab, and waits for the bridge to show it", () => {
-  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] })
+  const { model } = init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] })
   scene({ update, view }, given(model), expect(selector(".workspace")).toContainText("Waiting for the bridge."), expect(selector(".fleet")).toHaveClass("folded"))
 })
 
 test("zoom fills the window with the pane whose button was clicked, and the page remembers it", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -112,7 +112,7 @@ test("zoom fills the window with the pane whose button was clicked, and the page
 test("the pane menu holds the pane's tools, closes on a pick, and leaves a close to confirm in the head", () => {
   scene(
     { update, view },
-    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model, bridge: Bridge.Watching({ fleet }) }),
+    given({ ...init({ settings: DEFAULT_SETTINGS, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [] }).model, bridge: Bridge.Watching({ fleet }) }),
     Mount.resolveAll(
       [KeepTypingFocus, Message.CompletedKeepTypingFocus()],
       [LiveTerminal, Message.ChangedLink({ address: "t1", link: { _tag: "Live" } })],
@@ -136,7 +136,7 @@ test("the pane menu holds the pane's tools, closes on a pick, and leaves a close
   )
 })
 
-const opened = (agentView: AgentView, viewPicks: ReadonlyArray<ViewPick>) => init({ settings: { ...DEFAULT_SETTINGS, agentView }, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks, openEpics: [] }).model
+const opened = (agentView: AgentView, viewPicks: ReadonlyArray<ViewPick>) => init({ settings: { ...DEFAULT_SETTINGS, agentView }, selection: remembered, sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks }).model
 
 /** The fleet as the bridge sends it, after the page opens. */
 const arrived = (terminals: ReadonlyArray<Terminal>) => Subscription.emit(Message.ReceivedFleet({ fleet: { ...fleet, terminals } }))

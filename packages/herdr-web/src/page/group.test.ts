@@ -138,8 +138,8 @@ describe("spaceLabel", () => {
 
   test("the checkout that holds the folder names it, once git has read that folder", () => {
     const inside = [at("/src/shop", Option.some("/src/blog/web"))]
-    expect(labelOf(inside, { s1: { top: "/src/blog", branch: Option.none(), changed: false, project: Option.none() } })).toBe("blog")
-    expect(labelOf(inside, { s1: { top: "/src/shop", branch: Option.none(), changed: false, project: Option.none() } })).toBe("web")
+    expect(labelOf(inside, { s1: { top: "/src/blog", branch: Option.none(), changed: false } })).toBe("blog")
+    expect(labelOf(inside, { s1: { top: "/src/shop", branch: Option.none(), changed: false } })).toBe("web")
   })
 
   test("a space's own name wins, and a space with no terminal is called after its folder", () => {

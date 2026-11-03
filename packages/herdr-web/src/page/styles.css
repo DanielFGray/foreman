@@ -539,48 +539,11 @@ p.usage-error { margin: 0; }
   .checkout { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* The workspace and the Foreman column share a row on a desk; the column keeps its own scroll. */
 .body { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.foreman-column { flex: 0 0 min(380px, 40%); min-height: 0; overflow-y: auto; padding: 8px 12px; border-left: 1px solid var(--surface); }
-/* Declared after the base rules above, so these win on a phone. The column stacks under the pane, and the terminals keep the top of the screen. */
+/* Declared after the base rule above, so it wins on a phone. */
 @media (max-width: 720px) {
   .body { flex-direction: column; }
-  .foreman-column { flex: 0 0 auto; max-height: 45vh; border-left: 0; border-top: 1px solid var(--surface); }
 }
-.foreman { display: flex; flex-direction: column; gap: 10px; }
-.foreman-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.foreman-scope .note { margin: 0; }
-.foreman-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.foreman-heading .note { margin: 0; flex: 1; }
-.foreman-badge { padding: 0 6px; border: 1px solid var(--surface); border-radius: 4px; font-size: 12px; color: var(--subtext); }
-.foreman-badge.running { color: var(--green); border-color: var(--green); }
-.foreman-badge.paused, .foreman-badge.stale { color: var(--yellow); border-color: var(--yellow); }
-.foreman-badge.failed { color: var(--red); border-color: var(--red); }
-.foreman-policy { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--surface); }
-.foreman-controls, .foreman-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-/* One group, so a narrow window wraps the agent limit whole. */
-.foreman-slots { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-.foreman-slots .note { margin: 0; }
-.foreman-grants { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--subtext); }
-.foreman-grants li { display: flex; align-items: center; gap: 8px; }
-.foreman .chip:disabled { opacity: 0.6; cursor: default; }
-.foreman .chip.armed { border-color: var(--red); color: var(--red); }
-.foreman-section h3 { margin: 0; font-size: 12px; font-weight: normal; text-transform: uppercase; letter-spacing: 0.04em; }
-.foreman-section-toggle { display: flex; gap: 8px; padding: 4px 0; border: 0; background: transparent; color: var(--subtext); font: inherit; letter-spacing: inherit; cursor: pointer; }
-.foreman-section-toggle::before { content: "▸"; }
-.foreman-section-toggle[aria-expanded="true"]::before { content: "▾"; }
-.foreman-section.attention .foreman-section-toggle { color: var(--red); }
-.foreman-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.foreman-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px solid var(--surface); border-radius: 6px; }
-.foreman-children { margin: 4px 0 0 4px; padding-left: 10px; border-left: 2px solid var(--surface); }
-.foreman-row-head { display: flex; gap: 8px; min-width: 0; }
-.foreman-key { flex-shrink: 0; color: var(--subtext); font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; }
-.foreman-label { min-width: 0; overflow-wrap: anywhere; }
-.foreman-epic-toggle { flex-shrink: 0; min-width: 22px; padding: 0 6px; }
-.foreman-count { flex-shrink: 0; margin-left: auto; }
-.foreman-description { margin: 0; color: var(--subtext); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* A failed landing lists every file it touched; three lines say what went wrong, and the title holds the rest. */
-.foreman-detail { color: var(--subtext); font-size: 12px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 
 .model-tag {
   flex-shrink: 0;
@@ -687,33 +650,3 @@ button.slash-row:hover, button.slash-row:focus-visible { background: var(--surfa
   .pane-tools .chip { justify-content: flex-start; gap: 8px; padding: 6px 10px; }
   .pane-tools :is(.label, .menu-label) { display: inline; }
 }
-
-/* The task board needs the width of the row, so the workspace beside it hides while it shows. board.ts sets each column's width and each card's place; these rules keep the head and the cards on that layout. */
-.foreman-column:has(.board) { flex: 1 1 100%; min-width: 0; max-height: none; }
-.body:has(.board) > :not(.foreman-column) { display: none; }
-.board-stopped { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--red); border-radius: 6px; }
-.board-stopped ul { margin: 0; padding-left: 18px; color: var(--red); font-size: 13px; }
-.board-scroll { overflow-x: auto; overflow-y: hidden; height: 70vh; min-height: 320px; }
-.board { position: relative; display: flex; height: 100%; }
-.board-column { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
-.board-head { box-sizing: border-box; flex: 0 0 auto; margin: 0; font-size: 13px; line-height: 32px; white-space: nowrap; }
-.board-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.board-cards { position: relative; margin: 0; padding: 0; list-style: none; }
-.board-card { position: absolute; left: 0; right: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; overflow: hidden; padding: 6px 8px; border: 1px solid var(--surface); border-radius: 6px; background: var(--base, Canvas); font-size: 12px; }
-.board-card.movable { cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-.board-card.dragged { opacity: 0.35; }
-.board-card.floating { z-index: 5; pointer-events: none; cursor: grabbing; box-shadow: 0 4px 16px rgb(0 0 0 / 0.3); }
-.board-card.floating.snapped { border-color: var(--green); }
-.board-preview { position: absolute; z-index: 4; box-sizing: border-box; border: 2px dashed var(--green); border-radius: 6px; pointer-events: none; }
-.board-card-head { display: flex; justify-content: space-between; gap: 6px; }
-.board-label { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.board-detail { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: var(--subtext); }
-.board-card .foreman-actions { overflow-x: auto; flex-wrap: nowrap; }
-.board-column.needs-you .board-card { border-left: 4px solid var(--yellow); }
-.board-column.landed .board-card { border-left: 4px solid var(--green); }
-.foreman-ladder > summary { cursor: pointer; }
-.foreman-rungs-list { margin: 4px 0 0; padding-left: 22px; font-size: 12px; }
-.foreman-rungs-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.foreman-rungs-list li.off > .foreman-rung, .foreman-rungs-list li.off > .note { opacity: 0.45; }
-.foreman-rung { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.foreman-rung-switches { display: flex; gap: 4px; margin-left: auto; }

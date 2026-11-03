@@ -1,10 +1,10 @@
 // The sidebar: every machine's spaces and agents, the space drag, the
-// resize edge, and the New space, Foreman and Settings rows.
+// resize edge, and the New space and Settings rows.
 import { Array, HashMap, Option, Record, String } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import type { Fleet, SpaceGit } from "../shared/Fleet.ts"
 import { agentsIn, byState, type Children, dropSide, type DropSide, type ListedAgent, listedAgents, type MachineRow, sidebarOf, type SpaceRow, spaceBadge, terminalLabel, terminalNote } from "./group.ts"
-import { Bot, Factory, FolderPlus, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
+import { Bot, FolderPlus, icon, Monitor, Server, Settings as SettingsIcon } from "./icons.ts"
 import { todoCountView } from "./todos.ts"
 import { programOf } from "./programs.ts"
 import { Message, type Model, SpaceDrag } from "./model.ts"
@@ -12,7 +12,7 @@ import { lastFleet, maybeFocus, selectedTab } from "./selection.ts"
 import { DEFAULT_SIDEBAR_WIDTH, keyedSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "./sidebarWidth.ts"
 import { stateHeading, stateOf, statusDot, timeInState } from "./status.ts"
 
-/** The sidebar: the page's name, every machine's spaces and agents, and the New space, Foreman and Settings rows. */
+/** The sidebar: the page's name, every machine's spaces and agents, and the New space and Settings rows. */
 export const sidebarView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.nav(
     [
@@ -24,7 +24,7 @@ export const sidebarView = (model: Model, h: HtmlBuilder<Message>): Html =>
     [
       h.div([h.Class("fleet-top")], [h.h1([], ["herdr-web"])]),
       h.div([h.Class("fleet-list")], fleetView(model, h)),
-      h.div([h.Class("fleet-foot")], [newSpaceButton(model, h), foremanButton(model, h), settingsButton(model, h)]),
+      h.div([h.Class("fleet-foot")], [newSpaceButton(model, h), settingsButton(model, h)]),
     ],
   )
 
@@ -62,17 +62,6 @@ const newSpaceButton = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.OnClick(Message.ClickedNewSpace()),
     ],
     [icon(FolderPlus, h), h.span([h.Class("name")], ["New space"])],
-  )
-
-const foremanButton = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.button(
-    [
-      h.Type("button"),
-      h.Class(model.foremanPage.shown ? "row settings-row on" : "row settings-row"),
-      h.AriaPressed(model.foremanPage.shown ? "true" : "false"),
-      h.OnClick(Message.ClickedForeman()),
-    ],
-    [icon(Factory, h), h.span([h.Class("name")], ["Foreman"])],
   )
 
 const settingsButton = (model: Model, h: HtmlBuilder<Message>): Html =>

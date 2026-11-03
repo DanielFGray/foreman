@@ -12,7 +12,6 @@ import { labelAt, lastFleet, maybeFocus, selectedTab, shownTerminals } from "./s
 import { settingsView } from "./settingsView.ts"
 import { spaceFormView, spaceHeadView } from "./spaces.ts"
 import { worktreesView } from "./worktrees.ts"
-import { foremanColumnView } from "./foreman.ts"
 import { statusMark } from "./status.ts"
 
 /**
@@ -46,9 +45,9 @@ export const topBarView = (model: Model, h: HtmlBuilder<Message>): Html => {
   )
 }
 
-/** What the selection shows, with the Foreman column beside it when that is on show. */
+/** What the selection shows. */
 export const workspaceView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.div([h.Class("body")], [selectionView(model, h), ...foremanColumnView(model, h)])
+  h.div([h.Class("body")], [selectionView(model, h)])
 
 const selectionView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Selection.match(model.selection, {

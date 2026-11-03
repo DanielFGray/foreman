@@ -18,7 +18,6 @@ export {
   CodeXml,
   Columns2,
   EllipsisVertical,
-  Factory,
   ExternalLink,
   FlaskConical,
   Folder,
