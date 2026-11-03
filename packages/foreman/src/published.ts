@@ -67,6 +67,20 @@ export const PublishedPlacement = S.Struct({
   node: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+  /**
+   * The task's runs, oldest first: the block each ran at, its role, its rung,
+   * whether it is still open, and how it ended. A closed run that foreman did
+   * not settle has no ending; a run from before blocks were recorded has no block.
+   */
+  runs: S.Array(
+    S.Struct({
+      node: S.NullOr(S.String),
+      role: S.Literals(["author", "review", "check"]),
+      rung: S.NullOr(S.String),
+      open: S.Boolean,
+      ending: S.NullOr(S.String),
+    }),
+  ),
 });
 export type PublishedPlacement = typeof PublishedPlacement.Type;
 
@@ -122,7 +136,21 @@ export const publishedOf = (
     const found = placementOf(placement);
     return found === undefined
       ? []
-      : [{ key: task.id, label: task.title, project: task.project, ...found }];
+      : [
+          {
+            key: task.id,
+            label: task.title,
+            project: task.project,
+            ...found,
+            runs: task.runs.map((run) => ({
+              node: run.node ?? null,
+              role: run.role,
+              rung: run.rung ?? null,
+              open: run.open,
+              ending: run.ending ?? null,
+            })),
+          },
+        ];
   }),
   stopped: [...state.pipelines].flatMap(([project, found]) =>
     found._tag === "Stopped" ? [{ project, problems: [...found.problems] }] : [],

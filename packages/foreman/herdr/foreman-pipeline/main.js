@@ -8,7 +8,8 @@
 // A mod cannot load foreman's own modules (they need web globals the mod
 // engine lacks), and a second copy of the layout here would drift from the
 // one herdr-web draws. Where each task stands is the dispatcher's placement in
-// state.json.
+// state.json, with the task's runs so far; a task waiting at an ask is the
+// dispatcher's attention row that offers `approve`, which a button here runs.
 //
 // Simulating (`simulate.js`) walks a pretend task through the draft with
 // `foreman pipeline trace`, and marks where it stands and the blocks it passed.
@@ -47,7 +48,7 @@ export default class Pipeline extends View {
     this.project = p.project ?? null;
     this.state = p.state ?? `${home()}/.local/state/foreman/state.json`;
     this.command = p.command ?? ["foreman"];
-    this.shown = null; this.problem = null; this.placements = []; this.busy = false;
+    this.shown = null; this.problem = null; this.placements = []; this.asks = new Map(); this.busy = false;
     this.zoom = 1; this.pan = [0, 0]; this.size = null; this.selected = null;
     // The drawing fits the pane until the operator zooms or pans it.
     this.fitted = true;
@@ -89,17 +90,32 @@ export default class Pipeline extends View {
     });
   }
 
-  // Runs `foreman pipeline save` or `discard`, then reads the pipeline again.
-  finish(verb, cx) {
+  // Runs a foreman command that changes something, shows its refusal if it
+  // refuses, and then calls `after` either way.
+  act(args, cx, after) {
     this.busy = true; this.problem = null; cx.notify();
     cx.spawn(async (cx) => {
-      const result = await this.foreman(["pipeline", verb, this.project]);
+      const result = await this.foreman(args);
       this.busy = false;
       if (result.code !== 0) this.problem = refusalOf(result);
-      else if (verb === "save" && this.editor.on) this.editor.toggle();
+      after(result.code === 0, cx);
+    });
+  }
+
+  // Runs `foreman approve <task>`. The dispatcher starts the step on its next
+  // tick and publishes, and the watch reads the standings again then.
+  approve(key, cx) { this.act(["approve", key], cx, (_done, cx) => cx.notify()); }
+
+  // Runs `foreman pipeline save` or `discard`, then reads the pipeline again.
+  finish(verb, cx) {
+    this.act(["pipeline", verb, this.project], cx, (done, cx) => {
+      if (done && verb === "save" && this.editor.on) this.editor.toggle();
       this.loadDrawing(cx);
     });
   }
+
+  // The asks the board shows: none while it shows simulated tasks.
+  shownAsks() { return this.fleet.on ? new Map() : this.asks; }
 
   // Runs a foreman command that answers a reading, and takes the reading.
   ask(args, cx, then = () => {}) {
@@ -153,6 +169,9 @@ export default class Pipeline extends View {
         const published = JSON.parse(text);
         if (published.version !== VERSION) { this.problem = `state.json is version ${published.version}; this pane reads ${VERSION}`; cx.notify(); return; }
         this.placements = published.placements.filter((placement) => placement.project === this.project);
+        this.asks = new Map(published.rows
+          .filter((row) => row.project === this.project && row.actions.includes("approve"))
+          .map((row) => [row.key, row]));
       } catch {}
       cx.notify();
     });
@@ -215,6 +234,8 @@ export default class Pipeline extends View {
   blockView(block, tasks, t) {
     const z = this.zoom;
     const running = tasks.filter((task) => task.state === "running").length;
+    const asks = this.shownAsks();
+    const asking = tasks.filter((task) => asks.has(task.key)).length;
     const card = block.h >= 40;
     const mark = this.sim.mark(block.id);
     const border = this.editor.rejoining !== null ? t.accent
@@ -236,7 +257,8 @@ export default class Pipeline extends View {
           .child(div().text_color(t.muted).child(block.icon))
           .child(div().font_semibold().truncate().child(block.id))
           .when(mark === "here", (el) => el.child(div().text_color(t.working).child("◆")))
-          .when(tasks.length > 0, (el) => el.child(div().text_color(running > 0 ? t.working : t.accent).child(String(tasks.length)))))
+          .when(tasks.length > 0, (el) => el.child(div().text_color(running > 0 ? t.working : t.accent).child(String(tasks.length))))
+          .when(asking > 0, (el) => el.child(div().text_color(t.blocked).child(`${asking} ask${asking === 1 ? "" : "s"}`))))
         .when(card, (el) => el.child(div().text_size(10 * z).text_color(t.muted).truncate().child(block.summary))));
   }
 
@@ -252,12 +274,23 @@ export default class Pipeline extends View {
       .child(h_flex().flex_wrap().gap(6).child(div().font_semibold().child(`${block.icon} ${block.id}`)).child(div().text_color(t.muted).child(`${block.kind} · ${block.summary}`)))
       .when(this.editor.on, (el) => el.child(this.editor.settings(t, node)).child(this.editor.exits(t, drawing, node)))
       .when(tasks.length === 0, (el) => el.child(div().text_color(t.dim).child("no task stands here")))
-      .children(tasks.slice(0, 50).map((task) => h_flex().gap(8)
+      .children(tasks.slice(0, 50).map((task) => this.taskView(task, t)))
+      .when(tasks.length > 50, (el) => el.child(div().text_color(t.dim).child(`and ${tasks.length - 50} more`)));
+  }
+
+  // One task at the selected block: its state, its ask and the button that
+  // answers it, and the runs it took to get here.
+  taskView(task, t) {
+    const ask = this.shownAsks().get(task.key);
+    return v_flex().gap(1)
+      .child(h_flex().gap(8).items_center()
         .child(div().w(70).text_color(stateColor(task.state, t)).child(task.state))
         .child(div().w(80).text_color(t.muted).child(task.key))
         .child(div().flex_1().truncate().child(task.label))
-        .when(task.gates.length > 0, (el) => el.child(div().text_color(t.dim).child(`at ${task.gates.map((gate) => gate.step).join(", ")}`)))))
-      .when(tasks.length > 50, (el) => el.child(div().text_color(t.dim).child(`and ${tasks.length - 50} more`)));
+        .when(task.gates.length > 0, (el) => el.child(div().text_color(t.dim).child(`at ${task.gates.map((gate) => gate.step).join(", ")}`)))
+        .when(ask !== undefined, (el) => el.child(chip(t, "approve", `approve-${task.key}`, (cx) => this.approve(task.key, cx)))))
+      .when(ask !== undefined, (el) => el.child(div().pl(78).text_color(t.blocked).child(ask.detail ?? ask.label)))
+      .when(task.runs.length > 0, (el) => el.child(div().pl(78).text_color(t.dim).truncate().child(pathOf(task.runs))));
   }
 
   scroll(event, cx) {
@@ -304,5 +337,12 @@ const byBlock = (placements) => {
   for (const tasks of at.values()) tasks.sort((a, b) => (a.state === "running") === (b.state === "running") ? a.key.localeCompare(b.key) : a.state === "running" ? -1 : 1);
   return at;
 };
+
+// A task's runs in a line, newest last: the block (or the role, for a run that
+// names none), the rung, and how it ended.
+const pathOf = (runs) => runs.slice(-8).map((run) =>
+  `${run.node ?? run.role}${run.rung === null ? "" : ` on ${run.rung}`}: ${run.open ? "running" : run.ending ?? "not settled"}`)
+  .join("  →  ")
+  .replace(/^/, runs.length > 8 ? `${runs.length - 8} earlier  →  ` : "");
 
 const stateColor = (state, t) => state === "running" ? t.working : state === "parked" ? t.blocked : state === "ended" || state === "landed" ? t.done : t.muted;

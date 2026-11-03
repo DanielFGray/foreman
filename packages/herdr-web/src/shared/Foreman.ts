@@ -82,6 +82,16 @@ export const ForemanPlacement = S.Struct({
   node: S.String,
   state: S.Literals(["waiting", "running", "ended", "parked"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
+  /** The task's runs, oldest first, as foreman publishes them. */
+  runs: S.Array(
+    S.Struct({
+      node: S.NullOr(S.String),
+      role: S.Literals(["author", "review", "check"]),
+      rung: S.NullOr(S.String),
+      open: S.Boolean,
+      ending: S.NullOr(S.String),
+    }),
+  ),
 })
 export type ForemanPlacement = typeof ForemanPlacement.Type
 

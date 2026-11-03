@@ -468,6 +468,11 @@ a model — so the ordinary rung is chosen again once the account resets.
   cannot succeed until the operator acts — no usage source, a missing key, an
   expired token — is `permanent` and repeats on every poll, so it is never
   logged; only a transient failure, which may clear by itself, is worth a line.
+- **Every probe has 30 seconds.** The tick waits for every provider's reading,
+  so one probe that never answers stops the fleet: `codex app-server` has
+  waited all night for a reply after the machine slept. `boundedBy` interrupts
+  a probe at its limit, which kills its process, and the provider reads as
+  unreadable (transient) until the next tick.
 - **Read once per tick and handed to both observations.** A tick observes twice
   — before it acts and again before it fills — while an allowance moves on the
   order of hours, so a probe per observation is a request every few seconds for

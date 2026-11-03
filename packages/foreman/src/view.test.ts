@@ -467,7 +467,37 @@ describe("publishedOf", () => {
         pipelines: new Map([["fibrae", { _tag: "Stopped", problems: ["no source"] }]]),
         placed: [
           {
-            task: task("ts-a", "open", []),
+            task: {
+              ...task("ts-a", "in_progress", []),
+              runs: [
+                {
+                  id: 1,
+                  task: "ts-a",
+                  role: "author",
+                  rung: "cheap",
+                  node: author.id,
+                  commit: "c1",
+                  base: undefined,
+                  ending: "done",
+                  rounds: undefined,
+                  open: false,
+                  landed: false,
+                },
+                {
+                  id: 2,
+                  task: "ts-a",
+                  role: "review",
+                  rung: undefined,
+                  node: undefined,
+                  commit: undefined,
+                  base: undefined,
+                  ending: undefined,
+                  rounds: undefined,
+                  open: true,
+                  landed: false,
+                },
+              ],
+            },
             placement: {
               _tag: "At",
               node: author,
@@ -490,6 +520,10 @@ describe("publishedOf", () => {
         node: author.id,
         state: "waiting",
         gates: [{ id: "start", step: "author" }],
+        runs: [
+          { node: author.id, role: "author", rung: "cheap", open: false, ending: "done" },
+          { node: null, role: "review", rung: null, open: true, ending: null },
+        ],
       },
       {
         key: "ts-b",
@@ -498,6 +532,7 @@ describe("publishedOf", () => {
         node: "attention",
         state: "parked",
         gates: [],
+        runs: [],
       },
     ]);
     expect(published.stopped).toEqual([{ project: "fibrae", problems: ["no source"] }]);

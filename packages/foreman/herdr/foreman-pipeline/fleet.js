@@ -79,7 +79,7 @@ export class Fleet {
       for (const move of frame.moves) board.set(move.task, move);
     }
     return [...board.values()].filter((move) => move.node !== null)
-      .map((move) => ({ node: move.node, state: move.state, key: move.task, label: titles.get(move.task) ?? "", gates: [] }));
+      .map((move) => ({ node: move.node, state: move.state, key: move.task, label: titles.get(move.task) ?? "", gates: [], runs: [] }));
   }
 
   play(cx) {

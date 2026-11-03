@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Ref } from "effect";
-import { exhausted, freeAt, heldWhileSpent, type Spent, type Usage, windowName } from "./quota.ts";
+import { Duration, Effect, Exit, Fiber, Ref } from "effect";
+import { TestClock } from "effect/testing";
+import {
+  boundedBy,
+  exhausted,
+  freeAt,
+  heldWhileSpent,
+  QuotaError,
+  type Spent,
+  type Usage,
+  windowName,
+} from "./quota.ts";
 
 const usage = (allowances: Usage["allowances"]): Usage => ({
   provider: "opencode-go",
@@ -87,6 +97,23 @@ describe("windowName", () => {
 
   test("leaves a window whose length was not stated alone", () => {
     expect(windowName("primary", undefined)).toBe("primary");
+  });
+});
+
+describe("boundedBy", () => {
+  test("a probe that never answers fails as unreadable once its time is up", async () => {
+    const exit = await Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        boundedBy(Duration.seconds(30), () => Effect.never)("openai"),
+      );
+      yield* TestClock.adjust(Duration.seconds(30));
+      return yield* Fiber.await(fiber);
+    }).pipe(Effect.provide(TestClock.layer()), Effect.runPromise);
+    expect(exit).toEqual(
+      Exit.fail(
+        new QuotaError({ provider: "openai", detail: "no answer in 30s", permanent: false }),
+      ),
+    );
   });
 });
 
