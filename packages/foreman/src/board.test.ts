@@ -118,6 +118,21 @@ describe("the task board", () => {
     expect(columns(published)).toEqual({ "ts-asked": "needs-you" });
   });
 
+  test("a claim no agent works on needs you, not Authoring", () => {
+    const claimed = task("ts-claimed", "in_progress");
+    const published = board([claimed], {
+      decisions: [{ task: claimed, worker: undefined, kind: undefined }],
+    });
+    expect(columns(published)).toEqual({ "ts-claimed": "needs-you" });
+    // The report says why, and retry sends an agent to it.
+    expect(published.rows.find((row) => row.key === "ts-claimed")).toMatchObject({
+      view: "attention",
+      label: "author vanished",
+      detail: "claimed outside foreman",
+      actions: expect.arrayContaining(["retry"]),
+    });
+  });
+
   test("a grant gives the gated steps that are not on, and says which task it covers", () => {
     const policy = S.decodeSync(Policy)({
       default: { author: "off", climb: "ask", review: "on", land: "on" },

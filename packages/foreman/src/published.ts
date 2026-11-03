@@ -156,7 +156,7 @@ export const publishedOf = (
       ? gatedSteps(found.pipeline, state.policy, project).grantSteps
       : [];
   };
-  const asked = new Set(state.asks.map(({ task }) => task.id));
+  const asksYou = new Set([...state.asks, ...state.decisions].map(({ task }) => task.id));
   return {
     version: PUBLISHED_VERSION,
     dispatcher: Option.getOrNull(dispatcher),
@@ -178,7 +178,7 @@ export const publishedOf = (
               label: task.title,
               project: task.project,
               ...placementOf(placement),
-              column: columnOf(task, placement, asked.has(task.id)),
+              column: columnOf(task, placement, asksYou.has(task.id)),
               grant: coveringOf(state.policy, state.scopes, task, grantStepsOf(task.project)),
               runs: task.runs.map((run) => ({
                 node: run.node ?? null,
