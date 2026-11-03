@@ -93,14 +93,7 @@ export const graphReport = (world: GraphWorld): GraphReport => {
     rows.set(item.id, filled.get(column) ?? 0);
     filled.set(column, (filled.get(column) ?? 0) + 1);
   }
-  const gated = new Set(
-    pipeline.nodes.flatMap((node) => (node.kind === "gate" ? [node.step] : [])),
-  );
-  const steps = STEPS.filter((step) => gated.has(step)).map((step) => ({
-    step,
-    mode: modeFor(policy, project, step),
-  }));
-  const grantSteps = steps.filter(({ mode }) => mode !== "on").map(({ step }) => step);
+  const { steps, grantSteps } = gatedSteps(pipeline, policy, project);
   return {
     project,
     items: ordered.map((item) => ({
@@ -122,13 +115,33 @@ export const graphReport = (world: GraphWorld): GraphReport => {
 };
 
 /**
+ * Each step a gate in the pipeline names, with its mode for the project, and
+ * the steps a grant from a pane gives: the gated steps that are not on. When
+ * every gated step is on, a grant gives nothing, so a pane takes no drop.
+ */
+export const gatedSteps = (
+  pipeline: Pipeline,
+  policy: Policy,
+  project: string,
+): Pick<GraphReport, "steps" | "grantSteps"> => {
+  const gated = new Set(
+    pipeline.nodes.flatMap((node) => (node.kind === "gate" ? [node.step] : [])),
+  );
+  const steps = STEPS.filter((step) => gated.has(step)).map((step) => ({
+    step,
+    mode: modeFor(policy, project, step),
+  }));
+  return { steps, grantSteps: steps.filter(({ mode }) => mode !== "on").map(({ step }) => step) };
+};
+
+/**
  * The grant that lets the dispatcher take `grantSteps` for an item. For a
  * task it is what `permit` answers for each step, so a spent count or a grant
  * on other steps marks nothing. An epic is never dispatched itself, so its
  * grant is the one on its own id, which is the one a revoke on its card
  * removes.
  */
-const coveringOf = (
+export const coveringOf = (
   policy: Policy,
   scopes: Scopes,
   item: Item,
