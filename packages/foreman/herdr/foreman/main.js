@@ -13,7 +13,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, exec, readTextFile, watchFolder, theme, notify, props, home, run } from "herdr";
 
 const VERSION = 5;
-const STEPS = ["author", "climb", "review", "land"];
+const STEPS = ["author", "climb", "review", "publish", "land"];
 // A step cycles through its modes: on runs it, ask waits for one approval per task, off does nothing.
 const NEXT_MODE = { on: "ask", ask: "off", off: "on" };
 // Older than this, the reading is no longer the dispatcher working: its host is

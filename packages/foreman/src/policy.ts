@@ -2,7 +2,7 @@
  * The operator's policy: which steps the fleet may take by itself, for which
  * tasks, and how many agents may work at once.
  *
- * The four steps spend tokens or write to the operator's checkout, so each
+ * The five steps spend tokens or write to the operator's checkout, so each
  * runs only where the policy allows it:
  *
  * - `author` starts a task nobody has tried.
@@ -10,6 +10,9 @@
  *   the next rung or the same one. Its failures are recorded either way; this
  *   only decides whether the retry waits for the operator.
  * - `review` sends a reviewer to a finished branch.
+ * - `publish` pushes an approved branch and opens its pull request, for a
+ *   land block that lands by pull request. It spends no model, but a push and
+ *   a pull request are visible outside this machine.
  * - `land` proves the merge in the proving ground and applies it to the
  *   checkout.
  *
@@ -32,7 +35,7 @@ import { Effect, FileSystem, Option, Schema as S } from "effect";
 import type { Item } from "./records.ts";
 import { configDirectory, rewrite } from "./shared-file.ts";
 
-export const STEPS = ["author", "climb", "review", "land"] as const;
+export const STEPS = ["author", "climb", "review", "publish", "land"] as const;
 export type Step = (typeof STEPS)[number];
 
 /**
@@ -75,6 +78,32 @@ export const LinearPlace = S.Struct({ team: S.String, project: S.String });
 export type LinearPlace = typeof LinearPlace.Type;
 
 /**
+ * How foreman posts its review on a pull request (docs/issue-trackers.md, section 3).
+ *
+ * - `comment` posts the verdict as a comment review with the one `gh` account,
+ *   because GitHub refuses an approval from the PR's own author.
+ * - `approve` posts a real approval or a request for changes with a second
+ *   credential: `GH_TOKEN` is set from the environment variable
+ *   `reviewTokenEnv` names, for that one call.
+ */
+export const PULL_REQUEST_REVIEWS = ["comment", "approve"] as const;
+export type PullRequestReview = (typeof PULL_REQUEST_REVIEWS)[number];
+
+/**
+ * What a pull request closed without a merge does to its task: `park` it for
+ * the operator, `requeue` it at the same rung, or `cancel` it.
+ */
+export const CLOSED_PULL_REQUESTS = ["park", "requeue", "cancel"] as const;
+export type ClosedPullRequest = (typeof CLOSED_PULL_REQUESTS)[number];
+
+export const PullRequestPolicy = S.Struct({
+  review: S.optional(S.Literals(PULL_REQUEST_REVIEWS)),
+  reviewTokenEnv: S.optional(S.String),
+  closed: S.optional(S.Literals(CLOSED_PULL_REQUESTS)),
+});
+export type PullRequestPolicy = typeof PullRequestPolicy.Type;
+
+/**
  * One project's own settings. A step set here replaces the fleet default for
  * that project's tasks; a paused project takes no step, grants included;
  * `tracker` names where the project's tasks live.
@@ -85,11 +114,14 @@ export const ProjectPolicy = S.Struct({
   tracker: S.optional(S.Literals(TRACKERS)),
   /** The Linear team key and Linear project name; set with the `linear` tracker. */
   linear: S.optional(LinearPlace),
+  /** How a land block that lands by pull request treats the PR. Absent means `PULL_REQUEST_DEFAULTS`. */
+  pullRequest: S.optional(PullRequestPolicy),
   steps: S.optional(
     S.Struct({
       author: S.optional(S.Literals(STEP_MODES)),
       climb: S.optional(S.Literals(STEP_MODES)),
       review: S.optional(S.Literals(STEP_MODES)),
+      publish: S.optional(S.Literals(STEP_MODES)),
       land: S.optional(S.Literals(STEP_MODES)),
     }),
   ),
@@ -105,6 +137,8 @@ export const Policy = S.Struct({
     author: S.Literals(STEP_MODES),
     climb: S.Literals(STEP_MODES),
     review: S.Literals(STEP_MODES),
+    // A policy file that names no `publish` step reads it as off.
+    publish: S.Literals(STEP_MODES).pipe(S.withDecodingDefault(Effect.succeed("off" as const))),
     land: S.Literals(STEP_MODES),
   }).pipe(
     S.withDecodingDefault(
@@ -112,6 +146,7 @@ export const Policy = S.Struct({
         author: "off",
         climb: "off",
         review: "off",
+        publish: "off",
         land: "off",
       }),
     ),
@@ -373,6 +408,7 @@ const editProject = (
   const empty =
     next.paused === undefined &&
     next.tracker === undefined &&
+    next.pullRequest === undefined &&
     Object.keys(next.steps ?? {}).length === 0;
   return { ...policy, projects: empty ? others : { ...others, [project]: next } };
 };
@@ -394,13 +430,14 @@ export const setProjectStep = (
 
 /**
  * Drops a project's step and pause settings, so it follows the fleet default
- * again. The tracker choice stays: it is where the tasks live, not a setting
- * with a fleet default, and dropping it would move the project to prog.
+ * again. The tracker and pull-request choices stay: they say where the tasks
+ * live and how they land, not settings with a fleet default.
  */
 export const clearProject = (policy: Policy, project: string): Policy =>
-  editProject(policy, project, ({ tracker, linear }) => ({
+  editProject(policy, project, ({ tracker, linear, pullRequest }) => ({
     ...(tracker === undefined ? {} : { tracker }),
     ...(linear === undefined ? {} : { linear }),
+    ...(pullRequest === undefined ? {} : { pullRequest }),
   }));
 
 /** The tracker `project` takes its tasks from. */
@@ -422,4 +459,32 @@ export const setProjectTracker = (
     ...rest,
     ...(tracker === "prog" ? {} : { tracker }),
     ...(tracker === "linear" && linear !== undefined ? { linear } : {}),
+  }));
+
+/** A project's pull-request settings, with the defaults for what it leaves out. */
+export const pullRequestOf = (
+  policy: Policy,
+  project: string,
+): {
+  readonly review: PullRequestReview;
+  readonly reviewTokenEnv: string | undefined;
+  readonly closed: ClosedPullRequest;
+} => {
+  const entry = policy.projects[project]?.pullRequest;
+  return {
+    review: entry?.review ?? "comment",
+    reviewTokenEnv: entry?.reviewTokenEnv,
+    closed: entry?.closed ?? "park",
+  };
+};
+
+/** Changes some of one project's pull-request settings and keeps the others. */
+export const setPullRequest = (
+  policy: Policy,
+  project: string,
+  change: PullRequestPolicy,
+): Policy =>
+  editProject(policy, project, (entry) => ({
+    ...entry,
+    pullRequest: { ...entry.pullRequest, ...change },
   }));

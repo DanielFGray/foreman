@@ -322,7 +322,7 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
     policy: {
       ...DEFAULT_POLICY,
       slots: world.slots,
-      default: { author: "on", climb: "on", review: "on", land: "on" },
+      default: { author: "on", climb: "on", review: "on", publish: "on", land: "on" },
     },
     random: mulberry32(input.seed),
     window: Math.max(0.05, input.hours / MAX_FRAMES),
@@ -409,6 +409,8 @@ const planOf = (sim: Sim) => {
     pipelines,
     placed: tasks.map((task) => ({ task, placement: placementOf(sim, task) })),
     dirty: new Set(),
+    // The simulation reads no GitHub, so a pull-request landing never takes a step in it.
+    pullRequests: new Map(),
   });
   return { parks: [...offered.parks.map(({ task }) => task), ...yours], plan };
 };

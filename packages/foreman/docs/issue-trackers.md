@@ -112,6 +112,7 @@ All reads of one project come from one GraphQL query per tick (section 5).
 | `claim(id)` | adds `status:in_progress` and assigns `@me`: `gh issue edit <n> --add-label status:in_progress --add-assignee @me`. On a closed issue, first `gh issue reopen <n>`. |
 | `reopen(id)` | `gh issue reopen <n>` when closed; then removes every `status:*` label and the `@me` assignee. |
 | `complete(id)` | `gh issue close <n> --reason completed`, then removes `status:*`. |
+| `cancel(id)` | `gh issue close <n> --reason "not planned"`, then removes `status:*`. |
 | `label`, `unlabel` | `gh issue edit <n> --add-label` / `--remove-label`. A label the repo lacks is made first with `gh label create <name> --force`. |
 | `relabel(id, change)` | reads the labels, computes `change`, and writes the whole set in one call: `gh api -X PUT repos/<repo>/issues/<n>/labels` with `labels[]`. Answers the labels it read. |
 | `log(id, message)` | `gh issue comment <n> --body-file -`. |
@@ -535,7 +536,7 @@ each of its statuses by type, then by a name fragment, team states first
 
 Reads map every state by its type, so a state with any name reads right.
 Writes pick the state by the table. foreman moves issues only to the
-`unstarted`, `started` and `completed` types, so a team with no state of one
+`unstarted`, `started`, `completed` and `canceled` types, so a team with no state of one
 of those reads as unreachable with that reason, because foreman cannot make
 that move. A team with no `triage` or `backlog` state can still be worked.
 lalph falls back to a state of another type (`Linear.ts:228`); foreman does
@@ -579,6 +580,7 @@ Two of lalph's gaps are fixed:
 | `claim(id)` | `issueUpdate` with the `started` state and the viewer as assignee, then one confirming read (section 1). |
 | `reopen(id)` | `issueUpdate` with the `unstarted` state and no assignee. |
 | `complete(id)` | `issueUpdate` with the `completed` state. |
+| `cancel(id)` | `issueUpdate` with the `canceled` state. |
 | `label`, `unlabel`, `relabel` | `issueUpdate` with `labelIds`; a label the team lacks is made with `issueLabelCreate`. |
 | `log(id, message)` | `commentCreate`. |
 

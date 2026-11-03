@@ -1093,3 +1093,84 @@ describe("Repository landing by fast-forward", () => {
     expect(await branchOf(here)).toMatchObject({ merged: true, empty: true });
   });
 });
+
+describe("Repository against a remote", () => {
+  const task = "foreman/ts-pr";
+
+  // A checkout whose `origin` is a bare repository on this machine, with the
+  // task's branch checked out in a worktree as the fleet makes it.
+  const remote = async () => {
+    const root = await mkdtemp(join(tmpdir(), "foreman-remote-"));
+    const origin = join(root, "origin.git");
+    const here = join(root, "checkout");
+    const tree = join(root, "worktree");
+    const sh = (directory: string, ...args: Array<string>) =>
+      Bun.$`git -C ${directory} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    await Bun.$`git init -q --bare -b trunk ${origin}`.quiet();
+    await Bun.$`git init -q -b trunk ${here}`.quiet();
+    await writeFile(join(here, "a.txt"), "a\n");
+    await sh(here, "add", "a.txt");
+    await sh(here, "commit", "-qm", "initial");
+    await sh(here, "remote", "add", "origin", origin);
+    await sh(here, "push", "-q", "origin", "trunk");
+    await sh(here, "worktree", "add", "-q", "-b", task, tree);
+    await writeFile(join(tree, "b.txt"), "b\n");
+    await sh(tree, "add", "b.txt");
+    await sh(tree, "commit", "-qm", "work");
+    const out = async (directory: string, ...args: Array<string>) =>
+      (await sh(directory, ...args)).stdout.toString().trim();
+    return { root, origin, here, tree, sh, out };
+  };
+
+  test("push puts the commit on the remote branch, and a repeat changes nothing", async () => {
+    const { root, origin, here, out } = await remote();
+    const work = await out(here, "rev-parse", task);
+
+    await run((repository) => repository.push(here, work, task));
+    await run((repository) => repository.push(here, work, task));
+
+    expect(await out(origin, "rev-parse", task)).toBe(work);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("fetchBranch fast-forwards the worktree that has the branch out", async () => {
+    const { root, origin, here, tree, sh, out } = await remote();
+    await sh(tree, "push", "-q", "origin", task);
+    // Somebody else adds a commit to the PR on the remote.
+    const other = join(root, "other");
+    await Bun.$`git clone -q -b ${task} ${origin} ${other}`.quiet();
+    await writeFile(join(other, "c.txt"), "c\n");
+    await sh(other, "add", "c.txt");
+    await sh(other, "commit", "-qm", "theirs");
+    await sh(other, "push", "-q", "origin", task);
+    const theirs = await out(other, "rev-parse", "HEAD");
+
+    expect(await run((repository) => repository.fetchBranch(here, task))).toBe("Updated");
+    expect(await out(here, "rev-parse", task)).toBe(theirs);
+    expect(await out(tree, "status", "--porcelain")).toBe("");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("fetchBranch leaves a branch alone when the remote one was rewritten", async () => {
+    const { root, origin, here, tree, sh, out } = await remote();
+    await sh(tree, "push", "-q", "origin", task);
+    const ours = await out(here, "rev-parse", task);
+    const other = join(root, "other");
+    await Bun.$`git clone -q -b ${task} ${origin} ${other}`.quiet();
+    await sh(other, "reset", "-q", "--hard", "HEAD~1");
+    await writeFile(join(other, "d.txt"), "d\n");
+    await sh(other, "add", "d.txt");
+    await sh(other, "commit", "-qm", "rewritten");
+    await sh(other, "push", "-q", "--force", "origin", task);
+
+    expect(await run((repository) => repository.fetchBranch(here, task))).toBe("Diverged");
+    expect(await out(here, "rev-parse", task)).toBe(ours);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("trunkBranch names the branch a pull request merges into", async () => {
+    const { root, here } = await remote();
+    expect(await run((repository) => repository.trunkBranch(here))).toBe("trunk");
+    await rm(root, { recursive: true, force: true });
+  });
+});

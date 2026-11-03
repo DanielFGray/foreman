@@ -291,6 +291,21 @@ describe("linearTracker", () => {
     expect(updates).toEqual([{ stateId: "s-progress", assigneeId: "me" }, { stateId: "s-done" }]);
   });
 
+  test("cancel moves to the canceled state once", async () => {
+    const linear = fakeLinear({ issues: [node(1)] });
+    await run(
+      Effect.gen(function* () {
+        const tracker = yield* linear.tracker;
+        yield* tracker.cancel("foreman#ENG-1");
+        yield* tracker.cancel("foreman#ENG-1");
+      }),
+    );
+    const updates = linear.calls
+      .filter((call) => call.document.includes("issueUpdate"))
+      .map((call) => call.variables["input"]);
+    expect(updates).toEqual([{ stateId: "s-canceled" }]);
+  });
+
   test("reopen moves to Todo with no assignee", async () => {
     const linear = fakeLinear({
       issues: [node(1, { state: { type: "started" }, assignee: { id: "me" } })],

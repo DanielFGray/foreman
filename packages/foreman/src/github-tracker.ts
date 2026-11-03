@@ -250,12 +250,16 @@ export const githubTracker = (
         }),
       );
 
-    const complete = (task: string) =>
-      writing("complete")(task, (repo, number) =>
+    /**
+     * Closes the issue with GitHub's `reason` (`completed` for done, `not
+     * planned` for canceled) and drops its status labels.
+     */
+    const close = (event: string, reason: "completed" | "not planned") => (task: string) =>
+      writing(event)(task, (repo, number) =>
         Effect.gen(function* () {
           const before = yield* current(repo, number);
           if (before.state !== "closed") {
-            yield* github.run(["issue", "close", `${number}`, "-R", repo, "--reason", "completed"]);
+            yield* github.run(["issue", "close", `${number}`, "-R", repo, "--reason", reason]);
           }
           const stale = statusLabels(before.labels);
           if (stale.length > 0) {
@@ -357,7 +361,8 @@ export const githubTracker = (
         }).pipe(Effect.mapError(fail(`add ${task.title}`))),
       claim,
       reopen,
-      complete,
+      complete: close("complete", "completed"),
+      cancel: close("cancel", "not planned"),
       label: (task, label) =>
         writing("label")(task, (repo, number) =>
           ensureLabel(repo, label).pipe(

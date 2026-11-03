@@ -20,6 +20,7 @@ const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item
     claim: (task) => note(`claim ${task}`),
     reopen: (task) => note(`reopen ${task}`),
     complete: (task) => note(`complete ${task}`),
+    cancel: (task) => note(`cancel ${task}`),
     label: (task, label) => note(`label ${task} ${label}`),
     unlabel: (task, label) => note(`unlabel ${task} ${label}`),
     relabel: (task) => note(`relabel ${task}`).pipe(Effect.as([])),

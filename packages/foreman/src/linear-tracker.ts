@@ -21,7 +21,7 @@ import type { LinearPlace } from "./policy.ts";
  * failed read is kept until the next refresh, as for GitHub.
  *
  * A team with no state of a type foreman moves issues to (`unstarted`,
- * `started`, `completed`) fails the read, because foreman cannot make that
+ * `started`, `completed`, `canceled`) fails the read, because foreman cannot make that
  * move, and a state of another type is a status the operator did not mean.
  *
  * Below a tenth of either hourly budget left, `refresh` reads only on every
@@ -250,6 +250,14 @@ export const linearTracker = (
         }),
       );
 
+    const cancel = (task: string) =>
+      writing("cancel")(task, (read, identifier) =>
+        Effect.gen(function* () {
+          if ((yield* current(identifier)).state.type === "canceled") return;
+          yield* update(identifier, { stateId: stateFor(read.states, "canceled").id });
+        }),
+      );
+
     return Tracker.of({
       refresh: (project) => refresh(project).pipe(Effect.mapError(fail(`read ${project}`))),
       lookup,
@@ -322,6 +330,7 @@ export const linearTracker = (
       claim,
       reopen,
       complete,
+      cancel,
       label: (task, label) =>
         writing("label")(task, (read, identifier) =>
           labelId(read, label).pipe(
@@ -370,7 +379,7 @@ const splitIdentifier = (identifier: string) => {
 };
 
 /** The state types foreman moves issues to; a team without one of them cannot be worked. */
-const MOVED_TO = ["unstarted", "started", "completed"] as const;
+const MOVED_TO = ["unstarted", "started", "completed", "canceled"] as const;
 
 /**
  * The team's state of `type`, preferring the name the table in section 7

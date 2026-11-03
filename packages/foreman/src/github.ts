@@ -19,7 +19,7 @@ export class Gh extends Context.Service<
      */
     readonly exec: (
       args: ReadonlyArray<string>,
-      options?: { readonly cwd?: string; readonly input?: string },
+      options?: GhOptions,
     ) => Effect.Effect<GhResult, GithubError>;
   }
 >()("Gh") {
@@ -34,6 +34,9 @@ export class Gh extends Context.Service<
               const process = yield* spawner.spawn(
                 ChildProcess.make("gh", args, {
                   ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+                  // `env` adds to foreman's own environment, which holds `gh`'s
+                  // PATH, HOME and login.
+                  ...(options.env === undefined ? {} : { env: options.env, extendEnv: true }),
                   stdin: Stream.make(options.input ?? "").pipe(Stream.encodeText),
                 }),
               );
@@ -55,6 +58,13 @@ export class Gh extends Context.Service<
       });
     }),
   ).pipe(Layer.provide(BunServices.layer));
+}
+
+/** Where `gh` runs, what it reads on stdin, and variables added to its environment. */
+export interface GhOptions {
+  readonly cwd?: string;
+  readonly input?: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface GhResult {
@@ -88,10 +98,12 @@ export class GithubError extends S.TaggedError<GithubError>()("GithubError", {
 export class Github extends Context.Service<
   Github,
   {
+    /** Runs `gh` and answers its exit code and both streams, for a call whose exit code says too little. */
+    readonly exec: Gh["Service"]["exec"];
     /** Runs `gh` and answers its stdout; a non-zero exit is a `GithubError`. */
     readonly run: (
       args: ReadonlyArray<string>,
-      options?: { readonly cwd?: string; readonly input?: string },
+      options?: GhOptions,
     ) => Effect.Effect<string, GithubError>;
     /** A REST GET of `path` (`repos/OWNER/NAME/issues/1`), through the ETag cache. */
     readonly get: (path: string) => Effect.Effect<unknown, GithubError>;
@@ -108,10 +120,7 @@ export class Github extends Context.Service<
       new Map<string, { readonly etag: string; readonly body: unknown }>(),
     );
 
-    const run = (
-      args: ReadonlyArray<string>,
-      options?: { readonly cwd?: string; readonly input?: string },
-    ) =>
+    const run = (args: ReadonlyArray<string>, options?: GhOptions) =>
       gh
         .exec(args, options)
         .pipe(
@@ -182,7 +191,7 @@ export class Github extends Context.Service<
         return data;
       });
 
-    return Github.of({ run, get, graphql });
+    return Github.of({ exec: gh.exec, run, get, graphql });
   });
 
   static readonly layerWith = Layer.effect(this, this.make);
@@ -222,3 +231,199 @@ export const parseResponse = (
     .find((value) => value !== undefined);
   return { status: Number(status), etag, body };
 };
+
+/**
+ * A pull request as foreman reads it: found by its head branch, never stored.
+ * `reviewed` holds the commits a review was posted on, so a repeat of the
+ * review post finds it already made.
+ */
+export interface PullRequest {
+  readonly number: number;
+  readonly state: "OPEN" | "CLOSED" | "MERGED";
+  readonly head: string;
+  /** GitHub's `mergeStateStatus`: `CLEAN`, `DIRTY` (a conflict), `BLOCKED`, `BEHIND` and others. */
+  readonly mergeState: string;
+  readonly reviewed: ReadonlyArray<string>;
+}
+
+/** The required checks of a pull request, folded to one verdict, with the output for a task log. */
+export interface RequiredChecks {
+  readonly verdict: "none" | "pending" | "pass" | "fail";
+  readonly output: string;
+}
+
+const PullRequestJson = S.Array(
+  S.Struct({
+    number: S.Finite,
+    state: S.Literals(["OPEN", "CLOSED", "MERGED"]),
+    headRefOid: S.String,
+    mergeStateStatus: S.String,
+    reviews: S.Array(S.Struct({ commit: S.NullOr(S.Struct({ oid: S.String })) })),
+  }),
+);
+
+const ChecksJson = S.Array(S.Struct({ name: S.String, bucket: S.String }));
+
+const PULL_REQUEST_FIELDS = "number,state,headRefOid,mergeStateStatus,reviews";
+
+/**
+ * Every pull request whose head is `branch`, open, closed and merged. One
+ * branch can have several: a requeued task opens a new one beside the one the
+ * operator closed.
+ */
+export const pullRequestsOf = (repo: string, branch: string) =>
+  Effect.gen(function* () {
+    const github = yield* Github;
+    const command = `gh pr list --head ${branch}`;
+    const out = yield* github.run([
+      "pr",
+      "list",
+      "-R",
+      repo,
+      "--head",
+      branch,
+      "--state",
+      "all",
+      "--json",
+      PULL_REQUEST_FIELDS,
+    ]);
+    const rows = yield* parseJson(command, out).pipe(
+      Effect.flatMap((json) => S.decodeUnknownEffect(PullRequestJson)(json)),
+      Effect.mapError((error) =>
+        error._tag === "GithubError" ? error : new GithubError({ command, detail: error.message }),
+      ),
+    );
+    return rows.map((row): PullRequest => ({
+      number: row.number,
+      state: row.state,
+      head: row.headRefOid,
+      mergeState: row.mergeStateStatus,
+      reviewed: row.reviews.flatMap((review) => (review.commit ? [review.commit.oid] : [])),
+    }));
+  });
+
+/** Opens a pull request from `head` into `base`, and answers its number. */
+export const createPullRequest = (
+  repo: string,
+  pull: {
+    readonly head: string;
+    readonly base: string;
+    readonly title: string;
+    readonly body: string;
+  },
+) =>
+  Effect.gen(function* () {
+    const github = yield* Github;
+    const out = yield* github.run(
+      [
+        "pr",
+        "create",
+        "-R",
+        repo,
+        "--head",
+        pull.head,
+        "--base",
+        pull.base,
+        "--title",
+        pull.title,
+        "--body-file",
+        "-",
+      ],
+      { input: pull.body },
+    );
+    // `gh pr create` prints the new PR's URL, which ends in its number.
+    const number = Number(/\/pull\/(\d+)\s*$/.exec(out.trim())?.[1]);
+    if (!Number.isInteger(number)) {
+      return yield* new GithubError({ command: "gh pr create", detail: `no PR URL in: ${out}` });
+    }
+    return number;
+  });
+
+/**
+ * Posts a review on the pull request's head. A `comment` review approves
+ * nothing; an `approve` review runs with `GH_TOKEN` set to `token`, because
+ * GitHub refuses an approval from the PR's own author.
+ */
+export const reviewPullRequest = (
+  repo: string,
+  number: number,
+  review: { readonly kind: "comment" } | { readonly kind: "approve"; readonly token: string },
+  body: string,
+) =>
+  Effect.gen(function* () {
+    const github = yield* Github;
+    yield* github.run(
+      [
+        "pr",
+        "review",
+        `${number}`,
+        "-R",
+        repo,
+        review.kind === "comment" ? "--comment" : "--approve",
+        "--body-file",
+        "-",
+      ],
+      review.kind === "comment"
+        ? { input: body }
+        : { input: body, env: { GH_TOKEN: review.token } },
+    );
+  });
+
+/**
+ * Merges the pull request with a merge commit, only while its head is
+ * `commit`: GitHub refuses the merge when the head moved, so what lands is
+ * the commit the reviewer read.
+ */
+export const mergePullRequest = (repo: string, number: number, commit: string) =>
+  Effect.gen(function* () {
+    const github = yield* Github;
+    yield* github.run([
+      "pr",
+      "merge",
+      `${number}`,
+      "-R",
+      repo,
+      "--merge",
+      "--match-head-commit",
+      commit,
+    ]);
+  });
+
+/**
+ * The required checks of a pull request. `gh pr checks` exits non-zero while
+ * a check is pending or failed, and when the repo requires none, so the
+ * output decides, not the exit code.
+ */
+export const requiredChecksOf = (repo: string, number: number) =>
+  Effect.gen(function* () {
+    const github = yield* Github;
+    const args = ["pr", "checks", `${number}`, "-R", repo, "--required", "--json", "name,bucket"];
+    const result = yield* github.exec(args);
+    if (result.stdout.trim() === "") {
+      if (/no (required )?checks reported/i.test(result.stderr)) {
+        return { verdict: "none", output: "" } satisfies RequiredChecks;
+      }
+      return yield* new GithubError({ command: commandOf(args), detail: failureOf(result) });
+    }
+    const checks = yield* parseJson(commandOf(args), result.stdout).pipe(
+      Effect.flatMap((json) => S.decodeUnknownEffect(ChecksJson)(json)),
+      Effect.mapError(
+        (error) =>
+          new GithubError({
+            command: commandOf(args),
+            detail: error._tag === "GithubError" ? error.detail : error.message,
+          }),
+      ),
+    );
+    const output = checks.map((check) => `${check.bucket}\t${check.name}`).join("\n");
+    const buckets = new Set(checks.map((check) => check.bucket));
+    const verdict: RequiredChecks["verdict"] =
+      checks.length === 0
+        ? "none"
+        : buckets.has("fail") || buckets.has("cancel")
+          ? "fail"
+          : buckets.has("pending")
+            ? "pending"
+            : "pass";
+    return { verdict, output } satisfies RequiredChecks;
+  });

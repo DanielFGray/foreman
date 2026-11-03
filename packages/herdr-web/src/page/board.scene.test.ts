@@ -16,7 +16,7 @@ const placed = (key: string, column: ForemanPlacement["column"], project = "app"
 const reading: ForemanReading = {
   version: 5,
   dispatcher: { state: "running" },
-  policy: { paused: false, slots: 2, default: { author: "ask", climb: "on", review: "on", land: "on" }, grants: [] },
+  policy: { paused: false, slots: 2, default: { author: "ask", climb: "on", review: "on", publish: "on", land: "on" }, grants: [] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
   projects: [

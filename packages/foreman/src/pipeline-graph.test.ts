@@ -76,7 +76,7 @@ describe("graphReport", () => {
     // One grant has admitted its one task; the other covers a step a pane grant does not give.
     const policy = {
       ...DEFAULT_POLICY,
-      default: { author: "off", climb: "off", review: "on", land: "on" },
+      default: { author: "off", climb: "off", review: "on", publish: "off", land: "on" },
       grants: [
         { scope: "ep", steps: ["author"], remaining: 1, admitted: ["t"] },
         { scope: "v", steps: ["review"], admitted: [] },
@@ -99,7 +99,7 @@ describe("graphReport", () => {
   test("grants the gated steps that are not on", () => {
     const policy = {
       ...DEFAULT_POLICY,
-      default: { author: "off", climb: "ask", review: "on", land: "on" },
+      default: { author: "off", climb: "ask", review: "on", publish: "off", land: "on" },
     } as const;
     const report = graphReport(world({ policy }));
     expect(report.steps.map(({ step, mode }) => `${step}:${mode}`)).toEqual([

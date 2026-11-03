@@ -118,8 +118,12 @@ export const WorktreeNode = S.Struct({
   next: S.String,
 });
 
-/** How a land block puts the approved commit onto the trunk. */
-export const LANDINGS = ["merge", "fast-forward"] as const;
+/**
+ * How a land block puts the approved commit onto the trunk. `pull-request`
+ * pushes it, opens a pull request on GitHub and merges that
+ * (docs/issue-trackers.md, section 3); the other two merge in the checkout.
+ */
+export const LANDINGS = ["merge", "fast-forward", "pull-request"] as const;
 export type Landing = (typeof LANDINGS)[number];
 
 /**
@@ -501,6 +505,29 @@ export const problemsOf = (
           problems.push(`a route from ${from.id} reaches ${target.id} through no gate`);
         }
       }
+    }
+  }
+
+  // A pull-request landing takes two steps the operator can stop: `publish`
+  // pushes and opens the PR, `land` merges it. Each needs its own gate after
+  // the last work block, because either step can be on while the other is not.
+  // A publish gate before any other block would hold a step that never comes.
+  const pullRequests = work.filter((node) => node.kind === "land" && node.how === "pull-request");
+  const isGateFor = (step: Step) => (node: PipelineNode) =>
+    node.kind === "gate" && node.step === step;
+  for (const step of ["publish", "land"] as const) {
+    for (const [from, target] of skipping(
+      pipeline,
+      isGateFor(step),
+      [...sources, ...work.filter((node) => node.kind === "agent" || node.kind === "check")],
+      pullRequests,
+    )) {
+      problems.push(`a route from ${from.id} reaches ${target.id} with no ${step} gate after it`);
+    }
+  }
+  for (const gate of pipeline.nodes.filter(isGateFor("publish"))) {
+    if (!pullRequests.some((target) => wired.reaches(gate.id, target.id))) {
+      problems.push(`${gate.id} gates publish, but no route from it reaches a pull-request land`);
     }
   }
 

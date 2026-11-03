@@ -24,7 +24,7 @@ const row = (view: ForemanRow["view"], key: string, label: string, actions: Read
 const reading: ForemanReading = {
   version: 5,
   dispatcher: { state: "running" },
-  policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
+  policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", publish: "off", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
   projects: [{ name: "app", grantSteps: [] }, { name: "lib", grantSteps: [] }],
