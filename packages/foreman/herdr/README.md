@@ -106,6 +106,15 @@ layout is foreman's and the pane lays nothing out. The pane asks for
 flips. It takes `state` and
 `command` props like the panel, and `project`.
 
+`edit` changes the project's draft, never the pipeline it runs. Click a "+" on
+a wire to put a block there, or a block to change its settings, remove it, or
+point one of its exits at another block. Each change runs
+`foreman pipeline edit <project> '<change>' --json`, which answers the new
+reading. While a draft is open the pane draws it and lists its problems;
+`save` runs `foreman pipeline save`, which checks the draft and makes it the
+pipeline the project runs, and `discard` drops it. The draft is foreman's
+file, so it outlives the pane.
+
 ## What it does not do yet
 
 - `complete` and `intervene` need an answer the panel has no input for. Run

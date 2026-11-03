@@ -320,7 +320,11 @@ export const updatePolicy = (path: string, change: (policy: Policy) => Policy) =
 
 export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
   detail: S.String,
-}) {}
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
 
 /** Changes one project's entry; an entry left holding nothing is dropped. */
 const editProject = (

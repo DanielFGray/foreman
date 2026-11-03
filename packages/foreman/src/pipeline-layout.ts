@@ -21,9 +21,11 @@ export interface PlacedWire {
   readonly wire: Wire;
   /** The corners of the wire's route, from the block it leaves to the block it enters. */
   readonly points: ReadonlyArray<Point>;
-  /** Where the wire's label and "+" sit, and how wide the label may draw there. */
+  /** Where the wire's label sits, and how wide it may draw there. */
   readonly anchor: Point;
   readonly room: number;
+  /** Where an editor's "+" sits, to put a block on the wire: on the anchor across, beside the label down. */
+  readonly plus: Point;
 }
 
 export interface Layout {
@@ -63,6 +65,7 @@ export interface Drawing {
     readonly label: string;
     readonly points: ReadonlyArray<Point>;
     readonly anchor: Point;
+    readonly plus: Point;
   }>;
 }
 
@@ -86,13 +89,14 @@ export const drawingOf = (pipeline: Pipeline, flow: Flow): Drawing => {
             },
           ];
     }),
-    wires: layout.wires.map(({ wire, points, anchor }) => ({
+    wires: layout.wires.map(({ wire, points, anchor, plus }) => ({
       from: wire.from,
       port: wire.port,
       to: wire.to,
       label: wire.label,
       points,
       anchor,
+      plus,
     })),
   };
 };
@@ -329,17 +333,32 @@ const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<Plac
     ? [out, [a1, b0], [a1, laneB], [a2, laneB], [a2, b1], into]
     : [out, [a1, b0], [a1, b1], into];
   const points = dedupe(route.map(([a, b]) => (down ? [b, a] : [a, b])));
-  if (!down) return [{ wire, points, ...anchorOf(points) }];
-  const layerEnd = layerStart[from.column]! + grid.layerLength[from.column]!;
+  if (!down) {
+    const across = anchorOf(points);
+    return [{ wire, points, ...across, plus: across.anchor }];
+  }
+  if (lane) {
+    const middle = (a1 + a2) / 2;
+    return [
+      {
+        wire,
+        points,
+        anchor: [laneB, middle],
+        room: laneGap[laneIndexOf(cellOf, wire)]! - 16,
+        plus: [laneB, middle + (wire.label === "" ? 0 : LABEL_ROW)],
+      },
+    ];
+  }
+  const row = layerStart[from.column]! + grid.layerLength[from.column]! + LABEL_ROW / 2;
+  const half = labelWidth(wire.label) / 2;
   return [
-    lane
-      ? {
-          wire,
-          points,
-          anchor: [laneB, (a1 + a2) / 2],
-          room: laneGap[laneIndexOf(cellOf, wire)]! - 16,
-        }
-      : { wire, points, anchor: [b0, layerEnd + LABEL_ROW / 2], room: slotOf(wire, true) - 12 },
+    {
+      wire,
+      points,
+      anchor: [b0, row],
+      room: slotOf(wire, true) - 12,
+      plus: [half === 0 ? b0 : b0 + half + 10, row],
+    },
   ];
 };
 

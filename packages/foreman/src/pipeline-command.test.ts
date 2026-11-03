@@ -19,7 +19,11 @@ afterAll(() => {
   rmSync(folder, { recursive: true, force: true });
   store.cleanup();
 });
-beforeEach(() => rmSync(path, { force: true }));
+const drafts = join(folder, "pipelines.draft.json");
+beforeEach(() => {
+  rmSync(path, { force: true });
+  rmSync(drafts, { force: true });
+});
 
 // `place` reads the dispatcher, and no test here runs it. The dispatcher's own
 // tests cover `place`.
@@ -272,5 +276,66 @@ describe("a pipelines file from before the exits", () => {
         { name: "returned", to: "queue", fails: "author" },
       ],
     });
+  });
+});
+
+describe("drawing a draft", () => {
+  const change = (value: unknown) => JSON.stringify(value);
+  const draftOf = () => JSON.parse(readFileSync(drafts, "utf8")).drafts.amux;
+
+  test("edit starts a draft from the pipeline the project runs, and leaves that pipeline as it is", async () => {
+    await run("edit", "amux", change({ _tag: "Remove", id: "climb" }));
+    expect(existsSync(path)).toBe(false);
+    expect(draftOf().base).toBeNull();
+    expect(draftOf().pipeline.nodes.some((node: { id: string }) => node.id === "climb")).toBe(
+      false,
+    );
+  });
+
+  test("save checks the draft, then writes it as the pipeline the project runs", async () => {
+    await run("set", "amux", fileWith(pinned));
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Configure", id: "land", setting: { how: "fast-forward" } }),
+    );
+    await run("save", "amux");
+    const saved = JSON.parse(readFileSync(path, "utf8")).pipelines.amux;
+    expect(saved.nodes.find((node: { id: string }) => node.id === "land").how).toBe("fast-forward");
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
+  });
+
+  test("save refuses a draft that cannot run, and keeps it", async () => {
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "InsertOn", wire: { from: "queue", port: "next" }, kind: "check" }),
+    );
+    expect(await refusal("save", "amux")).toMatch(/cannot run/);
+    expect(existsSync(path)).toBe(false);
+    expect(draftOf()).toBeDefined();
+  });
+
+  test("save refuses when the pipeline changed since the draft began", async () => {
+    await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
+    await run("set", "amux", fileWith(pinned));
+    expect(await refusal("save", "amux")).toMatch(/changed since this draft began/);
+  });
+
+  test("a rejoin that would close a loop is refused, and the draft is not written", async () => {
+    expect(
+      await refusal(
+        "edit",
+        "amux",
+        change({ _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "queue" }),
+      ),
+    ).toMatch(/would close a loop/);
+    expect(existsSync(drafts)).toBe(false);
+  });
+
+  test("discard drops the draft", async () => {
+    await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
+    await run("discard", "amux");
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
   });
 });

@@ -55,7 +55,11 @@ export const rewrite = <A, I, E, R>(
 
 export class RewriteError extends S.TaggedError<RewriteError>()("RewriteError", {
   detail: S.String,
-}) {}
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
 
 /** The directory foreman's operator files live in: beside the config. */
 export const configDirectory = (): string =>

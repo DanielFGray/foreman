@@ -255,7 +255,7 @@ export const configure = (
     | {
         readonly role: AgentNode["role"];
         readonly model: string;
-        readonly slots: number | undefined;
+        readonly slots?: number | undefined;
       }
     | { readonly route: number; readonly when: string }
     | { readonly command: string }

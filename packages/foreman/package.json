@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./pipeline": "./src/pipeline.ts",
     "./pipeline-belt": "./src/pipeline-belt.ts",
+    "./pipeline-edit": "./src/pipeline-edit.ts",
     "./pipeline-layout": "./src/pipeline-layout.ts"
   },
   "scripts": {

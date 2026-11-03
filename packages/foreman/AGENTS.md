@@ -51,7 +51,8 @@ a claim made by hand.
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
 
-The policy file (`src/policy.ts`) and the pipelines file (`src/pipeline-file.ts`)
+The policy file (`src/policy.ts`), the pipelines file (`src/pipeline-file.ts`)
+and the drafts file beside it (`src/pipeline-draft.ts`)
 are the only durable things foreman holds, because nothing in the world records
 the operator's intention. The policy holds `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `land`)
@@ -69,7 +70,13 @@ and publishes a change at once, outside the tick, because a tick can take
 seconds and the operator's click should show in the reading before it ends.
 The pipelines file holds each project's pipeline (`docs/pipeline-engine.md`); it
 sits in the policy file's directory, and both are written through `rewrite` in
-`src/shared-file.ts`.
+`src/shared-file.ts`. The drafts file (`pipelines.draft.json`, beside it) holds
+the pipeline the operator is still drawing for a project, with the drawn
+pipeline the draft began from. A draft may not run yet, so the dispatcher never
+reads it. `foreman pipeline edit` changes it one `PipelineChange`
+(`src/pipeline-edit.ts`) at a time, and `foreman pipeline save` checks it and
+writes it through the same `runPipeline` as `set`, refusing when the drawn
+pipeline changed since the draft began.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything
@@ -113,7 +120,7 @@ The wake queue beside it holds no state: it only ends the poll wait early, after
 `commanded` in the dispatcher's own process or `wake` from its host once a
 one-shot command in another process changed the world.
 
-**Durable state beyond the policy and pipelines files is a wall.** Needing it means something
+**Durable state beyond the policy, pipelines and drafts files is a wall.** Needing it means something
 the world should record is not being recorded, and the fix belongs in hc,
 herdr-app or prog.
 
@@ -833,7 +840,9 @@ reads `state.json`, and reads the queue and a task's record through
 `foreman queue` and `foreman show` (`src/store-commands.ts`). The pipeline pane (`herdr/foreman-pipeline/main.js`)
 draws the `drawing` that `foreman pipeline show --json` prints, laid out by
 `src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Its
-`--flow` is `down` in a pane taller than it is wide, else `across`. Both act through
+`--flow` is `down` in a pane taller than it is wide, else `across`. It edits a
+project's draft through `foreman pipeline edit`, `save` and `discard`, and the
+block kinds, steps, roles and landings it offers are the `choices` in that JSON. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 

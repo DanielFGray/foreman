@@ -1,41 +1,20 @@
 // The Pipeline editor's edits, as messages the page can carry, and the pure
 // step that applies one to the draft. Every change to the pipeline itself is
-// foreman's `pipeline-belt`; this module only picks which one an edit calls and
-// keeps the editor's selection pointing at a block that still exists.
+// foreman's `pipeline-edit`; this module adds what the editor has picked, and
+// keeps that pick pointing at a block that still exists.
 import { Option, Schema as S } from "effect"
-import { LANDINGS, type Pipeline, type PipelineNode } from "foreman/pipeline"
-import { addRoute, addSource, configure, INSERTABLE, type Insertable, insertOn, rejoin, remove, removeRoute, swapEnd, type Wire } from "foreman/pipeline-belt"
-import { FOREMAN_STEPS } from "../shared/Foreman.ts"
+import type { Pipeline } from "foreman/pipeline"
+import { INSERTABLE, type Insertable } from "foreman/pipeline-belt"
+import { applyChange, PipelineChange } from "foreman/pipeline-edit"
 
-/** One way out of a block, as `pipeline-belt` names it: `next`, a router's `else`, route `n`, or an agent's or check's `exit:<name>`. */
-export const WirePort = S.Union([S.Literals(["next", "else"]), S.Int, S.TemplateLiteral(["exit:", S.String])])
-
-export const WireRef = S.Struct({ from: S.String, port: WirePort })
-export type WireRef = typeof WireRef.Type
-
-/** What a block does, as `configure` takes it. */
-export const BlockSetting = S.Union([
-  S.Struct({ filter: S.String }),
-  S.Struct({ step: S.Literals(FOREMAN_STEPS) }),
-  S.Struct({ role: S.Literals(["author", "review"]), model: S.String, slots: S.UndefinedOr(S.Int) }),
-  S.Struct({ route: S.Int, when: S.String }),
-  S.Struct({ command: S.String }),
-  S.Struct({ how: S.Literals(LANDINGS) }),
-])
+export { type WireRef } from "foreman/pipeline-edit"
 
 /** A change the operator makes to the draft, or to what the editor has picked. */
 export const PipelineEdit = S.Union([
   S.TaggedStruct("Select", { id: S.Option(S.String) }),
   /** Picks the kind of block that the next "+" on a belt puts there, or drops the pick. */
   S.TaggedStruct("PickKind", { kind: S.Option(S.Literals(INSERTABLE)) }),
-  S.TaggedStruct("InsertOn", { wire: WireRef, kind: S.Literals(INSERTABLE) }),
-  S.TaggedStruct("Remove", { id: S.String }),
-  S.TaggedStruct("AddRoute", { router: S.String, when: S.String }),
-  S.TaggedStruct("RemoveRoute", { router: S.String, index: S.Int }),
-  S.TaggedStruct("Rejoin", { wire: WireRef, to: S.String }),
-  S.TaggedStruct("AddSource", { filter: S.String }),
-  S.TaggedStruct("SwapEnd", { id: S.String }),
-  S.TaggedStruct("Configure", { id: S.String, setting: BlockSetting }),
+  ...PipelineChange.members,
 ])
 export type PipelineEdit = typeof PipelineEdit.Type
 
@@ -46,33 +25,20 @@ export interface Drafting {
   readonly placing: Option.Option<Insertable>
 }
 
+/** A refused change leaves the draft as it was; a change that adds a block picks it and drops the palette's pick. */
 export const applyEdit = (now: Drafting, edit: PipelineEdit): Drafting => {
-  const { draft } = now
   switch (edit._tag) {
     case "Select":
       return { ...now, selected: edit.id }
     case "PickKind":
       return { ...now, placing: edit.kind }
-    case "InsertOn": {
-      const inserted = insertOn(draft, edit.wire, edit.kind)
-      return settled({ draft: inserted.pipeline, selected: inserted.id === "" ? now.selected : Option.some(inserted.id), placing: Option.none() })
+    default: {
+      const result = applyChange(now.draft, edit)
+      if (result._tag === "Refused") return now
+      return result.added === undefined
+        ? settled({ ...now, draft: result.pipeline })
+        : { draft: result.pipeline, selected: Option.some(result.added), placing: Option.none() }
     }
-    case "Remove":
-      return settled({ ...now, draft: remove(draft, edit.id) })
-    case "AddRoute":
-      return settled({ ...now, draft: addRoute(draft, edit.router, edit.when) })
-    case "RemoveRoute":
-      return settled({ ...now, draft: removeRoute(draft, edit.router, edit.index) })
-    case "Rejoin":
-      return settled({ ...now, draft: Option.getOrElse(rejoin(draft, edit.wire, edit.to), () => draft) })
-    case "AddSource": {
-      const added = addSource(draft, edit.filter)
-      return settled({ ...now, draft: added.pipeline, selected: added.id === "" ? now.selected : Option.some(added.id) })
-    }
-    case "SwapEnd":
-      return settled({ ...now, draft: swapEnd(draft, edit.id) })
-    case "Configure":
-      return { ...now, draft: configure(draft, edit.id, edit.setting) }
   }
 }
 
@@ -81,4 +47,3 @@ const settled = (now: Drafting): Drafting => ({
   ...now,
   selected: Option.filter(now.selected, (id) => now.draft.nodes.some((node) => node.id === id)),
 })
-

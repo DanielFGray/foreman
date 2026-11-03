@@ -38,9 +38,13 @@ describe("layoutOf", () => {
       }
     });
 
-    it(`${name}, ${flow}: no two wires put their "+" at one place`, () => {
-      const anchors = layoutOf(beltOf(pipeline), flow).wires.map(({ anchor }) => anchor.join(","));
-      expect(new Set(anchors).size).toBe(anchors.length);
+    it(`${name}, ${flow}: no two wires put their label or their "+" at one place`, () => {
+      const { wires } = layoutOf(beltOf(pipeline), flow);
+      for (const at of [
+        wires.map(({ anchor }) => anchor.join(",")),
+        wires.map(({ plus }) => plus.join(",")),
+      ])
+        expect(new Set(at).size).toBe(at.length);
     });
   }
 

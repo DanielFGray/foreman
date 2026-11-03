@@ -2,7 +2,9 @@ import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
 import { Dispatcher } from "./dispatcher.ts";
 import {
+  AgentNode,
   instructionNames,
+  LANDINGS,
   instructionProblems,
   Pipeline,
   type Placement,
@@ -12,7 +14,11 @@ import {
 import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
 import { readLadder } from "./registry.ts";
-import { drawingOf } from "./pipeline-layout.ts";
+import { drawingOf, type Flow } from "./pipeline-layout.ts";
+import { applyChange, PipelineChange } from "./pipeline-edit.ts";
+import { INSERTABLE } from "./pipeline-belt.ts";
+import { STEPS } from "./policy.ts";
+import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { mayAuthor, mayReview } from "./ladder.ts";
 
 /**
@@ -28,42 +34,32 @@ const source = Argument.String("pipeline").pipe(
   Argument.withDescription("A file holding the pipeline as JSON, or - to read it from stdin"),
 );
 
-const show = Command.make(
-  "show",
-  {
-    project,
-    json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
-    flow: Flag.Literals("flow", ["across", "down"]).pipe(
-      Flag.withDefault("across"),
-      Flag.withDescription(
-        "Which way the JSON drawing runs: across (left to right) or down (top to bottom)",
-      ),
-    ),
-  },
-  ({ project, json, flow }) =>
-    Effect.gen(function* () {
-      const read = yield* readPipelines(pipelinesPath());
-      if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
-      const { pipeline, drawn } = pipelineFor(read.value, project);
-      const problems = yield* problemsAgainstLadder(pipeline);
-      if (json) {
-        return yield* Console.log(
-          JSON.stringify(
-            { project, drawn, pipeline, problems, drawing: drawingOf(pipeline, flow) },
-            null,
-            2,
-          ),
-        );
-      }
+const json = Flag.Boolean("json").pipe(Flag.withDefault(false));
+const flow = Flag.Literals("flow", ["across", "down"]).pipe(
+  Flag.withDefault("across"),
+  Flag.withDescription(
+    "Which way the JSON drawing runs: across (left to right) or down (top to bottom)",
+  ),
+);
+
+const show = Command.make("show", { project, json, flow }, ({ project, json, flow }) =>
+  Effect.gen(function* () {
+    if (json) return yield* Console.log(JSON.stringify(yield* shownOf(project, flow), null, 2));
+    const { pipeline, drawn } = yield* livePipeline(project);
+    yield* Console.log(
+      drawn ? `${project} runs its own pipeline:` : `${project} runs the standard pipeline:`,
+    );
+    yield* Console.log(toMermaid(pipeline));
+    for (const problem of yield* problemsAgainstLadder(pipeline))
+      yield* Console.error(`problem: ${problem}`);
+    if ((yield* draftsNow)[project] !== undefined)
       yield* Console.log(
-        drawn ? `${project} runs its own pipeline:` : `${project} runs the standard pipeline:`,
+        `a draft is open: foreman pipeline show ${project} --json, then save or discard it`,
       );
-      yield* Console.log(toMermaid(pipeline));
-      for (const problem of problems) yield* Console.error(`problem: ${problem}`);
-    }),
+  }),
 ).pipe(
   Command.withDescription(
-    "Print the pipeline a project runs as a Mermaid flowchart, or as JSON with --json, with any problems",
+    "Print the pipeline a project runs as a Mermaid flowchart, or as JSON with --json, with any problems and any open draft",
   ),
 );
 
@@ -78,13 +74,81 @@ const check = Command.make("check", { source }, ({ source }) =>
 
 const set = Command.make("set", { project, source }, ({ project, source }) =>
   Effect.gen(function* () {
-    const pipeline = yield* pipelineFrom(source);
-    const problems = yield* problemsAgainstLadder(pipeline);
-    if (problems.length > 0) return yield* refuse(problems);
-    yield* updatePipelines(pipelinesPath(), (pipelines) => ({ ...pipelines, [project]: pipeline }));
+    yield* runPipeline(project, yield* pipelineFrom(source));
     yield* Console.log(`${project} now runs the pipeline in ${source}`);
   }),
 ).pipe(Command.withDescription("Check a pipeline, then make it the one a project runs"));
+
+const edit = Command.make(
+  "edit",
+  {
+    project,
+    change: Argument.String("change").pipe(
+      Argument.withDescription(
+        'One change as JSON, such as {"_tag":"Remove","id":"climb"} or {"_tag":"InsertOn","wire":{"from":"queue","port":"next"},"kind":"gate"}',
+      ),
+    ),
+    json,
+    flow,
+  },
+  ({ project, change, json, flow }) =>
+    Effect.gen(function* () {
+      const decoded = yield* S.decodeEffect(S.fromJsonString(PipelineChange))(change).pipe(
+        Effect.mapError(
+          (error) => new PipelineError({ detail: `${change} is no change: ${error.message}` }),
+        ),
+      );
+      const draft = (yield* draftsNow)[project] ?? (yield* freshDraft(project));
+      const result = applyChange(draft.pipeline, decoded);
+      if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
+      yield* updateDrafts(draftsPath(), (drafts) => ({
+        ...drafts,
+        [project]: { ...draft, pipeline: result.pipeline },
+      }));
+      if (json) {
+        const shown = yield* shownOf(project, flow);
+        return yield* Console.log(
+          JSON.stringify({ ...shown, added: result.added ?? null }, null, 2),
+        );
+      }
+      yield* Console.log(
+        result.added === undefined
+          ? `changed ${project}'s draft`
+          : `added ${result.added} to ${project}'s draft`,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Change a project's draft pipeline, starting one from the pipeline it runs. The pipeline it runs stays as it is until save",
+  ),
+);
+
+const save = Command.make("save", { project }, ({ project }) =>
+  Effect.gen(function* () {
+    const draft = (yield* draftsNow)[project];
+    if (draft === undefined)
+      return yield* new PipelineError({ detail: `${project} has no draft open` });
+    const live = yield* livePipeline(project);
+    if (!sameDrawing(draft.base, live.drawn ? live.pipeline : null))
+      return yield* new PipelineError({
+        detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
+      });
+    yield* runPipeline(project, draft.pipeline);
+    yield* updateDrafts(draftsPath(), ({ [project]: _saved, ...others }) => others);
+    yield* Console.log(`${project} now runs its draft`);
+  }),
+).pipe(
+  Command.withDescription(
+    "Check a project's draft, then make it the pipeline the project runs, the same as set",
+  ),
+);
+
+const discard = Command.make("discard", { project }, ({ project }) =>
+  Effect.gen(function* () {
+    yield* updateDrafts(draftsPath(), ({ [project]: _dropped, ...others }) => others);
+    yield* Console.log(`${project} has no draft open`);
+  }),
+).pipe(Command.withDescription("Drop a project's draft, and keep the pipeline it runs"));
 
 const clear = Command.make("clear", { project }, ({ project }) =>
   Effect.gen(function* () {
@@ -133,7 +197,16 @@ const place = Command.make(
 export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
   Command.make("pipeline", {}).pipe(
     Command.withDescription(`Read, check and change each project's pipeline (${pipelinesPath()})`),
-    Command.withSubcommands([show, check, set, clear, Command.provide(place, services)]),
+    Command.withSubcommands([
+      show,
+      check,
+      set,
+      edit,
+      save,
+      discard,
+      clear,
+      Command.provide(place, services),
+    ]),
   );
 
 /** A placement in words: the block, its state, the gates before it, and the work blocks left. */
@@ -146,7 +219,11 @@ const whereIs = (placement: Placement): string =>
 
 export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError", {
   detail: S.String,
-}) {}
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
 
 /**
  * The problems that stop `pipeline` running: against the ladder, and in the
@@ -186,3 +263,65 @@ const pipelineFrom = (source: string) =>
       ),
     );
   });
+
+/** The pipeline a project runs now, and whether the operator drew it. */
+const livePipeline = (project: string) =>
+  Effect.gen(function* () {
+    const read = yield* readPipelines(pipelinesPath());
+    if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
+    return pipelineFor(read.value, project);
+  });
+
+const draftsNow = Effect.gen(function* () {
+  const read = yield* readDrafts(draftsPath());
+  if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
+  return read.value;
+});
+
+/** A draft that starts as the pipeline the project runs now. */
+const freshDraft = (project: string) =>
+  livePipeline(project).pipe(
+    Effect.map(({ pipeline, drawn }): Draft => ({ base: drawn ? pipeline : null, pipeline })),
+  );
+
+/** Checks a pipeline against the ladder, then makes it the one `project` runs. Both set and save write through here. */
+const runPipeline = (project: string, pipeline: Pipeline) =>
+  Effect.gen(function* () {
+    const problems = yield* problemsAgainstLadder(pipeline);
+    if (problems.length > 0) return yield* refuse(problems);
+    yield* updatePipelines(pipelinesPath(), (pipelines) => ({ ...pipelines, [project]: pipeline }));
+  });
+
+/**
+ * What `show --json` prints: the pipeline a project runs, its problems and its
+ * drawing, and the same for the project's draft when one is open.
+ */
+const shownOf = (project: string, flow: Flow) =>
+  Effect.gen(function* () {
+    const { pipeline, drawn } = yield* livePipeline(project);
+    const draft = (yield* draftsNow)[project];
+    return {
+      project,
+      drawn,
+      choices: CHOICES,
+      pipeline,
+      problems: yield* problemsAgainstLadder(pipeline),
+      drawing: drawingOf(pipeline, flow),
+      draft:
+        draft === undefined
+          ? null
+          : {
+              pipeline: draft.pipeline,
+              problems: yield* problemsAgainstLadder(draft.pipeline),
+              drawing: drawingOf(draft.pipeline, flow),
+            },
+    };
+  });
+
+/** What an editor that cannot load foreman's modules offers for a block's settings, from the schemas themselves. */
+const CHOICES = {
+  insertable: INSERTABLE,
+  steps: STEPS,
+  roles: AgentNode.fields.role.literals,
+  landings: LANDINGS,
+};
