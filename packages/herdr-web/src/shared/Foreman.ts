@@ -2,10 +2,8 @@
 // the page may ask the bridge to run. The reading is a copy of foreman's own
 // `Published` (src/published.ts there), version 5, holding the fields this
 // page reads. A queue row has the same shape as a published row. Foreman's
-// other modules are not browser-safe, so this copy stands in for them; the two
-// that are, `foreman/pipeline` and `foreman/pipeline-belt`, the page imports.
+// modules are not browser-safe, so this copy stands in for them.
 import { Match, Schema as S } from "effect"
-import { Pipeline } from "foreman/pipeline"
 
 /** The version of foreman's published shape this page reads. */
 export const FOREMAN_VERSION = 5
@@ -73,36 +71,11 @@ export type ForemanDispatcher = typeof ForemanDispatcher.Type
 
 /** The board's columns, left to right, as foreman names them. */
 export const BOARD_COLUMNS = ["queue", "needs-you", "authoring", "review", "fixing", "landed"] as const
-export type BoardColumn = (typeof BOARD_COLUMNS)[number]
+export const BoardColumn = S.Literals(BOARD_COLUMNS)
+export type BoardColumn = typeof BoardColumn.Type
 
-/**
- * Where one task stands at a block of its project's pipeline: the run's state
- * at a work block, or `parked` at a park block. `gates` hold it before the block.
- */
-export const ForemanPlacement = S.Struct({
-  key: S.String,
-  label: S.String,
-  project: S.String,
-  node: S.String,
-  /** The block a board draws the task on; `node` is the block it waits for or runs at. */
-  stands: S.String,
-  state: S.Literals(["waiting", "running", "ended", "parked"]),
-  gates: S.Array(S.Struct({ id: S.String, step: S.String })),
-  /** The board column foreman puts the task in. */
-  column: S.Literals(BOARD_COLUMNS),
-  /** The grant that lets the dispatcher take some of the project's `grantSteps` for the task. */
-  grant: S.NullOr(S.Struct({ scope: S.String, steps: S.Array(S.String), left: S.NullOr(S.Int) })),
-  /** The task's runs, oldest first, as foreman publishes them. */
-  runs: S.Array(
-    S.Struct({
-      node: S.NullOr(S.String),
-      role: S.Literals(["author", "review", "check"]),
-      rung: S.NullOr(S.String),
-      open: S.Boolean,
-      ending: S.NullOr(S.String),
-    }),
-  ),
-})
+/** One task on the board, in the column foreman puts it in. */
+export const ForemanPlacement = S.Struct({ key: S.String, label: S.String, project: S.String, column: BoardColumn })
 export type ForemanPlacement = typeof ForemanPlacement.Type
 
 /** One reading of the fleet, made by the dispatcher the bridge runs. */
@@ -115,9 +88,9 @@ export const ForemanReading = S.Struct({
   /** ISO instant of the reading; none when the dispatcher failed before its first. */
   observedAt: S.OptionFromNullOr(S.String),
   /** The managed projects; a board takes no drop where `grantSteps` (the steps a grant gives) is empty. */
-  projects: S.Array(S.Struct({ name: S.String, directory: S.String, grantSteps: S.Array(S.String) })),
+  projects: S.Array(S.Struct({ name: S.String, grantSteps: S.Array(ForemanStep) })),
   rows: S.Array(ForemanRow),
-  /** Each task that stands at a block of its project's pipeline. */
+  /** Each task on the board; a landed one shows from `landed`. */
   placements: S.Array(ForemanPlacement),
   /** The projects whose pipeline cannot run, and why. */
   stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
@@ -153,8 +126,12 @@ export const ForemanCommand = S.Union([
   S.TaggedStruct("Act", { action: ForemanAction, key: ForemanName }),
   /** Starts a queued task on a picked rung; the operator's click is the permission, so the policy does not gate it. */
   S.TaggedStruct("Launch", { key: ForemanName, rung: ForemanName }),
-  /** Lets the fleet take one step for one task, once. */
-  S.TaggedStruct("Allow", { key: ForemanName, step: ForemanStep }),
+  /**
+   * Lets the fleet take steps beyond the default for one task, or every task
+   * under an epic, as `foreman policy grant` does; `count` limits how many
+   * tasks it covers, and absent means no limit.
+   */
+  S.TaggedStruct("Grant", { scope: ForemanName, steps: S.NonEmptyArray(ForemanStep), count: S.optional(S.Int.check(S.isGreaterThan(0))) }),
   S.TaggedStruct("Pause", {}),
   S.TaggedStruct("Resume", {}),
   S.TaggedStruct("SetStep", { step: ForemanStep, setting: ForemanStepMode }),
@@ -174,7 +151,7 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
   Match.valueTags(command, {
     Act: ({ action, key }) => [action, key],
     Launch: ({ key, rung }) => ["dispatch", key, "--rung", rung],
-    Allow: ({ key, step }) => ["policy", "grant", key, step, "--count", "1"],
+    Grant: ({ scope, steps, count }) => ["policy", "grant", scope, ...steps, ...(count === undefined ? [] : ["--count", String(count)])],
     Pause: () => ["policy", "pause"],
     Resume: () => ["policy", "resume"],
     SetStep: ({ step, setting }) => ["policy", "set", step, setting],
@@ -182,16 +159,8 @@ export const argvOf = (command: ForemanCommand): ReadonlyArray<string> =>
     Revoke: ({ scope }) => ["policy", "revoke", scope],
     SetRung: ({ rung, on }) => ["ladder", on ? "enable" : "disable", rung],
     SetRole: ({ rung, role, on }) => ["ladder", "role", rung, role, on ? "on" : "off"],
-    MoveRung: ({ rung, side, of }) => ["ladder", "move", rung, `--`, of],
+    MoveRung: ({ rung, side, of }) => ["ladder", "move", rung, `--${side}`, of],
   })
-
-/**
- * What `foreman pipeline show <project> --json` prints: the pipeline a project
- * runs (its own when `drawn`, else the standard one) and why it cannot run, if
- * it cannot. The pipeline schema is foreman's own, not a copy.
- */
-export const ForemanPipeline = S.Struct({ project: S.String, drawn: S.Boolean, pipeline: Pipeline, problems: S.Array(S.String) })
-export type ForemanPipeline = typeof ForemanPipeline.Type
 
 /**
  * One rung of the ladder, cheapest first, as `foreman ladder list --json`

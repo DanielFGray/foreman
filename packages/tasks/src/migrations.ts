@@ -95,6 +95,18 @@ export const MIGRATIONS = Migrator.fromRecord({
     const sql = yield* SqlClient;
     for (const statement of CHARGES_AND_PARKS) yield* sql.unsafe(statement);
   }),
+  // Which models sit on the council. A model is a worker (a ladder rung), a
+  // council member, both or neither, so the switch is on the model, not the
+  // rung. Every model starts off: the operator names the members.
+  "0008_council": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const columns = yield* sql.unsafe<{ name: string }>(
+      `SELECT name FROM pragma_table_info('models')`,
+    );
+    if (!columns.some((column) => column.name === "council")) {
+      yield* sql.unsafe(`ALTER TABLE models ADD COLUMN council INTEGER NOT NULL DEFAULT 0`);
+    }
+  }),
 });
 
 export const MIGRATIONS_TABLE = "tasks_migrations";
@@ -318,7 +330,8 @@ const REGISTRY = [
     limit_scope TEXT NOT NULL CHECK (limit_scope IN ('pool','model')),
     thinking    TEXT NOT NULL DEFAULT 'medium',  -- medium | low | auto (cursor picks)
     retired     INTEGER NOT NULL DEFAULT 0,
-    notes       TEXT
+    notes       TEXT,
+    council     INTEGER NOT NULL DEFAULT 0  -- sits on the council
   )`,
   `CREATE TABLE aliases (
     alias TEXT PRIMARY KEY,              -- spelling found in runs.model

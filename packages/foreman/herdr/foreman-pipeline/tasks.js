@@ -6,17 +6,12 @@
 //
 // A card dropped on the board, or the picked cards sent through, runs
 // `foreman policy grant <id> <steps>`: an epic's grant covers every task
-// under it. The mod has no element drag and drop, so a drag is built from the
-// pointer: a press on a card, then a move of more than DRAG_START pixels,
-// then a release over the board. A shorter move is a click, which picks the
-// card. A release outside the window never arrives, so a drag left over is
-// dropped at the next press anywhere in the pane, before that press's release
-// could grant it.
+// under it. A drag lists one target, the board, and runs on the pane's one
+// drag (`drag.js`).
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { chip, refusalOf } from "./parts.js";
 
-const DRAG_START = 4;
 const CARD_W = 136;
 const GAP = 6;
 
@@ -28,17 +23,12 @@ export class Tasks {
     this.problem = null;
     this.loading = false;
     this.picked = new Set();
-    // The card being pressed or dragged: its id, where the press was, where
-    // the pointer is (window and pane coordinates), and whether it has moved
-    // far enough to be a drag.
-    this.drag = null;
     // The board's bounds in the window, taken from the last move over it.
     this.board = null;
   }
 
   toggle(cx) {
     this.on = !this.on;
-    this.drag = null;
     if (this.on) this.load(cx);
     else { this.report = null; this.problem = null; this.picked = new Set(); }
     cx.notify();
@@ -105,44 +95,28 @@ export class Tasks {
     cx.notify();
   }
 
-  // The pane root's pointer handlers. The root hears every press, move and
-  // release, so a drag follows the pointer anywhere in the pane. A card's own
-  // press starts a drag that has not moved, which this keeps whichever runs first.
-  pressed() { if (this.drag?.dragging === true) this.drag = null; }
-
-  moved(event, cx) {
-    if (this.drag === null) return;
-    const { from } = this.drag;
-    const far = Math.hypot(event.position.x - from.x, event.position.y - from.y) > DRAG_START;
-    this.drag = { ...this.drag, at: event.position, local: event.local_position, dragging: this.drag.dragging || far };
-    if (this.drag.dragging) cx.notify();
-  }
-
-  released(event, cx) {
-    const drag = this.drag;
-    this.drag = null;
-    if (drag === null || !drag.dragging) return;
-    if (this.overBoard(event.position)) this.grant([drag.id], cx);
-    cx.notify();
-  }
-
   // The board's own move handler, which is where its bounds come from.
   overMoved(event) { this.board = event.bounds; }
 
-  overBoard(point) {
-    const b = this.board;
-    return b != null && point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + b.height;
+  // A press on a card. Its one target state is granted, and the rectangle a
+  // granted card has is the board, from the board's last move.
+  press(item, event) {
+    const at = event.position;
+    this.pane.drag.press(item.id, at, event.bounds ?? { x: at.x, y: at.y, width: 0, height: 0 }, () =>
+      this.board == null ? [] : [{ rect: this.board, run: (cx) => this.grant([item.id], cx) }]);
   }
 
+  dragged() { return this.report?.items.find((one) => this.pane.drag.dragging(one.id)); }
+
   // Whether the board should show that a drop there grants the card.
-  dropping() { return this.drag?.dragging === true && this.overBoard(this.drag.at); }
+  dropping() { return this.dragged() !== undefined && this.pane.drag.preview() !== null; }
 
   // The card that follows the pointer while dragging, in pane coordinates.
   ghost(t) {
-    if (this.drag?.dragging !== true || this.drag.local == null) return null;
-    const item = this.report?.items.find((one) => one.id === this.drag.id);
+    const item = this.dragged();
     if (item === undefined) return null;
-    return div().absolute().left(this.drag.local.x + 8).top(this.drag.local.y + 8).w(CARD_W).p(4)
+    const rect = this.pane.local(this.pane.drag.floating());
+    return div().absolute().left(rect.x).top(rect.y).w(CARD_W).p(4)
       .rounded(4).border(1).border_color(t.accent).bg(t.surface).opacity(0.9)
       .child(div().text_color(t.muted).child(item.id))
       .child(div().truncate().child(item.title))
@@ -181,12 +155,12 @@ export class Tasks {
 
   card(item, t) {
     const picked = this.picked.has(item.id);
-    const dragged = this.drag?.dragging === true && this.drag.id === item.id;
+    const dragged = this.pane.drag.dragging(item.id);
     return v_flex().id(`card-${item.id}`).w(CARD_W).p(4).gap(1).rounded(4).border(picked ? 2 : 1)
       .border_color(picked ? t.accent : item.grant !== null ? t.done : t.border)
       .bg(dragged ? t.hover : item.type === "epic" ? t.canvas : t.surface)
       .hover((s) => s.bg(t.hover)).cursor_grab()
-      .on_mouse_down("left", (event, _cx) => { this.drag = { id: item.id, from: event.position, at: event.position, local: null, dragging: false }; })
+      .on_mouse_down("left", (event, _cx) => this.press(item, event))
       .on_click((event, cx) => this.pick(item.id, event.modifiers?.shift === true, cx))
       .child(h_flex().gap(4).text_size(10)
         .child(div().text_color(t.muted).child(item.type === "epic" ? `epic ${item.id}` : item.id))

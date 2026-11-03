@@ -27,7 +27,7 @@ const reading: ForemanReading = {
   policy: { paused: false, slots: 2, default: { author: "off", climb: "off", review: "on", land: "off" }, grants: [{ scope: "ep-1", steps: ["author"], remaining: 3, admitted: ["ts-q1"] }] },
   policyError: Option.none(),
   observedAt: Option.some(new Date(NOW - 30e3).toISOString()),
-  projects: [{ name: "app", directory: "/src/app", grantSteps: [] }, { name: "lib", directory: "/src/lib", grantSteps: [] }],
+  projects: [{ name: "app", grantSteps: [] }, { name: "lib", grantSteps: [] }],
   rows: [
     row("working", "ts-w1", "Add the login form", ["focus", "kill", "intervene", "release"]),
     row("review", "ts-r1", "Fix the date parser", ["focus"]),
@@ -47,7 +47,7 @@ const queue = ForemanQueue.Listed({
 
 const state: ForemanState = { reading: Option.some(reading), problem: Option.none() }
 
-const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [], closedPanels: [] }).model
+const start = init({ settings: DEFAULT_SETTINGS, selection: Selection.Nothing(), sidebarWidth: Option.none(), recent: [], softKeys: Option.none(), isZoomed: false, viewPicks: [], openEpics: [] }).model
 
 // Three spaces: app and lib are each in a project, notes is in none.
 // The sidebar names a space by its checkout's folder, so each space's checkout is its own folder.
@@ -194,7 +194,7 @@ test("kill takes a second click, a review can be allowed once, and the needs-inp
     expect(role("button", { name: "kill ts-w1" })).toHaveText("kill…"),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "kill ts-w1" })),
     click(role("button", { name: "allow review for ts-r1 once" })),
-    Command.expectExact(RunForeman({ command: { _tag: "Allow", key: "ts-r1", step: "review" } })),
+    Command.expectExact(RunForeman({ command: { _tag: "Grant", scope: "ts-r1", steps: ["review"], count: 1 } })),
     Command.resolve(RunForeman, Message.SucceededForemanCommand({ line: "policy grant ts-r1 review --count 1" })),
   )
 })

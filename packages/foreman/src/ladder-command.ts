@@ -1,4 +1,4 @@
-import { Argument, Command, Flag } from "effect/cli";
+import { Argument, CliError, Command, Flag } from "effect/cli";
 import { Console, Effect, Layer, Option, Schema } from "effect";
 import { launchArguments } from "./harness.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -14,6 +14,7 @@ import {
   type LadderRow,
   knownModels,
   parseRows,
+  readModels,
   readRows,
   readStatus,
   sizeSummary,
@@ -330,7 +331,18 @@ const suggest = Command.make(
   ),
 );
 
-export const ladderCommand = Command.make("ladder", {}).pipe(
+/**
+ * `foreman ladder --json`: every rung in rank order and every model with its
+ * council switch, so a front end draws the worker list and the council list
+ * from one read.
+ */
+export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
+  Effect.gen(function* () {
+    if (!json) return yield* new CliError.ShowHelp({ commandPath: ["ladder"], errors: [] });
+    const document = { rungs: yield* readStatus, models: yield* readModels };
+    yield* Console.log(JSON.stringify(document, null, 2));
+  }),
+).pipe(
   Command.withDescription("Read and edit the model ladder in the registry"),
   Command.withSubcommands([
     list,

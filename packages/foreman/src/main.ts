@@ -9,6 +9,7 @@ import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
 import { VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
+import { councilCommand } from "./council-command.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
@@ -128,6 +129,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
   Command.withSubcommands([
     quotaCommand,
     Command.provide(ladderCommand, store),
+    Command.provide(councilCommand, store),
     statsCommand,
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),
