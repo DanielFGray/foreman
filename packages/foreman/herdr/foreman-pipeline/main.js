@@ -18,9 +18,11 @@
 // simulated tasks on the board in place of the dispatcher's. One of the two
 // shows at a time.
 //
-// A Board / Pipeline switch picks the view. The Board view (`board.js`)
+// A Board / Pipeline / Models switch picks the view. The Board view (`board.js`)
 // shows the project's tasks in the dispatcher's board columns, and grants a
-// Queue card dropped on Authoring. Both views drag through `drag.js`.
+// Queue card dropped on Authoring. The Models view (`models.js`) shows the
+// ladder and the council, and changes them by drag. All three drag through
+// `drag.js`.
 //
 // The task graph (`tasks.js`) shows the project's open and claimed work in
 // columns by what it waits for (`foreman pipeline graph`), and grants a card's
@@ -42,6 +44,7 @@ import { Simulator } from "./simulate.js";
 import { Fleet } from "./fleet.js";
 import { Tasks } from "./tasks.js";
 import { Board } from "./board.js";
+import { Models } from "./models.js";
 import { Drag } from "./drag.js";
 import { chip, refusalOf, wiresLayer } from "./parts.js";
 
@@ -69,11 +72,12 @@ export default class Pipeline extends View {
     this.fleet = new Fleet(this);
     this.tasks = new Tasks(this);
     this.board = new Board(this);
-    // The pane's one drag, which the Board view and the task graph both use.
+    this.models = new Models(this);
+    // The pane's one drag, which the Board and Models views and the task graph use.
     this.drag = new Drag();
     // The pane root's bounds in the window, from the last move over it.
     this.origin = null;
-    // Which view the pane shows: the task board, or the pipeline drawing.
+    // Which view the pane shows: the task board, the pipeline drawing, or the models.
     this.mode = "board";
     this.loadPlacements(cx);
     this.watch(cx);
@@ -222,6 +226,7 @@ export default class Pipeline extends View {
         cx.notify();
       });
     if (this.mode === "board") return root.child(this.switchBar(t)).child(this.board.view(t));
+    if (this.mode === "models") return root.child(this.switchBar(t)).child(this.models.view(t));
     if (this.shown === null) return root.child(this.switchBar(t)).p(12).child(div().text_color(t.muted).child(this.problem ?? "reading the pipeline…"));
     const { drawing } = this.view();
     const draft = this.shown.draft;
@@ -273,7 +278,7 @@ export default class Pipeline extends View {
       .child(chip(t, "fit", "zoom-fit", (cx) => this.fit(cx)));
   }
 
-  // The bar over the Board view: the switch, the project, and the last refusal.
+  // The bar over the Board and Models views: the switch, the project, and the last refusal.
   switchBar(t) {
     return h_flex().px(10).py(6).gap(10).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(this.modeChip(t))
@@ -283,10 +288,11 @@ export default class Pipeline extends View {
       .when(this.problem !== null, (el) => el.child(div().text_color(t.blocked).truncate().child(this.problem)));
   }
 
-  // The Board / Pipeline switch. The drawing is read when the pipeline first shows.
+  // The Board / Pipeline / Models switch. The drawing is read when the pipeline
+  // first shows, and the ladder each time the Models view shows.
   modeChip(t) {
     return h_flex().gap(4)
-      .children([["board", "Board"], ["pipeline", "Pipeline"]].map(([mode, label]) =>
+      .children([["board", "Board"], ["pipeline", "Pipeline"], ["models", "Models"]].map(([mode, label]) =>
         div().id(`mode-${mode}`).px(6).rounded(4).border(1)
           .border_color(this.mode === mode ? t.accent : t.border).text_color(this.mode === mode ? t.accent : t.foreground)
           .hover((s) => s.bg(t.hover))
@@ -294,6 +300,7 @@ export default class Pipeline extends View {
             if (this.mode === mode) return;
             this.mode = mode; this.drag.pressedAnywhere();
             if (mode === "pipeline" && this.shown === null) this.loadDrawing(cx);
+            if (mode === "models") this.models.load(cx);
             cx.notify();
           })
           .child(label)));
