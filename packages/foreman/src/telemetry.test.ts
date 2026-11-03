@@ -18,6 +18,7 @@ const settingsWith = (otlpEndpoint: string) =>
     pollInterval: 60,
     staleAfter: 24,
     coachWindow: 60,
+    stallGrace: 5,
     landedWindow: 7,
     attemptsPerRung: 2,
   });

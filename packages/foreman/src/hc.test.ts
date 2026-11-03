@@ -57,7 +57,7 @@ describe("workersOf", () => {
     expect(worker!.task).toBe("ts-1");
     expect(worker!.worktree).toBe("/state/worktrees/proj/ts-1");
     expect(worker!.repository).toBe("/build/proj");
-    expect([...worker!.roles]).toEqual([
+    expect([...worker!.roles].map(([role, pane]) => [role, pane.state])).toEqual([
       ["author", "settled"],
       ["review", "working"],
     ]);
@@ -70,7 +70,7 @@ describe("workersOf", () => {
       terminal({ address: "t1", created_ms: 1, status: { state: "idle" } }),
       terminal({ address: "t2", created_ms: 2, status: null }),
     ]);
-    expect(worker!.roles.get("author")).toBe("working");
+    expect(worker!.roles.get("author")?.state).toBe("working");
   });
 
   test("marks a worker over the checkout itself as having no worktree", () => {

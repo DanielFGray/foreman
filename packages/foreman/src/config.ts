@@ -111,6 +111,7 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       otlpEndpoint: raw.otlpEndpoint.replace(/\/+$/, ""),
       staleAfter: raw.staleAfterHours,
       coachWindow: raw.coachWindowMinutes,
+      stallGrace: raw.stallGraceMinutes,
       landedWindow: raw.landedWindowDays,
       attemptsPerRung: raw.attemptsPerRung,
     } as const;
@@ -127,6 +128,9 @@ interface SettingsShape {
 
   /** Minutes an author's agent survives its handoff, for a reviewer to coach. */
   readonly coachWindow: number;
+
+  /** Minutes an agent may sit idle without naming an exit before foreman takes over. */
+  readonly stallGrace: number;
   readonly landedWindow: number;
 
   /**
@@ -190,6 +194,16 @@ const ConfigFile = Schema.Struct({
    * matters when reviews are queued behind a held project.
    */
   coachWindowMinutes: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(30))),
+
+  /**
+   * How long an agent may sit idle without naming an exit before foreman takes
+   * the task from it. An idle pane is an interrupted turn, a harness that
+   * stopped mid-task, or an agent that forgot its exit; the window lets the
+   * operator steer it by hand first. Typing in the pane starts a new turn, so
+   * the window counts from the last turn either of them ended. Past it,
+   * foreman closes the pane and a new agent continues from the worktree.
+   */
+  stallGraceMinutes: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(5))),
 
   /**
    * How far back the dashboard's landed column reaches. prog list has no

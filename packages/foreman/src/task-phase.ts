@@ -21,6 +21,11 @@ export interface TaskPhaseInput {
    * status as the signal that the author has handed off.
    */
   readonly underReview: boolean;
+  /**
+   * A settled agent has sat idle past the stall grace without naming an exit.
+   * Before that it may still be steered by hand, so settle leaves it alone.
+   */
+  readonly stalled: boolean;
 }
 
 /** One settled task's next handling, derived from the current world. */
@@ -37,6 +42,7 @@ export const TaskPhase = Schema.Literals([
   "ReviewStopped",
   "Residue",
   "AuthorStopped",
+  "Idle",
 ]);
 export type TaskPhase = typeof TaskPhase.Type;
 
@@ -60,9 +66,9 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
     if (input.reviewer === undefined) {
       return input.handoffExpired ? "ReviewExpired" : "ReviewWaiting";
     }
-    return "ReviewStopped";
+    return input.stalled ? "ReviewStopped" : "Idle";
   }
 
   if (input.status !== "in_progress") return "Residue";
-  return "AuthorStopped";
+  return input.stalled ? "AuthorStopped" : "Idle";
 };

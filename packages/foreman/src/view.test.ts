@@ -64,7 +64,8 @@ const worker = (task: string, state: WorkerState): Worker => ({
   directory: `/tmp/${task}`,
   worktree: `/tmp/wt-${task}`,
   state,
-  roles: new Map([["author", state]]),
+  since: undefined,
+  roles: new Map([["author", { state, since: undefined }]]),
 });
 
 const active = (item: Item, on: Worker | undefined): Active => ({

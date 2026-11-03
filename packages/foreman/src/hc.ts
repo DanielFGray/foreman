@@ -10,6 +10,7 @@ import {
   FleetError,
   type OpenOptions,
   type SpawnOptions,
+  type Pane,
   type Worker,
   type WorkerState,
   labelFor,
@@ -454,6 +455,7 @@ const idle = (task: string, directory: string, repository: string): Worker => ({
   worktree: directory === repository ? undefined : directory,
   repository,
   state: "gone",
+  since: undefined,
   roles: new Map(),
 });
 
@@ -503,11 +505,14 @@ export const workersOf = (all: ReadonlyArray<Terminal>): ReadonlyArray<Worker> =
   }
   return [...byTask].map(([task, mine]) => {
     const newest = [...mine].sort((a, b) => b.created_ms - a.created_ms);
-    const roles = new Map<AgentRole, WorkerState>();
+    const roles = new Map<AgentRole, Pane>();
     for (const terminal of newest) {
       const role = terminal.labels[ROLE];
-      if (S.is(AgentRoleSchema)(role) && !roles.has(role)) roles.set(role, stateOf(terminal));
+      if (S.is(AgentRoleSchema)(role) && !roles.has(role)) {
+        roles.set(role, { state: stateOf(terminal), since: terminal.status_ms ?? undefined });
+      }
     }
+    const pane = aggregate([...roles.values()]);
     const first = newest[0]!;
     const repository = first.labels[REPOSITORY];
     return {
@@ -515,7 +520,8 @@ export const workersOf = (all: ReadonlyArray<Terminal>): ReadonlyArray<Worker> =
       directory: first.cwd,
       worktree: repository === undefined || first.cwd === repository ? undefined : first.cwd,
       repository,
-      state: aggregate([...roles.values()]),
+      state: pane?.state ?? "gone",
+      since: pane?.since,
       roles,
     } satisfies Worker;
   });
@@ -554,9 +560,11 @@ export const stateOf = (terminal: Terminal): WorkerState => {
 export const stillRunning = (state: WorkerState): boolean =>
   state === "working" || state === "blocked";
 
-/** A worker's state across its roles: the most demanding one wins. */
-const aggregate = (states: ReadonlyArray<WorkerState>): WorkerState =>
-  (["blocked", "working", "settled"] as const).find((state) => states.includes(state)) ?? "gone";
+/** A worker's pane across its roles: the most demanding state wins. */
+const aggregate = (panes: ReadonlyArray<Pane>): Pane | undefined =>
+  (["blocked", "working", "settled"] as const)
+    .map((state) => panes.find((pane) => pane.state === state))
+    .find((pane) => pane !== undefined);
 
 const Terminal = S.Struct({
   address: S.String,
@@ -566,6 +574,8 @@ const Terminal = S.Struct({
   pid: S.optional(S.NullOr(S.Finite)),
   labels: S.Record(S.String, S.String),
   status: S.optional(S.NullOr(S.Struct({ state: S.String }))),
+  /** When the status last changed, in epoch milliseconds. */
+  status_ms: S.optional(S.NullOr(S.Finite)),
 });
 export type Terminal = S.Schema.Type<typeof Terminal>;
 

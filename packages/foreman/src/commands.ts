@@ -313,7 +313,7 @@ const wait = Command.make(
               worker.task === taskId &&
               Option.match(args.role, {
                 onNone: () => worker.state === "working",
-                onSome: (role) => worker.roles.get(role) === "working",
+                onSome: (role) => worker.roles.get(role)?.state === "working",
               }),
           ),
         ),

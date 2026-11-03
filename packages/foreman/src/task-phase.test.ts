@@ -10,6 +10,7 @@ const input = (overrides: Partial<TaskPhaseInput> = {}): TaskPhaseInput => ({
   holdsWork: false,
   handoffExpired: false,
   underReview: false,
+  stalled: true,
   ...overrides,
 });
 
@@ -36,5 +37,12 @@ describe("task phases", () => {
     expect(phaseOf(input({ underReview: true, reviewer: "claude" }))).toBe("ReviewStopped");
     expect(phaseOf(input({ status: "open" }))).toBe("Residue");
     expect(phaseOf(input())).toBe("AuthorStopped");
+  });
+
+  test("leaves an agent idle within the stall grace for the operator to steer", () => {
+    expect(phaseOf(input({ stalled: false }))).toBe("Idle");
+    expect(phaseOf(input({ stalled: false, underReview: true, reviewer: "claude" }))).toBe("Idle");
+    // A handed-off author waits out the coach window, not the stall grace.
+    expect(phaseOf(input({ stalled: false, underReview: true }))).toBe("ReviewWaiting");
   });
 });

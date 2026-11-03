@@ -193,6 +193,16 @@ way — so the task stays on the rung and is tried again. The count of those
 endings lives on the task as an `attempt:<rung>:<n>` label, because a dispatch
 days later is exactly what reads it.
 
+An agent whose pane is idle without an exit is not stopped until it has sat
+idle for `stallGraceMinutes` (default 5), counted from the time hc reports
+for its last turn (`status_ms`). An interrupted turn, a harness that stopped
+mid-task and an agent that forgot its exit all look like this, and the window
+lets the operator steer the pane by hand: typing starts a new turn, which
+resets the count. Past the window foreman stops the pane and keeps the
+worktree when it holds work, so the next author is told to continue from it,
+as after a vanished pane; only an empty worktree is removed. A harness that
+reports no status (cursor-agent) reads as working and never reaches this.
+
 A usage wall is the one stop that says something, and it says it about the
 account, not the model. Each harness's wall text is listed in `src/harness.ts`,
 read from the screen of the stopped author, and matched only at the foot of it.

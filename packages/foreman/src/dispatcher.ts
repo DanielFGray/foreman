@@ -1247,6 +1247,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const coachCutoff = DateTime.subtract(yield* DateTime.now, {
         minutes: settings.coachWindow,
       });
+      const stallCutoff = DateTime.toEpochMillis(
+        DateTime.subtract(yield* DateTime.now, { minutes: settings.stallGrace }),
+      );
       const walledNow = walledRungs(current.providers);
 
       // A stopped project's tasks stay as they are: its pipeline cannot say
@@ -1379,8 +1382,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ({ task, worker, kind }) =>
           Effect.gen(function* () {
             const reviewer = reviewedBy(task);
+            // A harness that reports no time for its idle turn gets no grace.
+            const stalled =
+              worker.state === "settled" &&
+              (worker.since === undefined || worker.since <= stallCutoff);
             const holdsWork =
-              worker.state === "gone" && !isOnboarding(task)
+              (worker.state === "gone" || stalled) && !isOnboarding(task)
                 ? yield* repository.holdsWork(worker.directory, labelFor(task.id))
                 : false;
             const pipeline = pipelineOf(task);
@@ -1395,6 +1402,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               holdsWork,
               handoffExpired: handoffExpired(task, coachCutoff),
               underReview: at !== undefined && isUnderReview(at),
+              stalled,
             });
 
             // The rung that actually ran, which is what an outcome is about —
@@ -1487,6 +1495,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 ).pipe(Effect.andThen(teardown(task))),
               ),
               Match.when("Blocked", () => Effect.void),
+              Match.when("Idle", () => Effect.void),
               Match.when("ReviewWaiting", () => Effect.void),
               Match.when("ReviewExpired", () => stopAgents(worker)),
               Match.when("ReviewStopped", () =>
@@ -1532,12 +1541,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                           worker,
                           `${kind ?? "agent"} stopped without naming an exit`,
                         )
-                      : retryAttempt(
-                          task,
-                          `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
-                          "stopped",
-                        ).pipe(
-                          Effect.andThen(teardown(task)),
+                      : // The pane sat idle past the stall grace. Its work stays for
+                        // the next author, as a vanished author's does; only an
+                        // empty worktree is removed.
+                        stopAgents(worker).pipe(
+                          Effect.andThen(
+                            current.committed.has(task.id) || holdsWork
+                              ? retryAttempt(
+                                  task,
+                                  `foreman: ${kind ?? "agent"} sat idle for ${settings.stallGrace} minutes without naming an exit and left unfinished work in ${worker.directory}. Read git status and git log ${labelFor(task.id)} before you plan anything, and continue from what is there.`,
+                                  "stopped",
+                                )
+                              : retryAttempt(
+                                  task,
+                                  `foreman: ${kind ?? "agent"} stopped without finishing (status ${task.status}).`,
+                                  "stopped",
+                                ).pipe(Effect.andThen(teardown(task))),
+                          ),
                           Effect.andThen(
                             fleet.notify(
                               "Task returned",
@@ -3625,10 +3645,10 @@ export const scopeRoster = (
     const task = tasks.get(worker.task);
     if (!task) continue;
     kept.add(worker.task);
-    const state = reviewedBy(task) ? worker.roles.get("review") : worker.roles.get("author");
+    const pane = worker.roles.get(reviewedBy(task) ? "review" : "author");
     owned.push({
       task,
-      worker: { ...worker, state: state ?? "gone" },
+      worker: { ...worker, state: pane?.state ?? "gone", since: pane?.since },
       kind: reviewedBy(task) ?? authoredBy(task),
     });
   }

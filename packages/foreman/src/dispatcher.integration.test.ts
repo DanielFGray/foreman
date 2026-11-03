@@ -69,7 +69,8 @@ const worker = (task: string, role: "author" | "review", state: WorkerState): Wo
   directory: `/worktree/${task}`,
   worktree: `/worktree/${task}`,
   state,
-  roles: new Map([[role, state]]),
+  since: undefined,
+  roles: new Map([[role, { state, since: undefined }]]),
 });
 
 class World {
@@ -133,6 +134,7 @@ class World {
           directory: options.directory,
           worktree: options.directory === options.repository ? undefined : options.directory,
           state: "gone",
+          since: undefined,
           roles: new Map(),
         };
         this.workers.set(options.task, created);
@@ -154,7 +156,10 @@ class World {
         : this.write("fleet.spawn", () => {
             this.spawned.push([target.task, options.role]);
             this.prompts.push(options.prompt);
-            const roles = new Map(target.roles).set(options.role, "working" as const);
+            const roles = new Map(target.roles).set(options.role, {
+              state: "working",
+              since: undefined,
+            });
             this.workers.set(target.task, { ...target, roles, state: "working" });
             return { kind: options.kind, model: options.model };
           }),
@@ -538,6 +543,7 @@ const layerFor = (world: World) =>
         pollInterval: 60,
         staleAfter: 24,
         coachWindow: 60,
+        stallGrace: 5,
         landedWindow: 7,
         attemptsPerRung: 2,
       }),
@@ -1234,6 +1240,7 @@ describe("quota probing", () => {
           pollInterval: 60,
           staleAfter: 24,
           coachWindow: 60,
+          stallGrace: 5,
           landedWindow: 7,
           attemptsPerRung: 2,
         }),
@@ -1312,6 +1319,7 @@ describe("a spent account and the reviewer above it", () => {
           pollInterval: 60,
           staleAfter: 24,
           coachWindow: 60,
+          stallGrace: 5,
           landedWindow: 7,
           attemptsPerRung: 2,
         }),
@@ -1628,6 +1636,7 @@ describe("a usage wall", () => {
           pollInterval: 60,
           staleAfter: 24,
           coachWindow: 60,
+          stallGrace: 5,
           landedWindow: 7,
           attemptsPerRung: 2,
         }),
@@ -1744,6 +1753,51 @@ describe("a usage wall", () => {
     });
   });
 
+  /** Dates the author pane's idle turn `minutes` ago; the stall grace is 5 minutes. */
+  const idleFor = (world: World, id: string, minutes: number) => {
+    const since = Date.now() - minutes * 60_000;
+    const current = world.workers.get(id)!;
+    world.workers.set(id, {
+      ...current,
+      since,
+      roles: new Map([["author", { state: "settled", since }]]),
+    });
+  };
+
+  test("an author idle within the stall grace is left for the operator to steer", async () => {
+    const world = stoppedOn("ts-idle", "all done\n  ctrl+p commands", true);
+    idleFor(world, "ts-idle", 1);
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-idle")?.runs[0]).toMatchObject({ open: true });
+    expect(world.stopped).toEqual([]);
+    expect(world.closed).toEqual([]);
+  });
+
+  test("past the stall grace the pane closes, and the next author continues from the worktree", async () => {
+    const world = stoppedOn("ts-stalled", "all done\n  ctrl+p commands", true);
+    idleFor(world, "ts-stalled", 10);
+
+    await tick(world);
+
+    expect(world.stopped).toContainEqual(["ts-stalled", "author"]);
+    expect(world.closed).not.toContain("ts-stalled");
+    expect(world.tasks.get("ts-stalled")?.labels).toContain("attempt:free:1");
+    expect(world.logs.map(([, message]) => message).join("\n")).toContain(
+      "continue from what is there",
+    );
+  });
+
+  test("past the stall grace an empty worktree is removed", async () => {
+    const world = stoppedOn("ts-stalled-empty", "all done\n  ctrl+p commands", false);
+    idleFor(world, "ts-stalled-empty", 10);
+
+    await tick(world);
+
+    expect(world.closed).toContain("ts-stalled-empty");
+  });
+
   test("a quoted wall higher up the screen than the stop is no wall", async () => {
     const quoted = "Free usage limit reached is the message foreman looks for.";
     const world = stoppedOn(
@@ -1850,7 +1904,11 @@ describe("a route's workspace blocks", () => {
   const settled = (world: World, id: string, role: "author" | "review") => {
     const current = world.workers.get(id);
     if (current === undefined) throw new Error(`${id} has no worker`);
-    world.workers.set(id, { ...current, roles: new Map([[role, "settled"]]), state: "settled" });
+    world.workers.set(id, {
+      ...current,
+      roles: new Map([[role, { state: "settled", since: undefined }]]),
+      state: "settled",
+    });
   };
   const authorRuns = (world: World, id: string) =>
     world.tasks.get(id)?.runs.filter((run) => run.role === "author") ?? [];
@@ -2170,6 +2228,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           pollInterval: 60,
           staleAfter: 24,
           coachWindow: 60,
+          stallGrace: 5,
           landedWindow: 7,
           attemptsPerRung: 2,
         }),
@@ -2266,7 +2325,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     const settle = (role: "author" | "review") =>
       world.workers.set(id, {
         ...world.workers.get(id)!,
-        roles: new Map([[role, "settled"]]),
+        roles: new Map([[role, { state: "settled", since: undefined }]]),
         state: "settled",
       });
 
@@ -2347,7 +2406,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
       const settle = (role: "author" | "review") =>
         world.workers.set(id, {
           ...world.workers.get(id)!,
-          roles: new Map([[role, "settled"]]),
+          roles: new Map([[role, { state: "settled", since: undefined }]]),
           state: "settled",
         });
 
@@ -2425,6 +2484,7 @@ describe("a drawn pipeline", () => {
                 pollInterval: 60,
                 staleAfter: 24,
                 coachWindow: 60,
+                stallGrace: 5,
                 landedWindow: 7,
                 attemptsPerRung: 2,
               }),

@@ -230,6 +230,13 @@ export interface Worker {
   readonly state: WorkerState;
 
   /**
+   * When `state` began, in epoch milliseconds, as the agent's harness reported
+   * it: for a settled agent, when its last turn ended. Absent when the harness
+   * reports no time or nothing runs.
+   */
+  readonly since: number | undefined;
+
+  /**
    * What the multiplexer sees in the pane each role runs in, for the roles
    * that have one.
    *
@@ -240,7 +247,13 @@ export interface Worker {
    * dispatch is refused from the pane list itself, and dismissing the author
    * means closing the workspace, which needs only the workspace id.
    */
-  readonly roles: ReadonlyMap<AgentRole, WorkerState>;
+  readonly roles: ReadonlyMap<AgentRole, Pane>;
+}
+
+/** One role's pane: what its agent is doing, and since when (see `Worker.since`). */
+export interface Pane {
+  readonly state: WorkerState;
+  readonly since: number | undefined;
 }
 
 /**

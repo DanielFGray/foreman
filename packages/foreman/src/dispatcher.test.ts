@@ -76,9 +76,10 @@ const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   repository: "/home/dan/build/project",
   worktree: "/tmp/worktree",
   state,
+  since: undefined,
   roles: new Map([
-    ["author", "settled"],
-    ["review", state],
+    ["author", { state: "settled", since: undefined }],
+    ["review", { state, since: undefined }],
   ]),
 });
 
@@ -103,7 +104,7 @@ const owned = (
     task: item,
     worker: {
       ...worker("gone", id),
-      roles: new Map(roles.map((role) => [role, "settled" as const])),
+      roles: new Map(roles.map((role) => [role, { state: "settled" as const, since: undefined }])),
     },
     kind: reviewedBy(item) ?? authoredBy(item),
   };
