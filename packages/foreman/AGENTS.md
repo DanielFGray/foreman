@@ -61,7 +61,7 @@ grants that widen the default for one task or epic, and `projects`: a
 project's own `paused`, its own mode for any step, which replace the
 default for that project's tasks only. A paused project takes no step, grants included; slots stay
 fleet-wide, and an agent block's `slots` caps that block's running tasks inside
-them. `foreman policy` and the panel write it
+them. `foreman policy` and the Foreman pane write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
@@ -877,9 +877,9 @@ knows what happened, whatever the workflow.
 
 herdr-web's server publishes every reading to its pages and writes it to
 `state.json` (`src/published.ts`), and reads the queue in its own process
-(`queueOf` in `src/host.ts`). The herdr-app panel (`herdr/foreman/main.js`)
+(`queueOf` in `src/host.ts`). The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
 reads `state.json`, and reads the queue and a task's record through
-`foreman queue` and `foreman show` (`src/store-commands.ts`). The pipeline pane (`herdr/foreman-pipeline/main.js`)
+`foreman queue` and `foreman show` (`src/store-commands.ts`). Its Pipeline view
 draws the `drawing` that `foreman pipeline show --json` prints, laid out by
 `src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Its
 `--flow` is `down` in a pane taller than it is wide, else `across`. It edits a
@@ -891,7 +891,7 @@ draft with the events a front end chose, from scratch on each call
 in memory, and after each event prints the placement, the route so far and the
 events the block offers next, so a front end shows what the dispatcher would do
 without a copy of its rules. The pane's simulate controls
-(`herdr/foreman-pipeline/simulate.js`) call it after each choice and after each
+(`herdr/foreman/simulate.js`) call it after each choice and after each
 change to the draft. `foreman pipeline simulate <project> --json` plays the
 project's ready and claimed tasks through its draft and through the pipeline it
 runs, on one seed, so the pane can compare the two and animate the draft
@@ -903,7 +903,7 @@ Landings and checks wait for the next tick, one poll interval after the tick
 before, as in the fleet. Each frame holds only the tasks that moved, so the
 board at a frame is the fold of the frames up to it. Its `assumes` names every
 fact it does not read from the world. The pane's fleet controls
-(`herdr/foreman-pipeline/fleet.js`) call it on demand and after each change to
+(`herdr/foreman/fleet.js`) call it on demand and after each change to
 the draft, and draw the frames on the board up to a time the operator picks. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
