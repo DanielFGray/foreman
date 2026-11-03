@@ -119,6 +119,8 @@ export interface ColumnRow {
   readonly ask: Ask | undefined;
   /** The account behind a quota row, whose every window the preview reads. */
   readonly provider: Provider | undefined;
+  /** The project's preview script, on a row whose task has a worktree for it to serve. */
+  readonly preview: string | undefined;
   /** The error behind a dispatch-failed decision row. */
   readonly failure: string | undefined;
   readonly hasWork: boolean;
@@ -139,6 +141,7 @@ export const ACTIONS_LIST = [
   "onboard",
   "adopt",
   "approve",
+  "preview",
 ] as const;
 
 /** Something an operator does to one row. */
@@ -169,8 +172,8 @@ export type Action = (typeof ACTIONS_LIST)[number];
  */
 const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   queue: ["complete", "intervene", "descend", "unassign"],
-  working: ["focus", "kill", "intervene", "descend", "release"],
-  review: ["focus", "kill", "intervene", "descend", "release"],
+  working: ["focus", "preview", "kill", "intervene", "descend", "release"],
+  review: ["focus", "preview", "kill", "intervene", "descend", "release"],
   landed: [],
   decisions: ["retry", "takeOver", "intervene", "release", "close", "unassign"],
   // Approval is the only answer an ask takes. Release and kill stay on the
@@ -257,6 +260,7 @@ export const actionsFor = (
       Match.when("onboard", () => row.project !== undefined && row.reason === "dirty"),
       Match.when("adopt", () => row.unreviewed !== undefined),
       Match.when("approve", () => row.ask !== undefined),
+      Match.when("preview", () => row.preview !== undefined),
       Match.exhaustive,
     ),
   );
@@ -354,6 +358,7 @@ export const queueRow = (task: Item): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: false,
   committed: false,
 });
@@ -374,6 +379,7 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: false,
   committed: false,
 });
@@ -418,6 +424,11 @@ const activeRow = (
     ask: undefined,
     failure: undefined,
     provider: undefined,
+    // A preview serves the task's worktree, so a task in the operator's checkout has none.
+    preview:
+      worker?.worktree === undefined
+        ? undefined
+        : state.projects.find((project) => project.name === task.project)?.preview,
     hasWork: worker !== undefined || state.resumable.has(task.id),
     committed: state.committed.has(task.id),
   };
@@ -438,6 +449,7 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -468,6 +480,7 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   ask: undefined,
   failure,
   provider: undefined,
+  preview: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
@@ -500,6 +513,7 @@ const askRow = (ask: Ask): ColumnRow => ({
   ask,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: false,
   committed: false,
 });
@@ -526,6 +540,7 @@ const orphanRow = (worker: Worker): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: false,
   committed: false,
 });
@@ -547,6 +562,7 @@ const heldRow = (held: Held): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: false,
   committed: false,
 });
@@ -584,6 +600,7 @@ const quotaRow = (provider: Provider): ColumnRow => {
     ask: undefined,
     failure: undefined,
     provider,
+    preview: undefined,
     hasWork: false,
     committed: false,
   };
@@ -609,6 +626,7 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: true,
   committed: true,
 });
@@ -633,6 +651,7 @@ const staleRow = (branch: StaleRow): ColumnRow => ({
   ask: undefined,
   failure: undefined,
   provider: undefined,
+  preview: undefined,
   hasWork: true,
   committed: true,
 });

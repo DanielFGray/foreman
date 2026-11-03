@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DateTime, Option, Schema as S } from "effect";
 import type { BoardColumn } from "./board.ts";
 import { EMPTY_FLEET, placementIn, type FleetState } from "./dispatcher.ts";
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { Policy } from "./policy.ts";
 import { Published, publishedOf } from "./published.ts";
 import type { Item, TaskStatus } from "./records.ts";
@@ -29,7 +29,7 @@ const task = (id: string, status: TaskStatus, runs: Item["runs"] = []): Item => 
 });
 
 const pipelines: FleetState["pipelines"] = new Map([
-  ["fibrae", { _tag: "Runs", pipeline: STANDARD_PIPELINE, drawn: false }],
+  ["fibrae", { _tag: "Runs", pipeline: STANDARD_PIPELINES.worktree, drawn: false }],
 ]);
 
 /** The published board for these tasks, each placed the way the dispatcher places it. */
@@ -37,7 +37,15 @@ const board = (tasks: ReadonlyArray<Item>, over: Partial<FleetState> = {}) => {
   const published = publishedOf(
     {
       ...EMPTY_FLEET,
-      projects: [{ name: "fibrae", directory: "/build/fibrae", verify: undefined, open: true }],
+      projects: [
+        {
+          name: "fibrae",
+          directory: "/build/fibrae",
+          verify: undefined,
+          preview: undefined,
+          open: true,
+        },
+      ],
       pipelines,
       placed: tasks.map((one) => ({ task: one, placement: placementIn(pipelines, one) })),
       ...over,

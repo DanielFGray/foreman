@@ -3,13 +3,16 @@ import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRe
 import { Dispatcher } from "./dispatcher.ts";
 import {
   AgentNode,
+  choiceOf,
   instructionNames,
   LANDINGS,
   instructionProblems,
   Pipeline,
   type Placement,
   problemsOf,
+  STANDARD_PIPELINES,
   toMermaid,
+  WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
@@ -53,9 +56,9 @@ const show = Command.make("show", { project, json, flow }, ({ project, json, flo
   Effect.gen(function* () {
     if (json) return yield* Console.log(JSON.stringify(yield* shownOf(project, flow), null, 2));
     const { pipeline, drawn } = yield* livePipeline(project);
-    yield* Console.log(
-      drawn ? `${project} runs its own pipeline:` : `${project} runs the standard pipeline:`,
-    );
+    const choice = choiceOf(pipeline);
+    const name = choice === undefined ? "its own pipeline" : `the standard ${choice} pipeline`;
+    yield* Console.log(`${project} runs ${name}${drawn ? "" : " (the default)"}:`);
     yield* Console.log(toMermaid(pipeline));
     for (const problem of yield* problemsAgainstLadder(pipeline))
       yield* Console.error(`problem: ${problem}`);
@@ -85,6 +88,33 @@ const set = Command.make("set", { project, source }, ({ project, source }) =>
     yield* Console.log(`${project} now runs the pipeline in ${source}`);
   }),
 ).pipe(Command.withDescription("Check a pipeline, then make it the one a project runs"));
+
+const use = Command.make(
+  "use",
+  {
+    workspace: Argument.Literals("workspace", WORKSPACE_CHOICES).pipe(
+      Argument.withDescription(
+        "checkout (your checkout, on the task's branch), worktree (a worktree of the task's own) or direct (your checkout, on your branch)",
+      ),
+    ),
+    project: Flag.String("project"),
+  },
+  ({ workspace, project }) =>
+    Effect.gen(function* () {
+      const { pipeline, drawn } = yield* livePipeline(project);
+      // Only a standard variant is replaced, so a pipeline the operator drew by hand is never lost.
+      if (drawn && choiceOf(pipeline) === undefined)
+        return yield* new PipelineError({
+          detail: `${project} runs its own drawn pipeline, so use leaves it as it is: see it with foreman pipeline show ${project}, and drop it with foreman pipeline clear ${project}`,
+        });
+      yield* runPipeline(project, STANDARD_PIPELINES[workspace]);
+      yield* Console.log(`${project} now runs the standard ${workspace} pipeline`);
+    }),
+).pipe(
+  Command.withDescription(
+    "Draw a standard pipeline for a project: its agents work in your checkout, in a worktree, or directly on your branch",
+  ),
+);
 
 const edit = Command.make(
   "edit",
@@ -160,9 +190,9 @@ const discard = Command.make("discard", { project }, ({ project }) =>
 const clear = Command.make("clear", { project }, ({ project }) =>
   Effect.gen(function* () {
     yield* updatePipelines(pipelinesPath(), ({ [project]: _dropped, ...others }) => others);
-    yield* Console.log(`${project} runs the standard pipeline`);
+    yield* Console.log(`${project} runs the default pipeline`);
   }),
-).pipe(Command.withDescription("Drop a project's own pipeline, so it runs the standard one"));
+).pipe(Command.withDescription("Drop a project's own pipeline, so it runs the default one"));
 
 const place = Command.make(
   "place",
@@ -359,6 +389,7 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       show,
       check,
       set,
+      use,
       edit,
       save,
       discard,

@@ -659,51 +659,99 @@ export const standardExits = (
         ];
 
 /**
- * The pipeline of a project that has drawn none: the task's branch in a
- * worktree of its own, then author, review, and a merge.
+ * Where a standard pipeline puts its agents (docs/workspace-blocks.md):
+ *
+ * - `checkout`: the operator's checkout, on the task's branch.
+ * - `worktree`: a separate worktree, on the task's branch.
+ * - `direct`: the operator's checkout, on the operator's branch. It has no
+ *   branch to land, so it ends at `done`.
+ */
+export const WORKSPACE_CHOICES = ["checkout", "worktree", "direct"] as const;
+export type WorkspaceChoice = (typeof WORKSPACE_CHOICES)[number];
+
+/**
+ * The standard pipeline for each workspace: author, review, then land (or
+ * done for direct).
  *
  * A returned review goes straight to `climb`, keeping the claim and workspace.
  * The router sends queued retries there too, so the `climb` step governs
  * retries apart from a first try.
  */
-export const STANDARD_PIPELINE: Pipeline = {
-  nodes: [
-    { kind: "source", id: "queue", filter: "", next: "branch" },
-    { kind: "branch", id: "branch", next: "worktree" },
-    { kind: "worktree", id: "worktree", next: "retry" },
-    {
-      kind: "router",
-      id: "retry",
-      routes: [
-        { when: "failed", to: "climb" },
-        { when: "attempts>=1", to: "climb" },
-      ],
-      else: "start",
-    },
-    { kind: "gate", id: "start", step: "author", next: "author" },
-    { kind: "gate", id: "climb", step: "climb", next: "author" },
-    {
-      kind: "agent",
-      id: "author",
-      role: "author",
-      model: "ladder",
-      exits: standardExits({ kind: "agent", role: "author" }, "review-gate"),
-    },
-    { kind: "gate", id: "review-gate", step: "review", next: "review" },
-    {
-      kind: "agent",
-      id: "review",
-      role: "review",
-      model: "above",
-      exits: [
-        { name: "approved", to: "land-gate" },
-        { name: "returned", to: "climb", fails: "author" },
-      ],
-    },
-    { kind: "gate", id: "land-gate", step: "land", next: "land" },
+export const STANDARD_PIPELINES: Record<WorkspaceChoice, Pipeline> = {
+  checkout: standardPipeline([{ kind: "branch", id: "branch", next: "retry" }], {
+    kind: "land",
+    id: "land",
+    how: "merge",
+  }),
+  worktree: standardPipeline(
+    [
+      { kind: "branch", id: "branch", next: "worktree" },
+      { kind: "worktree", id: "worktree", next: "retry" },
+    ],
     { kind: "land", id: "land", how: "merge" },
-  ],
+  ),
+  direct: standardPipeline([], { kind: "done", id: "done" }),
 };
+
+/** The pipeline of a project that has drawn none: its agents work in the operator's checkout. */
+export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
+
+/** The standard workspace `pipeline` is exactly, if any. */
+export const choiceOf = (pipeline: Pipeline): WorkspaceChoice | undefined => {
+  const encoded = JSON.stringify(S.encodeSync(Pipeline)(pipeline));
+  return WORKSPACE_CHOICES.find(
+    (workspace) =>
+      JSON.stringify(S.encodeSync(Pipeline)(STANDARD_PIPELINES[workspace])) === encoded,
+  );
+};
+
+/**
+ * The standard blocks after `workspace`, which leads from the source into the
+ * router `retry`, ending at `end`. A function declaration, so the constant
+ * above can call it while the module loads.
+ */
+function standardPipeline(
+  workspace: ReadonlyArray<PipelineNode>,
+  end: PipelineNode & { readonly id: string },
+): Pipeline {
+  return {
+    nodes: [
+      { kind: "source", id: "queue", filter: "", next: workspace[0]?.id ?? "retry" },
+      ...workspace,
+      {
+        kind: "router",
+        id: "retry",
+        routes: [
+          { when: "failed", to: "climb" },
+          { when: "attempts>=1", to: "climb" },
+        ],
+        else: "start",
+      },
+      { kind: "gate", id: "start", step: "author", next: "author" },
+      { kind: "gate", id: "climb", step: "climb", next: "author" },
+      {
+        kind: "agent",
+        id: "author",
+        role: "author",
+        model: "ladder",
+        exits: standardExits({ kind: "agent", role: "author" }, "review-gate"),
+      },
+      { kind: "gate", id: "review-gate", step: "review", next: "review" },
+      {
+        kind: "agent",
+        id: "review",
+        role: "review",
+        model: "above",
+        exits: [
+          { name: "approved", to: "land-gate" },
+          { name: "returned", to: "climb", fails: "author" },
+        ],
+      },
+      { kind: "gate", id: "land-gate", step: "land", next: end.id },
+      end,
+    ],
+  };
+}
 
 /** The pipeline as a Mermaid flowchart, one arrow per wire. A return to the queue draws none. */
 export const toMermaid = (pipeline: Pipeline): string =>

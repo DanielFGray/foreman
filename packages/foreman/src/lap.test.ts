@@ -16,7 +16,7 @@ import {
   roundsOf,
   routedCommit,
 } from "./lap.ts";
-import { place, STANDARD_PIPELINE } from "./pipeline.ts";
+import { place, STANDARD_PIPELINES } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
@@ -27,10 +27,10 @@ import { authorRun, authorDone, reviewRun } from "./task-fixture.ts";
 /** The block a reviewing task with these runs stands at on the standard pipeline. */
 const blockOf = (runs: ReadonlyArray<Run>, tip: string | undefined) => {
   const placement = place(
-    STANDARD_PIPELINE,
+    STANDARD_PIPELINES.worktree,
     factsOf(
       { status: "in_progress", priority: 2, parent: undefined, labels: [], runs, charges: [], tip },
-      STANDARD_PIPELINE,
+      STANDARD_PIPELINES.worktree,
     ),
   );
   return placement._tag === "At" ? placement.node.id : placement._tag;

@@ -4,7 +4,7 @@ import { planFrom, reviewable } from "./dispatcher.ts";
 import type { Ladder } from "./ladder.ts";
 import { authoredBy, reviewedBy } from "./lap.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
-import { isUnderReview, place, type Placement, STANDARD_PIPELINE } from "./pipeline.ts";
+import { isUnderReview, place, type Placement, STANDARD_PIPELINES } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import type { Item, TaskStatus } from "./records.ts";
 import { queueFrom } from "./queue.ts";
@@ -258,7 +258,7 @@ const placedStep = (item: Item): string => {
         }).queue
       : [];
   // Under review when placement puts the task past the author's running turn.
-  const placement = place(STANDARD_PIPELINE, factsOf(item, STANDARD_PIPELINE));
+  const placement = place(STANDARD_PIPELINES.worktree, factsOf(item, STANDARD_PIPELINES.worktree));
   const review = isUnderReview(placement)
     ? reviewable(
         [{ task: item, worker: undefined, kind: reviewedBy(item) ?? authoredBy(item) }],
@@ -273,7 +273,9 @@ const placedStep = (item: Item): string => {
     review,
     policy: ASKING,
     scopes: new Map<string, ReadonlySet<string>>(),
-    pipelines: new Map([["foreman", { _tag: "Runs", pipeline: STANDARD_PIPELINE, drawn: false }]]),
+    pipelines: new Map([
+      ["foreman", { _tag: "Runs", pipeline: STANDARD_PIPELINES.worktree, drawn: false }],
+    ]),
     placed: [],
     dirty: new Set<string>(),
   }).asks.map(({ step }) => step);
@@ -283,7 +285,9 @@ const placedStep = (item: Item): string => {
 describe("the next step after a run ends", () => {
   for (const row of PHASES) {
     test(`${row.phase} (${row.after}) → ${row.step} at ${row.at}`, () => {
-      expect(at(place(STANDARD_PIPELINE, factsOf(row.task, STANDARD_PIPELINE)))).toBe(row.at);
+      expect(
+        at(place(STANDARD_PIPELINES.worktree, factsOf(row.task, STANDARD_PIPELINES.worktree))),
+      ).toBe(row.at);
       expect(placedStep(row.task)).toBe(row.step);
     });
   }
@@ -292,7 +296,9 @@ describe("the next step after a run ends", () => {
 describe("the next step after a landing", () => {
   for (const row of LANDINGS) {
     test(`${row.result} (${row.after}) → ${row.step} at ${row.at}`, () => {
-      expect(at(place(STANDARD_PIPELINE, factsOf(row.task, STANDARD_PIPELINE)))).toBe(row.at);
+      expect(
+        at(place(STANDARD_PIPELINES.worktree, factsOf(row.task, STANDARD_PIPELINES.worktree))),
+      ).toBe(row.at);
       expect(placedStep(row.task)).toBe(row.step);
     });
   }

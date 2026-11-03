@@ -25,6 +25,9 @@ export interface Project {
   /** The project's own check, `scripts/verify.sh`, when it keeps one. */
   readonly verify: string | undefined;
 
+  /** The project's own dev server, `scripts/preview.sh`, when it keeps one. It runs in a task's worktree. */
+  readonly preview: string | undefined;
+
   /** A space is open in this checkout, so new work may start here. */
   readonly open: boolean;
 }
@@ -47,7 +50,7 @@ export const projectSet = (
   open: ReadonlyArray<string>,
   running: ReadonlyArray<string>,
 ): {
-  readonly projects: ReadonlyArray<Omit<Project, "verify">>;
+  readonly projects: ReadonlyArray<Omit<Project, "verify" | "preview">>;
   readonly ambiguous: ReadonlyArray<Ambiguous>;
 } => {
   const opened = new Set(open);

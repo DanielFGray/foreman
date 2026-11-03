@@ -9,7 +9,7 @@ import { chargesOf, parksOf, runsOf, Tasks } from "tasks";
 import { convert, reportLines } from "./cutover-runs.ts";
 import { reviewedBy, reviewFailedBy } from "./lap.ts";
 import { attemptsOf, failuresOf, needsYou } from "./records.ts";
-import { place, STANDARD_PIPELINE } from "./pipeline.ts";
+import { place, STANDARD_PIPELINES } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Repository } from "./repository.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
@@ -222,10 +222,10 @@ describe("the charges and parks cutover", () => {
 /** Whether a reviewing task with these runs stands at the land of the standard pipeline. */
 const landsAt = (task: { readonly runs: ReadonlyArray<Run>; readonly tip: string | undefined }) => {
   const placement = place(
-    STANDARD_PIPELINE,
+    STANDARD_PIPELINES.worktree,
     factsOf(
       { status: "in_progress", priority: 2, parent: undefined, labels: [], charges: [], ...task },
-      STANDARD_PIPELINE,
+      STANDARD_PIPELINES.worktree,
     ),
   );
   return placement._tag === "At" && placement.node.kind === "land";

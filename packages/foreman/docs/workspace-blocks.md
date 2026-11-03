@@ -21,9 +21,20 @@ Agents work where the blocks before them put the task:
 
 | Blocks before the agent | The agent works in | On |
 |---|---|---|
-| branch, worktree | a separate worktree | the task's branch (the standard pipeline) |
-| branch | your checkout | the task's branch |
-| none | your checkout | your current branch ("direct") |
+| branch, worktree | a separate worktree | the task's branch (`worktree`) |
+| branch | your checkout | the task's branch (`checkout`, the default) |
+| none | your checkout | your current branch (`direct`) |
+
+A project with no drawn pipeline runs the `checkout` choice. `foreman pipeline
+use <checkout|worktree|direct> --project <name>` draws one of the three as the
+project's pipeline, through the same file code as the pipeline editor. It refuses
+when the project already has a drawing that is not one of the three, so a
+hand-drawn pipeline is never lost. A worktree task can be served for a look:
+`foreman preview <task>` runs the project's `scripts/preview.sh` in the task's
+worktree, in the hc terminal `preview-<task>`, and prints that terminal's
+address. A preview terminal that is still live is used again. The `preview`
+action shows only on a row whose task has a worktree, in a project that keeps the
+script. A task in your checkout needs no preview: your own dev server serves it.
 
 ## Rules
 
@@ -78,8 +89,9 @@ Agents work where the blocks before them put the task:
 
 ## Changes to what exists
 
-- The standard pipeline is: source → branch → worktree → retry router → author →
-  review → land (merge).
+- The standard pipeline is: source → branch → retry router → author → review →
+  land (merge), in your checkout. The `worktree` choice adds a worktree block
+  after the branch; the `direct` choice has neither block and ends at done.
 - Each saved pipeline gets branch → worktree inserted after its sources, once.
   The pipelines file stores its pipelines under `version: 2`. A file with no
   version reads with the blocks inserted, and the next write stores the versioned

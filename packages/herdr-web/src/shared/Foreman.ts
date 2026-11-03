@@ -108,7 +108,7 @@ export const ForemanState = S.Struct({
 export type ForemanState = typeof ForemanState.Type
 
 /** The row actions the page can run: foreman's own, less the two that need a typed answer (`complete`, `intervene`). */
-export const ForemanAction = S.Literals(["retry", "release", "close", "take-over", "focus", "kill", "descend", "unassign", "onboard", "adopt", "approve"])
+export const ForemanAction = S.Literals(["retry", "release", "close", "take-over", "focus", "kill", "descend", "unassign", "onboard", "adopt", "approve", "preview"])
 export type ForemanAction = typeof ForemanAction.Type
 
 /** The actions that end an agent or give up a claim. */

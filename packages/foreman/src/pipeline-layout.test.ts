@@ -1,4 +1,4 @@
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { addRoute, beltOf, insertOn } from "./pipeline-belt.ts";
 import { describe, expect, it } from "bun:test";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./pipeline-layout.ts";
 
 const branched = () => {
-  const withRoute = addRoute(STANDARD_PIPELINE, "retry", "size>=3");
+  const withRoute = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
   return insertOn(withRoute, { from: "retry", port: 2 }, "gate").pipeline;
 };
 
@@ -23,9 +23,9 @@ const crosses = (a: Point, b: Point, box: Box): boolean => {
 
 describe("layoutOf", () => {
   for (const [name, pipeline, flow] of [
-    ["standard", STANDARD_PIPELINE, "across"],
+    ["standard", STANDARD_PIPELINES.worktree, "across"],
     ["branched", branched(), "across"],
-    ["standard", STANDARD_PIPELINE, "down"],
+    ["standard", STANDARD_PIPELINES.worktree, "down"],
     ["branched", branched(), "down"],
   ] as const) {
     it(`${name}, ${flow}: no wire runs through a block other than its two ends`, () => {
@@ -96,7 +96,7 @@ describe("layoutOf", () => {
   // Eleven blocks in ten columns: the branch and worktree chips are as narrow as a land.
   // Each agent exit is a labelled wire, and the author's `already-done` label widens its gap.
   it("the standard pipeline fits in about 1400px", () => {
-    const layout = layoutOf(beltOf(STANDARD_PIPELINE), "across");
+    const layout = layoutOf(beltOf(STANDARD_PIPELINES.worktree), "across");
     expect(layout.width).toBeLessThan(1420);
   });
 });

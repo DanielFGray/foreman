@@ -102,6 +102,17 @@ export class Fleet extends Context.Service<
       lines: number,
     ) => Effect.Effect<Option.Option<string>, FleetError>;
 
+    /**
+     * Runs `command` in the task's worktree, in a terminal named
+     * `preview-<task>`, and returns that terminal's address. A preview
+     * terminal that is still live is returned as it is, so one task never
+     * runs two dev servers.
+     *
+     * The terminal carries no fleet label, so the roster never reads it as an
+     * agent of the task.
+     */
+    readonly preview: (worker: Worker, command: string) => Effect.Effect<string, FleetError>;
+
     /** Brings a task's workspace to the front so a human can take over. */
     readonly focus: (worker: Worker) => Effect.Effect<void, FleetError>;
 

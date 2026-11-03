@@ -33,7 +33,7 @@ import {
   type Pipeline,
   type PipelineNode,
   place,
-  STANDARD_PIPELINE,
+  STANDARD_PIPELINES,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { traceOf, type TraceEvent } from "./pipeline-trace.ts";
@@ -190,6 +190,7 @@ class World {
     awaitTurn: () => Effect.void,
     spaces: Effect.succeed(["/build/test"]),
     focus: () => this.write("fleet.focus", () => undefined),
+    preview: (target: Worker) => this.write("fleet.preview", () => `preview-${target.task}`),
     say: () => this.write("fleet.say", () => undefined),
     screen: (target: Worker) =>
       this.write("fleet.screen", () => Option.fromNullishOr(this.screens.get(target.task))),
@@ -327,7 +328,7 @@ class World {
 
   readonly repository = {
     checkoutOf: (folder: string) => Effect.succeed<string | undefined>(folder),
-    verifyOf: () => Effect.succeed<string | undefined>(undefined),
+    scriptsOf: () => Effect.succeed({ verify: undefined, preview: undefined }),
     isFree: () =>
       Effect.succeed<Hold>(
         this.clean === "held"
@@ -478,10 +479,18 @@ const usePolicy = (policy: object) => {
 };
 beforeEach(() => usePolicy(ALLOWED));
 const operatorPolicy = process.env["FOREMAN_POLICY"];
-// A pipelines file that does not exist: every project runs the standard
-// pipeline, and the operator's own drawings stay out of the tests.
+// A pipelines file of the tests' own, so the operator's drawings stay out of
+// them. The fixture project draws the standard worktree pipeline before each
+// test, because its tasks run side by side; a test that needs another drawing
+// writes its own.
 const operatorPipelines = process.env["FOREMAN_PIPELINES"];
 process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
+beforeEach(() =>
+  writeFileSync(
+    join(policies, "pipelines.json"),
+    JSON.stringify({ version: 3, pipelines: { test: STANDARD_PIPELINES.worktree } }),
+  ),
+);
 afterAll(() => {
   rmSync(policies, { recursive: true, force: true });
   if (operatorPolicy === undefined) delete process.env["FOREMAN_POLICY"];
@@ -1852,22 +1861,8 @@ describe("a route's workspace blocks", () => {
     writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
-  /** The standard pipeline with no worktree: the task's branch in the operator's checkout. */
-  const BRANCH_ONLY = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
-    node.kind === "worktree" ? [] : node.kind === "branch" ? [{ ...node, next: "retry" }] : [node],
-  );
-  /** The standard pipeline with no branch and no worktree, ending at done: the operator's branch. */
-  const DIRECT = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
-    node.kind === "branch" || node.kind === "worktree"
-      ? []
-      : node.kind === "source"
-        ? [{ ...node, next: "retry" }]
-        : node.kind === "gate" && node.id === "land-gate"
-          ? [{ ...node, next: "done" }]
-          : node.kind === "land"
-            ? [{ kind: "done", id: "done" }]
-            : [node],
-  );
+  const BRANCH_ONLY = STANDARD_PIPELINES.checkout.nodes;
+  const DIRECT = STANDARD_PIPELINES.direct.nodes;
 
   const settled = (world: World, id: string, role: "author" | "review") => {
     const current = world.workers.get(id);
@@ -2096,7 +2091,7 @@ describe("a route's workspace blocks", () => {
         routes: [{ when: "label:direct", to: "d-start" }],
         else: "branch",
       },
-      ...STANDARD_PIPELINE.nodes.filter((node) => node.kind !== "source"),
+      ...STANDARD_PIPELINES.worktree.nodes.filter((node) => node.kind !== "source"),
       { kind: "gate", id: "d-start", step: "author", next: "d-author" },
       {
         kind: "agent",
@@ -2172,7 +2167,7 @@ describe("a route's workspace blocks", () => {
     await tick(world);
     expect(world.spawned).toEqual([]);
 
-    rmSync(drawn, { force: true });
+    draw(STANDARD_PIPELINES.worktree.nodes);
     await tick(world);
     expect(world.spawned).toEqual([[direct.id, "author"]]);
   });
@@ -2368,7 +2363,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 
   test("a charging exit wired back to the author, not the queue, charges the author's rung when its run closes", async () => {
     const drawn = join(policies, "pipelines.json");
-    const nodes = STANDARD_PIPELINE.nodes.map((node) =>
+    const nodes = STANDARD_PIPELINES.worktree.nodes.map((node) =>
       node.id === "review" && node.kind === "agent"
         ? {
             ...node,
@@ -2434,7 +2429,7 @@ describe("a drawn pipeline", () => {
 
   /** The standard pipeline with `change` made to its author block. */
   const withAuthor = (change: (author: AgentNode) => ReadonlyArray<PipelineNode>) =>
-    STANDARD_PIPELINE.nodes.flatMap((node) =>
+    STANDARD_PIPELINES.worktree.nodes.flatMap((node) =>
       node.kind === "agent" && node.id === "author" ? change(node) : [node],
     );
 
@@ -2505,7 +2500,7 @@ describe("a drawn pipeline", () => {
 
   test("a park block hands the task to the operator once", async () => {
     draw(
-      STANDARD_PIPELINE.nodes
+      STANDARD_PIPELINES.worktree.nodes
         .map((node) =>
           node.kind === "router" && node.id === "retry"
             ? { ...node, routes: [{ when: "label:hold", to: "operator" }, ...node.routes] }
@@ -2767,7 +2762,7 @@ describe("foreman pipeline trace", () => {
 
   /** Runs the events through the dispatcher and through the trace, and compares where each puts the task. */
   const agree = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
-    if (pipeline !== STANDARD_PIPELINE) {
+    if (pipeline !== STANDARD_PIPELINES.worktree) {
       writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: pipeline } }));
     }
     const world = await played(ladder, pipeline, events);
@@ -2784,18 +2779,22 @@ describe("foreman pipeline trace", () => {
 
   /** The standard pipeline with `change` made to its author block. */
   const withAuthor = (change: (author: AgentNode) => ReadonlyArray<PipelineNode>): Pipeline => ({
-    nodes: STANDARD_PIPELINE.nodes.flatMap((node) =>
+    nodes: STANDARD_PIPELINES.worktree.nodes.flatMap((node) =>
       node.kind === "agent" && node.id === "author" ? change(node) : [node],
     ),
   });
 
   test("an approved review lands", async () => {
-    const trace = await agree(THREE, STANDARD_PIPELINE, ["exit:done", "exit:approved", "landed"]);
+    const trace = await agree(THREE, STANDARD_PIPELINES.worktree, [
+      "exit:done",
+      "exit:approved",
+      "landed",
+    ]);
     expect(trace.steps.at(-1)?.placement).toEqual({ _tag: "Outside" });
   });
 
   test("a returned review fails its author, and the next author climbs", async () => {
-    const trace = await agree(THREE, STANDARD_PIPELINE, [
+    const trace = await agree(THREE, STANDARD_PIPELINES.worktree, [
       "exit:done",
       "exit:returned",
       "exit:done",
@@ -2808,7 +2807,7 @@ describe("foreman pipeline trace", () => {
   });
 
   test("stops spend a rung's attempts, then climb", async () => {
-    const trace = await agree(THREE, STANDARD_PIPELINE, ["stop", "stop", "stop"]);
+    const trace = await agree(THREE, STANDARD_PIPELINES.worktree, ["stop", "stop", "stop"]);
     expect(
       trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.rung.name),
     ).toEqual(["low", "low", "mid", "mid"]);
@@ -2817,7 +2816,7 @@ describe("foreman pipeline trace", () => {
   });
 
   test("a wall moves the author to another account", async () => {
-    const trace = await agree(WALLED, STANDARD_PIPELINE, ["wall"]);
+    const trace = await agree(WALLED, STANDARD_PIPELINES.worktree, ["wall"]);
     expect(trace.steps[0]?.offers).toContain("wall");
     expect(trace.steps.at(-1)?.rung).toMatchObject({ _tag: "Dispatch", rung: { name: "dear" } });
   });

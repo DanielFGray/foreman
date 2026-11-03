@@ -23,7 +23,7 @@ import { authoredBy, reviewedBy } from "./lap.ts";
 import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { AgentRole, Worker, WorkerState } from "./fleet.ts";
 import { DEFAULT_POLICY, type Policy } from "./policy.ts";
-import { place, type PipelineNode, STANDARD_PIPELINE } from "./pipeline.ts";
+import { place, type PipelineNode, STANDARD_PIPELINES } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 
 const task = (
@@ -120,9 +120,9 @@ describe("landing a reviewed branch", () => {
     // until its whole turn ends. Landing inside that window closes the
     // workspace with `worktree remove --force` and deletes the directory the
     // reviewer is standing in.
-    expect(readyToLand(STANDARD_PIPELINE, approved, worker("working"))).toBe(false);
-    expect(readyToLand(STANDARD_PIPELINE, approved, worker("settled"))).toBe(true);
-    expect(readyToLand(STANDARD_PIPELINE, approved, undefined)).toBe(true);
+    expect(readyToLand(STANDARD_PIPELINES.worktree, approved, worker("working"))).toBe(false);
+    expect(readyToLand(STANDARD_PIPELINES.worktree, approved, worker("settled"))).toBe(true);
+    expect(readyToLand(STANDARD_PIPELINES.worktree, approved, undefined)).toBe(true);
   });
 
   test("an approval whose run is still open waits for settle to close it", () => {
@@ -131,29 +131,37 @@ describe("landing a reviewed branch", () => {
     // The task stands at the review, ended: settle closes the run once the
     // pane is idle, and does not read it as a reviewer that stopped with no
     // exit. Only then does it stand at the land.
-    expect(readyToLand(STANDARD_PIPELINE, named, worker("settled"))).toBe(false);
-    expect(awaitingLanding(STANDARD_PIPELINE, named)).toBe(false);
-    const placement = place(STANDARD_PIPELINE, factsOf(named, STANDARD_PIPELINE));
+    expect(readyToLand(STANDARD_PIPELINES.worktree, named, worker("settled"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINES.worktree, named)).toBe(false);
+    const placement = place(
+      STANDARD_PIPELINES.worktree,
+      factsOf(named, STANDARD_PIPELINES.worktree),
+    );
     expect(placement._tag === "At" && `${placement.node.id} ${placement.state}`).toBe(
       "review ended",
     );
   });
 
   test("ignores a task without a verdict, and one that already left the pipeline", () => {
-    expect(awaitingLanding(STANDARD_PIPELINE, underReview("ts-123456"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINES.worktree, underReview("ts-123456"))).toBe(false);
     // Back in the queue: placement is outside once the status is open.
-    expect(awaitingLanding(STANDARD_PIPELINE, approvedTask("ts-123456", "open"))).toBe(false);
+    expect(awaitingLanding(STANDARD_PIPELINES.worktree, approvedTask("ts-123456", "open"))).toBe(
+      false,
+    );
   });
 
   test("lands nothing on size or priority alone", () => {
     // A branch reaches the operator's checkout on a reviewer's verdict and
     // nothing else, however small the task that produced it says it is.
     expect(
-      awaitingLanding(STANDARD_PIPELINE, authoredOn(task("ts-123456", ["trivial"]), "opencode")),
+      awaitingLanding(
+        STANDARD_PIPELINES.worktree,
+        authoredOn(task("ts-123456", ["trivial"]), "opencode"),
+      ),
     ).toBe(false);
     expect(
       awaitingLanding(
-        STANDARD_PIPELINE,
+        STANDARD_PIPELINES.worktree,
         authoredOn(task("ts-123456", [], "in_progress", 3), "opencode"),
       ),
     ).toBe(false);
@@ -372,8 +380,8 @@ describe("work handed back for review", () => {
 const dispatchesFor = (...args: Parameters<typeof plan>) => plan(...args).dispatches;
 
 /** Every task in these tests is in project "foreman", which runs the standard pipeline. */
-const STANDARD_PIPELINES = new Map([
-  ["foreman", { _tag: "Runs" as const, pipeline: STANDARD_PIPELINE, drawn: false }],
+const PROJECT_PIPELINES = new Map([
+  ["foreman", { _tag: "Runs" as const, pipeline: STANDARD_PIPELINES.worktree, drawn: false }],
 ]);
 
 describe("the policy gate on dispatch", () => {
@@ -411,7 +419,7 @@ describe("the policy gate on dispatch", () => {
     outOfQuota: new Set<string>(),
     policy,
     scopes: new Map<string, ReadonlySet<string>>(),
-    pipelines: STANDARD_PIPELINES,
+    pipelines: PROJECT_PIPELINES,
     placed: [],
     dirty: new Set<string>(),
     ...overrides,
@@ -465,7 +473,7 @@ describe("the policy gate on dispatch", () => {
 
   describe("an agent block with slots of its own", () => {
     // The standard pipeline with one author at a time.
-    const single = STANDARD_PIPELINE.nodes.map((node) =>
+    const single = STANDARD_PIPELINES.worktree.nodes.map((node) =>
       node.id === "author" ? { ...node, slots: 1 } : node,
     );
     const pipelines = new Map([
@@ -502,22 +510,23 @@ describe("the policy gate on dispatch", () => {
   });
 
   test("a check takes no slot and runs once its gate permits it", () => {
-    const checked = STANDARD_PIPELINE.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
-      node.kind === "agent" && node.id === "author"
-        ? [
-            { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
-            { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-            {
-              kind: "check",
-              id: "lint",
-              command: "bun run lint",
-              exits: [
-                { name: "passed", to: "review-gate" },
-                { name: "failed", to: "queue", fails: "author" },
-              ],
-            },
-          ]
-        : [node],
+    const checked = STANDARD_PIPELINES.worktree.nodes.flatMap(
+      (node): ReadonlyArray<PipelineNode> =>
+        node.kind === "agent" && node.id === "author"
+          ? [
+              { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
+              { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+              {
+                kind: "check",
+                id: "lint",
+                command: "bun run lint",
+                exits: [
+                  { name: "passed", to: "review-gate" },
+                  { name: "failed", to: "queue", fails: "author" },
+                ],
+              },
+            ]
+          : [node],
     );
     const handed = active(authoredOn(task("ts-c", []), "cheap", true), undefined);
     const planFor = (steps: Partial<Policy["default"]>) =>
@@ -643,7 +652,7 @@ describe("the policy gate on dispatch", () => {
           drawn: true,
           pipeline: {
             nodes: [
-              ...STANDARD_PIPELINE.nodes.map((node) =>
+              ...STANDARD_PIPELINES.worktree.nodes.map((node) =>
                 node.id === "start" ? { ...node, next: "second" } : node,
               ),
               { kind: "gate" as const, id: "second", step: "review" as const, next: "author" },
@@ -829,7 +838,7 @@ describe("the quota gate", () => {
       default: { author: "on", climb: "on", review: "on", land: "on" } as const,
     },
     scopes: new Map<string, ReadonlySet<string>>(),
-    pipelines: STANDARD_PIPELINES,
+    pipelines: PROJECT_PIPELINES,
     placed: [],
     dirty: new Set<string>(),
     ...overrides,

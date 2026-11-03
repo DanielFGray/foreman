@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Item } from "tasks";
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { type GraphWorld, graphReport } from "./pipeline-graph.ts";
 import { DEFAULT_POLICY, grant } from "./policy.ts";
 
@@ -30,7 +30,7 @@ const world = (over: Partial<GraphWorld>): GraphWorld => {
     statusOf: (id) => items.find((it) => it.id === id)?.status,
     policy: DEFAULT_POLICY,
     scopes: new Map(),
-    pipeline: STANDARD_PIPELINE,
+    pipeline: STANDARD_PIPELINES.worktree,
     ...over,
   };
 };

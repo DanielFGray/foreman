@@ -360,6 +360,35 @@ export function hcFleetOver() {
             ),
           ),
 
+        preview: (worker: Worker, command: string) =>
+          Effect.gen(function* () {
+            if (worker.worktree === undefined) {
+              return yield* new FleetError({
+                operation: "preview",
+                detail: `${worker.task} has no worktree to preview`,
+              });
+            }
+            const found = yield* call(TerminalList, "preview", "terminal.list", {
+              labels: { [PREVIEW]: worker.task },
+            });
+            const live = found.terminals.find((terminal) => terminal.state === "live");
+            if (live) return live.address;
+            const place = yield* placement(worker.task, worker.repository ?? worker.directory);
+            const started = yield* call(Started, "preview", "terminal.run", {
+              argv: [command],
+              cwd: worker.worktree,
+              name: `preview-${worker.task}`,
+              // A dev server outlives the one-shot command that started it.
+              no_parent: true,
+              labels: {
+                [PREVIEW]: worker.task,
+                "herdr.space": place.space,
+                "herdr.tab": place.tab,
+              },
+            });
+            return started.address;
+          }),
+
         focus: (worker: Worker) =>
           Effect.gen(function* () {
             const all = yield* ofTask(worker.task);
@@ -422,6 +451,8 @@ const TASK = "fm.task";
 const ROLE = "fm.role";
 const REPOSITORY = "fm.repo";
 const PID = "fm.pid";
+/** The task a preview terminal serves the worktree of. */
+const PREVIEW = "fm.preview";
 
 /**
  * The tab a task's agents share. herdr-app makes a tab or space for an id it

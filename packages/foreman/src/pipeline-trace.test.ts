@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
-import { STANDARD_PIPELINE } from "./pipeline.ts";
+import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { configure } from "./pipeline-belt.ts";
 import { traceReport } from "./pipeline-trace.ts";
 
@@ -9,13 +9,13 @@ const RULES = {
   attemptsPerRung: 2,
 };
 const REQUEST = { task: { labels: [], size: 2, priority: 2, parent: undefined }, events: [] };
-const SAVED = { pipeline: STANDARD_PIPELINE, drawn: true };
+const SAVED = { pipeline: STANDARD_PIPELINES.worktree, drawn: true };
 
 describe("traceReport", () => {
   test("traces the draft when the project has one, else the pipeline it runs", () => {
-    const sourceId = STANDARD_PIPELINE.nodes.find((node) => node.kind === "source")!.id;
+    const sourceId = STANDARD_PIPELINES.worktree.nodes.find((node) => node.kind === "source")!.id;
     // A draft whose source takes only research work leaves this task outside it.
-    const draft = configure(STANDARD_PIPELINE, sourceId, {
+    const draft = configure(STANDARD_PIPELINES.worktree, sourceId, {
       kind: "source",
       filter: "label:research",
     });
@@ -30,7 +30,7 @@ describe("traceReport", () => {
     const standard = traceReport(
       "p",
       REQUEST,
-      { draft: undefined, live: { pipeline: STANDARD_PIPELINE, drawn: false } },
+      { draft: undefined, live: { pipeline: STANDARD_PIPELINES.worktree, drawn: false } },
       RULES,
     );
     expect(standard.source).toBe("standard");

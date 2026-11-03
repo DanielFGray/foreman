@@ -5,7 +5,7 @@ import { Command } from "effect/cli";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STANDARD_PIPELINE, standardExits } from "./pipeline.ts";
+import { STANDARD_PIPELINES, standardExits, WORKSPACE_CHOICES } from "./pipeline.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { readPipelines, withWorkspace } from "./pipeline-file.ts";
@@ -63,7 +63,7 @@ const fileWith = (pipeline: unknown) => {
 };
 
 const pinned = {
-  nodes: STANDARD_PIPELINE.nodes.map((node) =>
+  nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
     node.id === "author" ? { ...node, model: "cheap" } : node,
   ),
 };
@@ -82,7 +82,7 @@ describe("foreman pipeline", () => {
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
     const gone = {
-      nodes: STANDARD_PIPELINE.nodes.map((node) =>
+      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
         node.id === "author" ? { ...node, model: "strong" } : node,
       ),
     };
@@ -100,6 +100,27 @@ describe("foreman pipeline", () => {
   test("check writes nothing", async () => {
     await run("check", fileWith(pinned));
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("foreman pipeline use", () => {
+  test("draws each standard choice, which reads back from the file as drawn", async () => {
+    for (const choice of WORKSPACE_CHOICES) {
+      await run("use", choice, "--project", "amux");
+      const read = await Effect.runPromise(
+        readPipelines(path).pipe(Effect.provide(BunServices.layer)),
+      );
+      expect(read.error).toBeUndefined();
+      expect(read.value["amux"]).toEqual(STANDARD_PIPELINES[choice]);
+    }
+  });
+
+  test("refuses over a drawing that is no standard choice, and leaves it as it is", async () => {
+    await run("set", "amux", fileWith(pinned));
+    expect(await refusal("use", "worktree", "--project", "amux")).toMatch(
+      /amux runs its own drawn pipeline/,
+    );
+    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(pinned);
   });
 });
 
