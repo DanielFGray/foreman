@@ -535,16 +535,26 @@ project foreman touches.
 
 ## Running it
 
-The dispatcher runs inside herdr-web's server (`packages/herdr-web`): start
-that, and the fleet runs with it. The server supervises the dispatcher. A
-failure is logged, shown in the Foreman column and in the Foreman pane as `failed`, and
-the dispatcher starts again after a pause that doubles from a second up to a
-minute; the server keeps serving meanwhile. After each reading the server
-writes `state.json` for the Foreman pane.
+`foreman serve` runs the dispatcher, supervised. A failure is logged, shown in
+the Foreman pane and herdr-web as `failed`, and the dispatcher starts again
+after a pause that doubles from a second up to a minute. After each reading
+serve writes `state.json`. It holds a lock (`serve.lock`, beside `state.json`)
+for its life, so a second serve refuses to start. When foreman's own checkout
+gets a new commit, serve exits, and its service starts it on the new code.
 
-The server's PATH must hold every program the dispatcher runs: `prog`, `hc`,
-`git` and each rung's harness. The command line stays for one-shot
-commands:
+A systemd user unit runs serve at login and starts it again when it stops. It
+runs from `~/build/foreman` through a login shell, so its PATH is the one your
+shell has, which must hold every program the dispatcher runs: `prog`, `hc`,
+`git`, `gh` and each rung's harness. To install it:
+
+```bash
+systemctl --user link ~/build/foreman/packages/foreman/systemd/foreman.service
+systemctl --user enable --now foreman.service
+journalctl --user -u foreman -f   # its log
+```
+
+A command you run in another process does not wake serve: serve reads its
+change on the next poll. The rest of the command line is one-shot commands:
 
 ```bash
 bun src/main.ts policy slots 1  # one agent at a time, to watch a change land
@@ -553,8 +563,8 @@ bun src/main.ts status          # one reading, printed
 
 What it starts by itself is the policy's to say; see above.
 
-foreman opens workspaces in the session it is running in, so the server must
-run inside that session.
+foreman opens workspaces in the session it is running in, so serve must
+reach that hc server.
 
 ## Ports
 

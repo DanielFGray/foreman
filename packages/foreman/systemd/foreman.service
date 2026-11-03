@@ -1,0 +1,18 @@
+# foreman serve: the one process that runs the dispatcher.
+# Install: see "Run the dispatcher" in ../README.md.
+[Unit]
+Description=foreman dispatcher
+After=default.target
+
+[Service]
+WorkingDirectory=%h/build/foreman/packages/foreman
+# A login shell gives the service the PATH the operator's shell has, so it
+# reaches bun, git, gh, hc and tasks without a second copy of that PATH here.
+ExecStart=/bin/zsh -lc 'exec bun src/main.ts serve'
+# Always, not on-failure: serve exits 0 when foreman's checkout has a new
+# commit, and only a restart runs the new code.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
