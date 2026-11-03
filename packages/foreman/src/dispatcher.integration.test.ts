@@ -1525,6 +1525,29 @@ describe("a spent account and the reviewer above it", () => {
     expect(world.opened[0]).toEndWith("/worktrees/test/test#7");
   });
 
+  test("dispatches a Linear issue id, `<project>#<identifier>`, and lands it locally", async () => {
+    const world = new World(item("test#ENG-7", "open", []));
+    await tickWith(world, []);
+    expect(world.spawned).toEqual([["test#ENG-7", "author"]]);
+    expect(world.opened[0]).toEndWith("/worktrees/test/test#ENG-7");
+
+    const task = item("test#ENG-8", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const landing = new World(task);
+    landing.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    await tick(landing);
+    expect(landing.tasks.get(task.id)?.status).toBe("done");
+    expect(landing.closed).toContain(task.id);
+  });
+
   test("takes the rung above a recorded failure", async () => {
     const world = new World({ ...item("ts-failed", "open", []), charges: [charged("cheap")] });
     await tickWith(world, []);

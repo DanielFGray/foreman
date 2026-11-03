@@ -78,9 +78,19 @@ describe("foreman policy tracker", () => {
   });
 
   test("prog is the default, so choosing it drops the key", async () => {
-    await run("tracker", "linear", "--project", "amux");
+    await run("tracker", "github", "--project", "amux");
     await run("tracker", "prog", "--project", "amux");
     expect(written().projects).toEqual({});
+  });
+
+  test("linear needs the Linear team and project, and writes nothing without them", async () => {
+    await run("tracker", "github", "--project", "amux");
+    const refused = await run("tracker", "linear", "--project", "amux").then(
+      () => undefined,
+      (error: unknown) => String(error),
+    );
+    expect(refused).toContain("--team <key> and --linear-project <name>");
+    expect(written().projects).toEqual({ amux: { tracker: "github" } });
   });
 
   test("clear keeps the tracker", async () => {

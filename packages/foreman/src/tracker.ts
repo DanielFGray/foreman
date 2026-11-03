@@ -13,6 +13,8 @@ import { Fleet } from "./fleet.ts";
 import { HcFleet } from "./hc.ts";
 import { checkoutRepo, githubTracker } from "./github-tracker.ts";
 import { Github } from "./github.ts";
+import { Linear } from "./linear.ts";
+import { linearTracker } from "./linear-tracker.ts";
 import { Repository } from "./repository.ts";
 import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
 
@@ -24,7 +26,8 @@ import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from
  * tracker's tasks and keyed by task id.
  *
  * `TasksTracker` below is the `tasks` package's store; `githubTracker` in
- * `github-tracker.ts` is GitHub issues over `gh`.
+ * `github-tracker.ts` is GitHub issues over `gh`; `linearTracker` in
+ * `linear-tracker.ts` is Linear issues over its GraphQL API.
  * `ProjectTracker` is the `Tracker` the rest of foreman sees: it sends each
  * call to the adapter of the task's project, as the policy file chooses it.
  */
@@ -181,10 +184,26 @@ export const ProjectTracker = Layer.effect(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.map(({ policy }) => policy),
     );
-    return routeByProject({ prog, github, linear: unbuilt("linear") }, choices);
+    const linear = yield* linearTracker((project) =>
+      choices.pipe(
+        Effect.flatMap((policy) => {
+          const place = policy.projects[project]?.linear;
+          return place === undefined
+            ? Effect.fail(
+                new TrackerError({
+                  command: `place of ${project}`,
+                  detail:
+                    "no Linear team and project: run `foreman policy tracker linear --team <key> --linear-project <name>`",
+                }),
+              )
+            : Effect.succeed(place);
+        }),
+      ),
+    );
+    return routeByProject({ prog, github, linear }, choices);
   }),
 ).pipe(
-  Layer.provide([Tasks.layerSql, HcFleet, Repository.Default]),
+  Layer.provide([Tasks.layerSql, Linear.layer, HcFleet, Repository.Default]),
   // The dispatcher's pull-request calls share this `Github`, so one ETag cache
   // serves both.
   Layer.provideMerge(Github.layer),
@@ -286,27 +305,4 @@ export const routeByProject = (
 const projectOfId = (id: string): string | undefined => {
   const hash = id.lastIndexOf("#");
   return hash > 0 ? id.slice(0, hash) : undefined;
-};
-
-/** A tracker whose adapter does not exist yet: every call fails and names it. */
-const unbuilt = (name: TrackerName): Tracker["Service"] => {
-  const fail = () =>
-    Effect.fail(new TrackerError({ command: `${name} tracker`, detail: "adapter not built" }));
-  return Tracker.of({
-    refresh: fail,
-    lookup: fail,
-    list: fail,
-    dependencies: fail,
-    ready: fail,
-    logs: fail,
-    add: fail,
-    claim: fail,
-    reopen: fail,
-    complete: fail,
-    cancel: fail,
-    label: fail,
-    unlabel: fail,
-    relabel: fail,
-    log: fail,
-  });
 };

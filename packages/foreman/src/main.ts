@@ -15,6 +15,7 @@ import { subcommands } from "./commands.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
 import { policyCommand } from "./policy-command.ts";
 import { cutoverCommand } from "./cutover-command.ts";
+import { linearCommand } from "./linear-auth.ts";
 import { queueCommand, showCommand } from "./store-commands.ts";
 import { services, storeServices } from "./host.ts";
 
@@ -135,6 +136,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(showCommand, storeServices),
     policyCommand,
     cutoverCommand,
+    linearCommand,
     Command.provide(pipelineCommand(services), store),
     ...subcommands(services),
   ]),

@@ -73,6 +73,10 @@ export const Grant = S.Struct({
 });
 export type Grant = typeof Grant.Type;
 
+/** Which Linear team (by key) and Linear project (by name) hold a project's tasks. */
+export const LinearPlace = S.Struct({ team: S.String, project: S.String });
+export type LinearPlace = typeof LinearPlace.Type;
+
 /**
  * How foreman posts its review on a pull request (docs/issue-trackers.md, section 3).
  *
@@ -108,6 +112,8 @@ export const ProjectPolicy = S.Struct({
   paused: S.optional(S.Boolean),
   /** Absent means `prog`. */
   tracker: S.optional(S.Literals(TRACKERS)),
+  /** The Linear team key and Linear project name; set with the `linear` tracker. */
+  linear: S.optional(LinearPlace),
   /** How a land block that lands by pull request treats the PR. Absent means `PULL_REQUEST_DEFAULTS`. */
   pullRequest: S.optional(PullRequestPolicy),
   steps: S.optional(
@@ -428,8 +434,9 @@ export const setProjectStep = (
  * live and how they land, not settings with a fleet default.
  */
 export const clearProject = (policy: Policy, project: string): Policy =>
-  editProject(policy, project, ({ tracker, pullRequest }) => ({
+  editProject(policy, project, ({ tracker, linear, pullRequest }) => ({
     ...(tracker === undefined ? {} : { tracker }),
+    ...(linear === undefined ? {} : { linear }),
     ...(pullRequest === undefined ? {} : { pullRequest }),
   }));
 
@@ -437,11 +444,22 @@ export const clearProject = (policy: Policy, project: string): Policy =>
 export const trackerOf = (policy: Policy, project: string): TrackerName =>
   policy.projects[project]?.tracker ?? "prog";
 
-/** Chooses one project's tracker. `prog` removes the key rather than storing the default. */
-export const setProjectTracker = (policy: Policy, project: string, tracker: TrackerName): Policy =>
-  editProject(policy, project, ({ tracker: _was, ...rest }) =>
-    tracker === "prog" ? rest : { ...rest, tracker },
-  );
+/**
+ * Chooses one project's tracker. `prog` removes the key rather than storing
+ * the default. `linear` is the Linear place, stored only with the `linear`
+ * tracker, because no other tracker reads it.
+ */
+export const setProjectTracker = (
+  policy: Policy,
+  project: string,
+  tracker: TrackerName,
+  linear?: LinearPlace,
+): Policy =>
+  editProject(policy, project, ({ tracker: _was, linear: _place, ...rest }) => ({
+    ...rest,
+    ...(tracker === "prog" ? {} : { tracker }),
+    ...(tracker === "linear" && linear !== undefined ? { linear } : {}),
+  }));
 
 /** A project's pull-request settings, with the defaults for what it leaves out. */
 export const pullRequestOf = (

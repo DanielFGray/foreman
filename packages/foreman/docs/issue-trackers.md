@@ -1,4 +1,4 @@
-# Issue trackers: prog, GitHub issues and Linear; landing by pull request
+| `lookup(id)` | the snapshot, else `issues` filtered by team key and number; no node answers `None`. |# Issue trackers: prog, GitHub issues and Linear; landing by pull request
 
 Status: design, not built. The operator answered the open questions on
 2026-11-03; each answer is stated below as `Decision (operator)`. A choice
@@ -112,6 +112,7 @@ All reads of one project come from one GraphQL query per tick (section 5).
 | `claim(id)` | adds `status:in_progress` and assigns `@me`: `gh issue edit <n> --add-label status:in_progress --add-assignee @me`. On a closed issue, first `gh issue reopen <n>`. |
 | `reopen(id)` | `gh issue reopen <n>` when closed; then removes every `status:*` label and the `@me` assignee. |
 | `complete(id)` | `gh issue close <n> --reason completed`, then removes `status:*`. |
+| `cancel(id)` | `gh issue close <n> --reason "not planned"`, then removes `status:*`. |
 | `label`, `unlabel` | `gh issue edit <n> --add-label` / `--remove-label`. A label the repo lacks is made first with `gh label create <name> --force`. |
 | `relabel(id, change)` | reads the labels, computes `change`, and writes the whole set in one call: `gh api -X PUT repos/<repo>/issues/<n>/labels` with `labels[]`. Answers the labels it read. |
 | `log(id, message)` | `gh issue comment <n> --body-file -`. |
@@ -466,13 +467,21 @@ Linear source (`~/sources/lalph/src/Linear.ts`, `src/Linear/TokenManager.ts`,
 lalph's `TokenManager` does: a local callback server, a SHA-256 challenge, the
 `read,write` scope, and a code exchange at `https://api.linear.app/oauth/token`
 (`~/sources/lalph/src/Linear/TokenManager.ts:86-149`). foreman registers its
-own Linear OAuth application; lalph's client id is lalph's.
+own Linear OAuth application; lalph's client id is lalph's. The operator
+registers it at `https://linear.app/settings/api/applications/new` with the
+callback URL `http://localhost:34338/callback`, and sets
+`FOREMAN_LINEAR_CLIENT_ID` to its client id. With neither that nor
+`LINEAR_API_KEY` set, `foreman linear login` fails with these steps.
 
 - The token, refresh token and expiry are written to
   `~/.config/foreman/linear-token.json`, mode `0600`.
 - A token is refreshed 30 minutes before it expires, with the
-  `refresh_token` grant (`TokenManager.ts:151-164`, `192-198`). A failed
-  refresh removes the token.
+  `refresh_token` grant (`TokenManager.ts:151-164`, `192-198`). The refresh
+  sends the client id too, so it also needs `FOREMAN_LINEAR_CLIENT_ID`.
+- Only a 4xx answer to the refresh (for example `invalid_grant`) removes the
+  token: Linear refused it. A network error, a 5xx or no answer in 30 seconds
+  keeps the token file and fails the read, so the project reads unreachable
+  and the next tick tries again.
 - Every token read and refresh runs under one lock, as lalph's
   `Semaphore.withPermit` does (`TokenManager.ts:64-84`), so two calls in one
   tick do not refresh twice.
@@ -526,8 +535,10 @@ each of its statuses by type, then by a name fragment, team states first
 | `canceled` | type `canceled` |
 
 Reads map every state by its type, so a state with any name reads right.
-Writes pick the state by the table. A team with no state of a needed type
-reads as unreachable with that reason, because foreman cannot make that move.
+Writes pick the state by the table. foreman moves issues only to the
+`unstarted`, `started`, `completed` and `canceled` types, so a team with no state of one
+of those reads as unreachable with that reason, because foreman cannot make
+that move. A team with no `triage` or `backlog` state can still be worked.
 lalph falls back to a state of another type (`Linear.ts:228`); foreman does
 not, because a move to the wrong state type is a status the operator did not
 mean.
@@ -552,8 +563,11 @@ Two of lalph's gaps are fixed:
   (`Linear.ts:820-826`). foreman reads every issue of the project whose state
   type is not `completed` or `canceled`, with no assignee filter (a claim by
   another person is read from the assignee, as in section 1), and adds the
-  issues foreman holds runs on by id, as `issue(id:)` aliases in the same
-  query, so an issue closed on Linear reads as closed.
+  issues a `lookup` found outside that list, by Linear's issue id, with an
+  `issues(filter: { id: { in: [...] } })` field in the same query, so an
+  issue closed on Linear reads as closed. A filter, not one `issue(id:)`
+  alias per issue, because Linear answers `issue(id:)` for an issue it does
+  not have with an error that fails the whole query.
 
 ### Method by method
 
@@ -566,6 +580,7 @@ Two of lalph's gaps are fixed:
 | `claim(id)` | `issueUpdate` with the `started` state and the viewer as assignee, then one confirming read (section 1). |
 | `reopen(id)` | `issueUpdate` with the `unstarted` state and no assignee. |
 | `complete(id)` | `issueUpdate` with the `completed` state. |
+| `cancel(id)` | `issueUpdate` with the `canceled` state. |
 | `label`, `unlabel`, `relabel` | `issueUpdate` with `labelIds`; a label the team lacks is made with `issueLabelCreate`. |
 | `log(id, message)` | `commentCreate`. |
 
