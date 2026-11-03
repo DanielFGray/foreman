@@ -589,6 +589,12 @@ fallback is a second ladder that can drift. The model row carries the harness
 and the thinking level, and `launchArguments` in `src/harness.ts` turns the level
 into the harness's flag. `foreman ladder edit` is the one way to change the
 order: it validates the whole edit and writes it in one transaction.
+The council is a `council` switch on the model row, apart from the ladder, so
+a model is a worker, a council member, both or neither. `foreman council
+add|remove <model>` changes it, and `foreman council --json` prints each member
+with its harness and the `launchArguments` of its row; the council skill reads
+its roster from there. `foreman ladder --json` prints the rungs and every model
+with its switch in one read, for a front end that draws both lists.
 
 **Two correction rounds, counted.** A reviewer sends mechanical findings to the
 live author with `foreman correct`, which refuses a third round and counts each

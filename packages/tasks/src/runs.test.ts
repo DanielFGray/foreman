@@ -358,7 +358,7 @@ describe("the exits migration", () => {
         // migrations must go too or exits is skipped and the rename never runs.
         yield* sql.unsafe(
           `DELETE FROM tasks_migrations
-           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks')`,
+           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council')`,
         );
         const endings = [
           ["build", "handed-off"],
@@ -394,5 +394,32 @@ describe("the exits migration", () => {
       "walled",
     ]);
     expect(new Set(rows.map((row) => `${row.commit} ${row.base}`))).toEqual(new Set(["c b"]));
+  });
+});
+
+describe("the council migration", () => {
+  test("adds the council switch to a store that has the registry tables, every model off", async () => {
+    const file = join(dir, `store-${++files}.db`);
+    const at = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
+      Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
+    await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        yield* sql.unsafe(
+          `INSERT INTO pools (pool, harness, provider_default) VALUES ('P', 'pi', 'p')`,
+        );
+        yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, tier, limit_scope)
+          VALUES ('m1', 'p', 'P', 'pi', 'frontier', 'pool')`);
+        yield* sql.unsafe(`ALTER TABLE models DROP COLUMN council`);
+        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'council'`);
+      }),
+    );
+    const rows = await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        return yield* sql<{ model: string; council: number }>`SELECT model, council FROM models`;
+      }),
+    );
+    expect(rows).toEqual([{ model: "m1", council: 0 }]);
   });
 });

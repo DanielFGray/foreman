@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
+import { launchArguments } from "./harness.ts";
 import type { Ladder, Rung } from "./ladder.ts";
 
 /**
@@ -12,9 +13,10 @@ import type { Ladder, Rung } from "./ladder.ts";
  * it on every start and refuses to run without it: a second copy of the order
  * in a config file is a copy that can disagree.
  *
- * Models themselves (harness, pool, thinking level) are rows the herd skill's
- * `schema-registry.sql` seeds. This module edits only the ladder, which is the
- * part an operator reorders, enables and disables.
+ * Models themselves (harness, pool, thinking level) are rows the task store's
+ * migrations define and the operator seeds. This module edits the ladder, which
+ * is the part an operator reorders, enables and disables, and each model's
+ * council switch: a model is a worker, a council member, both or neither.
  */
 
 export class RegistryError extends Schema.TaggedError<RegistryError>()("RegistryError", {
@@ -76,7 +78,9 @@ export interface RungStatus {
   readonly rung: string;
   readonly harness: string;
   readonly model: string;
+  readonly tier: string;
   readonly thinking: string;
+  readonly enabled: boolean;
   /** `retired`, `disabled`, or the model's derived `proven` / `trial`. */
   readonly state: string;
   readonly author: boolean;
@@ -94,6 +98,7 @@ export const readStatus = Effect.gen(function* () {
     harness: string;
     model: string;
     thinking: string;
+    tier: string;
     enabled: number;
     author: number;
     review: number;
@@ -102,7 +107,7 @@ export const readStatus = Effect.gen(function* () {
     slices: number;
     succeeded: number;
     avg_rounds: number | null;
-  }>`SELECT l.rung, s.harness, s.model, s.thinking, l.enabled, l.author, l.review,
+  }>`SELECT l.rung, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author, l.review,
             s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
        FROM ladder l JOIN model_status s USING (model) ORDER BY l.rank`;
   return rows.map((row): RungStatus => ({
@@ -110,6 +115,8 @@ export const readStatus = Effect.gen(function* () {
     harness: row.harness,
     model: row.model,
     thinking: row.thinking,
+    tier: row.tier,
+    enabled: row.enabled !== 0,
     state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
     author: row.author !== 0,
     review: row.review !== 0,
@@ -125,6 +132,71 @@ export const knownModels = Effect.gen(function* () {
   const rows = yield* sql<{ model: string }>`SELECT model FROM models`;
   return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
 }).pipe(Effect.mapError(registryError("reading the models")));
+
+/** One model with its tier and council switch, for a pane that draws the lists. */
+export interface ModelEntry {
+  readonly model: string;
+  readonly harness: string;
+  readonly tier: string;
+  readonly retired: boolean;
+  readonly council: boolean;
+}
+
+/** Every model the registry knows, by model id. */
+export const readModels = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    model: string;
+    harness: string;
+    tier: string;
+    retired: number;
+    council: number;
+  }>`SELECT model, harness, tier, retired, council FROM models ORDER BY model`;
+  return rows.map((row): ModelEntry => ({
+    ...row,
+    retired: row.retired !== 0,
+    council: row.council !== 0,
+  }));
+}).pipe(Effect.mapError(registryError("reading the models")));
+
+/**
+ * A council member and what a caller needs to launch it: the harness (the
+ * vendor CLI), the model, and the flags that name the model and its thinking
+ * level. The read-only flags are the caller's: they depend on what the caller
+ * asks the member to do, not on the model.
+ */
+export interface CouncilMember {
+  readonly model: string;
+  readonly harness: string;
+  readonly thinking: string;
+  readonly tier: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+/** The models whose council switch is on, retired ones left out. */
+export const readCouncil = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ model: string; harness: string; thinking: string; tier: string }>`
+    SELECT model, harness, thinking, tier FROM models
+     WHERE council <> 0 AND retired = 0 ORDER BY model`;
+  return rows.map((row): CouncilMember => ({
+    ...row,
+    args: launchArguments({ kind: row.harness, model: row.model, thinking: row.thinking }),
+  }));
+}).pipe(Effect.mapError(registryError("reading the council")));
+
+/** Turns a model's council switch on or off. The model must have a row. */
+export const setCouncil = (model: string, on: boolean) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ model: string }>`
+      UPDATE models SET council = ${on ? 1 : 0} WHERE model = ${model} RETURNING model`;
+    if (rows.length === 0) {
+      return yield* new RegistryError({
+        detail: `model "${model}" has no row in the models table`,
+      });
+    }
+  }).pipe(Effect.mapError(registryError("changing the council")));
 
 /** Landed slices, rounds and cost per success, by model and size. */
 export const sizeSummary = Effect.gen(function* () {
