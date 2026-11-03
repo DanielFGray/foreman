@@ -1,13 +1,12 @@
 // The page's commands: each one call to the bridge or to this browser's storage.
-import { Effect, Inspectable, Schema as S } from "effect"
+import { Data, Effect, Inspectable, Schema as S } from "effect"
 import { Command } from "foldkit"
 import * as Dom from "foldkit/dom"
 import { Direction } from "../shared/Api.ts"
 import { Answer, Question } from "../shared/Chat.ts"
-import { Pipeline } from "foreman/pipeline"
 import { argvOf, ForemanCommand } from "../shared/Foreman.ts"
 import { ProviderId } from "../shared/Usage.ts"
-import { CLOSED_PANELS_KEY, Message, OPEN_EPICS_KEY, PipelinePanel, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
+import { Message, OPEN_EPICS_KEY, RECENT_KEY, SELECTION_KEY, Selection, SOFT_KEYS_KEY, VIEW_PICKS_KEY, ViewPick, ZOOM_KEY } from "./model.ts"
 import { BridgeClient, failureOf, failureReason, reportFailure } from "./rpc.ts"
 import { saveSettings, Settings } from "./settings.ts"
 import { saveSidebarWidth } from "./sidebarWidth.ts"
@@ -370,12 +369,6 @@ export const SaveOpenEpics = Command.define("SaveOpenEpics", {
   execute: ({ openEpics }) => saveStored(OPEN_EPICS_KEY, S.Array(S.String), openEpics).pipe(Effect.as(Message.CompletedSaveOpenEpics())),
 })
 
-export const SaveClosedPanels = Command.define("SaveClosedPanels", {
-  args: { closedPanels: S.Array(PipelinePanel) },
-  messages: [Message.CompletedSaveClosedPanels],
-  execute: ({ closedPanels }) => saveStored(CLOSED_PANELS_KEY, S.Array(PipelinePanel), closedPanels).pipe(Effect.as(Message.CompletedSaveClosedPanels())),
-})
-
 /** Reads one epic's description from foreman. */
 export const LoadForemanEpic = Command.define("LoadForemanEpic", {
   args: { key: S.String },
@@ -388,38 +381,24 @@ export const LoadForemanEpic = Command.define("LoadForemanEpic", {
     }).pipe(reportFailure((reason) => Message.FailedForemanEpic({ key, reason }))),
 })
 
-/** Reads the pipeline a project runs. */
-export const LoadForemanPipeline = Command.define("LoadForemanPipeline", {
-  args: { project: S.String },
-  messages: [Message.ReceivedPipeline, Message.FailedPipeline],
-  execute: ({ project }) =>
-    Effect.gen(function* () {
-      const client = yield* BridgeClient
-      const { drawn, pipeline } = yield* client.foremanPipeline({ project })
-      return Message.ReceivedPipeline({ project, drawn, pipeline })
-    }).pipe(reportFailure((reason) => Message.FailedPipeline({ project, reason }))),
-})
 
-/** Makes the draft the pipeline a project runs; foreman's refusal comes back as the reason. */
-export const SaveForemanPipeline = Command.define("SaveForemanPipeline", {
-  args: { project: S.String, pipeline: Pipeline },
-  messages: [Message.SucceededPipelineChange, Message.FailedPipelineChange],
-  execute: ({ project, pipeline }) =>
-    Effect.gen(function* () {
-      const client = yield* BridgeClient
-      yield* client.saveForemanPipeline({ project, pipeline })
-      return Message.SucceededPipelineChange({ project })
-    }).pipe(reportFailure((reason) => Message.FailedPipelineChange({ project, reason }))),
-})
+/** setPointerCapture refuses a pointer that is no longer down. */
+class PointerNotCaptured extends Data.TaggedError("PointerNotCaptured")<{ readonly cause: unknown }> {}
 
-/** Drops a project's own pipeline, so it runs the standard one. */
-export const ClearForemanPipeline = Command.define("ClearForemanPipeline", {
-  args: { project: S.String },
-  messages: [Message.SucceededPipelineChange, Message.FailedPipelineChange],
-  execute: ({ project }) =>
-    Effect.gen(function* () {
-      const client = yield* BridgeClient
-      yield* client.clearForemanPipeline({ project })
-      return Message.SucceededPipelineChange({ project })
-    }).pipe(reportFailure((reason) => Message.FailedPipelineChange({ project, reason }))),
+/**
+ * Sends a dragged card's pointer events to the card until the pointer goes up,
+ * so the drag goes on when the pointer leaves it. A card already gone from the
+ * page, or a pointer already up, takes no capture, and the drag ends as usual.
+ */
+export const CapturePointer = Command.define("CapturePointer", {
+  args: { elementId: S.String, pointerId: S.Finite },
+  messages: [Message.CompletedCapturePointer],
+  execute: ({ elementId, pointerId }) =>
+    Effect.try({
+      try: () => document.getElementById(elementId)?.setPointerCapture(pointerId),
+      catch: (cause) => new PointerNotCaptured({ cause }),
+    }).pipe(
+      Effect.catchTag("PointerNotCaptured", ({ cause }) => Effect.logDebug("a board card did not capture its pointer", cause)),
+      Effect.as(Message.CompletedCapturePointer()),
+    ),
 })

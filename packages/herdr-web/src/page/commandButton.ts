@@ -1,5 +1,5 @@
-// A button that runs one foreman command, shared by the fleet column and the
-// pipeline page's ladder panel, so both show a running or armed command alike.
+// A button that runs one foreman command, shared by the fleet column's rows,
+// its board and its ladder, so each shows a running or armed command alike.
 import { Array, Option } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { argvOf, type ForemanCommand } from "../shared/Foreman.ts"

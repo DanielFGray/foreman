@@ -8,7 +8,6 @@ import { Array, Option, Record, Result, Schema as S } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { modifyFields } from "foldkit/struct"
 import {
-  argvOf,
   DESTRUCTIVE_ACTIONS,
   FOREMAN_STEPS,
   FOREMAN_STEP_MODES,
@@ -24,8 +23,9 @@ import {
 } from "../shared/Foreman.ts"
 import { commandButton, lineOf } from "./commandButton.ts"
 import { ListRungs, LoadForemanEpic, RunForeman, SaveOpenEpics } from "./commands.ts"
-import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, PipelineView, RungList, type UpdateReturn } from "./model.ts"
-import { pipelineSectionView } from "./pipelineView.ts"
+import { type EpicRecord, ForemanQueue, type ForemanPage, Message, type Model, BoardDrag, NO_SCROLL, RungList, type UpdateReturn } from "./model.ts"
+import { boardView } from "./board.ts"
+import { ladderView } from "./ladder.ts"
 import { lastFleet, selectedTab } from "./selection.ts"
 import { ago } from "./usage.ts"
 
@@ -40,10 +40,11 @@ export const EMPTY_FOREMAN_PAGE: ForemanPage = {
   all: false,
   folded: ["queue", "landed"],
   openEpics: [],
-  closedPanels: [],
   epicRecords: {},
   queue: ForemanQueue.Unread(),
-  pipeline: PipelineView.Closed(),
+  isBoardShown: false,
+  drag: BoardDrag.Idle(),
+  scrolled: NO_SCROLL,
 }
 
 /**
@@ -55,7 +56,7 @@ export const toggledColumn = (model: Model): UpdateReturn => {
   const shown = !model.foremanPage.shown
   if (!shown) return { model: withPage(model, (page) => ({ ...page, shown })) }
   return {
-    model: withPage(modifyFields(model, { isFleetFolded: () => true }), (page) => ({ ...page, shown, rungs: RungList.Loading() })),
+    model: withPage(modifyFields(model, { isFleetFolded: () => true }), (page) => ({ ...page, shown, rungs: RungList.Loading(), scrolled: NO_SCROLL })),
     commands: [ListRungs(), ...Array.map(model.foremanPage.openEpics, (key) => LoadForemanEpic({ key }))],
   }
 }
@@ -82,11 +83,11 @@ export const queueScopeOf = (model: Model): Option.Option<Option.Option<string>>
  * space's project and the fleet's own rows, which have no project. A row of
  * another project never shows, even in a read that has not caught up with a switch.
  */
-export const visibleRows = (model: Model, rows: ReadonlyArray<ForemanRow>): ReadonlyArray<ForemanRow> => {
-  if (model.foremanPage.all) return rows
-  const project = selectedProject(model)
-  return Array.filter(rows, (row) => Option.match(row.project, { onNone: () => true, onSome: (own) => Option.contains(project, own) }))
-}
+export const visibleRows = (model: Model, rows: ReadonlyArray<ForemanRow>): ReadonlyArray<ForemanRow> => Array.filter(rows, (row) => isInScope(model, row.project))
+
+/** Whether the column shows what belongs to a project: every project for `all`, else the selected space's, and always what belongs to none. */
+export const isInScope = (model: Model, project: Option.Option<string>): boolean =>
+  model.foremanPage.all || Option.match(project, { onNone: () => true, onSome: (own) => Option.contains(selectedProject(model), own) })
 
 /**
  * A click on a command. One that ends an agent or gives up a claim only arms
@@ -150,7 +151,6 @@ export const foremanColumnView = (model: Model, h: HtmlBuilder<Message>): Readon
         onSome: (state) => [
           headingView(state, model.now, h),
           scopeView(model, h),
-          pipelineSectionView(model, selectedProject(model), h),
           ...Option.match(failureOf(state), { onNone: () => [], onSome: (detail) => [h.p([h.Class("note error")], [`The dispatcher failed and starts again shortly: ${detail}`])] }),
           ...Option.match(state.problem, { onNone: () => [], onSome: (problem) => [h.p([h.Class("note error")], [problem])] }),
           ...Option.match(page.refusal, { onNone: () => [], onSome: (refusal) => [h.p([h.Class("note error"), h.Role("alert")], [refusal])] }),
@@ -163,7 +163,11 @@ export const foremanColumnView = (model: Model, h: HtmlBuilder<Message>): Readon
             : []),
           ...Option.match(state.reading, {
             onNone: () => [h.p([h.Class("note")], ["Waiting for the dispatcher's first reading…"])],
-            onSome: (reading) => [policyView(reading, page, h), ...sectionsView(visibleRows(model, [...reading.rows, ...queueRows(page.queue)]), page, h)],
+            onSome: (reading) => [
+              policyView(reading, page, h),
+              ...(page.isBoardShown ? boardView(model, reading, h) : sectionsView(visibleRows(model, [...reading.rows, ...queueRows(page.queue)]), page, h)),
+              ladderView(page, h),
+            ],
           }),
         ],
       }),
@@ -181,6 +185,10 @@ const scopeView = (model: Model, h: HtmlBuilder<Message>): Html => {
       h.button(
         [h.Type("button"), h.Class(all ? "chip on" : "chip"), h.AriaPressed(all ? "true" : "false"), h.OnClick(Message.ToggledForemanAll())],
         ["All projects"],
+      ),
+      h.button(
+        [h.Type("button"), h.Class(model.foremanPage.isBoardShown ? "chip on" : "chip"), h.AriaPressed(model.foremanPage.isBoardShown ? "true" : "false"), h.OnClick(Message.ClickedBoard())],
+        ["Board"],
       ),
       h.span([h.Class("note"), h.AriaLabel("showing")], [name]),
     ],
@@ -333,16 +341,7 @@ const groupedRows = (rows: ReadonlyArray<ForemanRow>, page: ForemanPage, h: Html
 const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: ForemanPage, h: HtmlBuilder<Message>): Html => {
   const isLaunching = Option.contains(page.launching, row.key)
   const isOpen = Array.contains(page.openEpics, row.key)
-  const actions = Array.filter(row.actions, S.is(ForemanAction))
-  const buttons = [
-    ...(row.view === "queue" && !row.epic
-      ? [h.button([h.Type("button"), h.Class(isLaunching ? "chip on" : "chip"), h.AriaExpanded(isLaunching), h.AriaLabel(`launch ${row.key}`), h.OnClick(Message.ClickedLaunch({ key: row.key }))], ["launch"])]
-      : []),
-    ...(row.view === "review"
-      ? Array.map(["review", "land"] as const, (step) => commandButton(`allow ${step}`, `allow ${step} for ${row.key} once`, { _tag: "Allow", key: row.key, step }, page, h))
-      : []),
-    ...Array.map(actions, (action) => commandButton(action, `${action} ${row.key}`, { _tag: "Act", action, key: row.key }, page, h)),
-  ]
+  const buttons = rowButtonsView(row, page, h)
   return h.keyed("li")(
     `${row.view}/${row.key}`,
     [h.Class("foreman-row")],
@@ -365,6 +364,20 @@ const rowView = (row: ForemanRow, children: ReadonlyArray<ForemanRow>, page: For
         : []),
     ],
   )
+}
+
+/** A row's buttons: launch for a queued task, the one-time grants for one in review, and each foreman action the row takes. */
+export const rowButtonsView = (row: ForemanRow, page: ForemanPage, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
+  const isLaunching = Option.contains(page.launching, row.key)
+  return [
+    ...(row.view === "queue" && !row.epic
+      ? [h.button([h.Type("button"), h.Class(isLaunching ? "chip on" : "chip"), h.AriaExpanded(isLaunching), h.AriaLabel(`launch ${row.key}`), h.OnClick(Message.ClickedLaunch({ key: row.key }))], ["launch"])]
+      : []),
+    ...(row.view === "review"
+      ? Array.map(["review", "land"] as const, (step) => commandButton(`allow ${step}`, `allow ${step} for ${row.key} once`, { _tag: "Grant", scope: row.key, steps: [step], count: 1 }, page, h))
+      : []),
+    ...Array.map(Array.filter(row.actions, S.is(ForemanAction)), (action) => commandButton(action, `${action} ${row.key}`, { _tag: "Act", action, key: row.key }, page, h)),
+  ]
 }
 
 const rungsView = (key: string, page: ForemanPage, h: HtmlBuilder<Message>): Html =>
