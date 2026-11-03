@@ -78,6 +78,8 @@ reads it. `foreman pipeline edit` changes it one `PipelineChange`
 writes it through the same `runPipeline` as `set`, refusing when the drawn
 pipeline changed since the draft began. `foreman pipeline trace` reads the
 draft, else the drawn pipeline, else the standard one, and writes nothing.
+`foreman pipeline simulate` reads the draft and the pipeline the project runs,
+and writes nothing.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything
@@ -864,7 +866,19 @@ in memory, and after each event prints the placement, the route so far and the
 events the block offers next, so a front end shows what the dispatcher would do
 without a copy of its rules. The pane's simulate controls
 (`herdr/foreman-pipeline/simulate.js`) call it after each choice and after each
-change to the draft. Both act through
+change to the draft. `foreman pipeline simulate <project> --json` plays the
+project's ready and claimed tasks through its draft and through the pipeline it
+runs, on one seed, so the pane can compare the two and animate the draft
+(`src/pipeline-simulate.ts`). After each event it plans with the dispatcher's
+own `candidatesFrom` and `planFrom` and folds the trace's events; only each
+run's outcome and minutes, and each check's result, are drawn, from the runs
+table's rates per rung, blended toward the role's pool (`src/run-rates.ts`).
+Landings and checks wait for the next tick, one poll interval after the tick
+before, as in the fleet. Each frame holds only the tasks that moved, so the
+board at a frame is the fold of the frames up to it. Its `assumes` names every
+fact it does not read from the world. The pane's fleet controls
+(`herdr/foreman-pipeline/fleet.js`) call it on demand and after each change to
+the draft, and draw the frames on the board up to a time the operator picks. Both act through
 `foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 

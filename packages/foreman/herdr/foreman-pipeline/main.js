@@ -12,6 +12,10 @@
 //
 // Simulating (`simulate.js`) walks a pretend task through the draft with
 // `foreman pipeline trace`, and marks where it stands and the blocks it passed.
+// The fleet simulation (`fleet.js`) plays the project's real tasks through the
+// draft and the pipeline it runs with `foreman pipeline simulate`, and puts the
+// simulated tasks on the board in place of the dispatcher's. One of the two
+// shows at a time.
 //
 // Editing (`editor.js`) changes the project's draft, never the pipeline it
 // runs: each change is one `foreman pipeline edit`, and `foreman pipeline
@@ -26,6 +30,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { exec, readTextFile, watchFolder, theme, props, home } from "herdr";
 import { Editor } from "./editor.js";
 import { Simulator } from "./simulate.js";
+import { Fleet } from "./fleet.js";
 import { chip, wiresLayer } from "./parts.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
@@ -48,6 +53,7 @@ export default class Pipeline extends View {
     this.fitted = true;
     this.editor = new Editor(this);
     this.sim = new Simulator(this);
+    this.fleet = new Fleet(this);
     this.loadPlacements(cx);
     this.watch(cx);
   }
@@ -124,6 +130,7 @@ export default class Pipeline extends View {
     if (this.fitted) this.fit(cx);
     // A change to the draft can change every step after it.
     if (this.sim.on) this.sim.run(cx);
+    if (this.fleet.on) this.fleet.run(cx);
   }
 
   // What the board draws: the draft while one is open, else the pipeline the project runs.
@@ -164,12 +171,13 @@ export default class Pipeline extends View {
     if (this.shown === null) return root.p(12).child(div().text_color(t.muted).child(this.problem ?? "reading the pipeline…"));
     const { drawing } = this.view();
     const draft = this.shown.draft;
-    const at = byBlock(this.placements);
+    const at = byBlock(this.fleet.placements() ?? this.placements);
     const editing = this.editor.on;
     return root
       .child(this.header(t, at))
       .when(editing, (el) => el.child(this.editor.toolbar(t)))
       .when(this.sim.on, (el) => el.child(this.sim.toolbar(t)))
+      .when(this.fleet.on, (el) => el.child(this.fleet.toolbar(t)))
       .when(draft !== null && draft.problems.length > 0, (el) => el.child(problemsView(t, draft.problems)))
       .child(div().id("board").relative().flex_1().overflow_hidden()
         .on_scroll_wheel((event, cx) => this.scroll(event, cx))
@@ -186,14 +194,15 @@ export default class Pipeline extends View {
     return h_flex().flex_wrap().px(10).py(6).gap_x(10).gap_y(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().font_semibold().child(this.project))
       .child(div().text_color(t.muted).child(this.shown.drawn ? "its own pipeline" : "the standard pipeline"))
-      .child(div().text_color(t.muted).child(`${placed} task${placed === 1 ? "" : "s"} placed`))
+      .child(div().text_color(t.muted).child(`${placed} task${placed === 1 ? "" : "s"} ${this.fleet.on ? "simulated" : "placed"}`))
       .when(problems.length > 0, (el) => el.child(div().text_color(t.blocked).child(`${problems.length} problem${problems.length === 1 ? "" : "s"}`)))
       .when(this.shown.draft !== null, (el) => el
         .child(div().text_color(t.accent).child("showing the draft"))
         .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
         .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
       .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(); cx.notify(); }))
-      .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => this.sim.toggle(cx)))
+      .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => { if (this.fleet.on) this.fleet.toggle(cx); this.sim.toggle(cx); }))
+      .child(chip(t, this.fleet.on ? "stop the fleet" : "fleet", "fleet", (cx) => { if (this.sim.on) this.sim.toggle(cx); this.fleet.toggle(cx); }))
       .child(div().flex_1())
       .when(this.busy, (el) => el.child(div().text_color(t.muted).child("…")))
       .when(this.problem !== null, (el) => el.child(div().text_color(t.blocked).child(this.problem)))
@@ -296,4 +305,4 @@ const byBlock = (placements) => {
   return at;
 };
 
-const stateColor = (state, t) => state === "running" ? t.working : state === "parked" ? t.blocked : state === "ended" ? t.done : t.muted;
+const stateColor = (state, t) => state === "running" ? t.working : state === "parked" ? t.blocked : state === "ended" || state === "landed" ? t.done : t.muted;

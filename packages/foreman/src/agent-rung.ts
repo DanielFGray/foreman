@@ -6,6 +6,7 @@ import {
   mayReview,
   reviewerFor,
   rungsOnAccounts,
+  providerOf,
   type Ladder,
   type Rung,
 } from "./ladder.ts";
@@ -72,6 +73,23 @@ export const rungAt = (
     (block.role === "author" ? mayAuthor(rung) : mayReview(rung)) &&
     !spent.has(rung.name);
   return mayTake ? { _tag: "Dispatch", rung } : { _tag: "Waiting" };
+};
+
+/**
+ * `rungAt` for a dispatch: the account of the rung it chose is added to
+ * `drawn`, so the authors one tick dispatches spread over the accounts.
+ */
+export const drawRung = (
+  ladder: Ladder,
+  block: AgentNode,
+  task: Pick<Item, "runs" | "charges">,
+  walled: ReadonlySet<string>,
+  drawn: Set<string> | undefined,
+): BlockRung => {
+  const choice = rungAt(ladder, block, task, walled, drawn);
+  const provider = choice._tag === "Dispatch" ? providerOf(choice.rung) : undefined;
+  if (provider !== undefined) drawn?.add(provider);
+  return choice;
 };
 
 /**

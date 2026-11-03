@@ -58,10 +58,11 @@ import {
   highestFailure,
   providersOf,
   providerOf,
+  type Ladder,
   type Rung,
   rungsOn,
 } from "./ladder.ts";
-import { authorWalls, rungAt } from "./agent-rung.ts";
+import { authorWalls, drawRung, rungAt } from "./agent-rung.ts";
 import {
   instructionNames,
   nextAgent,
@@ -674,32 +675,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
       const tipped = inFlight.map(withTip);
-      const placementOf = (task: Item): Placement => {
-        const pipeline = runningPipeline(pipelines, task.project);
-        return pipeline === undefined
-          ? { _tag: "Outside" }
-          : place(pipeline, factsOf(task, pipeline));
-      };
-      const claimed = tipped.filter((task) => !isUnderReview(placementOf(task)));
-      const reviewing = tipped.filter((task) => isUnderReview(placementOf(task)));
+      const claimed = tipped.filter((task) => !isUnderReview(placementIn(pipelines, task)));
+      const reviewing = tipped.filter((task) => isUnderReview(placementIn(pipelines, task)));
 
-      // A task that works in the checkout holds it against every other task
-      // (rule 2 of docs/workspace-blocks.md), as a `busy` hold that names it. A
-      // branch-only task's branch out in the checkout already reads as one.
-      const occupancy: ReadonlyArray<Held> = [...claimed, ...reviewing, ...queue]
-        .filter((task) => occupies(pipelines, task))
-        .filter(
-          (task) =>
-            !checkoutHolds.some(
-              (entry) => entry.project === task.project && entry.branch === labelFor(task.id),
-            ),
-        )
-        .map((task) => ({
-          project: task.project,
-          reason: "busy",
-          detail: `${task.id} works in the checkout until it leaves the pipeline`,
-          branch: labelFor(task.id),
-        }));
+      const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue], checkoutHolds);
 
       return {
         projects,
@@ -881,78 +860,28 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const claimedActive = active(claimed);
       const reviewingActive = active(reviewing);
 
-      // Where each task stands in its project's pipeline. A task in a stopped
-      // project is placed nowhere, and takes no step.
-      const placementOf = (task: Item): Placement => {
-        const pipeline = runningPipeline(pipelines, task.project);
-        return pipeline === undefined
-          ? { _tag: "Outside" }
-          : place(pipeline, factsOf(task, pipeline));
-      };
+      // Where each task stands in its project's pipeline.
       const placed = [...ordered, ...yours, ...claimed, ...reviewing].map((task) => ({
         task,
-        placement: placementOf(task),
+        placement: placementIn(pipelines, task),
       }));
 
-      // A task waiting at an agent block runs on the rung that block takes.
-      // The dispatch resolves the rung the same way from the same reading, so
-      // the plan cannot pass over a task the dispatch would have found an
-      // agent for, nor the reverse. A rung on a spent account holds the task
-      // back; a block with no rung left for it parks it.
-      const reviews = reviewable(reviewingActive, committed);
-      // A returned review wired back to the author leaves the task claimed and
-      // waiting at that block (still `in_progress`). It is not under review, so
-      // fill must take it from the claimed column or it never runs again.
-      const continuing = claimedActive.filter(({ task }) => {
-        const placement = placementOf(task);
-        return (
-          placement._tag === "At" &&
-          placement.state === "waiting" &&
-          placement.node.kind === "agent"
-        );
+      const {
+        reviews,
+        outOfQuota,
+        parks,
+        queue: unparked,
+        review,
+      } = candidatesFrom({
+        claimed: claimedActive,
+        reviewing: reviewingActive,
+        queue: ordered,
+        committed,
+        pipelines,
+        ladder: settings.ladder,
+        walled,
+        held,
       });
-      const candidates: ReadonlyArray<Active> = [
-        ...reviews.review,
-        ...continuing,
-        ...ordered.map((task) => ({ task, worker: undefined, kind: undefined })),
-      ];
-      const rungs = candidates.flatMap(({ task, worker }) => {
-        const placement = placementOf(task);
-        return placement._tag === "At" &&
-          placement.state === "waiting" &&
-          placement.node.kind === "agent"
-          ? [{ task, worker, rung: rungAt(settings.ladder, placement.node, task, walled) }]
-          : [];
-      });
-      const outOfQuota = new Set(
-        rungs.filter(({ rung }) => rung._tag === "Waiting").map(({ task }) => task.id),
-      );
-      const parks: ReadonlyArray<Park> = [
-        ...candidates.flatMap(({ task, worker }) => {
-          const placement = placementOf(task);
-          return placement._tag === "Parked"
-            ? [{ task, worker, why: `${task.project}'s pipeline parks it at ${placement.node}.` }]
-            : [];
-        }),
-        ...rungs.flatMap(({ task, worker, rung }) =>
-          rung._tag === "Exhausted"
-            ? [
-                {
-                  task,
-                  worker,
-                  why: "the block it waits at has no rung left that has not failed it.",
-                },
-              ]
-            : [],
-        ),
-      ].filter(
-        // A park is a step: a paused project takes none, and a live pane is
-        // still finishing its turn.
-        ({ task, worker }) =>
-          !held.some((entry) => entry.project === task.project) &&
-          (worker === undefined || !isBusy(worker)),
-      );
-      const parked = new Set(parks.map(({ task }) => task.id));
 
       // Planned here, from the reading the gates read, so the asks a reading
       // shows and the dispatches fill makes are the same plan by construction.
@@ -960,11 +889,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         {
           workers,
           outOfQuota,
-          queue: ordered.filter((task) => !parked.has(task.id)),
+          queue: unparked,
           held,
-          // Continuing claimed authors sit with reviews so they keep ahead of
-          // the queue, as a returned task did when its status was `reviewing`.
-          review: [...reviews.review, ...continuing].filter(({ task }) => !parked.has(task.id)),
+          review,
           policy,
           scopes,
           pipelines,
@@ -2039,12 +1966,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       drawn?: Set<string>,
     ) {
       const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
-      const choice = rungAt(settings.ladder, block, task, walled, drawn);
-      if (choice._tag === "Dispatch") {
-        const provider = providerOf(choice.rung);
-        if (provider !== undefined) drawn?.add(provider);
-        return choice.rung;
-      }
+      const choice = drawRung(settings.ladder, block, task, walled, drawn);
+      if (choice._tag === "Dispatch") return choice.rung;
       yield* Effect.logInfo(
         choice._tag === "Waiting"
           ? `${block.role} of ${task.id} at ${block.id} deferred: no account with room for ${block.model}`
@@ -3087,6 +3010,96 @@ export const planFrom = (
 };
 
 /**
+ * What a reading offers the plan: the reviews and the claimed tasks waiting
+ * at an agent block, the queue, and what holds a task back from a dispatch.
+ *
+ * A task waiting at an agent block runs on the rung that block takes. The
+ * dispatch resolves the rung the same way from the same reading, so the plan
+ * cannot pass over a task the dispatch would have found an agent for, nor the
+ * reverse. A rung on a spent account (`walled`) holds the task back
+ * (`outOfQuota`); a block with no rung left for it parks it, as a park block
+ * does. A parked task is in neither `queue` nor `review`.
+ */
+export const candidatesFrom = (reading: {
+  readonly claimed: ReadonlyArray<Active>;
+  readonly reviewing: ReadonlyArray<Active>;
+  /** The ranked queue. */
+  readonly queue: ReadonlyArray<Item>;
+  /** The tasks whose author wrote something. */
+  readonly committed: ReadonlySet<string>;
+  readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
+  readonly ladder: Ladder;
+  readonly walled: ReadonlySet<string>;
+  readonly held: ReadonlyArray<Held>;
+}) => {
+  const { pipelines, held } = reading;
+  const reviews = reviewable(reading.reviewing, reading.committed);
+  // A returned review wired back to the author leaves the task claimed and
+  // waiting at that block (still `in_progress`). It is not under review, so
+  // fill must take it from the claimed column or it never runs again.
+  const continuing = reading.claimed.filter(({ task }) => {
+    const placement = placementIn(pipelines, task);
+    return (
+      placement._tag === "At" && placement.state === "waiting" && placement.node.kind === "agent"
+    );
+  });
+  const candidates: ReadonlyArray<Active> = [
+    ...reviews.review,
+    ...continuing,
+    ...reading.queue.map((task) => ({ task, worker: undefined, kind: undefined })),
+  ];
+  const rungs = candidates.flatMap(({ task, worker }) => {
+    const placement = placementIn(pipelines, task);
+    return placement._tag === "At" &&
+      placement.state === "waiting" &&
+      placement.node.kind === "agent"
+      ? [{ task, worker, rung: rungAt(reading.ladder, placement.node, task, reading.walled) }]
+      : [];
+  });
+  const outOfQuota = new Set(
+    rungs.filter(({ rung }) => rung._tag === "Waiting").map(({ task }) => task.id),
+  );
+  const parks: ReadonlyArray<Park> = [
+    ...candidates.flatMap(({ task, worker }) => {
+      const placement = placementIn(pipelines, task);
+      return placement._tag === "Parked"
+        ? [{ task, worker, why: `${task.project}'s pipeline parks it at ${placement.node}.` }]
+        : [];
+    }),
+    ...rungs.flatMap(({ task, worker, rung }) =>
+      rung._tag === "Exhausted"
+        ? [{ task, worker, why: "the block it waits at has no rung left that has not failed it." }]
+        : [],
+    ),
+  ].filter(
+    // A park is a step: a paused project takes none, and a live pane is
+    // still finishing its turn.
+    ({ task, worker }) =>
+      !held.some((entry) => entry.project === task.project) &&
+      (worker === undefined || !isBusy(worker)),
+  );
+  const parked = new Set(parks.map(({ task }) => task.id));
+  return {
+    reviews,
+    outOfQuota,
+    parks,
+    queue: reading.queue.filter((task) => !parked.has(task.id)),
+    // Continuing claimed authors sit with reviews so they keep ahead of the
+    // queue, as a returned task did when its status was `reviewing`.
+    review: [...reviews.review, ...continuing].filter(({ task }) => !parked.has(task.id)),
+  };
+};
+
+/** Where the task stands in its project's pipeline. A task in a stopped project is placed nowhere, and takes no step. */
+export const placementIn = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): Placement => {
+  const pipeline = runningPipeline(pipelines, task.project);
+  return pipeline === undefined ? { _tag: "Outside" } : place(pipeline, factsOf(task, pipeline));
+};
+
+/**
  * How many tasks run at each agent block, per project, from where the tasks
  * stand: a block's id names it only inside its own project's pipeline.
  */
@@ -3115,7 +3128,7 @@ const runningAt = (placed: DispatchState["placed"]) => {
 const isBusy = (worker: Worker): boolean =>
   worker.state === "working" || worker.state === "blocked";
 
-interface DispatchState {
+export interface DispatchState {
   readonly workers: ReadonlyArray<Worker>;
   readonly outOfQuota: ReadonlySet<string>;
   readonly queue: ReadonlyArray<Item>;
@@ -3132,7 +3145,7 @@ interface DispatchState {
 }
 
 /** What one tick would start, land, check, and hold for the operator's approval. */
-interface Plan {
+export interface Plan {
   readonly dispatches: ReadonlyArray<PlannedDispatch>;
   readonly checks: ReadonlyArray<PlannedCheck>;
   readonly lands: ReadonlyArray<PlannedLanding>;
@@ -3158,7 +3171,7 @@ export interface Ask {
  * permit each gate on its route gave. Two gates can hold grants on different
  * scopes, and each grant records its own admission.
  */
-interface PlannedDispatch {
+export interface PlannedDispatch {
   readonly role: AgentNode["role"];
   readonly task: Item;
   readonly permits: ReadonlyArray<Permit>;
@@ -3169,7 +3182,7 @@ interface PlannedDispatch {
  * An approved task the plan ends at its land or done block, with the permit
  * each gate on its route gave.
  */
-interface PlannedLanding {
+export interface PlannedLanding {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly permits: ReadonlyArray<Permit>;
@@ -3177,14 +3190,14 @@ interface PlannedLanding {
 }
 
 /** A check the plan runs on the task's branch tip, with the permit each gate on its route gave. */
-interface PlannedCheck {
+export interface PlannedCheck {
   readonly task: Item;
   readonly permits: ReadonlyArray<Permit>;
   readonly block: CheckNode;
 }
 
 /** A task the tick hands to the operator, and the reason it gives them. */
-interface Park {
+export interface Park {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly why: string;
@@ -3211,6 +3224,32 @@ const workspaceOf = (
   const pipeline = runningPipeline(pipelines, task.project);
   return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task, pipeline));
 };
+
+/**
+ * The `busy` holds of the tasks that work in their project's checkout. Such a
+ * task holds the checkout against every other task (rule 2 of
+ * docs/workspace-blocks.md), as a hold that names it. A branch-only task whose
+ * branch is out in the checkout already reads as a hold in `checkoutHolds`.
+ */
+export const occupancyOf = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  tasks: ReadonlyArray<Item>,
+  checkoutHolds: ReadonlyArray<Held>,
+): ReadonlyArray<Held> =>
+  tasks
+    .filter((task) => occupies(pipelines, task))
+    .filter(
+      (task) =>
+        !checkoutHolds.some(
+          (entry) => entry.project === task.project && entry.branch === labelFor(task.id),
+        ),
+    )
+    .map((task) => ({
+      project: task.project,
+      reason: "busy",
+      detail: `${task.id} works in the checkout until it leaves the pipeline`,
+      branch: labelFor(task.id),
+    }));
 
 /**
  * Whether the task holds its project's checkout. A task with no worktree
