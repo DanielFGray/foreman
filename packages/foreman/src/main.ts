@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { CliError, Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer } from "effect";
+import { Cause, Console, Effect, FileSystem, Layer, Logger, Runtime } from "effect";
 import { store } from "tasks";
 import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
@@ -147,4 +147,18 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
 
 const cli = foreman.pipe(Command.run({ version: VERSION }));
 
-BunRuntime.runMain(cli.pipe(Effect.provide(BunServices.layer)));
+// A refusal is logged on stderr, so stdout holds only what a command prints:
+// a caller that parses --json, and the Foreman pane that shows the refusal,
+// each read their own stream. runMain logs a failure outside every reference
+// provided to the program, so the program logs it here and runMain does not.
+const reported = cli.pipe(
+  Effect.provide(BunServices.layer),
+  Effect.tapCause((cause) =>
+    Cause.hasInterruptsOnly(cause) || !Runtime.getErrorReported(Cause.squash(cause))
+      ? Effect.void
+      : Effect.logError(cause),
+  ),
+  Effect.provideService(Logger.LogToStderr, true),
+);
+
+BunRuntime.runMain(reported, { disableErrorReporting: true });
