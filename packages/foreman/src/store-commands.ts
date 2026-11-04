@@ -56,7 +56,7 @@ const id = Argument.String("id").pipe(Argument.withDescription("A task id"));
 const stepOf = (placement: Placement): string | undefined =>
   placement._tag === "At"
     ? placement.node.id
-    : placement._tag === "Parked"
+    : placement._tag === "Parked" || placement._tag === "ExitGone"
       ? placement.node
       : undefined;
 

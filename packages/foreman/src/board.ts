@@ -39,7 +39,7 @@ export const columnOf = (
   placement: Exclude<Placement, { readonly _tag: "Outside" }>,
   asksYou: boolean,
 ): BoardColumn => {
-  if (placement._tag === "Parked" || asksYou) return "needs-you";
+  if (placement._tag === "Parked" || placement._tag === "ExitGone" || asksYou) return "needs-you";
   const { node, state } = placement;
   switch (node.kind) {
     case "agent":

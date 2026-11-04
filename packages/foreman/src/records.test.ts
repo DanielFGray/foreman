@@ -249,7 +249,7 @@ describe("Records against a scratch store", () => {
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
     await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
-    await record(id, { _tag: "ExitNamed", name: "returned", commit: "c1" });
+    await record(id, { _tag: "ExitNamed", exit: "returned", commit: "c1" });
     await run((records) => records.endRuns(id, { review: "stopped" }));
 
     expect((await run((records) => records.show(id))).status).toBe("in_progress");
@@ -367,7 +367,7 @@ describe("Records against a scratch store", () => {
       Effect.flip(
         records.write(id, {
           ...NO_WRITES,
-          exit: { name: "returned", commit: "c1" },
+          exit: { ending: "returned", commit: "c1" },
           move: "reopen",
         }),
       ),

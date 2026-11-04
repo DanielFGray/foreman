@@ -1,5 +1,5 @@
 import { isExit, type Run } from "tasks";
-import { ALREADY_DONE } from "./pipeline.ts";
+import { type Exit, exitAt, type Pipeline } from "./pipeline.ts";
 
 /**
  * What foreman reads off a task's runs.
@@ -61,7 +61,8 @@ export const directBase = (task: Runs): string | undefined =>
   task.runs.find((run) => run.role === "author" && run.base !== undefined)?.base;
 
 /**
- * The author's claim that the trunk already does what the task asks.
+ * The claim exit the lap's author named, as drawn now: its claim that the
+ * trunk already does what the task asks, or nothing when it made none.
  *
  * A backlog outlives the code it describes: work gets done under another
  * task's branch, or by hand, and the entry for it stays open. An author sent
@@ -70,16 +71,20 @@ export const directBase = (task: Runs): string | undefined =>
  * read as a crash, which costs a rung and dispatches the same discovery again
  * at a more expensive model, forever.
  *
- * So the finding is a claim the author records as the exit `already-done`, and
- * the branch it hands over is legitimately empty. The name is the one an author
- * block must declare for the claim to count: the prompt explains that exit only
- * to a block that has it (`exitsSection` in `src/prompt.ts`), so a drawing that
- * renames it loses the explanation and the meaning together.
+ * So the finding is a claim the author records by naming its block's claim
+ * exit (`empty: claim`, `already-done` in the standard pipelines), and the
+ * branch it hands over is legitimately empty. The property, not the name,
+ * makes the claim, so a rename keeps it; the prompt explains the exit, under
+ * its name as drawn, only to a block that declares one (`exitsSection` in
+ * `src/prompt.ts`).
  *
  * It is a claim and not a verdict: "it is already done" is exactly what a model
  * too weak for the task would say to escape it, so a reviewer confirms it
  * against the trunk like any other diff, and only the reviewer's approval
  * closes the task.
  */
-export const claimsAlreadyDone = (task: Runs): boolean =>
-  lapOf(task).find((run) => run.role === "author")?.ending === ALREADY_DONE;
+export const authorClaim = (task: Runs, pipeline: Pipeline): Exit | undefined => {
+  const author = lapOf(task).find((run) => run.role === "author");
+  const exit = exitAt(pipeline, author?.node, author?.ending);
+  return exit?.empty === "claim" ? exit : undefined;
+};

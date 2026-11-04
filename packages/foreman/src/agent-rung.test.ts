@@ -32,8 +32,8 @@ const author = (model: string): AgentNode => ({
   role: "author",
   model,
   exits: [
-    { name: "done", to: "review-gate" },
-    { name: "already-done", to: "review-gate" },
+    { id: "done", name: "done", to: "review-gate" },
+    { id: "already-done", name: "already-done", to: "review-gate" },
   ],
 });
 
@@ -43,8 +43,8 @@ const reviewer = (model: string): AgentNode => ({
   role: "review",
   model,
   exits: [
-    { name: "approved", to: "land-gate" },
-    { name: "returned", to: "queue", fails: "author" },
+    { id: "approved", name: "approved", to: "land-gate" },
+    { id: "returned", name: "returned", to: "queue", fails: "author" },
   ],
 });
 

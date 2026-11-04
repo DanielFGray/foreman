@@ -1,22 +1,10 @@
-import { Effect, FileSystem, Option, Schema as S, Struct } from "effect";
+import { Effect, FileSystem, Option, Schema as S } from "effect";
 import {
-  AgentNode,
-  BranchNode,
-  CheckNode,
-  DoneNode,
-  GateNode,
-  LandNode,
-  ParkNode,
-  Pipeline,
-  type PipelineNode,
-  type SeatOffers,
-  RouterNode,
-  SourceNode,
-  WorktreeNode,
-  instructionProblems,
-  problemsOf,
   DEFAULT_PIPELINE,
-  standardExits,
+  instructionProblems,
+  Pipeline,
+  problemsOf,
+  type SeatOffers,
 } from "./pipeline.ts";
 import { configDirectory, type Read, rewrite } from "./shared-file.ts";
 
@@ -32,40 +20,13 @@ export const Pipelines = S.Record(S.String, Pipeline);
 export type Pipelines = typeof Pipelines.Type;
 
 /**
- * The file as written: the pipelines under the format's version. Older files
- * read as they ran then, and the next write stores them in this form:
- *
- * - version 3 named the review rule `above`, the next review-on rung above the
- *   author. It reads as `reviewers`, the rule that took its place
- *   (`withReviewers`).
- * - version 2 wired each agent and check block to one `next` block. Each gets
- *   the standard exits for its role, advancing to that block, and returning
- *   to the queue charged to the author.
- * - a file without a version predates the workspace blocks as well, and also
- *   reads through `withWorkspace`, so a pipeline the operator then draws with
- *   no worktree is never given one again.
+ * The file as written: the pipelines under the format's version. A file in an
+ * older form does not decode, and so stops every project: `foreman cutover
+ * exit-ids` (`src/cutover-exits.ts`) converts it once, and nothing else reads
+ * the older forms.
  */
-const PipelinesFile = S.Struct({ version: S.Literal(4), pipelines: Pipelines });
-type PipelinesFile = typeof PipelinesFile.Type;
-
-/** An agent or a check block as version 2 drew it: one wire on. */
-const WiredOn = { next: S.String };
-const OldNode = S.Union([
-  SourceNode,
-  RouterNode,
-  GateNode,
-  BranchNode,
-  WorktreeNode,
-  LandNode,
-  DoneNode,
-  ParkNode,
-  AgentNode.mapFields((fields) => ({ ...Struct.omit(fields, ["exits", "stopped"]), ...WiredOn })),
-  CheckNode.mapFields((fields) => ({ ...Struct.omit(fields, ["exits"]), ...WiredOn })),
-]);
-type OldNode = typeof OldNode.Type;
-const OldPipelines = S.Record(S.String, S.Struct({ nodes: S.Array(OldNode) }));
-const V3File = S.Struct({ version: S.Literal(3), pipelines: Pipelines });
-const OldFile = S.Struct({ version: S.Literal(2), pipelines: OldPipelines });
+export const PipelinesFile = S.Struct({ version: S.Literal(5), pipelines: Pipelines });
+export type PipelinesFile = typeof PipelinesFile.Type;
 
 /** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
 export const pipelinesPath = (): string =>
@@ -86,102 +47,19 @@ export const readPipelines = (path: string) =>
 /** Rewrites the pipelines through `change`, the one way anything writes them. */
 export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
   rewrite(path, PipelinesFile, readFile, (file) => ({
-    version: 4 as const,
+    version: 5 as const,
     pipelines: change(file.pipelines),
   }));
 
-/** A version 2 pipeline as it ran: each agent and check block takes the standard exits for its role. */
-export const withExits = (pipeline: { readonly nodes: ReadonlyArray<OldNode> }): Pipeline => ({
-  nodes: pipeline.nodes.map((node): PipelineNode => {
-    if (node.kind !== "agent" && node.kind !== "check") return node;
-    const { next, ...rest } = node;
-    return { ...rest, exits: standardExits(node, next) };
-  }),
-});
+const NONE: PipelinesFile = { version: 5, pipelines: {} };
 
-/**
- * A pipeline drawn before the reviewers, as it ran then: its review blocks read
- * by the rule `above`, which the `reviewers` rule replaced. A review block
- * pinned to a rung name is left as it is, and the drawing check names it when
- * no reviewer has that name.
- */
-export const withReviewers = (pipeline: Pipeline): Pipeline => ({
-  ...pipeline,
-  nodes: pipeline.nodes.map((node) =>
-    node.kind === "agent" && node.role === "review" && node.model === "above"
-      ? { ...node, model: "reviewers" }
-      : node,
-  ),
-});
-
-/**
- * A pipeline drawn before the workspace blocks, as it ran then: every task
- * had a branch and a worktree of its own, so each source leads into a branch
- * block and a worktree block before whatever it led into.
- */
-export const withWorkspace = (pipeline: Pipeline): Pipeline => {
-  const taken = new Set(pipeline.nodes.map((node) => node.id));
-  const fresh = (base: string) => {
-    let id = base;
-    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
-    taken.add(id);
-    return id;
-  };
-  return {
-    ...pipeline,
-    nodes: pipeline.nodes.flatMap((node): ReadonlyArray<PipelineNode> => {
-      if (node.kind !== "source") return [node];
-      const branch = fresh("branch");
-      const worktree = fresh("worktree");
-      return [
-        { ...node, next: branch },
-        { kind: "branch", id: branch, next: worktree },
-        { kind: "worktree", id: worktree, next: node.next },
-      ];
-    }),
-  };
-};
-
-const NONE: PipelinesFile = { version: 4, pipelines: {} };
-
-/** An older file's pipelines as they ran then: `upgrade` reads one in the next form. */
-const each = <Old>(
-  pipelines: { readonly [project: string]: Old },
-  upgrade: (pipeline: Old) => Pipeline,
-): PipelinesFile => ({
-  version: 4,
-  pipelines: Object.fromEntries(
-    Object.entries(pipelines).map(([project, pipeline]) => [
-      project,
-      withReviewers(upgrade(pipeline)),
-    ]),
-  ),
-});
-
-/** The file as stored, with a file from before the version read as it ran then. */
+/** The file as stored. */
 const readFile = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(path).pipe(Effect.option);
     if (Option.isNone(text)) return { value: NONE, error: undefined, text: undefined };
-    // A file that is no form reports why it is not the current one.
     return yield* S.decodeEffect(S.fromJsonString(PipelinesFile))(text.value).pipe(
-      Effect.catch((current) =>
-        S.decodeEffect(S.fromJsonString(V3File))(text.value).pipe(
-          Effect.map((old) => each(old.pipelines, (pipeline) => pipeline)),
-          Effect.catch(() =>
-            S.decodeEffect(S.fromJsonString(OldFile))(text.value).pipe(
-              Effect.map((old) => each(old.pipelines, withExits)),
-            ),
-          ),
-          Effect.catch(() =>
-            S.decodeEffect(S.fromJsonString(OldPipelines))(text.value).pipe(
-              Effect.map((old) => each(old, (pipeline) => withWorkspace(withExits(pipeline)))),
-            ),
-          ),
-          Effect.mapError(() => current),
-        ),
-      ),
       Effect.map((value): Read<PipelinesFile> => ({ value, error: undefined, text: text.value })),
       Effect.catch((error) =>
         Effect.succeed<Read<PipelinesFile>>({

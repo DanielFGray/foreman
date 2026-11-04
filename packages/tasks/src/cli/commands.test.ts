@@ -141,7 +141,7 @@ describe("tasks add, show, list and ready", () => {
           node: "author",
           work: "build",
         });
-        yield* nameExit(task, { name: "done", commit: "0123456789abcdef", event: undefined });
+        yield* nameExit(task, { ending: "done", commit: "0123456789abcdef", event: undefined });
       }).pipe(Effect.provide(services())),
     );
     const shown = JSON.parse(await run(["show", task, "--json"]));

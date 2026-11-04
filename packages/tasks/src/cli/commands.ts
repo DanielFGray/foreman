@@ -370,7 +370,7 @@ const verdictCommand = Command.make(
     ),
   },
   ({ id, said }) =>
-    nameExit(id, { name: said, commit: undefined, event: VERDICT_MOVES[said] }).pipe(
+    nameExit(id, { ending: said, commit: undefined, event: VERDICT_MOVES[said] }).pipe(
       Effect.andThen(Console.log(`${id}: ${said}`)),
     ),
 ).pipe(

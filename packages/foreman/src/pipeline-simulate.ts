@@ -18,7 +18,13 @@ import {
 } from "./dispatcher.ts";
 import { labelFor, type Worker } from "./fleet.ts";
 import { isEnabled, mayAuthor } from "./ladder.ts";
-import { isUnderReview, type Pipeline, type Placement, type RunState } from "./pipeline.ts";
+import {
+  type Exit,
+  isUnderReview,
+  type Pipeline,
+  type Placement,
+  type RunState,
+} from "./pipeline.ts";
 import type { ProjectPipeline } from "./pipeline-file.ts";
 import {
   afterEvent,
@@ -76,7 +82,7 @@ export interface SimulateWorld {
 }
 
 /** Where a task stands in a frame: a block's run state, or out of the pipeline for good or for now. */
-export type FrameState = RunState | "landed" | "parked" | "outside";
+export type FrameState = RunState | "landed" | "parked" | "gone" | "outside";
 
 export interface Standing {
   readonly task: string;
@@ -260,14 +266,23 @@ const rateJson = (rate: AgentRate) => ({
  */
 const drawOutcome = (
   offers: ReadonlyArray<TraceEvent>,
+  declared: ReadonlyArray<Exit>,
   rate: AgentRate,
   random: () => number,
 ): TraceEvent => {
+  // A run stores the id of the exit it named, and an offer names it as the agent types it.
+  const rateOf = (offer: TraceEvent) => {
+    const exit = declared.find((candidate) => `${EXIT}${candidate.name}` === offer);
+    return exit === undefined ? undefined : rate.endings.get(exit.id);
+  };
   const exits = offers.filter((offer) => offer.startsWith(EXIT));
-  const named = exits.filter((offer) => rate.endings.has(offer.slice(EXIT.length)));
+  const named = exits.flatMap((offer) => {
+    const weight = rateOf(offer);
+    return weight === undefined ? [] : [[offer, weight] as const];
+  });
   const weighted: ReadonlyArray<readonly [TraceEvent, number]> = [
     ...(named.length > 0
-      ? named.map((offer) => [offer, rate.endings.get(offer.slice(EXIT.length))!] as const)
+      ? named
       : exits.map((offer) => [offer, rate.success / exits.length] as const)),
     ...(offers.includes("stop") ? [["stop", rate.endings.get("stopped") ?? 0] as const] : []),
     ...(offers.includes("wall") ? [["wall", rate.endings.get("walled") ?? 0] as const] : []),
@@ -349,7 +364,7 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
     const open = openAgentOf(sim.rules.pipeline, task);
     if (placement._tag !== "At" || open === undefined) continue;
     if (placement.state === "ended") {
-      const exit = open.block.exits.find((candidate) => candidate.name === open.run.ending);
+      const exit = open.block.exits.find((candidate) => candidate.id === open.run.ending);
       tasks.set(task.id, handedOff(task, open.block, exit, sim.rules));
     } else if (placement.state === "running") {
       run(sim, task, sim.rates.agent(open.run.rung, open.block.role), 0);
@@ -470,8 +485,11 @@ const dispatch = (sim: Sim, dispatches: Plan["dispatches"], now: number) => {
 
 /** Draws how the run that just opened on `task` ends, and when. */
 const run = (sim: Sim, task: Simulated, rate: AgentRate, now: number) => {
-  const offers = offersAt(placementOf(sim, task), openRung(task, sim.rules));
-  const event = drawOutcome(offers, rate, sim.random);
+  const placement = placementOf(sim, task);
+  const offers = offersAt(placement, openRung(task, sim.rules));
+  const declared =
+    placement._tag === "At" && placement.node.kind === "agent" ? placement.node.exits : [];
+  const event = drawOutcome(offers, declared, rate, sim.random);
   sim.pending.set(task.id, { end: now + drawMinutes(rate, sim.random) / 60, event });
 };
 
@@ -508,7 +526,9 @@ const snapshot = (sim: Sim, now: number) => {
         ? placement.state
         : placement._tag === "Parked"
           ? "parked"
-          : "outside";
+          : placement._tag === "ExitGone"
+            ? "gone"
+            : "outside";
     return { task: id, node: nodeOf(placement), state };
   });
   const last = sim.frames.at(-1);
@@ -579,7 +599,11 @@ const workerOf = (sim: Sim, task: Item): Worker | undefined =>
 
 /** The block a placement names, if any. */
 const nodeOf = (placement: Placement): string | null =>
-  placement._tag === "At" ? placement.stands : placement._tag === "Parked" ? placement.node : null;
+  placement._tag === "At"
+    ? placement.stands
+    : placement._tag === "Parked" || placement._tag === "ExitGone"
+      ? placement.node
+      : null;
 
 const hoursOf = (hours: number): number => Math.round(hours * 100) / 100;
 

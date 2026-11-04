@@ -155,7 +155,7 @@ export const insertOn = (
             id,
             role: "author",
             model: "ladder",
-            exits: standardExits({ kind, role: "author" }, target),
+            exits: freshExits(pipeline, standardExits({ kind, role: "author" }, target)),
           }
         : kind === "check"
           ? { kind, id, command: "", exits: standardExits({ kind }, target) }
@@ -242,18 +242,64 @@ export const swapEnd = (pipeline: Pipeline, id: string): Pipeline =>
 
 /**
  * Adds an exit named `name` to an agent, leading where its first exit leads,
- * or back to the queue when it has none. The operator rewires it after.
+ * or back to the queue when it has none, with a fresh id. The operator rewires
+ * it after.
  */
 export const addExit = (pipeline: Pipeline, id: string, name: string): Pipeline =>
-  mapExits(pipeline, id, (exits) => [...exits, { name, to: exits[0]?.to ?? QUEUE }]);
+  mapExits(pipeline, id, (exits) => [
+    ...exits,
+    { id: freshExitId(pipeline), name, to: exits[0]?.to ?? QUEUE },
+  ]);
 
 /**
- * Renames an exit, keeping where it leads. A task whose last exit had the old
- * name no longer finds it drawn, so placement walks it from the source again.
+ * Renames an exit, keeping its id and where it leads, so a task whose last
+ * exit it was stays where it is. A filter that names the exit by its old name
+ * names the new one, unless another exit in the pipeline still has the old
+ * name, since a filter counts exits by name across every block.
  */
-export const renameExit = (pipeline: Pipeline, id: string, name: string, to: string): Pipeline =>
-  mapExits(pipeline, id, (exits) =>
+export const renameExit = (pipeline: Pipeline, id: string, name: string, to: string): Pipeline => {
+  const named = (candidate: Pipeline) =>
+    candidate.nodes.flatMap((node) =>
+      node.kind === "agent" || node.kind === "check"
+        ? node.exits.filter((exit) => exit.name === name).map(() => node.id)
+        : [],
+    );
+  if (!named(pipeline).includes(id)) return pipeline;
+  const renamed = mapExits(pipeline, id, (exits) =>
     exits.map((exit) => (exit.name === name ? { ...exit, name: to } : exit)),
+  );
+  if (named(renamed).length > 0) return renamed;
+  const filter = (text: string) => renamedInFilter(text, name, to);
+  return {
+    nodes: renamed.nodes.map((node) =>
+      node.kind === "source"
+        ? { ...node, filter: filter(node.filter) }
+        : node.kind === "router"
+          ? {
+              ...node,
+              routes: node.routes.map((route) => ({ ...route, when: filter(route.when) })),
+            }
+          : node,
+    ),
+  };
+};
+
+/**
+ * Marks an author's exit as its claim (`empty: claim`), or unmarks it. An
+ * author has one claim, so marking one unmarks the block's others.
+ */
+export const setEmpty = (
+  pipeline: Pipeline,
+  id: string,
+  name: string,
+  empty: Exit["empty"],
+): Pipeline =>
+  mapExits(pipeline, id, (exits) =>
+    exits.map((exit) => {
+      const { empty: _empty, ...rest } = exit;
+      if (exit.name === name) return empty === undefined ? rest : { ...rest, empty };
+      return empty === undefined ? exit : rest;
+    }),
   );
 
 /** Drops an exit. The blocks only it reached stay, as with a dropped route. */
@@ -299,6 +345,11 @@ const settled = (node: PipelineNode, setting: BlockSetting): PipelineNode => {
         ...rest,
         role: setting.role,
         model: setting.model,
+        // Only an author claims trunk already does the task.
+        exits:
+          setting.role === "author"
+            ? node.exits
+            : node.exits.map(({ empty: _empty, ...exit }) => exit),
         ...(setting.slots === undefined ? {} : { slots: setting.slots }),
       };
     }
@@ -463,6 +514,54 @@ const mapExits = (
   mapNode(pipeline, id, (node) =>
     node.kind === "agent" || node.kind === "check" ? { ...node, exits: change(node.exits) } : node,
   );
+
+/**
+ * A new `exit-<hex>` id that no exit in the pipeline has. Random for the
+ * reason a block's id is: a counted or derived id would come back after its
+ * exit was removed, and a task that named the old exit would be placed at the
+ * new one.
+ */
+const freshExitId = (pipeline: Pipeline, also: ReadonlyArray<string> = []): string => {
+  const taken = new Set([
+    ...also,
+    ...pipeline.nodes.flatMap((node) =>
+      node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.id) : [],
+    ),
+  ]);
+  for (;;) {
+    const id = `exit-${crypto.randomUUID().slice(0, 8)}`;
+    if (!taken.has(id)) return id;
+  }
+};
+
+/** `exits` with a fresh id each, distinct from each other and from the pipeline's. */
+const freshExits = (pipeline: Pipeline, exits: ReadonlyArray<Exit>): ReadonlyArray<Exit> =>
+  exits.reduce<ReadonlyArray<Exit>>(
+    (given, exit) => [
+      ...given,
+      {
+        ...exit,
+        id: freshExitId(
+          pipeline,
+          given.map((one) => one.id),
+        ),
+      },
+    ],
+    [],
+  );
+
+/**
+ * A filter with each `exit:` and `exits:` term that names exit `from` naming
+ * `to` instead, its spacing kept.
+ */
+const renamedInFilter = (filter: string, from: string, to: string): string =>
+  filter
+    .split(/(\s+)/)
+    .map((word) => {
+      const term = /^(-?exits?:)([a-z-]+)(.*)$/.exec(word);
+      return term !== null && term[2] === from ? `${term[1]}${to}${term[3]}` : word;
+    })
+    .join("");
 
 /**
  * A new `<kind>-<hex>` id. Random rather than counted, because a counted id

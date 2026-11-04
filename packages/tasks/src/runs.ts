@@ -186,9 +186,13 @@ export const addRound = (task: string) =>
     return rows[0]!.rounds;
   });
 
-/** An exit an agent names, with the commit it names it on and the status move it makes. */
+/**
+ * An exit an agent names, with the commit it names it on and the status move it
+ * makes. `ending` is what the run stores: the exit's id in the drawing, which
+ * is never a process ending.
+ */
 export interface NamedExit {
-  readonly name: string;
+  readonly ending: string;
   /** The task's tip when the exit is named; absent when the task has no tip to read. */
   readonly commit: string | undefined;
   readonly event: TaskEvent | undefined;
@@ -199,7 +203,7 @@ export interface NamedExit {
  * was named on, and makes the status move that goes with it, in one
  * transaction. A second exit in the same run replaces the first, commit
  * included. Fails when the task has no open agent run, since a closed run
- * cannot change its exit, or when `name` is no exit name.
+ * cannot change its exit, or when `ending` is no exit.
  */
 export const nameExit = (task: string, exit: NamedExit) =>
   Effect.gen(function* () {
@@ -220,17 +224,17 @@ export const nameExit = (task: string, exit: NamedExit) =>
 export const recordExit = (task: string, exit: Omit<NamedExit, "event">) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    if (!isExit(exit.name))
-      return yield* new TaskError({ id: task, detail: `${exit.name} is no exit name` });
+    if (!isExit(exit.ending))
+      return yield* new TaskError({ id: task, detail: `${exit.ending} is no exit` });
     const changed = yield* sql`UPDATE runs
-      SET ending = ${exit.name}, "commit" = coalesce(${exit.commit ?? null}, "commit")
+      SET ending = ${exit.ending}, "commit" = coalesce(${exit.commit ?? null}, "commit")
       WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
                     AND work <> 'check')
       RETURNING id`;
     if (changed.length === 0)
       return yield* new TaskError({
         id: task,
-        detail: `${task} has no open run to name ${exit.name} on`,
+        detail: `${task} has no open run to name ${exit.ending} on`,
       });
   });
 

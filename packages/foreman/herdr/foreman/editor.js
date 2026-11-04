@@ -11,7 +11,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, EditorState, Editor as TextEditor } from "gpui-base";
 import { chip, picker, portName } from "./parts.js";
 import { FIELDS, changedSettings, instructionsOf, settingsOf } from "./editor-settings.js";
-import { QUEUE, chargeChange, exitRows } from "./editor-exits.js";
+import { QUEUE, chargeChange, emptyChange, exitRows } from "./editor-exits.js";
 
 // The ends of a route, in the order `SwapEnd` turns one into the next.
 const ENDS = ["land", "done", "park"];
@@ -242,8 +242,9 @@ export class Editor {
         .child(chip(t, "lead elsewhere", `rejoin-${index}`, (cx) => { this.rejoining = wire; this.inserting = null; cx.notify(); }))));
   }
 
-  // An agent's or a check's exits: where each leads, the rung it charges, and
-  // the changes it takes. A check's exits keep their names.
+  // An agent's or a check's exits: where each leads, the rung it charges, what
+  // an author's empty branch on it means, and the changes it takes. A check's
+  // exits keep their names.
   exitList(t, node) {
     const change = (one, cx) => this.pane.change(one, cx);
     return v_flex().gap(3).pb(4)
@@ -258,6 +259,7 @@ export class Editor {
             .child(row.name))
           .child(div().text_color(t.muted).child(row.returns ? "→ back to the queue" : `→ ${row.to}`))
           .child(picker(t, "charges", row.charges, row.fails, (choice, cx) => change(chargeChange(node, row.name, choice), cx)))
+          .when(row.empties.length > 0, (el) => el.child(picker(t, "empty branch", row.empties, row.empty, (choice, cx) => change(emptyChange(node, row.name, choice), cx))))
           .child(chip(t, "lead elsewhere", `rejoin-${index}`, (cx) => { this.rejoining = port; this.inserting = null; cx.notify(); }))
           .when(!row.returns, (el) => el.child(chip(t, "return to the queue", `return-${index}`, (cx) =>
             change({ _tag: "Rejoin", wire: { from: node.id, port: port.port }, to: QUEUE }, cx))))

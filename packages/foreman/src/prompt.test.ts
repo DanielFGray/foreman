@@ -10,6 +10,7 @@ import {
   STANDARD_PIPELINES,
   type Workspace,
 } from "./pipeline.ts";
+import { renameExit } from "./pipeline-belt.ts";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./records.ts";
 import { authorRun } from "./task-fixture.ts";
@@ -21,11 +22,11 @@ const run = (f: (prompts: Prompts["Service"]) => Effect.Effect<string, unknown>)
     prompt.replace(/\s+/g, " "),
   );
 
-const blockOf = (role: AgentNode["role"]): AgentNode => {
-  const block = STANDARD_PIPELINES.worktree.nodes.find(
+const blockOf = (role: AgentNode["role"], pipeline = STANDARD_PIPELINES.worktree): AgentNode => {
+  const block = pipeline.nodes.find(
     (node): node is AgentNode => node.kind === "agent" && node.role === role,
   );
-  if (block === undefined) throw new Error(`the standard pipeline has no ${role}`);
+  if (block === undefined) throw new Error(`the pipeline has no ${role}`);
   return block;
 };
 
@@ -43,6 +44,7 @@ const authorPrompt = (
     repository,
     workspace,
     base,
+    pipeline: STANDARD_PIPELINES.worktree,
   });
 
 const reviewPrompt = (
@@ -61,6 +63,7 @@ const reviewPrompt = (
     workspace,
     base,
     verify,
+    pipeline: STANDARD_PIPELINES.worktree,
   });
 const item: Item = {
   id: "ts-123456",
@@ -372,8 +375,8 @@ describe("Prompts", () => {
       instructions: "careful",
       stopped: "park",
       exits: [
-        { name: "approved", to: "land-gate" },
-        { name: "needs-tests", to: "queue", fails: "author" },
+        { id: "approved", name: "approved", to: "land-gate" },
+        { id: "needs-tests", name: "needs-tests", to: "queue", fails: "author" },
       ],
     };
     const previous = process.env["XDG_CONFIG_HOME"];
@@ -386,6 +389,7 @@ describe("Prompts", () => {
           repository: "/tmp/repository",
           workspace: "worktree",
           base: "abc1234",
+          pipeline: undefined,
         }),
       );
       expect(prompt).toContain("Read ts-123456 twice in /tmp/worktree.");
@@ -433,6 +437,7 @@ describe("Prompts", () => {
             repository: "/tmp/repository",
             workspace: "worktree",
             base: "abc1234",
+            pipeline: undefined,
           }),
         ).pipe(Effect.flip, Effect.provide(Prompts.Default)),
       );
@@ -489,8 +494,14 @@ describe("the instructions foreman ships for agent blocks", () => {
     });
   }
 
-  test("an author is told when to name already-done only by a block that declares it", async () => {
-    const author = blockOf("author");
+  test("the claim guidance follows the declared claim, under the name it is drawn with", async () => {
+    const pipeline = renameExit(
+      STANDARD_PIPELINES.worktree,
+      "author",
+      "already-done",
+      "nothing-to-do",
+    );
+    const author = blockOf("author", pipeline);
     const prompt = (block: AgentNode) =>
       run((prompts) =>
         prompts.agent(block, {
@@ -499,18 +510,34 @@ describe("the instructions foreman ships for agent blocks", () => {
           repository: "/tmp/repository",
           workspace: "worktree",
           base: "abc1234",
+          pipeline,
         }),
       );
-    expect(await prompt(author)).toContain(
-      "Name `already-done` only when trunk already does everything the task asks",
-    );
-    const renamed = await prompt({
-      ...author,
-      exits: author.exits.map((exit) =>
-        exit.name === "already-done" ? { ...exit, name: "nothing-to-do" } : exit,
-      ),
-    });
+    const renamed = await prompt(author);
     expect(renamed).toContain("`foreman exit ts-123456 nothing-to-do`");
+    expect(renamed).toContain(
+      "Name `nothing-to-do` only when trunk already does everything the task asks",
+    );
     expect(renamed).not.toContain("already-done");
+    // A name alone means nothing: an exit called already-done that declares
+    // no claim gets no guidance.
+    const unmarked = await prompt({
+      ...blockOf("author"),
+      exits: blockOf("author").exits.map(({ empty: _empty, ...exit }) => exit),
+    });
+    expect(unmarked).not.toContain("only when trunk already does everything");
+
+    // The reviewer reads the claim the author made, under its name as drawn now.
+    const review = await run((prompts) =>
+      prompts.agent(blockOf("review"), {
+        task: { ...item, runs: [authorRun("cheap", { open: false, ending: "already-done" })] },
+        worktree: "/tmp/worktree",
+        repository: "/tmp/repository",
+        workspace: "worktree",
+        base: "abc1234",
+        pipeline,
+      }),
+    );
+    expect(review).toContain("ended its run `nothing-to-do`: it claims trunk already does");
   });
 });
