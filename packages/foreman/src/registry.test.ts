@@ -32,8 +32,8 @@ describe("the registry ladder", () => {
       Effect.gen(function* () {
         const rows = parseRows(renderRows(yield* readRows));
         const [first, ...rest] = rows;
-        // Levels order the ladder before the text does, so a block moved across
-        // levels takes the level it moved to.
+        // Levels order the ladder before the text does, so a block moved to
+        // another level must also be given that level.
         yield* writeRows([...rest, { ...first!, level: 4 }]);
         const after = yield* readRows;
         expect(after.map((row) => row.rung)).toEqual(["strong", "promo", "cheap"]);

@@ -134,7 +134,8 @@ const edit = Command.make("edit", {}, () =>
         catch: (cause) => new RegistryError({ detail: `could not read your edit: ${cause}` }),
       });
       yield* writeRows(after);
-      yield* Console.log(describeChange(before, after));
+      // The stored order, not the text's: a write sorts the rows by level.
+      yield* Console.log(describeChange(before, yield* readRows));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

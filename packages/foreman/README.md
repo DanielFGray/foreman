@@ -383,9 +383,10 @@ Unknown price, quota or billing stays visibly unknown. An `unmetered` rung is no
 walled by a spent account allowance.
 
 `edit` opens one JSON object per rung, cheapest level first. Each carries its
-`level`; inside a level, reordering is moving a block, and a block moved to
-another level takes that `level` number. the result is validated (known models, unique names, at least one rung on)
-and written in one transaction, so a typo changes nothing. A rung may carry
+`level`; inside a level, reordering is moving a block. To move a rung to another
+level, edit its `level`: the text order does not change a level. The result is
+validated (known models, unique names, integer levels, at least one rung on) and
+written in one transaction, so a typo changes nothing. A rung may carry
 `provider`, `unmetered` and `note`.
 
 A rung's `model` must already have a row in `models`; add that row with the herd
