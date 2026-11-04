@@ -71,7 +71,8 @@ export const PipelineChange = S.Union([
 export type PipelineChange = typeof PipelineChange.Type;
 
 /**
- * The pipeline after `change`, and the id of the block it added, if any. A
+ * The pipeline after `change`, and the id of the block an insert or a new source
+ * added, which an editor selects; a gate a land's `how` brings is not it. A
  * change the pipeline cannot take answers `refused`: a rejoin that names a
  * block the pipeline lacks, a setting for another kind of block, a new exit
  * name the block already has, an exit added, renamed or removed on a check,
