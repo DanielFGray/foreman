@@ -55,10 +55,6 @@ answer it: log the question and stop without naming an exit.
 
 ## Decide
 
-Before approving, run the `council` skill's Review over `{{ base }}..HEAD`. A confirmed
-defect is a rejection. Log what council found and what you decided, then close the
-member panes.
-
 To return the task, log findings detailed enough for the next agent, then name the
 exit `returned`. To approve it, name the exit `approved`.
 
