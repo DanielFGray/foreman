@@ -332,7 +332,7 @@ from the main checkout and lands into `develop` there.
 1. Done: `src/pipeline.ts`: schema, facts, filters, placement, validation,
    Mermaid, the standard pipeline.
 2. Done: `pipelines.json` and `foreman pipeline show|check|set|clear`.
-3. Done: herdr-web's Pipeline page: the editor. It draws, checks and saves
+3. Done: the editor, the herdr-app pane's Pipeline view. It draws, checks and saves
    through foreman's commands, and needs nothing from the dispatcher.
 4. Done: runs replace labels (tasks step 3b; design in `runs-replace-labels.md`); `factsOf` reads runs and each task's
    branch tip. A review run records the commit it read, and land merges that

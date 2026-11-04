@@ -14,7 +14,7 @@ cycles on, ask, off with `foreman policy set <step> <mode>`) and each grant
 with a revoke button.
 
 The dispatcher's state is as the file names it: `running`, `paused`, `idle`
-(no step on and no grant, so it only reads), `failed` (herdr-web's server is
+(no step on and no grant, so it only reads), `failed` (`foreman serve` is
 starting it again), `stale` (no reading for two minutes), `no dispatcher` (the
 file was written by a one-shot `foreman status`) or `offline` (no file).
 
@@ -88,7 +88,7 @@ project, posts a notification. The pane never runs `prog`.
 
 The pane keeps no state but the Tasks mode. It reads the file that
 `src/published.ts` writes, and the schema there is the contract; a row from
-`foreman queue --json` has the shape of a published row. herdr-web's server
+`foreman queue --json` has the shape of a published row. `foreman serve`
 writes the file. Bump `PUBLISHED_VERSION` and `VERSION` in `foreman/main.js`
 together.
 
@@ -111,7 +111,7 @@ together.
 Both are optional:
 
 - `state`: the published file. Default: `~/.local/state/foreman/state.json`,
-  where herdr-web's server writes it when it has no `XDG_STATE_HOME` or
+  where `foreman serve` writes it when it has no `XDG_STATE_HOME` or
   `FOREMAN_STATE`.
 - `command`: the argv prefix that runs foreman. Default: `["foreman"]`. A mod
   cannot read environment variables, so a fleet with its own registry or

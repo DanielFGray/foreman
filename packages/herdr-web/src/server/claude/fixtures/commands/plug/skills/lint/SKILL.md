@@ -1,3 +1,0 @@
----
-description: Lint the code
----

@@ -1,6 +1,6 @@
 // The changes an operator makes to a pipeline, as data an editor can send, and
 // the pure step that applies one. Every change itself is `pipeline-belt`'s;
-// this module names each one, so herdr-web's editor and `foreman pipeline
+// this module names each one, so the pane's editor and `foreman pipeline
 // edit` decode the same changes.
 import { Schema as S } from "effect";
 import { AgentNode, Exit, LandNode, LANDINGS, type Pipeline } from "./pipeline.ts";

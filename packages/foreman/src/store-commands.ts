@@ -16,8 +16,8 @@ import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
  * `ProjectTracker`, so one prompt serves every tracker. `foreman add` is in
  * `commands.ts`, because it can also dispatch the task it files.
  *
- * The panel and herdr-web show the queue and a task's record through these,
- * so neither speaks to the task store itself, and a store other than prog is
+ * The herdr-app pane shows the queue and a task's record through these, so
+ * it never speaks to the task store itself, and a store other than prog is
  * one `Records` implementation away. They read the store only: no roster, no
  * checkout gates, no `Dispatcher.read`, which takes seconds.
  */
@@ -29,10 +29,7 @@ const project = Flag.String("project").pipe(
   Flag.optional,
 );
 
-/**
- * The queue in the order the fleet would dispatch it. `queueOf` is the read
- * herdr-web's server makes in process, so the two print the same rows.
- */
+/** The queue in the order the fleet would dispatch it. */
 export const queueCommand = Command.make("queue", { json, project }, (args) =>
   Effect.gen(function* () {
     const { queue, epics } = yield* queueOf(args.project);

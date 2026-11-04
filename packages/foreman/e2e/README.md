@@ -14,12 +14,12 @@ export FOREMAN_POLICY=/tmp/foreman-e2e-policy.json
 bun src/main.ts policy slots 1
 bun src/main.ts policy set author on   # and review, land: what the run should prove
 export FOREMAN_CONFIG=$PWD/e2e/config.jsonc FOREMAN_STATE=/tmp/foreman-e2e-state.json
-HERDR_WEB_PORT=4181 bun ../herdr-web/src/server/main.ts
+bun src/main.ts serve
 ```
 
-The dispatcher runs only inside herdr-web's server, so the rig starts a second
-server on a spare port with the rig's variables. Never point it at the real
-server's port or state file.
+The rig runs a second `foreman serve` with the rig's variables. Its lock sits
+beside the rig's state file, so it runs beside the operator's service. Never
+point it at the real state file.
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without
 touching the real registry; `PROG_DB` keeps the rig's tasks and runs out of the real store too.

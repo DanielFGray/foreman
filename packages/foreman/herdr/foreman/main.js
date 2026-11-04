@@ -19,8 +19,8 @@
 // It asks for a drawing that runs down when the pane is taller than it is
 // wide, and across otherwise, and asks again when the pane's shape flips.
 // A mod cannot load foreman's own modules (they need web globals the mod
-// engine lacks), and a second copy of the layout here would drift from the
-// one herdr-web draws. Where each task stands is the dispatcher's placement in
+// engine lacks), and a second copy of the layout here would drift from
+// `src/pipeline-layout.ts`. Where each task stands is the dispatcher's placement in
 // state.json, with the task's runs so far; a task waiting at an ask is the
 // dispatcher's attention row that offers `approve`, which a button here runs.
 // A gate shows the mode its step has for this project, which state.json
