@@ -4,7 +4,7 @@
  * The dispatcher is supervised: when it fails, the failure is logged and
  * written to state.json as the reading's state, and the dispatcher starts
  * again after a pause. Each reading is written to state.json, which the
- * herdr-app Foreman pane and herdr-web read.
+ * herdr-app Foreman pane reads.
  *
  * A lock on a file beside state.json is held for the life of the process, so
  * a second serve refuses to start and cannot race the first one's landings.

@@ -1,7 +1,7 @@
 /**
  * The task board: each task in the one column a person reads as where its
  * work is, from where it stands in its project's pipeline. Foreman decides
- * the column, so the herdr-app pane and herdr-web's board only draw it.
+ * the column, so the herdr-app pane only draws it.
  */
 import { DateTime } from "effect";
 import { PROCESS_ENDINGS, type Ending } from "tasks";

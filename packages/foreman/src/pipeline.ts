@@ -16,10 +16,6 @@
  * has, or one at a block it no longer has, places the task nowhere: where it
  * goes then is the operator's decision. The editor keeps a block's id and an
  * exit's id across edits for the same reason.
- *
- * herdr-web's page imports this module and `pipeline-belt.ts` in the browser,
- * so neither may import, other than as a type, anything that reaches the task
- * store or the file system.
  */
 import { Graph, Option, Schema as S } from "effect";
 import { EXIT_NAME, PROCESS_ENDINGS } from "tasks/endings";

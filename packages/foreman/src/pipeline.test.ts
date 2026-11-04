@@ -845,18 +845,6 @@ describe("the Mermaid drawing", () => {
   });
 });
 
-describe("the modules herdr-web's page bundles", () => {
-  test("reach neither the task store nor node", async () => {
-    const built = await Bun.build({
-      entrypoints: [`${import.meta.dir}/pipeline.ts`, `${import.meta.dir}/pipeline-belt.ts`],
-      target: "browser",
-    });
-    expect(built.success).toBe(true);
-    const code = (await Promise.all(built.outputs.map((output) => output.text()))).join("\n");
-    expect(code).not.toMatch(/bun:sqlite|from "node:|require\("node:|effect\/sql/);
-  });
-});
-
 describe("workspace blocks", () => {
   const swap = (pipeline: Pipeline, ...nodes: ReadonlyArray<PipelineNode>): Pipeline => ({
     nodes: pipeline.nodes.map((node) => nodes.find((other) => other.id === node.id) ?? node),

@@ -1097,12 +1097,11 @@ not to have been earned.
   `FOREMAN_PIPELINES` and `FOREMAN_CONFIG` at scratch paths. To read real data, copy the store first:
   `sqlite3 ~/.prog/prog.db ".backup <scratch>/prog.db"`.
 - **oxfmt runs from `packages/foreman`.** Its config is
-  `packages/foreman/.oxfmtrc.json`. herdr-web has none: keep its style by hand.
+  `packages/foreman/.oxfmtrc.json`.
 - **`CLAUDE.md` is a symlink to `AGENTS.md`.** `sed -i` or `perl -i` on it
   replaces the link with a copy. Edit `AGENTS.md`.
 - **The operator's screen is live.** Leave herdr-app spaces, panes and focus
-  alone. Start no herdr-web server: the operator's runs as the `herdr-web` user
-  service.
+  alone.
 
 ## House rules
 
