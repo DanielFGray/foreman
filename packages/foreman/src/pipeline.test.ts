@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import type { Run } from "tasks";
 import { authorDone, authorRun, charged, checkRun, reviewRun, stoppedRun } from "./task-fixture.ts";
 import {
@@ -17,7 +18,11 @@ import {
   routeTarget,
   routeWorkspace,
   targetsOf,
-  choiceOf,
+  type Landing,
+  LANDINGS,
+  type Standard,
+  standardOf,
+  standardPipeline,
   DEFAULT_PIPELINE,
   STANDARD_PIPELINES,
   WORKSPACE_CHOICES,
@@ -449,10 +454,28 @@ describe("validation", () => {
     expect(kinds).not.toContain("worktree");
   });
 
-  test("each standard workspace choice is valid, and is named by its blocks", () => {
+  test("each standard pipeline is valid, and is named by its blocks", () => {
+    const standards: ReadonlyArray<Standard> = [
+      { workspace: "direct" },
+      ...(["checkout", "worktree"] as const).flatMap((workspace) =>
+        LANDINGS.flatMap((how) => [
+          { workspace, how },
+          { workspace, how, onto: "develop" },
+        ]),
+      ),
+    ];
+    for (const standard of standards) {
+      const pipeline = standardPipeline(standard);
+      expect(problemsOf(pipeline, OFFERS)).toEqual([]);
+      expect(standardOf(pipeline)).toEqual(Option.some(standard));
+      expect(standardOf({ nodes: pipeline.nodes.toReversed() })).toEqual(Option.some(standard));
+    }
     for (const choice of WORKSPACE_CHOICES) {
-      expect(problemsOf(STANDARD_PIPELINES[choice], OFFERS)).toEqual([]);
-      expect(choiceOf(STANDARD_PIPELINES[choice])).toBe(choice);
+      expect(standardOf(STANDARD_PIPELINES[choice])).toEqual(
+        Option.some(
+          choice === "direct" ? { workspace: choice } : { workspace: choice, how: "merge" },
+        ),
+      );
     }
     const kinds = STANDARD_PIPELINES.direct.nodes.map((node) => node.kind);
     expect(kinds).not.toContain("branch");
@@ -462,7 +485,17 @@ describe("validation", () => {
         node.id === "author" ? { ...node, model: "cheap" } : node,
       ),
     };
-    expect(choiceOf(pinned)).toBeUndefined();
+    expect(standardOf(pinned)).toEqual(Option.none());
+  });
+
+  test("a standard pull-request land is behind a publish gate, and no other land is", () => {
+    const gates = (how: Landing) =>
+      standardPipeline({ workspace: "worktree", how }).nodes.flatMap((node) =>
+        node.kind === "gate" ? [node.step] : [],
+      );
+    expect(gates("pull-request")).toContain("publish");
+    expect(gates("merge")).not.toContain("publish");
+    expect(gates("fast-forward")).not.toContain("publish");
   });
 
   test("names a duplicate block, a loose wire and a filter that means nothing", () => {

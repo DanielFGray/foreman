@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { isExit } from "tasks";
-import { type Pipeline, problemsOf, type SeatOffers, STANDARD_PIPELINES } from "./pipeline.ts";
+import {
+  type Pipeline,
+  problemsOf,
+  type SeatOffers,
+  STANDARD_PIPELINES,
+  standardOf,
+  standardPipeline,
+} from "./pipeline.ts";
 import {
   addExit,
   addRoute,
@@ -25,6 +32,8 @@ const OFFERS: SeatOffers = {
 };
 const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
 const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
+const gateSteps = (pipeline: Pipeline) =>
+  pipeline.nodes.flatMap((one) => (one.kind === "gate" ? [one.step] : []));
 const exitsOf = (pipeline: Pipeline, id: string) => {
   const found = node(pipeline, id);
   return found?.kind === "agent" || found?.kind === "check" ? found.exits : [];
@@ -158,6 +167,61 @@ describe("belt edits", () => {
     expect(problemsOf(onto, OFFERS)).toEqual([]);
     const cleared = configure(onto, "land", { kind: "land", how: "fast-forward" });
     expect(node(cleared, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
+  });
+
+  test("a land set to pull-request gets a publish gate, and one set back loses it", () => {
+    for (const workspace of ["checkout", "worktree"] as const) {
+      const published = configure(STANDARD_PIPELINES[workspace], "land", {
+        kind: "land",
+        how: "pull-request",
+        onto: "develop",
+      });
+      expect(problemsOf(published, OFFERS)).toEqual([]);
+      expect(standardOf(published)).toEqual(
+        Option.some({ workspace, how: "pull-request", onto: "develop" }),
+      );
+      const merged = configure(published, "land", { kind: "land", how: "merge" });
+      expect(standardOf(merged)).toEqual(Option.some({ workspace, how: "merge" }));
+      const forwarded = configure(published, "land", { kind: "land", how: "fast-forward" });
+      expect(gateSteps(forwarded)).not.toContain("publish");
+      expect(problemsOf(forwarded, OFFERS)).toEqual([]);
+    }
+  });
+
+  test("a pull-request land keeps the publish gate it has", () => {
+    const published = standardPipeline({ workspace: "worktree", how: "pull-request" });
+    const moved = configure(published, "land", {
+      kind: "land",
+      how: "pull-request",
+      onto: "develop",
+    });
+    expect(ids(moved)).toEqual(ids(published));
+    const stranded = {
+      nodes: published.nodes.map((one) =>
+        one.kind === "land" ? { ...one, how: "merge" as const } : one,
+      ),
+    };
+    expect(problemsOf(stranded, OFFERS)).toContain(
+      "publish-gate gates publish, but no route from it reaches a pull-request land",
+    );
+    expect(configure(stranded, "land", { kind: "land", how: "pull-request" })).toEqual(published);
+  });
+
+  test("a land behind no land gate gets one with its publish gate", () => {
+    const authorGated = configure(STANDARD_PIPELINES.worktree, "land-gate", {
+      kind: "gate",
+      step: "author",
+    });
+    const published = configure(authorGated, "land", { kind: "land", how: "pull-request" });
+    expect(gateSteps(published).toSorted()).toEqual([
+      "author",
+      "author",
+      "climb",
+      "land",
+      "publish",
+      "review",
+    ]);
+    expect(problemsOf(published, OFFERS)).toEqual([]);
   });
 
   test("taking the worktree out leaves the task's branch in the operator's checkout", () => {

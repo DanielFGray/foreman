@@ -462,7 +462,7 @@ plan to tell agents `gh issue view` and `gh issue comment`.
 | `src/store-commands.ts` | `foreman log <id> -`. |
 | `src/published.ts`, `src/view.ts` | `url`, `pr`, project `tracker`, `repo`, `unreachable` (section 2). |
 | herdr-app pane | the Foreman pane shows the same fields from `state.json`, and offers `pull-request` from `choices`, with no code of its own. |
-| AGENTS.md | "Every task with a branch ends by merging into the project's main checkout" and "landing is the only code path that moves the operator's branch" hold for local landings only; a PR landing moves the remote trunk, and the operator's checkout takes it by its own pull. The policy steps list gains `publish`. |
+| AGENTS.md | A task lands on its target: the branch its land's `onto` names, else the branch the checkout has out, recorded when its branch is cut. A local landing moves that target in the repository; a PR landing merges into the target on the remote, and the operator's checkout takes it by its own pull. The policy steps list gains `publish`. |
 
 ## 7. Linear
 
@@ -632,8 +632,9 @@ Linear has no pull requests. The land block decides, as in a prog project:
   `publish` before the push and `land` before the merge (section 4).
 - `AGENTS.md`, "A landing is proved somewhere disposable": a PR landing is
   proved by the repo's required checks, not the proving ground (section 3).
-- `AGENTS.md`, "landing is the only code path that moves the operator's
-  branch": a PR landing moves the remote trunk instead (section 6).
+- `AGENTS.md`, "landing is the only code path that moves a task's target for
+  a local landing": a PR landing merges into its target on the remote instead
+  (section 6).
 - `src/prompt.ts` and `prompts/author.md`: agents read and log with
   `foreman show` and `foreman log`, not `tasks show` and `tasks log`
   (section 6).

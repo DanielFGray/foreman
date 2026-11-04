@@ -88,7 +88,11 @@ const clear = Command.make("clear", { project: Flag.String("project") }, ({ proj
 const tracker = Command.make(
   "tracker",
   {
-    tracker: Argument.Literals("tracker", TRACKERS),
+    tracker: Argument.Literals("tracker", TRACKERS).pipe(
+      Argument.withDescription(
+        "prog (the tasks store; the default), github (the issues of the project's GitHub repo) or linear (a Linear project of a Linear team)",
+      ),
+    ),
     project: Flag.String("project"),
     team: Flag.String("team").pipe(
       Flag.withDescription("The Linear team key, for example ENG; needed with linear"),

@@ -32,10 +32,14 @@ Agents work where the blocks before them put the task:
 | none | your checkout | your current branch (`direct`) |
 
 A project with no drawn pipeline runs the `checkout` choice. `foreman pipeline
-use <checkout|worktree|direct> --project <name>` draws one of the three as the
-project's pipeline, through the same file code as the pipeline editor. It refuses
-when the project already has a drawing that is not one of the three, so a
-hand-drawn pipeline is never lost. A worktree task can be served for a look:
+use <checkout|worktree|direct> [--land merge|fast-forward|pull-request] [--onto
+<branch>] --project <name>` draws the standard pipeline of that workspace as the
+project's pipeline, through the same file code as the pipeline editor. `--land`
+is the land's `how` (default `merge`) and `--onto` its `onto` (default none: the
+branch your checkout has out). A pull-request land comes with its publish gate.
+A direct route lands nothing, so `use direct` refuses `--land` and `--onto`. It
+refuses when the project already has a drawing that is no standard pipeline, so
+a hand-drawn pipeline is never lost. A worktree task can be served for a look:
 `foreman preview <task>` runs the project's `scripts/preview.sh` in the task's
 worktree, in the hc terminal `preview-<task>`, and prints that terminal's
 address. A preview terminal that is still live is used again. The `preview`

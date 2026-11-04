@@ -347,6 +347,14 @@ target. A target that does not exist holds the project, and the held row names
 it. A route in your checkout with no worktree needs the target out there, or the
 project is held with a row that names both branches.
 
+`foreman pipeline use <checkout|worktree> --land <merge|fast-forward|pull-request>
+--onto <branch> --project <name>` draws the standard pipeline with that landing;
+both flags are optional, and the default is a merge onto the branch your checkout
+has out. A pull-request landing takes a `publish` gate as well as a `land` gate,
+and the standard pipeline draws both. Changing a land's `how` in the editor or
+with `foreman pipeline edit` adds or takes out the publish gate in the same
+change, so the draft stays valid.
+
 A branch that turns a green project red never lands, and the task goes back to
 the queue carrying the failure output — the next author's whole job is that
 output. A failed run is repeated once on the same merged tree first: a pass on
