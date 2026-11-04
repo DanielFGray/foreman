@@ -11,8 +11,8 @@ project has one: a graph of **blocks** (nodes) joined by **wires**. The
 dispatcher places each task in the graph and runs the block it stands at. With
 no pipeline set, a project runs the **default pipeline**: the standard pipeline
 in the operator's checkout, on the task's branch. `foreman pipeline use
-<checkout|worktree|direct> --project <name>` draws one of the three standard
-workspace choices (`docs/workspace-blocks.md`).
+<checkout|worktree|direct> [--land merge|fast-forward|pull-request] [--onto
+<branch>] --project <name>` draws a standard pipeline (`docs/workspace-blocks.md`).
 
 The executors stay: dispatching an agent into the task's worktree, reading how
 its run ended, landing, usage walls, trials, teardown. What the pipeline
@@ -259,7 +259,11 @@ running a flow the operator did not draw is worse than stopping.
   pull request, and a `land` gate, which merges it. Either step can be on while
   the other is off, so one gate cannot stand for both. A `publish` gate from
   which no route reaches a pull-request land is a problem: it would hold a step
-  that never comes.
+  that never comes. So changing a land's `how` brings these gates with it, in
+  one change: to `pull-request`, a gate of each step a route to the land lacks
+  goes directly before the land; away from it, each publish gate that reached a
+  pull-request land and now reaches none is taken out, its wires running on to
+  its next block (`configure` in `src/pipeline-belt.ts`).
 - Every land a branch block reaches names the same `onto`, absent counting as
   one target, because the branch block cuts the task's branch from that
   target. An `onto` that is empty or names a `foreman/` branch is a problem
@@ -270,10 +274,13 @@ draws the pipeline as Mermaid (`foreman pipeline show`).
 
 ## The standard pipeline
 
-The standard pipeline has three workspace choices. The blocks between the source
-and the router say where the agents work: `branch` (checkout, the default),
+The standard pipeline takes a workspace and, for a route on a branch, a landing:
+`standardPipeline` in `src/pipeline.ts`. The blocks between the source and the
+router say where the agents work: `branch` (checkout, the default),
 `branch → worktree` (worktree), or none (direct). Direct ends at `done` in place
-of `land`.
+of `land`, so it takes no landing. The others end at a land with the `how` and
+`onto` given; the default is `merge` with no `onto`. A pull-request land takes a
+publish gate between its land gate and itself.
 
 ```
 source(all) → workspace blocks
@@ -282,8 +289,12 @@ source(all) → workspace blocks
             else           → gate(author)
 gate(author), gate(climb) → agent(author, ladder)
   → gate(review) → agent(review, above)
-  → gate(land) → land
+  → gate(land) → [gate(publish), pull-request only] → land
 ```
+
+A pipeline is standard when it holds the same blocks as the standard pipeline
+of its own workspace blocks and land, in any order (`standardOf`).
+`pipeline show` names it, and `pipeline use` replaces only a standard pipeline.
 
 The router is `authorStep` in `src/policy.ts` drawn as a block. A conflict
 returns with no evidence, so the router reads the same labels it reads today,
