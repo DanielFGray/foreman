@@ -38,6 +38,12 @@ const COLUMNS = [
 ];
 const AUTHORING = COLUMNS.findIndex((column) => column.key === "authoring");
 
+// A card's place on the board: its column and its key. One reading can show a
+// task in two columns, such as Landed and Needs you while its author still
+// runs, so the key alone does not name one card.
+const slot = (index, key) => `${COLUMNS[index].key} ${key}`;
+const columnOf = (card) => COLUMNS.findIndex((column) => column.key === card.column);
+
 export class Board {
   constructor(pane) {
     this.pane = pane;
@@ -56,7 +62,7 @@ export class Board {
     const placements = this.pane.placements();
     const byTask = this.pane.rowsByTask();
     for (const placement of placements) {
-      const index = COLUMNS.findIndex((column) => column.key === placement.column);
+      const index = columnOf(placement);
       columns[index].push({ ...placement, row: rowOf(byTask.get(placement.key), placement.column) });
     }
     const placed = new Set(placements.map((placement) => placement.key));
@@ -73,7 +79,7 @@ export class Board {
   // The selected card, as the board shows it now.
   selected() { return this.columns().flat().find((card) => card.key === this.pane.detail.key); }
 
-  // Every card's rectangle in board coordinates, each column's x and width,
+  // Every card's rectangle in board coordinates, keyed by `slot`, each column's x and width,
   // and how far the columns reach past the board's right edge.
   layout(columns) {
     const width = this.width();
@@ -85,7 +91,7 @@ export class Board {
       let y = PAD + HEAD - this.scroll.y;
       for (const card of cards) {
         const height = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
-        rects.set(card.key, { x: xs[index], y, width: columnW, height });
+        rects.set(slot(index, card.key), { x: xs[index], y, width: columnW, height });
         y += height + GAP;
       }
     });
@@ -100,18 +106,18 @@ export class Board {
   targets(card, columns) {
     if (this.bounds === null) return [];
     const window = (rect) => ({ ...rect, x: rect.x + this.bounds.x, y: rect.y + this.bounds.y });
-    const stay = { rect: window(this.layout(columns).rects.get(card.key)), run: null };
+    const stay = { rect: window(this.layout(columns).rects.get(slot(columnOf(card), card.key))), run: null };
     const steps = this.pane.grantSteps();
     if (card.column !== "queue" || steps.length === 0) return [stay];
     const moved = columns.map((cards, index) =>
       index === AUTHORING ? [...cards, card] : cards.filter((one) => one.key !== card.key));
-    const granted = window(this.layout(moved).rects.get(card.key));
+    const granted = window(this.layout(moved).rects.get(slot(AUTHORING, card.key)));
     return [stay, { rect: granted, run: (cx) => this.pane.act(["policy", "grant", card.key, ...steps], cx, (_done, cx) => cx.notify()) }];
   }
 
   press(card, event) {
     const columns = this.columns();
-    const rect = this.layout(columns).rects.get(card.key);
+    const rect = this.layout(columns).rects.get(slot(columnOf(card), card.key));
     const origin = this.bounds ?? { x: 0, y: 0 };
     this.pane.drag.press(card.key, event.position, { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
   }
@@ -147,7 +153,7 @@ export class Board {
         .child(div().px(6).rounded(4).bg(`${column.color(t)}26`).text_size(10).text_color(column.color(t))
           .child(String(columns[index].length)))))
       .children(columns.flatMap((cards, index) => cards.map((card) =>
-        this.card(card, COLUMNS[index], rects.get(card.key), t, card === dragged))))
+        this.card(card, COLUMNS[index], rects.get(slot(index, card.key)), t, card === dragged))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
         outline(preview.rect, origin, t)))
       .when(floating !== null, (el) => el.child(
