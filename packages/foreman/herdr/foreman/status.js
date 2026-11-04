@@ -50,3 +50,12 @@ export const newlyLanded = (before, landedKeys) =>
 export const pullRequestLine = (pr) =>
   [`PR #${pr.number} ${pr.state}`, pr.checks ? `checks ${pr.checks}` : null, pr.waiting ? WAITING[pr.waiting] : null, pr.url]
     .filter(Boolean).join(" · ");
+
+// What a refused foreman command said, on stderr, as the one line the pane has
+// for a problem: the error's message without the log prefix or the stack under
+// it, and a listed reason after its heading rather than on a line of its own.
+export const refusalOf = (result) => {
+  const message = result.stderr.split("\n    at ")[0].replace(/^.*?Error: /s, "");
+  const [heading = "", ...reasons] = message.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  return [heading, reasons.join("; ")].filter((part) => part !== "").join(" ") || `foreman exited ${result.code}`;
+};

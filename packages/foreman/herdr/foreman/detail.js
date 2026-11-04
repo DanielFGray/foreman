@@ -9,7 +9,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { chip } from "./parts.js";
-import { pullRequestLine, TASK_ID } from "./status.js";
+import { pullRequestLine, refusalOf, TASK_ID } from "./status.js";
 
 // These take an answer the pane has no input for; the CLI takes them.
 const NEEDS_INPUT = new Set(["complete", "intervene"]);
@@ -43,7 +43,7 @@ export class Detail {
       const result = await this.pane.foreman(["show", id, "--json"]);
       let record;
       try {
-        record = result.code === 0 ? JSON.parse(result.stdout) : { error: (result.stderr || result.stdout).trim() };
+        record = result.code === 0 ? JSON.parse(result.stdout) : { error: refusalOf(result) };
       } catch (error) { record = { error: `foreman show's answer is not JSON: ${error.message}` }; }
       if (this.key === key) { this.record = record; cx.notify(); }
     });

@@ -7,6 +7,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, SliderState, Slider, SliderTrack, SliderIndicator, SliderThumb } from "gpui-base";
 import { chip, picker } from "./parts.js";
+import { refusalOf } from "./status.js";
 
 const HORIZONS = ["24", "72", "168"];
 // The slider runs over the horizon in this many steps, whatever its hours.
@@ -45,7 +46,7 @@ export class Fleet {
     cx.spawn(async (cx) => {
       const result = await this.pane.foreman(args);
       this.running = false;
-      if (result.code !== 0) this.problem = result.stderr.trim().split("\n").at(-1) || `foreman exited ${result.code}`;
+      if (result.code !== 0) this.problem = refusalOf(result);
       else {
         try {
           this.report = JSON.parse(result.stdout); this.problem = null;

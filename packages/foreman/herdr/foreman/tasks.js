@@ -9,7 +9,8 @@
 // picked card: an epic's grant covers every task under it.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { chip, refusalOf } from "./parts.js";
+import { chip } from "./parts.js";
+import { refusalOf } from "./status.js";
 
 const CARD_W = 136;
 const GAP = 6;
@@ -35,7 +36,7 @@ export class Tasks {
       this.loading = false;
       // The space moved to another project while this read ran: read for the one shown now.
       if (this.pane.project() !== project) { this.load(cx); return; }
-      if (result.code !== 0) this.problem = result.stderr.trim().split("\n").at(-1) || `foreman exited ${result.code}`;
+      if (result.code !== 0) this.problem = refusalOf(result);
       else {
         try {
           this.report = JSON.parse(result.stdout);
@@ -102,14 +103,19 @@ export class Tasks {
     const { grantSteps, steps } = this.report;
     const picked = this.report.items.filter((item) => this.picked.has(item.id));
     const one = picked.length === 1 ? picked[0] : null;
+    // The pick row keeps one height, picked or not, so a pick never moves the
+    // cards under the pointer before the next click.
+    const row = h_flex().h(22).flex_none().gap(6).items_center().overflow_hidden();
     return v_flex().px(GAP).py(4).gap(3).bg(t.chrome).border_b(1).border_color(t.border)
-      .child(div().text_color(t.muted).child(stepsLine(steps, grantSteps)))
-      .when(picked.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).items_center()
-        .child(div().child(one === null ? `${picked.length} picked` : one.id))
-        .when(grantSteps.length > 0, (el) => el.child(chip(t, picked.length === 1 ? "send through" : `send ${picked.length} through`, "send-through", (cx) => this.grant(picked.map((item) => item.id), cx))))
-        .when(one?.grant != null, (el) => el.child(chip(t, one.grant.scope === one.id ? "revoke" : `revoke ${one.grant.scope}, the whole epic`, "revoke", (cx) => this.revoke(one.grant.scope, cx))))
-        .child(chip(t, "clear", "clear-picked", (cx) => { this.picked = new Set(); cx.notify(); }))))
-      .when(one !== null, (el) => el.child(div().text_color(t.muted).child(one.title)));
+      .child(div().text_color(t.muted).truncate().child(stepsLine(steps, grantSteps)))
+      .child(picked.length === 0
+        ? row.child(div().text_color(t.dim).truncate().child("click a card to pick it, shift-click to pick more"))
+        : row
+          .child(div().flex_none().child(one === null ? `${picked.length} picked` : one.id))
+          .when(grantSteps.length > 0, (el) => el.child(chip(t, picked.length === 1 ? "send through" : `send ${picked.length} through`, "send-through", (cx) => this.grant(picked.map((item) => item.id), cx)).flex_none()))
+          .when(one?.grant != null, (el) => el.child(chip(t, one.grant.scope === one.id ? "revoke" : `revoke ${one.grant.scope}, the whole epic`, "revoke", (cx) => this.revoke(one.grant.scope, cx)).flex_none()))
+          .child(chip(t, "clear", "clear-picked", (cx) => { this.picked = new Set(); cx.notify(); }).flex_none())
+          .when(one !== null, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(one.title))));
   }
 
   card(item, placement, t) {

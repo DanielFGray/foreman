@@ -160,7 +160,7 @@ export class Board {
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
         outline(preview.rect, origin, t)))
       .when(floating !== null, (el) => el.child(
-        this.card(dragged, COLUMNS.find((column) => column.key === dragged.column), { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false)
+        this.face(dragged, COLUMNS.find((column) => column.key === dragged.column), { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t)
           .opacity(0.9)));
     return v_flex().flex_1().min_h(0).child(board).child(this.pane.detail.view(t, this.selected()));
   }
@@ -180,18 +180,25 @@ export class Board {
       .when(folded, (el) => el.child(div().flex_none().px(5).rounded(4).bg(t.surface).child(String(count))));
   }
 
+  // The card in its column: a click shows its record, and a queued card drags.
   card(card, column, rect, t, ghost) {
+    return this.face(card, column, rect, t).id(`board-card-${card.key}`)
+      .when(ghost, (el) => el.opacity(0.35))
+      .hover((s) => s.border_color(column.color(t)))
+      .when(card.column === "queue", (el) => el.cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event)))
+      .on_click((_event, cx) => this.pane.detail.toggle(card.key, cx));
+  }
+
+  // The card as it looks, taking no input. The copy that follows a drag is
+  // this alone: after a release outside the window the copy stays under the
+  // pointer, and the next click must reach the card beneath it.
+  face(card, column, rect, t) {
     const color = column.color(t);
     const rung = card.runs.findLast((run) => run.open)?.rung ?? null;
-    const movable = card.column === "queue";
     const selected = this.pane.detail.key === card.key;
     const line = lineOf(card);
-    return h_flex().id(`board-card-${card.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
+    return h_flex().absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
       .rounded(6).overflow_hidden().bg(selected ? t.selected : t.surface).border(1).border_color(selected ? color : t.border)
-      .when(ghost, (el) => el.opacity(0.35))
-      .hover((s) => s.border_color(color))
-      .when(movable, (el) => el.cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event)))
-      .on_click((_event, cx) => this.pane.detail.toggle(card.key, cx))
       .child(div().w(STRIPE).h_full().bg(color).flex_none())
       .child(v_flex().flex_1().min_w(0).px(8).py(5).gap(2)
         .child(h_flex().gap(6).text_size(10).text_color(t.muted)
