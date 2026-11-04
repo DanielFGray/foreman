@@ -10,7 +10,7 @@ import {
   providersOf,
   rankOf,
   reviewerFor,
-  rungSpent,
+  levelSpent,
   rungsOn,
   topOf,
 } from "./ladder.ts";
@@ -197,22 +197,22 @@ describe("dispatchable", () => {
   });
 });
 
-describe("rungSpent", () => {
+describe("levelSpent", () => {
   test("retries in place until the rung's attempts run out", () => {
     // A crash, a timeout and a usage wall say nothing about the model, so the
-    // first attemptsPerRung - 1 failures stay on the rung.
-    expect(rungSpent(1, 2)).toBe(false);
-    expect(rungSpent(2, 3)).toBe(false);
+    // first attemptsPerLevel - 1 failures stay on the rung.
+    expect(levelSpent(1, 2)).toBe(false);
+    expect(levelSpent(2, 3)).toBe(false);
   });
 
   test("fails the rung on the attempt that reaches the limit", () => {
-    expect(rungSpent(2, 2)).toBe(true);
-    expect(rungSpent(3, 3)).toBe(true);
-    expect(rungSpent(4, 2)).toBe(true);
+    expect(levelSpent(2, 2)).toBe(true);
+    expect(levelSpent(3, 3)).toBe(true);
+    expect(levelSpent(4, 2)).toBe(true);
   });
 
-  test("with attemptsPerRung 1, every stopped run fails the rung", () => {
-    expect(rungSpent(1, 1)).toBe(true);
+  test("with attemptsPerLevel 1, every stopped run fails the rung", () => {
+    expect(levelSpent(1, 1)).toBe(true);
   });
 });
 

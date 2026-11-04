@@ -20,7 +20,7 @@ const settingsWith = (otlpEndpoint: string) =>
     coachWindow: 60,
     stallGrace: 5,
     landedWindow: 7,
-    attemptsPerRung: 2,
+    attemptsPerLevel: 2,
   });
 
 const withTelemetry = <A>(endpoint: string, work: Effect.Effect<A>) =>

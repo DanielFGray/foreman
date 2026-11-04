@@ -248,7 +248,7 @@ const trace = Command.make(
       );
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const { ladder, attemptsPerRung } = yield* Settings;
+      const { ladder, attemptsPerLevel } = yield* Settings;
       const report = traceReport(
         project,
         {
@@ -261,7 +261,7 @@ const trace = Command.make(
           events,
         },
         { draft: draft?.pipeline, live },
-        { ladder, attemptsPerRung },
+        { ladder, attemptsPerLevel },
       );
       if (json) return yield* Console.log(JSON.stringify(report, null, 2));
       for (const step of report.steps) yield* Console.log(traceLine(step));
@@ -300,7 +300,7 @@ const simulate = Command.make(
       const rates = ratesOf(yield* readMeasured);
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const { ladder, attemptsPerRung, pollInterval } = yield* Settings;
+      const { ladder, attemptsPerLevel, pollInterval } = yield* Settings;
       const report = simulateReport(
         {
           project,
@@ -322,7 +322,7 @@ const simulate = Command.make(
           live: { ...live, problems: yield* problemsAgainstLadder(live.pipeline) },
         },
         rates,
-        { ladder, attemptsPerRung },
+        { ladder, attemptsPerLevel },
         { seed, hours },
       );
       if (json) return yield* Console.log(JSON.stringify(report));

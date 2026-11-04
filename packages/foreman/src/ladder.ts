@@ -239,6 +239,18 @@ export const levelOf = (ladder: Ladder, name: string): number | undefined =>
   ladder.find((rung) => rung.name === name)?.level;
 
 /**
+ * The names of the rungs at the named rung's level, the named rung among them.
+ * Only the named rung for one the config has dropped: it has no level left to
+ * share.
+ */
+export const levelPeers = (ladder: Ladder, name: string): ReadonlyArray<string> => {
+  const level = levelOf(ladder, name);
+  return level === undefined
+    ? [name]
+    : ladder.filter((rung) => rung.level === level).map((rung) => rung.name);
+};
+
+/**
  * The highest-ranked rung a task records as having failed it. It stands at the
  * highest failed level, the level the operator's correction takes back.
  *
@@ -257,18 +269,18 @@ export const highestFailure = (
   }, undefined)?.name;
 
 /**
- * Whether a rung with this many stopped attempts is spent, so the task
- * records the failure and moves up.
+ * Whether a level with this many stopped attempts is spent, so the task
+ * records the failure and moves up a level.
  *
  * An agent that stops without finishing says nothing about its model — a
  * crash, a timeout and a usage wall all end the same way — so the first
- * `attemptsPerRung - 1` failures retry the same rung and the one that reaches
- * `attemptsPerRung` fails it. Judgements never count: a reviewer sending work
- * back, or a branch that broke verification, fails the rung on the strength of
- * the verdict alone.
+ * `attemptsPerLevel - 1` stops retry the level, each on the rung whose turn it
+ * is, and the one that reaches `attemptsPerLevel` fails the rung that ran it.
+ * Judgements never count: a reviewer sending work back, or a branch that broke
+ * verification, fails the rung on the strength of the verdict alone.
  */
-export const rungSpent = (attempts: number, attemptsPerRung: number): boolean =>
-  attempts >= attemptsPerRung;
+export const levelSpent = (attempts: number, attemptsPerLevel: number): boolean =>
+  attempts >= attemptsPerLevel;
 
 /**
  * Who reads the work of a given rung, or nothing when no account can pay.

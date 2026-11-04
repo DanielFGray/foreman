@@ -73,6 +73,7 @@ import {
   isEnabled,
   mayAuthor,
   levelOf,
+  levelPeers,
   highestFailure,
   providersOf,
   providerOf,
@@ -198,7 +199,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       rung: rung.name,
       model: rung.model ?? rung.harness,
       role,
-      attempt: attemptsOf(task, rung.name) + 1,
+      attempt: attemptsOf(task, levelPeers(settings.ladder, rung.name)) + 1,
       labels: task.labels.join(","),
     });
 
@@ -2557,7 +2558,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const done = stepOf(task, event, {
           ladder: settings.ladder,
-          attemptsPerRung: settings.attemptsPerRung,
+          attemptsPerLevel: settings.attemptsPerLevel,
           pipeline,
         });
         yield* records.write(task.id, done.row);
@@ -2611,8 +2612,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* tracker.log(
           task.id,
           climb !== undefined
-            ? `${detail} Returned to the queue one rung up — ${attempt.count} attempts on ${attempt.rung} exhausted it.`
-            : `${detail} Returned to the queue to try ${attempt.rung} again (attempt ${attempt.count} of ${settings.attemptsPerRung}).`,
+            ? `${detail} Returned to the queue one level up — ${attempt.count} attempts at ${attempt.rung}'s level exhausted it.`
+            : `${detail} Returned to the queue to try ${attempt.rung}'s level again (attempt ${attempt.count} of ${settings.attemptsPerLevel}).`,
         );
       });
 

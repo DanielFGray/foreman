@@ -613,7 +613,7 @@ const layerFor = (world: World) =>
         coachWindow: 60,
         stallGrace: 5,
         landedWindow: 7,
-        attemptsPerRung: 2,
+        attemptsPerLevel: 2,
       }),
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Records, world.records),
@@ -661,7 +661,7 @@ describe("Dispatcher tick", () => {
     expect(world.tasks.get(task.id)?.status).toBe("open");
     expect(world.tasks.get(task.id)?.labels).toEqual([]);
     expect(world.tasks.get(task.id)?.charges).toEqual([]);
-    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
+    expect(attemptsOf(world.tasks.get(task.id)!, ["cheap"])).toBe(1);
     expect(world.logs).toEqual([
       [task.id, "foreman: operator killed this attempt: tests caught the wrong path"],
     ]);
@@ -686,7 +686,7 @@ describe("Dispatcher tick", () => {
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
     expect(world.tasks.get(task.id)?.labels).toEqual([]);
     expect(world.tasks.get(task.id)?.charges).toEqual([]);
-    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
+    expect(attemptsOf(world.tasks.get(task.id)!, ["cheap"])).toBe(1);
     expect(world.logs).toContainEqual([task.id, "foreman: operator killed this attempt"]);
     expect(world.spawned).toEqual([[task.id, "author"]]);
   });
@@ -749,7 +749,7 @@ describe("Dispatcher tick", () => {
       if (branch) world.branches.set(branch.branch, branch);
 
       await tick(world);
-      expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
+      expect(attemptsOf(world.tasks.get(task.id)!, ["cheap"])).toBe(1);
 
       world.workers.set(task.id, vanished);
       await tick(world);
@@ -1381,7 +1381,7 @@ describe("quota probing", () => {
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -1467,7 +1467,7 @@ describe("a spent account and the reviewer above it", () => {
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -1559,7 +1559,7 @@ describe("a spent account and the reviewer above it", () => {
 
     expect(world.tasks.get(task.id)?.labels).toEqual([]);
     expect(world.tasks.get(task.id)?.charges).toEqual([]);
-    expect(attemptsOf(world.tasks.get(task.id)!, "cheap")).toBe(1);
+    expect(attemptsOf(world.tasks.get(task.id)!, ["cheap"])).toBe(1);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
 
@@ -1827,7 +1827,7 @@ describe("a usage wall", () => {
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -1877,7 +1877,7 @@ describe("a usage wall", () => {
     expect(world.commits).toHaveLength(1);
     expect(world.commits[0]).toContain("stopped on a usage limit before verifying");
     expect(walledBy(walled, ladder)).toEqual(["opencode"]);
-    expect(attemptsOf(walled, "free")).toBe(0);
+    expect(attemptsOf(walled, ["free"])).toBe(0);
     expect(failuresOf(walled)).toEqual([]);
     expect(world.tasks.get("ts-walled")?.runs[0]).toMatchObject({ open: false, ending: "walled" });
     expect(world.logs.map(([, message]) => message).join("\n")).toContain("opencode");
@@ -1934,7 +1934,7 @@ describe("a usage wall", () => {
     await tick(world);
 
     const plain = world.tasks.get("ts-plain")!;
-    expect(attemptsOf(plain, "free")).toBe(1);
+    expect(attemptsOf(plain, ["free"])).toBe(1);
     expect(walledBy(plain, ladder)).toEqual([]);
     expect(world.commits).toHaveLength(0);
     expect(world.tasks.get("ts-plain")?.runs[0]).toMatchObject({
@@ -1973,7 +1973,7 @@ describe("a usage wall", () => {
 
     expect(world.stopped).toContainEqual(["ts-stalled", "author"]);
     expect(world.closed).not.toContain("ts-stalled");
-    expect(attemptsOf(world.tasks.get("ts-stalled")!, "free")).toBe(1);
+    expect(attemptsOf(world.tasks.get("ts-stalled")!, ["free"])).toBe(1);
     expect(world.logs.map(([, message]) => message).join("\n")).toContain(
       "continue from what is there",
     );
@@ -2467,7 +2467,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -2740,7 +2740,7 @@ describe("a drawn pipeline", () => {
                 coachWindow: 60,
                 stallGrace: 5,
                 landedWindow: 7,
-                attemptsPerRung: 2,
+                attemptsPerLevel: 2,
               }),
               Layer.succeed(Fleet, world.fleet),
               Layer.succeed(Records, world.records),
@@ -2943,7 +2943,7 @@ describe("foreman pipeline trace", () => {
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -3049,7 +3049,7 @@ describe("foreman pipeline trace", () => {
     const world = await played(ladder, pipeline, events);
     const trace = traceOf({ labels: [], size: undefined, priority: 1, parent: undefined }, events, {
       ladder,
-      attemptsPerRung: 2,
+      attemptsPerLevel: 2,
       pipeline,
     });
     expect(trace.refused).toBeUndefined();
@@ -3556,7 +3556,7 @@ describe("ladder levels", () => {
           coachWindow: 60,
           stallGrace: 5,
           landedWindow: 7,
-          attemptsPerRung: 2,
+          attemptsPerLevel: 2,
         }),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),

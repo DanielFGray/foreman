@@ -51,7 +51,7 @@ reasoning: a wall report is a judgement call in context (per-key throttle vs
 spent window vs unfunded account), and the planner — human or reviewing
 operator — already converts it into action. Foreman's existing machinery
 covers the unattended case well enough: a walled run settles `Unfinished`,
-`attemptsPerRung` bounds the retries on a spent rung, the quota poll walls
+`attemptsPerLevel` bounds the retries on a spent level, the quota poll walls
 the account, and the failures climb the task. Building a parallel
 machine-readable wall channel would duplicate that loop for one wasted retry
 of latency.

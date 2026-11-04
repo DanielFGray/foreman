@@ -8,7 +8,7 @@ const RULES = {
   ladder: [
     { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
   ] as Ladder,
-  attemptsPerRung: 2,
+  attemptsPerLevel: 2,
 };
 const REQUEST = { task: { labels: [], size: 2, priority: 2, parent: undefined }, events: [] };
 const SAVED = { pipeline: STANDARD_PIPELINES.worktree, drawn: true };

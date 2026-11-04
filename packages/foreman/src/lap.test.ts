@@ -185,7 +185,7 @@ describe("the readers against a scratch store", () => {
             ladder: [
               { name: "low", harness: "test", level: 0, model: undefined, provider: undefined },
             ],
-            attemptsPerRung: 2,
+            attemptsPerLevel: 2,
             pipeline: undefined,
           }).row,
         ),

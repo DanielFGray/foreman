@@ -12,7 +12,8 @@ import {
   type Ladder,
   type Rung,
   reviewerFor,
-  rungSpent,
+  levelSpent,
+  levelPeers,
 } from "./ladder.ts";
 import type { AgentNode, CheckNode, Exit, Pipeline } from "./pipeline.ts";
 import { QUEUE } from "./pipeline.ts";
@@ -75,7 +76,7 @@ export type RunEvent =
 /** The rules a step reads: the ladder, the stop limit, and the drawing the task runs in. */
 export interface StepRules {
   readonly ladder: Ladder;
-  readonly attemptsPerRung: number;
+  readonly attemptsPerLevel: number;
   readonly pipeline: Pipeline | undefined;
 }
 
@@ -431,15 +432,16 @@ const climb = (task: Stepping, rules: StepRules): RunStep => {
 
 /**
  * An author that stopped without finishing, which has said nothing about its
- * rung: the task returns to the queue on the same rung, until the stop that
- * spends the rung's `attemptsPerRung`, which climbs. The release closes the
- * run with `ending`, which is what counts it (`attemptsOf`), and the climb's
- * charge ends the count.
+ * rung: the task returns to the queue at the same level, where the next turn
+ * may fall to a peer, until the stop that spends the level's
+ * `attemptsPerLevel`, which charges the rung that ran and climbs. The release
+ * closes the run with `ending`, which is what counts it (`attemptsOf`), and
+ * the climb's charge ends the count.
  */
 const retry = (task: Stepping, ending: Ending, rules: StepRules): RunStep => {
   const rung = ranAt(task, rules.ladder);
-  const count = attemptsOf(task, rung) + 1;
-  const spent = rungSpent(count, rules.attemptsPerRung);
+  const count = attemptsOf(task, levelPeers(rules.ladder, rung)) + 1;
+  const spent = levelSpent(count, rules.attemptsPerLevel);
   const climbed = spent ? climb(task, rules) : step({});
   return { ...adding(climbed, releasing({ author: ending })), attempt: { rung, count } };
 };

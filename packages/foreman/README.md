@@ -414,10 +414,11 @@ that is in the ladder, enabled and funded, and started a run least recently. So 
 nothing left, moves work along instead of stranding it.
 
 A failure is written on real evidence only: a reviewer sent the work back, the
-branch would not land, or the rung has been spent by `attemptsPerRung` attempts
-that ended without finishing. An agent that merely stopped unfinished has said
-nothing about its model — a crash, a timeout and a usage wall all end the same
-way — so nothing is recorded and the same rung is tried again. The evidence lives
+branch would not land, or the level has been spent by `attemptsPerLevel`
+attempts that ended without finishing, counted across its peers. An agent that
+merely stopped unfinished has said nothing about its model — a crash, a timeout
+and a usage wall all end the same way — so nothing is recorded and the level is
+tried again, on the peer whose turn it is. The evidence lives
 in foreman's database rather than in its memory, because a dispatch days later,
 after a restart, is exactly what reads it. To start a task above a level you know
 is not enough, intervene and continue on the rung you want: that charges every
@@ -504,11 +505,12 @@ strictly.
 ```jsonc
 {
   "slots": 3,
-  // How many attempts one rung gets before an unfinished task climbs to the
-  // next. A crash, a timeout or a usage wall says nothing about the model, so
-  // the first attemptsPerRung - 1 retry in place; a reviewer rejection or a
-  // branch that will not land climbs at once and spends none of it.
-  "attemptsPerRung": 2,
+  // How many attempts one level gets, across its peers, before an unfinished
+  // task climbs to the next. A crash, a timeout or a usage wall says nothing
+  // about the model, so the first attemptsPerLevel - 1 retry the level; a
+  // reviewer rejection or a branch that will not land climbs at once and
+  // spends none of it.
+  "attemptsPerLevel": 2,
   "pollSeconds": 20,
   "staleAfterHours": 24,
   "landedWindowDays": 7,

@@ -201,7 +201,7 @@ abandoned one from one whose owner is away.
 
 Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
 a reviewer sending work back, a branch that broke the project's verification, or
-a rung spent by `attemptsPerRung` `stopped` endings. A branch that merely would
+a level spent by `attemptsPerLevel` `stopped` endings. A branch that merely would
 not **merge** is none of them: every author cuts from the trunk's tip, so a
 branch whose tip has not moved fast-forwards and cannot conflict — a conflict
 therefore means the trunk moved afterwards, which no model is stronger at
@@ -209,10 +209,12 @@ avoiding. It returns to the queue at the same rung, with the conflicting paths
 on its log, and the ordinary attempt count still bounds a task that cannot
 get past it. An agent that merely stopped without
 finishing has said nothing about its model — a crash and a timeout end the same
-way — so the task stays on the rung and is tried again. The count of those
-endings is the task's runs on the rung that ended `stopped` or `vanished` since
-the rung's last charge (`attemptsOf`), so a dispatch days later reads the same
-number.
+way — so the task stays at the level and is tried again, on the peer whose turn
+it is. The count of those endings is the task's runs on any rung of the level
+that ended `stopped` or `vanished` since the last charge on one of them
+(`attemptsOf` over `levelPeers`), so a dispatch days later reads the same
+number, and a level of several peers is not tried more often than a level of
+one.
 
 An agent whose pane is idle without an exit is not stopped until it has sat
 idle for `stallGraceMinutes` (default 5), counted from the time hc reports

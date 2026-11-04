@@ -113,7 +113,7 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       coachWindow: raw.coachWindowMinutes,
       stallGrace: raw.stallGraceMinutes,
       landedWindow: raw.landedWindowDays,
-      attemptsPerRung: raw.attemptsPerRung,
+      attemptsPerLevel: raw.attemptsPerLevel,
     } as const;
   }),
 ).pipe(Layer.provide(BunServices.layer));
@@ -134,15 +134,17 @@ interface SettingsShape {
   readonly landedWindow: number;
 
   /**
-   * How many attempts one rung of the ladder gets before a task climbs.
+   * How many attempts one level of the ladder gets before a task climbs.
    *
    * An agent that stops without finishing — a crash, a timeout, a usage wall —
-   * has said nothing about its model, so the task retries the same rung rather
-   * than paying for a stronger one. Only repeated failure exhausts the rung.
+   * has said nothing about its model, so the task retries the level rather
+   * than paying for a stronger one. The peers of a level share the count, so a
+   * level of several rungs is not tried more often than a level of one. Only
+   * repeated failure exhausts the level.
    * A reviewer that sends work back is a judgement about the work and climbs
    * immediately, so it spends none of this budget.
    */
-  readonly attemptsPerRung: number;
+  readonly attemptsPerLevel: number;
 }
 
 /** A number above zero. */
@@ -165,16 +167,16 @@ const ConfigFile = Schema.Struct({
   ),
 
   /**
-   * How many times a task may stop without an exit on one rung before it climbs.
+   * How many times a task may stop without an exit at one level before it climbs.
    *
    * An agent that stops without finishing says nothing about its model — a
    * crash, a timeout and a usage wall all end the same way — so the task stays
-   * on the rung and is tried again. The attempt that reaches this limit is the
-   * one that climbs; a reviewer rejecting the work climbs at once and spends
+   * at the level and is tried again, on whichever peer's turn it is. The
+   * attempt that reaches this limit is the one that climbs; a reviewer rejecting the work climbs at once and spends
    * none of it. Both are written to the task as labels, so the count survives
    * a dispatch days later.
    */
-  attemptsPerRung: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(2))),
+  attemptsPerLevel: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(2))),
 
   /**
    * How long a claimed task may go without activity before the queue takes it

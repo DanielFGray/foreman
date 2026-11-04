@@ -20,7 +20,7 @@ const rules: StepRules = {
     { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
     { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
   ],
-  attemptsPerRung: 2,
+  attemptsPerLevel: 2,
   pipeline: STANDARD_PIPELINES.worktree,
 };
 
