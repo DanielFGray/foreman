@@ -4,7 +4,8 @@
  *
  * The drawing is derived from the graph every time, so nothing about it is
  * stored. Every edit keeps every wire ending at a block, and deletes only the
- * block it names: a block an edit leaves unreached stays, so the operator can
+ * block it names, or a publish gate a land's new `how` no longer needs
+ * (`configure`): a block an edit leaves unreached stays, so the operator can
  * wire it again or take it out. What an edit cannot guarantee (a source that
  * reaches every block, a gate before each step, a review before each land, a
  * rung the ladder has) is `problemsOf`'s to report.
@@ -12,14 +13,17 @@
 import { Option } from "effect";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
-  type AgentNode,
   type Exit,
-  type Landing,
   type Pipeline,
   type PipelineNode,
+  PULL_REQUEST_STEPS,
+  pullRequestLands,
   QUEUE,
+  routesWithoutGate,
   standardExits,
+  strandedPublishGates,
 } from "./pipeline.ts";
+import type { Step } from "./policy.ts";
 
 /** Where a block sits on the drawing: its column from the left and its row from the top. */
 export interface Cell {
@@ -321,11 +325,49 @@ export const chargeExit = (
     }),
   );
 /**
- * Changes what a block does, never where it is wired or what it is called:
- * the id is what a task's facts name, and the wires are the belt's to change.
+ * Changes what a block does, never what it is called: the id is what a task's
+ * facts name. It rewires nothing, except that a land's `how` brings the gates
+ * that landing needs (`landingGated`).
  */
-export const configure = (pipeline: Pipeline, id: string, setting: BlockSetting): Pipeline =>
-  mapNode(pipeline, id, (node) => settled(node, setting));
+export const configure = (pipeline: Pipeline, id: string, setting: BlockSetting): Pipeline => {
+  const configured = mapNode(pipeline, id, (node) => settled(node, setting));
+  return setting.kind === "land" ? landingGated(pipeline, configured, id) : configured;
+};
+
+/**
+ * `after`, a change of land `id` in `before`, with the gates its landing needs.
+ * A pull-request land takes a gate of each of its steps on every route to it,
+ * so each one a route lacks is put directly before the land. A publish gate
+ * that reached a pull-request land before the change and reaches none after it
+ * is taken out, since it holds a step that never comes.
+ */
+const landingGated = (before: Pipeline, after: Pipeline, id: string): Pipeline => {
+  const stranded = new Set(strandedPublishGates(before).map((gate) => gate.id));
+  const kept = strandedPublishGates(after)
+    .filter((gate) => !stranded.has(gate.id))
+    .reduce((pipeline, gate) => remove(pipeline, gate.id), after);
+  const land = pullRequestLands(kept).filter((node) => node.id === id);
+  return PULL_REQUEST_STEPS.filter((step) => routesWithoutGate(kept, step, land).length > 0).reduce(
+    (pipeline, step) => gatedBefore(pipeline, id, step),
+    kept,
+  );
+};
+
+/**
+ * Puts a gate of `step` directly before block `id`: every wire into the block
+ * leads into the gate. The gate is `<step>-gate`, as the standard pipelines
+ * name it, unless the pipeline already has a block of that id.
+ */
+const gatedBefore = (pipeline: Pipeline, id: string, step: Step): Pipeline => {
+  const named = `${step}-gate`;
+  const gate = pipeline.nodes.some((node) => node.id === named) ? freshId(pipeline, named) : named;
+  return {
+    nodes: [
+      ...pipeline.nodes.map((node) => redirect(node, id, gate)),
+      { kind: "gate", id: gate, step, next: id },
+    ],
+  };
+};
 
 /** A block with `setting` applied, or as it was when the setting is for another kind of block. */
 const settled = (node: PipelineNode, setting: BlockSetting): PipelineNode => {

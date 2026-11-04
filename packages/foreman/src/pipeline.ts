@@ -184,6 +184,7 @@ export const PipelineNode = S.Union([
 export type PipelineNode = typeof PipelineNode.Type;
 export type AgentNode = typeof AgentNode.Type;
 export type CheckNode = typeof CheckNode.Type;
+export type GateNode = typeof GateNode.Type;
 export type LandNode = typeof LandNode.Type;
 export type DoneNode = typeof DoneNode.Type;
 
@@ -657,30 +658,62 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
     }
   }
 
-  // A pull-request landing takes two steps the operator can stop: `publish`
-  // pushes and opens the PR, `land` merges it. Each needs its own gate after
-  // the last work block, because either step can be on while the other is not.
-  // A publish gate before any other block would hold a step that never comes.
-  const pullRequests = work.filter((node) => node.kind === "land" && node.how === "pull-request");
-  const isGateFor = (step: Step) => (node: PipelineNode) =>
-    node.kind === "gate" && node.step === step;
-  for (const step of ["publish", "land"] as const) {
-    for (const [from, target] of skipping(
-      pipeline,
-      isGateFor(step),
-      [...sources, ...work.filter((node) => node.kind === "agent" || node.kind === "check")],
-      pullRequests,
-    )) {
+  for (const step of PULL_REQUEST_STEPS) {
+    for (const [from, target] of routesWithoutGate(pipeline, step, pullRequestLands(pipeline))) {
       problems.push(`a route from ${from.id} reaches ${target.id} with no ${step} gate after it`);
     }
   }
-  for (const gate of pipeline.nodes.filter(isGateFor("publish"))) {
-    if (!pullRequests.some((target) => wired.reaches(gate.id, target.id))) {
-      problems.push(`${gate.id} gates publish, but no route from it reaches a pull-request land`);
-    }
+  for (const gate of strandedPublishGates(pipeline)) {
+    problems.push(`${gate.id} gates publish, but no route from it reaches a pull-request land`);
   }
 
   return [...new Set(problems)];
+};
+
+/**
+ * A pull-request landing takes two steps the operator can stop: `publish`
+ * pushes and opens the PR, `land` merges it. Each needs its own gate after the
+ * last work block, because either step can be on while the other is not.
+ */
+export const PULL_REQUEST_STEPS = ["publish", "land"] as const;
+
+/** The land blocks that land by pull request. */
+export const pullRequestLands = (pipeline: Pipeline): ReadonlyArray<LandNode> =>
+  pipeline.nodes.filter(
+    (node): node is LandNode => node.kind === "land" && node.how === "pull-request",
+  );
+
+/**
+ * Each route from a source, an agent or a check that reaches one of `targets`
+ * with no gate of `step` after its last work block, as its first and last block.
+ */
+export const routesWithoutGate = (
+  pipeline: Pipeline,
+  step: Step,
+  targets: ReadonlyArray<PipelineNode>,
+): ReadonlyArray<readonly [PipelineNode, PipelineNode]> =>
+  skipping(
+    pipeline,
+    (node) => node.kind === "gate" && node.step === step,
+    pipeline.nodes.filter(
+      (node) => node.kind === "source" || node.kind === "agent" || node.kind === "check",
+    ),
+    targets,
+  );
+
+/**
+ * The publish gates from which no route reaches a pull-request land. Only a
+ * pull-request land publishes, so such a gate holds a step that never comes.
+ */
+export const strandedPublishGates = (pipeline: Pipeline): ReadonlyArray<GateNode> => {
+  const wired = graphOf(pipeline);
+  const lands = pullRequestLands(pipeline);
+  return pipeline.nodes.filter(
+    (node): node is GateNode =>
+      node.kind === "gate" &&
+      node.step === "publish" &&
+      !lands.some((land) => wired.reaches(node.id, land.id)),
+  );
 };
 
 /**
@@ -861,49 +894,96 @@ export const WORKSPACE_CHOICES = ["checkout", "worktree", "direct"] as const;
 export type WorkspaceChoice = (typeof WORKSPACE_CHOICES)[number];
 
 /**
- * The standard pipeline for each workspace: author, review, then land (or
- * done for direct).
+ * What `foreman pipeline use` draws: where agents work, and for a route on a
+ * branch, how and onto which branch its land lands. A direct route has no
+ * branch to land, so it takes no landing.
+ */
+export type Standard =
+  | { readonly workspace: "direct" }
+  | {
+      readonly workspace: "checkout" | "worktree";
+      readonly how: Landing;
+      readonly onto?: string;
+    };
+
+/**
+ * The standard pipeline of `standard`: author, review, then land (or done for
+ * direct).
  *
  * A returned review goes straight to `climb`, keeping the claim and workspace.
  * The router sends queued retries there too, so the `climb` step governs
- * retries apart from a first try.
+ * retries apart from a first try. A pull-request land takes a publish gate
+ * between its land gate and itself, where a change of a land's `how` puts one
+ * (`configure` in `src/pipeline-belt.ts`).
  */
-export const STANDARD_PIPELINES: Record<WorkspaceChoice, Pipeline> = {
-  checkout: standardPipeline([{ kind: "branch", id: "branch", next: "retry" }], {
-    kind: "land",
-    id: "land",
-    how: "merge",
-  }),
-  worktree: standardPipeline(
-    [
-      { kind: "branch", id: "branch", next: "worktree" },
-      { kind: "worktree", id: "worktree", next: "retry" },
-    ],
-    { kind: "land", id: "land", how: "merge" },
-  ),
-  direct: standardPipeline([], { kind: "done", id: "done" }),
-};
+export function standardPipeline(standard: Standard): Pipeline {
+  if (standard.workspace === "direct") return standardRoute([], { kind: "done", id: "done" });
+  const land: LandNode = { kind: "land", id: "land", how: standard.how, onto: standard.onto };
+  const workspace: ReadonlyArray<PipelineNode> =
+    standard.workspace === "checkout"
+      ? [{ kind: "branch", id: "branch", next: "retry" }]
+      : [
+          { kind: "branch", id: "branch", next: "worktree" },
+          { kind: "worktree", id: "worktree", next: "retry" },
+        ];
+  return standard.how === "pull-request"
+    ? standardRoute(
+        workspace,
+        { kind: "gate", id: "publish-gate", step: "publish", next: "land" },
+        land,
+      )
+    : standardRoute(workspace, land);
+}
+
+/** Each workspace's standard pipeline with the default landing: a merge onto the checkout's branch. */
+export const STANDARD_PIPELINES = {
+  checkout: standardPipeline({ workspace: "checkout", how: "merge" }),
+  worktree: standardPipeline({ workspace: "worktree", how: "merge" }),
+  direct: standardPipeline({ workspace: "direct" }),
+} satisfies Record<WorkspaceChoice, Pipeline>;
 
 /** The pipeline of a project that has drawn none: its agents work in the operator's checkout. */
 export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
 
-/** The standard workspace `pipeline` is exactly, if any. */
-export const choiceOf = (pipeline: Pipeline): WorkspaceChoice | undefined => {
-  const encoded = JSON.stringify(S.encodeSync(Pipeline)(pipeline));
-  return WORKSPACE_CHOICES.find(
-    (workspace) =>
-      JSON.stringify(S.encodeSync(Pipeline)(STANDARD_PIPELINES[workspace])) === encoded,
-  );
+/**
+ * The standard pipeline `pipeline` is, if any. Its workspace blocks and its
+ * land name the only standard it can be, so it is that one when it has the
+ * same blocks; the order the blocks are listed in means nothing.
+ */
+export const standardOf = (pipeline: Pipeline): Option.Option<Standard> => {
+  const has = (kind: PipelineNode["kind"]) => pipeline.nodes.some((node) => node.kind === kind);
+  const land = pipeline.nodes.find((node): node is LandNode => node.kind === "land");
+  const workspace = has("worktree") ? "worktree" : has("branch") ? "checkout" : "direct";
+  const candidate: Standard =
+    workspace === "direct"
+      ? { workspace }
+      : { workspace, how: land?.how ?? "merge", onto: land?.onto };
+  return sameBlocks(pipeline, standardPipeline(candidate)) ? Option.some(candidate) : Option.none();
+};
+
+/** A standard pipeline in words, as `pipeline show` and `pipeline use` name it. */
+export const describeStandard = (standard: Standard): string =>
+  standard.workspace === "direct"
+    ? "the standard direct pipeline"
+    : `the standard ${standard.workspace} pipeline, landing by ${standard.how} onto ${standard.onto ?? "the checkout's branch"}`;
+
+/** Whether two pipelines hold the same blocks, in any order. */
+const sameBlocks = (one: Pipeline, other: Pipeline): boolean => {
+  const encoded = (pipeline: Pipeline) =>
+    JSON.stringify(
+      S.encodeSync(Pipeline)(pipeline).nodes.toSorted((a, b) => a.id.localeCompare(b.id)),
+    );
+  return encoded(one) === encoded(other);
 };
 
 /**
  * The standard blocks after `workspace`, which leads from the source into the
- * router `retry`, ending at `end`. A function declaration, so the constant
- * above can call it while the module loads.
+ * router `retry`, ending with `end` after the land gate. A function
+ * declaration, so the constants above can call it while the module loads.
  */
-function standardPipeline(
+function standardRoute(
   workspace: ReadonlyArray<PipelineNode>,
-  end: PipelineNode & { readonly id: string },
+  ...end: readonly [PipelineNode, ...ReadonlyArray<PipelineNode>]
 ): Pipeline {
   return {
     nodes: [
@@ -938,8 +1018,8 @@ function standardPipeline(
           { id: "returned", name: "returned", to: "climb", fails: "author" },
         ],
       },
-      { kind: "gate", id: "land-gate", step: "land", next: end.id },
-      end,
+      { kind: "gate", id: "land-gate", step: "land", next: end[0].id },
+      ...end,
     ],
   };
 }

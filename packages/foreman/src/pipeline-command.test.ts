@@ -1,11 +1,11 @@
 import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { Command } from "effect/cli";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STANDARD_PIPELINES, WORKSPACE_CHOICES } from "./pipeline.ts";
+import { STANDARD_PIPELINES, standardOf, standardPipeline, WORKSPACE_CHOICES } from "./pipeline.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { readPipelines } from "./pipeline-file.ts";
@@ -114,6 +114,39 @@ describe("foreman pipeline use", () => {
     }
   });
 
+  test("draws the landing --land and --onto name, over another standard choice", async () => {
+    await run("use", "checkout", "--project", "amux");
+    await run(
+      "use",
+      "worktree",
+      "--land",
+      "pull-request",
+      "--onto",
+      "develop",
+      "--project",
+      "amux",
+    );
+    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
+      JSON.parse(
+        JSON.stringify(
+          standardPipeline({ workspace: "worktree", how: "pull-request", onto: "develop" }),
+        ),
+      ),
+    );
+  });
+
+  test("refuses --land or --onto with direct, and writes nothing", async () => {
+    for (const flag of [
+      ["--land", "merge"],
+      ["--onto", "develop"],
+    ]) {
+      expect(await refusal("use", "direct", ...flag, "--project", "amux")).toMatch(
+        /takes no --land or --onto/,
+      );
+    }
+    expect(existsSync(path)).toBe(false);
+  });
+
   test("refuses over a drawing that is no standard choice, and leaves it as it is", async () => {
     await run("set", "amux", fileWith(pinned));
     expect(await refusal("use", "worktree", "--project", "amux")).toMatch(
@@ -158,6 +191,22 @@ describe("drawing a draft", () => {
     const saved = JSON.parse(readFileSync(path, "utf8")).pipelines.amux;
     expect(saved.nodes.find((node: { id: string }) => node.id === "land").how).toBe("fast-forward");
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
+  });
+
+  test("one change of a land to pull-request leaves a draft that saves", async () => {
+    await run("use", "worktree", "--project", "amux");
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Configure", id: "land", setting: { kind: "land", how: "pull-request" } }),
+    );
+    await run("save", "amux");
+    const read = await Effect.runPromise(
+      readPipelines(path).pipe(Effect.provide(BunServices.layer)),
+    );
+    expect(standardOf(read.value["amux"] ?? { nodes: [] })).toEqual(
+      Option.some({ workspace: "worktree", how: "pull-request" }),
+    );
   });
 
   test("save refuses a draft that cannot run, and keeps it", async () => {

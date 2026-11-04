@@ -3,7 +3,7 @@ import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRe
 import { Dispatcher, newWorkspace } from "./dispatcher.ts";
 import {
   AgentNode,
-  choiceOf,
+  describeStandard,
   instructionNames,
   LANDINGS,
   instructionProblems,
@@ -13,7 +13,9 @@ import {
   problemsOf,
   routeTarget,
   routeWorkspace,
-  STANDARD_PIPELINES,
+  type Standard,
+  standardOf,
+  standardPipeline,
   toMermaid,
   WORKSPACE_CHOICES,
 } from "./pipeline.ts";
@@ -60,8 +62,10 @@ const show = Command.make("show", { project, json, flow }, ({ project, json, flo
   Effect.gen(function* () {
     if (json) return yield* Console.log(JSON.stringify(yield* shownOf(project, flow), null, 2));
     const { pipeline, drawn } = yield* livePipeline(project);
-    const choice = choiceOf(pipeline);
-    const name = choice === undefined ? "its own pipeline" : `the standard ${choice} pipeline`;
+    const name = Option.match(standardOf(pipeline), {
+      onNone: () => "its own pipeline",
+      onSome: describeStandard,
+    });
     yield* Console.log(`${project} runs ${name}${drawn ? "" : " (the default)"}:`);
     yield* Console.log(toMermaid(pipeline));
     for (const problem of yield* problemsAgainstLadder(pipeline))
@@ -102,21 +106,46 @@ const use = Command.make(
       ),
     ),
     project: Flag.String("project"),
+    land: Flag.Literals("land", LANDINGS).pipe(
+      Flag.optional,
+      Flag.withDescription(
+        "How the task's branch lands: merge (a merge commit; the default), fast-forward, or pull-request (with a publish gate). Not with direct",
+      ),
+    ),
+    onto: Flag.String("onto").pipe(
+      Flag.optional,
+      Flag.withDescription(
+        "The branch the task lands on; absent, the branch your checkout has out. Not with direct",
+      ),
+    ),
   },
-  ({ workspace, project }) =>
+  ({ workspace, project, land, onto }) =>
     Effect.gen(function* () {
+      if (workspace === "direct" && (Option.isSome(land) || Option.isSome(onto)))
+        return yield* new PipelineError({
+          detail:
+            "a direct route commits onto your branch and lands nothing, so it takes no --land or --onto",
+        });
+      const standard: Standard =
+        workspace === "direct"
+          ? { workspace }
+          : {
+              workspace,
+              how: Option.getOrElse(land, () => "merge" as const),
+              onto: Option.getOrUndefined(onto),
+            };
       const { pipeline, drawn } = yield* livePipeline(project);
       // Only a standard variant is replaced, so a pipeline the operator drew by hand is never lost.
-      if (drawn && choiceOf(pipeline) === undefined)
+      if (drawn && Option.isNone(standardOf(pipeline)))
         return yield* new PipelineError({
           detail: `${project} runs its own drawn pipeline, so use leaves it as it is: see it with foreman pipeline show ${project}, and drop it with foreman pipeline clear ${project}`,
         });
-      yield* runPipeline(project, STANDARD_PIPELINES[workspace]);
-      yield* Console.log(`${project} now runs the standard ${workspace} pipeline`);
+      yield* runPipeline(project, standardPipeline(standard));
+      yield* Console.log(`${project} now runs ${describeStandard(standard)}`);
     }),
 ).pipe(
   Command.withDescription(
-    "Draw a standard pipeline for a project: its agents work in your checkout, in a worktree, or directly on your branch",
+    "Draw a standard pipeline for a project: its agents work in your checkout, in a worktree, or directly on your branch, and a task on a branch lands as --land and --onto say",
   ),
 );
 
