@@ -46,10 +46,14 @@ script. A task in your checkout needs no preview: your own dev server serves it.
    block reaches a land block or a park block. Validation names a route that does
    not: "work on this branch never lands". A land with no branch before it is a
    problem too.
-2. **Your checkout holds one task at a time.** A task without a worktree occupies
-   your checkout from its first block that uses it until it leaves the pipeline.
-   The planner marks the checkout taken as soon as it plans that dispatch, so one
-   tick cannot send two tasks into it.
+2. **Your checkout holds one task at a time.** A task holds your checkout while
+   its commits sit there. A task on a branch holds it while git has its branch
+   out in the checkout: from its author's dispatch until it lands or goes back
+   to the queue, which checks your branch out again. A direct task holds it from
+   its first author run there until it leaves the pipeline, because its commits
+   are on your branch with no undo (rule 4). The planner marks the checkout
+   taken as soon as it plans that dispatch, so one tick cannot send two tasks
+   into it.
 3. **Passing a workspace block is read from git, not recorded.** A task whose
    branch exists has passed the branch block; one whose worktree exists has
    passed the worktree block. So tasks in flight place correctly with no
@@ -68,12 +72,14 @@ script. A task in your checkout needs no preview: your own dev server serves it.
   (rule 3): `Fleet.open` adopts a worktree git lists for the branch, and a branch
   that exists is not made again. So placement stays a function of the task's
   facts, and no tick makes a branch for a task that no gate has let start.
-- **Occupancy of your checkout is derived every tick.** A task occupies the
-  checkout when its route has no worktree, an author has run on it, and it is
-  still in the pipeline. git's busy hold (a `foreman/*` branch out in the
-  checkout) is the same fact for a branch-only task. The planner starts each pass
-  with that set and adds the project when it plans a dispatch into the checkout.
-  A dispatch into the checkout also needs a clean tree.
+- **Occupancy of your checkout is read every tick.** For a task on a branch it
+  is git's busy hold: a `foreman/*` branch out in the checkout. A direct task has
+  no branch to read, so it occupies the checkout when its route is direct, an
+  author run recorded a `base` there, and it is still in the pipeline. An author
+  run with no `base` worked in a worktree or on a branch, and holds nothing. The
+  planner starts each pass with these holds and adds the project when it plans a
+  dispatch into the checkout. A dispatch into the checkout also needs a clean
+  tree.
 - **done and land are work blocks for validation.** Nothing reaches a done or a
   land without a review after the last source or author, and a gate stands
   before each. So a direct route cannot complete without review or a policy

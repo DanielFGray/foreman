@@ -296,9 +296,12 @@ records whether they are passed, so tasks in flight place as before.
   branch that reaches `done`, a worktree or land with no branch before it, and a
   workspace block after an agent or a check: the workspace is set before the
   first agent.
-- **The checkout holds one task at a time.** A task with no worktree, an author
-  run, and still in the pipeline occupies its checkout, derived each tick, and
-  shows as a `busy` hold that names it. It holds every other task in the
+- **The checkout holds one task at a time.** A task holds it while its commits
+  sit there: a branch task while git has its branch out in the checkout, a
+  direct task from its first author run there (the run's `base`) until it leaves
+  the pipeline. Either shows as a `busy` hold that names the task. Author runs
+  alone are no evidence: a task whose authors worked in a worktree, or whose
+  branch is no longer out in the checkout, holds nothing. The hold covers every other task in the
   project, landings included. A dispatch the
   planner sends into a free checkout takes it in the same pass, and needs a clean
   tree (`Repository.dirty`), because git carries uncommitted edits into the
