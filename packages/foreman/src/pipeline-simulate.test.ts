@@ -10,6 +10,10 @@ const RULES = {
     { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
     { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
   ] as Ladder,
+  // The reviewer has the upper rung's name, so one sample name covers both roles.
+  reviewers: [
+    { name: "dear", harness: "test", model: "m-dear", provider: undefined, thinking: "high" },
+  ],
   attemptsPerLevel: 2,
 };
 
@@ -168,7 +172,7 @@ describe("simulate", () => {
       );
       expect(running.length).toBeLessThanOrEqual(2);
     }
-    expect(run.runsByRung).toEqual({ cheap: 5, dear: 5 });
+    expect(run.runsBySeat).toEqual({ author: { cheap: 5 }, review: { dear: 5 } });
   });
 
   test("parks a task whose author stops at a block that parks a stop", () => {
@@ -176,7 +180,7 @@ describe("simulate", () => {
     const run = played(withAuthor({ stopped: "park" }), stops, 3);
     expect(run.parked).toBe(3);
     expect(run.landed).toBe(0);
-    expect(run.runsByRung).toEqual({ cheap: 3 });
+    expect(run.runsBySeat).toEqual({ author: { cheap: 3 }, review: {} });
     expect(run.tasks.every((task) => task.parkedAt !== null && task.at === null)).toBe(true);
   });
 
@@ -185,7 +189,7 @@ describe("simulate", () => {
     const run = played(STANDARD_PIPELINES.worktree, stops, 3);
     expect(run.parked).toBe(3);
     // Two tries on each rung before the climb, as attemptsPerLevel says.
-    expect(run.runsByRung).toEqual({ cheap: 6, dear: 6 });
+    expect(run.runsBySeat).toEqual({ author: { cheap: 6, dear: 6 }, review: {} });
   });
 
   test("counts a task parked before the start as parked from the start", () => {
@@ -237,7 +241,6 @@ describe("simulateReport", () => {
     expect(report.saved.source).toBe("standard");
     expect(report.rates.map((rate) => [rate.rung, rate.role, rate.label])).toEqual([
       ["cheap", "author", "Measured"],
-      ["cheap", "review", "Assumed"],
       ["dear", "author", "Assumed"],
       ["dear", "review", "Measured"],
     ]);

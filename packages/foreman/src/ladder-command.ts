@@ -15,6 +15,7 @@ import {
   knownModels,
   parseRows,
   readModels,
+  readReviewers,
   readRows,
   readStatus,
   sizeSummary,
@@ -24,6 +25,7 @@ import {
   type RungPlace,
   writeRows,
 } from "./registry.ts";
+import { reviewerJson } from "./reviewers-command.ts";
 
 /**
  * `foreman ladder`: read and edit the registry's ladder.
@@ -46,7 +48,7 @@ const list = Command.make("list", { json }, ({ json }) =>
         row.slices === 0
           ? "no trials"
           : `${row.succeeded}/${row.slices} landed, ${row.avgRounds ?? "?"} rounds avg`;
-      const roles = `author ${row.author ? "on" : "off"}  review ${row.review ? "on" : "off"}`;
+      const roles = `author ${row.author ? "on" : "off"}`;
       yield* Console.log(
         `${String(row.level).padStart(2)}  ${row.rung.padEnd(26)} ${row.state.padEnd(8)} ${roles}  ${row.model}  ${record}  ${launchHint(row)}`,
       );
@@ -170,7 +172,6 @@ const add = Command.make("add", { rung, model, above, below, disabled, note }, (
         model: args.model,
         enabled: !args.disabled,
         author: true,
-        review: true,
         provider: null,
         unmetered: false,
         note: Option.getOrNull(args.note),
@@ -248,35 +249,25 @@ const toggle = (name: "enable" | "disable") =>
     ),
   );
 
-const which = Argument.String("which").pipe(
-  Argument.withDescription("Which role: author or review"),
-);
 const switch_ = Argument.String("switch").pipe(Argument.withDescription("on or off"));
 
 /**
- * Turn a rung's author or review role on or off without retiring it: a free
- * model may write and never read, or the reverse.
+ * Turn a rung's author role on or off without retiring it: it keeps its level
+ * and rank, so the failures naming it still position the work above it.
  */
-const role = Command.make("role", { rung, which, switch: switch_ }, (args) =>
+const author = Command.make("author", { rung, switch: switch_ }, (args) =>
   Effect.gen(function* () {
-    if (args.which !== "author" && args.which !== "review") {
-      return yield* new RegistryError({
-        detail: `role is author or review, not ${args.which}`,
-      });
-    }
     if (args.switch !== "on" && args.switch !== "off") {
       return yield* new RegistryError({
         detail: `switch is on or off, not ${args.switch}`,
       });
     }
     const on = args.switch === "on";
-    yield* changeRow(args.rung, (row) => ({ ...row, [args.which]: on }));
-    yield* Console.log(`${args.rung}: ${args.which} ${args.switch}`);
+    yield* changeRow(args.rung, (row) => ({ ...row, author: on }));
+    yield* Console.log(`${args.rung}: author ${args.switch}`);
   }),
 ).pipe(
-  Command.withDescription(
-    "Turn a rung's author or review role on or off; it keeps its place either way",
-  ),
+  Command.withDescription("Turn a rung's author role on or off; it keeps its place either way"),
 );
 
 const catalog = Flag.String("catalog").pipe(
@@ -354,14 +345,18 @@ const suggest = Command.make(
 );
 
 /**
- * `foreman ladder --json`: every rung in (level, rank) order with its level, and every model with its
- * council switch, so a front end draws the worker list and the council list
- * from one read.
+ * `foreman ladder --json`: every rung in (level, rank) order with its level,
+ * every model, and the reviewers as `foreman reviewers --json` prints them, so
+ * a front end draws the worker list and the reviewer list from one read.
  */
 export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
   Effect.gen(function* () {
     if (!json) return yield* new CliError.ShowHelp({ commandPath: ["ladder"], errors: [] });
-    const document = { rungs: yield* readStatus, models: yield* readModels };
+    const document = {
+      rungs: yield* readStatus,
+      models: yield* readModels,
+      reviewers: (yield* readReviewers).map(reviewerJson),
+    };
     yield* Console.log(JSON.stringify(document, null, 2));
   }),
 ).pipe(
@@ -375,7 +370,7 @@ export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
     add,
     toggle("enable"),
     toggle("disable"),
-    role,
+    author,
     move,
     level,
   ]),

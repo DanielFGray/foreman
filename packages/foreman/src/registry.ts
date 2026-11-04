@@ -1,7 +1,7 @@
-import { Array as Arr, Effect, Order, Schema } from "effect";
+import { Array as Arr, Effect, Option, Order, Schema } from "effect";
 import { SqlClient } from "effect/sql";
-import { launchArguments } from "./harness.ts";
 import type { Ladder, Rung } from "./ladder.ts";
+import type { Reviewer } from "./reviewers.ts";
 
 /**
  * The model registry: the ladder, and the facts about each model on it.
@@ -15,8 +15,9 @@ import type { Ladder, Rung } from "./ladder.ts";
  *
  * Models themselves (harness, pool, thinking level) are rows the task store's
  * migrations define and the operator seeds. This module edits the ladder, which
- * is the part an operator reorders, enables and disables, and each model's
- * council switch: a model is a worker, a council member, both or neither.
+ * is the part an operator reorders, enables and disables, and the reviewers, the
+ * list a review block takes its reader from: a model may be a rung, a reviewer,
+ * both or neither.
  */
 
 export class RegistryError extends Schema.TaggedError<RegistryError>()("RegistryError", {
@@ -37,7 +38,6 @@ export interface LadderRow {
   readonly model: string;
   readonly enabled: boolean;
   readonly author: boolean;
-  readonly review: boolean;
   readonly provider: string | null;
   readonly unmetered: boolean;
   readonly note: string | null;
@@ -52,12 +52,11 @@ export const readLadder = Effect.gen(function* () {
     model: string;
     enabled: number;
     author: number;
-    review: number;
     provider: string | null;
     unmetered: number;
     harness: string;
     thinking: string;
-  }>`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.review, l.provider, l.unmetered,
+  }>`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.provider, l.unmetered,
             m.harness, m.thinking
        FROM ladder l JOIN models m USING (model)
       ORDER BY l.level, l.rank`;
@@ -69,7 +68,6 @@ export const readLadder = Effect.gen(function* () {
     provider: row.provider ?? undefined,
     enabled: row.enabled !== 0,
     author: row.author !== 0 ? undefined : false,
-    review: row.review !== 0 ? undefined : false,
     unmetered: row.unmetered !== 0 ? true : undefined,
     thinking: row.thinking,
   }));
@@ -91,7 +89,6 @@ export interface RungStatus {
   /** `retired`, `disabled`, or the model's derived `proven` / `trial`. */
   readonly state: string;
   readonly author: boolean;
-  readonly review: boolean;
   readonly slices: number;
   readonly succeeded: number;
   readonly avgRounds: number | null;
@@ -109,13 +106,12 @@ export const readStatus = Effect.gen(function* () {
     tier: string;
     enabled: number;
     author: number;
-    review: number;
     retired: number;
     status: string;
     slices: number;
     succeeded: number;
     avg_rounds: number | null;
-  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author, l.review,
+  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author,
             s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
        FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`;
   return rows.map((row): RungStatus => ({
@@ -128,7 +124,6 @@ export const readStatus = Effect.gen(function* () {
     enabled: row.enabled !== 0,
     state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
     author: row.author !== 0,
-    review: row.review !== 0,
     slices: row.slices,
     succeeded: row.succeeded,
     avgRounds: row.avg_rounds,
@@ -142,13 +137,12 @@ export const knownModels = Effect.gen(function* () {
   return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
 }).pipe(Effect.mapError(registryError("reading the models")));
 
-/** One model with its tier and council switch, for a pane that draws the lists. */
+/** One model with its tier, for a pane that draws the lists. */
 export interface ModelEntry {
   readonly model: string;
   readonly harness: string;
   readonly tier: string;
   readonly retired: boolean;
-  readonly council: boolean;
 }
 
 /** Every model the registry knows, by model id. */
@@ -159,53 +153,88 @@ export const readModels = Effect.gen(function* () {
     harness: string;
     tier: string;
     retired: number;
-    council: number;
-  }>`SELECT model, harness, tier, retired, council FROM models ORDER BY model`;
-  return rows.map((row): ModelEntry => ({
-    ...row,
-    retired: row.retired !== 0,
-    council: row.council !== 0,
-  }));
+  }>`SELECT model, harness, tier, retired FROM models ORDER BY model`;
+  return rows.map((row): ModelEntry => ({ ...row, retired: row.retired !== 0 }));
 }).pipe(Effect.mapError(registryError("reading the models")));
 
-/**
- * A council member and what a caller needs to launch it: the harness (the
- * vendor CLI), the model, and the flags that name the model and its thinking
- * level. The read-only flags are the caller's: they depend on what the caller
- * asks the member to do, not on the model.
- */
-export interface CouncilMember {
-  readonly model: string;
-  readonly harness: string;
-  readonly thinking: string;
+/** A reviewer with its model's tier, for a reader that lists them. */
+export interface ReviewerEntry extends Reviewer {
   readonly tier: string;
-  readonly args: ReadonlyArray<string>;
 }
 
-/** The models whose council switch is on, retired ones left out. */
-export const readCouncil = Effect.gen(function* () {
+/**
+ * The reviewers, by name. A reviewer whose model is retired is left out: it is
+ * never dispatched, and a drawing pinned to it no longer runs.
+ */
+export const readReviewers = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ model: string; harness: string; thinking: string; tier: string }>`
-    SELECT model, harness, thinking, tier FROM models
-     WHERE council <> 0 AND retired = 0 ORDER BY model`;
-  return rows.map((row): CouncilMember => ({
-    ...row,
-    args: launchArguments({ kind: row.harness, model: row.model, thinking: row.thinking }),
+  const rows = yield* sql<{
+    reviewer: string;
+    model: string;
+    thinking: string;
+    provider: string | null;
+    harness: string;
+    tier: string;
+  }>`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness, m.tier
+       FROM reviewers r JOIN models m USING (model)
+      WHERE m.retired = 0 ORDER BY r.reviewer`;
+  return rows.map((row): ReviewerEntry => ({
+    name: row.reviewer,
+    harness: row.harness,
+    model: row.model,
+    provider: row.provider ?? undefined,
+    thinking: row.thinking,
+    tier: row.tier,
   }));
-}).pipe(Effect.mapError(registryError("reading the council")));
+}).pipe(Effect.mapError(registryError("reading the reviewers")));
 
-/** Turns a model's council switch on or off. The model must have a row. */
-export const setCouncil = (model: string, on: boolean) =>
+/** A reviewer as `foreman reviewers add` states it; the absent fields come from the model. */
+export interface NewReviewer {
+  readonly name: string;
+  readonly model: string;
+  /** The model row's level when absent. */
+  readonly thinking: Option.Option<string>;
+  /** Derived from the model when absent (`providerOf`). */
+  readonly provider: Option.Option<string>;
+}
+
+/** Adds a reviewer. Its model must have a row, and its name must be new. */
+export const addReviewer = (reviewer: NewReviewer) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ model: string }>`
-      UPDATE models SET council = ${on ? 1 : 0} WHERE model = ${model} RETURNING model`;
-    if (rows.length === 0) {
+    const model = yield* sql<{ thinking: string }>`
+      SELECT thinking FROM models WHERE model = ${reviewer.model}`;
+    const row = model[0];
+    if (row === undefined) {
       return yield* new RegistryError({
-        detail: `model "${model}" has no row in the models table`,
+        detail: `model "${reviewer.model}" has no row in the models table`,
       });
     }
-  }).pipe(Effect.mapError(registryError("changing the council")));
+    const taken = yield* sql<{ reviewer: string }>`
+      SELECT reviewer FROM reviewers WHERE reviewer = ${reviewer.name}`;
+    if (taken.length > 0) {
+      return yield* new RegistryError({ detail: `reviewer ${reviewer.name} is already listed` });
+    }
+    yield* sql`INSERT INTO reviewers (reviewer, model, thinking, provider)
+      VALUES (${reviewer.name}, ${reviewer.model},
+              ${Option.getOrElse(reviewer.thinking, () => row.thinking)},
+              ${Option.getOrNull(reviewer.provider)})`;
+  }).pipe(Effect.mapError(registryError("adding a reviewer")));
+
+/** Removes the reviewer named `name`, or fails naming the reviewers there are. */
+export const removeReviewer = (name: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const removed = yield* sql<{ reviewer: string }>`
+      DELETE FROM reviewers WHERE reviewer = ${name} RETURNING reviewer`;
+    if (removed.length === 0) {
+      const names = yield* sql<{ reviewer: string }>`
+        SELECT reviewer FROM reviewers ORDER BY reviewer`;
+      return yield* new RegistryError({
+        detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
+      });
+    }
+  }).pipe(Effect.mapError(registryError("removing a reviewer")));
 
 /** Landed slices, rounds and cost per success, by model and size. */
 export const sizeSummary = Effect.gen(function* () {
@@ -225,17 +254,15 @@ export const readRows = Effect.gen(function* () {
     model: string;
     enabled: number;
     author: number;
-    review: number;
     provider: string | null;
     unmetered: number;
     note: string | null;
-  }>`SELECT rung, level, model, enabled, author, review, provider, unmetered, note
+  }>`SELECT rung, level, model, enabled, author, provider, unmetered, note
        FROM ladder ORDER BY level, rank`;
   return rows.map((row): LadderRow => ({
     ...row,
     enabled: row.enabled !== 0,
     author: row.author !== 0,
-    review: row.review !== 0,
     unmetered: row.unmetered !== 0,
   }));
 }).pipe(Effect.mapError(registryError("reading the ladder rows")));
@@ -285,9 +312,9 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
             Order.mapInput(Order.Number, (row: LadderRow) => row.level),
           ),
           (row, index) =>
-            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, review, provider, unmetered, note)
+            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, provider, unmetered, note)
                 VALUES (${index + 1}, ${row.level}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
-                        ${row.author ? 1 : 0}, ${row.review ? 1 : 0},
+                        ${row.author ? 1 : 0},
                         ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note})`,
           { discard: true },
         );
@@ -373,7 +400,6 @@ export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
     model: row.model,
     enabled: row.enabled,
     author: row.author,
-    review: row.review,
     provider: row.provider ?? null,
     unmetered: row.unmetered,
     note: row.note ?? null,
@@ -388,7 +414,7 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
     "// order is the rank; move a block to re-rank it.",
     "// A rung's name is what tasks record: renaming one makes a new rung.",
     "// `model` must already have a row in the registry's models table.",
-    "// `author` / `review` say which roles the rung may fill (default both on).",
+    "// `author: false` keeps a rung out of the author pick without retiring it.",
     "[",
     ...rows.map(
       (row) =>
@@ -399,7 +425,6 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
           model: row.model,
           enabled: row.enabled,
           ...(row.author ? {} : { author: false }),
-          ...(row.review ? {} : { review: false }),
           ...(row.provider ? { provider: row.provider } : {}),
           ...(row.unmetered ? { unmetered: true } : {}),
           ...(row.note ? { note: row.note } : {}),
@@ -416,7 +441,6 @@ const RowFile = Schema.Struct({
   model: Schema.NonEmptyString,
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   author: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  review: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   provider: Schema.optional(Schema.NullOr(Schema.String)),
   unmetered: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   note: Schema.optional(Schema.NullOr(Schema.String)),

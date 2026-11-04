@@ -95,7 +95,8 @@ const provider = (
   usage: Usage,
   rungs: ReadonlyArray<string> = [],
   unreadable: string | undefined = undefined,
-): Provider => ({ ...usage, rungs, unreadable });
+  reviewers: ReadonlyArray<string> = [],
+): Provider => ({ ...usage, rungs, reviewers, unreadable });
 
 // A real description is several paragraphs, and the pane wraps and scrolls
 // rather than truncating, so the assertion is that every line survives.
@@ -402,6 +403,15 @@ describe("quota view and accounts", () => {
     expect(row?.detail).toContain("monthly 100%");
     expect(row?.detail).toContain("resets in 2d");
     expect(row?.detail).toContain("stops: pro, sonnet");
+  });
+
+  test("a spent account names the reviewers it stops as reviewers", () => {
+    const reading: FleetState = {
+      ...withQuota,
+      providers: [provider(spent, ["sonnet"], undefined, ["sonnet"])],
+    };
+    const row = rowsForView("attention", reading).find((each) => each.column === "quota");
+    expect(row?.detail).toContain("stops: sonnet, reviewer sonnet");
   });
 
   test("the quota view lists every account, healthy and spent", () => {

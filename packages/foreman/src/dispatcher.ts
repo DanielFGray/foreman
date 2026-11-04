@@ -66,7 +66,7 @@ import {
 import { queueFrom } from "./queue.ts";
 import { phaseOf } from "./task-phase.ts";
 import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
-import { Quota, type Usage, walledRungs } from "./quota.ts";
+import { Quota, type Usage, walledSeats } from "./quota.ts";
 import {
   authorFor,
   dispatchable as dispatchableRungs,
@@ -77,12 +77,14 @@ import {
   highestFailure,
   providersOf,
   providerOf,
-  type Ladder,
   type LastStarts,
   type Rung,
+  type Seat,
   rungsOn,
+  seatsOn,
 } from "./ladder.ts";
-import { authorWalls, drawRung, rungAt } from "./agent-rung.ts";
+import { drawSeat, type PerRole, seatAt, taskWalls } from "./agent-rung.ts";
+import { type Seats, seatOf } from "./reviewers.ts";
 import {
   instructionNames,
   nextAgent,
@@ -96,6 +98,7 @@ import {
   type Pipeline,
   QUEUE,
   DEFAULT_PIPELINE,
+  offersOf,
   type Placement,
   type Workspace,
 } from "./pipeline.ts";
@@ -191,7 +194,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     const runAttributes = (
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
-      rung: Rung,
+      rung: Seat,
       role: AgentRole,
     ) => ({
       task: task.id,
@@ -199,13 +202,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       rung: rung.name,
       model: rung.model ?? rung.harness,
       role,
-      attempt: attemptsOf(task, levelPeers(settings.ladder, rung.name)) + 1,
+      // A reviewer has no level, so its attempt counts its own runs alone.
+      attempt:
+        attemptsOf(task, role === "author" ? levelPeers(settings.ladder, rung.name) : [rung.name]) +
+        1,
       labels: task.labels.join(","),
     });
 
     const instrumentRun = <A, E, R>(
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
-      rung: Rung,
+      rung: Seat,
       role: AgentRole,
       effect: Effect.Effect<A, E, R>,
     ) => {
@@ -476,7 +482,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * read.
      */
     const readProviders = Effect.forEach(
-      providersOf(settings.ladder),
+      providersOf(settings.ladder, settings.reviewers),
       (provider) =>
         quota.usage(provider).pipe(
           Effect.map((usage): Provider => ({
@@ -484,6 +490,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             plan: usage.plan,
             allowances: usage.allowances,
             rungs: rungsOn(settings.ladder, provider),
+            reviewers: seatsOn(settings.reviewers, provider),
             unreadable: undefined,
           })),
           Effect.catch((error) =>
@@ -500,6 +507,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 plan: undefined,
                 allowances: [],
                 rungs: rungsOn(settings.ladder, provider),
+                reviewers: seatsOn(settings.reviewers, provider),
                 unreadable: error.detail,
               }),
             ),
@@ -671,18 +679,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Each project's pipeline, read with the policy and checked against the
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
-      const rungs = settings.ladder.map((rung) => ({
-        name: rung.name,
-        author: rung.author !== false,
-        review: rung.review !== false,
-      }));
+      const offers = offersOf(settings);
       const instructions = yield* prompts.instructions(
         [DEFAULT_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
       );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
         projects.map((project) => [
           project.name,
-          projectPipeline(drawings, project.name, rungs, instructions),
+          projectPipeline(drawings, project.name, offers, instructions),
         ]),
       );
       const scopes = yield* scopesOf(policy.grants, records.lookup, records.children);
@@ -911,10 +915,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           !orphaned.has(entry.task),
       );
 
-      // Which rungs have no allowance left. A spent account changes which rung
-      // a task gets, and at the top of the ladder whether it can be dispatched
-      // at all.
-      const walled = walledRungs(providers);
+      // Which rungs and reviewers have no allowance left. A spent account
+      // changes which seat a task gets, and at the top of the ladder whether it
+      // can be dispatched at all.
+      const walled = walledSeats(providers);
 
       // Work waiting on the operator is ready by every measure prog knows and
       // still must not be dispatched: it is waiting on a decision no agent can
@@ -966,7 +970,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         queue: ordered,
         committed,
         pipelines,
-        ladder: settings.ladder,
+        seats: settings,
         walled,
         held,
       });
@@ -1171,7 +1175,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /** The run row for an agent about to start on this task at `block`. */
-    const runFor = (task: Item, rung: Rung, block: AgentNode, commit?: string, base?: string) =>
+    const runFor = (task: Item, rung: Seat, block: AgentNode, commit?: string, base?: string) =>
       newRunFor({
         task,
         branch: labelFor(task.id),
@@ -1192,7 +1196,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const onUsageWall = (
       worker: Worker,
-      rung: Rung,
+      rung: Seat,
       role: AgentRole,
     ): Effect.Effect<Option.Option<UsageWall>> => {
       const provider = wallAccountOf(rung);
@@ -1228,7 +1232,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       worker: Worker,
       wall: UsageWall,
-      walled: ReadonlySet<string>,
+      walled: PerRole<ReadonlySet<string>>,
       pipeline: Pipeline | undefined,
     ) =>
       Effect.gen(function* () {
@@ -1249,7 +1253,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           settings.ladder,
           failuresOf(task),
           new Set([
-            ...authorWalls(settings.ladder, task, walled),
+            ...taskWalls(settings, task, walled).author,
             ...rungsOn(settings.ladder, wall.provider),
           ]),
         );
@@ -1279,7 +1283,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const stallCutoff = DateTime.toEpochMillis(
         DateTime.subtract(yield* DateTime.now, { minutes: settings.stallGrace }),
       );
-      const walledNow = walledRungs(current.providers);
+      const walledNow = walledSeats(current.providers);
 
       // A stopped project's tasks stay as they are: its pipeline cannot say
       // which block they stand at, so no ending of theirs can be classified.
@@ -1430,8 +1434,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // The rung that actually ran, which is what an outcome is about —
             // the reviewer where one owns the pane, else the author.
             const ran = reviewedBy(task) ?? authoredBy(task);
-            const rung = settings.ladder.find((candidate) => candidate.name === ran);
             const role = reviewedBy(task) ? "review" : "author";
+            const rung = ran === undefined ? undefined : seatOf(settings, { role, rung: ran });
             // Only a stop without a verdict can be a wall: an onboarding worker
             // stands in the operator's own tree, which foreman never commits, so
             // it is left to the ordinary path.
@@ -2184,7 +2188,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Dispatchable & { readonly lastStarts: LastStarts }) =>
+    const fill = (current: Dispatchable & { readonly lastStarts: PerRole<LastStarts> }) =>
       Effect.gen(function* () {
         yield* Effect.forEach(current.parks, park, { discard: true });
         // A task whose dispatch has failed twice is held out of the plan.
@@ -2194,9 +2198,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // authors only, and discarded with it. Its whole job is to stop every
         // slot in this pass drawing on the one account the reading calls healthy.
         const drawn = new Set<string>();
-        // This tick's copy of the last starts: each dispatch records its rung as
-        // started, so the free slots of one tick spread over a level.
-        const started = new Map(current.lastStarts);
+        // This tick's copy of the last starts: each dispatch records its seat as
+        // started, so the free slots of one tick spread over a level and over
+        // the reviewers.
+        const started = {
+          author: new Map(current.lastStarts.author),
+          review: new Map(current.lastStarts.review),
+        };
         yield* Effect.forEach(
           current.dispatches,
           (dispatch) =>
@@ -2306,19 +2314,19 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * before any pass runs, and for an operator's command it is the reading the
      * dashboard was showing when they pressed the key.
      */
-    const rungFor = Effect.fnUntraced(function* (
+    const seatFor = Effect.fnUntraced(function* (
       task: Item,
       block: AgentNode,
       drawn?: Set<string>,
-      started?: Map<string, Date>,
+      started?: PerRole<Map<string, Date>>,
     ) {
-      const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
-      const choice = drawRung(settings.ladder, block, task, walled, drawn, started);
-      if (choice._tag === "Dispatch") return choice.rung;
+      const walled = walledSeats((yield* SubscriptionRef.get(state)).providers);
+      const choice = drawSeat(settings, block, task, walled, drawn, started);
+      if (choice._tag === "Dispatch") return choice.seat;
       yield* Effect.logInfo(
         choice._tag === "Waiting"
           ? `${block.role} of ${task.id} at ${block.id} deferred: no account with room for ${block.model}`
-          : `${block.role} of ${task.id} at ${block.id} deferred: no rung of ${block.model} is left that has not failed it`,
+          : `${block.role} of ${task.id} at ${block.id} deferred: no ${block.role === "author" ? "rung" : "reviewer"} of ${block.model} is left that has not failed it`,
       );
       return undefined;
     });
@@ -2369,20 +2377,20 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       block: AgentNode,
       drawn?: Set<string>,
-      started?: Map<string, Date>,
+      started?: PerRole<Map<string, Date>>,
     ) {
       // The task carries its failures in its labels, so the choice survives a
       // restart, and the allowances are this tick's reading. `drawn` and
       // `started` are this tick's burst, not the task's history: only `fill`
       // has them, so only it spreads.
-      const rung = yield* rungFor(task, block, drawn, started);
+      const rung = yield* seatFor(task, block, drawn, started);
       if (rung) yield* authorAt(task, rung, block);
     });
 
     /** Opens the task's workspace, claims it and starts its author on this rung. */
     const authorAt = Effect.fn("foreman.dispatch.authorAt")(function* (
       task: Item,
-      rung: Rung,
+      rung: Seat,
       block: AgentNode,
     ) {
       const project = yield* projectFor(task.project);
@@ -2429,7 +2437,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
       task: Item,
       block: AgentNode,
-      started?: Map<string, Date>,
+      started?: PerRole<Map<string, Date>>,
     ) {
       const project = yield* projectFor(task.project);
       if (!project) return;
@@ -2450,8 +2458,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // Resolved here rather than by each caller, so fill, a retry and an
       // intervention all pick a reviewer the same way. The status is untouched
-      // when no rung can read the diff, so the task keeps its place.
-      const rung = yield* rungFor(task, block, undefined, started);
+      // when no reviewer can read the diff, so the task keeps its place.
+      const rung = yield* seatFor(task, block, undefined, started);
       if (!rung) return;
       const worker = yield* workspaceFor(task, project);
 
@@ -2558,6 +2566,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const done = stepOf(task, event, {
           ladder: settings.ladder,
+          reviewers: settings.reviewers,
           attemptsPerLevel: settings.attemptsPerLevel,
           pipeline,
         });
@@ -2959,7 +2968,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             if (block === undefined) return;
             const rung =
               rungName === undefined
-                ? yield* rungFor(task, block)
+                ? yield* seatFor(task, block)
                 : settings.ladder.find((candidate) => candidate.name === rungName);
             if (rung) yield* authorAt(task, rung, block);
           }),
@@ -3053,7 +3062,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             if (!project) return;
             const block = yield* blockFor(task, "author");
             if (block === undefined) return;
-            const rung = yield* rungFor(task, block);
+            const rung = yield* seatFor(task, block);
             if (!rung) return;
             // The workspace may be gone — the pane that was its only one closed
             // by hand. `fleet.open` resolves to the worktree git still has, so
@@ -3424,8 +3433,8 @@ export const planFrom = (
  * What a reading offers the plan: the reviews and the claimed tasks waiting
  * at an agent block, the queue, and what holds a task back from a dispatch.
  *
- * A task waiting at an agent block runs on the rung that block takes. The
- * dispatch resolves the rung the same way from the same reading, so the plan
+ * A task waiting at an agent block runs on the seat that block takes: a rung
+ * for an author, a reviewer for a review. The dispatch resolves the seat the same way from the same reading, so the plan
  * cannot pass over a task the dispatch would have found an agent for, nor the
  * reverse. A rung on a spent account (`walled`) holds the task back
  * (`outOfQuota`); a block with no rung left for it parks it, as a park block
@@ -3439,8 +3448,8 @@ export const candidatesFrom = (reading: {
   /** The tasks whose author wrote something. */
   readonly committed: ReadonlySet<string>;
   readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
-  readonly ladder: Ladder;
-  readonly walled: ReadonlySet<string>;
+  readonly seats: Seats;
+  readonly walled: PerRole<ReadonlySet<string>>;
   readonly held: ReadonlyArray<Held>;
 }) => {
   const { pipelines, held } = reading;
@@ -3448,24 +3457,18 @@ export const candidatesFrom = (reading: {
   // A returned review wired back to the author leaves the task claimed and
   // waiting at that block (still `in_progress`). It is not under review, so
   // fill must take it from the claimed column or it never runs again.
-  const continuing = reading.claimed.filter(({ task }) => {
-    const placement = placementIn(pipelines, task);
-    return (
-      placement._tag === "At" && placement.state === "waiting" && placement.node.kind === "agent"
-    );
-  });
+  const continuing = reading.claimed.filter(({ task }) => waitingAt(pipelines, task) !== undefined);
   const candidates: ReadonlyArray<Active> = [
     ...reviews.review,
     ...continuing,
     ...reading.queue.map((task) => ({ task, worker: undefined, kind: undefined })),
   ];
   const rungs = candidates.flatMap(({ task, worker }) => {
-    const placement = placementIn(pipelines, task);
-    return placement._tag === "At" &&
-      placement.state === "waiting" &&
-      placement.node.kind === "agent"
-      ? [{ task, worker, rung: rungAt(reading.ladder, placement.node, task, reading.walled) }]
-      : [];
+    const block = waitingAt(pipelines, task);
+    if (block === undefined) return [];
+    return [
+      { task, worker, role: block.role, rung: seatAt(reading.seats, block, task, reading.walled) },
+    ];
   });
   const outOfQuota = new Set(
     rungs.filter(({ rung }) => rung._tag === "Waiting").map(({ task }) => task.id),
@@ -3477,10 +3480,8 @@ export const candidatesFrom = (reading: {
         ? [{ task, worker, why: `${task.project}'s pipeline parks it at ${placement.node}.` }]
         : [];
     }),
-    ...rungs.flatMap(({ task, worker, rung }) =>
-      rung._tag === "Exhausted"
-        ? [{ task, worker, why: "the block it waits at has no rung left that has not failed it." }]
-        : [],
+    ...rungs.flatMap(({ task, worker, role, rung }) =>
+      rung._tag === "Exhausted" ? [{ task, worker, why: noSeatLeft(role) }] : [],
     ),
   ].filter(
     // A park is a step: a paused project takes none, and a live pane is
@@ -3535,6 +3536,21 @@ const runningAt = (placed: DispatchState["placed"]) => {
       node.slots === undefined || (counts.get(key(project, node)) ?? 0) < node.slots,
   };
 };
+
+/** The agent block a task waits at, when it waits at one. */
+const waitingAt = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): AgentNode | undefined => {
+  const placement = placementIn(pipelines, task);
+  return placement._tag === "At" && placement.state === "waiting" && placement.node.kind === "agent"
+    ? placement.node
+    : undefined;
+};
+
+/** Why a block parks a task when no seat of its role is left for it. */
+const noSeatLeft = (role: AgentNode["role"]): string =>
+  `the block it waits at has no ${role === "author" ? "rung" : "reviewer"} left that has not failed it.`;
 
 const isBusy = (worker: Worker): boolean =>
   worker.state === "working" || worker.state === "blocked";
@@ -4049,7 +4065,7 @@ interface UsageWall {
 }
 
 /** A rung, as the multiplexer needs it: which program, and which model inside it. */
-const spawnAs = (rung: Rung, prompt: string, role: AgentRole): SpawnOptions => ({
+const spawnAs = (rung: Seat, prompt: string, role: AgentRole): SpawnOptions => ({
   kind: rung.harness,
   model: rung.model,
   thinking: rung.thinking,
@@ -4242,7 +4258,10 @@ export interface Held {
  * neither spent nor a wall.
  */
 export interface Provider extends Usage {
+  /** The rungs this account stops when spent (`rungsOn`). */
   readonly rungs: ReadonlyArray<string>;
+  /** The reviewers this account stops when spent (`seatsOn`). */
+  readonly reviewers: ReadonlyArray<string>;
   readonly unreadable: string | undefined;
 }
 

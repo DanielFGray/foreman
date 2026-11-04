@@ -26,11 +26,11 @@ export const authoredBy = (task: Runs): string | undefined =>
 export const roundsOf = (task: Runs): number =>
   task.runs.findLast((run) => run.role === "author")?.rounds ?? 0;
 
-/** The rung of the lap's open review run: the reviewer that owns the task now. */
+/** The name of the lap's open review run: the reviewer that owns the task now. */
 export const reviewedBy = (task: Runs): string | undefined =>
   lapOf(task).find((run) => run.role === "review" && run.open)?.rung;
 
-/** The rungs whose reviewers stopped this lap without naming an exit. */
+/** The reviewers that stopped this lap without naming an exit. */
 export const reviewFailedBy = (task: Runs): ReadonlyArray<string> =>
   lapOf(task).flatMap((run) =>
     run.role === "review" && run.ending === "stopped" && run.rung !== undefined ? [run.rung] : [],

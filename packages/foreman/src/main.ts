@@ -9,7 +9,7 @@ import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
 import { VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
-import { councilCommand } from "./council-command.ts";
+import { reviewersCommand } from "./reviewers-command.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
@@ -54,7 +54,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
     const rungsOf = (provider: string) => rungsOn(config.ladder, provider);
 
     const readings = yield* Effect.forEach(
-      providersOf(config.ladder),
+      providersOf(config.ladder, config.reviewers),
       (provider) =>
         quota.usage(provider).pipe(
           Effect.map((usage) => ({ _tag: "usage", provider, usage }) as const),
@@ -137,7 +137,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     serveCommand,
     quotaCommand,
     Command.provide(ladderCommand, store),
-    Command.provide(councilCommand, store),
+    Command.provide(reviewersCommand, store),
     statsCommand,
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),

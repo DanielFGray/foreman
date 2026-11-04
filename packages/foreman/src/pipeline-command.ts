@@ -9,6 +9,7 @@ import {
   instructionProblems,
   Pipeline,
   type Placement,
+  offersOf,
   problemsOf,
   STANDARD_PIPELINES,
   toMermaid,
@@ -16,7 +17,7 @@ import {
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
 import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
-import { readLadder } from "./registry.ts";
+import { readLadder, readReviewers } from "./registry.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { INSERTABLE } from "./pipeline-belt.ts";
@@ -24,7 +25,6 @@ import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
-import { mayAuthor, mayReview } from "./ladder.ts";
 import { Settings, settings } from "./config.ts";
 import { type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
@@ -248,7 +248,7 @@ const trace = Command.make(
       );
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const { ladder, attemptsPerLevel } = yield* Settings;
+      const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
       const report = traceReport(
         project,
         {
@@ -261,7 +261,7 @@ const trace = Command.make(
           events,
         },
         { draft: draft?.pipeline, live },
-        { ladder, attemptsPerLevel },
+        { ladder, reviewers, attemptsPerLevel },
       );
       if (json) return yield* Console.log(JSON.stringify(report, null, 2));
       for (const step of report.steps) yield* Console.log(traceLine(step));
@@ -300,7 +300,7 @@ const simulate = Command.make(
       const rates = ratesOf(yield* readMeasured);
       const draft = (yield* draftsNow)[project];
       const live = yield* livePipeline(project);
-      const { ladder, attemptsPerLevel, pollInterval } = yield* Settings;
+      const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
       const report = simulateReport(
         {
           project,
@@ -322,7 +322,7 @@ const simulate = Command.make(
           live: { ...live, problems: yield* problemsAgainstLadder(live.pipeline) },
         },
         rates,
-        { ladder, attemptsPerLevel },
+        { ladder, reviewers, attemptsPerLevel },
         { seed, hours },
       );
       if (json) return yield* Console.log(JSON.stringify(report));
@@ -445,24 +445,14 @@ export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError
 }
 
 /**
- * The problems that stop `pipeline` running: against the ladder, and in the
- * instructions files its agent blocks read.
+ * The problems that stop `pipeline` running: against the ladder and the
+ * reviewers, and in the instructions files its agent blocks read.
  */
 const problemsAgainstLadder = (pipeline: Pipeline) =>
   Effect.gen(function* () {
-    const ladder = yield* readLadder;
+    const seats = { ladder: yield* readLadder, reviewers: yield* readReviewers };
     const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
-    return [
-      ...problemsOf(
-        pipeline,
-        ladder.map((rung) => ({
-          name: rung.name,
-          author: mayAuthor(rung),
-          review: mayReview(rung),
-        })),
-      ),
-      ...instructionProblems(pipeline, texts),
-    ];
+    return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
   }).pipe(Effect.provide(Prompts.Default));
 
 const refuse = (problems: ReadonlyArray<string>) =>

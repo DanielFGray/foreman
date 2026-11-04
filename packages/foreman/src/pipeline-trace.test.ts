@@ -8,6 +8,7 @@ const RULES = {
   ladder: [
     { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
   ] as Ladder,
+  reviewers: [],
   attemptsPerLevel: 2,
 };
 const REQUEST = { task: { labels: [], size: 2, priority: 2, parent: undefined }, events: [] };

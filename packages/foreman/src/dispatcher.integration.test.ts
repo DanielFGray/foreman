@@ -27,6 +27,7 @@ import type { Ending, NewRun, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { Ladder } from "./ladder.ts";
+import type { Reviewer } from "./reviewers.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
 import {
   type AgentNode,
@@ -385,17 +386,19 @@ class World {
       }),
     // Run ids climb in the order runs open, so the newest id stands in for the
     // newest start.
-    lastStarts: Effect.sync(
-      (): ReadonlyMap<string, Date> =>
+    lastStarts: Effect.sync(() => {
+      const startsOf = (role: Role): ReadonlyMap<string, Date> =>
         new Map(
           [...this.tasks.values()]
             .flatMap((task) => task.runs)
+            .filter((run) => run.role === role)
             .toSorted((a, b) => a.id - b.id)
             .flatMap((run) =>
               run.rung === undefined ? [] : [[run.rung, new Date(run.id)] as const],
             ),
-        ),
-    ),
+        );
+      return { author: startsOf("author"), review: startsOf("review") };
+    }),
     children: () => Effect.succeed([]),
     countRound: () => this.write("records.countRound", () => 1),
   };
@@ -588,7 +591,7 @@ process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
 beforeEach(() =>
   writeFileSync(
     join(policies, "pipelines.json"),
-    JSON.stringify({ version: 3, pipelines: { test: STANDARD_PIPELINES.worktree } }),
+    JSON.stringify({ version: 4, pipelines: { test: STANDARD_PIPELINES.worktree } }),
   ),
 );
 afterAll(() => {
@@ -606,6 +609,10 @@ const layerFor = (world: World) =>
       Layer.succeed(Settings, {
         ladder: [
           { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+        ],
+        // A reviewer with the rung's name, on no account either.
+        reviewers: [
+          { name: "cheap", harness: "test", model: "cheap", provider: undefined, thinking: "high" },
         ],
         otlpEndpoint: "http://localhost:4318",
         pollInterval: 60,
@@ -1375,6 +1382,7 @@ describe("quota probing", () => {
           ladder: [
             { name: "cheap", harness: "test", level: 0, model: "openai/gpt", provider: undefined },
           ],
+          reviewers: [],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,
@@ -1431,7 +1439,7 @@ describe("quota probing", () => {
   });
 });
 
-describe("a spent account and the reviewer above it", () => {
+describe("a spent account and the reviewers", () => {
   /** A Quota where each named provider is spent and every other has room. */
   const quotaSpending = (spent: ReadonlyArray<string>) =>
     Layer.succeed(Quota, {
@@ -1459,6 +1467,23 @@ describe("a spent account and the reviewer above it", () => {
               level: 1,
               model: "anthropic/claude",
               provider: undefined,
+            },
+          ],
+          // One reviewer on each account; "cheap" shares the author's model.
+          reviewers: [
+            {
+              name: "cheap",
+              harness: "test",
+              model: "openai/gpt",
+              provider: undefined,
+              thinking: "high",
+            },
+            {
+              name: "dear",
+              harness: "test",
+              model: "anthropic/claude",
+              provider: undefined,
+              thinking: "high",
             },
           ],
           otlpEndpoint: "http://localhost:4318",
@@ -1516,9 +1541,9 @@ describe("a spent account and the reviewer above it", () => {
     expect(new Set(rungs)).toEqual(new Set(["cheap", "dear"]));
   });
 
-  test("reviews with the rung above the wall rather than waiting on money", async () => {
-    // "cheap" wrote it, so "dear" reads it — and "dear" is on another account,
-    // which the wall on openai says nothing about.
+  test("reviews with a reviewer on another account rather than waiting on money", async () => {
+    // "cheap" wrote it on openai, and the wall on openai says nothing about
+    // "dear", which reads on anthropic.
     const world = awaiting("ts-skips");
     await tickWith(world, ["openai"]);
 
@@ -1526,7 +1551,7 @@ describe("a spent account and the reviewer above it", () => {
     expect(reviewerOf(world, "ts-skips")).toBe("dear");
   });
 
-  test("leaves the task alone when every account above is spent", async () => {
+  test("leaves the task alone when every reviewer's account is spent", async () => {
     const world = awaiting("ts-walled");
     await tickWith(world, ["openai", "anthropic"]);
 
@@ -1561,6 +1586,16 @@ describe("a spent account and the reviewer above it", () => {
     expect(world.tasks.get(task.id)?.charges).toEqual([]);
     expect(attemptsOf(world.tasks.get(task.id)!, ["cheap"])).toBe(1);
     expect(reviewerOf(world, task.id)).toBe("dear");
+  });
+
+  test("reads with another model first, and with the author's own model when no other can pay", async () => {
+    const other = awaiting("ts-other");
+    await tickWith(other, []);
+    expect(reviewerOf(other, "ts-other")).toBe("dear");
+
+    const same = awaiting("ts-same");
+    await tickWith(same, ["anthropic"]);
+    expect(reviewerOf(same, "ts-same")).toBe("cheap");
   });
 
   test("takes the cheapest rung nothing has recorded against the task", async () => {
@@ -1815,12 +1850,31 @@ describe("a usage wall", () => {
     },
     { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
   ];
+  /** The same two models as reviewers, each named after its rung. */
+  const reviewers: ReadonlyArray<Reviewer> = [
+    {
+      name: "free",
+      harness: "opencode",
+      model: "opencode/free-model",
+      provider: undefined,
+      thinking: "high",
+    },
+    {
+      name: "dear",
+      harness: "test",
+      model: "anthropic/claude",
+      provider: undefined,
+      thinking: "high",
+    },
+  ];
+  const seats = { ladder, reviewers };
   const layerFor = (world: World) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
           ladder,
+          reviewers,
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,
@@ -1876,7 +1930,7 @@ describe("a usage wall", () => {
     const walled = world.tasks.get("ts-walled")!;
     expect(world.commits).toHaveLength(1);
     expect(world.commits[0]).toContain("stopped on a usage limit before verifying");
-    expect(walledBy(walled, ladder)).toEqual(["opencode"]);
+    expect(walledBy(walled, seats)).toEqual(["opencode"]);
     expect(attemptsOf(walled, ["free"])).toBe(0);
     expect(failuresOf(walled)).toEqual([]);
     expect(world.tasks.get("ts-walled")?.runs[0]).toMatchObject({ open: false, ending: "walled" });
@@ -1910,7 +1964,7 @@ describe("a usage wall", () => {
 
     const found = world.tasks.get(task.id);
     expect(found?.status).toBe("in_progress");
-    expect(walledBy(found!, ladder)).toEqual(["opencode"]);
+    expect(walledBy(found!, seats)).toEqual(["opencode"]);
     expect(found?.runs.some((run) => run.ending === "stopped")).toBe(false);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
@@ -1925,7 +1979,7 @@ describe("a usage wall", () => {
     await tick(world);
 
     expect(world.commits).toHaveLength(0);
-    expect(walledBy(world.tasks.get("ts-walled-clean")!, ladder)).toEqual(["opencode"]);
+    expect(walledBy(world.tasks.get("ts-walled-clean")!, seats)).toEqual(["opencode"]);
   });
 
   test("a stop with no wall text on its screen goes through the retry path as before", async () => {
@@ -1935,7 +1989,7 @@ describe("a usage wall", () => {
 
     const plain = world.tasks.get("ts-plain")!;
     expect(attemptsOf(plain, ["free"])).toBe(1);
-    expect(walledBy(plain, ladder)).toEqual([]);
+    expect(walledBy(plain, seats)).toEqual([]);
     expect(world.commits).toHaveLength(0);
     expect(world.tasks.get("ts-plain")?.runs[0]).toMatchObject({
       open: false,
@@ -1998,7 +2052,7 @@ describe("a usage wall", () => {
 
     await tick(world);
 
-    expect(walledBy(world.tasks.get("ts-quoted")!, ladder)).toEqual([]);
+    expect(walledBy(world.tasks.get("ts-quoted")!, seats)).toEqual([]);
   });
 });
 
@@ -2069,7 +2123,7 @@ describe("a policy change", () => {
 describe("a route's workspace blocks", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   const BRANCH_ONLY = STANDARD_PIPELINES.checkout.nodes;
@@ -2368,7 +2422,7 @@ describe("a route's workspace blocks", () => {
         kind: "agent",
         id: "d-review",
         role: "review",
-        model: "above",
+        model: "reviewers",
         exits: [
           { name: "approved", to: "d-land-gate" },
           { name: "returned", to: "queue", fails: "author" },
@@ -2450,7 +2504,7 @@ describe("a route's workspace blocks", () => {
 });
 
 describe("a reviewer that stops without naming an exit, and one that names returned", () => {
-  /** Three rungs on three accounts, so a review has two rungs to climb. */
+  /** Two reviewers on two accounts, so a review that stops has another to take. */
   const layerFor = (world: World) =>
     Layer.provideMerge(
       Dispatcher.Default,
@@ -2460,6 +2514,16 @@ describe("a reviewer that stops without naming an exit, and one that names retur
             { name: "low", harness: "test", level: 0, model: "a/low", provider: undefined },
             { name: "mid", harness: "test", level: 1, model: "b/mid", provider: undefined },
             { name: "high", harness: "test", level: 2, model: "c/high", provider: undefined },
+          ],
+          reviewers: [
+            { name: "mid", harness: "test", model: "b/mid", provider: undefined, thinking: "high" },
+            {
+              name: "high",
+              harness: "test",
+              model: "c/high",
+              provider: undefined,
+              thinking: "high",
+            },
           ],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
@@ -2504,7 +2568,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     return world;
   };
 
-  test("keeps the task in review, charges no attempt, and dispatches a higher reviewer", async () => {
+  test("keeps the task in review, charges no attempt, and dispatches another reviewer", async () => {
     const world = stopped("ts-stopped", [authorDone("low"), reviewRun("mid")]);
 
     await tick(world);
@@ -2538,7 +2602,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(world.tasks.get("ts-spawn")?.status).toBe("in_progress");
   });
 
-  test("hands the task to the operator when no reviewer rung is left", async () => {
+  test("hands the task to the operator when no reviewer is left", async () => {
     const world = stopped("ts-last", [
       authorDone("low"),
       reviewRun("mid", { open: false, ending: "stopped" }),
@@ -2550,7 +2614,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     const task = world.tasks.get("ts-last");
     expect(task?.status).toBe("open");
     expect(task?.labels).toEqual([]);
-    expect(task?.parked).toContain("no rung above it is left");
+    expect(task?.parked).toContain("no reviewer is left");
     expect(world.spawned).toEqual([]);
   });
 
@@ -2635,7 +2699,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           }
         : node,
     );
-    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
     try {
       const id = "ts-looped";
       const world = new World(item(id, "open", []));
@@ -2685,7 +2749,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 describe("a drawn pipeline", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with `change` made to its author block. */
@@ -2734,6 +2798,7 @@ describe("a drawn pipeline", () => {
                     provider: undefined,
                   },
                 ],
+                reviewers: [],
                 otlpEndpoint: "http://localhost:4318",
                 pollInterval: 60,
                 staleAfter: 24,
@@ -2931,12 +2996,27 @@ describe("foreman pipeline trace", () => {
     { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
   ];
 
+  /**
+   * Each rung above the bottom as a reviewer of its own name and model, so a
+   * review of the bottom's work and of the next rung's work each has a reader
+   * of another model.
+   */
+  const reviewersOf = (ladder: Ladder): ReadonlyArray<Reviewer> =>
+    ladder.slice(1).map((rung) => ({
+      name: rung.name,
+      harness: rung.harness,
+      model: rung.model ?? rung.name,
+      provider: rung.provider,
+      thinking: "high",
+    }));
+
   const layerWith = (world: World, ladder: Ladder) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
         Layer.succeed(Settings, {
           ladder,
+          reviewers: reviewersOf(ladder),
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,
@@ -3044,11 +3124,12 @@ describe("foreman pipeline trace", () => {
   /** Runs the events through the dispatcher and through the trace, and compares where each puts the task. */
   const agree = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
     if (pipeline !== STANDARD_PIPELINES.worktree) {
-      writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: pipeline } }));
+      writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: pipeline } }));
     }
     const world = await played(ladder, pipeline, events);
     const trace = traceOf({ labels: [], size: undefined, priority: 1, parent: undefined }, events, {
       ladder,
+      reviewers: reviewersOf(ladder),
       attemptsPerLevel: 2,
       pipeline,
     });
@@ -3082,7 +3163,7 @@ describe("foreman pipeline trace", () => {
       "exit:approved",
     ]);
     expect(
-      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.rung.name),
+      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.seat.name),
     ).toEqual(["low", "mid", "mid", "high", false]);
     expect(trace.steps.at(-1)?.tip).toBe("c2");
   });
@@ -3090,7 +3171,7 @@ describe("foreman pipeline trace", () => {
   test("stops spend a rung's attempts, then climb", async () => {
     const trace = await agree(THREE, STANDARD_PIPELINES.worktree, ["stop", "stop", "stop"]);
     expect(
-      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.rung.name),
+      trace.steps.map((step) => step.rung?._tag === "Dispatch" && step.rung.seat.name),
     ).toEqual(["low", "low", "mid", "mid"]);
     // The test harness prints no wall text foreman knows, so a wall reads as a stop.
     expect(trace.steps[0]?.offers).not.toContain("wall");
@@ -3099,7 +3180,7 @@ describe("foreman pipeline trace", () => {
   test("a wall moves the author to another account", async () => {
     const trace = await agree(WALLED, STANDARD_PIPELINES.worktree, ["wall"]);
     expect(trace.steps[0]?.offers).toContain("wall");
-    expect(trace.steps.at(-1)?.rung).toMatchObject({ _tag: "Dispatch", rung: { name: "dear" } });
+    expect(trace.steps.at(-1)?.rung).toMatchObject({ _tag: "Dispatch", seat: { name: "dear" } });
   });
 
   test("a failed check returns the task, and a pass sends it on to review", async () => {
@@ -3164,7 +3245,7 @@ describe("a pull-request landing", () => {
     ],
   };
   beforeEach(() =>
-    writeFileSync(drawn, JSON.stringify({ version: 3, pipelines: { test: PULL_REQUEST } })),
+    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: PULL_REQUEST } })),
   );
 
   const steps = (modes: { publish: string; land: string }, extra: object = {}) =>
@@ -3550,6 +3631,7 @@ describe("ladder levels", () => {
       Layer.mergeAll(
         Layer.succeed(Settings, {
           ladder: LEVELS,
+          reviewers: [],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,

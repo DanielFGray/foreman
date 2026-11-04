@@ -582,10 +582,9 @@ const quotaRow = (provider: Provider): ColumnRow => {
   const name = `${provider.provider}${provider.plan === undefined ? "" : ` [${provider.plan}]`}`;
   const news =
     provider.unreadable !== undefined ? "unreadable" : exhausted(provider) ? "out of quota" : "";
-  const stopped =
-    exhausted(provider) && provider.rungs.length > 0
-      ? `  ·  stops: ${provider.rungs.join(", ")}`
-      : "";
+  // A reviewer may share a rung's name, so it is named as one.
+  const seats = [...provider.rungs, ...provider.reviewers.map((name) => `reviewer ${name}`)];
+  const stopped = exhausted(provider) && seats.length > 0 ? `  ·  stops: ${seats.join(", ")}` : "";
   return {
     column: "quota",
     key: provider.provider,

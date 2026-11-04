@@ -367,12 +367,12 @@ describe("Prompts", () => {
       kind: "agent",
       id: "careful",
       role: "review",
-      model: "above",
+      model: "reviewers",
       instructions: "careful",
       stopped: "park",
       exits: [
         { name: "approved", to: "land-gate" },
-        { name: "needs-tests", to: "queue", fails: "self" },
+        { name: "needs-tests", to: "queue", fails: "author" },
       ],
     };
     const previous = process.env["XDG_CONFIG_HOME"];
@@ -389,7 +389,7 @@ describe("Prompts", () => {
       );
       expect(prompt).toContain("Read ts-123456 twice in /tmp/worktree.");
       expect(prompt).toContain(
-        "`foreman exit ts-123456 needs-tests`: the task returns to the queue, and your model is charged with a failure.",
+        "`foreman exit ts-123456 needs-tests`: the task returns to the queue, and the author's model is charged with a failure.",
       );
       expect(prompt).not.toContain("returned");
       expect(prompt).toContain("If you name none, the task parks.");

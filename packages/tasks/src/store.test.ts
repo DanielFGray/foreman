@@ -348,7 +348,7 @@ const schemaOf = (file: string) => {
   }
 };
 
-/** The tables foreman's migrations add (`0002_registry`, `0007_charges_and_parks`); Go does not create them. */
+/** The tables foreman's migrations add (`0002_registry`, `0007_charges_and_parks`, `0010_reviewers`); Go does not create them. */
 const OTHER_TABLES = [
   "charges",
   "parks",
@@ -358,6 +358,7 @@ const OTHER_TABLES = [
   "models",
   "aliases",
   "ladder",
+  "reviewers",
   "prices",
   "runs",
   "defects",

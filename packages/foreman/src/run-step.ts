@@ -6,15 +6,8 @@
 // one copy of the rules.
 import type { Charge, CheckRun, Ending, NewRun, Run } from "tasks";
 import { authoredBy, lapOf, reviewedBy, reviewFailedBy } from "./lap.ts";
-import {
-  authorFor,
-  type Choice,
-  type Ladder,
-  type Rung,
-  reviewerFor,
-  levelSpent,
-  levelPeers,
-} from "./ladder.ts";
+import { authorFor, type Choice, type Ladder, levelSpent, levelPeers } from "./ladder.ts";
+import { drawnBy, reviewerFor, type Reviewer, type Seats } from "./reviewers.ts";
 import type { AgentNode, CheckNode, Exit, Pipeline } from "./pipeline.ts";
 import { QUEUE } from "./pipeline.ts";
 import { attemptsOf, failuresOf, isResearch, type Item, type TaskStatus } from "./records.ts";
@@ -73,9 +66,11 @@ export type RunEvent =
   /** The operator moves the task one rung up for its next author. */
   | { readonly _tag: "Climbed" };
 
-/** The rules a step reads: the ladder, the stop limit, and the drawing the task runs in. */
-export interface StepRules {
-  readonly ladder: Ladder;
+/**
+ * The rules a step reads: the ladder and the reviewers, the stop limit, and the
+ * drawing the task runs in.
+ */
+export interface StepRules extends Seats {
   readonly attemptsPerLevel: number;
   readonly pipeline: Pipeline | undefined;
 }
@@ -120,7 +115,11 @@ export interface RunStep {
   readonly attempt: { readonly rung: string; readonly count: number } | undefined;
   /** A reviewer stop: the reviewer that read a voided approval, and the next reviewer, if any. */
   readonly reviewer:
-    | { readonly ran: string | undefined; readonly said: boolean; readonly next: Rung | undefined }
+    | {
+        readonly ran: string | undefined;
+        readonly said: boolean;
+        readonly next: Reviewer | undefined;
+      }
     | undefined;
 }
 
@@ -146,7 +145,9 @@ export const stepOf = (task: Stepping, event: RunEvent, rules: StepRules): RunSt
         close: { author: "done", review: "stopped", commit: event.tip },
       });
     case "ReviewReturned":
-      return adding(exitCharge(task, reviewedBy(task), rules), { close: { review: "released" } });
+      // A reviewer is no rung, so a review exit charges only the author
+      // (`fails: author`); validation refuses `fails: self` on a review block.
+      return adding(exitCharge(task, undefined, rules), { close: { review: "released" } });
     case "Requeued":
       return step({ close: { author: "released", review: "released" } });
     case "Stalled":
@@ -448,10 +449,11 @@ const retry = (task: Stepping, ending: Ending, rules: StepRules): RunStep => {
 
 /**
  * A reviewer that stopped without a verdict, which is the reviewer's failure,
- * not the author's: the task stays in review for the next review-on rung above
- * the author and every reviewer that stopped this lap. With none left, the
- * task is released and parked. A reviewer that named an exit has not failed,
- * even when a later commit voided it: the same rung may read the new tip.
+ * not the author's: the task stays in review for the next reviewer of its
+ * block (`reviewerFor`), passing over every reviewer that stopped this lap.
+ * With none left, the task is released and parked. A reviewer that named an
+ * exit has not failed, even when a later commit voided it: the same reviewer
+ * may read the new tip.
  */
 const reviewerStop = (task: Stepping, rules: StepRules): RunStep => {
   const ran = reviewedBy(task);
@@ -459,12 +461,15 @@ const reviewerStop = (task: Stepping, rules: StepRules): RunStep => {
     (run) => run.role === "review" && run.open && run.ending !== undefined,
   );
   const failed = [...reviewFailedBy(task), ...(ran === undefined || said ? [] : [ran])];
-  const next = reviewerFor(rules.ladder, authoredBy(task), new Set(), failed);
+  const rule = openAgentOf(rules.pipeline, task)?.block.model ?? "reviewers";
+  const author = rules.ladder.find((rung) => rung.name === authoredBy(task));
+  const choice = reviewerFor(drawnBy(rules.reviewers, rule), author, new Set(), failed);
+  const next = choice._tag === "Dispatch" ? choice.reviewer : undefined;
   const row: Partial<Row> =
     next === undefined
       ? {
           ...releasing({ review: "stopped" }),
-          park: `reviewer ${ran ?? "the reviewer"} stopped without a verdict, and no rung above it is left`,
+          park: `reviewer ${ran ?? "the reviewer"} stopped without a verdict, and no reviewer is left`,
         }
       : { close: { review: "stopped" } };
   return { ...step(row), reviewer: { ran, said, next } };

@@ -20,6 +20,9 @@ const rules: StepRules = {
     { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
     { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
   ],
+  reviewers: [
+    { name: "dear", harness: "test", model: "m-dear", provider: undefined, thinking: "high" },
+  ],
   attemptsPerLevel: 2,
   pipeline: STANDARD_PIPELINES.worktree,
 };
@@ -88,7 +91,7 @@ const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
     fixed({ _tag: "Stopped", ending: "vanished" }),
     (id) => ({ _tag: "AuthorReplaced", run: started(id, "author", "dear") }),
   ],
-  "a stalled reviewer with no rung above parks": [
+  "a stalled reviewer with no reviewer left parks": [
     authorOn("cheap"),
     fixed({ _tag: "ExitNamed", name: "done", commit: "c1" }),
     fixed({ _tag: "HandedOff", tip: "c1" }),

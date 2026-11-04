@@ -113,13 +113,58 @@ export const MIGRATIONS = Migrator.fromRecord({
   "0009_ladder_levels": withViewsRebuilt(
     Effect.gen(function* () {
       const sql = yield* SqlClient;
-      yield* sql.unsafe(LADDER.replace("CREATE TABLE ladder (", "CREATE TABLE ladder_next ("));
+      yield* sql.unsafe(
+        LADDER_LEVELS.replace("CREATE TABLE ladder (", "CREATE TABLE ladder_next ("),
+      );
       yield* sql.unsafe(
         `INSERT INTO ladder_next (rank, level, rung, model, enabled, provider, note, unmetered, author, review)
        SELECT rank, rank, rung, model, enabled, provider, note, unmetered, author, review FROM ladder`,
       );
       yield* sql.unsafe(`DROP TABLE ladder`);
       yield* sql.unsafe(`ALTER TABLE ladder_next RENAME TO ladder`);
+    }),
+  ),
+  // The council becomes the reviewers: a list of its own, each entry a model
+  // with its own thinking level and account, from which a review block takes
+  // its reader. The ladder then decides only who writes, so the rung's review
+  // switch goes. Each council member becomes a reviewer named after the
+  // lowest rung that runs its model, with that rung's account, so the review
+  // runs already recorded under that rung's name read as the reviewer's; a
+  // member no rung runs is named by its model id.
+  //
+  // Each step checks the shape it changes: a test that re-runs the older
+  // migrations brings the council switch and the review column back.
+  "0010_reviewers": withViewsRebuilt(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      yield* sql.unsafe(REVIEWERS);
+      const has = (table: string, column: string) =>
+        sql
+          .unsafe<{ name: string }>(`SELECT name FROM pragma_table_info('${table}')`)
+          .pipe(Effect.map((columns) => columns.some((one) => one.name === column)));
+      if (yield* has("models", "council")) {
+        yield* sql.unsafe(
+          `INSERT OR IGNORE INTO reviewers (reviewer, model, thinking, provider)
+           SELECT coalesce(
+                    (SELECT l.rung FROM ladder l WHERE l.model = m.model
+                      ORDER BY l.level, l.rank LIMIT 1),
+                    m.model),
+                  m.model, m.thinking,
+                  (SELECT l.provider FROM ladder l WHERE l.model = m.model
+                    ORDER BY l.level, l.rank LIMIT 1)
+             FROM models m WHERE m.council <> 0 AND m.retired = 0`,
+        );
+        yield* sql.unsafe(`ALTER TABLE models DROP COLUMN council`);
+      }
+      if (yield* has("ladder", "review")) {
+        yield* sql.unsafe(LADDER.replace("CREATE TABLE ladder (", "CREATE TABLE ladder_next ("));
+        yield* sql.unsafe(
+          `INSERT INTO ladder_next (rank, level, rung, model, enabled, provider, note, unmetered, author)
+           SELECT rank, level, rung, model, enabled, provider, note, unmetered, author FROM ladder`,
+        );
+        yield* sql.unsafe(`DROP TABLE ladder`);
+        yield* sql.unsafe(`ALTER TABLE ladder_next RENAME TO ladder`);
+      }
     }),
   ),
 });
@@ -146,7 +191,7 @@ function withViewsRebuilt<E>(rebuild: Effect.Effect<void, E, SqlClient>) {
  * The ladder as `0009_ladder_levels` leaves it: `rank` is the order of the
  * whole list and `level` groups it, so readers sort by (level, rank).
  */
-const LADDER = `CREATE TABLE ladder (
+const LADDER_LEVELS = `CREATE TABLE ladder (
     rank      INTEGER PRIMARY KEY,       -- the order by (level, rank); rewritten by every ladder write
     level     INTEGER NOT NULL,          -- levels climb in number; the rungs of one level are peers
     rung      TEXT NOT NULL UNIQUE,      -- foreman rung name
@@ -157,6 +202,32 @@ const LADDER = `CREATE TABLE ladder (
     unmetered INTEGER NOT NULL DEFAULT 0,
     author    INTEGER NOT NULL DEFAULT 1, -- may take the ladder (author) rule
     review    INTEGER NOT NULL DEFAULT 1  -- may take the above (review) rule
+  )`;
+
+/** The ladder as `0010_reviewers` leaves it: a rung only writes, so it has no review switch. */
+const LADDER = `CREATE TABLE ladder (
+    rank      INTEGER PRIMARY KEY,       -- the order by (level, rank); rewritten by every ladder write
+    level     INTEGER NOT NULL,          -- levels climb in number; the rungs of one level are peers
+    rung      TEXT NOT NULL UNIQUE,      -- foreman rung name
+    model     TEXT NOT NULL REFERENCES models(model),
+    enabled   INTEGER NOT NULL DEFAULT 1,
+    provider  TEXT,                      -- foreman provider field, when one is set
+    note      TEXT,
+    unmetered INTEGER NOT NULL DEFAULT 0,
+    author    INTEGER NOT NULL DEFAULT 1  -- may take the ladder (author) rule
+  )`;
+
+/**
+ * The reviewers a review block takes its reader from. A review run records
+ * its reviewer's name in `runs.rung`, as an author run records its rung's.
+ * The run's work says which list the name is in, so a reviewer may share a
+ * rung's name.
+ */
+const REVIEWERS = `CREATE TABLE IF NOT EXISTS reviewers (
+    reviewer TEXT PRIMARY KEY,           -- the name review runs record
+    model    TEXT NOT NULL REFERENCES models(model),
+    thinking TEXT NOT NULL,              -- this entry's level, apart from the model row's
+    provider TEXT                        -- the account it spends, where the model does not say
   )`;
 
 export const MIGRATIONS_TABLE = "tasks_migrations";

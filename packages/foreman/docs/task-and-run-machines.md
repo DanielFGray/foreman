@@ -144,10 +144,10 @@ the row opens.
 | `ReviewStarted` | | close `done` at the run's commit | close `released` | | review |
 | `ExitNamed` | reopen if the exit's wire goes to `queue` | name the exit on the open agent run | the same | | |
 | `HandedOff` | | close `done` at the tip | close `stopped` | the exit's `fails` | |
-| `ReviewReturned` | | | close `released` | the exit's `fails`, `self` = the reviewer's rung | |
+| `ReviewReturned` | | | close `released` | the exit's `fails` (a review block names only `author`) | |
 | `Requeued` | | close `released` | close `released` | | |
 | `Stalled`, block says `park` | reopen | close `stopped` | close `stopped` | park | |
-| `Stalled` reviewer, a rung above is left | | | close `stopped` | | |
+| `Stalled` reviewer, a reviewer is left | | | close `stopped` | | |
 | `Stalled` reviewer, none left | reopen | close `released` | close `stopped` | park | |
 | `Stalled` author, `Stopped` | reopen | close `stopped` or `vanished` | close `released` | climb if the stop spends the rung | |
 | `Walled` author | reopen | close `walled` | close `released` | | |
@@ -162,8 +162,9 @@ the row opens.
 - **An exit stands.** A close writes its ending only on a run with no exit.
   An author run that named an exit keeps the commit it named it on.
 - **Charges.** `fails: author` is a climb: it charges the rung of the task's
-  last author run. `fails: self` charges the rung of the block that named the
-  exit; a check has no rung, so it charges nothing.
+  last author run. `fails: self` charges the rung of the author block that named
+  the exit; a check and a reviewer have no rung, so the drawing check refuses it
+  there.
 - **Skip rule.** `Records` skips a tracker move to the status the task already
   has.
 - **Exit moves come from the drawing.** The exit's wire decides whether naming

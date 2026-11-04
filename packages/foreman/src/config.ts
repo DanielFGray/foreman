@@ -2,7 +2,8 @@ import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, Layer, Path, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
-import { readLadder, RegistryError } from "./registry.ts";
+import { readLadder, readReviewers, RegistryError } from "./registry.ts";
+import type { Reviewer } from "./reviewers.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
 export class Settings extends Context.Service<Settings, SettingsShape>()("Settings") {}
@@ -53,9 +54,12 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       ),
     );
 
-    // The ladder is the registry's, not the config file's: one copy of the
-    // order, shared with the herd skill and the trial record.
-    const ladder = yield* readLadder.pipe(
+    // The ladder and the reviewers are the registry's, not the config file's:
+    // one copy of each list, shared with the herd skill and the trial record.
+    const { ladder, reviewers } = yield* Effect.all({
+      ladder: readLadder,
+      reviewers: readReviewers,
+    }).pipe(
       Effect.mapError(
         (cause) =>
           new ConfigError({
@@ -85,18 +89,20 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       });
     }
 
-    // A rung whose account cannot be named is dispatched blind: foreman
+    // A rung or reviewer whose account cannot be named is dispatched blind: foreman
     // cannot ask whether it has room left, so the fleet learns it is out of
     // quota by spending a run on it. Not an error — a ladder that works
     // today keeps working — but the operator is the only one who can say
     // which plan a bare harness is signed in to, so they are told which rung
     // to write it on. The claude harness is never blind: it always spends
     // the claude.ai account.
-    const blind = dispatchable(ladder).filter((rung) => providerOf(rung) === undefined);
+    const blind = [...dispatchable(ladder), ...reviewers].filter(
+      (seat) => providerOf(seat) === undefined,
+    );
     if (blind.length > 0) {
       yield* Effect.logWarning(
         `no provider derivable for ${blind
-          .map((rung) => `"${rung.name}"`)
+          .map((seat) => `"${seat.name}"`)
           .join(
             ", ",
           )} in the registry — set "provider" on each so foreman can read its remaining quota before dispatching`,
@@ -105,6 +111,7 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
 
     return {
       ladder,
+      reviewers,
       pollInterval: raw.pollSeconds,
       // The signal path is appended to this, so a trailing slash would send
       // every span to a doubled path the collector does not serve.
@@ -120,6 +127,9 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
 
 interface SettingsShape {
   readonly ladder: Ladder;
+
+  /** The list a review block takes its reader from (`src/reviewers.ts`). */
+  readonly reviewers: ReadonlyArray<Reviewer>;
   readonly pollInterval: number;
   readonly staleAfter: number;
 

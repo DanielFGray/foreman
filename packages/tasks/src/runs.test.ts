@@ -360,7 +360,7 @@ describe("the exits migration", () => {
         yield* sql.unsafe(
           `DELETE FROM tasks_migrations
            WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council',
-                          'ladder_levels')`,
+                          'ladder_levels', 'reviewers')`,
         );
         const endings = [
           ["build", "handed-off"],
@@ -399,8 +399,8 @@ describe("the exits migration", () => {
   });
 });
 
-describe("the council migration", () => {
-  test("adds the council switch to a store that has the registry tables, every model off", async () => {
+describe("the reviewers migration", () => {
+  test("makes each council member a reviewer, and drops the council and review switches", async () => {
     const file = join(dir, `store-${++files}.db`);
     const at = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
       Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
@@ -410,26 +410,49 @@ describe("the council migration", () => {
         yield* sql.unsafe(
           `INSERT INTO pools (pool, harness, provider_default) VALUES ('P', 'pi', 'p')`,
         );
-        yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, tier, limit_scope)
-          VALUES ('m1', 'p', 'P', 'pi', 'frontier', 'pool')`);
-        yield* sql.unsafe(`ALTER TABLE models DROP COLUMN council`);
-        yield* sql.unsafe(
-          `DELETE FROM tasks_migrations WHERE name IN ('council', 'ladder_levels')`,
-        );
+        yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, tier, limit_scope, thinking)
+          VALUES ('m1', 'p', 'P', 'pi', 'frontier', 'pool', 'low'),
+                 ('m2', 'p', 'P', 'pi', 'frontier', 'pool', 'medium'),
+                 ('m3', 'p', 'P', 'pi', 'frontier', 'pool', 'medium')`);
+        // The store as migration 0009 left it: a council switch on the model
+        // and a review switch on the rung.
+        yield* sql.unsafe(`ALTER TABLE models ADD COLUMN council INTEGER NOT NULL DEFAULT 0`);
+        yield* sql.unsafe(`UPDATE models SET council = 1 WHERE model IN ('m1', 'm2')`);
+        yield* sql.unsafe(`ALTER TABLE ladder ADD COLUMN review INTEGER NOT NULL DEFAULT 1`);
+        yield* sql.unsafe(`INSERT INTO ladder (rank, level, rung, model, provider, review) VALUES
+          (1, 1, 'cheap', 'm3', NULL, 1), (2, 2, 'dear', 'm1', 'acct', 0), (3, 3, 'dearer', 'm1', NULL, 1)`);
+        yield* sql.unsafe(`DROP TABLE reviewers`);
+        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'reviewers'`);
       }),
     );
-    const rows = await at(
+    const after = await at(
       Effect.gen(function* () {
         const sql = yield* SqlClient;
-        return yield* sql<{ model: string; council: number }>`SELECT model, council FROM models`;
+        const reviewers = yield* sql<{
+          reviewer: string;
+          model: string;
+          thinking: string;
+          provider: string | null;
+        }>`SELECT reviewer, model, thinking, provider FROM reviewers ORDER BY reviewer`;
+        const columns = yield* sql<{ name: string }>`
+          SELECT name FROM pragma_table_info('models')
+          UNION ALL SELECT name FROM pragma_table_info('ladder')`;
+        const rungs = yield* sql<{ rung: string }>`SELECT rung FROM ladder ORDER BY rank`;
+        return { reviewers, columns: columns.map((column) => column.name), rungs };
       }),
     );
-    expect(rows).toEqual([{ model: "m1", council: 0 }]);
+    expect(after.reviewers).toEqual([
+      { reviewer: "dear", model: "m1", thinking: "low", provider: "acct" },
+      { reviewer: "m2", model: "m2", thinking: "medium", provider: null },
+    ]);
+    expect(after.columns).not.toContain("council");
+    expect(after.columns).not.toContain("review");
+    expect(after.rungs.map((row) => row.rung)).toEqual(["cheap", "dear", "dearer"]);
   });
 });
 
 describe("lastStarts", () => {
-  test("reads the newest start of each rung's runs, author and review alike", async () => {
+  test("reads the newest start of each name's runs of one role", async () => {
     const starts = await inStore(
       Effect.gen(function* () {
         const sql = yield* SqlClient;
@@ -438,15 +461,17 @@ describe("lastStarts", () => {
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'a', '2026-01-01 10:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'a', '2026-01-02 10:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'review', 'b', '2026-01-03 09:00:00', NULL),
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'review', 'a', '2026-01-05 09:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', NULL, '2026-01-04 09:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'c', NULL, NULL)`);
-        return yield* lastStarts;
+        return { author: yield* lastStarts("author"), review: yield* lastStarts("review") };
       }),
     );
-    expect(starts).toEqual(
+    expect(starts.author).toEqual(new Map([["a", new Date("2026-01-02T10:00:00Z")]]));
+    expect(starts.review).toEqual(
       new Map([
-        ["a", new Date("2026-01-02T10:00:00Z")],
         ["b", new Date("2026-01-03T09:00:00Z")],
+        ["a", new Date("2026-01-05T09:00:00Z")],
       ]),
     );
   });
@@ -474,19 +499,21 @@ describe("the ladder levels migration", () => {
           author INTEGER NOT NULL DEFAULT 1, review INTEGER NOT NULL DEFAULT 1)`);
         yield* sql.unsafe(`INSERT INTO ladder (rank, rung, model, review) VALUES
           (1, 'cheap', 'm1', 1), (2, 'dear', 'm1', 0)`);
-        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'ladder_levels'`);
+        yield* sql.unsafe(
+          `DELETE FROM tasks_migrations WHERE name IN ('ladder_levels', 'reviewers')`,
+        );
       }),
     );
     const rows = await at(
       Effect.gen(function* () {
         const sql = yield* SqlClient;
-        return yield* sql<{ rank: number; level: number; rung: string; review: number }>`
-          SELECT rank, level, rung, review FROM ladder ORDER BY rank`;
+        return yield* sql<{ rank: number; level: number; rung: string }>`
+          SELECT rank, level, rung FROM ladder ORDER BY rank`;
       }),
     );
     expect(rows).toEqual([
-      { rank: 1, level: 1, rung: "cheap", review: 1 },
-      { rank: 2, level: 2, rung: "dear", review: 0 },
+      { rank: 1, level: 1, rung: "cheap" },
+      { rank: 2, level: 2, rung: "dear" },
     ]);
   });
 });

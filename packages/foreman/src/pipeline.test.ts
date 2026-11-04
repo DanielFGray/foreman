@@ -12,6 +12,7 @@ import {
   type PipelineNode,
   place,
   problemsOf,
+  type SeatOffers,
   QUEUE,
   routeWorkspace,
   choiceOf,
@@ -50,7 +51,10 @@ const at = (pipeline: Pipeline, over: Partial<Facts>) => {
     : placement;
 };
 
-const RUNGS = ["cheap", "strong"].map((name) => ({ name, author: true, review: true }));
+const OFFERS: SeatOffers = {
+  rungs: ["cheap", "strong"].map((name) => ({ name, author: true })),
+  reviewers: ["sharp"],
+};
 
 /** The block with each exit that does not return to the queue wired to `to`. */
 const onward = <N extends AgentNode | CheckNode>(node: N, to: string): N => ({
@@ -270,7 +274,7 @@ describe("placement on a drawn pipeline", () => {
         kind: "agent",
         id: "read",
         role: "review",
-        model: "above",
+        model: "reviewers",
         exits: [
           { name: "approved", to: "ship" },
           { name: "returned", to: "queue", fails: "author" },
@@ -282,7 +286,7 @@ describe("placement on a drawn pipeline", () => {
   };
 
   test("is valid", () => {
-    expect(problemsOf(triage, RUNGS)).toEqual([]);
+    expect(problemsOf(triage, OFFERS)).toEqual([]);
   });
 
   test("the first source whose filter matches takes the task", () => {
@@ -351,7 +355,7 @@ describe("validation", () => {
   )!;
 
   test("the standard pipeline is valid", () => {
-    expect(problemsOf(STANDARD_PIPELINES.worktree, RUNGS)).toEqual([]);
+    expect(problemsOf(STANDARD_PIPELINES.worktree, OFFERS)).toEqual([]);
   });
 
   describe("a pull-request land", () => {
@@ -388,14 +392,14 @@ describe("validation", () => {
     };
 
     test("is valid with a publish gate and a land gate after the review", () => {
-      expect(problemsOf(landingBy(["publish", "land"]), RUNGS)).toEqual([]);
+      expect(problemsOf(landingBy(["publish", "land"]), OFFERS)).toEqual([]);
     });
 
     test("names the gate it is missing", () => {
-      expect(problemsOf(landingBy(["land"]), RUNGS)).toContain(
+      expect(problemsOf(landingBy(["land"]), OFFERS)).toContain(
         "a route from review reaches land with no publish gate after it",
       );
-      expect(problemsOf(landingBy(["publish"]), RUNGS)).toContain(
+      expect(problemsOf(landingBy(["publish"]), OFFERS)).toContain(
         "a route from review reaches land with no land gate after it",
       );
     });
@@ -407,7 +411,7 @@ describe("validation", () => {
           node.kind === "land" ? { ...node, how: "merge" as const } : node,
         ),
       };
-      expect(problemsOf(merging, RUNGS)).toContain(
+      expect(problemsOf(merging, OFFERS)).toContain(
         "publish-gate gates publish, but no route from it reaches a pull-request land",
       );
     });
@@ -422,7 +426,7 @@ describe("validation", () => {
 
   test("each standard workspace choice is valid, and is named by its blocks", () => {
     for (const choice of WORKSPACE_CHOICES) {
-      expect(problemsOf(STANDARD_PIPELINES[choice], RUNGS)).toEqual([]);
+      expect(problemsOf(STANDARD_PIPELINES[choice], OFFERS)).toEqual([]);
       expect(choiceOf(STANDARD_PIPELINES[choice])).toBe(choice);
     }
     const kinds = STANDARD_PIPELINES.direct.nodes.map((node) => node.kind);
@@ -444,7 +448,7 @@ describe("validation", () => {
           { kind: "land", id: "queue" },
         ],
       },
-      RUNGS,
+      OFFERS,
     );
     expect(problems).toEqual([
       "two blocks are named queue",
@@ -466,9 +470,9 @@ describe("validation", () => {
             { name: "returned", to: "queue", fails: "author" },
           ],
         }),
-        RUNGS,
+        OFFERS,
       ),
-    ).toEqual(["review: a reviewer reads above its author, not from the ladder's foot"]);
+    ).toEqual(["review: a reviewer reads from the reviewers, not from the ladder"]);
     expect(
       problemsOf(
         replace({
@@ -481,7 +485,7 @@ describe("validation", () => {
             { name: "already-done", to: "review-gate" },
           ],
         }),
-        RUNGS,
+        OFFERS,
       ),
     ).toEqual(["author: gone is no rung on the ladder"]);
     expect(
@@ -496,24 +500,53 @@ describe("validation", () => {
             { name: "already-done", to: "review-gate" },
           ],
         }),
-        [
-          { name: "cheap", author: false, review: true },
-          { name: "strong", author: true, review: true },
-        ],
+        {
+          rungs: [
+            { name: "cheap", author: false },
+            { name: "strong", author: true },
+          ],
+          reviewers: [],
+        },
       ),
     ).toEqual(["author: cheap may not author"]);
+    // A rung is no reviewer, even when a reviewer has the same model.
+    expect(problemsOf(replace({ ...reviewBlock, model: "strong" }), OFFERS)).toEqual([
+      "review: strong is no reviewer",
+    ]);
+    expect(problemsOf(replace({ ...reviewBlock, model: "sharp" }), OFFERS)).toEqual([]);
     expect(
-      problemsOf(replace({ ...reviewBlock, model: "strong" }), [
-        { name: "cheap", author: true, review: true },
-        { name: "strong", author: true, review: false },
-      ]),
-    ).toEqual(["review: strong may not review"]);
+      problemsOf(
+        replace({
+          kind: "agent",
+          id: "author",
+          role: "author",
+          model: "reviewers",
+          exits: [
+            { name: "done", to: "review-gate" },
+            { name: "already-done", to: "review-gate" },
+          ],
+        }),
+        OFFERS,
+      ),
+    ).toEqual(["author: an author writes from the ladder, not from the reviewers"]);
+  });
+
+  test("refuses a review exit that fails the reviewer itself", () => {
+    const selfFailing = replace({
+      ...reviewBlock,
+      exits: reviewBlock.exits.map((exit) =>
+        exit.name === "returned" ? { ...exit, fails: "self" as const } : exit,
+      ),
+    });
+    expect(problemsOf(selfFailing, OFFERS)).toContain(
+      "review: a reviewer is no rung, so returned has none to fail",
+    );
   });
 
   test("refuses a wire back to an earlier block", () => {
     const problems = problemsOf(
       replace({ kind: "gate", id: "land-gate", step: "land", next: "author" }),
-      RUNGS,
+      OFFERS,
     );
     expect(problems[0]).toMatch(/^the wires loop through .*author.*nothing ends the loop/);
     expect(problems).toContain("no source reaches land");
@@ -521,7 +554,10 @@ describe("validation", () => {
 
   test("refuses a route to a land that skips review", () => {
     expect(
-      problemsOf(replace({ kind: "gate", id: "review-gate", step: "review", next: "land" }), RUNGS),
+      problemsOf(
+        replace({ kind: "gate", id: "review-gate", step: "review", next: "land" }),
+        OFFERS,
+      ),
     ).toEqual([
       "no source reaches review",
       "no source reaches land-gate",
@@ -540,7 +576,7 @@ describe("validation", () => {
           kind: "agent",
           id: "review",
           role: "review",
-          model: "above",
+          model: "reviewers",
           exits: [
             { name: "approved", to: "g2" },
             { name: "returned", to: "queue", fails: "author" },
@@ -561,7 +597,7 @@ describe("validation", () => {
         { kind: "land", id: "land" },
       ],
     };
-    expect(problemsOf(backwards, RUNGS)).toEqual([
+    expect(problemsOf(backwards, OFFERS)).toEqual([
       "a route from author reaches land with no review after it",
     ]);
   });
@@ -573,13 +609,13 @@ describe("validation", () => {
           kind: "agent",
           id: "review",
           role: "review",
-          model: "above",
+          model: "reviewers",
           exits: [
             { name: "approved", to: "land" },
             { name: "returned", to: "queue", fails: "author" },
           ],
         }),
-        RUNGS,
+        OFFERS,
       ),
     ).toEqual(["no source reaches land-gate", "a route from review reaches land through no gate"]);
     expect(
@@ -591,7 +627,7 @@ describe("validation", () => {
             { kind: "worktree", id: "worktree", next: "start" },
           ],
         },
-        RUNGS,
+        OFFERS,
       ),
     ).toEqual(["no source reaches retry", "no source reaches climb"]);
   });
@@ -606,7 +642,7 @@ describe("validation", () => {
         ...without("queue", "worktree", "retry", "start", "climb"),
       ],
     };
-    expect(problemsOf(ungated, RUNGS)).toEqual([
+    expect(problemsOf(ungated, OFFERS)).toEqual([
       "a route from queue reaches author through no gate",
     ]);
   });
@@ -653,7 +689,7 @@ describe("a check block", () => {
     placement._tag === "At" ? `${placement.node.id} ${placement.state}` : placement._tag;
 
   test("is valid where a gate stands before it and an author before that", () => {
-    expect(problemsOf(checked, RUNGS)).toEqual([]);
+    expect(problemsOf(checked, OFFERS)).toEqual([]);
   });
 
   test("waits after the author hands off, and counts as a block ahead", () => {
@@ -688,7 +724,7 @@ describe("a check block", () => {
           node.id === "lint" && node.kind === "check" ? onward(node, "land-gate") : node,
         ),
     };
-    expect(problemsOf(unreviewed, RUNGS)).toEqual([
+    expect(problemsOf(unreviewed, OFFERS)).toEqual([
       "a route from queue reaches land with no review after it",
       "a route from author reaches land with no review after it",
     ]);
@@ -702,7 +738,7 @@ describe("a check block", () => {
           node.id === "author" && node.kind === "agent" ? onward(node, "lint") : node,
         ),
     };
-    expect(problemsOf(ungated, RUNGS)).toEqual([
+    expect(problemsOf(ungated, OFFERS)).toEqual([
       "a route from author reaches lint through no gate",
     ]);
 
@@ -725,14 +761,14 @@ describe("a check block", () => {
         ),
       ],
     };
-    expect(problemsOf(first, RUNGS)).toEqual([
+    expect(problemsOf(first, OFFERS)).toEqual([
       "a route from queue reaches lint with no author before it",
     ]);
 
     const silent: Pipeline = {
       nodes: checked.nodes.map((node) => (node.id === "lint" ? { ...node, command: " " } : node)),
     };
-    expect(problemsOf(silent, RUNGS)).toEqual(["lint: a check runs a command, and it names none"]);
+    expect(problemsOf(silent, OFFERS)).toEqual(["lint: a check runs a command, and it names none"]);
   });
 
   test("is drawn with its command", () => {
@@ -783,7 +819,7 @@ describe("workspace blocks", () => {
 
   test("each of the three shapes is valid, and places the agent in its workspace", () => {
     for (const pipeline of [STANDARD_PIPELINES.worktree, branchOnly, direct]) {
-      expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+      expect(problemsOf(pipeline, OFFERS)).toEqual([]);
     }
     expect(workspaceOf(STANDARD_PIPELINES.worktree)).toEqual(["author", "worktree"]);
     expect(workspaceOf(branchOnly)).toEqual(["author", "branch"]);
@@ -813,21 +849,21 @@ describe("workspace blocks", () => {
   });
 
   test("refuses a worktree with no branch before it", () => {
-    expect(problemsOf(drop(STANDARD_PIPELINES.worktree, "branch", "worktree"), RUNGS)).toEqual([
+    expect(problemsOf(drop(STANDARD_PIPELINES.worktree, "branch", "worktree"), OFFERS)).toEqual([
       "a route from queue reaches worktree with no branch before it",
       "a route from queue reaches land with no branch before it",
     ]);
   });
 
   test("refuses a land with no branch before it", () => {
-    expect(problemsOf(drop(branchOnly, "branch", "retry"), RUNGS)).toEqual([
+    expect(problemsOf(drop(branchOnly, "branch", "retry"), OFFERS)).toEqual([
       "a route from queue reaches land with no branch before it",
     ]);
   });
 
   test("refuses a route from a branch that ends at done", () => {
     expect(
-      problemsOf(swap(STANDARD_PIPELINES.worktree, { kind: "done", id: "land" }), RUNGS),
+      problemsOf(swap(STANDARD_PIPELINES.worktree, { kind: "done", id: "land" }), OFFERS),
     ).toEqual(["a route from branch ends at land: work on this branch never lands"]);
   });
 
@@ -842,20 +878,20 @@ describe("workspace blocks", () => {
         { name: "already-done", to: "land-gate" },
       ],
     });
-    expect(problemsOf(unreviewed, RUNGS)).toContain(
+    expect(problemsOf(unreviewed, OFFERS)).toContain(
       "a route from author reaches land with no review after it",
     );
     const ungated = swap(direct, {
       kind: "agent",
       id: "review",
       role: "review",
-      model: "above",
+      model: "reviewers",
       exits: [
         { name: "approved", to: "land" },
         { name: "returned", to: "queue", fails: "author" },
       ],
     });
-    expect(problemsOf(ungated, RUNGS)).toContain(
+    expect(problemsOf(ungated, OFFERS)).toContain(
       "a route from review reaches land through no gate",
     );
   });
@@ -874,7 +910,7 @@ test("refuses a workspace block after an agent", () => {
       .filter((node) => node.id !== "branch" && node.id !== "worktree")
       .concat([{ kind: "branch", id: "late", next: "review-gate" }]),
   };
-  expect(problemsOf(late, RUNGS)).toEqual([
+  expect(problemsOf(late, OFFERS)).toEqual([
     "a route from author reaches late: a route's workspace is set before its first agent",
   ]);
 });
@@ -891,13 +927,13 @@ describe("a cycle", () => {
   });
 
   test("is a problem when no exit on it fails a rung and no router leaves it on a count", () => {
-    expect(problemsOf(looped({ name: "returned", to: "start" }), RUNGS)).toEqual([
+    expect(problemsOf(looped({ name: "returned", to: "start" }), OFFERS)).toEqual([
       "the wires loop through author, start, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
     ]);
   });
 
   test("is valid when an exit on it fails a rung", () => {
-    expect(problemsOf(looped({ name: "returned", to: "start", fails: "author" }), RUNGS)).toEqual(
+    expect(problemsOf(looped({ name: "returned", to: "start", fails: "author" }), OFFERS)).toEqual(
       [],
     );
   });
@@ -915,7 +951,7 @@ describe("a cycle", () => {
         { kind: "park", id: "operator" },
       ],
     };
-    expect(problemsOf(counted, RUNGS)).toEqual([]);
+    expect(problemsOf(counted, OFFERS)).toEqual([]);
   });
 
   test("is a problem when its router counts an exit no block on it declares", () => {
@@ -931,7 +967,7 @@ describe("a cycle", () => {
         { kind: "park", id: "operator" },
       ],
     };
-    expect(problemsOf(miscounted, RUNGS)).toEqual([
+    expect(problemsOf(miscounted, OFFERS)).toEqual([
       "the wires loop through author, start, count, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
     ]);
   });
@@ -950,7 +986,7 @@ describe("a cycle", () => {
         },
       ],
     };
-    expect(problemsOf(spin, RUNGS)).toContainEqual(
+    expect(problemsOf(spin, OFFERS)).toContainEqual(
       "the wires loop through climb, spin with no work block on the loop",
     );
   });
@@ -964,12 +1000,12 @@ describe("exits", () => {
     kind: "agent",
     id: "review",
     role: "review",
-    model: "above",
+    model: "reviewers",
     exits,
   });
 
   test("an agent names at least one, each unique, lower-case and wired", () => {
-    expect(problemsOf(replace(review([])), RUNGS)).toContain(
+    expect(problemsOf(replace(review([])), OFFERS)).toContain(
       "review: an agent names an exit to end its run, and it declares none",
     );
     expect(
@@ -983,7 +1019,7 @@ describe("exits", () => {
             { name: "loose", to: "nowhere" },
           ]),
         ),
-        RUNGS,
+        OFFERS,
       ),
     ).toEqual([
       "review is wired to nowhere, which is no block",

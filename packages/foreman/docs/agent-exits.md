@@ -70,7 +70,7 @@ one included. The operator writes the rest of the prompt.
 `exits`:
 
 ```jsonc
-{ "kind": "agent", "id": "review", "role": "review", "model": "above",
+{ "kind": "agent", "id": "review", "role": "review", "model": "reviewers",
   "instructions": "review",          // a file under ~/.config/foreman/prompts/
   "rounds": 2,                       // correction rounds this reviewer may send
   "exits": [
@@ -83,11 +83,11 @@ one included. The operator writes the rest of the prompt.
 
 - `to` is a block id, or `queue` for a return.
 - `fails` charges a rung when the exit is named. `author` charges the rung of
-  the task's last author run (today's `climb`), and `self` charges this block's
-  rung. When it is absent, the exit charges no rung.
+  the task's last author run (today's `climb`), and `self` charges this author
+  block's rung; a review block may not name `self`, since a reviewer is no rung. When it is absent, the exit charges no rung.
 - `stopped: retry` keeps the task at the block. The block's model rule then
-  picks the next rung, as today: `ladder` counts an attempt and climbs when the
-  rung is spent, and `above` reads above every reviewer that stopped.
+  picks the next seat: `ladder` counts an attempt and climbs when the level is
+  spent, and `reviewers` passes over every reviewer that stopped.
   `stopped: park` parks the task.
 
 **Check block.** It has the exits `passed` and `failed`, wired like an agent's.

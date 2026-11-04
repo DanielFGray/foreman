@@ -1,6 +1,7 @@
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunServices } from "@effect/platform-bun";
+import type { PerRole } from "./agent-rung.ts";
 import {
   Clock,
   Context,
@@ -110,16 +111,23 @@ export const exhausted = (usage: Usage): boolean =>
   usage.allowances.some((allowance) => allowance.usedPercent >= 100);
 
 /**
- * Every rung a spent account stops paying for.
+ * Every rung and every reviewer a spent account stops paying for, per role.
  *
  * The one derivation of "unaffordable" in the tree. Both the gate that passes
  * a task over and the dispatch that picks its agent read this, so they cannot
  * come to different answers about the same reading.
  */
-export const walledRungs = (
-  providers: ReadonlyArray<Usage & { readonly rungs: ReadonlyArray<string> }>,
-): ReadonlySet<string> =>
-  new Set(providers.filter(exhausted).flatMap((provider) => provider.rungs));
+export const walledSeats = (
+  providers: ReadonlyArray<
+    Usage & { readonly rungs: ReadonlyArray<string>; readonly reviewers: ReadonlyArray<string> }
+  >,
+): PerRole<ReadonlySet<string>> => {
+  const spent = providers.filter(exhausted);
+  return {
+    author: new Set(spent.flatMap((provider) => provider.rungs)),
+    review: new Set(spent.flatMap((provider) => provider.reviewers)),
+  };
+};
 
 /** A reading that cannot change again until the instant the provider named. */
 export interface Spent {

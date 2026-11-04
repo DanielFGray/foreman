@@ -22,6 +22,8 @@
 import { Graph, Option, Schema as S } from "effect";
 import { PROCESS_ENDINGS } from "tasks/endings";
 import type { TaskStatus } from "./records.ts";
+import { mayAuthor } from "./ladder.ts";
+import type { Seats } from "./reviewers.ts";
 import { STEPS, type Step } from "./policy.ts";
 
 /** The `to` of an exit that returns the task to the queue. */
@@ -31,7 +33,8 @@ export const QUEUE = "queue";
  * A name that ends a run, wired to the block that comes next, or to `queue`.
  *
  * `fails` charges a rung when the exit is named: `author` the rung of the
- * task's last author run, `self` the rung of the block that named it.
+ * task's last author run, `self` the rung of the author block that named it.
+ * A reviewer is no rung, so a review block names only `author`.
  */
 export const Exit = S.Struct({
   name: S.String,
@@ -67,14 +70,15 @@ export const GateNode = S.Struct({
 /**
  * Runs an agent on the task.
  *
- * `model` is `ladder` (an author on an author-enabled rung of the lowest level
- * above the task's failures, the peer that started least recently), `above` (a reviewer on the next review-enabled rung above
- * the author), or a rung name, which pins the block to that rung — and that
- * rung must allow the block's role. `slots` caps how many of this block's
+ * `model` is, for an author, `ladder` (an author-enabled rung of the lowest
+ * level above the task's failures, the peer that started least recently) or a
+ * rung name that allows authoring; for a reviewer, `reviewers` (the reviewer
+ * that read least recently, off a spent account, preferring a model other than
+ * the author's) or the name of one reviewer. `slots` caps how many of this block's
  * tasks run at once, inside the fleet's own limit. `exits` are the names the
  * agent may end its run with. `stopped` is what follows a run that named none:
  * `retry` (the default) keeps the task at the block, and the model rule picks
- * the next rung; `park` parks it. `instructions` names the operator's text for
+ * the next rung or reviewer; `park` parks it. `instructions` names the operator's text for
  * the agent, a file `<name>.md`; it defaults to the role.
  */
 export const AgentNode = S.Struct({
@@ -390,12 +394,20 @@ export const nextAgent = (
   return undefined;
 };
 
-/** A rung a block may pin, and whether it may author and review. */
-export interface RungOffer {
-  readonly name: string;
-  readonly author: boolean;
-  readonly review: boolean;
+/**
+ * What an agent block may name: the rungs, each with whether it may author,
+ * and the reviewers.
+ */
+export interface SeatOffers {
+  readonly rungs: ReadonlyArray<{ readonly name: string; readonly author: boolean }>;
+  readonly reviewers: ReadonlyArray<string>;
 }
+
+/** What the ladder and the reviewers offer an agent block to name. */
+export const offersOf = (seats: Seats): SeatOffers => ({
+  rungs: seats.ladder.map((rung) => ({ name: rung.name, author: mayAuthor(rung) })),
+  reviewers: seats.reviewers.map((reviewer) => reviewer.name),
+});
 
 /**
  * Why a pipeline cannot run, or nothing when it can.
@@ -404,11 +416,8 @@ export interface RungOffer {
  * falls back to the standard pipeline, because running a flow the operator did
  * not draw is worse than stopping.
  */
-export const problemsOf = (
-  pipeline: Pipeline,
-  rungs: ReadonlyArray<RungOffer>,
-): ReadonlyArray<string> => {
-  const shape = shapeProblems(pipeline, rungs);
+export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArray<string> => {
+  const shape = shapeProblems(pipeline, offers);
   if (shape.length > 0) return shape;
 
   const wired = graphOf(pipeline);
@@ -768,7 +777,7 @@ function standardPipeline(
         kind: "agent",
         id: "review",
         role: "review",
-        model: "above",
+        model: "reviewers",
         exits: [
           { name: "approved", to: "land-gate" },
           { name: "returned", to: "climb", fails: "author" },
@@ -862,7 +871,7 @@ const termTest = (term: string): Term["test"] | undefined => {
 };
 
 /** The checks that need no walk: names, wires, exits, filters and models. */
-const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<RungOffer>): Array<string> => {
+const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> => {
   const problems: Array<string> = [];
   const ids = new Set<string>();
   for (const node of pipeline.nodes) {
@@ -881,7 +890,7 @@ const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<RungOffer>): Arr
       if (parsed._tag === "Invalid") problems.push(`${node.id}: ${parsed.reason}`);
     }
     if (node.kind === "agent" || node.kind === "check") problems.push(...exitProblems(node));
-    if (node.kind === "agent") problems.push(...modelProblems(node, rungs));
+    if (node.kind === "agent") problems.push(...modelProblems(node, offers));
     if (node.kind === "check" && node.command.trim() === "") {
       problems.push(`${node.id}: a check runs a command, and it names none`);
     }
@@ -892,6 +901,7 @@ const shapeProblems = (pipeline: Pipeline, rungs: ReadonlyArray<RungOffer>): Arr
 const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
   const problems: Array<string> = [];
   const names = node.exits.map((exit) => exit.name);
+  const unseated = unseatedBy(node);
   if (node.kind === "agent" && names.length === 0) {
     problems.push(`${node.id}: an agent names an exit to end its run, and it declares none`);
   }
@@ -908,31 +918,37 @@ const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
     if ((PROCESS_ENDINGS as ReadonlyArray<string>).includes(exit.name)) {
       problems.push(`${node.id}: ${exit.name} is how a run stops with no exit, not an exit`);
     }
-    if (node.kind === "check" && exit.fails === "self") {
-      problems.push(`${node.id}: a check runs on no rung, so ${exit.name} has none to fail`);
+    if (unseated !== undefined && exit.fails === "self") {
+      problems.push(`${node.id}: ${unseated}, so ${exit.name} has none to fail`);
     }
   }
   return problems;
 };
 
-const modelProblems = (node: AgentNode, rungs: ReadonlyArray<RungOffer>): ReadonlyArray<string> => {
-  if (node.model === "ladder") {
-    return node.role === "author"
+/** Why a block has no rung for `fails: self` to charge; nothing for an author block. */
+const unseatedBy = (node: AgentNode | CheckNode): string | undefined =>
+  node.kind === "check"
+    ? "a check runs on no rung"
+    : node.role === "review"
+      ? "a reviewer is no rung"
+      : undefined;
+
+const modelProblems = (node: AgentNode, offers: SeatOffers): ReadonlyArray<string> => {
+  if (node.role === "review") {
+    if (node.model === "ladder") {
+      return [`${node.id}: a reviewer reads from the reviewers, not from the ladder`];
+    }
+    return node.model === "reviewers" || offers.reviewers.includes(node.model)
       ? []
-      : [`${node.id}: a reviewer reads above its author, not from the ladder's foot`];
+      : [`${node.id}: ${node.model} is no reviewer`];
   }
-  if (node.model === "above") {
-    return node.role === "review" ? [] : [`${node.id}: an author has no author to read above`];
+  if (node.model === "ladder") return [];
+  if (node.model === "reviewers") {
+    return [`${node.id}: an author writes from the ladder, not from the reviewers`];
   }
-  const offer = rungs.find((rung) => rung.name === node.model);
+  const offer = offers.rungs.find((rung) => rung.name === node.model);
   if (offer === undefined) return [`${node.id}: ${node.model} is no rung on the ladder`];
-  if (node.role === "author" && !offer.author) {
-    return [`${node.id}: ${node.model} may not author`];
-  }
-  if (node.role === "review" && !offer.review) {
-    return [`${node.id}: ${node.model} may not review`];
-  }
-  return [];
+  return offer.author ? [] : [`${node.id}: ${node.model} may not author`];
 };
 
 /**
