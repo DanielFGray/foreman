@@ -7,6 +7,11 @@ describe("changedSettings", () => {
     expect(changedSettings(drafted, { ...drafted, filter: "" })).toEqual([["filter", ""]]));
   test("a reading that keeps every setting refills nothing, so unsent text stays", () =>
     expect(changedSettings(drafted, { ...drafted, next: "worktree" })).toEqual([]));
+  test("a land shows the branch it lands onto, and an empty input for none", () => {
+    const land = { kind: "land", id: "land", how: "merge" };
+    expect(changedSettings(land, { ...land, onto: "develop" })).toEqual([["onto", "develop"]]);
+    expect(changedSettings({ ...land, onto: "develop" }, land)).toEqual([["onto", ""]]);
+  });
 });
 
 describe("instructionsOf", () => {

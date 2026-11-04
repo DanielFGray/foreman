@@ -148,6 +148,18 @@ describe("belt edits", () => {
     expect(problemsOf(pipeline, OFFERS)).toEqual([]);
   });
 
+  test("a land is set to land onto a branch, and a setting without onto clears it", () => {
+    const onto = configure(STANDARD_PIPELINES.worktree, "land", {
+      kind: "land",
+      how: "merge",
+      onto: "develop",
+    });
+    expect(node(onto, "land")).toEqual({ kind: "land", id: "land", how: "merge", onto: "develop" });
+    expect(problemsOf(onto, OFFERS)).toEqual([]);
+    const cleared = configure(onto, "land", { kind: "land", how: "fast-forward" });
+    expect(node(cleared, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
+  });
+
   test("taking the worktree out leaves the task's branch in the operator's checkout", () => {
     const pipeline = remove(STANDARD_PIPELINES.worktree, "worktree");
     expect(node(pipeline, "branch")).toMatchObject({ next: "retry" });

@@ -14,7 +14,9 @@ import {
   problemsOf,
   type SeatOffers,
   QUEUE,
+  routeTarget,
   routeWorkspace,
+  targetsOf,
   choiceOf,
   DEFAULT_PIPELINE,
   STANDARD_PIPELINES,
@@ -1140,5 +1142,57 @@ describe("exits", () => {
     expect(problemsOf(parked, OFFERS)).toContain(
       "author: the claim already-done reaches operator before a review",
     );
+  });
+});
+
+describe("the branch a task lands on", () => {
+  const onto = (pipeline: Pipeline, branch: string | undefined): Pipeline => ({
+    nodes: pipeline.nodes.map((node) => (node.kind === "land" ? { ...node, onto: branch } : node)),
+  });
+  // The worktree pipeline with a router after the land gate, which lands big
+  // work through a second land block.
+  const twoLands = (big: string | undefined): Pipeline => ({
+    nodes: [
+      ...onto(STANDARD_PIPELINES.worktree, "develop").nodes.map((node) =>
+        node.id === "land-gate" && node.kind === "gate" ? { ...node, next: "size" } : node,
+      ),
+      { kind: "router", id: "size", routes: [{ when: "size>=3", to: "land-big" }], else: "land" },
+      { kind: "land", id: "land-big", how: "merge", onto: big },
+    ],
+  });
+
+  test("is the onto the route's lands name, else the checkout's branch", () => {
+    expect(routeTarget(onto(STANDARD_PIPELINES.worktree, "develop"), facts())).toBe("develop");
+    expect(routeTarget(STANDARD_PIPELINES.worktree, facts())).toBeUndefined();
+    // A direct route has no branch, so it stays on the checkout's branch.
+    expect(routeTarget(onto(STANDARD_PIPELINES.direct, "develop"), facts())).toBeUndefined();
+  });
+
+  test("lands a branch reaches must name one target", () => {
+    expect(problemsOf(twoLands("develop"), OFFERS)).toEqual([]);
+    expect(problemsOf(twoLands(undefined), OFFERS)).toEqual([
+      "a route from branch reaches lands on different branches: land onto develop, land-big onto the checkout's branch",
+    ]);
+    expect(problemsOf(twoLands("main"), OFFERS)).toEqual([
+      "a route from branch reaches lands on different branches: land onto develop, land-big onto main",
+    ]);
+  });
+
+  test("refuses an onto that names a task's branch", () => {
+    expect(problemsOf(onto(STANDARD_PIPELINES.worktree, "foreman/ts-123456"), OFFERS)).toContain(
+      'land lands onto "foreman/ts-123456", which is no branch a task lands on',
+    );
+  });
+
+  test("names the targets that must exist, and those the checkout must have out", () => {
+    expect(targetsOf(onto(STANDARD_PIPELINES.worktree, "develop"))).toEqual({
+      named: ["develop"],
+      inCheckout: [],
+    });
+    expect(targetsOf(onto(STANDARD_PIPELINES.checkout, "develop"))).toEqual({
+      named: ["develop"],
+      inCheckout: ["develop"],
+    });
+    expect(targetsOf(STANDARD_PIPELINES.checkout)).toEqual({ named: [], inCheckout: [] });
   });
 });

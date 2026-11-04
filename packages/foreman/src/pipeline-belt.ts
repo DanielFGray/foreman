@@ -337,7 +337,7 @@ const settled = (node: PipelineNode, setting: BlockSetting): PipelineNode => {
     case "check":
       return node.kind === "check" ? { ...node, command: setting.command } : node;
     case "land":
-      return node.kind === "land" ? { ...node, how: setting.how } : node;
+      return node.kind === "land" ? { ...node, how: setting.how, onto: setting.onto } : node;
     case "agent": {
       if (node.kind !== "agent") return node;
       const { slots: _slots, ...rest } = node;

@@ -119,6 +119,7 @@ export class Editor {
     switch (key) {
       case "filter": return configure({ filter: value });
       case "command": return configure({ command: value });
+      case "onto": return configure({ how: node.how ?? "merge", onto: value.trim() === "" ? undefined : value.trim() });
       case "model": return configure({ ...agent, model: value });
       case "slots": {
         const slots = Number.parseInt(value, 10);
@@ -225,7 +226,11 @@ export class Editor {
       case "check":
         return box.child(this.field(t, "command")).child(actions);
       case "land":
-        return box.child(picker(t, "how", choices.landings, node.how ?? "merge", (how, cx) => configure({ how }, cx))).child(actions);
+        // `configure` sets a land's how and onto together; an empty onto clears it.
+        return box
+          .child(picker(t, "how", choices.landings, node.how ?? "merge", (how, cx) => configure({ how, onto: node.onto }, cx)))
+          .child(this.field(t, "onto"))
+          .child(actions);
       default:
         return box.child(actions);
     }

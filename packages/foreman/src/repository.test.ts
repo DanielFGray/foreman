@@ -634,7 +634,7 @@ describe("Repository worktrees", () => {
 
   test("cuts a new branch from HEAD into a worktree, and finds it again", async () => {
     await Bun.$`git -C ${project} init -q && git -C ${project} -c user.email=f@t -c user.name=f commit -q --allow-empty -m initial`.quiet();
-    await run((repository) => repository.addWorktree(project, branch, path));
+    await run((repository) => repository.addWorktree(project, branch, path, undefined));
 
     expect(await worktrees()).toContainEqual({ path, branch, prunable: false });
   });
@@ -644,7 +644,7 @@ describe("Repository worktrees", () => {
     await run((repository) => repository.removeWorktree(project, path));
     expect((await worktrees()).map((worktree) => worktree.path)).not.toContain(path);
 
-    await run((repository) => repository.addWorktree(project, branch, path));
+    await run((repository) => repository.addWorktree(project, branch, path, undefined));
     const log = await Bun.$`git -C ${path} log -1 --format=%s`.text();
     expect(log.trim()).toBe("work");
   });
@@ -653,7 +653,7 @@ describe("Repository worktrees", () => {
     await rm(path, { recursive: true, force: true });
     expect(await worktrees()).toContainEqual({ path, branch, prunable: true });
 
-    await run((repository) => repository.addWorktree(project, branch, path));
+    await run((repository) => repository.addWorktree(project, branch, path, undefined));
     expect(await worktrees()).toContainEqual({ path, branch, prunable: false });
   });
 
@@ -737,7 +737,7 @@ describe("Repository in branch mode", () => {
   };
 
   const ofCheckout = (here: string) => ({
-    checkoutBranch: () => run((repository) => repository.checkoutBranch(here, task)),
+    checkoutBranch: () => run((repository) => repository.checkoutBranch(here, task, undefined)),
     isFree: () => run((repository) => repository.isFree(here)),
     dirty: () => run((repository) => repository.dirty(here)),
     base: () => run((repository) => repository.base(here, task)),
@@ -843,7 +843,7 @@ describe("Repository in branch mode, after the task's run", () => {
     await writeFile(join(here, "a.txt"), "a\n");
     await sh("add", "a.txt");
     await sh("commit", "-qm", "initial");
-    await run((repository) => repository.checkoutBranch(here, task));
+    await run((repository) => repository.checkoutBranch(here, task, undefined));
     await writeFile(join(here, "b.txt"), "b\n");
     await sh("add", "b.txt");
     await sh("commit", "-qm", "work");
@@ -904,7 +904,7 @@ describe("Repository in branch mode, after the task's run", () => {
       ).toMatchObject({ _tag: "Broke" });
       expect(await head()).toBe("trunk");
 
-      await run((repository) => repository.checkoutBranch(here, task));
+      await run((repository) => repository.checkoutBranch(here, task, undefined));
       expect(await head()).toBe(task);
       expect(await tip("HEAD")).toBe(work);
       expect(await tip(`${task}@{upstream}`)).toBe(await tip("trunk"));
@@ -961,7 +961,7 @@ describe("Repository.remove on a branch with a worktree", () => {
       "git init -q && printf 'node_modules/\\n' > .gitignore && printf 'tracked\\n' > tracked.txt && " +
         "git add . && git -c user.email=f@t -c user.name=f commit -q -m base",
     );
-    await run((repository) => repository.addWorktree(checkout, branch, worktree));
+    await run((repository) => repository.addWorktree(checkout, branch, worktree, undefined));
     await sh(
       worktree,
       "printf 'work\\n' > work.txt && git add work.txt && " +
@@ -1170,7 +1170,148 @@ describe("Repository against a remote", () => {
 
   test("trunkBranch names the branch a pull request merges into", async () => {
     const { root, here } = await remote();
-    expect(await run((repository) => repository.trunkBranch(here))).toBe("trunk");
+    expect(await run((repository) => repository.trunkBranch(here, task))).toBe("trunk");
+    await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("Repository landing onto a named branch", () => {
+  const task = "foreman/ts-onto";
+
+  // The operator's checkout has `trunk` out; `develop` is ahead of it and out
+  // nowhere. The task's branch is cut for `develop` in a worktree.
+  const checkout = async (onto: string) => {
+    const root = await mkdtemp(join(tmpdir(), "foreman-onto-"));
+    const here = join(root, "checkout");
+    const tree = join(root, "worktree");
+    const sh = (directory: string, ...args: Array<string>) =>
+      Bun.$`git -C ${directory} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    const out = async (directory: string, ...args: Array<string>) =>
+      (await sh(directory, ...args)).stdout.toString().trim();
+    await Bun.$`git init -q -b trunk ${here}`.quiet();
+    await writeFile(join(here, "a.txt"), "a\n");
+    await sh(here, "add", "a.txt");
+    await sh(here, "commit", "-qm", "initial");
+    await sh(here, "checkout", "-q", "-b", "develop");
+    await writeFile(join(here, "dev.txt"), "dev\n");
+    await sh(here, "add", "dev.txt");
+    await sh(here, "commit", "-qm", "develop");
+    await sh(here, "checkout", "-q", "trunk");
+    await run((repository) => repository.addWorktree(here, task, tree, onto));
+    await writeFile(join(tree, "b.txt"), "b\n");
+    await sh(tree, "add", "b.txt");
+    await sh(tree, "commit", "-qm", "work");
+    return { root, here, tree, sh, out };
+  };
+
+  const land = (here: string, verify?: string) =>
+    run((repository) =>
+      Effect.gen(function* () {
+        const commit = yield* repository.tip(here, task);
+        if (commit === undefined) return yield* Effect.die(`${task} has no tip`);
+        return yield* repository.merge(
+          here,
+          task,
+          commit,
+          verify,
+          `${here}.grounds/verify`,
+          `Merge ${task}`,
+          "merge",
+        );
+      }),
+    );
+  const branchOf = async (here: string) =>
+    (await run((repository) => repository.branches(here))).find((entry) => entry.branch === task);
+
+  test("cuts the branch from the tip of onto, and reads onto as its trunk and its pull request's base", async () => {
+    const { root, here, out } = await checkout("develop");
+    const develop = await out(here, "rev-parse", "develop");
+    expect(await out(here, "rev-parse", `${task}~1`)).toBe(develop);
+    expect(await out(here, "rev-parse", "--abbrev-ref", `${task}@{upstream}`)).toBe("develop");
+    expect(await run((repository) => repository.base(here, task))).toBe(develop);
+    expect(await run((repository) => repository.trunkBranch(here, task))).toBe("develop");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("lands onto a branch no checkout has out: moves the ref, leaves the checkout and its uncommitted work alone", async () => {
+    const { root, here, out } = await checkout("develop");
+    // The operator edits a tracked file and has an untracked copy of the
+    // path the branch adds, which a fast-forward of the checkout would refuse.
+    await writeFile(join(here, "a.txt"), "edited\n");
+    await writeFile(join(here, "b.txt"), "the operator's own\n");
+    const head = await out(here, "rev-parse", "HEAD");
+    const status = await out(here, "status", "--porcelain");
+    const develop = await out(here, "rev-parse", "develop");
+    const work = await out(here, "rev-parse", task);
+
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    expect(await out(here, "rev-parse", "develop^1")).toBe(develop);
+    expect(await out(here, "rev-parse", "develop^2")).toBe(work);
+    expect(await out(here, "rev-parse", "HEAD")).toBe(head);
+    expect(await out(here, "symbolic-ref", "--short", "HEAD")).toBe("trunk");
+    expect(await out(here, "status", "--porcelain")).toBe(status);
+    expect(await Bun.file(join(here, "b.txt")).text()).toBe("the operator's own\n");
+    // Measured against develop, not against the checkout's trunk.
+    expect(await branchOf(here)).toMatchObject({ merged: true, empty: false });
+    // A second landing finds the commit on develop already.
+    expect(await land(here)).toEqual({ _tag: "Present" });
+    await rm(root, { recursive: true, force: true });
+    await rm(`${here}.grounds`, { recursive: true, force: true });
+  });
+
+  test("holds a landing whose target moved while it was proved, and moves nothing", async () => {
+    const { root, here, out } = await checkout("develop");
+    const head = await out(here, "rev-parse", "HEAD");
+    // The verify command moves develop under the landing, as an operator's
+    // commit there would.
+    const verify = `git update-ref refs/heads/develop HEAD^2`;
+    expect(await land(here, verify)).toMatchObject({
+      _tag: "Held",
+      detail: expect.stringContaining("develop moved while"),
+    });
+    expect(await out(here, "rev-parse", "develop")).toBe(await out(here, "rev-parse", task));
+    expect(await out(here, "rev-parse", "HEAD")).toBe(head);
+    await rm(root, { recursive: true, force: true });
+    await rm(`${here}.grounds`, { recursive: true, force: true });
+  });
+
+  test("lands onto the branch the checkout has out by fast-forwarding the checkout, as before", async () => {
+    const { root, here, out } = await checkout("trunk");
+    const work = await out(here, "rev-parse", task);
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    expect(await out(here, "rev-parse", "HEAD^2")).toBe(work);
+    expect(await Bun.file(join(here, "b.txt")).text()).toBe("b\n");
+    expect(await out(here, "status", "--porcelain")).toBe("");
+    await rm(root, { recursive: true, force: true });
+    await rm(`${here}.grounds`, { recursive: true, force: true });
+  });
+
+  test("holds a landing whose target does not exist, and names it", async () => {
+    const { root, here, sh } = await checkout("develop");
+    await sh(here, "branch", "-q", "-D", "develop");
+    expect(await land(here)).toEqual({
+      _tag: "Held",
+      reason: "noBranch",
+      detail: "develop, the branch this project's work lands on, does not exist",
+    });
+    // Nothing can be measured against a missing target, so the branch reads as work.
+    expect(await branchOf(here)).toMatchObject({ merged: false, empty: false, stale: undefined });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("branch-only mode refuses a checkout that does not have the target out, and names both", async () => {
+    const { root, here, out } = await checkout("develop");
+    const other = "foreman/ts-other";
+    const refused = await Effect.runPromise(
+      Repository.use((repository) => repository.checkoutBranch(here, other, "develop")).pipe(
+        Effect.flip,
+        Effect.provide(Repository.Default),
+      ),
+    );
+    expect(refused.detail).toBe(
+      "work in this checkout lands on develop, but the checkout has trunk out: check develop out",
+    );
+    expect(await out(here, "symbolic-ref", "--short", "HEAD")).toBe("trunk");
     await rm(root, { recursive: true, force: true });
   });
 });

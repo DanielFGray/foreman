@@ -27,6 +27,7 @@ import type { TaskStatus } from "./records.ts";
 import { mayAuthor } from "./ladder.ts";
 import type { Seats } from "./reviewers.ts";
 import { STEPS, type Step } from "./policy.ts";
+import { taskOf } from "./fleet.ts";
 
 /** The `to` of an exit that returns the task to the queue. */
 export const QUEUE = "queue";
@@ -120,9 +121,10 @@ export const CheckNode = S.Struct({
 });
 
 /**
- * Makes the task's branch `foreman/<id>` from the trunk tip. It runs no agent,
- * and placement walks through it: the branch is made when the first agent
- * after it dispatches, and git's record of the branch is what says it passed.
+ * Makes the task's branch `foreman/<id>` from the tip of the branch its lands
+ * name (`onto`), else from the checkout's branch. It runs no agent, and
+ * placement walks through it: the branch is made when the first agent after
+ * it dispatches, and git's record of the branch is what says it passed.
  */
 export const BranchNode = S.Struct({ kind: S.Literal("branch"), id: S.String, next: S.String });
 
@@ -146,13 +148,16 @@ export const LANDINGS = ["merge", "fast-forward", "pull-request"] as const;
 export type Landing = (typeof LANDINGS)[number];
 
 /**
- * Proves and applies the task's branch to the project's checkout, which
- * completes it. `how` is `merge` (a merge commit) when absent.
+ * Proves and applies the task's branch to the branch `onto` names, which
+ * completes it. `how` is `merge` (a merge commit) when absent. `onto` is the
+ * branch the checkout has out when absent; a pull-request landing names it
+ * as the pull request's base.
  */
 export const LandNode = S.Struct({
   kind: S.Literal("land"),
   id: S.String,
   how: S.optional(S.Literals(LANDINGS)),
+  onto: S.optional(S.String),
 });
 
 /**
@@ -386,17 +391,74 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
  * and ignores the task's exits, so it needs no tip: the tip is read from the
  * workspace this answers.
  */
-export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | undefined => {
+export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | undefined =>
+  workspaceWalk(pipeline, facts)?.workspace;
+
+/**
+ * The branch the task's route lands on, when its lands name one (`onto`).
+ * Nothing for a route with no branch, for lands that name no branch (the
+ * checkout's branch), and when no source takes the task. Validation gives
+ * every land a branch block reaches the same `onto`, so the branch block on
+ * the route decides it.
+ */
+export const routeTarget = (pipeline: Pipeline, facts: Facts): string | undefined => {
+  const branch = workspaceWalk(pipeline, facts)?.branch;
+  return branch === undefined ? undefined : targetOf(pipeline, branch);
+};
+
+/**
+ * The branches a project's lands name, which must exist for it to take work,
+ * and those a route in the operator's checkout lands on (a branch block an
+ * agent follows with no worktree between), which the checkout must have out:
+ * leaving the task's branch returns the checkout to the branch it lands on.
+ */
+export const targetsOf = (
+  pipeline: Pipeline,
+): { readonly named: ReadonlyArray<string>; readonly inCheckout: ReadonlyArray<string> } => {
+  const inCheckout = skipping(
+    pipeline,
+    (node) => node.kind === "worktree",
+    pipeline.nodes.filter((node) => node.kind === "branch"),
+    pipeline.nodes.filter((node) => node.kind === "agent"),
+  ).flatMap(([branch]) => {
+    const onto = targetOf(pipeline, branch.id);
+    return onto === undefined ? [] : [onto];
+  });
+  const named = pipeline.nodes.flatMap((node) =>
+    node.kind === "land" && node.onto !== undefined ? [node.onto] : [],
+  );
+  return { named: [...new Set(named)], inCheckout: [...new Set(inCheckout)] };
+};
+
+/** The `onto` the lands after branch block `branch` name, or nothing when they name none. */
+const targetOf = (pipeline: Pipeline, branch: string): string | undefined => {
+  const wired = graphOf(pipeline);
+  return pipeline.nodes.find(
+    (node): node is LandNode =>
+      node.kind === "land" && node.onto !== undefined && wired.reaches(branch, node.id),
+  )?.onto;
+};
+
+/** The workspace the task's route gives it, and the branch block on that route, if any. */
+const workspaceWalk = (
+  pipeline: Pipeline,
+  facts: Facts,
+): { readonly workspace: Workspace; readonly branch: string | undefined } | undefined => {
   const nodes = indexOf(pipeline);
   let node: PipelineNode | undefined = sourceOf(pipeline, facts);
   if (node === undefined) return undefined;
   let workspace: Workspace = "none";
+  let branch: string | undefined;
   for (let steps = 0; node !== undefined && steps <= pipeline.nodes.length; steps++) {
     switch (node.kind) {
       case "router":
         node = nodes.get(routeOf(node, facts));
         continue;
       case "branch":
+        branch = node.id;
+        workspace = node.kind;
+        node = nodes.get(node.next);
+        continue;
       case "worktree":
         workspace = node.kind;
         node = nodes.get(node.next);
@@ -406,10 +468,10 @@ export const routeWorkspace = (pipeline: Pipeline, facts: Facts): Workspace | un
         node = nodes.get(node.next);
         continue;
       default:
-        return workspace;
+        return { workspace, branch };
     }
   }
-  return workspace;
+  return { workspace, branch };
 };
 
 /**
@@ -530,6 +592,27 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
           `a route from ${from.id} reaches ${block.id}: a route's workspace is set before its first agent`,
         );
       }
+    }
+  }
+  // A branch is cut from the tip of the branch it lands on, so every land it
+  // reaches names one target. An absent `onto` is one target: the branch the
+  // checkout has out.
+  for (const branch of pipeline.nodes.filter(isBranch)) {
+    const reached = work.filter(
+      (node): node is LandNode => node.kind === "land" && wired.reaches(branch.id, node.id),
+    );
+    if (new Set(reached.map((land) => land.onto)).size > 1) {
+      problems.push(
+        `a route from ${branch.id} reaches lands on different branches: ${reached
+          .map((land) => `${land.id} onto ${land.onto ?? "the checkout's branch"}`)
+          .join(", ")}`,
+      );
+    }
+  }
+  for (const land of work) {
+    if (land.kind !== "land" || land.onto === undefined) continue;
+    if (land.onto.trim() === "" || taskOf(land.onto) !== undefined) {
+      problems.push(`${land.id} lands onto "${land.onto}", which is no branch a task lands on`);
     }
   }
   // Work on a branch reaches the trunk only through a land, so a branch whose
@@ -1347,7 +1430,7 @@ const describe = (node: PipelineNode): string => {
     case "check":
       return `${node.id}: runs ${node.command}`;
     case "land":
-      return `${node.id}: ${node.how ?? "merge"}`;
+      return `${node.id}: ${node.how ?? "merge"}${node.onto === undefined ? "" : ` onto ${node.onto}`}`;
     case "branch":
     case "worktree":
     case "done":

@@ -245,12 +245,12 @@ export function hcFleetOver() {
                 break;
               case "switch":
                 yield* repository
-                  .checkoutBranch(options.repository, options.branch)
+                  .checkoutBranch(options.repository, options.branch, options.onto)
                   .pipe(Effect.mapError(fail("open")));
                 break;
               case "create":
                 yield* repository
-                  .addWorktree(options.repository, options.branch, options.directory)
+                  .addWorktree(options.repository, options.branch, options.directory, options.onto)
                   .pipe(Effect.mapError(fail("open")));
             }
             return idle(options.task, resolution.path, options.repository);

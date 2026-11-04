@@ -44,6 +44,7 @@ const authorPrompt = (
     repository,
     workspace,
     base,
+    trunk: "develop",
     pipeline: STANDARD_PIPELINES.worktree,
   });
 
@@ -62,6 +63,7 @@ const reviewPrompt = (
     repository,
     workspace,
     base,
+    trunk: "develop",
     verify,
     pipeline: STANDARD_PIPELINES.worktree,
   });
@@ -116,7 +118,7 @@ describe("Prompts", () => {
     expect(prompt).toContain("foreman exit ts-123456 done");
     expect(prompt).not.toContain("git -C /tmp/repository merge");
     expect(prompt).not.toContain("tasks done ts-123456");
-    expect(prompt).toContain("git worktree list --porcelain");
+    expect(prompt).toContain("git diff develop...HEAD");
     expect(prompt).toContain("Never enter /tmp/repository");
     expect(prompt).toContain("do not read another task's worktree");
   });
@@ -126,7 +128,7 @@ describe("Prompts", () => {
       authorPrompt(prompts, ready, "/tmp/repository", "/tmp/repository", "branch"),
     );
     expect(author).toContain("This is the operator's own checkout");
-    expect(author).toContain("git diff @{upstream}...HEAD");
+    expect(author).toContain("git diff develop...HEAD");
     expect(author).not.toContain("Never enter /tmp/repository");
 
     const review = await run((prompts) =>
@@ -389,6 +391,7 @@ describe("Prompts", () => {
           repository: "/tmp/repository",
           workspace: "worktree",
           base: "abc1234",
+          trunk: "develop",
           pipeline: undefined,
         }),
       );
@@ -437,6 +440,7 @@ describe("Prompts", () => {
             repository: "/tmp/repository",
             workspace: "worktree",
             base: "abc1234",
+            trunk: "develop",
             pipeline: undefined,
           }),
         ).pipe(Effect.flip, Effect.provide(Prompts.Default)),
@@ -510,6 +514,7 @@ describe("the instructions foreman ships for agent blocks", () => {
           repository: "/tmp/repository",
           workspace: "worktree",
           base: "abc1234",
+          trunk: "develop",
           pipeline,
         }),
       );
@@ -535,9 +540,12 @@ describe("the instructions foreman ships for agent blocks", () => {
         repository: "/tmp/repository",
         workspace: "worktree",
         base: "abc1234",
+        trunk: "develop",
         pipeline,
       }),
     );
-    expect(review).toContain("ended its run `nothing-to-do`: it claims trunk already does");
+    expect(review).toContain(
+      "ended its run `nothing-to-do`: it claims trunk (`develop`) already does",
+    );
   });
 });
