@@ -110,15 +110,15 @@ describe("simulate", () => {
           id: "author",
           role: "author",
           model: "ladder",
-          exits: [{ name: "done", to: "lint" }],
+          exits: [{ id: "done", name: "done", to: "lint" }],
         },
         {
           kind: "check",
           id: "lint",
           command: "false",
           exits: [
-            { name: "passed", to: "land" },
-            { name: "failed", to: "lint" },
+            { id: "passed", name: "passed", to: "land" },
+            { id: "failed", name: "failed", to: "lint" },
           ],
         },
         { kind: "land", id: "land", how: "merge" },

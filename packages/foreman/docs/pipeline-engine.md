@@ -85,7 +85,7 @@ done. Sources, routers, gates, branches and worktrees decide at once.
 
 | Block | Advances when | Returns when |
 | --- | --- | --- |
-| author agent | the author names `done` or `already-done` (stays `in_progress`; placement follows the exit) | it stops with no exit or hands back an empty branch (`stopped: retry`: an attempt, and `failed-by` once the rung is spent) |
+| author agent | the author names `done` or its claim (`already-done`) (stays `in_progress`; placement follows the exit) | it stops with no exit or hands back an empty branch (`stopped: retry`: an attempt, and `failed-by` once the rung is spent) |
 | review agent | the reviewer names `approved` and the branch tip is still the commit it named it on | the reviewer names `returned` (`fails: author`: `failed-by` the author's rung) |
 | land | the merge lands (the task is done) | a conflict (no evidence) or broken verification (`climb`) |
 | done | the approval holds for the checkout's HEAD (the task is done) | — |
@@ -180,9 +180,10 @@ Filters read facts, never label strings, so when runs replace labels only
 2. A task with an open agent run is **at** that run's block: `ended` when the
    run named an exit, else `running`. Settle closes an ended run once the
    agent's pane is idle, and the next tick places the task where the exit leads.
-3. Otherwise take the task's last named exit, find it on its block in the
-   drawing as it is now, and walk from its wire. An open task, a return, a
-   missing block or exit, or no exit at all: walk from the source.
+3. Otherwise take the task's last named exit, find its id on its block in the
+   drawing as it is now, and walk from its wire. An open task, a return or no
+   exit at all: walk from the source. A missing block or exit: `ExitGone`, a
+   decision for the operator.
 4. Walk forward. At a router, follow the first matching route. At a gate,
    remember the gate. Stop at the first work block. The task is **at** that
    block, `waiting`; the remembered gates decide when it may start. The walk
@@ -302,7 +303,7 @@ and the policy step that holds the retry is unchanged.
   `review-failed-by:*` go with the labels; the review run's open and close
   replace them.
 - "`satisfied` is cleared wherever `approved` is": replaced. `already-done` is
-  an exit of the author block.
+  the standard author block's claim (`empty: claim`).
 - "`Held` … leaves the task in `reviewing` with its `approved` label": the task
   stays `in_progress` at its land step; the tip has not moved, so the review
   still passes.

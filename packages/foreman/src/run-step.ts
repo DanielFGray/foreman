@@ -24,8 +24,8 @@ export type RunEvent =
    * reviewer this one replaces, so it ends `released`.
    */
   | { readonly _tag: "ReviewStarted"; readonly run: NewRun }
-  /** The agent of the open run names an exit on the commit the task's tip is at. */
-  | { readonly _tag: "ExitNamed"; readonly name: string; readonly commit: string | undefined }
+  /** The agent of the open run names the exit with id `exit`, on the commit the task's tip is at. */
+  | { readonly _tag: "ExitNamed"; readonly exit: string; readonly commit: string | undefined }
   /**
    * The pane of an agent that named an exit is idle: its exit is charged and
    * its runs close, an author that named none at the task's tip.
@@ -93,8 +93,8 @@ export interface Row {
         readonly commit?: string | undefined;
       }
     | undefined;
-  /** Names the exit of the open agent run, with the commit it is named on. */
-  readonly exit: { readonly name: string; readonly commit: string | undefined } | undefined;
+  /** Names the exit of the open agent run by its id, with the commit it is named on. */
+  readonly exit: { readonly ending: string; readonly commit: string | undefined } | undefined;
   /** A check run, written closed. */
   readonly check: CheckRun | undefined;
   /** The rungs charged with failing the task. */
@@ -217,7 +217,7 @@ export const openExitOf = (
   task: Pick<Item, "runs">,
 ): Exit | undefined => {
   const open = openAgentOf(pipeline, task);
-  return open?.block.exits.find((exit) => exit.name === open.run.ending);
+  return open?.block.exits.find((exit) => exit.id === open.run.ending);
 };
 
 /** The task's open agent run and its block in the drawing, while that block is still an agent. */
@@ -277,10 +277,10 @@ const named = (
   rules: StepRules,
 ): RunStep => {
   const exit = openAgentOf(rules.pipeline, task)?.block.exits.find(
-    (candidate) => candidate.name === event.name,
+    (candidate) => candidate.id === event.exit,
   );
   return step({
-    exit: { name: event.name, commit: event.commit },
+    exit: { ending: event.exit, commit: event.commit },
     move: exit?.to === QUEUE ? "reopen" : undefined,
   });
 };
@@ -318,7 +318,7 @@ const checked = (
   rules: StepRules,
 ): RunStep => {
   if (event.check.ending === "passed") return step({ check: event.check });
-  const failed = event.block.exits.find((candidate) => candidate.name === "failed");
+  const failed = event.block.exits.find((candidate) => candidate.id === "failed");
   return adding(charge(task, failed?.fails, undefined, rules), {
     check: event.check,
     ...(failed?.to === QUEUE ? releasing({}) : {}),
@@ -360,7 +360,7 @@ const endedRuns = (task: Stepping, row: Row): ReadonlyArray<Run> => {
 const namedExit = (runs: ReadonlyArray<Run>, exit: NonNullable<Row["exit"]>) => {
   const open = runs.findLast((run) => run.open && run.role !== "check");
   return runs.map((run) =>
-    run === open ? { ...run, ending: exit.name, commit: exit.commit ?? run.commit } : run,
+    run === open ? { ...run, ending: exit.ending, commit: exit.commit ?? run.commit } : run,
   );
 };
 

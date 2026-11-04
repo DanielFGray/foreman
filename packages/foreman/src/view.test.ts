@@ -189,9 +189,12 @@ describe("decisionKind", () => {
     expect(decisionKind(authoredOn(task("ts-1", "done", []), "flash"))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
-    expect(decisionKind(authoredOn(task("ts-1", "open", []), "flash"), "no worktree")).toBe(
-      "dispatch failed",
-    );
+    expect(
+      decisionKind(authoredOn(task("ts-1", "open", []), "flash"), {
+        _tag: "DispatchFailed",
+        detail: "no worktree",
+      }),
+    ).toBe("dispatch failed");
   });
 });
 
@@ -285,6 +288,19 @@ describe("actionsFor", () => {
     // Nothing to intervene in either: the task is finished, and the workspace
     // behind it is residue rather than an attempt to resume.
     expect(actionsFor("decisions", left)).toEqual(["close"]);
+    // A task whose last exit the drawing lost has no place to be retried at.
+    const lost = {
+      ...state,
+      decisions: [
+        {
+          ...active(authoredOn(task("ts-g1", "in_progress", []), "flash"), undefined),
+          cause: { _tag: "ExitGone" as const, detail: "author no longer has the exit done" },
+        },
+      ],
+    };
+    const gone = rowsForView("attention", lost).find((each) => each.key === "ts-g1");
+    expect(gone?.label).toBe("exit gone");
+    expect(actionsFor("decisions", gone)).toEqual(["release", "intervene"]);
   });
 
   // A task parked at the operator leaves by them writing the decision into it,

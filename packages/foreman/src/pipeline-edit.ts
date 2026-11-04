@@ -17,6 +17,7 @@ import {
   removeExit,
   removeRoute,
   renameExit,
+  setEmpty,
   swapEnd,
 } from "./pipeline-belt.ts";
 import { STEPS } from "./policy.ts";
@@ -65,6 +66,7 @@ export const PipelineChange = S.Union([
   S.TaggedStruct("RenameExit", { id: S.String, name: S.String, to: S.String }),
   S.TaggedStruct("RemoveExit", { id: S.String, name: S.String }),
   S.TaggedStruct("ChargeExit", { id: S.String, name: S.String, fails: Exit.fields.fails }),
+  S.TaggedStruct("SetEmpty", { id: S.String, name: S.String, empty: Exit.fields.empty }),
 ]);
 export type PipelineChange = typeof PipelineChange.Type;
 
@@ -72,8 +74,9 @@ export type PipelineChange = typeof PipelineChange.Type;
  * The pipeline after `change`, and the id of the block it added, if any. A
  * change the pipeline cannot take answers `refused`: a rejoin that names a
  * block the pipeline lacks, a setting for another kind of block, a new exit
- * name the block already has, or an exit added, renamed or removed on a check,
- * whose exits are passed and failed. A change that names a block, wire or exit
+ * name the block already has, an exit added, renamed or removed on a check,
+ * whose exits are passed and failed, or a claim on a block that is no author.
+ * A change that names a block, wire or exit
  * the pipeline lacks otherwise leaves it as it was.
  */
 export const applyChange = (
@@ -138,6 +141,12 @@ export const applyChange = (
     }
     case "ChargeExit":
       return changed(chargeExit(pipeline, change.id, change.name, change.fails));
+    case "SetEmpty": {
+      const node = pipeline.nodes.find((one) => one.id === change.id);
+      return change.empty !== undefined && (node?.kind !== "agent" || node.role !== "author")
+        ? { _tag: "Refused", reason: `${change.id} is no author, and only an author claims` }
+        : changed(setEmpty(pipeline, change.id, change.name, change.empty));
+    }
   }
 };
 

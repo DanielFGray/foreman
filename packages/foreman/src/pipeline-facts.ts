@@ -1,21 +1,23 @@
 import { isExit, type Run } from "tasks";
 import { attemptsOf, failuresOf, type Item, valueOf } from "./records.ts";
-import { type Facts, type NamedExit, type Pipeline, type PipelineNode, QUEUE } from "./pipeline.ts";
+import { exitAt, type Facts, type NamedExit, type Pipeline, QUEUE } from "./pipeline.ts";
 
 /**
  * What placement knows about `item` in `pipeline`, read from its status,
  * labels, runs and charges. This is the one reader of runs for placement.
  *
- * The task's exits count from the last time it left a source: a return to the
- * queue, or an exit the drawing no longer has, starts the count again, because
- * either sends the task back to its source.
+ * A run stores the id of the exit it named; each named exit carries its name
+ * as the drawing stands now, which filters read. The task's exits count from
+ * the last time it left a source: a return to the queue starts the count
+ * again. An exit the drawing no longer has is no return: nothing says where it
+ * led, so it stays, and placement asks the operator about it.
  */
 export const factsOf = (
   item: Pick<Item, "status" | "priority" | "parent" | "labels" | "runs" | "charges" | "tip">,
   pipeline: Pipeline,
 ): Facts => {
   const open = item.runs.findLast((run) => run.open && run.role !== "check");
-  const exits = item.runs.flatMap((run) => namedBy(run));
+  const exits = item.runs.flatMap((run) => namedBy(run, pipeline));
   return {
     status: item.status,
     priority: item.priority,
@@ -32,9 +34,16 @@ export const factsOf = (
 };
 
 /** The exit a run named, if it named one at a block. */
-const namedBy = (run: Run): ReadonlyArray<NamedExit> =>
+const namedBy = (run: Run, pipeline: Pipeline): ReadonlyArray<NamedExit> =>
   run.node !== undefined && isExit(run.ending)
-    ? [{ node: run.node, name: run.ending, commit: run.commit }]
+    ? [
+        {
+          node: run.node,
+          id: run.ending,
+          name: exitAt(pipeline, run.node, run.ending)?.name,
+          commit: run.commit,
+        },
+      ]
     : [];
 
 /** The exits after the last one that sent the task back to its source. */
@@ -42,16 +51,8 @@ const sinceSource = (
   exits: ReadonlyArray<NamedExit>,
   pipeline: Pipeline,
 ): ReadonlyArray<NamedExit> => {
-  const nodes = new Map(pipeline.nodes.map((node) => [node.id, node]));
-  const back = exits.findLastIndex((exit) => returns(nodes.get(exit.node), exit.name));
+  const back = exits.findLastIndex((exit) => exitAt(pipeline, exit.node, exit.id)?.to === QUEUE);
   return exits.slice(back + 1);
-};
-
-/** Whether naming `name` at `node` sends the task back to its source. */
-const returns = (node: PipelineNode | undefined, name: string): boolean => {
-  if (node?.kind !== "agent" && node?.kind !== "check") return true;
-  const exit = node.exits.find((candidate) => candidate.name === name);
-  return exit === undefined || exit.to === QUEUE;
 };
 
 const valuesOf = (labels: ReadonlyArray<string>, kind: string): ReadonlyArray<string> =>

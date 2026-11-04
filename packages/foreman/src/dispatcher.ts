@@ -127,7 +127,7 @@ import { Tracker, TrackerError } from "./tracker.ts";
 import {
   authoredBy,
   directBase,
-  claimsAlreadyDone,
+  authorClaim,
   reviewerNamed,
   lastExit,
   routedCommit,
@@ -949,14 +949,27 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // One mapping, three columns. working and review each take a slice of
       // these, and decisionsOf reads the vanished-worker rows off the same
       // arrays rather than mapping the lists a second time.
-      const claimedActive = active(claimed);
-      const reviewingActive = active(reviewing);
-
       // Where each task stands in its project's pipeline.
       const placed = [...ordered, ...yours, ...claimed, ...reviewing].map((task) => ({
         task,
         placement: placementIn(pipelines, task),
       }));
+      // A task whose last exit the drawing lost waits for the operator: no
+      // column works it and no reclaim releases it, since nothing says where
+      // it would go.
+      const gone = new Map(
+        placed.flatMap(({ task, placement }) =>
+          placement._tag === "ExitGone" ? [[task.id, placement.reason] as const] : [],
+        ),
+      );
+      const claimedActive = active(claimed).filter(({ task }) => !gone.has(task.id));
+      const reviewingActive = active(reviewing);
+      const exitGone = active(claimed).flatMap((row): ReadonlyArray<Active> => {
+        const reason = gone.get(row.task.id);
+        return reason === undefined
+          ? []
+          : [{ ...row, cause: { _tag: "ExitGone", detail: reason } }];
+      });
 
       const {
         reviews,
@@ -1027,7 +1040,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // leftover workspace or label would name it — so it is filtered out
         // of the ordinary kinds rather than shown twice. The failures that
         // have no row here yet are read back in `interpret`.
-        decisions: decisionsOf(claimedActive, reviewingActive, owned).filter(
+        decisions: [...decisionsOf(claimedActive, reviewingActive, owned), ...exitGone].filter(
           (decision) => !failedIds.has(decision.task.id),
         ),
         policy,
@@ -1142,7 +1155,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               task: item,
               worker: undefined,
               kind: undefined,
-              failure: failure.detail,
+              cause: { _tag: "DispatchFailed", detail: failure.detail },
             })),
             // The task may have been closed or deleted since it failed.
             Effect.orElseSucceed(() => undefined),
@@ -1384,11 +1397,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const block = pipeline?.nodes.find((node) => node.id === run?.node);
           const exit =
             block?.kind === "agent" || block?.kind === "check"
-              ? block.exits.find((candidate) => candidate.name === run?.ending)
+              ? block.exits.find((candidate) => candidate.id === run?.ending)
               : undefined;
           const placement = pipeline && place(pipeline, factsOf(task, pipeline));
           return (
             pipeline !== undefined &&
+            // A task whose last exit the drawing lost is the operator's to answer.
+            placement?._tag !== "ExitGone" &&
             diagnosticIntent(task) === undefined &&
             !awaitingLanding(pipeline, task) &&
             // An agent that named its exit finished; the step above closes its run.
@@ -1950,7 +1965,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // may honestly say it did. `Present` wrote nothing and ran nothing, so
         // it claims neither a merge nor a verification. Two things reach it:
         // an interrupted landing whose merge had already gone in, and a branch
-        // whose author named `already-done` and whose
+        // whose author named its claim exit and whose
         // reviewer confirmed it. The verdict cannot tell them apart — an empty
         // branch is contained by any checkout — so the label the author left
         // is what names the one in the log.
@@ -1960,7 +1975,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           );
           yield* tracker.log(
             task.id,
-            claimsAlreadyDone(task)
+            claimsAlreadyDone((yield* SubscriptionRef.get(state)).pipelines, task)
               ? `foreman: ${project.name}'s trunk already does what this task asked, and the reviewer confirmed it. Nothing was merged and nothing was verified — the backlog had outlived the work.`
               : isResearch(task)
                 ? `foreman: this task's deliverable was a report, and the reviewer confirmed it against its evidence in the log. Nothing was merged and nothing was verified — there was no code to land.`
@@ -2055,7 +2070,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
 
         // The step wrote what the block's `failed` exit says; this reports it.
-        const exit = block.exits.find((candidate) => candidate.name === "failed");
+        const exit = block.exits.find((candidate) => candidate.id === "failed");
         const returns = exit?.to === QUEUE;
         yield* Effect.logWarning(`${task.id} failed the check ${block.id}`);
         yield* tracker.log(
@@ -2235,6 +2250,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       }).pipe(Effect.catch((error) => Effect.logWarning(`parking ${task.id} failed: ${error}`)));
 
     /** The workspace the task's route gives it, from the published reading. */
+    /** The pipeline the task's project runs now, if it runs one. */
+    const drawingOf = (task: Item) =>
+      SubscriptionRef.get(state).pipe(
+        Effect.map(({ pipelines }) => runningPipeline(pipelines, task.project)),
+      );
+
     const routeOf = (task: Item) =>
       SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => workspaceOf(pipelines, task)));
 
@@ -2409,6 +2430,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const prompt = yield* prompts.agent(block, {
         task,
+        pipeline: yield* drawingOf(task),
         worktree: worker.directory,
         repository: project.directory,
         workspace,
@@ -2469,6 +2491,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const prompt = yield* prompts.agent(block, {
         task,
+        pipeline: yield* drawingOf(task),
         worktree: worker.directory,
         repository: project.directory,
         workspace,
@@ -3001,6 +3024,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           if (!base) return undefined;
           return yield* prompts.agent(block, {
             task,
+            pipeline: runningPipeline(pipelines, task.project),
             worktree,
             repository: project.directory,
             workspace,
@@ -3079,6 +3103,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const worker = yield* workspaceFor(task, project);
             const prompt = yield* prompts.agent(block, {
               task,
+              pipeline: yield* drawingOf(task),
               worktree: worker.directory,
               repository: project.directory,
               workspace: yield* routeOf(task),
@@ -3207,7 +3232,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             }
             const project = yield* projectFor(task.project);
             const commit = project ? yield* tipOf(task, project) : undefined;
-            yield* record(task, { _tag: "ExitNamed", name, commit }, pipeline);
+            yield* record(task, { _tag: "ExitNamed", exit: exit.id, commit }, pipeline);
             return { _tag: "Named", block: block.id, commit } as const;
           }),
         ),
@@ -3461,7 +3486,7 @@ export const candidatesFrom = (reading: {
   readonly held: ReadonlyArray<Held>;
 }) => {
   const { pipelines, held } = reading;
-  const reviews = reviewable(reading.reviewing, reading.committed);
+  const reviews = reviewable(reading.reviewing, reading.committed, pipelines);
   // A returned review wired back to the author leaves the task claimed and
   // waiting at that block (still `in_progress`). It is not under review, so
   // fill must take it from the claimed column or it never runs again.
@@ -3655,6 +3680,15 @@ const runningPipeline = (
 ): Pipeline | undefined => {
   const found = pipelines.get(project);
   return found?._tag === "Runs" ? found.pipeline : undefined;
+};
+
+/** Whether the lap's author named its block's claim exit (`authorClaim`), as the task's project draws it now. */
+const claimsAlreadyDone = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): boolean => {
+  const pipeline = runningPipeline(pipelines, task.project);
+  return pipeline !== undefined && authorClaim(task, pipeline) !== undefined;
 };
 
 /**
@@ -3965,13 +3999,14 @@ export const landedColumn = (
 export const reviewable = (
   reviewing: ReadonlyArray<Active>,
   committed: ReadonlySet<string>,
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
 ): {
   readonly review: ReadonlyArray<Active>;
   readonly unbacked: ReadonlyArray<Active>;
 } => {
   const authored = reviewing.filter(({ task }) => authoredBy(task) !== undefined);
   const readable = ({ task }: Active) =>
-    committed.has(task.id) || claimsAlreadyDone(task) || isResearch(task);
+    committed.has(task.id) || claimsAlreadyDone(pipelines, task) || isResearch(task);
   return {
     review: authored.filter(readable),
     unbacked: authored.filter((active) => !readable(active)),
@@ -4306,9 +4341,18 @@ export interface Active {
   readonly task: Item;
   readonly worker: Worker | undefined;
   readonly kind: string | undefined;
-  /** The error behind a dispatch-failed decision, absent for the other kinds. */
-  readonly failure?: string;
+  /**
+   * What makes this row a decision when the task's status cannot say: a
+   * dispatch that failed twice alike, or a last exit the drawing lost. Absent
+   * for the other kinds.
+   */
+  readonly cause?: DecisionCause;
 }
+
+/** Why a task is a decision, with the detail the operator reads on its row. */
+export type DecisionCause =
+  | { readonly _tag: "DispatchFailed"; readonly detail: string }
+  | { readonly _tag: "ExitGone"; readonly detail: string };
 
 export interface InterventionTarget {
   readonly task: Item | Item;

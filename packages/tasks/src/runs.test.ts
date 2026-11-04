@@ -93,7 +93,7 @@ describe("runs", () => {
         const review = yield* openRun(
           run({ task: id, work: "review", node: "review", commit: "tip1" }),
         );
-        yield* nameExit(id, { name: "approved", commit: "tip2", event: undefined });
+        yield* nameExit(id, { ending: "approved", commit: "tip2", event: undefined });
         yield* closeRun(review, { ending: "stopped", commit: "tip3" });
         return (yield* runsOf([id])).get(id);
       }),
@@ -276,6 +276,21 @@ describe("naming an exit", () => {
     return id;
   });
 
+  // Foreman gives a new exit a random id of letters, and the run stores it.
+  test("stores an exit id that is no name an agent was ever given", async () => {
+    const runs = await inTasks(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        yield* openRun(run({ task: id, work: "build", node: "author" }));
+        yield* nameExit(id, { ending: "exit-qzvmktrwpa", commit: "c1", event: undefined });
+        return (yield* runsOf([id])).get(id)?.map((r) => r.ending);
+      }),
+    );
+    expect(runs).toEqual(["exit-qzvmktrwpa"]);
+  });
+
   test("a second exit replaces the first, commit and all, and makes its status move", async () => {
     const [status, runs] = await inTasks(
       Effect.gen(function* () {
@@ -283,8 +298,8 @@ describe("naming an exit", () => {
         const id = yield* filed;
         yield* tasks.send(id, "start");
         yield* openRun(run({ task: id, work: "review", node: "review" }));
-        yield* nameExit(id, { name: "approved", commit: "c1", event: undefined });
-        yield* nameExit(id, { name: "returned", commit: "c2", event: "open" });
+        yield* nameExit(id, { ending: "approved", commit: "c1", event: undefined });
+        yield* nameExit(id, { ending: "returned", commit: "c2", event: "open" });
         const task = yield* tasks.require(id);
         return [task.status, (yield* runsOf([id])).get(id)?.map((r) => [r.ending, r.commit])];
       }),
@@ -300,13 +315,13 @@ describe("naming an exit", () => {
         const id = yield* filed;
         yield* tasks.send(id, "start");
         const none = yield* nameExit(id, {
-          name: "returned",
+          ending: "returned",
           commit: undefined,
           event: "open",
         }).pipe(Effect.flip);
         yield* openRun(run({ task: id }));
         const process = yield* nameExit(id, {
-          name: "stopped",
+          ending: "stopped",
           commit: undefined,
           event: undefined,
         }).pipe(Effect.flip);

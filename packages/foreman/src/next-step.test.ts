@@ -236,8 +236,8 @@ const ASKING: Policy = {
 const at = (placement: Placement): string =>
   placement._tag === "Outside"
     ? "outside"
-    : placement._tag === "Parked"
-      ? `parked at ${placement.node}`
+    : placement._tag === "Parked" || placement._tag === "ExitGone"
+      ? `${placement._tag === "Parked" ? "parked" : "exit gone"} at ${placement.node}`
       : [
           placement.node.id,
           placement.state,
@@ -263,6 +263,9 @@ const placedStep = (item: Item): string => {
     ? reviewable(
         [{ task: item, worker: undefined, kind: reviewedBy(item) ?? authoredBy(item) }],
         new Set([item.id]),
+        new Map([
+          [item.project, { _tag: "Runs", pipeline: STANDARD_PIPELINES.worktree, drawn: false }],
+        ]),
       ).review
     : [];
   const steps = planFrom({

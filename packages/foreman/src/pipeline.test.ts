@@ -63,8 +63,8 @@ const onward = <N extends AgentNode | CheckNode>(node: N, to: string): N => ({
 });
 
 describe("filters", () => {
-  const returned = { node: "review", name: "returned", commit: "c1" };
-  const approvedExit = { node: "review", name: "approved", commit: "c1" };
+  const returned = { node: "review", id: "returned", name: "returned", commit: "c1" };
+  const approvedExit = { node: "review", id: "approved", name: "approved", commit: "c1" };
 
   test.each<[string, Partial<Facts>, boolean]>([
     ["", {}, true],
@@ -117,8 +117,8 @@ describe("facts read from labels, runs and charges", () => {
     expect(read.attempts).toBe(2);
     expect(read.size).toBe(3);
     expect(read.named).toEqual([
-      { node: "author", name: "done", commit: undefined },
-      { node: "review", name: "approved", commit: "c1" },
+      { node: "author", id: "done", name: "done", commit: undefined },
+      { node: "review", id: "approved", name: "approved", commit: "c1" },
     ]);
     expect(read.exit).toBe("approved");
     expect(read.running).toEqual({ node: "review", named: true });
@@ -127,7 +127,7 @@ describe("facts read from labels, runs and charges", () => {
 });
 
 describe("the block a board draws a task on", () => {
-  const done = { node: "author", name: "done", commit: "c1" };
+  const done = { node: "author", id: "done", name: "done", commit: "c1" };
   const stands = (over: Partial<Facts>) => {
     const placement = place(STANDARD_PIPELINES.worktree, facts(over));
     return placement._tag === "At" ? placement.stands : placement._tag;
@@ -149,8 +149,8 @@ describe("the block a board draws a task on", () => {
 });
 
 describe("placement on the standard pipeline", () => {
-  const done = { node: "author", name: "done", commit: "c1" };
-  const approved = { node: "review", name: "approved", commit: "c1" };
+  const done = { node: "author", id: "done", name: "done", commit: "c1" };
+  const approved = { node: "review", id: "approved", name: "approved", commit: "c1" };
 
   test.each<[string, Partial<Facts>, ReturnType<typeof at>]>([
     [
@@ -187,7 +187,7 @@ describe("placement on the standard pipeline", () => {
       "a returned review waits at the author behind climb",
       {
         status: "in_progress",
-        named: [done, { node: "review", name: "returned", commit: "c1" }],
+        named: [done, { node: "review", id: "returned", name: "returned", commit: "c1" }],
         failedBy: new Set(["cheap"]),
       },
       { node: "author", state: "waiting", gates: ["climb"], ahead: 2 },
@@ -211,22 +211,45 @@ describe("placement on the standard pipeline", () => {
       "an earlier exit at a block the pipeline no longer has changes nothing",
       {
         status: "in_progress",
-        named: [{ node: "deleted-block", name: "done", commit: "c1" }, done],
+        named: [{ node: "deleted-block", id: "done", name: "done", commit: "c1" }, done],
       },
       { node: "review", state: "waiting", gates: ["review-gate"], ahead: 1 },
     ],
     [
-      "a last exit at a block the pipeline no longer has walks from the source",
+      "a last exit at a block the pipeline no longer has places nowhere, for the operator to answer",
       {
         status: "in_progress",
-        named: [done, { node: "deleted-block", name: "done", commit: "c1" }],
+        named: [done, { node: "deleted-block", id: "done", name: undefined, commit: "c1" }],
       },
-      { node: "author", state: "running", gates: ["start"], ahead: 2 },
+      {
+        _tag: "ExitGone",
+        node: "deleted-block",
+        exit: "done",
+        reason:
+          "the pipeline no longer has the block deleted-block, where the task's run named done",
+      },
     ],
     [
-      "a last exit the block no longer declares walks from the source",
-      { status: "in_progress", named: [{ node: "author", name: "gone", commit: "c1" }] },
-      { node: "author", state: "running", gates: ["start"], ahead: 2 },
+      "a last exit the block no longer declares places nowhere, for the operator to answer",
+      {
+        status: "in_progress",
+        named: [{ node: "author", id: "gone", name: undefined, commit: "c1" }],
+      },
+      {
+        _tag: "ExitGone",
+        node: "author",
+        exit: "gone",
+        reason: "author no longer has the exit gone the task's run named there",
+      },
+    ],
+    [
+      "an agent at work past a lost exit stands at its block",
+      {
+        status: "in_progress",
+        named: [{ node: "author", id: "gone", name: undefined, commit: "c1" }],
+        running: { node: "review", named: false },
+      },
+      { node: "review", state: "running", gates: [], ahead: 1 },
     ],
     [
       "a commit after the approval places the task at review again",
@@ -265,8 +288,8 @@ describe("placement on a drawn pipeline", () => {
         role: "author",
         model: "ladder",
         exits: [
-          { name: "done", to: "check" },
-          { name: "already-done", to: "check" },
+          { id: "done", name: "done", to: "check" },
+          { id: "already-done", name: "already-done", to: "check" },
         ],
       },
       { kind: "gate", id: "check", step: "review", next: "read" },
@@ -276,8 +299,8 @@ describe("placement on a drawn pipeline", () => {
         role: "review",
         model: "reviewers",
         exits: [
-          { name: "approved", to: "ship" },
-          { name: "returned", to: "queue", fails: "author" },
+          { id: "approved", name: "approved", to: "ship" },
+          { id: "returned", name: "returned", to: "queue", fails: "author" },
         ],
       },
       { kind: "gate", id: "ship", step: "land", next: "land" },
@@ -337,8 +360,8 @@ const forwardPipeline: Pipeline = {
       ? {
           ...node,
           exits: [
-            { name: "approved", to: "land-gate" },
-            { name: "returned", to: "queue", fails: "author" },
+            { id: "approved", name: "approved", to: "land-gate" },
+            { id: "returned", name: "returned", to: "queue", fails: "author" },
           ],
         }
       : node,
@@ -466,8 +489,8 @@ describe("validation", () => {
           role: "review",
           model: "ladder",
           exits: [
-            { name: "approved", to: "land-gate" },
-            { name: "returned", to: "queue", fails: "author" },
+            { id: "approved", name: "approved", to: "land-gate" },
+            { id: "returned", name: "returned", to: "queue", fails: "author" },
           ],
         }),
         OFFERS,
@@ -481,8 +504,8 @@ describe("validation", () => {
           role: "author",
           model: "gone",
           exits: [
-            { name: "done", to: "review-gate" },
-            { name: "already-done", to: "review-gate" },
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "review-gate" },
           ],
         }),
         OFFERS,
@@ -496,8 +519,8 @@ describe("validation", () => {
           role: "author",
           model: "cheap",
           exits: [
-            { name: "done", to: "review-gate" },
-            { name: "already-done", to: "review-gate" },
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "review-gate" },
           ],
         }),
         {
@@ -522,8 +545,8 @@ describe("validation", () => {
           role: "author",
           model: "reviewers",
           exits: [
-            { name: "done", to: "review-gate" },
-            { name: "already-done", to: "review-gate" },
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "review-gate" },
           ],
         }),
         OFFERS,
@@ -578,8 +601,8 @@ describe("validation", () => {
           role: "review",
           model: "reviewers",
           exits: [
-            { name: "approved", to: "g2" },
-            { name: "returned", to: "queue", fails: "author" },
+            { id: "approved", name: "approved", to: "g2" },
+            { id: "returned", name: "returned", to: "queue", fails: "author" },
           ],
         },
         { kind: "gate", id: "g2", step: "author", next: "author" },
@@ -589,8 +612,8 @@ describe("validation", () => {
           role: "author",
           model: "ladder",
           exits: [
-            { name: "done", to: "g3" },
-            { name: "already-done", to: "g3" },
+            { id: "done", name: "done", to: "g3" },
+            { id: "already-done", name: "already-done", to: "g3" },
           ],
         },
         { kind: "gate", id: "g3", step: "land", next: "land" },
@@ -611,8 +634,8 @@ describe("validation", () => {
           role: "review",
           model: "reviewers",
           exits: [
-            { name: "approved", to: "land" },
-            { name: "returned", to: "queue", fails: "author" },
+            { id: "approved", name: "approved", to: "land" },
+            { id: "returned", name: "returned", to: "queue", fails: "author" },
           ],
         }),
         OFFERS,
@@ -661,8 +684,8 @@ describe("a check block", () => {
               id: "lint",
               command: "bun run lint",
               exits: [
-                { name: "passed", to: "review-gate" },
-                { name: "failed", to: "queue", fails: "author" },
+                { id: "passed", name: "passed", to: "review-gate" },
+                { id: "failed", name: "failed", to: "queue", fails: "author" },
               ],
             },
           ]
@@ -697,7 +720,7 @@ describe("a check block", () => {
     expect(
       at(checked, {
         status: "in_progress",
-        named: [{ node: "author", name: "done", commit: "c1" }],
+        named: [{ node: "author", id: "done", name: "done", commit: "c1" }],
       }),
     ).toEqual({
       node: "lint",
@@ -752,8 +775,8 @@ describe("a check block", () => {
           id: "lint",
           command: "bun run lint",
           exits: [
-            { name: "passed", to: "start" },
-            { name: "failed", to: "queue", fails: "author" },
+            { id: "passed", name: "passed", to: "start" },
+            { id: "failed", name: "failed", to: "queue", fails: "author" },
           ],
         },
         ...forwardPipeline.nodes.filter(
@@ -826,8 +849,8 @@ describe("workspace blocks", () => {
     expect(workspaceOf(direct)).toEqual(["author", "none"]);
   });
 
-  const done = { node: "author", name: "done", commit: "c1" };
-  const approved = { node: "review", name: "approved", commit: "c1" };
+  const done = { node: "author", id: "done", name: "done", commit: "c1" };
+  const approved = { node: "review", id: "approved", name: "approved", commit: "c1" };
 
   test("a task in flight places at the same block as before the workspace blocks", () => {
     const old = drop(drop(STANDARD_PIPELINES.worktree, "worktree", "retry"), "branch", "retry");
@@ -874,8 +897,8 @@ describe("workspace blocks", () => {
       role: "author",
       model: "ladder",
       exits: [
-        { name: "done", to: "land-gate" },
-        { name: "already-done", to: "land-gate" },
+        { id: "done", name: "done", to: "land-gate" },
+        { id: "already-done", name: "already-done", to: "land-gate" },
       ],
     });
     expect(problemsOf(unreviewed, OFFERS)).toContain(
@@ -887,8 +910,8 @@ describe("workspace blocks", () => {
       role: "review",
       model: "reviewers",
       exits: [
-        { name: "approved", to: "land" },
-        { name: "returned", to: "queue", fails: "author" },
+        { id: "approved", name: "approved", to: "land" },
+        { id: "returned", name: "returned", to: "queue", fails: "author" },
       ],
     });
     expect(problemsOf(ungated, OFFERS)).toContain(
@@ -921,23 +944,24 @@ describe("a cycle", () => {
   const looped = (returned: Exit): Pipeline => ({
     nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
       node.id === "review" && node.kind === "agent"
-        ? { ...node, exits: [{ name: "approved", to: "land-gate" }, returned] }
+        ? { ...node, exits: [{ id: "approved", name: "approved", to: "land-gate" }, returned] }
         : node,
     ),
   });
 
   test("is a problem when no exit on it fails a rung and no router leaves it on a count", () => {
-    expect(problemsOf(looped({ name: "returned", to: "start" }), OFFERS)).toEqual([
+    expect(problemsOf(looped({ id: "returned", name: "returned", to: "start" }), OFFERS)).toEqual([
       "the wires loop through author, start, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
     ]);
   });
 
   test("is a problem when a lap that passes no charging exit can go round, inside a loop one charges", () => {
     const inner: Pipeline = {
-      nodes: looped({ name: "returned", to: "start", fails: "author" }).nodes.map((node) =>
-        node.id === "author" && node.kind === "agent"
-          ? { ...node, exits: [...node.exits, { name: "stuck", to: "start" }] }
-          : node,
+      nodes: looped({ id: "returned", name: "returned", to: "start", fails: "author" }).nodes.map(
+        (node) =>
+          node.id === "author" && node.kind === "agent"
+            ? { ...node, exits: [...node.exits, { id: "stuck", name: "stuck", to: "start" }] }
+            : node,
       ),
     };
     expect(problemsOf(inner, OFFERS)).toEqual([
@@ -946,15 +970,18 @@ describe("a cycle", () => {
   });
 
   test("is valid when an exit on it fails a rung", () => {
-    expect(problemsOf(looped({ name: "returned", to: "start", fails: "author" }), OFFERS)).toEqual(
-      [],
-    );
+    expect(
+      problemsOf(
+        looped({ id: "returned", name: "returned", to: "start", fails: "author" }),
+        OFFERS,
+      ),
+    ).toEqual([]);
   });
 
   test("is valid when a router leaves it on a count of exits", () => {
     const counted: Pipeline = {
       nodes: [
-        ...looped({ name: "returned", to: "count" }).nodes,
+        ...looped({ id: "returned", name: "returned", to: "count" }).nodes,
         {
           kind: "router",
           id: "count",
@@ -970,7 +997,7 @@ describe("a cycle", () => {
   test("is a problem when its router counts an exit no block on it declares", () => {
     const miscounted: Pipeline = {
       nodes: [
-        ...looped({ name: "returned", to: "count" }).nodes,
+        ...looped({ id: "returned", name: "returned", to: "count" }).nodes,
         {
           kind: "router",
           id: "count",
@@ -1027,11 +1054,11 @@ describe("exits", () => {
       problemsOf(
         replace(
           review([
-            { name: "approved", to: "land-gate" },
-            { name: "approved", to: "queue" },
-            { name: "Bad_Name", to: "land-gate" },
-            { name: "stopped", to: "land-gate" },
-            { name: "loose", to: "nowhere" },
+            { id: "approved", name: "approved", to: "land-gate" },
+            { id: "approved", name: "approved", to: "queue" },
+            { id: "Bad_Name", name: "Bad_Name", to: "land-gate" },
+            { id: "stopped", name: "stopped", to: "land-gate" },
+            { id: "loose", name: "loose", to: "nowhere" },
           ]),
         ),
         OFFERS,
@@ -1039,8 +1066,79 @@ describe("exits", () => {
     ).toEqual([
       "review is wired to nowhere, which is no block",
       "review: two exits are named approved",
+      "review: two exits have the id approved",
       "review: the exit Bad_Name is not lower-case words and hyphens",
+      'review: the exit Bad_Name has the id "Bad_Name", not lower-case letters and hyphens',
       "review: stopped is how a run stops with no exit, not an exit",
     ]);
+  });
+
+  const author = (exits: ReadonlyArray<Exit>): PipelineNode => ({
+    kind: "agent",
+    id: "author",
+    role: "author",
+    model: "ladder",
+    exits,
+  });
+
+  test("an author has at most one claim, and it leads to a review", () => {
+    expect(
+      problemsOf(
+        replace(
+          author([
+            { id: "done", name: "done", to: "review-gate", empty: "claim" },
+            { id: "already-done", name: "already-done", to: "queue", empty: "claim" },
+          ]),
+        ),
+        OFFERS,
+      ),
+    ).toEqual([
+      "author: the claim already-done returns the task to the queue, and a claim leads to a review",
+      "author: an author has at most one claim, and done, already-done are claims",
+    ]);
+    expect(
+      problemsOf(
+        replace(review([{ id: "approved", name: "approved", to: "land-gate", empty: "claim" }])),
+        OFFERS,
+      ),
+    ).toContain("review: only an author claims trunk already does the task");
+  });
+
+  test("a claim that reaches another author or a park before a review is refused", () => {
+    const second: PipelineNode = {
+      kind: "agent",
+      id: "second",
+      role: "author",
+      model: "ladder",
+      exits: [{ id: "done", name: "done", to: "review-gate" }],
+    };
+    const pipeline: Pipeline = {
+      nodes: [
+        ...replace(
+          author([
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "second", empty: "claim" },
+          ]),
+        ).nodes,
+        second,
+      ],
+    };
+    expect(problemsOf(pipeline, OFFERS)).toContain(
+      "author: the claim already-done reaches second before a review",
+    );
+    const parked: Pipeline = {
+      nodes: [
+        ...replace(
+          author([
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "operator", empty: "claim" },
+          ]),
+        ).nodes,
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(problemsOf(parked, OFFERS)).toContain(
+      "author: the claim already-done reaches operator before a review",
+    );
   });
 });

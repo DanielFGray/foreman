@@ -1,13 +1,14 @@
 import { BunServices } from "@effect/platform-bun";
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { labelFor } from "./fleet.ts";
-import { claimsAlreadyDone } from "./lap.ts";
+import { authorClaim } from "./lap.ts";
 import {
-  ALREADY_DONE,
   type AgentNode,
+  claimOf,
   type Exit,
   instructionsOf,
   isInstructionsName,
+  type Pipeline,
   placeholdersIn,
   QUEUE,
   type Workspace,
@@ -185,6 +186,8 @@ export interface AgentRun {
   readonly workspace: Workspace | undefined;
   readonly base: string;
   readonly verify?: string | undefined;
+  /** The pipeline the task runs, which says whether its author made a claim; absent when its project runs none. */
+  readonly pipeline: Pipeline | undefined;
 }
 
 type Values = Readonly<Record<string, string>>;
@@ -216,7 +219,7 @@ const fill = (name: string, body: string, values: Values) =>
  * reaches only the runs whose task calls for it, so every other prompt stays
  * short.
  */
-const taskSection = (block: AgentNode, { task, workspace }: AgentRun): string => {
+const taskSection = (block: AgentNode, { task, workspace, pipeline }: AgentRun): string => {
   const lines = [
     "## Task",
     "",
@@ -230,10 +233,11 @@ const taskSection = (block: AgentNode, { task, workspace }: AgentRun): string =>
       `This task is labelled \`research\`: the deliverable is a report, not code. Write it to \`foreman log ${task.id} -\` with the commands you ran and what they showed, so a reviewer can check every claim. Make no commits of your own.${workspace === "none" ? "" : " The branch stays empty."}`,
     );
   }
-  if (block.role === "review" && claimsAlreadyDone(task)) {
+  const claim = pipeline === undefined ? undefined : authorClaim(task, pipeline);
+  if (block.role === "review" && claim !== undefined) {
     lines.push(
       "",
-      `The author ended its run \`${ALREADY_DONE}\`: it claims trunk already does what the task asks. Walk the definition of done and find the code and tests on trunk for each part. Approve only when every part is there; otherwise log the missing parts and return it.`,
+      `The author ended its run \`${claim.name}\`: it claims trunk already does what the task asks. Walk the definition of done and find the code and tests on trunk for each part. Approve only when every part is there; otherwise log the missing parts and return it.`,
     );
   }
   if (block.role === "review" && research) {
@@ -308,11 +312,12 @@ const verification = ({ task, repository, workspace, verify }: AgentRun): string
  * One line per exit the block declares, then what follows when the agent
  * names none. This is the only text an agent block's prompt uses to name an
  * exit: the instructions foreman ships for agent blocks name none, so a drawing that renames or removes one cannot
- * leave them contradicting it. An author block that declares `ALREADY_DONE`,
- * the one exit name foreman's code reads, is also told when to name it.
+ * leave them contradicting it. An author block that declares a claim exit
+ * (`empty: claim`) is also told when to name it, under its name as drawn.
  */
-const exitsSection = (block: AgentNode, { task }: AgentRun): string =>
-  [
+const exitsSection = (block: AgentNode, { task }: AgentRun): string => {
+  const claim = claimOf(block);
+  return [
     "## Exits",
     "",
     "End your run by naming one exit:",
@@ -320,13 +325,14 @@ const exitsSection = (block: AgentNode, { task }: AgentRun): string =>
     ...block.exits.map((exit) => `- \`foreman exit ${task.id} ${exit.name}\`: ${whereTo(exit)}`),
     "",
     `Name exactly one exit; a second replaces the first. If you name none, the task ${block.stopped === "park" ? "parks" : "retries"}.`,
-    ...(block.role === "author" && block.exits.some((exit) => exit.name === ALREADY_DONE)
-      ? [
+    ...(claim === undefined
+      ? []
+      : [
           "",
-          `Name \`${ALREADY_DONE}\` only when trunk already does everything the task asks: first prove it part by part in \`foreman log ${task.id} -\` (code, tests, commits). A reviewer reads the claim. Partly done is not done, and a claim you cannot point at line by line is rejected.`,
-        ]
-      : []),
+          `Name \`${claim.name}\` only when trunk already does everything the task asks: first prove it part by part in \`foreman log ${task.id} -\` (code, tests, commits). A reviewer reads the claim. Partly done is not done, and a claim you cannot point at line by line is rejected.`,
+        ]),
   ].join("\n");
+};
 
 const whereTo = (exit: Exit): string => {
   const charge =

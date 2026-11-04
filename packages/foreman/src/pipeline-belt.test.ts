@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
+import { isExit } from "tasks";
 import { type Pipeline, problemsOf, type SeatOffers, STANDARD_PIPELINES } from "./pipeline.ts";
 import {
   addExit,
@@ -14,6 +15,7 @@ import {
   removeExit,
   removeRoute,
   renameExit,
+  setEmpty,
   swapEnd,
 } from "./pipeline-belt.ts";
 
@@ -23,6 +25,10 @@ const OFFERS: SeatOffers = {
 };
 const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
 const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
+const exitsOf = (pipeline: Pipeline, id: string) => {
+  const found = node(pipeline, id);
+  return found?.kind === "agent" || found?.kind === "check" ? found.exits : [];
+};
 const at = (pipeline: Pipeline) =>
   Object.fromEntries(beltOf(pipeline).cells.map((cell) => [cell.node.id, [cell.column, cell.row]]));
 
@@ -61,15 +67,15 @@ describe("belt edits", () => {
     );
     expect(node(pipeline, "review")).toMatchObject({
       exits: [
-        { name: "approved", to: id },
-        { name: "returned", to: "climb", fails: "author" },
+        { id: "approved", name: "approved", to: id },
+        { id: "returned", name: "returned", to: "climb", fails: "author" },
       ],
     });
     expect(node(pipeline, id)).toMatchObject({
       kind: "agent",
       exits: [
         { name: "done", to: "land-gate" },
-        { name: "already-done", to: "land-gate" },
+        { name: "already-done", to: "land-gate", empty: "claim" },
       ],
     });
     // A second agent between review and land needs its own gate, and a review after it.
@@ -90,8 +96,8 @@ describe("belt edits", () => {
       id,
       command: "",
       exits: [
-        { name: "passed", to: "review-gate" },
-        { name: "failed", to: "queue", fails: "author" },
+        { id: "passed", name: "passed", to: "review-gate" },
+        { id: "failed", name: "failed", to: "queue", fails: "author" },
       ],
     });
     expect(problemsOf(pipeline, OFFERS)).toEqual([
@@ -101,8 +107,8 @@ describe("belt edits", () => {
     expect(node(named, id)).toMatchObject({
       command: "bun run lint",
       exits: [
-        { name: "passed", to: "review-gate" },
-        { name: "failed", to: "queue" },
+        { id: "passed", name: "passed", to: "review-gate" },
+        { id: "failed", name: "failed", to: "queue" },
       ],
     });
     expect(problemsOf(named, OFFERS)).toEqual([
@@ -234,6 +240,12 @@ describe("belt edits", () => {
 
   test("an exit is added where the first exit leads, renamed, charged and removed", () => {
     const added = addExit(STANDARD_PIPELINES.worktree, "author", "stuck");
+    const stuck = exitsOf(added, "author")[2]?.id ?? "";
+    // A fresh id, not the name: a name given back after a removal would
+    // otherwise place the removed exit's tasks at the new one.
+    expect(stuck).toMatch(/^exit-[a-z]{10}$/);
+    // A run stores the id as its ending, and the store must read it as an exit.
+    expect(isExit(stuck)).toBe(true);
     expect(node(added, "author")).toMatchObject({
       exits: [{ name: "done" }, { name: "already-done" }, { name: "stuck", to: "review-gate" }],
     });
@@ -246,38 +258,60 @@ describe("belt edits", () => {
     ]);
     const charged = chargeExit(back, "author", "stuck", "self");
     expect(node(charged, "author")).toMatchObject({
-      exits: [{}, {}, { name: "stuck", to: "start", fails: "self" }],
+      exits: [{}, {}, { id: stuck, name: "stuck", to: "start", fails: "self" }],
     });
     expect(problemsOf(charged, OFFERS)).toEqual([]);
     const renamed = renameExit(charged, "author", "stuck", "blocked");
     expect(node(renamed, "author")).toMatchObject({
-      exits: [{}, {}, { name: "blocked", to: "start", fails: "self" }],
+      exits: [{}, {}, { id: stuck, name: "blocked", to: "start", fails: "self" }],
     });
     expect(node(chargeExit(renamed, "author", "blocked", undefined), "author")).toMatchObject({
-      exits: [{}, {}, { name: "blocked", to: "start" }],
+      exits: [{}, {}, { id: stuck, name: "blocked", to: "start" }],
     });
     expect(node(removeExit(renamed, "author", "blocked"), "author")).toEqual(
       node(STANDARD_PIPELINES.worktree, "author"),
     );
   });
 
-  test("an exit leads back to the queue, and a renamed exit a router counts is named", () => {
+  test("an exit leads back to the queue, and renaming an exit a router counts renames it in the filter", () => {
     const returned = rejoin(
       STANDARD_PIPELINES.worktree,
       { from: "review", port: "exit:returned" },
       "queue",
     ).pipe(Option.getOrThrow);
     expect(node(returned, "review")).toMatchObject({
-      exits: [{}, { name: "returned", to: "queue", fails: "author" }],
+      exits: [{}, { id: "returned", name: "returned", to: "queue", fails: "author" }],
     });
     const counted = configure(returned, "retry", {
       kind: "router",
       route: 1,
       when: "exits:returned>=2",
     });
-    expect(problemsOf(renameExit(counted, "review", "returned", "sent-back"), OFFERS)).toContain(
-      "retry: the filter counts the exit returned, and no block declares it",
+    const renamed = renameExit(counted, "review", "returned", "sent-back");
+    expect(node(renamed, "retry")).toMatchObject({
+      routes: [{ when: "failed" }, { when: "exits:sent-back>=2" }],
+    });
+    expect(problemsOf(renamed, OFFERS)).toEqual(problemsOf(counted, OFFERS));
+    // While another exit still has the old name, the filter keeps counting it.
+    const twice = renameExit(
+      addExit(counted, "author", "returned"),
+      "review",
+      "returned",
+      "sent-back",
     );
+    expect(node(twice, "retry")).toMatchObject({
+      routes: [{ when: "failed" }, { when: "exits:returned>=2" }],
+    });
+  });
+
+  test("marking an exit the claim unmarks the author's other exits", () => {
+    const moved = setEmpty(STANDARD_PIPELINES.worktree, "author", "done", "claim");
+    expect(exitsOf(moved, "author").map((exit) => [exit.name, exit.empty])).toEqual([
+      ["done", "claim"],
+      ["already-done", undefined],
+    ]);
+    const none = setEmpty(moved, "author", "done", undefined);
+    expect(exitsOf(none, "author").some((exit) => exit.empty !== undefined)).toBe(false);
   });
 
   test("a wire can rejoin an acyclic sibling in the same column", () => {
@@ -313,8 +347,8 @@ describe("belt edits", () => {
       model: "cheap",
       slots: 2,
       exits: [
-        { name: "done", to: "review-gate" },
-        { name: "already-done", to: "review-gate" },
+        { id: "done", name: "done", to: "review-gate" },
+        { id: "already-done", name: "already-done", to: "review-gate", empty: "claim" },
       ],
     });
     const unslotted = configure(pipeline, "author", {

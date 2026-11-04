@@ -334,7 +334,11 @@ describe("work handed back for review", () => {
   test("sends a reviewer only at a branch that holds commits", () => {
     const written = active(authoredOn(task("ts-111111", []), "opencode"), undefined);
     const empty = active(authoredOn(task("ts-222222", []), "opencode"), undefined);
-    const { review, unbacked } = reviewable([written, empty], new Set(["ts-111111"]));
+    const { review, unbacked } = reviewable(
+      [written, empty],
+      new Set(["ts-111111"]),
+      PROJECT_PIPELINES,
+    );
 
     expect(review.map(({ task }) => task.id)).toEqual(["ts-111111"]);
     expect(unbacked.map(({ task }) => task.id)).toEqual(["ts-222222"]);
@@ -350,7 +354,7 @@ describe("work handed back for review", () => {
       ]),
       undefined,
     );
-    const { review, unbacked } = reviewable([claimed], new Set());
+    const { review, unbacked } = reviewable([claimed], new Set(), PROJECT_PIPELINES);
 
     expect(review.map(({ task }) => task.id)).toEqual(["ts-444444"]);
     expect(unbacked).toEqual([]);
@@ -360,7 +364,7 @@ describe("work handed back for review", () => {
     // A research task's product is in its log, so its branch is legitimately
     // empty; read as unbacked it would be returned for having no commits.
     const report = active(authoredOn(task("ts-555555", ["research"]), "opencode"), undefined);
-    const { review, unbacked } = reviewable([report], new Set());
+    const { review, unbacked } = reviewable([report], new Set(), PROJECT_PIPELINES);
 
     expect(review.map(({ task }) => task.id)).toEqual(["ts-555555"]);
     expect(unbacked).toEqual([]);
@@ -370,7 +374,7 @@ describe("work handed back for review", () => {
     // A task under review with no author run is not fleet work. Without a by-* label the
     // branch is not foreman's to review, land or return to its queue.
     const theirs = active(task("ts-333333", []), undefined);
-    const { review, unbacked } = reviewable([theirs], new Set(["ts-333333"]));
+    const { review, unbacked } = reviewable([theirs], new Set(["ts-333333"]), PROJECT_PIPELINES);
 
     expect(review).toEqual([]);
     expect(unbacked).toEqual([]);
@@ -522,8 +526,8 @@ describe("the policy gate on dispatch", () => {
                 id: "lint",
                 command: "bun run lint",
                 exits: [
-                  { name: "passed", to: "review-gate" },
-                  { name: "failed", to: "queue", fails: "author" },
+                  { id: "passed", name: "passed", to: "review-gate" },
+                  { id: "failed", name: "failed", to: "queue", fails: "author" },
                 ],
               },
             ]

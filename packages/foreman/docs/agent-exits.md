@@ -8,14 +8,25 @@ they differ, that section is the rule.
 ## What is built
 
 - **Schema and file.** Agent and check blocks have `exits`; agent blocks have
-  `stopped`. The pipelines file is `version: 3`, and version 2 and 1 read with
-  the standard exits wired as they were: `returned` and `failed` go to `queue`
-  with `fails: author`. The standard pipeline wires a returned review to the
+  `stopped`. Each exit has an `id` and a `name`. The id is the exit's identity:
+  a run stores it, and placement looks it up. The name is what the agent types
+  and what filters count, and a rename changes only the name. A new exit gets
+  a random id (`exit-<letters>`) that no exit in the pipeline has. An id has
+  the form of a name (`[a-z-]+`), because the store reads an ending in that
+  form as an exit. A check's exits
+  are `passed` and `failed`, id and name alike. An author's exit may declare
+  `empty: claim`: see "Prompts". The pipelines file is `version: 5` and the
+  drafts file `version: 3`, and foreman reads only those.
+  `foreman cutover exit-ids` converts an older file once: each exit's id is its
+  name, an author's `already-done` declares the claim, and version 2 and older
+  get the standard exits wired as they were: `returned` and `failed` go to
+  `queue` with `fails: author`. The standard pipeline wires a returned review to the
   `climb` gate with `fails: author`, keeping the claim, branch and worktree.
   It also keeps its retry router for queued retries. Agent blocks have
   `instructions`; blocks have no `rounds` yet.
-- **Store.** An agent run ends with an exit name (`[a-z-]+`) or a process
-  ending. A migration renamed the old endings: `handed-off` to `done`,
+- **Store.** An agent run ends with an exit id or a process ending.
+  `foreman exit <task> <name>` resolves the name on the run's block in the
+  drawing as it is now and stores the id. A migration renamed the old endings: `handed-off` to `done`,
   `satisfied` to `already-done`, `no-verdict` and `unfinished` to `stopped`.
   An exit's `fails` writes a row in `charges` (State).
 - **Placement.** An open agent run places the task at its block. Otherwise
@@ -37,10 +48,11 @@ they differ, that section is the rule.
   files, with the same lookup and their own placeholders.
   The instructions foreman ships for agent blocks name no exit: only the
   generated Exits section names exits, from the block, so a renamed exit cannot leave the
-  instructions contradicting it. The one exit name foreman's code reads is
-  `already-done` (`ALREADY_DONE` in `src/pipeline.ts`), and the Exits section
-  explains it only to an author block that declares it. A drawing that renames
-  it loses the explanation and the meaning together. An operator's own
+  instructions contradicting it. No code reads an exit's name
+  for its meaning. An author exit declared `empty: claim` is the claim that
+  trunk already does the task: an empty branch on it goes to a reviewer, the
+  reviewer gets the claim-checking instructions, and the Exits section tells
+  the author when to name it. A renamed claim keeps all three. An operator's own
   instructions may still name exits; validation does not read them for exit
   names.
 - **The page.** The Foreman pane's inspector lists an agent's or a check's
@@ -139,7 +151,8 @@ a process outcome, not an exit.
    wire, and walks on through routers, gates and workspace blocks to the next
    work block, as `place` walks today. A task with no such run, or one that came
    back from the queue, starts at its source. When the last exit names a block
-   or exit the operator deleted, the task starts at its source again. The
+   or exit the operator deleted, the task is a decision for the operator
+   ("What is built"). The
    exit is evidence of what the agent said, not a pointer to what runs next:
    its wire is read from the drawing as it is now, so an edit to the wire moves
    the task, as "A task records what failed it, never what runs next"
@@ -220,8 +233,11 @@ A charge records the newest run on the task when it was written (`run`), so
 
 These are problems: a pipeline with any of them does not run.
 
-- Every exit is wired, and its names are unique on the block and match
-  `[a-z-]+`.
+- Every exit is wired, its names and its ids are unique on the block, and its
+  name matches `[a-z-]+`.
+- Only an author exit declares `empty: claim`, an author block has at most one,
+  and it does not return to the queue. Its route reaches a review before any
+  other author block or a park; a check may stand between them.
 - An agent block has at least one exit.
 - Every cycle can end (rule 5).
 - A router filter that counts an exit names one some block declares.
@@ -240,8 +256,8 @@ This is a hint: the editor shows it, but the pipeline runs.
 
 ## The standard pipeline, drawn with exits
 
-- author: `done` → review gate; `already-done` → review gate (the old
-  `satisfied`); `stopped: retry`.
+- author: `done` → review gate; `already-done` → review gate, `empty: claim`
+  (the old `satisfied`); `stopped: retry`.
 - review: `approved` → land gate; `returned` → climb gate, `fails: author`;
   `stopped: retry`.
 
@@ -254,18 +270,19 @@ The standard pipeline has no check block. The store's author ending
 
 ## Changes to what exists
 
-- **The pipelines file goes to `version: 3`.** On read, each agent and check
-  block gets the standard exits for its role, and each agent block gets the
+- **The pipelines file goes to `version: 3`.** Each agent and check block
+  gets the standard exits for its role, and each agent block gets the
   instructions for its role. Saved pipelines wire `returned` and `failed` to
   `queue` with `fails: author`, so they behave as today. Only the standard
-  pipeline wires `returned` back to the author through `climb`. The read
-  writes nothing, as with version 2.
+  pipeline wires `returned` back to the author through `climb`. The
+  conversion is now `foreman cutover exit-ids`, and foreman reads only the
+  current version ("What is built").
 - **Prompts.** The files under `prompts/` become the default instructions,
   without the contract text and the `{% %}` logic. That logic moves into the
   generated sections. An operator's files live in `~/.config/foreman/prompts/`
   and win over the defaults. The `FOREMAN_PROMPTS` variable is removed.
-- **The store.** An agent run's `ending` holds an exit name or a process
-  ending. The store accepts any exit name for an agent run, because only
+- **The store.** An agent run's `ending` holds an exit id or a process
+  ending. The store accepts any ending in the form of an exit name for an agent run, because only
   foreman knows the block, and foreman validates it. The rung an exit charges is a
   row in `charges` (State). `VERDICTS` is removed. `tasks verdict`
   stays for people who use `tasks` without foreman; `tasks review` is removed

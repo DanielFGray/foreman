@@ -8,7 +8,7 @@ import type { Run } from "tasks";
 import { connectionAt, nameExit, store, Tasks } from "tasks";
 import {
   authoredBy,
-  claimsAlreadyDone,
+  authorClaim,
   lapOf,
   lastExit,
   reviewedBy,
@@ -18,6 +18,7 @@ import {
   routedCommit,
 } from "./lap.ts";
 import { place, STANDARD_PIPELINES } from "./pipeline.ts";
+import { renameExit, setEmpty } from "./pipeline-belt.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
@@ -127,11 +128,20 @@ describe("a task's lap", () => {
     expect(blockOf([authorDone("low", "c1"), approval, authorRun("high")], "c1")).toBe("author");
   });
 
-  test("reads the author's already-done claim from its exit", () => {
-    expect(
-      claimsAlreadyDone({ runs: [authorRun("low", { open: false, ending: "already-done" })] }),
-    ).toBe(true);
-    expect(claimsAlreadyDone({ runs: [authorDone("low")] })).toBe(false);
+  test("reads the author's claim from the declared property of the exit it named", () => {
+    const pipeline = STANDARD_PIPELINES.worktree;
+    const claimed = { runs: [authorRun("low", { open: false, ending: "already-done" })] };
+    expect(authorClaim(claimed, pipeline)?.id).toBe("already-done");
+    expect(authorClaim({ runs: [authorDone("low")] }, pipeline)).toBeUndefined();
+  });
+
+  test("a renamed claim exit keeps its meaning, and a claim exit by name alone has none", () => {
+    const pipeline = STANDARD_PIPELINES.worktree;
+    const renamed = renameExit(pipeline, "author", "already-done", "nothing-to-do");
+    const claimed = { runs: [authorRun("low", { open: false, ending: "already-done" })] };
+    expect(authorClaim(claimed, renamed)?.name).toBe("nothing-to-do");
+    const unmarked = setEmpty(renamed, "author", "nothing-to-do", undefined);
+    expect(authorClaim(claimed, unmarked)).toBeUndefined();
   });
 });
 
@@ -195,7 +205,7 @@ describe("the readers against a scratch store", () => {
     await run((_, tracker) => tracker.claim(id));
     await started({ _tag: "ReviewStarted", run: dispatch("review", "mid", "c1") });
     await Effect.runPromise(
-      nameExit(id, { name: "approved", commit: "c1", event: undefined }).pipe(
+      nameExit(id, { ending: "approved", commit: "c1", event: undefined }).pipe(
         Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),
       ),
     );

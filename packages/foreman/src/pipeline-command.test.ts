@@ -5,10 +5,10 @@ import { Command } from "effect/cli";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STANDARD_PIPELINES, standardExits, WORKSPACE_CHOICES } from "./pipeline.ts";
+import { STANDARD_PIPELINES, WORKSPACE_CHOICES } from "./pipeline.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
-import { readPipelines, withWorkspace } from "./pipeline-file.ts";
+import { readPipelines } from "./pipeline-file.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
@@ -74,12 +74,12 @@ describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      version: 4,
+      version: 5,
       pipelines: { amux: pinned },
     });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 4, pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 5, pipelines: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -126,115 +126,7 @@ describe("foreman pipeline use", () => {
   });
 });
 
-describe("a pipelines file from before the workspace blocks", () => {
-  const old = {
-    nodes: [
-      { kind: "source", id: "queue", filter: "", next: "author" },
-      { kind: "agent", id: "author", role: "author", model: "ladder", next: "review" },
-      { kind: "agent", id: "review", role: "review", model: "above", next: "land" },
-      { kind: "land", id: "land" },
-    ],
-  };
-  const read = () => JSON.parse(readFileSync(path, "utf8"));
-
-  test("reads with a branch and a worktree after each source, and is stored that way once written", async () => {
-    writeFileSync(path, JSON.stringify({ amux: old }));
-    await run("set", "other", fileWith(pinned));
-
-    expect(read().version).toBe(4);
-    expect(read().pipelines.amux.nodes.slice(0, 3)).toEqual([
-      { kind: "source", id: "queue", filter: "", next: "branch" },
-      { kind: "branch", id: "branch", next: "worktree" },
-      { kind: "worktree", id: "worktree", next: "author" },
-    ]);
-    expect(read().pipelines.amux.nodes.slice(3)).toEqual([
-      {
-        kind: "agent",
-        id: "author",
-        role: "author",
-        model: "ladder",
-        exits: standardExits({ kind: "agent", role: "author" }, "review"),
-      },
-      {
-        kind: "agent",
-        id: "review",
-        role: "review",
-        model: "reviewers",
-        exits: standardExits({ kind: "agent", role: "review" }, "land"),
-      },
-      { kind: "land", id: "land" },
-    ]);
-  });
-
-  test("a pipeline later drawn direct stays direct", async () => {
-    writeFileSync(path, JSON.stringify({ amux: old }));
-    const direct = {
-      nodes: [
-        { kind: "source", id: "queue", filter: "", next: "start" },
-        { kind: "gate", id: "start", step: "author", next: "author" },
-        {
-          kind: "agent",
-          id: "author",
-          role: "author",
-          model: "ladder",
-          exits: [
-            { name: "done", to: "review-gate" },
-            { name: "already-done", to: "review-gate" },
-          ],
-        },
-        { kind: "gate", id: "review-gate", step: "review", next: "review" },
-        {
-          kind: "agent",
-          id: "review",
-          role: "review",
-          model: "reviewers",
-          exits: [
-            { name: "approved", to: "land-gate" },
-            { name: "returned", to: "queue", fails: "author" },
-          ],
-        },
-        { kind: "gate", id: "land-gate", step: "land", next: "done" },
-        { kind: "done", id: "done" },
-      ],
-    };
-    await run("set", "amux", fileWith(direct));
-    await run("set", "other", fileWith(pinned));
-
-    expect(read().pipelines.amux).toEqual(direct);
-  });
-});
-
-describe("migrating and reading the pipelines file", () => {
-  test("two sources each get a branch and a worktree with ids of their own", () => {
-    const migrated = withWorkspace({
-      nodes: [
-        { kind: "source", id: "bugs", filter: "label:bug", next: "author" },
-        { kind: "source", id: "rest", filter: "", next: "author" },
-        {
-          kind: "agent",
-          id: "author",
-          role: "author",
-          model: "ladder",
-          exits: [
-            { name: "done", to: "land" },
-            { name: "already-done", to: "land" },
-          ],
-        },
-        { kind: "land", id: "land" },
-      ],
-    });
-    expect(migrated.nodes.map((node) => node.id)).toEqual([
-      "bugs",
-      "branch",
-      "worktree",
-      "rest",
-      "branch-2",
-      "worktree-2",
-      "author",
-      "land",
-    ]);
-  });
-
+describe("reading the pipelines file", () => {
   test("a file that does not decode reports its path and why", async () => {
     writeFileSync(path, "{ not json");
     const read = await Effect.runPromise(
@@ -243,78 +135,15 @@ describe("migrating and reading the pipelines file", () => {
     expect(read.error).toStartWith(`${path} does not decode: `);
     expect(read.error?.length).toBeGreaterThan(`${path} does not decode: `.length);
   });
-});
 
-describe("a pipelines file from before the reviewers", () => {
-  test("reads a review block's above as reviewers, and is stored that way once written", async () => {
-    const pipeline = {
-      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
-        node.kind === "agent" && node.role === "review" ? { ...node, model: "above" } : node,
-      ),
-    };
-    writeFileSync(path, JSON.stringify({ version: 3, pipelines: { amux: pipeline } }));
-    await run("set", "other", fileWith(pinned));
-
-    const stored = JSON.parse(readFileSync(path, "utf8"));
-    expect(stored.version).toBe(4);
-    expect(stored.pipelines.amux).toEqual(STANDARD_PIPELINES.worktree);
-  });
-});
-
-describe("a pipelines file from before the exits", () => {
-  test("gives each agent and check the standard exits for its role, and is stored that way once written", async () => {
-    const drawn = {
-      nodes: [
-        { kind: "source", id: "queue", filter: "", next: "branch" },
-        { kind: "branch", id: "branch", next: "worktree" },
-        { kind: "worktree", id: "worktree", next: "start" },
-        { kind: "gate", id: "start", step: "author", next: "author" },
-        { kind: "agent", id: "author", role: "author", model: "ladder", next: "lint-gate" },
-        { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-        { kind: "check", id: "lint", command: "bun run lint", next: "review-gate" },
-        { kind: "gate", id: "review-gate", step: "review", next: "review" },
-        { kind: "agent", id: "review", role: "review", model: "above", next: "land-gate" },
-        { kind: "gate", id: "land-gate", step: "land", next: "land" },
-        { kind: "land", id: "land" },
-      ],
-    };
-    writeFileSync(path, JSON.stringify({ version: 2, pipelines: { amux: drawn } }));
-    await run("set", "other", fileWith(pinned));
-
-    const stored = JSON.parse(readFileSync(path, "utf8"));
-    expect(stored.version).toBe(4);
-    const byId = new Map(
-      stored.pipelines.amux.nodes.map((node: { readonly id: string }) => [node.id, node]),
+  // The cutover is the one reader of the older forms, so a file in one stops
+  // every project rather than placing tasks by exits with no ids.
+  test("a file from before exit ids does not decode", async () => {
+    writeFileSync(path, JSON.stringify({ version: 4, pipelines: {} }));
+    const read = await Effect.runPromise(
+      readPipelines(path).pipe(Effect.provide(BunServices.layer)),
     );
-    expect(byId.get("author")).toEqual({
-      kind: "agent",
-      id: "author",
-      role: "author",
-      model: "ladder",
-      exits: [
-        { name: "done", to: "lint-gate" },
-        { name: "already-done", to: "lint-gate" },
-      ],
-    });
-    expect(byId.get("lint")).toEqual({
-      kind: "check",
-      id: "lint",
-      command: "bun run lint",
-      exits: [
-        { name: "passed", to: "review-gate" },
-        { name: "failed", to: "queue", fails: "author" },
-      ],
-    });
-    expect(byId.get("review")).toEqual({
-      kind: "agent",
-      id: "review",
-      role: "review",
-      model: "reviewers",
-      exits: [
-        { name: "approved", to: "land-gate" },
-        { name: "returned", to: "queue", fails: "author" },
-      ],
-    });
+    expect(read.error).toStartWith(`${path} does not decode: `);
   });
 });
 
@@ -328,22 +157,6 @@ describe("drawing a draft", () => {
     expect(draftOf().base).toBeNull();
     expect(draftOf().pipeline.nodes.some((node: { id: string }) => node.id === "climb")).toBe(
       false,
-    );
-  });
-
-  test("a version 1 draft reads its review rule above as reviewers", async () => {
-    const old = {
-      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
-        node.kind === "agent" && node.role === "review" ? { ...node, model: "above" } : node,
-      ),
-    };
-    writeFileSync(
-      drafts,
-      JSON.stringify({ version: 1, drafts: { amux: { base: null, pipeline: old } } }),
-    );
-    await run("save", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
-      STANDARD_PIPELINES.worktree,
     );
   });
 
@@ -394,7 +207,7 @@ describe("drawing a draft", () => {
     );
     expect(
       draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "review").exits[0],
-    ).toEqual({ name: "approved", to: "start" });
+    ).toEqual({ id: "approved", name: "approved", to: "start" });
     expect(await refusal("save", "amux")).toMatch(/no source reaches land-gate/);
   });
 
@@ -422,9 +235,14 @@ describe("drawing a draft", () => {
         (node: { id: string }) => node.id === "author",
       ).exits,
     ).toEqual([
-      { name: "done", to: "review-gate" },
-      { name: "already-done", to: "review-gate" },
-      { name: "blocked", to: "start", fails: "self" },
+      { id: "done", name: "done", to: "review-gate" },
+      { id: "already-done", name: "already-done", to: "review-gate", empty: "claim" },
+      {
+        id: expect.stringMatching(/^exit-[a-z]{10}$/),
+        name: "blocked",
+        to: "start",
+        fails: "self",
+      },
     ]);
     await run("edit", "amux", change({ _tag: "RemoveExit", id: "author", name: "blocked" }));
     expect(
@@ -455,6 +273,13 @@ describe("drawing a draft", () => {
     expect(
       await refusal("edit", "amux", change({ _tag: "RemoveExit", id: check, name: "failed" })),
     ).toMatch(/a check's exits are passed and failed/);
+    expect(
+      await refusal(
+        "edit",
+        "amux",
+        change({ _tag: "SetEmpty", id: "review", name: "approved", empty: "claim" }),
+      ),
+    ).toMatch(/review is no author, and only an author claims/);
   });
 
   test("a rejoin to a block the pipeline lacks is refused, and the draft is not written", async () => {

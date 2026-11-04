@@ -8,3 +8,10 @@
  */
 export const PROCESS_ENDINGS = ["stopped", "vanished", "walled", "released", "canceled"] as const;
 export type ProcessEnding = (typeof PROCESS_ENDINGS)[number];
+
+/**
+ * The form of an exit's name and of its id. A run stores the id of the exit it
+ * named as its ending, so an ending in this form that is no process ending is
+ * an exit.
+ */
+export const EXIT_NAME = /^[a-z-]+$/;

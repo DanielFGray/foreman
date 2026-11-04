@@ -3,6 +3,7 @@ import type {
   Active,
   Ask,
   Climbing,
+  DecisionCause,
   FleetState,
   Held,
   Provider,
@@ -48,7 +49,8 @@ export type DecisionKind =
   | "author vanished"
   | "reviewer vanished"
   | "orphaned workspace"
-  | "dispatch failed";
+  | "dispatch failed"
+  | "exit gone";
 
 /**
  * Which kind of decision a row is, from the task's status.
@@ -57,17 +59,23 @@ export type DecisionKind =
  * carries its by-* label while its task sits back in the queue, so naming from
  * the labels alone would call it an author that vanished; the task's status —
  * neither claimed nor under review — is what makes it residue. A dispatch
- * failure is the one kind status cannot name: the task is ordinary queue work,
- * so the failure itself is what marks the row.
+ * failure and a lost exit are the kinds status cannot name: a failed task is
+ * ordinary queue work, and a task whose last exit the drawing lost is an
+ * ordinary claim, so the cause itself is what marks the row.
  */
-export const decisionKind = (task: Item, failure: string | undefined = undefined): DecisionKind =>
-  failure !== undefined
+export const decisionKind = (
+  task: Item,
+  cause: DecisionCause | undefined = undefined,
+): DecisionKind =>
+  cause?._tag === "DispatchFailed"
     ? "dispatch failed"
-    : reviewedBy(task) !== undefined
-      ? "reviewer vanished"
-      : task.status === "in_progress"
-        ? "author vanished"
-        : "orphaned workspace";
+    : cause?._tag === "ExitGone"
+      ? "exit gone"
+      : reviewedBy(task) !== undefined
+        ? "reviewer vanished"
+        : task.status === "in_progress"
+          ? "author vanished"
+          : "orphaned workspace";
 
 /**
  * Whether an open review run has no live reviewer behind it, so it is stale.
@@ -121,8 +129,8 @@ export interface ColumnRow {
   readonly provider: Provider | undefined;
   /** The project's preview script, on a row whose task has a worktree for it to serve. */
   readonly preview: string | undefined;
-  /** The error behind a dispatch-failed decision row. */
-  readonly failure: string | undefined;
+  /** What makes a decision row one when the task's status cannot say (`DecisionCause`). */
+  readonly cause: DecisionCause | undefined;
   readonly hasWork: boolean;
   readonly committed: boolean;
 }
@@ -208,6 +216,9 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   // Nothing to take over or release: the agent never started. The one answer
   // is to clear the cause and retry.
   "dispatch failed": ["retry"],
+  // No retry: nothing says which block the task would go to. The operator
+  // releases it to the queue, or sends an agent at it by hand.
+  "exit gone": ["release", "intervene"],
 };
 
 /** The commands that are meaningful for this exact row, not just its column. */
@@ -220,7 +231,7 @@ export const actionsFor = (
   if (row.task?.type === "epic") return [];
   const actions =
     column === "decisions" && row.task
-      ? DECISION_ACTIONS[decisionKind(row.task, row.failure)]
+      ? DECISION_ACTIONS[decisionKind(row.task, row.cause)]
       : ACTIONS[column];
 
   return actions.filter((action) =>
@@ -356,7 +367,7 @@ export const queueRow = (task: Item): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: false,
@@ -377,7 +388,7 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: false,
@@ -406,7 +417,7 @@ const activeRow = (
   const step =
     placement?._tag === "At"
       ? placement.node.id
-      : placement?._tag === "Parked"
+      : placement?._tag === "Parked" || placement?._tag === "ExitGone"
         ? placement.node
         : undefined;
   return {
@@ -422,7 +433,7 @@ const activeRow = (
     unreviewed: undefined,
     stale: undefined,
     ask: undefined,
-    failure: undefined,
+    cause: undefined,
     provider: undefined,
     // A preview serves the task's worktree, so a task in the operator's checkout has none.
     preview:
@@ -447,14 +458,14 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
 
-const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState): ColumnRow => ({
+const decisionRow = ({ task, worker, kind, cause }: Active, state: FleetState): ColumnRow => ({
   column: "decisions",
   key: task.id,
   // The kind leads: it is the question the column exists to answer. What is
@@ -463,10 +474,10 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   // left it: done and canceled are pure cleanup, a queued task will be
   // dispatched again into a fresh workspace once this one is closed. A
   // dispatch failure names the error, because that is what the operator must
-  // clear before retrying. A claim with no rung was made outside foreman.
-  label: decisionKind(task, failure),
+  // clear before retrying, and a lost exit names which exit and block. A claim with no rung was made outside foreman.
+  label: decisionKind(task, cause),
   detail:
-    failure ??
+    cause?.detail ??
     (task.status === "done" || task.status === "canceled" || task.status === "open"
       ? task.status
       : (kind ?? "claimed outside foreman")),
@@ -478,7 +489,7 @@ const decisionRow = ({ task, worker, kind, failure }: Active, state: FleetState)
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure,
+  cause,
   provider: undefined,
   preview: undefined,
   hasWork: worker !== undefined || state.resumable.has(task.id),
@@ -511,7 +522,7 @@ const askRow = (ask: Ask): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: false,
@@ -540,7 +551,7 @@ const orphanRow = (worker: Worker): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: false,
@@ -562,7 +573,7 @@ const heldRow = (held: Held): ColumnRow => ({
   unreviewed: undefined,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: false,
@@ -599,7 +610,7 @@ const quotaRow = (provider: Provider): ColumnRow => {
     unreviewed: undefined,
     stale: undefined,
     ask: undefined,
-    failure: undefined,
+    cause: undefined,
     provider,
     preview: undefined,
     hasWork: false,
@@ -625,7 +636,7 @@ const unreviewedRow = (branch: Unreviewed): ColumnRow => ({
   unreviewed: branch,
   stale: undefined,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: true,
@@ -650,7 +661,7 @@ const staleRow = (branch: StaleRow): ColumnRow => ({
   unreviewed: undefined,
   stale: branch,
   ask: undefined,
-  failure: undefined,
+  cause: undefined,
   provider: undefined,
   preview: undefined,
   hasWork: true,

@@ -325,12 +325,18 @@ const atAgent = <T extends Pretend>(
   if (event === "wall") return folded(task, [{ _tag: "Walled", role: node.role }], rules);
   const name = event.slice(EXIT.length);
   const exit = node.exits.find((candidate) => candidate.name === name);
+  // The dispatcher refuses an exit the block does not declare, and records nothing.
+  if (exit === undefined) return task;
   // One made-up commit per author run, so no two handoffs of a task share a tip.
   const tip =
     node.role === "author"
       ? `c${task.runs.filter((run) => run.role === "author").length}`
       : task.tip;
-  const named = folded({ ...task, tip }, [{ _tag: "ExitNamed", name, commit: tip }], rules);
+  const named = folded(
+    { ...task, tip },
+    [{ _tag: "ExitNamed", exit: exit.id, commit: tip }],
+    rules,
+  );
   return handedOff(named, node, exit, rules);
 };
 
@@ -407,7 +413,7 @@ const routeAfter = (route: ReadonlyArray<string>, placement: Placement): Readonl
   const at =
     placement._tag === "At"
       ? [...placement.gates.map((gate) => gate.id), placement.node.id]
-      : placement._tag === "Parked"
+      : placement._tag === "Parked" || placement._tag === "ExitGone"
         ? [placement.node]
         : [];
   return at.length === 0 || route.at(-1) === at.at(-1) ? route : [...route, ...at];

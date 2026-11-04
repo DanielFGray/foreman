@@ -230,6 +230,7 @@ const prompt = Command.make(
         workspace,
         base: "<base>",
         verify: "./scripts/verify.sh",
+        pipeline,
       });
       yield* Console.log(text);
     }).pipe(Effect.provide(Prompts.Default)),
@@ -491,7 +492,9 @@ const whereIs = (placement: Placement): string =>
     ? "outside the pipeline"
     : placement._tag === "Parked"
       ? `parked at ${placement.node}`
-      : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
+      : placement._tag === "ExitGone"
+        ? `waiting for the operator: ${placement.reason}`
+        : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
 
 /** What `trace` reads: the pretend task, and the events chosen so far. */
 const TraceRequest = S.Struct({

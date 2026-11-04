@@ -11,16 +11,18 @@
  *
  * Nothing here stores where a task is. `place` reads the task's last exit and
  * walks its wire as the drawing stands now, so an edit to a wire moves the
- * task. An exit names a block by its id, so an exit at a block the operator
- * deleted places nothing, and the task starts at its source again. The editor
- * keeps a block's id across edits for the same reason.
+ * task. A run stores the id of the block it ran at and the id of the exit it
+ * named, never a name, so a rename moves nothing. An exit the drawing no longer
+ * has, or one at a block it no longer has, places the task nowhere: where it
+ * goes then is the operator's decision. The editor keeps a block's id and an
+ * exit's id across edits for the same reason.
  *
  * herdr-web's page imports this module and `pipeline-belt.ts` in the browser,
  * so neither may import, other than as a type, anything that reaches the task
  * store or the file system.
  */
 import { Graph, Option, Schema as S } from "effect";
-import { PROCESS_ENDINGS } from "tasks/endings";
+import { EXIT_NAME, PROCESS_ENDINGS } from "tasks/endings";
 import type { TaskStatus } from "./records.ts";
 import { mayAuthor } from "./ladder.ts";
 import type { Seats } from "./reviewers.ts";
@@ -30,16 +32,29 @@ import { STEPS, type Step } from "./policy.ts";
 export const QUEUE = "queue";
 
 /**
- * A name that ends a run, wired to the block that comes next, or to `queue`.
+ * A way to end a run, wired to the block that comes next, or to `queue`.
+ *
+ * `id` is the exit's identity: a run that names the exit stores it, and
+ * placement looks it up. It is never reused within the pipeline. `name` is the
+ * word an agent types and the pane shows, so a rename changes the name alone.
+ * A check's exits are `passed` and `failed`, as id and name, because foreman
+ * names them.
  *
  * `fails` charges a rung when the exit is named: `author` the rung of the
  * task's last author run, `self` the rung of the author block that named it.
  * A reviewer is no rung, so a review block names only `author`.
+ *
+ * `empty` says what an empty branch handed over with this exit means. `claim`
+ * is the author's claim that trunk already does what the task asks: the empty
+ * branch goes to a reviewer, who checks the claim (`authorClaim` in
+ * `src/lap.ts`). Without it, an empty branch is unfinished work.
  */
 export const Exit = S.Struct({
+  id: S.String,
   name: S.String,
   to: S.String,
   fails: S.optional(S.Literals(["author", "self"])),
+  empty: S.optional(S.Literal("claim")),
 });
 export type Exit = typeof Exit.Type;
 
@@ -180,10 +195,15 @@ export type Workspace = "none" | "branch" | "worktree";
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
 
-/** An exit a task's run named: the block that named it, the name, and the commit it was named on. */
+/**
+ * An exit a task's run named: the block that named it, the exit's id, its
+ * name as the drawing stands now (absent when the drawing no longer has it),
+ * and the commit it was named on.
+ */
 export interface NamedExit {
   readonly node: string;
-  readonly name: string;
+  readonly id: string;
+  readonly name: string | undefined;
   readonly commit: string | undefined;
 }
 
@@ -211,7 +231,7 @@ export interface Facts {
   readonly running: { readonly node: string; readonly named: boolean } | undefined;
   /** The exits the task named since it last left a source, oldest first. */
   readonly named: ReadonlyArray<NamedExit>;
-  /** The name of the last exit the task named, a return included. */
+  /** The name, as drawn now, of the last exit the task named, a return included. */
   readonly exit: string | undefined;
 }
 
@@ -229,6 +249,17 @@ export type Placement =
   /** No source takes the task, or its status puts it outside any flow. */
   | { readonly _tag: "Outside" }
   | { readonly _tag: "Parked"; readonly node: string }
+  /**
+   * The task's last exit is one the drawing no longer has, or was named at a
+   * block it no longer has. Absence is an unknown, not evidence, so the task
+   * waits for the operator rather than starting at its source again.
+   */
+  | {
+      readonly _tag: "ExitGone";
+      readonly node: string;
+      readonly exit: string;
+      readonly reason: string;
+    }
   | {
       readonly _tag: "At";
       readonly node: WorkNode;
@@ -253,9 +284,9 @@ export type Placement =
  * A task with an open agent run is at that run's block. Otherwise it is where
  * its last exit leads: the walk takes that exit's wire on the block as the
  * drawing stands now, and goes on through routers, gates and workspace blocks
- * to the next work block. A task with no exit, an open one (back in the
- * queue), or one whose last exit names a block or exit no longer drawn, walks
- * from the first source whose filter matches.
+ * to the next work block. A task with no exit, or an open one (back in the
+ * queue), walks from the first source whose filter matches. A task whose last
+ * exit names a block or an exit no longer drawn is `ExitGone`.
  *
  * An exit holds for the commit it was named on. A check passes one commit, and
  * a land or a done takes the commit the exit before it was named on, so an
@@ -278,14 +309,19 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
 
   const named = facts.status === "open" ? [] : facts.named;
   let reached = walk(nodes, source.next, facts, bound);
-  // A named exit that still wires places the task; one that no longer does
-  // leaves the walk at the source, as a hand launch does.
+  // A named exit that still wires places the task. One wired to the queue
+  // leaves the walk at the source; one the drawing lost places it nowhere.
   let viaExit = false;
+  let gone: NamedExit | undefined;
   for (let last = named.length - 1; last >= 0; last--) {
     const exit = named[last]!;
-    const wire = exitOf(nodes, exit);
-    if (wire === undefined) break;
-    const target = walk(nodes, wire.to, facts, bound);
+    const wire = wireOf(nodes, exit);
+    if (wire._tag === "Gone") {
+      gone = exit;
+      break;
+    }
+    if (wire._tag === "Queue") break;
+    const target = walk(nodes, wire.exit.to, facts, bound);
     // A land or a done takes the commit the exit was named on, so an exit
     // that names none, or names one the tip has moved past, binds nothing.
     const moved = exit.commit === undefined || exit.commit !== facts.tip;
@@ -311,6 +347,16 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       gates: reached.node?.id === runningAt.id ? reached.gates : [],
       ahead: aheadOf(nodes, runningAt, facts, bound),
       stands: runningAt.id,
+    };
+  }
+  if (gone !== undefined) {
+    return {
+      _tag: "ExitGone",
+      node: gone.node,
+      exit: gone.id,
+      reason: nodes.has(gone.node)
+        ? `${gone.node} no longer has the exit ${gone.id} the task's run named there`
+        : `the pipeline no longer has the block ${gone.node}, where the task's run named ${gone.id}`,
     };
   }
   const { node, gates } = reached;
@@ -438,6 +484,18 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
   }
 
   const authors = work.filter(isRole("author"));
+  const nodes = indexOf(pipeline);
+  // A reviewer checks a claim against trunk, so the claim leads to a review. A
+  // new author run starts a new lap, which leaves the claim behind, and a park
+  // hands it to the operator unchecked, so neither may come between the claim
+  // and its review. A land or a done before a review is the rule below.
+  for (const author of authors) {
+    const claim = author.kind === "agent" ? claimOf(author) : undefined;
+    if (claim === undefined || claim.to === QUEUE) continue;
+    for (const reached of stopsBeforeReview(nodes, claim.to)) {
+      problems.push(`${author.id}: the claim ${claim.name} reaches ${reached.id} before a review`);
+    }
+  }
   const landings = work.filter((node) => node.kind === "land" || node.kind === "done");
   // Nothing skips review: no land or done after a source or an author but a reviewer.
   for (const [from, end] of skipping(
@@ -505,7 +563,6 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
     (node) => node.kind !== "gate",
     (node) => !isWork(node),
   );
-  const nodes = indexOf(pipeline);
   for (const from of [...sources, ...work]) {
     for (const { to } of wiresOf(from)) {
       if (nodes.get(to)?.kind === "gate") continue;
@@ -684,17 +741,11 @@ const isRole =
     node.kind === "agent" && node.role === role;
 
 /**
- * The author exit that claims trunk already does what the task asks. It is the
- * one exit name foreman's code reads (`claimsAlreadyDone` in `src/lap.ts`), so
- * a drawing that renames it loses that meaning.
- */
-export const ALREADY_DONE = "already-done";
-
-/**
- * The exits each kind of block has when the drawing names none: an author's
- * `done` and `already-done` advance, a reviewer's `approved` advances and
- * `returned` sends the task back to the queue charged to its author, and a
- * check's `passed` and `failed` do the same.
+ * The exits each kind of block has when the drawing names none, each with its
+ * name as its id: an author's `done` and `already-done` advance, and
+ * `already-done` is the claim; a reviewer's `approved` advances and `returned`
+ * sends the task back to the queue charged to its author; a check's `passed`
+ * and `failed` do the same.
  */
 export const standardExits = (
   node: { readonly kind: "agent"; readonly role: AgentNode["role"] } | { readonly kind: "check" },
@@ -702,17 +753,17 @@ export const standardExits = (
 ): ReadonlyArray<Exit> =>
   node.kind === "check"
     ? [
-        { name: "passed", to: next },
-        { name: "failed", to: QUEUE, fails: "author" },
+        { id: "passed", name: "passed", to: next },
+        { id: "failed", name: "failed", to: QUEUE, fails: "author" },
       ]
     : node.role === "author"
       ? [
-          { name: "done", to: next },
-          { name: ALREADY_DONE, to: next },
+          { id: "done", name: "done", to: next },
+          { id: "already-done", name: "already-done", to: next, empty: "claim" },
         ]
       : [
-          { name: "approved", to: next },
-          { name: "returned", to: QUEUE, fails: "author" },
+          { id: "approved", name: "approved", to: next },
+          { id: "returned", name: "returned", to: QUEUE, fails: "author" },
         ];
 
 /**
@@ -800,8 +851,8 @@ function standardPipeline(
         role: "review",
         model: "reviewers",
         exits: [
-          { name: "approved", to: "land-gate" },
-          { name: "returned", to: "climb", fails: "author" },
+          { id: "approved", name: "approved", to: "land-gate" },
+          { id: "returned", name: "returned", to: "climb", fails: "author" },
         ],
       },
       { kind: "gate", id: "land-gate", step: "land", next: end.id },
@@ -932,28 +983,94 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
 const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
   const problems: Array<string> = [];
   const names = node.exits.map((exit) => exit.name);
+  const ids = node.exits.map((exit) => exit.id);
   const unseated = unseatedBy(node);
+  const endings: ReadonlyArray<string> = PROCESS_ENDINGS;
   if (node.kind === "agent" && names.length === 0) {
     problems.push(`${node.id}: an agent names an exit to end its run, and it declares none`);
   }
-  if (node.kind === "check" && [...names].sort().join(" ") !== "failed passed") {
+  if (
+    node.kind === "check" &&
+    ([...ids].sort().join(" ") !== "failed passed" ||
+      node.exits.some((exit) => exit.id !== exit.name))
+  ) {
     problems.push(`${node.id}: a check's exits are passed and failed`);
   }
   for (const [at, exit] of node.exits.entries()) {
     if (names.indexOf(exit.name) !== at) {
       problems.push(`${node.id}: two exits are named ${exit.name}`);
     }
-    if (!/^[a-z-]+$/.test(exit.name)) {
+    if (ids.indexOf(exit.id) !== at) {
+      problems.push(`${node.id}: two exits have the id ${exit.id}`);
+    }
+    if (!EXIT_NAME.test(exit.name)) {
       problems.push(`${node.id}: the exit ${exit.name} is not lower-case words and hyphens`);
     }
-    if ((PROCESS_ENDINGS as ReadonlyArray<string>).includes(exit.name)) {
-      problems.push(`${node.id}: ${exit.name} is how a run stops with no exit, not an exit`);
+    // A run stores the id as its ending, which the store reads as an exit only
+    // in this form.
+    if (!EXIT_NAME.test(exit.id)) {
+      problems.push(
+        `${node.id}: the exit ${exit.name} has the id "${exit.id}", not lower-case letters and hyphens`,
+      );
+    }
+    // A run stores the exit's id where it would store how it stopped, so an
+    // id that reads as a stop would be read as one.
+    for (const word of new Set([exit.name, exit.id])) {
+      if (endings.includes(word)) {
+        problems.push(`${node.id}: ${word} is how a run stops with no exit, not an exit`);
+      }
     }
     if (unseated !== undefined && exit.fails === "self") {
       problems.push(`${node.id}: ${unseated}, so ${exit.name} has none to fail`);
     }
+    if (exit.empty === "claim" && (node.kind !== "agent" || node.role !== "author")) {
+      problems.push(`${node.id}: only an author claims trunk already does the task`);
+    }
+    if (exit.empty === "claim" && exit.to === QUEUE) {
+      problems.push(
+        `${node.id}: the claim ${exit.name} returns the task to the queue, and a claim leads to a review`,
+      );
+    }
+  }
+  const claims = node.exits.filter((exit) => exit.empty === "claim");
+  if (claims.length > 1) {
+    problems.push(
+      `${node.id}: an author has at most one claim, and ${claims.map((exit) => exit.name).join(", ")} are claims`,
+    );
   }
   return problems;
+};
+
+/**
+ * The author blocks and parks a task reaches from block `from` before any
+ * review, on every route the routers can take while nothing fails: through a
+ * check by its `passed` exit, since a failed check sends the claim where the
+ * drawing says. A route ends at a review, a land or a done, and at the first
+ * author or park it meets.
+ */
+const stopsBeforeReview = (
+  nodes: ReadonlyMap<string, PipelineNode>,
+  from: string,
+): ReadonlyArray<PipelineNode> => {
+  const seen = new Set<string>();
+  const found: Array<PipelineNode> = [];
+  const visit = (id: string) => {
+    const node = nodes.get(id);
+    if (node === undefined || seen.has(id) || isRole("review")(node)) return;
+    seen.add(id);
+    if (isRole("author")(node) || node.kind === "park") {
+      found.push(node);
+      return;
+    }
+    if (node.kind === "check") {
+      const passed = node.exits.find((exit) => exit.id === "passed");
+      if (passed !== undefined) visit(passed.to);
+      return;
+    }
+    for (const wire of wiresOf(node)) visit(wire.to);
+  };
+  visit(from);
+  return found;
 };
 
 /** Why a block has no rung for `fails: self` to charge; nothing for an author block. */
@@ -1084,14 +1201,42 @@ const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
   router.routes.find((route) => matches(facts, route.when))?.to ?? router.else;
 
 /**
- * The exit a named exit took, as the drawing stands now: nothing when its
- * block or its exit is gone, or when it returns the task to the queue.
+ * The exit with id `exit` at block `node`, as the drawing stands now: nothing
+ * when the block or the exit is gone.
  */
-const exitOf = (nodes: ReadonlyMap<string, PipelineNode>, named: NamedExit): Exit | undefined => {
+export const exitAt = (
+  pipeline: Pipeline,
+  node: string | undefined,
+  exit: string | undefined,
+): Exit | undefined => {
+  const block = pipeline.nodes.find((candidate) => candidate.id === node);
+  return block?.kind === "agent" || block?.kind === "check"
+    ? block.exits.find((candidate) => candidate.id === exit)
+    : undefined;
+};
+
+/** An author block's claim exit (`empty: claim`), if it declares one. */
+export const claimOf = (node: AgentNode): Exit | undefined =>
+  node.role === "author" ? node.exits.find((exit) => exit.empty === "claim") : undefined;
+
+/**
+ * What a named exit leads to as the drawing stands now: its wire, a return to
+ * the queue, or nothing at all, when its block or the exit itself is gone.
+ */
+const wireOf = (
+  nodes: ReadonlyMap<string, PipelineNode>,
+  named: NamedExit,
+):
+  | { readonly _tag: "Wire"; readonly exit: Exit }
+  | { readonly _tag: "Queue" }
+  | { readonly _tag: "Gone" } => {
   const node = nodes.get(named.node);
-  if (node?.kind !== "agent" && node?.kind !== "check") return undefined;
-  const exit = node.exits.find((candidate) => candidate.name === named.name);
-  return exit === undefined || exit.to === QUEUE ? undefined : exit;
+  const exit =
+    node?.kind === "agent" || node?.kind === "check"
+      ? node.exits.find((candidate) => candidate.id === named.id)
+      : undefined;
+  if (exit === undefined) return { _tag: "Gone" };
+  return exit.to === QUEUE ? { _tag: "Queue" } : { _tag: "Wire", exit };
 };
 
 /** The exit that moves a task on from a work block: its first that does not return it. */

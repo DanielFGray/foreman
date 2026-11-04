@@ -569,4 +569,4 @@ const pathOf = (runs) => runs.slice(-8).map((run) =>
   .join("  →  ")
   .replace(/^/, runs.length > 8 ? `${runs.length - 8} earlier  →  ` : "");
 
-const stateColor = (state, t) => state === "running" ? t.working : state === "parked" ? t.blocked : state === "ended" || state === "landed" ? t.done : t.muted;
+const stateColor = (state, t) => state === "running" ? t.working : state === "parked" || state === "gone" ? t.blocked : state === "ended" || state === "landed" ? t.done : t.muted;

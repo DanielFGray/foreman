@@ -606,7 +606,7 @@ process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
 beforeEach(() =>
   writeFileSync(
     join(policies, "pipelines.json"),
-    JSON.stringify({ version: 4, pipelines: { test: STANDARD_PIPELINES.worktree } }),
+    JSON.stringify({ version: 5, pipelines: { test: STANDARD_PIPELINES.worktree } }),
   ),
 );
 afterAll(() => {
@@ -2192,7 +2192,7 @@ describe("a policy change", () => {
 describe("a route's workspace blocks", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   const BRANCH_ONLY = STANDARD_PIPELINES.checkout.nodes;
@@ -2348,8 +2348,8 @@ describe("a route's workspace blocks", () => {
                 id: "lint",
                 command: "bun run lint",
                 exits: [
-                  { name: "passed", to: "review-gate" },
-                  { name: "failed", to: "queue", fails: "author" },
+                  { id: "passed", name: "passed", to: "review-gate" },
+                  { id: "failed", name: "failed", to: "queue", fails: "author" },
                 ],
               },
             ]
@@ -2510,8 +2510,8 @@ describe("a route's workspace blocks", () => {
         role: "author",
         model: "ladder",
         exits: [
-          { name: "done", to: "d-review-gate" },
-          { name: "already-done", to: "d-review-gate" },
+          { id: "done", name: "done", to: "d-review-gate" },
+          { id: "already-done", name: "already-done", to: "d-review-gate" },
         ],
       },
       { kind: "gate", id: "d-review-gate", step: "review", next: "d-review" },
@@ -2521,8 +2521,8 @@ describe("a route's workspace blocks", () => {
         role: "review",
         model: "reviewers",
         exits: [
-          { name: "approved", to: "d-land-gate" },
-          { name: "returned", to: "queue", fails: "author" },
+          { id: "approved", name: "approved", to: "d-land-gate" },
+          { id: "returned", name: "returned", to: "queue", fails: "author" },
         ],
       },
       { kind: "gate", id: "d-land-gate", step: "land", next: "d-done" },
@@ -2790,13 +2790,13 @@ describe("a reviewer that stops without naming an exit, and one that names retur
         ? {
             ...node,
             exits: [
-              { name: "approved", to: "land-gate" },
-              { name: "returned", to: "start", fails: "author" as const },
+              { id: "approved", name: "approved", to: "land-gate" },
+              { id: "returned", name: "returned", to: "start", fails: "author" as const },
             ],
           }
         : node,
     );
-    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
     try {
       const id = "ts-looped";
       const world = new World(item(id, "open", []));
@@ -2846,7 +2846,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 describe("a drawn pipeline", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with `change` made to its author block. */
@@ -2869,6 +2869,68 @@ describe("a drawn pipeline", () => {
     return world;
   };
 
+  /** The standard pipeline with the author's `done` exit given the name `name` and the id `id`. */
+  const authorDoneAs = (name: string, id: string) =>
+    withAuthor((author) => [
+      {
+        ...author,
+        exits: author.exits.map((exit) => (exit.id === "done" ? { ...exit, id, name } : exit)),
+      },
+    ]);
+
+  /** The reading a tick publishes. */
+  const readingOf = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.read.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+  test("a renamed exit keeps a task in flight at the block it leads to", async () => {
+    draw(authorDoneAs("handed-off", "done"));
+    const world = handedOver("ts-renamed");
+    await tick(world);
+
+    expect(world.spawned).toEqual([["ts-renamed", "review"]]);
+    expect((await readingOf(world)).decisions).toEqual([]);
+  });
+
+  test("a task whose last exit the drawing lost is a decision, not placed from its source", async () => {
+    // The `done` exit removed and another added under its name: a fresh id.
+    draw(authorDoneAs("done", "exit-qzvmktrwpa"));
+    const world = handedOver("ts-lost");
+    await tick(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(world.writes).not.toContain("records.release");
+    expect(world.tasks.get("ts-lost")?.status).toBe("in_progress");
+    const reading = await readingOf(world);
+    expect(reading.decisions.map((decision) => [decision.task.id, decision.cause])).toEqual([
+      [
+        "ts-lost",
+        {
+          _tag: "ExitGone",
+          detail: "author no longer has the exit done the task's run named there",
+        },
+      ],
+    ]);
+    expect(reading.queue.map((task) => task.id)).not.toContain("ts-lost");
+  });
+
+  test("a task whose last exit the drawing lost keeps its claim past the stale window", async () => {
+    draw(authorDoneAs("done", "exit-qzvmktrwpa"));
+    const world = handedOver("ts-lost-stale");
+    const task = world.tasks.get("ts-lost-stale")!;
+    world.tasks.set("ts-lost-stale", {
+      ...task,
+      lastActivityAt: new Date(task.lastActivityAt.getTime() - 48 * 60 * 60 * 1000),
+    });
+    world.workers.delete("ts-lost-stale");
+    await tick(world);
+
+    expect(world.writes).not.toContain("records.release");
+    expect(world.tasks.get("ts-lost-stale")?.status).toBe("in_progress");
+  });
   test("an agent block pinned to a rung dispatches that rung", async () => {
     draw(withAuthor((author) => [{ ...author, model: "dear" }]));
     const world = new World(item("ts-pinned", "open", []));
@@ -2965,8 +3027,8 @@ describe("a drawn pipeline", () => {
             id: "lint",
             command: "bun run lint",
             exits: [
-              { name: "passed", to: "review-gate" },
-              { name: "failed", to: "queue", fails: "author" },
+              { id: "passed", name: "passed", to: "review-gate" },
+              { id: "failed", name: "failed", to: "queue", fails: "author" },
             ],
           },
         ]),
@@ -3221,7 +3283,7 @@ describe("foreman pipeline trace", () => {
   /** Runs the events through the dispatcher and through the trace, and compares where each puts the task. */
   const agree = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
     if (pipeline !== STANDARD_PIPELINES.worktree) {
-      writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: pipeline } }));
+      writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: pipeline } }));
     }
     const world = await played(ladder, pipeline, events);
     const trace = traceOf({ labels: [], size: undefined, priority: 1, parent: undefined }, events, {
@@ -3291,8 +3353,8 @@ describe("foreman pipeline trace", () => {
           id: "lint",
           command: "bun run lint",
           exits: [
-            { name: "passed", to: "review-gate" },
-            { name: "failed", to: "queue", fails: "author" },
+            { id: "passed", name: "passed", to: "review-gate" },
+            { id: "failed", name: "failed", to: "queue", fails: "author" },
           ],
         },
       ]),
@@ -3342,7 +3404,7 @@ describe("a pull-request landing", () => {
     ],
   };
   beforeEach(() =>
-    writeFileSync(drawn, JSON.stringify({ version: 4, pipelines: { test: PULL_REQUEST } })),
+    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: PULL_REQUEST } })),
   );
 
   const steps = (modes: { publish: string; land: string }, extra: object = {}) =>
