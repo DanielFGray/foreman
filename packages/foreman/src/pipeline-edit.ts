@@ -3,16 +3,20 @@
 // this module names each one, so herdr-web's editor and `foreman pipeline
 // edit` decode the same changes.
 import { Schema as S } from "effect";
-import { AgentNode, LANDINGS, type Pipeline } from "./pipeline.ts";
+import { AgentNode, Exit, LANDINGS, type Pipeline } from "./pipeline.ts";
 import {
+  addExit,
   addRoute,
   addSource,
+  chargeExit,
   configure,
   INSERTABLE,
   insertOn,
   rejoin,
   remove,
+  removeExit,
   removeRoute,
+  renameExit,
   swapEnd,
 } from "./pipeline-belt.ts";
 import { STEPS } from "./policy.ts";
@@ -57,15 +61,20 @@ export const PipelineChange = S.Union([
   S.TaggedStruct("AddSource", { filter: S.String }),
   S.TaggedStruct("SwapEnd", { id: S.String }),
   S.TaggedStruct("Configure", { id: S.String, setting: BlockSetting }),
+  S.TaggedStruct("AddExit", { id: S.String, name: S.String }),
+  S.TaggedStruct("RenameExit", { id: S.String, name: S.String, to: S.String }),
+  S.TaggedStruct("RemoveExit", { id: S.String, name: S.String }),
+  S.TaggedStruct("ChargeExit", { id: S.String, name: S.String, fails: Exit.fields.fails }),
 ]);
 export type PipelineChange = typeof PipelineChange.Type;
 
 /**
  * The pipeline after `change`, and the id of the block it added, if any. A
- * change the pipeline cannot take answers `refused`: a rejoin that would close
- * a loop or names a block the pipeline lacks, or a setting for another kind of
- * block. A change that names a
- * block or wire the pipeline lacks otherwise leaves it as it was.
+ * change the pipeline cannot take answers `refused`: a rejoin that names a
+ * block the pipeline lacks, a setting for another kind of block, a new exit
+ * name the block already has, or an exit added, renamed or removed on a check,
+ * whose exits are passed and failed. A change that names a block, wire or exit
+ * the pipeline lacks otherwise leaves it as it was.
  */
 export const applyChange = (
   pipeline: Pipeline,
@@ -92,7 +101,7 @@ export const applyChange = (
         ? changed(rejoined.value)
         : {
             _tag: "Refused",
-            reason: `${change.wire.from} cannot lead to ${change.to}: that would close a loop, or one of them is not in the pipeline`,
+            reason: `${change.wire.from} cannot lead to ${change.to}: one of them is not in the pipeline`,
           };
     }
     case "AddSource": {
@@ -110,5 +119,38 @@ export const applyChange = (
           }
         : changed(configure(pipeline, change.id, change.setting));
     }
+    case "AddExit":
+    case "RenameExit": {
+      const name = change._tag === "AddExit" ? change.name : change.to;
+      const refusal = exitRefusal(pipeline, change.id, name);
+      if (refusal !== undefined) return { _tag: "Refused", reason: refusal };
+      return changed(
+        change._tag === "AddExit"
+          ? addExit(pipeline, change.id, change.name)
+          : renameExit(pipeline, change.id, change.name, change.to),
+      );
+    }
+    case "RemoveExit": {
+      const refusal = exitRefusal(pipeline, change.id, undefined);
+      return refusal !== undefined
+        ? { _tag: "Refused", reason: refusal }
+        : changed(removeExit(pipeline, change.id, change.name));
+    }
+    case "ChargeExit":
+      return changed(chargeExit(pipeline, change.id, change.name, change.fails));
   }
+};
+
+/**
+ * Why an exit cannot be added, renamed to `name`, or (with no name) removed on
+ * block `id`: a check's exits are fixed, and two exits of one block may not
+ * share a name, since a port names its exit by name.
+ */
+const exitRefusal = (pipeline: Pipeline, id: string, name: string | undefined) => {
+  const node = pipeline.nodes.find((one) => one.id === id);
+  if (node?.kind === "check") return `${id} is a check, and a check's exits are passed and failed`;
+  if (node?.kind === "agent" && node.exits.some((exit) => exit.name === name)) {
+    return `${id} already has an exit named ${name}`;
+  }
+  return undefined;
 };

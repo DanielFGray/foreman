@@ -3,16 +3,17 @@
  * where a router splits the row into parallel rows that join again.
  *
  * The drawing is derived from the graph every time, so nothing about it is
- * stored. Every edit keeps the graph a pipeline can be: its edits draw forward
- * wires only (an exit wired back up the belt is drawn as a block's exit),
- * every wire ends at a block, and a block no source reaches is dropped. What an
- * edit cannot guarantee (a gate before each step, a review before each land, a
+ * stored. Every edit keeps every wire ending at a block, and deletes only the
+ * block it names: a block an edit leaves unreached stays, so the operator can
+ * wire it again or take it out. What an edit cannot guarantee (a source that
+ * reaches every block, a gate before each step, a review before each land, a
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   type AgentNode,
+  type Exit,
   type Landing,
   type Pipeline,
   type PipelineNode,
@@ -42,9 +43,17 @@ export interface Wire {
   readonly label: string;
 }
 
+/**
+ * A wire as the belt draws it. A back wire closes a loop, so it runs against
+ * the flow (`backWiresOf`).
+ */
+export interface BeltWire extends Wire {
+  readonly back: boolean;
+}
+
 export interface Belt {
   readonly cells: ReadonlyArray<Cell>;
-  readonly wires: ReadonlyArray<Wire>;
+  readonly wires: ReadonlyArray<BeltWire>;
   readonly columns: number;
   readonly rows: number;
 }
@@ -62,16 +71,15 @@ export interface Belt {
 export const beltOf = (pipeline: Pipeline): Belt => {
   const nodes = new Map(pipeline.nodes.map((node) => [node.id, node]));
   const wires = wiresOf(pipeline);
-  const into = forwardInputsOf(
-    wires,
-    pipeline.nodes.filter((node) => node.kind === "source").map((node) => node.id),
-  );
+  const backs = backWiresOf(pipeline, wires);
 
   const columns = new Map<string, number>();
   const columnOf = (id: string): number => {
     const known = columns.get(id);
     if (known !== undefined) return known;
-    const before = (into.get(id) ?? []).filter((from) => nodes.has(from));
+    const before = wires
+      .filter((wire) => wire.to === id && !backs.has(wire) && nodes.has(wire.from))
+      .map((wire) => wire.from);
     const column = before.length === 0 ? 0 : Math.max(...before.map((from) => columnOf(from))) + 1;
     columns.set(id, column);
     return column;
@@ -108,7 +116,10 @@ export const beltOf = (pipeline: Pipeline): Belt => {
   }));
   return {
     cells,
-    wires,
+    wires: wires.map((wire) => ({
+      ...wire,
+      back: backs.has(wire),
+    })),
     columns: Math.max(0, ...cells.map((cell) => cell.column + 1)),
     rows: nextRow,
   };
@@ -156,20 +167,19 @@ export const insertOn = (
 };
 
 /**
- * Takes a block out. The wires into it run on to where it went: a router's
- * `else`, an agent's or a check's first exit that does not return the task, or
- * a block's `next`. An end (land, done or park) cannot go, since
- * every route must end somewhere; turn one into another instead. A source takes the
- * blocks only it reached with it.
+ * Takes a block out, and no other. The wires into it run on to where it went:
+ * a router's `else`, an agent's or a check's first exit that does not return
+ * the task, or a block's `next`. An end (land, done or park) goes only when no
+ * wire enters it, since a wire must end at a block; turn one into another
+ * instead. The blocks only this one reached stay, and `problemsOf` names them.
  */
 export const remove = (pipeline: Pipeline, id: string): Pipeline => {
   const node = pipeline.nodes.find((candidate) => candidate.id === id);
-  const onward = node === undefined ? undefined : onwardOf(node);
-  if (onward === undefined) return pipeline;
-  const left = pipeline.nodes
-    .filter((candidate) => candidate.id !== id)
-    .map((candidate) => redirect(candidate, id, onward));
-  return pruned({ nodes: left });
+  if (node === undefined) return pipeline;
+  const others = pipeline.nodes.filter((candidate) => candidate.id !== id);
+  const onward = onwardOf(node);
+  if (onward !== undefined) return { nodes: others.map((other) => redirect(other, id, onward)) };
+  return wiresOf(pipeline).some((wire) => wire.to === id) ? pipeline : { nodes: others };
 };
 
 /** Adds a route to a router. It joins `else` at once, until blocks are put on it. */
@@ -178,43 +188,30 @@ export const addRoute = (pipeline: Pipeline, router: string, when: string): Pipe
     node.kind === "router" ? { ...node, routes: [...node.routes, { when, to: node.else }] } : node,
   );
 
-/** Drops route `index` of a router, and the blocks only it reached. */
+/** Drops route `index` of a router. The blocks only it reached stay. */
 export const removeRoute = (pipeline: Pipeline, router: string, index: number): Pipeline =>
-  pruned(
-    mapNode(pipeline, router, (node) =>
-      node.kind === "router"
-        ? { ...node, routes: node.routes.filter((_, at) => at !== index) }
-        : node,
-    ),
+  mapNode(pipeline, router, (node) =>
+    node.kind === "router"
+      ? { ...node, routes: node.routes.filter((_, at) => at !== index) }
+      : node,
   );
 
 /**
- * Points a wire at another block. Refused (none) when the new wire closes a
- * cycle among forward wires. Existing cycle-closing returns stay in place
- * without preventing joins between unrelated branches.
+ * Points a wire at another block, which may stand before it: a wire that
+ * closes a loop is drawn as a back wire, and `problemsOf` reports a loop that
+ * nothing ends. An exit may also lead to `queue`, a return. Refused (none)
+ * when either block is not in the pipeline.
  */
 export const rejoin = (
   pipeline: Pipeline,
   wire: Pick<Wire, "from" | "port">,
   to: string,
-): Option.Option<Pipeline> => {
-  const into = forwardInputsOf(
-    wiresOf(pipeline),
-    pipeline.nodes.filter((node) => node.kind === "source").map((node) => node.id),
-  );
-  const seen = new Set<string>();
-  const reaches = (id: string): boolean => {
-    if (id === to) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return (into.get(id) ?? []).some(reaches);
-  };
-  return pipeline.nodes.some((node) => node.id === wire.from) &&
-    pipeline.nodes.some((node) => node.id === to) &&
-    !reaches(wire.from)
-    ? Option.some(pruned(retargeted(pipeline, wire, to)))
+): Option.Option<Pipeline> =>
+  pipeline.nodes.some((node) => node.id === wire.from) &&
+  (pipeline.nodes.some((node) => node.id === to) ||
+    (to === QUEUE && typeof wire.port === "string" && wire.port.startsWith("exit:")))
+    ? Option.some(retargeted(pipeline, wire, to))
     : Option.none();
-};
 
 /** Starts a new belt: a source with this filter that joins the first source's belt. */
 export const addSource = (
@@ -243,6 +240,40 @@ export const swapEnd = (pipeline: Pipeline, id: string): Pipeline =>
           : node,
   );
 
+/**
+ * Adds an exit named `name` to an agent, leading where its first exit leads,
+ * or back to the queue when it has none. The operator rewires it after.
+ */
+export const addExit = (pipeline: Pipeline, id: string, name: string): Pipeline =>
+  mapExits(pipeline, id, (exits) => [...exits, { name, to: exits[0]?.to ?? QUEUE }]);
+
+/**
+ * Renames an exit, keeping where it leads. A task whose last exit had the old
+ * name no longer finds it drawn, so placement walks it from the source again.
+ */
+export const renameExit = (pipeline: Pipeline, id: string, name: string, to: string): Pipeline =>
+  mapExits(pipeline, id, (exits) =>
+    exits.map((exit) => (exit.name === name ? { ...exit, name: to } : exit)),
+  );
+
+/** Drops an exit. The blocks only it reached stay, as with a dropped route. */
+export const removeExit = (pipeline: Pipeline, id: string, name: string): Pipeline =>
+  mapExits(pipeline, id, (exits) => exits.filter((exit) => exit.name !== name));
+
+/** Sets which rung an exit charges with failing the task, or none. */
+export const chargeExit = (
+  pipeline: Pipeline,
+  id: string,
+  name: string,
+  fails: Exit["fails"],
+): Pipeline =>
+  mapExits(pipeline, id, (exits) =>
+    exits.map((exit) => {
+      if (exit.name !== name) return exit;
+      const { fails: _fails, ...rest } = exit;
+      return fails === undefined ? rest : { ...rest, fails };
+    }),
+  );
 /**
  * Changes what a block does, never where it is wired or what it is called:
  * the id is what a task's facts name, and the wires are the belt's to change.
@@ -283,26 +314,55 @@ const settled = (node: PipelineNode, setting: BlockSetting): PipelineNode => {
   }
 };
 
-/** Incoming wires after excluding edges that close a walk from a source. */
-const forwardInputsOf = (wires: ReadonlyArray<Wire>, sources: ReadonlyArray<string>) => {
-  const into = new Map<string, Array<string>>();
-  const visited = new Set<string>();
-  const visit = (id: string, path: ReadonlySet<string>) => {
-    if (visited.has(id)) return;
-    visited.add(id);
-    const nextPath = new Set([...path, id]);
-    for (const wire of wires.filter((candidate) => candidate.from === id)) {
-      // A wire back into this path closes a cycle. Draw it, but let the
-      // source's forward routes determine the columns of the blocks it joins.
-      if (nextPath.has(wire.to)) continue;
-      into.set(wire.to, [...(into.get(wire.to) ?? []), wire.from]);
-      visit(wire.to, nextPath);
+/**
+ * The wires that run back up the belt. A wire is back when it closes a loop
+ * (the block it enters reaches the block it leaves) and leads no farther from
+ * the sources than where it starts. Every loop has such a wire, so the others
+ * run forward without a loop, and the operator's return to an earlier block is
+ * the one drawn back, whatever order the blocks are listed in.
+ */
+const backWiresOf = (pipeline: Pipeline, wires: ReadonlyArray<Wire>): ReadonlySet<Wire> => {
+  const depth = depthsOf(pipeline, wires);
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set([from]);
+    const queue = [from];
+    for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+      if (id === to) return true;
+      for (const wire of wires) {
+        if (wire.from === id && !seen.has(wire.to)) {
+          seen.add(wire.to);
+          queue.push(wire.to);
+        }
+      }
+    }
+    return false;
+  };
+  return new Set(
+    wires.filter(
+      (wire) =>
+        (depth.get(wire.to) ?? 0) <= (depth.get(wire.from) ?? 0) && reaches(wire.to, wire.from),
+    ),
+  );
+};
+
+/**
+ * Each block's distance in wires from the nearest source. A block no source
+ * reaches counts from itself, or from the first such block before it that
+ * reaches it.
+ */
+const depthsOf = (pipeline: Pipeline, wires: ReadonlyArray<Wire>): ReadonlyMap<string, number> => {
+  const depth = new Map<string, number>();
+  const spread = (roots: ReadonlyArray<string>) => {
+    let layer = roots.filter((id) => !depth.has(id));
+    for (let at = 0; layer.length > 0; at++) {
+      for (const id of layer) depth.set(id, at);
+      const next = wires.filter((wire) => layer.includes(wire.from)).map((wire) => wire.to);
+      layer = [...new Set(next)].filter((id) => !depth.has(id));
     }
   };
-  for (const id of sources) visit(id, new Set());
-  for (const wire of wires) visit(wire.from, new Set());
-
-  return into;
+  spread(pipeline.nodes.filter((node) => node.kind === "source").map((node) => node.id));
+  for (const node of pipeline.nodes) spread([node.id]);
+  return depth;
 };
 
 const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
@@ -395,18 +455,14 @@ const mapNode = (
   nodes: pipeline.nodes.map((node) => (node.id === id ? change(node) : node)),
 });
 
-/** The pipeline without the blocks no source reaches. */
-const pruned = (pipeline: Pipeline): Pipeline => {
-  const wires = wiresOf(pipeline);
-  const reached = new Set<string>();
-  const visit = (id: string) => {
-    if (reached.has(id)) return;
-    reached.add(id);
-    for (const wire of wires) if (wire.from === id) visit(wire.to);
-  };
-  for (const node of pipeline.nodes) if (node.kind === "source") visit(node.id);
-  return { nodes: pipeline.nodes.filter((node) => reached.has(node.id)) };
-};
+const mapExits = (
+  pipeline: Pipeline,
+  id: string,
+  change: (exits: ReadonlyArray<Exit>) => ReadonlyArray<Exit>,
+): Pipeline =>
+  mapNode(pipeline, id, (node) =>
+    node.kind === "agent" || node.kind === "check" ? { ...node, exits: change(node.exits) } : node,
+  );
 
 /**
  * A new `<kind>-<hex>` id. Random rather than counted, because a counted id

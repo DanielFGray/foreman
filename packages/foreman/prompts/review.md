@@ -55,7 +55,7 @@ answer it: log the question and stop without naming an exit.
 
 ## Decide
 
-To return the task, log findings detailed enough for the next agent, then name the
-exit `returned`. To approve it, name the exit `approved`.
+Before you name an exit that sends the task back, log findings detailed enough for
+the next agent. Then name the exit the Exits section gives for your verdict.
 
 Do not start any other work.

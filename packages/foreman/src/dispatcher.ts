@@ -4399,9 +4399,9 @@ export const EMPTY_FLEET: FleetState = {
  * operator's checkout put on the task's branch, or nothing for a task that
  * works on the operator's own branch, which attaches to the checkout as it is.
  */
-const newWorkspace = (
+export const newWorkspace = (
   workspace: Workspace | undefined,
-  project: Project,
+  project: Pick<Project, "name" | "directory">,
   task: string,
 ): string | undefined =>
   workspace === "none"

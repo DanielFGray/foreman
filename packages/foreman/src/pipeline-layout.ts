@@ -3,7 +3,14 @@
 // column is as wide as its widest block, a row as tall as its tallest, and a
 // wire's route is a list of points that the view draws as a path.
 import type { Pipeline, PipelineNode } from "./pipeline.ts";
-import { type Belt, beltOf, type Cell, type Port, type Wire } from "./pipeline-belt.ts";
+import {
+  type Belt,
+  type BeltWire,
+  beltOf,
+  type Cell,
+  type Port,
+  type Wire,
+} from "./pipeline-belt.ts";
 
 /** Which way work moves through a drawing: left to right, or top to bottom. */
 export type Flow = "across" | "down";
@@ -18,7 +25,7 @@ export interface Box {
 export type Point = readonly [number, number];
 
 export interface PlacedWire {
-  readonly wire: Wire;
+  readonly wire: BeltWire;
   /** The corners of the wire's route, from the block it leaves to the block it enters. */
   readonly points: ReadonlyArray<Point>;
   /** Where the wire's label sits, and how wide it may draw there. */
@@ -63,6 +70,8 @@ export interface Drawing {
     readonly port: Port;
     readonly to: string;
     readonly label: string;
+    /** Whether the wire runs against the flow, back along a return lane past the last lane. */
+    readonly back: boolean;
     readonly points: ReadonlyArray<Point>;
     readonly anchor: Point;
     readonly plus: Point;
@@ -94,6 +103,7 @@ export const drawingOf = (pipeline: Pipeline, flow: Flow): Drawing => {
       port: wire.port,
       to: wire.to,
       label: wire.label,
+      back: wire.back,
       points,
       anchor,
       plus,
@@ -114,6 +124,8 @@ const LABEL_MAX = 84;
 /** The '+' an editor draws on a wire, and the room it needs beside a label. */
 const PLUS = 14;
 const PLUS_ROOM = PLUS + 4;
+/** How far apart the return lanes run past the last lane, one per back wire. */
+const RETURN_SPACING = 10;
 
 /** How big a block draws before its exits widen it: gates and routers are chips, the rest are cards. */
 export const sizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly h: number } => {
@@ -183,13 +195,19 @@ export const layoutOf = (belt: Belt, flow: Flow): Layout => {
   const trackOf = (sizes: ReadonlyArray<number>, gaps: ReadonlyArray<number>) =>
     sizes.flatMap((size, index) => (index < sizes.length - 1 ? [size, gaps[index]!] : [size]));
   const last = belt.rows - 1;
+  const wires = belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index));
+  // The drawing holds every block and every wire, a back wire's return lane included.
+  const reach = (axis: 0 | 1) =>
+    Math.max(0, ...wires.flatMap(({ points }) => points.map((point) => point[axis] + PAD)));
   const along = grid.layerStart[belt.columns - 1]! + layerLength[belt.columns - 1]! + PAD;
   const beside = (laneStart[last] ?? PAD) + (laneWidth[last] ?? 0) + (laneGap[last] ?? 0) / 2 + PAD;
   const alongTracks = trackOf(layerLength, gap);
   const besideTracks = trackOf(laneWidth, laneGap);
+  const width = Math.max(down ? beside : along, reach(0));
+  const height = Math.max(down ? along : beside, reach(1));
   return {
-    width: down ? beside : along,
-    height: down ? along : beside,
+    width,
+    height,
     columnTracks: down ? besideTracks : alongTracks,
     rowTracks: down ? alongTracks : besideTracks,
     boxes: new Map(
@@ -198,7 +216,7 @@ export const layoutOf = (belt: Belt, flow: Flow): Layout => {
         down ? { x: b, y: a, w: lb, h: la } : { x: a, y: b, w: la, h: lb },
       ]),
     ),
-    wires: belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index)),
+    wires,
   };
 };
 
@@ -314,8 +332,9 @@ const laneIndexOf = (cellOf: ReadonlyMap<string, Cell>, wire: Wire) => {
  * just before the next layer. A lane wire turns onto its lane there instead,
  * and off it just before the layer it enters.
  */
-const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<PlacedWire> => {
-  const { belt, down, cellOf, spans, layerStart, laneStart, laneWidth, laneGap } = grid;
+const placedWireOf = (grid: Grid, wire: BeltWire, index: number): ReadonlyArray<PlacedWire> => {
+  const { belt, down, cellOf, spans, layerStart, layerLength, gap, laneStart, laneWidth, laneGap } =
+    grid;
   const from = cellOf.get(wire.from);
   const to = cellOf.get(wire.to);
   const fromSpan = spans.get(wire.from);
@@ -329,7 +348,9 @@ const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<Plac
   const k = belt.wires
     .filter((other) => cellOf.get(other.from)?.column === from.column)
     .indexOf(wire);
-  const a1 = layerStart[from.column + 1]! - 12 - STAGGER * (k % 4);
+  // The start of the next layer, or where it would start after the last one.
+  const next = layerStart[from.column]! + layerLength[from.column]! + gap[from.column]!;
+  const a1 = next - 12 - STAGGER * (k % 4);
   const a2 = layerStart[to.column]! - 12 - STAGGER * (index % 3);
   const lane = grid.laneWires.includes(wire);
   const laneB =
@@ -337,9 +358,20 @@ const placedWireOf = (grid: Grid, wire: Wire, index: number): ReadonlyArray<Plac
       ? laneStart[from.row]! - laneGap[from.row - 1]! / 2
       : laneStart[from.row]! + laneWidth[from.row]! + laneGap[from.row]! / 2) +
     ((index % 3) - 1) * 5;
-  const route: ReadonlyArray<Point> = lane
-    ? [out, [a1, b0], [a1, laneB], [a2, laneB], [a2, b1], into]
-    : [out, [a1, b0], [a1, b1], into];
+  // A back wire runs out past the last lane, back along a return lane of its
+  // own, and in again just before the layer it enters.
+  const last = belt.rows - 1;
+  const returnB =
+    laneStart[last]! +
+    laneWidth[last]! +
+    laneGap[last]! / 2 +
+    5 +
+    RETURN_SPACING * (belt.wires.filter((other) => other.back).indexOf(wire) + 1);
+  const route: ReadonlyArray<Point> = wire.back
+    ? [out, [a1, b0], [a1, returnB], [a2, returnB], [a2, b1], into]
+    : lane
+      ? [out, [a1, b0], [a1, laneB], [a2, laneB], [a2, b1], into]
+      : [out, [a1, b0], [a1, b1], into];
   const points = dedupe(route.map(([a, b]) => (down ? [b, a] : [a, b])));
   if (!down) {
     const across = anchorOf(points);
@@ -382,11 +414,15 @@ const exitOf = (grid: Grid, wire: Wire, span: Span): number => {
   return span.b + (span.lb - sum(slots)) / 2 + sum(slots.slice(0, at)) + slots[at]! / 2;
 };
 
-/** Across, the gap after a layer holds the widest label of the wires that go on to a later layer. */
+/**
+ * Across, the gap after a layer holds the widest label of the wires that leave
+ * it: those that go on to a later layer, and the back wires.
+ */
 const gapAcross = (belt: Belt, column: number, cellOf: ReadonlyMap<string, Cell>): number => {
   const leaving = belt.wires.filter(
     (wire) =>
-      cellOf.get(wire.from)?.column === column && (cellOf.get(wire.to)?.column ?? -1) > column,
+      cellOf.get(wire.from)?.column === column &&
+      (wire.back || (cellOf.get(wire.to)?.column ?? -1) > column),
   );
   return Math.max(
     MIN_GAP,

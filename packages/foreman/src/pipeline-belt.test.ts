@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { type Pipeline, problemsOf, type SeatOffers, STANDARD_PIPELINES } from "./pipeline.ts";
 import {
+  addExit,
   addRoute,
   addSource,
   beltOf,
+  chargeExit,
   configure,
   insertOn,
   rejoin,
   remove,
+  removeExit,
   removeRoute,
+  renameExit,
   swapEnd,
 } from "./pipeline-belt.ts";
 
@@ -41,12 +45,10 @@ describe("the standard pipeline as belts", () => {
     expect([belt.columns, belt.rows]).toEqual([10, 2]);
     // The author's two exits onward are two wires to the same gate.
     expect(belt.wires).toHaveLength(14);
-    expect(belt.wires).toContainEqual({
-      from: "review",
-      port: "exit:returned",
-      to: "climb",
-      label: "returned",
-    });
+    // The returned exit runs back to the climb gate, against the flow.
+    expect(belt.wires.filter((wire) => wire.back)).toEqual([
+      { from: "review", port: "exit:returned", to: "climb", label: "returned", back: true },
+    ]);
   });
 });
 
@@ -173,16 +175,32 @@ describe("belt edits", () => {
     expect(at(pipeline)[id]![1]).toBeGreaterThan(0);
   });
 
-  test("dropping a route drops the blocks only it reached", () => {
+  test("dropping a route keeps the blocks only it reached, named as unreached", () => {
     const routed = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
     const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
     const pipeline = removeRoute(inserted.pipeline, "retry", 2);
-    expect(ids(pipeline)).not.toContain(inserted.id);
-    const withoutRetries = removeRoute(removeRoute(pipeline, "retry", 0), "retry", 0);
-    expect(ids(withoutRetries)).toContain("climb");
+    expect(ids(pipeline)).toContain(inserted.id);
+    expect(problemsOf(pipeline, OFFERS)).toContain(`no source reaches ${inserted.id}`);
+    expect(ids(remove(pipeline, inserted.id))).not.toContain(inserted.id);
   });
 
-  test("a wire rejoins a later block, never an earlier one", () => {
+  test("removing the only source removes that block alone, and a new source joins the rest", () => {
+    const pipeline = remove(STANDARD_PIPELINES.worktree, "queue");
+    expect(ids(pipeline)).toEqual(ids(STANDARD_PIPELINES.worktree).filter((id) => id !== "queue"));
+    expect(problemsOf(pipeline, OFFERS)).toEqual(["no source supplied"]);
+    const { pipeline: supplied, id } = addSource(pipeline, "");
+    expect(node(supplied, id)).toMatchObject({ next: "branch" });
+    expect(problemsOf(supplied, OFFERS)).toEqual([]);
+  });
+
+  test("an end no wire enters can go; one a wire enters stays", () => {
+    const routed = insertOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "router");
+    const parked = { nodes: [...routed.pipeline.nodes, { kind: "park" as const, id: "hold" }] };
+    expect(ids(remove(parked, "hold"))).not.toContain("hold");
+    expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
+  });
+
+  test("a wire rejoins a later block or an earlier one, never one the pipeline lacks", () => {
     const skip = rejoin(
       STANDARD_PIPELINES.worktree,
       { from: "climb", port: "next" },
@@ -191,9 +209,20 @@ describe("belt edits", () => {
     expect(Option.map(skip, (pipeline) => node(pipeline, "climb"))).toEqual(
       Option.some({ kind: "gate", id: "climb", step: "climb", next: "review-gate" }),
     );
-    expect(
-      rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, "author"),
-    ).toEqual(Option.none());
+    const looped = rejoin(
+      STANDARD_PIPELINES.worktree,
+      { from: "review", port: "exit:approved" },
+      "start",
+    ).pipe(Option.getOrThrow);
+    expect(beltOf(looped).wires).toContainEqual({
+      from: "review",
+      port: "exit:approved",
+      to: "start",
+      label: "approved",
+      back: true,
+    });
+    // The loop leaves the land unreached, and validation says so.
+    expect(problemsOf(looped, OFFERS)).toContain("no source reaches land");
     expect(
       rejoin(
         STANDARD_PIPELINES.worktree,
@@ -201,6 +230,54 @@ describe("belt edits", () => {
         "no-such-block",
       ),
     ).toEqual(Option.none());
+  });
+
+  test("an exit is added where the first exit leads, renamed, charged and removed", () => {
+    const added = addExit(STANDARD_PIPELINES.worktree, "author", "stuck");
+    expect(node(added, "author")).toMatchObject({
+      exits: [{ name: "done" }, { name: "already-done" }, { name: "stuck", to: "review-gate" }],
+    });
+    const back = rejoin(added, { from: "author", port: "exit:stuck" }, "start").pipe(
+      Option.getOrThrow,
+    );
+    // Back to the author's own gate with nothing charged, the loop never ends.
+    expect(problemsOf(back, OFFERS)).toEqual([
+      "the wires loop through author, start, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+    ]);
+    const charged = chargeExit(back, "author", "stuck", "self");
+    expect(node(charged, "author")).toMatchObject({
+      exits: [{}, {}, { name: "stuck", to: "start", fails: "self" }],
+    });
+    expect(problemsOf(charged, OFFERS)).toEqual([]);
+    const renamed = renameExit(charged, "author", "stuck", "blocked");
+    expect(node(renamed, "author")).toMatchObject({
+      exits: [{}, {}, { name: "blocked", to: "start", fails: "self" }],
+    });
+    expect(node(chargeExit(renamed, "author", "blocked", undefined), "author")).toMatchObject({
+      exits: [{}, {}, { name: "blocked", to: "start" }],
+    });
+    expect(node(removeExit(renamed, "author", "blocked"), "author")).toEqual(
+      node(STANDARD_PIPELINES.worktree, "author"),
+    );
+  });
+
+  test("an exit leads back to the queue, and a renamed exit a router counts is named", () => {
+    const returned = rejoin(
+      STANDARD_PIPELINES.worktree,
+      { from: "review", port: "exit:returned" },
+      "queue",
+    ).pipe(Option.getOrThrow);
+    expect(node(returned, "review")).toMatchObject({
+      exits: [{}, { name: "returned", to: "queue", fails: "author" }],
+    });
+    const counted = configure(returned, "retry", {
+      kind: "router",
+      route: 1,
+      when: "exits:returned>=2",
+    });
+    expect(problemsOf(renameExit(counted, "review", "returned", "sent-back"), OFFERS)).toContain(
+      "retry: the filter counts the exit returned, and no block declares it",
+    );
   });
 
   test("a wire can rejoin an acyclic sibling in the same column", () => {

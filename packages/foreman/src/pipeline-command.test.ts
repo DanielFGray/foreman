@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
@@ -14,6 +14,8 @@ import { scratchStore, seed } from "./scratch-store.ts";
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
 const path = join(folder, "pipelines.json");
 process.env["FOREMAN_PIPELINES"] = path;
+// `instructions` writes the operator's prompts directory, under the config directory.
+process.env["XDG_CONFIG_HOME"] = folder;
 const store = scratchStore();
 afterAll(() => {
   rmSync(folder, { recursive: true, force: true });
@@ -369,20 +371,100 @@ describe("drawing a draft", () => {
     expect(draftOf()).toBeDefined();
   });
 
+  test("removing the only source keeps the rest of the draft, and save refuses until a source is added", async () => {
+    await run("edit", "amux", change({ _tag: "Remove", id: "queue" }));
+    expect(draftOf().pipeline.nodes.map((node: { id: string }) => node.id)).toContain("author");
+    expect(await refusal("save", "amux")).toMatch(/no source supplied/);
+    await run("edit", "amux", change({ _tag: "AddSource", filter: "" }));
+    await run("save", "amux");
+    expect(existsSync(path)).toBe(true);
+  });
+
   test("save refuses when the pipeline changed since the draft began", async () => {
     await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
     await run("set", "amux", fileWith(pinned));
     expect(await refusal("save", "amux")).toMatch(/changed since this draft began/);
   });
 
-  test("a rejoin that would close a loop is refused, and the draft is not written", async () => {
+  test("a rejoin to an earlier block is written, and save names what the loop leaves unreached", async () => {
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "review", port: "exit:approved" }, to: "start" }),
+    );
+    expect(
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "review").exits[0],
+    ).toEqual({ name: "approved", to: "start" });
+    expect(await refusal("save", "amux")).toMatch(/no source reaches land-gate/);
+  });
+
+  test("an exit added, wired back to the author's gate and charged lets the draft save", async () => {
+    await run("edit", "amux", change({ _tag: "AddExit", id: "author", name: "stuck" }));
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "author", port: "exit:stuck" }, to: "start" }),
+    );
+    expect(await refusal("save", "amux")).toMatch(/loop through author, start, and nothing ends/);
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "ChargeExit", id: "author", name: "stuck", fails: "self" }),
+    );
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "RenameExit", id: "author", name: "stuck", to: "blocked" }),
+    );
+    await run("save", "amux");
+    expect(
+      JSON.parse(readFileSync(path, "utf8")).pipelines.amux.nodes.find(
+        (node: { id: string }) => node.id === "author",
+      ).exits,
+    ).toEqual([
+      { name: "done", to: "review-gate" },
+      { name: "already-done", to: "review-gate" },
+      { name: "blocked", to: "start", fails: "self" },
+    ]);
+    await run("edit", "amux", change({ _tag: "RemoveExit", id: "author", name: "blocked" }));
+    expect(
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "author").exits,
+    ).toHaveLength(2);
+  });
+
+  test("an exit name the block has, or an exit on a check, is refused", async () => {
+    expect(
+      await refusal("edit", "amux", change({ _tag: "AddExit", id: "author", name: "done" })),
+    ).toMatch(/author already has an exit named done/);
     expect(
       await refusal(
         "edit",
         "amux",
-        change({ _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "queue" }),
+        change({ _tag: "RenameExit", id: "review", name: "returned", to: "approved" }),
       ),
-    ).toMatch(/would close a loop/);
+    ).toMatch(/review already has an exit named approved/);
+    expect(existsSync(drafts)).toBe(false);
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "InsertOn", wire: { from: "author", port: "exit:done" }, kind: "check" }),
+    );
+    const check = draftOf().pipeline.nodes.find(
+      (node: { kind: string }) => node.kind === "check",
+    ).id;
+    expect(
+      await refusal("edit", "amux", change({ _tag: "RemoveExit", id: check, name: "failed" })),
+    ).toMatch(/a check's exits are passed and failed/);
+  });
+
+  test("a rejoin to a block the pipeline lacks is refused, and the draft is not written", async () => {
+    expect(
+      await refusal(
+        "edit",
+        "amux",
+        change({ _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "nowhere" }),
+      ),
+    ).toMatch(/one of them is not in the pipeline/);
     expect(existsSync(drafts)).toBe(false);
   });
 
@@ -417,5 +499,61 @@ describe("drawing a draft", () => {
     await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
     await run("discard", "amux");
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
+  });
+});
+
+/** What a run of the command prints. */
+const printed = async (...args: ReadonlyArray<string>) => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    await run(...args);
+    return log.mock.calls.map((call) => call.join(" ")).join("\n");
+  } finally {
+    log.mockRestore();
+  }
+};
+
+describe("foreman pipeline prompt and instructions", () => {
+  const change = (value: unknown) => JSON.stringify(value);
+  const own = join(folder, "foreman", "prompts", "author.md");
+  beforeEach(() => rmSync(join(folder, "foreman"), { recursive: true, force: true }));
+
+  test("prompt shows a draft's agent block for a pretend task, with the exits the draft gives it", async () => {
+    await run("edit", "amux", change({ _tag: "AddExit", id: "author", name: "stuck" }));
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "author", port: "exit:stuck" }, to: "start" }),
+    );
+    const text = await printed("prompt", "amux", "author");
+    expect(text).toContain("## Task\n\ntrace — a pretend task\nProject: amux.");
+    expect(text).toContain("- `foreman exit trace stuck`: the task goes to start.");
+    expect(text).toContain("Your task's work: `git log <base>..HEAD`");
+  });
+
+  test("prompt names no block that is not an agent", async () => {
+    expect(await refusal("prompt", "amux", "land")).toBe(
+      "amux's pipeline has no agent block named land",
+    );
+  });
+
+  test("instructions prints the text foreman ships until the operator writes their own, which the prompt then carries", async () => {
+    expect(await printed("instructions", "author")).toBe(
+      readFileSync(join(import.meta.dir, "..", "prompts", "author.md"), "utf8"),
+    );
+    await run("instructions", "author", "Work on {{ task }} alone.");
+    expect(readFileSync(own, "utf8")).toBe("Work on {{ task }} alone.");
+    expect(await printed("instructions", "author")).toBe("Work on {{ task }} alone.");
+    expect(await printed("prompt", "amux", "author")).toContain(
+      "\n\nWork on trace alone.\n\n## Exits",
+    );
+  });
+
+  test("instructions refuses a name that is no file name, and prints none for a name with no file", async () => {
+    expect(await refusal("instructions", "../policy", "text")).toBe(
+      "../policy is no file name: use a-z, 0-9 and -",
+    );
+    expect(existsSync(join(folder, "foreman"))).toBe(false);
+    expect(await refusal("instructions", "nobody")).toBe("no instructions file is named nobody.md");
   });
 });

@@ -544,46 +544,57 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
 };
 
 /**
- * The cycles that can loop forever. A cycle can end when one of its exits
- * charges a rung (`fails`), since a task that every rung has failed parks, or
- * when a router on it has a route out of it whose filter is a count that grows
- * on each lap. A cycle with no work block on it would spin without a run.
+ * The cycles that can loop forever. A lap of a cycle ends in time when it
+ * passes an exit that charges a rung (`fails`), since a task that every rung
+ * has failed parks, or a router with a route out of the cycle whose filter is a
+ * count that grows on each lap. So with those exits and routers taken out, any
+ * cycle left with a work block on it can loop forever, and one with none would
+ * spin without a run.
  */
 const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
-  const wired = graphOf(pipeline);
   const problems: Array<string> = [];
-  for (const component of Graph.stronglyConnectedComponents(wired.graph)) {
-    const blocks = component.flatMap((at) => Option.toArray(Graph.getNode(wired.graph, at)));
-    const ids = new Set(blocks.map((node) => node.id));
-    const looped =
-      blocks.length > 1 || blocks.some((node) => wiresOf(node).some((wire) => wire.to === node.id));
-    if (!looped) continue;
-    const path = blocks.map((node) => node.id).join(", ");
+  const pathOf = (blocks: ReadonlyArray<PipelineNode>) => blocks.map((node) => node.id).join(", ");
+  for (const blocks of loopsOf(graphOf(pipeline).graph)) {
     if (!blocks.some(isWork)) {
-      problems.push(`the wires loop through ${path} with no work block on the loop`);
+      problems.push(`the wires loop through ${pathOf(blocks)} with no work block on the loop`);
       continue;
     }
+    const ids = new Set(blocks.map((node) => node.id));
     const named = new Set(
       blocks.flatMap((node) =>
         node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
       ),
     );
-    const charges = blocks.some((node) =>
-      wiresOf(node).some((wire) => wire.fails && ids.has(wire.to)),
+    const counts = (node: PipelineNode) =>
+      node.kind === "router" &&
+      node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when, named));
+    const unbounded = graphOf(
+      { nodes: blocks },
+      (node) => !counts(node),
+      () => true,
+      (wire) => !wire.fails,
     );
-    const counts = blocks.some(
-      (node) =>
-        node.kind === "router" &&
-        node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when, named)),
-    );
-    if (!charges && !counts) {
+    for (const loop of loopsOf(unbounded.graph)) {
       problems.push(
-        `the wires loop through ${path}, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows`,
+        loop.some(isWork)
+          ? `the wires loop through ${pathOf(loop)}, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows`
+          : `the wires loop through ${pathOf(loop)} with no work block on the loop`,
       );
     }
   }
   return problems;
 };
+
+/** The strongly connected components of a graph that hold a cycle, as their blocks. */
+const loopsOf = (
+  graph: Graph.DirectedGraph<PipelineNode, string>,
+): ReadonlyArray<ReadonlyArray<PipelineNode>> =>
+  Graph.stronglyConnectedComponents(graph).flatMap((component) => {
+    const blocks = component.flatMap((at) => Option.toArray(Graph.getNode(graph, at)));
+    const looped =
+      blocks.length > 1 || blocks.some((node) => wiresOf(node).some((wire) => wire.to === node.id));
+    return looped ? [blocks] : [];
+  });
 
 /**
  * Whether a filter holds a count that grows on each lap of a cycle, such as
@@ -628,6 +639,9 @@ export const PLACEHOLDERS = ["task", "branch", "base", "worktree"] as const;
 /** The instructions file an agent block reads: its own, or its role's. */
 export const instructionsOf = (node: AgentNode): string => node.instructions ?? node.role;
 
+/** Whether `name` can name an instructions file `<name>.md`: a-z, 0-9 and -, so it stays in its directory. */
+export const isInstructionsName = (name: string): boolean => /^[a-z0-9-]+$/.test(name);
+
 /** Every `{{ name }}` in a text, in order. */
 export const placeholdersIn = (text: string): ReadonlyArray<string> =>
   [...text.matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((match) => match[1] ?? "");
@@ -649,7 +663,7 @@ export const instructionProblems = (
   pipeline.nodes.flatMap((node) => {
     if (node.kind !== "agent") return [];
     const name = instructionsOf(node);
-    if (!/^[a-z0-9-]+$/.test(name)) {
+    if (!isInstructionsName(name)) {
       return [`${node.id}: instructions ${name} is no file name: use a-z, 0-9 and -`];
     }
     const text = texts.get(name);
@@ -670,6 +684,13 @@ const isRole =
     node.kind === "agent" && node.role === role;
 
 /**
+ * The author exit that claims trunk already does what the task asks. It is the
+ * one exit name foreman's code reads (`claimsAlreadyDone` in `src/lap.ts`), so
+ * a drawing that renames it loses that meaning.
+ */
+export const ALREADY_DONE = "already-done";
+
+/**
  * The exits each kind of block has when the drawing names none: an author's
  * `done` and `already-done` advance, a reviewer's `approved` advances and
  * `returned` sends the task back to the queue charged to its author, and a
@@ -687,7 +708,7 @@ export const standardExits = (
     : node.role === "author"
       ? [
           { name: "done", to: next },
-          { name: "already-done", to: next },
+          { name: ALREADY_DONE, to: next },
         ]
       : [
           { name: "approved", to: next },
@@ -879,8 +900,13 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
     ids.add(node.id);
   }
   if (!pipeline.nodes.some((node) => node.kind === "source")) {
-    problems.push("no source takes tasks in");
+    problems.push("no source supplied");
   }
+  const declared = new Set(
+    pipeline.nodes.flatMap((node) =>
+      node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
+    ),
+  );
   for (const node of pipeline.nodes) {
     for (const { to } of wiresOf(node)) {
       if (!ids.has(to)) problems.push(`${node.id} is wired to ${to}, which is no block`);
@@ -888,6 +914,11 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
     for (const filter of filtersOf(node)) {
       const parsed = parseFilter(filter);
       if (parsed._tag === "Invalid") problems.push(`${node.id}: ${parsed.reason}`);
+      for (const name of exitsNamedBy(filter)) {
+        if (!declared.has(name)) {
+          problems.push(`${node.id}: the filter counts the exit ${name}, and no block declares it`);
+        }
+      }
     }
     if (node.kind === "agent" || node.kind === "check") problems.push(...exitProblems(node));
     if (node.kind === "agent") problems.push(...modelProblems(node, offers));
@@ -953,12 +984,14 @@ const modelProblems = (node: AgentNode, offers: SeatOffers): ReadonlyArray<strin
 
 /**
  * The pipeline as a directed graph of the blocks `keep` accepts, with the
- * wires out of each block `follow` accepts. A return to the queue is no wire.
+ * wires out of each block `follow` accepts that `take` accepts. A return to the
+ * queue is no wire.
  */
 const graphOf = (
   pipeline: Pipeline,
   keep: (node: PipelineNode) => boolean = () => true,
   follow: (node: PipelineNode) => boolean = () => true,
+  take: (wire: { readonly fails?: boolean }) => boolean = () => true,
 ) => {
   const index = new Map<string, Graph.NodeIndex>();
   const graph = Graph.directed<PipelineNode, string>((mutable) => {
@@ -970,7 +1003,7 @@ const graphOf = (
       if (from === undefined || !follow(node)) continue;
       for (const wire of wiresOf(node)) {
         const to = index.get(wire.to);
-        if (to !== undefined) Graph.addEdge(mutable, from, to, wire.label);
+        if (to !== undefined && take(wire)) Graph.addEdge(mutable, from, to, wire.label);
       }
     }
   });
@@ -1012,6 +1045,22 @@ const wiresOf = (
       return [];
   }
 };
+
+/**
+ * The exits a filter's `exit:` and `exits:` terms name, but for the endings of a
+ * run that named none. A renamed or removed exit leaves such a term matching
+ * nothing.
+ */
+const exitsNamedBy = (filter: string): ReadonlyArray<string> =>
+  filter
+    .trim()
+    .split(/\s+/)
+    .flatMap((word) => {
+      const name = /^-?exits?:([a-z-]+)/.exec(word)?.[1];
+      return name === undefined || (PROCESS_ENDINGS as ReadonlyArray<string>).includes(name)
+        ? []
+        : [name];
+    });
 
 const filtersOf = (node: PipelineNode): ReadonlyArray<string> =>
   node.kind === "source"

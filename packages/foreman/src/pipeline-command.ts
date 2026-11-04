@@ -1,6 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
-import { Dispatcher } from "./dispatcher.ts";
+import { Dispatcher, newWorkspace } from "./dispatcher.ts";
 import {
   AgentNode,
   choiceOf,
@@ -11,6 +11,7 @@ import {
   type Placement,
   offersOf,
   problemsOf,
+  routeWorkspace,
   STANDARD_PIPELINES,
   toMermaid,
   WORKSPACE_CHOICES,
@@ -26,7 +27,8 @@ import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
 import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
 import { Settings, settings } from "./config.ts";
-import { type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { pretend, type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { factsOf } from "./pipeline-facts.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
@@ -194,6 +196,85 @@ const clear = Command.make("clear", { project }, ({ project }) =>
     yield* Console.log(`${project} runs the default pipeline`);
   }),
 ).pipe(Command.withDescription("Drop a project's own pipeline, so it runs the default one"));
+
+/**
+ * The prompt an agent block of the draft, else of the pipeline the project
+ * runs, would send. It goes through `Prompts.agent`, as `foreman prompt` does
+ * for a real task; only the inputs differ: a pretend task with no labels and
+ * no runs, on the workspace its route opens, with example paths and an
+ * example verify script where a dispatch reads the world.
+ */
+const prompt = Command.make(
+  "prompt",
+  { project, block: Argument.String("block") },
+  ({ project, block }) =>
+    Effect.gen(function* () {
+      const draft = (yield* draftsNow)[project];
+      const pipeline = draft?.pipeline ?? (yield* livePipeline(project)).pipeline;
+      const node = pipeline.nodes.find((one) => one.id === block);
+      if (node?.kind !== "agent")
+        return yield* new PipelineError({
+          detail: `${project}'s pipeline has no agent block named ${block}`,
+        });
+      const task = {
+        ...pretend({ labels: [], size: undefined, priority: 2, parent: undefined }),
+        project,
+      };
+      const workspace = routeWorkspace(pipeline, factsOf(task, pipeline));
+      const repository = "<repository>";
+      const text = yield* (yield* Prompts).agent(node, {
+        task,
+        worktree:
+          newWorkspace(workspace, { name: project, directory: repository }, task.id) ?? repository,
+        repository,
+        workspace,
+        base: "<base>",
+        verify: "./scripts/verify.sh",
+      });
+      yield* Console.log(text);
+    }).pipe(Effect.provide(Prompts.Default)),
+).pipe(
+  Command.withDescription(
+    "Print the prompt an agent block of a project's draft, else of the pipeline it runs, would send a pretend task. Writes nothing",
+  ),
+);
+
+/**
+ * The text of instructions `name`, or, with `text`, a write of it to the
+ * operator's own `prompts/` directory, which the next dispatch reads.
+ */
+const instructions = Command.make(
+  "instructions",
+  {
+    name: Argument.String("name").pipe(
+      Argument.withDescription(
+        "The instructions an agent block reads: its role, unless it names other ones",
+      ),
+    ),
+    text: Argument.String("text").pipe(
+      Argument.withDescription(
+        "The new text, or - to read it from stdin; with none, print the text",
+      ),
+      Argument.optional,
+    ),
+  },
+  ({ name, text }) =>
+    Effect.gen(function* () {
+      const prompts = yield* Prompts;
+      if (Option.isNone(text)) {
+        const found = yield* prompts.read(name);
+        if (found === undefined)
+          return yield* new PipelineError({ detail: `no instructions file is named ${name}.md` });
+        return yield* Console.log(found);
+      }
+      const file = yield* prompts.write(name, yield* prose(text.value));
+      yield* Console.log(`wrote ${file}`);
+    }).pipe(Effect.provide(Prompts.Default)),
+).pipe(
+  Command.withDescription(
+    "Print the instructions an agent block reads, or write new text for them to the operator's prompts directory, which wins over the text foreman ships",
+  ),
+);
 
 const place = Command.make(
   "place",
@@ -395,6 +476,8 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       save,
       discard,
       clear,
+      prompt,
+      instructions,
       Command.provide(trace, settings),
       Command.provide(simulate, Layer.mergeAll(Records.layer, settings)),
       Command.provide(graph, Records.layer),

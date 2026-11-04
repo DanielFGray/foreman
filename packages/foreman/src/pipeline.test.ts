@@ -543,7 +543,7 @@ describe("validation", () => {
     );
   });
 
-  test("refuses a wire back to an earlier block", () => {
+  test("refuses a wire back to an earlier block that nothing lets leave the loop", () => {
     const problems = problemsOf(
       replace({ kind: "gate", id: "land-gate", step: "land", next: "author" }),
       OFFERS,
@@ -932,6 +932,19 @@ describe("a cycle", () => {
     ]);
   });
 
+  test("is a problem when a lap that passes no charging exit can go round, inside a loop one charges", () => {
+    const inner: Pipeline = {
+      nodes: looped({ name: "returned", to: "start", fails: "author" }).nodes.map((node) =>
+        node.id === "author" && node.kind === "agent"
+          ? { ...node, exits: [...node.exits, { name: "stuck", to: "start" }] }
+          : node,
+      ),
+    };
+    expect(problemsOf(inner, OFFERS)).toEqual([
+      "the wires loop through author, start, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+    ]);
+  });
+
   test("is valid when an exit on it fails a rung", () => {
     expect(problemsOf(looped({ name: "returned", to: "start", fails: "author" }), OFFERS)).toEqual(
       [],
@@ -967,8 +980,10 @@ describe("a cycle", () => {
         { kind: "park", id: "operator" },
       ],
     };
+    // No block declares the exit, so the count never grows; that is reported
+    // before the walk, as a filter that matches nothing.
     expect(problemsOf(miscounted, OFFERS)).toEqual([
-      "the wires loop through author, start, count, review, review-gate, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
+      "count: the filter counts the exit rejected, and no block declares it",
     ]);
   });
 

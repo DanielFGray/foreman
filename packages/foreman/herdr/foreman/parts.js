@@ -9,7 +9,10 @@ export const wiresLayer = (drawing, z, t) => {
   const layer = div().absolute().left(0).top(0).size_full();
   const paths = drawing.wires.map((wire) => {
     const [first, ...rest] = wire.points;
-    let path = PathBuilder.stroke(1.5).move_to(first[0] * z, first[1] * z);
+    // A back wire runs against the flow, so it draws dashed.
+    let path = PathBuilder.stroke(1.5);
+    if (wire.back) path = path.dash_array([4 * z, 3 * z]);
+    path = path.move_to(first[0] * z, first[1] * z);
     for (const [x, y] of rest) path = path.line_to(x * z, y * z);
     return window.paint_path(path.build(), t.border).absolute().left(0).top(0).size_full();
   });

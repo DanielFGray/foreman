@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import {
   type AgentNode,
   instructionProblems,
+  instructionsOf,
   STANDARD_PIPELINES,
   type Workspace,
 } from "./pipeline.ts";
@@ -459,5 +460,57 @@ describe("Prompts", () => {
       if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
       else process.env["XDG_CONFIG_HOME"] = previous;
     }
+  });
+});
+
+// A drawing may rename or remove any exit, so the instructions foreman ships
+// for agent blocks name none: only the generated Exits section does, from the
+// block itself.
+describe("the instructions foreman ships for agent blocks", () => {
+  const exitNames = new Set(
+    Object.values(STANDARD_PIPELINES).flatMap((pipeline) =>
+      pipeline.nodes.flatMap((node) =>
+        node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
+      ),
+    ),
+  );
+
+  const shipped = new Set(
+    Object.values(STANDARD_PIPELINES).flatMap((pipeline) =>
+      pipeline.nodes.flatMap((node) => (node.kind === "agent" ? [instructionsOf(node)] : [])),
+    ),
+  );
+
+  for (const name of shipped) {
+    test(`${name}.md names no exit`, () => {
+      const text = readFileSync(join(import.meta.dir, "..", "prompts", `${name}.md`), "utf8");
+      expect(text).not.toContain("foreman exit");
+      for (const exit of exitNames) expect(text).not.toContain(`\`${exit}\``);
+    });
+  }
+
+  test("an author is told when to name already-done only by a block that declares it", async () => {
+    const author = blockOf("author");
+    const prompt = (block: AgentNode) =>
+      run((prompts) =>
+        prompts.agent(block, {
+          task: ready,
+          worktree: "/tmp/worktree",
+          repository: "/tmp/repository",
+          workspace: "worktree",
+          base: "abc1234",
+        }),
+      );
+    expect(await prompt(author)).toContain(
+      "Name `already-done` only when trunk already does everything the task asks",
+    );
+    const renamed = await prompt({
+      ...author,
+      exits: author.exits.map((exit) =>
+        exit.name === "already-done" ? { ...exit, name: "nothing-to-do" } : exit,
+      ),
+    });
+    expect(renamed).toContain("`foreman exit ts-123456 nothing-to-do`");
+    expect(renamed).not.toContain("already-done");
   });
 });
