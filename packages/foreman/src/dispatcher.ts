@@ -109,6 +109,7 @@ import {
   attemptsOf,
   diagnosticIntent,
   type DiagnosticIntent,
+  type EpicProgress,
   isOnboarding,
   isResearch,
   type Item,
@@ -661,7 +662,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // allowlist is applied afterwards, to prog's answer rather than to the
       // question, so a blocker outside the fleet still holds its dependents.
       const queue = yield* records.ready(Option.none());
-      const epics = yield* records.epicsOver(queue);
+      // The queue ranks by the epics over its own tasks; a board groups the
+      // claimed tasks by theirs too.
+      const epics = yield* records.epicsOver([...queue, ...inFlight]);
 
       // Each project's pipeline, read with the policy and checked against the
       // ladder on every pass: a ladder edit can make a drawing invalid.
@@ -1010,6 +1013,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         asks: plan.asks,
         pipelines,
         placed,
+        epics,
         committed,
         prunable,
         stale,
@@ -4118,6 +4122,8 @@ export interface FleetState {
    * `Outside`.
    */
   readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
+  /** The epics being driven over the queued and claimed tasks, each with its direct children. */
+  readonly epics: ReadonlyArray<EpicProgress>;
   /** Each grant's scope, mapped to the unfinished tasks it reaches. */
   readonly scopes: Scopes;
   /** Steps the policy holds for one approval; see `Ask`. */
@@ -4296,6 +4302,7 @@ export const EMPTY_FLEET: FleetState = {
   policyError: undefined,
   pipelines: new Map(),
   placed: [],
+  epics: [],
   scopes: new Map(),
   asks: [],
   repos: new Map(),

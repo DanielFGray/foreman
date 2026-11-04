@@ -45,8 +45,10 @@ stop this project's pipeline.
 - **Tasks** has two modes, picked by a switch inside it, and the pane keeps
   the last one picked in its own `localStorage`.
   - **Board**: the dispatcher's six board columns. Drag a Queue card onto
-    Authoring to grant it the steps the pipeline gates on. A Queue card under
-    an epic names the epic. Click a card to open its detail under the board:
+    Authoring to grant it the steps the pipeline gates on. In each column, an
+    epic's cards follow its head (its title and how many of its tasks are
+    done); a click on the head folds the epic in every column, and the pane
+    keeps the fold. Click a card to open its detail under the board:
     the task's record from `foreman show <id> --json` (facts, description,
     definition of done, the last three logs), its page, its pull request,
     every action its row takes (`foreman <action> <id>`; `kill`, `close` and

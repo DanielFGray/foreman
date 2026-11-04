@@ -238,6 +238,8 @@ export default class Foreman extends View {
   // A row in no project (an orphaned worker, a spent account, a branch whose
   // task is gone) shows in every project, so no space hides it.
   rows() { const project = this.project(); return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === project); }
+  // The epics being driven, by key: each one's title and how many of its tasks are done.
+  epics() { return new Map((this.published?.epics ?? []).map((epic) => [epic.key, epic])); }
 
   // Each task's rows by task id: its published rows and its queue row. A
   // row's key may be a workspace label that holds the task id.

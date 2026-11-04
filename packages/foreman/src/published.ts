@@ -39,8 +39,7 @@ import {
 
 /**
  * Bumped whenever a field a reader relies on changes meaning or goes away.
- * Two readers check it: the herdr-app Foreman pane (`herdr/foreman/main.js`) and
- * herdr-web's Foreman page (`src/shared/Foreman.ts` there).
+ * The herdr-app Foreman pane (`herdr/foreman/main.js`) checks it.
  */
 export const PUBLISHED_VERSION = 6;
 
@@ -96,6 +95,8 @@ export const PublishedPlacement = S.Struct({
   key: S.String,
   label: S.String,
   project: S.String,
+  /** The epic the task sits under; `epics` describes it while it is being driven. */
+  parent: S.NullOr(S.String),
   node: S.String,
   /** The block a board draws the task on (`stands` on a placement); `node` is the block it waits for or runs at. */
   stands: S.String,
@@ -188,7 +189,21 @@ export const Published = S.Struct({
   stopped: S.Array(S.Struct({ project: S.String, problems: S.Array(S.String) })),
   /** The board's Landed column: tasks that landed in the last `LANDED_HOURS`, newest first. */
   landed: S.Array(
-    S.Struct({ key: S.String, label: S.String, project: S.String, landedAt: S.String }),
+    S.Struct({
+      key: S.String,
+      label: S.String,
+      project: S.String,
+      parent: S.NullOr(S.String),
+      landedAt: S.String,
+    }),
+  ),
+  /**
+   * The epics being driven that a queued or claimed task sits under, and how
+   * many of their direct children are done, for a reader that groups tasks
+   * by epic.
+   */
+  epics: S.Array(
+    S.Struct({ key: S.String, label: S.String, project: S.String, done: S.Int, total: S.Int }),
   ),
 });
 export type Published = typeof Published.Type;
@@ -234,6 +249,7 @@ export const publishedOf = (
               key: task.id,
               label: task.title,
               project: task.project,
+              parent: task.parent ?? null,
               ...placementOf(placement),
               column: columnOf(task, placement, asksYou.has(task.id)),
               ...linksOf(state, task.id),
@@ -258,8 +274,16 @@ export const publishedOf = (
             key: item.id,
             label: item.title,
             project: item.project,
+            parent: item.parent ?? null,
             landedAt: item.lastActivityAt.toISOString(),
           })),
+    epics: state.epics.map(({ epic, children }) => ({
+      key: epic.id,
+      label: epic.title,
+      project: epic.project,
+      done: children.filter((child) => child.status === "done").length,
+      total: children.length,
+    })),
   };
 };
 
