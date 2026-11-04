@@ -113,6 +113,17 @@ coordinator needs: `foreman status`, `foreman dispatch <id>`, `foreman wait
 does one thing and exits, so it works with or without the dispatcher running.
 `foreman --skill` prints how to use them.
 
+To file a task and start its author in one command, pipe the brief in:
+
+```sh
+foreman add "<title>" -p <project> -l size:2 -d - --dispatch [--rung <name>] <<'EOF'
+<the brief>
+EOF
+```
+
+It prints the id and how to wait on it. A refused dispatch leaves the task
+filed and names its id.
+
 ## Projects you are working in
 
 You share each project's checkout with the fleet: every task ends by landing

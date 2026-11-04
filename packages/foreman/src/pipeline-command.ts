@@ -29,6 +29,7 @@ import { Settings, settings } from "./config.ts";
 import { type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
+import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
 
 /**
@@ -240,7 +241,7 @@ const trace = Command.make(
   },
   ({ project, request, json }) =>
     Effect.gen(function* () {
-      const text = request === "-" ? yield* Effect.promise(() => Bun.stdin.text()) : request;
+      const text = yield* prose(request);
       const { task, events } = yield* S.decodeEffect(S.fromJsonString(TraceRequest))(text).pipe(
         Effect.mapError(
           (error) => new PipelineError({ detail: `that trace cannot be read: ${error.message}` }),
@@ -464,7 +465,7 @@ const pipelineFrom = (source: string) =>
   Effect.gen(function* () {
     const text =
       source === "-"
-        ? yield* Effect.promise(() => Bun.stdin.text())
+        ? yield* prose(source)
         : yield* (yield* FileSystem.FileSystem).readFileString(source);
     return yield* S.decodeEffect(S.fromJsonString(Pipeline))(text).pipe(
       Effect.mapError(

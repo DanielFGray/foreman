@@ -8,6 +8,8 @@ import { Records } from "./records.ts";
 import { ACTIONS_LIST, actionsFor, rowsForView, VIEWS, type Action } from "./view.ts";
 import { commandName, publishedOf } from "./published.ts";
 import { Settings } from "./config.ts";
+import { Tracker } from "./tracker.ts";
+import { prose } from "tasks";
 
 /**
  * The lifecycle as one-shot commands.
@@ -122,25 +124,122 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
 
 const dispatch = Command.make("dispatch", { id, rung }, (args) =>
   Effect.gen(function* () {
-    const dispatcher = yield* Dispatcher;
-    const named = Option.getOrUndefined(args.rung);
-    if (named !== undefined && !dispatcher.rungs.includes(named)) {
-      return yield* new Refused({
-        detail: `no dispatchable rung ${named}; rungs: ${dispatcher.rungs.join(", ")}`,
-      });
-    }
-    yield* dispatcher.read;
-    const task = (yield* SubscriptionRef.get(dispatcher.state)).queue.find(
-      (candidate) => candidate.id === args.id,
-    );
-    if (!task)
-      return yield* new Refused({ detail: `${args.id} is not in the queue; see foreman queue` });
-    yield* dispatcher.author(task, named);
-    yield* Console.log(`${args.id}: dispatched; see foreman status, or foreman wait ${args.id}`);
+    yield* dispatchQueued(yield* Dispatcher, args.id, args.rung);
   }),
 ).pipe(
   Command.withDescription(
     "Start a queued task's author now, on the rung a tick would choose or on --rung",
+  ),
+);
+
+/** The part of the dispatcher that starts one queued task's author. */
+export type Dispatching = Pick<Dispatcher["Service"], "rungs" | "read" | "state" | "author">;
+
+/**
+ * Starts a queued task's author after one reading of the world, on the rung a
+ * tick would choose or on the one named. `foreman dispatch` and
+ * `foreman add --dispatch` both start an author through this.
+ */
+export const dispatchQueued = Effect.fn("dispatchQueued")(function* (
+  dispatcher: Dispatching,
+  id: string,
+  rung: Option.Option<string>,
+) {
+  if (Option.isSome(rung) && !dispatcher.rungs.includes(rung.value)) {
+    return yield* new Refused({
+      detail: `no dispatchable rung ${rung.value}; rungs: ${dispatcher.rungs.join(", ")}`,
+    });
+  }
+  yield* dispatcher.read;
+  const task = (yield* SubscriptionRef.get(dispatcher.state)).queue.find(
+    (candidate) => candidate.id === id,
+  );
+  if (!task) return yield* new Refused({ detail: `${id} is not in the queue; see foreman queue` });
+  yield* dispatcher.author(task, Option.getOrUndefined(rung));
+  yield* Console.log(`${id}: dispatched; see foreman status, or foreman wait ${id}`);
+});
+
+const title = Argument.String("title").pipe(Argument.withDescription("The new task's title"));
+
+const project = Flag.String("project").pipe(
+  Flag.withAlias("p"),
+  Flag.withDescription("The project, which picks its tracker"),
+);
+
+const description = Flag.String("description").pipe(
+  Flag.withAlias("d"),
+  Flag.withDescription("What the task is, and what done means; - reads it from stdin"),
+  Flag.withDefault(""),
+);
+
+const labels = Flag.String("label").pipe(
+  Flag.withAlias("l"),
+  Flag.withDescription("A label, such as size:2; repeat it for more"),
+  Flag.atLeast(0),
+);
+
+const dispatchNow = Flag.Boolean("dispatch").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Start the new task's author at once, as foreman dispatch does"),
+);
+
+const dispatchRung = Flag.String("rung").pipe(
+  Flag.withDescription("The ladder rung to dispatch on; needs --dispatch"),
+  Flag.optional,
+);
+
+/** What `foreman add` is told. */
+export interface Filing {
+  readonly title: string;
+  readonly project: string;
+  readonly description: string;
+  readonly labels: ReadonlyArray<string>;
+  readonly dispatch: boolean;
+  readonly rung: Option.Option<string>;
+}
+
+/**
+ * Files a task in its project's tracker and prints its id, then, with
+ * `dispatch`, starts its author through `dispatchQueued`.
+ *
+ * The id is printed before the dispatch, because a dispatch that fails leaves
+ * the task filed, and the caller needs its id to dispatch it again.
+ */
+export const fileTask = Effect.fn("fileTask")(function* (
+  filing: Filing,
+  tracker: Pick<Tracker["Service"], "add">,
+  dispatcher: Dispatching,
+) {
+  if (Option.isSome(filing.rung) && !filing.dispatch) {
+    return yield* new Refused({
+      detail: "--rung names the rung of a dispatch, so it needs --dispatch",
+    });
+  }
+  const id = yield* tracker.add({
+    project: filing.project,
+    title: filing.title,
+    description: yield* prose(filing.description),
+    labels: filing.labels,
+  });
+  yield* Console.log(id);
+  if (!filing.dispatch) return;
+  yield* dispatchQueued(dispatcher, id, filing.rung).pipe(
+    Effect.catchTag("Refused", (refused) =>
+      Effect.fail(new Refused({ detail: `${id} is filed but not dispatched: ${refused.detail}` })),
+    ),
+  );
+});
+
+const add = Command.make(
+  "add",
+  { title, project, description, labels, dispatch: dispatchNow, rung: dispatchRung },
+  (filing) =>
+    Effect.gen(function* () {
+      yield* fileTask(filing, yield* Tracker, yield* Dispatcher);
+    }),
+).pipe(
+  Command.withDescription(
+    "File a task in a project's tracker and print its id; --dispatch also starts its author",
   ),
 );
 
@@ -344,6 +443,7 @@ export const subcommands = <E>(services: Services<E>) => [
   Command.provide(correct, services),
   Command.provide(exit, services),
   Command.provide(dispatch, services),
+  Command.provide(add, services),
   Command.provide(prompt, services),
   Command.provide(wait, services),
   ...ACTIONS_LIST.map((action) => actionCommand(action, services)),
@@ -359,4 +459,4 @@ export class Refused extends Schema.TaggedError<Refused>()("Refused", {
 }
 
 /** What a one-shot command reads. */
-type Services<E> = Layer.Layer<Dispatcher | Fleet | Records | Settings, E>;
+type Services<E> = Layer.Layer<Dispatcher | Fleet | Records | Settings | Tracker, E>;
