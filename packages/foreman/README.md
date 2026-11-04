@@ -130,7 +130,7 @@ names its id.
 ## Projects you are working in
 
 You share each project's checkout with the fleet: every task ends by landing
-into it. Your uncommitted edits hold only the landings that would write the
+on the branch it has out, unless the pipeline names another branch (below). Your uncommitted edits hold only the landings that would write the
 same files. Such a landing waits, named in the dashboard, until you commit or
 stash those files. Work elsewhere in the checkout lands around you, and your
 edits stay as they were.
@@ -168,7 +168,7 @@ fix instead of offering the run. The task carries an `onboard` label so the
 queue never starts one on its own.
 
 Agents themselves never enter your checkout, with that one exception. Each works in its own worktree
-under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off your current `HEAD`,
+under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off the tip of the branch it lands on,
 and the author prompt forbids touching the main checkout or switching branches.
 Landing is foreman's own work, not an agent's, so no prompt anywhere hands out
 merge rights. Your tree can go dirty hours after dispatch: foreman re-reads it at
@@ -332,6 +332,19 @@ in a directory you are working in, and nothing has to be undone in yours when
 one fails. What then lands in your checkout is that same commit, fast-forwarded
 onto, so you get the exact tree that was verified, and only if your tip has not
 moved meanwhile.
+
+A land block can name the branch it lands onto with `onto`, such as `develop`;
+without it, work lands on the branch your checkout has out. The task's branch is
+cut from the tip of that branch, and git records it as the branch's upstream, so
+the target is fixed when the branch is cut: a later edit to the drawing applies
+to branches cut after it. A target your checkout has out is fast-forwarded as
+above. A target it does not have out is moved by its ref alone
+(`git update-ref`, only while it still points where the proof started), so your
+files, your branch and your uncommitted edits are untouched, and none of them
+holds the landing. A pull-request landing opens its pull request against the
+target. A target that does not exist holds the project, and the held row names
+it. A route in your checkout with no worktree needs the target out there, or the
+project is held with a row that names both branches.
 
 A branch that turns a green project red never lands, and the task goes back to
 the queue carrying the failure output — the next author's whole job is that

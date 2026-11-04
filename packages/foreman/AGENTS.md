@@ -250,9 +250,10 @@ skips that account (`walledBy`). Landing the task ends the wall.
 
 ### The operator's checkout is shared, so it is asked about
 
-Every task with a local landing ends by merging into the project's main checkout, and a
+Every task with a local landing ends by landing on its target, the branch its
+land's `onto` names, else the branch the project's main checkout has out, and a
 direct task commits there from the start: the checkout is the one the operator
-edits in. A pull-request landing merges into the remote trunk instead, and the
+edits in. A pull-request landing merges into the target on the remote instead, and the
 operator's checkout takes it by its own pull. `Repository.isFree` is the dispatch gate: a project it answers `Held`
 for is **held**, and `fill` passes over its tasks in both the review and the
 author pass. It is read every tick, so a project frees itself the moment the
@@ -273,11 +274,20 @@ untracked files included, because a fast-forward refuses to overwrite either.
 fast-forward. Holding the whole project on any edit would stop the fleet for as
 long as the operator works.
 
-A checkout with no branch is held. The branch a landing moves is whichever
-one `HEAD` names, and `git merge` into a detached `HEAD` succeeds: the commits
+A checkout with no branch is held. A task's branch that records no target lands
+on whichever branch `HEAD` names, and `git merge` into a detached `HEAD` succeeds: the commits
 land, the operator's branch stays put, and the tick sweep then deletes the only
 ref that reached them. "Free to work against" means there is a branch for the
 work to land on.
+
+A target is fixed when the task's branch is cut: the branch block records it as
+the branch's git upstream, and the landing, the pull request's base, the
+reviewer's base and the sweep all read that upstream, so a drawing edit applies
+only to branches cut after it. A target the checkout has out is fast-forwarded
+there. A target out nowhere is moved by a compare-and-swap of its ref
+(`update-ref <ref> <proved> <old tip>`), which writes no file, so no dirty path
+holds it. A target that does not exist holds the project (`noBranch`, naming it),
+at dispatch and at landing.
 
 An unreadable repository counts as held — foreman cannot merge into a checkout it
 cannot read either.
@@ -300,7 +310,7 @@ the agent is there.
 ### Workspace blocks: where a task works
 
 The pipeline says where a task works, not the policy (`docs/workspace-blocks.md`).
-A `branch` block makes `foreman/<id>` from the trunk tip; a `worktree` block puts
+A `branch` block makes `foreman/<id>` from the tip of its target; a `worktree` block puts
 it in a directory of its own. `routeWorkspace` reads the shape off the task's
 route, and `workspaceFor` opens it: a worktree, the operator's checkout on the
 task's branch (branch only), or the operator's checkout on the operator's own
@@ -311,6 +321,10 @@ records whether they are passed, so tasks in flight place as before.
   branch that reaches `done`, a worktree or land with no branch before it, and a
   workspace block after an agent or a check: the workspace is set before the
   first agent.
+- **A branch lands on one target.** Every land a branch block reaches names the
+  same `onto`, absent counting as one target (the checkout's branch), or
+  validation names the lands. A direct route has no land and stays on the
+  operator's branch.
 - **The checkout holds one task at a time.** A task holds it while its commits
   sit there: a branch task while git has its branch out in the checkout, a
   direct task from its first author run there (the run's `base`) until it leaves
@@ -326,15 +340,19 @@ records whether they are passed, so tasks in flight place as before.
   checkout as the directory runs `Repository.checkoutBranch`, which sets the
   branch it left as the upstream; `trunkOf` reads that upstream as the trunk while
   the task branch is out; landing and teardown (`leaveBranch`) check the
-  operator's branch out again from a clean tree. The checkout is never removed.
+  upstream out again from a clean tree. The checkout is never removed. So the
+  upstream is both the target and the branch the checkout returns to: a route
+  whose `onto` the checkout does not have out holds the project, with a row that
+  names both branches, and foreman never moves the checkout to a branch the
+  operator was not on.
 - **Direct has no undo, and completes at `done`.** The author commits onto the
   operator's branch, so a rejection is fixed by new commits. Each direct author
   run records the checkout's HEAD as its `base`; the reviewer reads from the first
   one, the task's tip is the checkout's HEAD while it occupies it, and a tip past
   the base is the author's commit. `done` completes the task and merges nothing.
 - **`land` has `how`.** `merge` (the default) makes a merge commit;
-  `fast-forward` lands only a commit that descends from the trunk tip, and a
-  trunk that moved returns the task like a conflict. Foreman never rebases: a
+  `fast-forward` lands only a commit that descends from the target's tip, and a
+  target that moved returns the task like a conflict. Foreman never rebases: a
   rebase makes a commit the reviewer did not read.
 
 ### Onboarding salvages the operator's checkout
@@ -597,9 +615,9 @@ Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
 the work most likely to be filed as too small to check is the work an author is
 most likely to have stubbed. An approving reviewer is the only thing that makes
-a branch landable, and landing is the only code path that moves the
-operator's branch for a task with a local landing; a pull-request landing moves
-the remote trunk instead. So no prompt gives an agent merge rights. A direct route is the operator's choice to let the author commit there,
+a branch landable, and landing is the only code path that moves a
+task's target for a local landing; a pull-request landing moves
+the target on the remote instead. So no prompt gives an agent merge rights. A direct route is the operator's choice to let the author commit there,
 and its `done` still waits for an approval.
 
 The author critiques its own diff before handing off, reading `git diff` rather
@@ -689,13 +707,14 @@ pull-request landing is proved by the repo's required checks instead, and the
 proving ground does not run. The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
 `verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the
-checkout's current tip. Check blocks run their command there too, at the task's
+target's current tip. Check blocks run their command there too, at the task's
 tip, after the landings.
 
 **What lands is that commit, not a merge remade from the same parents.** The
 ground shares the repository's objects, so the proved commit is addressable from
-the checkout, and git fast-forwards onto it. The checkout therefore takes the
-exact tree that was verified, and the fast-forward cannot reconcile anything —
+the checkout, and git fast-forwards onto it, or moves the target's ref to it when
+no checkout has the target out. The target therefore takes the
+exact tree that was verified, and the apply cannot reconcile anything —
 which is what makes a refusal there provably about the machine.
 
 Every property that makes this the design follows from the operator sharing that
@@ -704,7 +723,7 @@ somebody is using strands the `index.lock` that the landing's own git then trips
 over. And the undo disappears entirely: backing a merge out was only ever needed
 because the merge had to be applied to be tested, and a `reset --hard` that fails
 leaves an unverified merge sitting in the shared checkout with nothing to say so.
-The proving ground is reset from the checkout's tip on the next landing anyway,
+The proving ground is reset from the target's tip on the next landing anyway,
 so nothing there ever needs undoing.
 
 The ground is per project, not per task — landings are serialised by the tick,
@@ -762,7 +781,7 @@ matters, and half the price in the common case.
 **A landing is several steps and only the merge is atomic.** Interrupt it after
 the merge — a stranded `index.lock` is enough — and the commits are in while the
 task still reads as awaiting a landing, so every later tick lands the same branch
-again. So landing's first question is whether `HEAD` already contains the branch,
+again. So landing's first question is whether the target already contains the branch,
 and an already-merged one returns `Present`: the task is completed without
 merging or verifying. Re-merging is a harmless no-op, but re-verifying is not —
 it is a full suite run the whole one-fiber tick waits out, repeated forever for a
@@ -780,13 +799,14 @@ standing in.
 Every other column comes from the task store, which stops mentioning a branch the
 moment its task is closed, reclaimed or deleted — while the commits stay. So
 `Repository.branches` reads foreman's refs directly and answers three questions
-off one read per project:
+off one read per project, each against the branch it lands on (its upstream, else
+the checkout's branch, else a detached `HEAD`; a target git lacks answers neither):
 
-- **`merged`** — `HEAD` already contains the tip, so the ref is free to delete.
-- **`empty`** — the tip is still on `rev-list --first-parent HEAD`, and the
+- **`merged`** — the target already contains the tip, so the ref is free to delete.
+- **`empty`** — the tip is still on the target's first-parent line, and the
   branch's reflog says it was created at that tip, so nothing was ever
   committed on this branch.
-- Neither — the branch holds work the checkout has not taken.
+- Neither — the branch holds work its target has not taken.
 
 **`merged` cannot stand in for `empty`.** An author run proves foreman authored
 a branch; it does not prove the author wrote anything, and an agent can run

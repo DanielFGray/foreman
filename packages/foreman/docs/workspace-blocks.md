@@ -6,11 +6,13 @@ policy setting.
 
 ## Blocks
 
-- **branch**: makes the task's branch `foreman/<id>` from the trunk tip. It runs
-  no agent.
+- **branch**: makes the task's branch `foreman/<id>` from the tip of its target:
+  the branch the lands after it name with `onto`, else the branch your checkout
+  has out. It runs no agent.
 - **worktree**: checks the task's branch out in a separate directory. It runs no
   agent. It needs a branch block before it.
-- **land**: puts the approved commit onto the trunk. Prop `how`: `merge` (a merge
+- **land**: puts the approved commit onto its target. Prop `onto`: the branch it
+  lands on; absent is the branch your checkout has out. Prop `how`: `merge` (a merge
   commit; the default), `fast-forward`, or `pull-request`: foreman pushes the
   branch, opens a pull request, and merges it on GitHub once the repo's required
   checks pass. A pull-request land needs a `publish` gate and a `land` gate
@@ -61,8 +63,21 @@ script. A task in your checkout needs no preview: your own dev server serves it.
 4. **Direct has no undo.** With no branch, a returned review leaves the author's
    commits on your branch, and the next author continues on top of them. Foreman
    cannot separate them from commits you made meanwhile.
-5. **A direct task completes when it passes the last block.** It has nothing to
-   land, so its route ends at the **done** block.
+. **A task lands on one branch, fixed when its branch is cut.** Every land a
+   branch block reaches names the same `onto` (absent counts as one target), or
+   validation names the blocks. An `onto` that names a `foreman/` branch is a
+   problem too. The branch block records the target as the task branch's git
+   upstream, and the pull request's base, the reviewer's base, the sweep's
+   `merged` and `empty`, and the landing all read that upstream. A drawing edit
+   applies to branches cut after it. A branch with no upstream lands on the
+   branch your checkout has out, and a detached checkout measures against its
+   `HEAD`. A direct route has no land and stays on your branch.
+7. **A target that does not exist holds the project.** The held row names the
+   target, at dispatch and at landing. A route in your checkout with no worktree
+   (branch only) leaves the task's branch by checking its upstream out, so the
+   checkout must have the target out to start one: otherwise the project is
+   held, and the row names both branches. Foreman never moves your checkout to a
+   branch you were not on.
 
 ## How the engine reads the blocks
 
@@ -84,7 +99,15 @@ script. A task in your checkout needs no preview: your own dev server serves it.
   land without a review after the last source or author, and a gate stands
   before each. So a direct route cannot complete without review or a policy
   stop.
-- **Fast-forward lands only a commit that descends from the trunk tip.** A trunk
+- **A landing applies the proved commit by the target's ref.** The proving
+  ground resets to the target's tip. A target your checkout has out is
+  fast-forwarded there, and your uncommitted edits hold only the landings that
+  write the same paths. A target out nowhere is moved with
+  `git update-ref refs/heads/<onto> <proved> <old tip>`, which fails when the
+  tip moved, so your checkout is not touched and its edits hold nothing. A target
+  that another worktree has out is fast-forwarded in that worktree. A tip that
+  moved during the proof holds the landing, and a later tick proves it again.
+- **Fast-forward lands only a commit that descends from the target's tip.** A target
   that moved after the branch was cut returns the task to the queue at the same
   rung, as a conflict does. Foreman never rebases: a rebase makes a commit the
   reviewer did not read.
@@ -132,6 +155,21 @@ Each line names the old rule, where it stood, and what replaces it.
   the only code path that moves the operator's branch" (AGENTS.md): both hold for
   a task with a branch. A direct task commits there from the start, by the
   operator's choice of route, and its `done` still waits for an approval.
+- "A `branch` block makes `foreman/<id>` from the trunk tip" and "the branch a
+  landing moves is whichever one `HEAD` names" (AGENTS.md, Workspace blocks and
+  the operator's checkout): the branch is cut from the tip of `onto`, and the
+  landing moves the branch the task branch's upstream names; with no upstream,
+  `HEAD`'s branch, as before (rules 6 and 7).
+- "`merged`: `HEAD` already contains the tip" and "`empty`: the tip is still on
+  `rev-list --first-parent HEAD`" (AGENTS.md, the branches): both measure
+  against the branch's upstream, else the checkout's branch.
+- "the proving ground … reset to the checkout's current tip" and "landing's first
+  question is whether `HEAD` already contains the branch" (AGENTS.md, the review
+  gate): both read the target's tip, and a target out nowhere is moved by a
+  compare-and-swap of its ref, which no dirty path holds.
+- "landing is the only code path that moves the operator's branch for a task
+  with a local landing" (AGENTS.md, the review gate): it moves the task's
+  target, which need not be the operator's branch.
 
 ## Open question
 

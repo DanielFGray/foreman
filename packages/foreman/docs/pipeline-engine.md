@@ -73,7 +73,7 @@ claim and workspace. See "The standard pipeline, drawn with exits" in
 | branch | — | `next` | Instant. Makes `foreman/<id>` from the trunk tip when the first agent is dispatched. git records it as passed. |
 | worktree | — | `next` | Instant. Puts the task's branch in a directory of its own. Without one, agents work in the operator's checkout. See `docs/workspace-blocks.md`. |
 | agent | `role`, `model`, `slots?`, `stopped?` | `exits` | A work block. Dispatches an agent and waits for it to name an exit or stop. |
-| land | `how?`: `merge` (default) or `fast-forward` | (ends) | A work block. Lands the approved commit, which completes the task. |
+| land | `how?`: `merge` (default), `fast-forward` or `pull-request`; `onto?`: the branch it lands on, absent for the branch the checkout has out | (ends) | A work block. Lands the approved commit on `onto`, which completes the task. |
 | done | — | (ends) | A work block. Completes a task that has no branch: its commits are already on the operator's branch. |
 | park | — | (ends) | Parks the task for the operator (a row in `parks`). |
 | check | `command` | `exits`: `passed`, `failed` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
@@ -260,6 +260,10 @@ running a flow the operator did not draw is worse than stopping.
   the other is off, so one gate cannot stand for both. A `publish` gate from
   which no route reaches a pull-request land is a problem: it would hold a step
   that never comes.
+- Every land a branch block reaches names the same `onto`, absent counting as
+  one target, because the branch block cuts the task's branch from that
+  target. An `onto` that is empty or names a `foreman/` branch is a problem
+  (`docs/workspace-blocks.md`, rule 6).
 
 These are reachability checks with `effect/Graph`, which also finds cycles and
 draws the pipeline as Mermaid (`foreman pipeline show`).
