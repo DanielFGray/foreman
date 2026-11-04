@@ -1,7 +1,7 @@
 import { Effect, Schema as S } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { TaskEvent } from "./item.ts";
-import { PROCESS_ENDINGS } from "./endings.ts";
+import { EXIT_NAME, PROCESS_ENDINGS } from "./endings.ts";
 import { Tasks, TaskError } from "./store.ts";
 import { parseStored } from "./time.ts";
 
@@ -15,9 +15,6 @@ export type CheckEnding = (typeof CHECK_ENDINGS)[number];
  * foreman knows the block the run was at and which exits it declares.
  */
 export type Ending = string;
-
-/** The form of an exit name. */
-export const EXIT_NAME = /^[a-z-]+$/;
 
 /** Whether `ending` names an exit, rather than how a process stopped. */
 export const isExit = (ending: Ending | undefined): ending is string =>

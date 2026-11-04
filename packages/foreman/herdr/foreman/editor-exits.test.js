@@ -8,7 +8,7 @@ describe("exitRows", () => {
       exits: [
         { id: "done", name: "done", to: "review-gate" },
         { id: "already-done", name: "already-done", to: "review-gate", empty: "claim" },
-        { id: "exit-0a1b2c3d", name: "stuck", to: "queue", fails: "self" },
+        { id: "exit-qzvmktrwpa", name: "stuck", to: "queue", fails: "self" },
       ],
     })).toEqual([
       { name: "done", to: "review-gate", returns: false, fails: "none", charges: ["none", "author", "self"], empty: "unfinished", empties: ["unfinished", "claim"], fixed: false },

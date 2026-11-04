@@ -22,7 +22,7 @@
  * store or the file system.
  */
 import { Graph, Option, Schema as S } from "effect";
-import { PROCESS_ENDINGS } from "tasks/endings";
+import { EXIT_NAME, PROCESS_ENDINGS } from "tasks/endings";
 import type { TaskStatus } from "./records.ts";
 import { mayAuthor } from "./ladder.ts";
 import type { Seats } from "./reviewers.ts";
@@ -485,13 +485,14 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
 
   const authors = work.filter(isRole("author"));
   const nodes = indexOf(pipeline);
-  // A reviewer checks a claim against trunk. A new author run starts a new
-  // lap, which leaves the claim behind, so no author may run between the
-  // claim and its review. A land or a done before a review is the rule below.
+  // A reviewer checks a claim against trunk, so the claim leads to a review. A
+  // new author run starts a new lap, which leaves the claim behind, and a park
+  // hands it to the operator unchecked, so neither may come between the claim
+  // and its review. A land or a done before a review is the rule below.
   for (const author of authors) {
     const claim = author.kind === "agent" ? claimOf(author) : undefined;
     if (claim === undefined || claim.to === QUEUE) continue;
-    for (const reached of authorsBeforeReview(nodes, claim.to)) {
+    for (const reached of stopsBeforeReview(nodes, claim.to)) {
       problems.push(`${author.id}: the claim ${claim.name} reaches ${reached.id} before a review`);
     }
   }
@@ -1002,9 +1003,15 @@ const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
     if (ids.indexOf(exit.id) !== at) {
       problems.push(`${node.id}: two exits have the id ${exit.id}`);
     }
-    if (exit.id === "") problems.push(`${node.id}: the exit ${exit.name} has no id`);
-    if (!/^[a-z-]+$/.test(exit.name)) {
+    if (!EXIT_NAME.test(exit.name)) {
       problems.push(`${node.id}: the exit ${exit.name} is not lower-case words and hyphens`);
+    }
+    // A run stores the id as its ending, which the store reads as an exit only
+    // in this form.
+    if (!EXIT_NAME.test(exit.id)) {
+      problems.push(
+        `${node.id}: the exit ${exit.name} has the id "${exit.id}", not lower-case letters and hyphens`,
+      );
     }
     // A run stores the exit's id where it would store how it stopped, so an
     // id that reads as a stop would be read as one.
@@ -1035,13 +1042,13 @@ const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
 };
 
 /**
- * The author blocks a task reaches from block `from` before any review, on
- * every route the routers can take while nothing fails: through a check by its
- * `passed` exit, since a failed check sends the claim where the drawing says.
- * A route ends at a review, at a land, a done or a park, and at the first
- * author it meets.
+ * The author blocks and parks a task reaches from block `from` before any
+ * review, on every route the routers can take while nothing fails: through a
+ * check by its `passed` exit, since a failed check sends the claim where the
+ * drawing says. A route ends at a review, a land or a done, and at the first
+ * author or park it meets.
  */
-const authorsBeforeReview = (
+const stopsBeforeReview = (
   nodes: ReadonlyMap<string, PipelineNode>,
   from: string,
 ): ReadonlyArray<PipelineNode> => {
@@ -1051,7 +1058,7 @@ const authorsBeforeReview = (
     const node = nodes.get(id);
     if (node === undefined || seen.has(id) || isRole("review")(node)) return;
     seen.add(id);
-    if (isRole("author")(node)) {
+    if (isRole("author")(node) || node.kind === "park") {
       found.push(node);
       return;
     }

@@ -276,6 +276,21 @@ describe("naming an exit", () => {
     return id;
   });
 
+  // Foreman gives a new exit a random id of letters, and the run stores it.
+  test("stores an exit id that is no name an agent was ever given", async () => {
+    const runs = await inTasks(
+      Effect.gen(function* () {
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        yield* openRun(run({ task: id, work: "build", node: "author" }));
+        yield* nameExit(id, { ending: "exit-qzvmktrwpa", commit: "c1", event: undefined });
+        return (yield* runsOf([id])).get(id)?.map((r) => r.ending);
+      }),
+    );
+    expect(runs).toEqual(["exit-qzvmktrwpa"]);
+  });
+
   test("a second exit replaces the first, commit and all, and makes its status move", async () => {
     const [status, runs] = await inTasks(
       Effect.gen(function* () {

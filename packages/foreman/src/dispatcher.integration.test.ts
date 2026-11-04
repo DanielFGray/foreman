@@ -2897,7 +2897,7 @@ describe("a drawn pipeline", () => {
 
   test("a task whose last exit the drawing lost is a decision, not placed from its source", async () => {
     // The `done` exit removed and another added under its name: a fresh id.
-    draw(authorDoneAs("done", "exit-0a1b2c3d"));
+    draw(authorDoneAs("done", "exit-qzvmktrwpa"));
     const world = handedOver("ts-lost");
     await tick(world);
 
@@ -2915,6 +2915,21 @@ describe("a drawn pipeline", () => {
       ],
     ]);
     expect(reading.queue.map((task) => task.id)).not.toContain("ts-lost");
+  });
+
+  test("a task whose last exit the drawing lost keeps its claim past the stale window", async () => {
+    draw(authorDoneAs("done", "exit-qzvmktrwpa"));
+    const world = handedOver("ts-lost-stale");
+    const task = world.tasks.get("ts-lost-stale")!;
+    world.tasks.set("ts-lost-stale", {
+      ...task,
+      lastActivityAt: new Date(task.lastActivityAt.getTime() - 48 * 60 * 60 * 1000),
+    });
+    world.workers.delete("ts-lost-stale");
+    await tick(world);
+
+    expect(world.writes).not.toContain("records.release");
+    expect(world.tasks.get("ts-lost-stale")?.status).toBe("in_progress");
   });
   test("an agent block pinned to a rung dispatches that rung", async () => {
     draw(withAuthor((author) => [{ ...author, model: "dear" }]));

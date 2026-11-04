@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
+import { isExit } from "tasks";
 import { type Pipeline, problemsOf, type SeatOffers, STANDARD_PIPELINES } from "./pipeline.ts";
 import {
   addExit,
@@ -242,7 +243,9 @@ describe("belt edits", () => {
     const stuck = exitsOf(added, "author")[2]?.id ?? "";
     // A fresh id, not the name: a name given back after a removal would
     // otherwise place the removed exit's tasks at the new one.
-    expect(stuck).toMatch(/^exit-[0-9a-f]{8}$/);
+    expect(stuck).toMatch(/^exit-[a-z]{10}$/);
+    // A run stores the id as its ending, and the store must read it as an exit.
+    expect(isExit(stuck)).toBe(true);
     expect(node(added, "author")).toMatchObject({
       exits: [{ name: "done" }, { name: "already-done" }, { name: "stuck", to: "review-gate" }],
     });

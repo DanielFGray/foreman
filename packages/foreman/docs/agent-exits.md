@@ -11,7 +11,9 @@ they differ, that section is the rule.
   `stopped`. Each exit has an `id` and a `name`. The id is the exit's identity:
   a run stores it, and placement looks it up. The name is what the agent types
   and what filters count, and a rename changes only the name. A new exit gets
-  a random id (`exit-<hex>`) that no exit in the pipeline has. A check's exits
+  a random id (`exit-<letters>`) that no exit in the pipeline has. An id has
+  the form of a name (`[a-z-]+`), because the store reads an ending in that
+  form as an exit. A check's exits
   are `passed` and `failed`, id and name alike. An author's exit may declare
   `empty: claim`: see "Prompts". The pipelines file is `version: 5` and the
   drafts file `version: 3`, and foreman reads only those.
@@ -235,7 +237,7 @@ These are problems: a pipeline with any of them does not run.
   name matches `[a-z-]+`.
 - Only an author exit declares `empty: claim`, an author block has at most one,
   and it does not return to the queue. Its route reaches a review before any
-  other author block.
+  other author block or a park; a check may stand between them.
 - An agent block has at least one exit.
 - Every cycle can end (rule 5).
 - A router filter that counts an exit names one some block declares.
@@ -268,18 +270,19 @@ The standard pipeline has no check block. The store's author ending
 
 ## Changes to what exists
 
-- **The pipelines file goes to `version: 3`.** On read, each agent and check
-  block gets the standard exits for its role, and each agent block gets the
+- **The pipelines file goes to `version: 3`.** Each agent and check block
+  gets the standard exits for its role, and each agent block gets the
   instructions for its role. Saved pipelines wire `returned` and `failed` to
   `queue` with `fails: author`, so they behave as today. Only the standard
-  pipeline wires `returned` back to the author through `climb`. The read
-  writes nothing, as with version 2.
+  pipeline wires `returned` back to the author through `climb`. The
+  conversion is now `foreman cutover exit-ids`, and foreman reads only the
+  current version ("What is built").
 - **Prompts.** The files under `prompts/` become the default instructions,
   without the contract text and the `{% %}` logic. That logic moves into the
   generated sections. An operator's files live in `~/.config/foreman/prompts/`
   and win over the defaults. The `FOREMAN_PROMPTS` variable is removed.
-- **The store.** An agent run's `ending` holds an exit name or a process
-  ending. The store accepts any exit name for an agent run, because only
+- **The store.** An agent run's `ending` holds an exit id or a process
+  ending. The store accepts any ending in the form of an exit name for an agent run, because only
   foreman knows the block, and foreman validates it. The rung an exit charges is a
   row in `charges` (State). `VERDICTS` is removed. `tasks verdict`
   stays for people who use `tasks` without foreman; `tasks review` is removed

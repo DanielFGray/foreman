@@ -516,10 +516,11 @@ const mapExits = (
   );
 
 /**
- * A new `exit-<hex>` id that no exit in the pipeline has. Random for the
+ * A new `exit-<letters>` id that no exit in the pipeline has. Random for the
  * reason a block's id is: a counted or derived id would come back after its
  * exit was removed, and a task that named the old exit would be placed at the
- * new one.
+ * new one. Letters only, because a run stores the id as its ending, and the
+ * store reads an ending in the form of an exit name (`EXIT_NAME`) as an exit.
  */
 const freshExitId = (pipeline: Pipeline, also: ReadonlyArray<string> = []): string => {
   const taken = new Set([
@@ -529,7 +530,10 @@ const freshExitId = (pipeline: Pipeline, also: ReadonlyArray<string> = []): stri
     ),
   ]);
   for (;;) {
-    const id = `exit-${crypto.randomUUID().slice(0, 8)}`;
+    const letters = Array.from(crypto.getRandomValues(new Uint8Array(10)), (byte) =>
+      String.fromCharCode(97 + (byte % 26)),
+    ).join("");
+    const id = `exit-${letters}`;
     if (!taken.has(id)) return id;
   }
 };

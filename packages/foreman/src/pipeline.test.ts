@@ -1068,6 +1068,7 @@ describe("exits", () => {
       "review: two exits are named approved",
       "review: two exits have the id approved",
       "review: the exit Bad_Name is not lower-case words and hyphens",
+      'review: the exit Bad_Name has the id "Bad_Name", not lower-case letters and hyphens',
       "review: stopped is how a run stops with no exit, not an exit",
     ]);
   });
@@ -1103,7 +1104,7 @@ describe("exits", () => {
     ).toContain("review: only an author claims trunk already does the task");
   });
 
-  test("a claim that reaches another author before a review is refused", () => {
+  test("a claim that reaches another author or a park before a review is refused", () => {
     const second: PipelineNode = {
       kind: "agent",
       id: "second",
@@ -1124,6 +1125,20 @@ describe("exits", () => {
     };
     expect(problemsOf(pipeline, OFFERS)).toContain(
       "author: the claim already-done reaches second before a review",
+    );
+    const parked: Pipeline = {
+      nodes: [
+        ...replace(
+          author([
+            { id: "done", name: "done", to: "review-gate" },
+            { id: "already-done", name: "already-done", to: "operator", empty: "claim" },
+          ]),
+        ).nodes,
+        { kind: "park", id: "operator" },
+      ],
+    };
+    expect(problemsOf(parked, OFFERS)).toContain(
+      "author: the claim already-done reaches operator before a review",
     );
   });
 });

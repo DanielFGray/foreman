@@ -579,7 +579,8 @@ run by naming its block's claim: the one exit the drawing declares `empty:
 claim` (`already-done` in the standard pipelines), and `reviewable` sends that
 one empty branch to a reviewer. The meaning is the declared property, not the
 name, so a renamed claim stays a claim. Validation allows one claim per author
-block, and its route reaches a review before any other author.
+block, and its route reaches a review before any other author or a park; a
+check may stand between them.
 
 A task labelled `research` is the second such branch: its deliverable is a report
 in its own log, so it never has a diff to commit. That label is set when the task

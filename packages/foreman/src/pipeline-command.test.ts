@@ -238,7 +238,7 @@ describe("drawing a draft", () => {
       { id: "done", name: "done", to: "review-gate" },
       { id: "already-done", name: "already-done", to: "review-gate", empty: "claim" },
       {
-        id: expect.stringMatching(/^exit-[0-9a-f]{8}$/),
+        id: expect.stringMatching(/^exit-[a-z]{10}$/),
         name: "blocked",
         to: "start",
         fails: "self",
