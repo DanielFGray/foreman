@@ -17,15 +17,12 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { TASK_ID } from "./status.js";
+import { HEAD, PAD, columnHead, columnsAcross, scrolledBy } from "./columns.js";
 
-const PAD = 12;
 const GAP = 10;
-const HEAD = 30;
 const CARD_H = 50;
 const LINE_H = 16;
 const STRIPE = 3;
-// A column never narrows past this, so a card shows a title, not a word or
-// two. A pane too narrow for six such columns scrolls across them.
 const COLUMN_MIN = 200;
 
 const COLUMNS = [
@@ -82,11 +79,9 @@ export class Board {
   // Every card's rectangle in board coordinates, keyed by `slot`, each column's x and width,
   // and how far the columns reach past the board's right edge.
   layout(columns) {
-    const width = this.width();
-    const columnW = Math.max(COLUMN_MIN, (width - 2 * PAD - (COLUMNS.length - 1) * GAP) / COLUMNS.length);
-    const overflow = Math.max(0, 2 * PAD + COLUMNS.length * columnW + (COLUMNS.length - 1) * GAP - width);
+    const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
+    const { xs, columnW, overflow } = columnsAcross(width, COLUMNS.length, { min: COLUMN_MIN, gap: GAP, scroll: this.scroll });
     const rects = new Map();
-    const xs = COLUMNS.map((_, index) => PAD + index * (columnW + GAP) - this.scroll.x);
     columns.forEach((cards, index) => {
       let y = PAD + HEAD - this.scroll.y;
       for (const card of cards) {
@@ -97,8 +92,6 @@ export class Board {
     });
     return { rects, xs, columnW, overflow };
   }
-
-  width() { return this.bounds?.width ?? this.pane.size?.width ?? 600; }
 
   // A Queue card lists two target states: where it stands, which runs
   // nothing, and granted, at the foot of Authoring. A card with no grant to
@@ -122,16 +115,8 @@ export class Board {
     this.pane.drag.press(card.key, event.position, { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
   }
 
-  // A wheel scrolls down the columns; a sideways scroll, or a wheel with shift
-  // held, scrolls across them as far as the last column's right edge.
   scrolled(event, cx) {
-    const dx = event.delta?.x ?? 0, dy = event.delta?.y ?? 0;
-    const [across, down] = event.modifiers?.shift && dx === 0 ? [dy, 0] : [dx, dy];
-    const { overflow } = this.layout(this.columns());
-    this.scroll = {
-      x: Math.min(overflow, Math.max(0, this.scroll.x + across)),
-      y: Math.max(0, this.scroll.y + down),
-    };
+    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()).overflow);
     cx.notify();
   }
 
@@ -146,12 +131,7 @@ export class Board {
     const board = div().id("task-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => this.scrolled(event, cx))
-      .children(COLUMNS.map((column, index) => h_flex().absolute().left(xs[index]).top(PAD).w(columnW).h(HEAD - 6)
-        .items_center().gap(8).px(3)
-        .child(div().size(8).rounded(8).bg(column.color(t)).flex_none())
-        .child(div().text_size(13).font_semibold().truncate().child(column.label))
-        .child(div().px(6).rounded(4).bg(`${column.color(t)}26`).text_size(10).text_color(column.color(t))
-          .child(String(columns[index].length)))))
+      .children(COLUMNS.map((column, index) => columnHead(column, xs[index], columnW, columns[index].length, t)))
       .children(columns.flatMap((cards, index) => cards.map((card) =>
         this.card(card, COLUMNS[index], rects.get(slot(index, card.key)), t, card === dragged))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
