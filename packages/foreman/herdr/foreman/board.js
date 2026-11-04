@@ -5,11 +5,15 @@
 // The view computes no column: a card moves when foreman publishes it in
 // another one.
 //
+// In each column, the cards under no epic come first. Each epic's cards
+// follow its head, which shows the epic's title and how many of its tasks are
+// done, and the heads come in the order of their first cards. A click on a
+// head folds that epic in every column, and the pane keeps the fold.
+//
 // A Queue card dragged onto Authoring runs `foreman policy grant <task>
 // <steps>` with the project's `grantSteps`; with none, the card lists no
 // target but where it stands. A click selects a card and opens its detail
-// under the board (`detail.js`), where its row's actions run. A Queue card
-// under an epic names the epic, from the queue foreman ranks.
+// under the board (`detail.js`), where its row's actions run.
 //
 // The board lays its cards out itself, in absolute rectangles from `layout`,
 // so a drag's targets are the rectangles the same layout gives the card where
@@ -24,6 +28,8 @@ const CARD_H = 50;
 const LINE_H = 16;
 const STRIPE = 3;
 const COLUMN_MIN = 200;
+const EPIC_H = 24;
+const FOLDED_KEY = "board-folded";
 
 const COLUMNS = [
   { key: "queue", label: "Queue", color: (t) => t.muted },
@@ -47,6 +53,14 @@ export class Board {
     // The board's bounds in the window, from the last move over it.
     this.bounds = null;
     this.scroll = unscrolled(COLUMNS.length);
+    // The epics whose cards the board hides under their heads.
+    this.folded = storedFolded();
+  }
+
+  fold(epic, cx) {
+    if (!this.folded.delete(epic)) this.folded.add(epic);
+    try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...this.folded])); } catch {}
+    cx.notify();
   }
 
   // Each column's cards: a placement, or a landed task, with the row it
@@ -60,40 +74,43 @@ export class Board {
     const byTask = this.pane.rowsByTask();
     for (const placement of placements) {
       const index = columnOf(placement);
-      columns[index].push({ ...placement, row: rowOf(byTask.get(placement.key), placement.column) });
+      columns[index].push({ ...placement, parent: placement.parent ?? null, row: rowOf(byTask.get(placement.key), placement.column) });
     }
     const placed = new Set(placements.map((placement) => placement.key));
     const needsYou = COLUMNS.findIndex((column) => column.key === "needs-you");
     for (const row of this.pane.rows()) {
       if (row.view !== "attention" || placed.has(row.key.match(TASK_ID)?.[0])) continue;
-      columns[needsYou].push({ key: row.key, label: row.label, column: "needs-you", grant: null, runs: [], gates: [], url: row.url, pr: row.pr, row });
+      columns[needsYou].push({ key: row.key, label: row.label, parent: row.parent, column: "needs-you", grant: null, runs: [], gates: [], url: row.url, pr: row.pr, row });
     }
     columns[COLUMNS.length - 1] = this.pane.landed()
-      .map((task) => ({ ...task, column: "landed", grant: null, runs: [], gates: [], url: null, pr: null, row: rowOf(byTask.get(task.key), "landed") }));
+      .map((task) => ({ ...task, parent: task.parent ?? null, column: "landed", grant: null, runs: [], gates: [], url: null, pr: null, row: rowOf(byTask.get(task.key), "landed") }));
     return columns;
   }
 
   // The selected card, as the board shows it now.
   selected() { return this.columns().flat().find((card) => card.key === this.pane.detail.key); }
 
-  // Every card's rectangle in board coordinates, keyed by `slot`; each
+  // What each column shows (`entriesOf`), each entry with its rectangle in
+  // board coordinates; every shown card's rectangle, keyed by `slot`; each
   // column's x and width; how far the columns reach past the board's right
   // edge; and how far each column can scroll down.
   layout(columns) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
-    const height = this.bounds?.height ?? this.pane.size?.height ?? 600;
+    const boardH = this.bounds?.height ?? this.pane.size?.height ?? 600;
     const { xs, columnW, overflow } = columnsAcross(width, COLUMNS.length, { min: COLUMN_MIN, gap: GAP, scroll: this.scroll });
-    const rects = new Map();
-    const reach = columns.map((cards, index) => {
-      let y = 0;
-      for (const card of cards) {
-        const tall = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
-        rects.set(slot(index, card.key), { x: xs[index], y: CARDS_TOP + y - this.scroll.y[index], width: columnW, height: tall });
-        y += tall + GAP;
-      }
-      return reachOf(y, height);
+    const entries = columns.map((cards, index) => {
+      let y = CARDS_TOP - this.scroll.y[index];
+      return entriesOf(cards, this.folded).map((entry) => {
+        const height = entry.card === undefined ? EPIC_H : CARD_H + (lineOf(entry.card) === null ? 0 : LINE_H);
+        const rect = { x: xs[index], y, width: columnW, height };
+        y += height + GAP;
+        return { ...entry, rect };
+      });
     });
-    return { rects, xs, columnW, overflow, reach };
+    const rects = new Map(entries.flatMap((column, index) =>
+      column.flatMap(({ card, rect }) => card === undefined ? [] : [[slot(index, card.key), rect]])));
+    const reach = entries.map((column) => reachOf(column.reduce((sum, { rect }) => sum + rect.height + GAP, 0), boardH));
+    return { entries, rects, xs, columnW, overflow, reach };
   }
 
   // A Queue card lists two target states: where it stands, which runs
@@ -125,7 +142,8 @@ export class Board {
 
   view(t) {
     const columns = this.columns();
-    const { rects, xs, columnW } = this.layout(columns);
+    const { entries, xs, columnW } = this.layout(columns);
+    const epics = this.pane.epics();
     const drag = this.pane.drag;
     const preview = drag.preview();
     const origin = this.bounds ?? { x: 0, y: 0 };
@@ -135,14 +153,31 @@ export class Board {
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => this.scrolled(event, cx))
       .children(COLUMNS.map((column, index) => columnHead(column, xs[index], columnW, columns[index].length, t)))
-      .children(columns.map((cards, index) => columnBody(`board-column-${COLUMNS[index].key}`, xs[index], columnW)
-        .children(cards.map((card) => this.card(card, COLUMNS[index], inBody(rects.get(slot(index, card.key))), t, card === dragged)))))
+      .children(entries.map((column, index) => columnBody(`board-column-${COLUMNS[index].key}`, xs[index], columnW)
+        .children(column.map(({ card, epic, count, rect }) => card === undefined
+          ? this.epicHead(epic, epics.get(epic), count, COLUMNS[index], inBody(rect), t)
+          : this.card(card, COLUMNS[index], inBody(rect), t, card === dragged)))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
         outline(preview.rect, origin, t)))
       .when(floating !== null, (el) => el.child(
         this.card(dragged, COLUMNS.find((column) => column.key === dragged.column), { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false)
           .opacity(0.9)));
     return v_flex().flex_1().min_h(0).child(board).child(this.pane.detail.view(t, this.selected()));
+  }
+
+  // An epic's head in one column: +/− for its fold, its title, how many of
+  // its tasks are done, and, folded, how many cards it hides here. An epic
+  // foreman no longer drives, such as one a landed task closed, shows its key.
+  epicHead(epic, info, count, column, rect, t) {
+    const folded = this.folded.has(epic);
+    return h_flex().id(`board-epic-${column.key}-${epic}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
+      .items_center().gap(6).px(4).rounded(4).text_size(11).text_color(t.muted).cursor_pointer()
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((_event, cx) => this.fold(epic, cx))
+      .child(div().flex_none().w(10).child(folded ? "+" : "−"))
+      .child(div().flex_1().min_w(0).truncate().font_semibold().child(info?.label ?? epic))
+      .when(info !== undefined, (el) => el.child(div().flex_none().text_color(t.dim).child(`${info.done}/${info.total}`)))
+      .when(folded, (el) => el.child(div().flex_none().px(5).rounded(4).bg(t.surface).child(String(count))));
   }
 
   card(card, column, rect, t, ghost) {
@@ -176,11 +211,28 @@ const VIEW_OF_COLUMN = { queue: "queue", "needs-you": "attention", authoring: "w
 // column shows, since actions are per view, else any row of its task.
 const rowOf = (rows = [], column) => rows.find((row) => row.view === VIEW_OF_COLUMN[column]) ?? rows[0] ?? null;
 
-// The card's third line: why a Needs-you card waits, or the epic a Queue card sits under.
-const lineOf = (card) =>
-  card.column === "needs-you" ? card.row?.detail ?? null
-  : card.column === "queue" && card.row?.parent != null ? `under ${card.row.parent}`
-  : null;
+// A column's entries, in the order it shows them: the cards under no epic,
+// then each epic's head, followed by its cards unless the epic is folded.
+const entriesOf = (cards, folded) => {
+  const groups = new Map();
+  for (const card of cards) if (card.parent !== null) groups.set(card.parent, [...(groups.get(card.parent) ?? []), card]);
+  return [
+    ...cards.filter((card) => card.parent === null).map((card) => ({ card })),
+    ...[...groups].flatMap(([epic, under]) =>
+      [{ epic, count: under.length }, ...(folded.has(epic) ? [] : under.map((card) => ({ card })))]),
+  ];
+};
+
+// The epics folded when the pane last ran.
+const storedFolded = () => {
+  try {
+    const kept = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
+    return new Set(Array.isArray(kept) ? kept.filter((epic) => typeof epic === "string") : []);
+  } catch { return new Set(); }
+};
+
+// The card's third line: why a Needs-you card waits.
+const lineOf = (card) => card.column === "needs-you" ? card.row?.detail ?? null : null;
 
 // Where the drop would put the card, drawn as an empty slot.
 const outline = (rect, origin, t) =>

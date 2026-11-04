@@ -214,16 +214,33 @@ describe("the task board", () => {
         key: "ts-new",
         label: "task ts-new",
         project: "fibrae",
+        parent: null,
         landedAt: "2026-11-03T11:00:00.000Z",
       },
       {
         key: "ts-mid",
         label: "task ts-mid",
         project: "fibrae",
+        parent: null,
         landedAt: "2026-11-02T13:00:00.000Z",
       },
     ]);
     // Before the first reading there is no "now" to count a day back from.
     expect(board([], { landed }).landed).toEqual([]);
+  });
+
+  test("names each task's epic, and how far the epic has come", () => {
+    const epic: Item = { ...task("ep-1", "in_progress"), type: "epic" };
+    const under = { ...task("ts-under", "open"), parent: "ep-1" };
+    const published = board([under, task("ts-loose", "open")], {
+      epics: [{ epic, children: [under, { ...task("ts-shipped", "done"), parent: "ep-1" }] }],
+    });
+    expect(published.placements.map(({ key, parent }) => [key, parent])).toEqual([
+      ["ts-under", "ep-1"],
+      ["ts-loose", null],
+    ]);
+    expect(published.epics).toEqual([
+      { key: "ep-1", label: "task ep-1", project: "fibrae", done: 1, total: 2 },
+    ]);
   });
 });
