@@ -59,14 +59,26 @@ stop this project's pipeline.
     (`foreman pipeline graph <project> --json`). Pick cards, then `send
     through` grants each one the pipeline's gated steps.
 
-- **Models**: the ladder's rungs, the models and the reviewers, changed by
-  drag; a dragged rung takes a level of its own (`foreman ladder move`), and
-  `foreman ladder level` puts rungs in one level. A model dropped on Reviewers
-  runs `foreman reviewers add`, with the rung's thinking level when a worker is
-  dropped, and a reviewer dropped on Models runs
-  `foreman reviewers remove`. Under them are the accounts the ladder and the
-  reviewers draw on: what each has left (the quota rows) and the rungs and
-  reviewers it pays for.
+- **Models** (`foreman ladder --json`): a column per ladder level that holds
+  an enabled rung, cheapest first; Available, every disabled rung and every
+  model no rung or reviewer names; and Reviewers. Each change is a drag:
+  - A rung dropped on a level column joins that level (`foreman ladder
+    level`). Dropped on the gap between two level columns, or before the first
+    or after the last, it takes a level of its own there (`foreman ladder
+    move`). A disabled rung is enabled after the move (`foreman ladder
+    enable`), and an enabled rung dropped on Available is disabled.
+  - A model dropped in a level or a gap becomes a rung there (`foreman ladder
+    add`, with `--level` to join a level), named after the model unless that
+    name is taken, with no thinking level.
+  - A rung or a model dropped on Reviewers runs `foreman reviewers add`, with
+    the rung's thinking level for a rung; a reviewer dropped on Available runs
+    `foreman reviewers remove`.
+
+  A click on a rung's or a reviewer's thinking level steps it none, low,
+  medium, high, none (`foreman ladder thinking`, `foreman reviewers
+  thinking`). Under the columns are the accounts the ladder and the reviewers
+  draw on: what each has left (the quota rows) and the rungs and reviewers it
+  pays for.
 
 The queue is not in `state.json`: the pane runs `foreman queue --project
 <name> --json` every 5 seconds. A row that newly appears under Landed, in any
