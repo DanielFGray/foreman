@@ -21,7 +21,7 @@
 // reviewer card name their account.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { moveArgs } from "./ladder-order.js";
+import { moveArgs, reviewerArgs } from "./ladder-order.js";
 import { refusalOf } from "./parts.js";
 import { CARDS_TOP, PAD, columnBody, columnHead, columnsAcross, inBody, reachOf, scrolledBy, unscrolled } from "./columns.js";
 
@@ -112,8 +112,7 @@ export class Models {
     const reviews = this.ladder.reviewers.some((one) => one.model === card.model);
     if (card.kind !== "reviewer" && !reviews) {
       const moved = without.map((cards, column) => column === REVIEWERS ? [...cards, card] : cards);
-      const level = card.kind === "worker" && card.rung.thinking ? ["--thinking", card.rung.thinking] : [];
-      targets.push({ rect: at(moved), run: (cx) => this.run(["reviewers", "add", card.model, ...level], cx) });
+      targets.push({ rect: at(moved), run: (cx) => this.run(reviewerArgs(card), cx) });
     }
     if (card.kind === "reviewer") {
       const moved = without.map((cards, column) => column === MODELS ? [...cards, card] : cards);
