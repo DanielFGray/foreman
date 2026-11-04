@@ -178,31 +178,41 @@ class World {
     for (const task of items) this.tasks.set(task.id, task);
   }
 
+  /** The worker of a task in `directory`, made when it has none. */
+  private workerIn(task: string, repository: string, directory: string): Worker {
+    this.opened.push(directory);
+    const current = this.workers.get(task);
+    if (current) return current;
+    const created: Worker = {
+      task,
+      repository,
+      directory,
+      worktree: directory === repository ? undefined : directory,
+      state: "gone",
+      since: undefined,
+      roles: new Map(),
+    };
+    this.workers.set(task, created);
+    return created;
+  }
+
+  /** git's `leaveBranch`: a clean checkout with `branch` out takes the operator's branch back. */
+  private leave(branch: string) {
+    if (this.checkedOut === branch && !this.treeDirty) this.checkedOut = undefined;
+  }
+
   readonly fleet = {
+    // Opening the checkout itself checks the task's branch out there, as
+    // `Repository.checkoutBranch` does.
     open: (options: { task: string; repository: string; branch: string; directory: string }) =>
       this.write("fleet.open", () => {
-        this.opened.push(options.directory);
-        const current = this.workers.get(options.task);
-        if (current) return current;
-        const created: Worker = {
-          task: options.task,
-          repository: options.repository,
-          directory: options.directory,
-          worktree: options.directory === options.repository ? undefined : options.directory,
-          state: "gone",
-          since: undefined,
-          roles: new Map(),
-        };
-        this.workers.set(options.task, created);
-        return created;
+        if (options.directory === options.repository) this.checkedOut = options.branch;
+        return this.workerIn(options.task, options.repository, options.directory);
       }),
     attach: (options: { task: string; repository: string }) =>
-      this.fleet.open({
-        task: options.task,
-        repository: options.repository,
-        branch: `foreman/${options.task}`,
-        directory: options.repository,
-      }),
+      this.write("fleet.attach", () =>
+        this.workerIn(options.task, options.repository, options.repository),
+      ),
     spawn: (
       target: Worker,
       options: { role: AgentRole; kind: string; model: string | undefined; prompt: string },
@@ -243,6 +253,7 @@ class World {
       this.write("fleet.close", () => {
         this.closed.push(options.task);
         this.workers.delete(options.task);
+        this.leave(`foreman/${options.task}`);
       }),
     notify: (title: string) =>
       this.write("fleet.notify", () => void this.notifications.push(title)),
@@ -436,13 +447,14 @@ class World {
     setup: () => this.write("repository.setup", () => undefined),
     merge: (
       _directory: string,
-      _branch: string,
+      branch: string,
       commit: string,
       _verify: string | undefined,
       _proving: string,
       message: string,
     ) =>
       this.write("repository.merge", () => {
+        this.leave(branch);
         this.merged.push(commit);
         this.mergeMessages.push(message);
         return this.landing;
@@ -2420,6 +2432,8 @@ describe("a route's workspace blocks", () => {
           land: "committed",
         }),
       );
+      // The landing those records stand for checks the operator's branch out again.
+      world.checkedOut = undefined;
       await tick(world);
       expect(world.spawned.at(-1)).toEqual([second.id, "author"]);
     });
@@ -2448,6 +2462,32 @@ describe("a route's workspace blocks", () => {
     expect(state.held).toEqual([
       { project: "test", reason: "busy", detail: "busy", branch: `foreman/${own.id}` },
     ]);
+  });
+
+  test("branch only: queued tasks with earlier author runs hold nothing while no branch is out", async () => {
+    draw(BRANCH_ONLY);
+    const stopped = () => authorRun("cheap", { open: false, ending: "stopped" });
+    const first = item("ts-queued-a", "open", [], "test", [stopped()]);
+    const second = item("ts-queued-b", "open", [], "test", [stopped()]);
+    const world = new World(first, second);
+
+    const state = await reading(world);
+
+    expect(state.held).toEqual([]);
+    expect(world.spawned).toEqual([[first.id, "author"]]);
+  });
+
+  test("direct: queued tasks whose author runs recorded no base hold nothing", async () => {
+    draw(DIRECT);
+    const elsewhere = () => authorRun("cheap", { open: false, ending: "stopped" });
+    const first = item("ts-moved-a", "open", [], "test", [elsewhere()]);
+    const second = item("ts-moved-b", "open", [], "test", [elsewhere()]);
+    const world = new World(first, second);
+
+    const state = await reading(world);
+
+    expect(state.held).toEqual([]);
+    expect(world.spawned).toEqual([[first.id, "author"]]);
   });
 
   test("a direct task in the checkout holds another task's landing, and names itself", async () => {
