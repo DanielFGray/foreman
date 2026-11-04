@@ -6,6 +6,7 @@ import {
   type AgentNode,
   type Exit,
   instructionsOf,
+  isInstructionsName,
   placeholdersIn,
   QUEUE,
   type Workspace,
@@ -33,11 +34,17 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const packaged = path.join(import.meta.dir, "..", "prompts");
+    const own = () => path.join(configDirectory(), "prompts");
 
-    /** The text of instructions `name`, or `undefined` when no directory has it. */
+    /**
+     * The text of instructions `name`, or `undefined` when no directory has
+     * it. A name outside a-z, 0-9 and - fails, since it could name a file
+     * outside the directory.
+     */
     const read = (name: string) =>
       Effect.gen(function* () {
-        for (const directory of [path.join(configDirectory(), "prompts"), packaged]) {
+        if (!isInstructionsName(name)) return yield* misnamed(name);
+        for (const directory of [own(), packaged]) {
           const file = path.join(directory, `${name}.md`);
           if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) {
             return yield* fs
@@ -62,6 +69,30 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       });
 
     return {
+      read,
+
+      /**
+       * Writes `text` as instructions `name` in the operator's `prompts/`
+       * directory, where it wins over the file foreman ships, and answers the
+       * file's path. A dispatch reads the file, so the text goes to a temporary
+       * file first and is renamed into place: no dispatch reads half of it.
+       */
+      write: (name: string, text: string) =>
+        Effect.gen(function* () {
+          if (!isInstructionsName(name)) return yield* misnamed(name);
+          const directory = own();
+          const file = path.join(directory, `${name}.md`);
+          const temporary = path.join(directory, `.${name}.md.${process.pid}.tmp`);
+          yield* fs.makeDirectory(directory, { recursive: true });
+          yield* fs.writeFileString(temporary, text);
+          yield* fs.rename(temporary, file);
+          return file;
+        }).pipe(
+          Effect.catchTag("PlatformError", (cause) =>
+            Effect.fail(new PromptError({ template: name, detail: String(cause) })),
+          ),
+        ),
+
       /**
        * The instructions each name reads, for validation. A name with no file,
        * or one that cannot be read, is absent: that stops the projects whose
@@ -147,7 +178,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
  * told about.
  */
 export interface AgentRun {
-  readonly task: Item;
+  readonly task: Pick<Item, "id" | "title" | "project" | "labels" | "runs">;
   readonly worktree: string;
   readonly repository: string;
   readonly workspace: Workspace | undefined;
@@ -156,6 +187,9 @@ export interface AgentRun {
 }
 
 type Values = Readonly<Record<string, string>>;
+
+const misnamed = (name: string) =>
+  new PromptError({ template: name, detail: `${name} is no file name: use a-z, 0-9 and -` });
 
 /**
  * Replaces each `{{ name }}` in `body` with its value. A name with no entry

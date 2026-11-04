@@ -8,9 +8,9 @@
 // the pane starts, fills them when a block is selected, and reads the selected
 // block when Enter is pressed in one.
 import { div } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, EditorState, Editor as TextEditor } from "gpui-base";
 import { chip, picker, portName } from "./parts.js";
-import { FIELDS, changedSettings, settingsOf } from "./editor-settings.js";
+import { FIELDS, changedSettings, instructionsOf, settingsOf } from "./editor-settings.js";
 import { QUEUE, chargeChange, exitRows } from "./editor-exits.js";
 
 // The ends of a route, in the order `SwapEnd` turns one into the next.
@@ -33,19 +33,78 @@ export class Editor {
       input.on("submit", (_event, cx) => this.submit(key, input.value(), cx));
       this.inputs[key] = input;
     }
+    // The text of the instructions the selected agent reads, named by
+    // `instructions`, and the prompt foreman would send from that block, or
+    // `promptProblem`, why it has none. `asked` counts the prompt reads, so
+    // only the last one sent is shown.
+    const text = { language: "markdown", line_numbers: false, folding: false, soft_wrap: true };
+    this.text = EditorState.new(text);
+    this.promptText = EditorState.new({ ...text, readonly: true });
+    this.instructions = null; this.promptProblem = null; this.asked = 0;
   }
 
-  toggle() { this.on = !this.on; this.inserting = null; this.rejoining = null; this.addingSource = false; }
+  // Turns editing on or off. Editing reads the selected agent's instructions
+  // and its prompt; reading nothing while it is off spares a foreman run per click.
+  toggle(cx) {
+    this.on = !this.on; this.inserting = null; this.rejoining = null; this.addingSource = false;
+    this.instructions = null; this.promptProblem = null; this.promptText.set_value("");
+    if (this.on) this.read(this.pane.selectedNode(), cx);
+  }
 
   // Fills the inputs from the block just selected.
-  load(node) {
+  load(node, cx) {
     this.route = null; this.exit = null;
     for (const [key, value] of settingsOf(node)) this.inputs[key].set_value(value);
+    this.instructions = null; this.promptProblem = null; this.promptText.set_value("");
+    this.read(node, cx);
   }
 
-  // Refills the inputs whose settings a reading changed under them.
-  follow(before, after) {
+  // Refills the inputs whose settings a reading changed under them. The
+  // instructions text is read again only when the block reads other
+  // instructions, so text the operator has not saved stays; the prompt is
+  // read again after every reading, since any change can change it.
+  follow(before, after, cx) {
     for (const [key, value] of changedSettings(before, after)) this.inputs[key].set_value(value);
+    if (instructionsOf(after) !== (this.instructions ?? undefined)) this.read(after, cx);
+    else this.preview(after, cx);
+  }
+
+  // Reads the text of the instructions `node` reads into its box, then its prompt.
+  read(node, cx) {
+    const name = instructionsOf(node);
+    this.instructions = name ?? null;
+    if (!this.on || name === undefined) return;
+    cx.spawn(async (cx) => {
+      const result = await this.pane.foreman(["pipeline", "instructions", name]);
+      if (this.instructions !== name) return;
+      // A name with no file yet starts empty; save writes it.
+      this.text.set_value(result.code === 0 ? result.stdout.replace(/\n$/, "") : "");
+      this.preview(node, cx);
+      cx.notify();
+    });
+  }
+
+  // Reads the prompt foreman would send from agent block `node` of the draft.
+  preview(node, cx) {
+    if (!this.on || instructionsOf(node) === undefined) return;
+    const asked = ++this.asked;
+    cx.spawn(async (cx) => {
+      const result = await this.pane.foreman(["pipeline", "prompt", this.pane.project(), node.id]);
+      if (asked !== this.asked) return;
+      this.promptProblem = result.code === 0 ? null : (result.stderr || result.stdout).trim();
+      this.promptText.set_value(result.code === 0 ? result.stdout : "");
+      cx.notify();
+    });
+  }
+
+  // Writes the box as the instructions the selected agent reads, which
+  // the next dispatch of every block reading them sends.
+  saveText(node, cx) {
+    const name = instructionsOf(node);
+    this.pane.act(["pipeline", "instructions", name, this.text.value()], cx, (done, cx) => {
+      if (done) this.preview(node, cx);
+      cx.notify();
+    });
   }
 
   // Enter in a text setting: the change it makes to the selected block, or the new source.
@@ -209,6 +268,24 @@ export class Editor {
       }))
       .when(this.exit !== null, (el) => el.child(this.field(t, "exitName", `rename ${this.exit}`)))
       .when(node.kind === "agent", (el) => el.child(this.field(t, "newExit")));
+  }
+
+  // An agent's instructions, which "save text" writes, and the prompt foreman
+  // would send from the block, read again after each change and each save.
+  // Each scrolls in its own box, so it fills the height it is given. Nothing
+  // for another kind of block.
+  instructionsView(t, node) {
+    const name = instructionsOf(node);
+    if (name === undefined) return null;
+    const box = (state) => TextEditor.new(state).flex_1().min_h(0).rounded(4).border(1).border_color(t.border).bg(t.canvas);
+    return v_flex().size_full().gap(4)
+      .child(h_flex().gap(6).items_center()
+        .child(div().text_color(t.muted).child(`instructions ${name}.md`))
+        .child(chip(t, "save text", "save-text", (cx) => this.saveText(node, cx))))
+      .child(box(this.text))
+      .child(div().text_color(this.promptProblem === null ? t.muted : t.blocked)
+        .child(this.promptProblem ?? "the prompt this block sends a pretend task"))
+      .child(box(this.promptText));
   }
 
   // A text setting, which changes the draft when Enter is pressed in it.

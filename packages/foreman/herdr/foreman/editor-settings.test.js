@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changedSettings } from "./editor-settings.js";
+import { changedSettings, instructionsOf } from "./editor-settings.js";
 
 describe("changedSettings", () => {
   const drafted = { kind: "source", id: "queue", filter: "label:bug", next: "branch" };
@@ -7,4 +7,13 @@ describe("changedSettings", () => {
     expect(changedSettings(drafted, { ...drafted, filter: "" })).toEqual([["filter", ""]]));
   test("a reading that keeps every setting refills nothing, so unsent text stays", () =>
     expect(changedSettings(drafted, { ...drafted, next: "worktree" })).toEqual([]));
+});
+
+describe("instructionsOf", () => {
+  test("an agent reads the instructions it names, else its role's, and another block reads none", () => {
+    expect(instructionsOf({ kind: "agent", role: "review", instructions: "careful" })).toBe("careful");
+    expect(instructionsOf({ kind: "agent", role: "review" })).toBe("review");
+    expect(instructionsOf({ kind: "check", command: "true" })).toBeUndefined();
+    expect(instructionsOf(undefined)).toBeUndefined();
+  });
 });

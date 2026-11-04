@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
@@ -14,6 +14,8 @@ import { scratchStore, seed } from "./scratch-store.ts";
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
 const path = join(folder, "pipelines.json");
 process.env["FOREMAN_PIPELINES"] = path;
+// `instructions` writes the operator's prompts directory, under the config directory.
+process.env["XDG_CONFIG_HOME"] = folder;
 const store = scratchStore();
 afterAll(() => {
   rmSync(folder, { recursive: true, force: true });
@@ -497,5 +499,61 @@ describe("drawing a draft", () => {
     await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
     await run("discard", "amux");
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
+  });
+});
+
+/** What a run of the command prints. */
+const printed = async (...args: ReadonlyArray<string>) => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    await run(...args);
+    return log.mock.calls.map((call) => call.join(" ")).join("\n");
+  } finally {
+    log.mockRestore();
+  }
+};
+
+describe("foreman pipeline prompt and instructions", () => {
+  const change = (value: unknown) => JSON.stringify(value);
+  const own = join(folder, "foreman", "prompts", "author.md");
+  beforeEach(() => rmSync(join(folder, "foreman"), { recursive: true, force: true }));
+
+  test("prompt shows a draft's agent block for a pretend task, with the exits the draft gives it", async () => {
+    await run("edit", "amux", change({ _tag: "AddExit", id: "author", name: "stuck" }));
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "author", port: "exit:stuck" }, to: "start" }),
+    );
+    const text = await printed("prompt", "amux", "author");
+    expect(text).toContain("## Task\n\ntrace — a pretend task\nProject: amux.");
+    expect(text).toContain("- `foreman exit trace stuck`: the task goes to start.");
+    expect(text).toContain("Your task's work: `git log <base>..HEAD`");
+  });
+
+  test("prompt names no block that is not an agent", async () => {
+    expect(await refusal("prompt", "amux", "land")).toBe(
+      "amux's pipeline has no agent block named land",
+    );
+  });
+
+  test("instructions prints the text foreman ships until the operator writes their own, which the prompt then carries", async () => {
+    expect(await printed("instructions", "author")).toBe(
+      readFileSync(join(import.meta.dir, "..", "prompts", "author.md"), "utf8"),
+    );
+    await run("instructions", "author", "Work on {{ task }} alone.");
+    expect(readFileSync(own, "utf8")).toBe("Work on {{ task }} alone.");
+    expect(await printed("instructions", "author")).toBe("Work on {{ task }} alone.");
+    expect(await printed("prompt", "amux", "author")).toContain(
+      "\n\nWork on trace alone.\n\n## Exits",
+    );
+  });
+
+  test("instructions refuses a name that is no file name, and prints none for a name with no file", async () => {
+    expect(await refusal("instructions", "../policy", "text")).toBe(
+      "../policy is no file name: use a-z, 0-9 and -",
+    );
+    expect(existsSync(join(folder, "foreman"))).toBe(false);
+    expect(await refusal("instructions", "nobody")).toBe("no instructions file is named nobody.md");
   });
 });

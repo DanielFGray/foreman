@@ -28,3 +28,8 @@ export const changedSettings = (before, after) => {
   const was = new Map(settingsOf(before));
   return settingsOf(after).filter(([key, value]) => before === undefined || was.get(key) !== value);
 };
+
+// The instructions an agent block reads, as foreman's `instructionsOf` names
+// them: its own `instructions`, else its role. Nothing for another kind of block.
+export const instructionsOf = (node) =>
+  node?.kind === "agent" ? node.instructions ?? node.role : undefined;

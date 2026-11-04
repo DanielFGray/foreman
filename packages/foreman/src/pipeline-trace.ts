@@ -185,7 +185,7 @@ export type Pretend = Pick<
   | "parked"
 > & { readonly tip: string };
 
-const pretend = (task: PretendTask): Pretend => ({
+export const pretend = (task: PretendTask): Pretend => ({
   id: "trace",
   title: "a pretend task",
   project: "trace",

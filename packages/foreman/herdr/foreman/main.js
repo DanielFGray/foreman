@@ -140,7 +140,7 @@ export default class Foreman extends View {
     if (project === this.following) return;
     this.following = project;
     this.shown = null; this.selected = null; this.queue = null; this.problem = null;
-    if (this.editor.on) this.editor.toggle();
+    if (this.editor.on) this.editor.toggle(cx);
     if (this.sim.on) this.sim.toggle(cx);
     if (this.fleet.on) this.fleet.toggle(cx);
     this.tasks.clear(); this.detail.clear();
@@ -273,8 +273,8 @@ export default class Foreman extends View {
   // Sends one change to the draft. foreman answers the new reading, and the
   // block the change added, which the pane then selects.
   change(change, cx) {
-    this.ask(["pipeline", "edit", this.project(), JSON.stringify(change), "--json", "--flow", this.flow()], cx, (shown) => {
-      if (shown.added !== null) this.select(shown.added);
+    this.ask(["pipeline", "edit", this.project(), JSON.stringify(change), "--json", "--flow", this.flow()], cx, (shown, cx) => {
+      if (shown.added !== null) this.select(shown.added, cx);
     });
   }
 
@@ -300,7 +300,7 @@ export default class Foreman extends View {
   finish(verb, cx) {
     this.act(["pipeline", verb, this.project()], cx, (done, cx) => {
       if (!done) { cx.notify(); return; }
-      if (verb === "save" && this.editor.on) this.editor.toggle();
+      if (verb === "save" && this.editor.on) this.editor.toggle(cx);
       this.loadDrawing(cx);
     });
   }
@@ -316,7 +316,7 @@ export default class Foreman extends View {
         const shown = JSON.parse(result.stdout);
         this.problem = null;
         this.showing(shown, cx);
-        then(shown);
+        then(shown, cx);
       } catch (error) { this.problem = String(error.message ?? error); }
       cx.notify();
     });
@@ -331,8 +331,8 @@ export default class Foreman extends View {
   showing(shown, cx) {
     const before = this.shown === null ? undefined : this.selectedNode();
     this.shown = shown;
-    if (this.selected !== null && !this.view().drawing.blocks.some((block) => block.id === this.selected)) this.select(null);
-    else this.editor.follow(before, this.selectedNode());
+    if (this.selected !== null && !this.view().drawing.blocks.some((block) => block.id === this.selected)) this.select(null, cx);
+    else this.editor.follow(before, this.selectedNode(), cx);
     if (this.fitted) this.fit(cx);
     // A change to the draft can change every step after it.
     if (this.sim.on) this.sim.run(cx);
@@ -345,7 +345,7 @@ export default class Foreman extends View {
   // The way the drawing should run in this pane: down a column, across a row.
   flow() { return this.size !== null && this.size.height > this.size.width ? "down" : "across"; }
 
-  select(id) { this.selected = id; this.editor.load(this.selectedNode()); }
+  select(id, cx) { this.selected = id; this.editor.load(this.selectedNode(), cx); }
 
   selectedNode() {
     return this.selected === null ? undefined : this.view().pipeline.nodes.find((node) => node.id === this.selected);
@@ -415,7 +415,7 @@ export default class Foreman extends View {
         .child(div().text_color(t.accent).child("showing the draft"))
         .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
         .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
-      .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(); cx.notify(); }))
+      .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(cx); cx.notify(); }))
       .child(chip(t, this.sim.on ? "stop simulating" : "simulate", "simulate", (cx) => { if (this.fleet.on) this.fleet.toggle(cx); this.sim.toggle(cx); }))
       .child(chip(t, this.fleet.on ? "stop the fleet" : "fleet", "fleet", (cx) => { if (this.sim.on) this.sim.toggle(cx); this.fleet.toggle(cx); }))
       .child(div().flex_1())
@@ -466,7 +466,7 @@ export default class Foreman extends View {
       .hover((s) => s.bg(t.hover))
       .on_click((_event, cx) => {
         if (this.editor.clickedBlock(block, cx)) return;
-        this.select(this.selected === block.id ? null : block.id);
+        this.select(this.selected === block.id ? null : block.id, cx);
         cx.notify();
       })
       .child(v_flex().size_full().justify_center()
@@ -488,12 +488,19 @@ export default class Foreman extends View {
     const node = this.selectedNode();
     if (block === undefined || node === undefined) return div();
     const tasks = at.get(block.id) ?? [];
-    return v_flex().id("detail").max_h(320).overflow_y_scrollbar().p(10).gap(4).bg(t.surface).border_t(1).border_color(t.border)
+    const body = v_flex().p(10).gap(4)
       .child(h_flex().flex_wrap().gap(6).child(div().font_semibold().child(`${block.icon} ${block.id}`)).child(div().text_color(t.muted).child(`${block.kind} · ${block.summary}`)))
       .when(this.editor.on, (el) => el.child(this.editor.settings(t, node)).child(this.editor.exits(t, drawing, node)))
       .when(tasks.length === 0, (el) => el.child(div().text_color(t.dim).child("no task stands here")))
       .children(tasks.slice(0, 50).map((task) => this.taskView(task, t)))
       .when(tasks.length > 50, (el) => el.child(div().text_color(t.dim).child(`and ${tasks.length - 50} more`)));
+    const panel = (el) => el.bg(t.surface).border_t(1).border_color(t.border);
+    const text = this.editor.on ? this.editor.instructionsView(t, node) : null;
+    if (text === null) return panel(v_flex().id("detail").max_h(320).overflow_y_scrollbar().child(body));
+    // An agent being edited: its instructions and prompt beside its settings, at a height they can fill.
+    return panel(h_flex().flex_none().h(360)
+      .child(v_flex().id("detail").flex_1().h_full().overflow_y_scrollbar().child(body))
+      .child(div().flex_1().h_full().p(10).border_l(1).border_color(t.border).child(text)));
   }
 
   // One task at the selected block: its state, its ask and the button that

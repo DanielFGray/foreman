@@ -568,6 +568,8 @@ class World {
 }
 
 const prompts = Layer.succeed(Prompts, {
+  read: () => Effect.succeed(""),
+  write: (name: string) => Effect.succeed(name),
   instructions: (names: ReadonlyArray<string>) =>
     Effect.succeed(new Map(names.map((name) => [name, ""]))),
   agent: (block: AgentNode, run: AgentRun) =>

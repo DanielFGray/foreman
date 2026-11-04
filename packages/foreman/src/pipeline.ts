@@ -639,6 +639,9 @@ export const PLACEHOLDERS = ["task", "branch", "base", "worktree"] as const;
 /** The instructions file an agent block reads: its own, or its role's. */
 export const instructionsOf = (node: AgentNode): string => node.instructions ?? node.role;
 
+/** Whether `name` can name an instructions file `<name>.md`: a-z, 0-9 and -, so it stays in its directory. */
+export const isInstructionsName = (name: string): boolean => /^[a-z0-9-]+$/.test(name);
+
 /** Every `{{ name }}` in a text, in order. */
 export const placeholdersIn = (text: string): ReadonlyArray<string> =>
   [...text.matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((match) => match[1] ?? "");
@@ -660,7 +663,7 @@ export const instructionProblems = (
   pipeline.nodes.flatMap((node) => {
     if (node.kind !== "agent") return [];
     const name = instructionsOf(node);
-    if (!/^[a-z0-9-]+$/.test(name)) {
+    if (!isInstructionsName(name)) {
       return [`${node.id}: instructions ${name} is no file name: use a-z, 0-9 and -`];
     }
     const text = texts.get(name);
