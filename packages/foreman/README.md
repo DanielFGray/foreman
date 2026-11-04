@@ -370,8 +370,9 @@ foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
                                # the rung dispatch would pick next, with models.dev
                                # list prices and current subscription quotas (no dispatch)
 foreman ladder edit            # edit it in $EDITOR
-foreman ladder add <rung> <model> [--thinking L] [--above R | --below R] [--disabled] [--note N]
-                               # add a rung in a level of its own next to R, or at the bottom
+foreman ladder add <rung> <model> [--thinking L] [--above R | --below R | --level N] [--disabled] [--note N]
+                               # add a rung in a level of its own next to R, or at the bottom;
+                               # --level N puts it in level N beside its rungs
 foreman ladder thinking <rung> <level|none>
                                # set the level a rung starts at; none passes no flag
 foreman ladder disable <rung>  # stop dispatching a rung, keeping its place
@@ -452,6 +453,8 @@ one. The council skill convenes the same list.
 foreman reviewers [--json]     # each reviewer with its harness and launch arguments
 foreman reviewers add <model> [--name N] [--thinking low|medium|high] [--provider P]
 foreman reviewers remove <name>
+foreman reviewers thinking <name> <level|none>
+                               # set the level a reviewer starts at; none passes no flag
 ```
 
 A review run records the reviewer's name where an author run records its

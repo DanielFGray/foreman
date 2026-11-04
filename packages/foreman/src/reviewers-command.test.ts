@@ -61,6 +61,23 @@ describe("the reviewers", () => {
       }),
     ));
 
+  test("thinking sets one reviewer's level, and none clears it", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        yield* reviewers("add", "opencode/claude-sonnet-5", "--thinking", "low");
+        yield* reviewers("add", "opencode/claude-sonnet-5", "--name", "deep", "--thinking", "low");
+        yield* reviewers("thinking", "deep", "high");
+        yield* reviewers("thinking", "opencode/claude-sonnet-5", "none");
+        expect((yield* readReviewers).map((one) => [one.name, one.thinking])).toEqual([
+          ["deep", "high"],
+          ["opencode/claude-sonnet-5", undefined],
+        ]);
+        const error = yield* Effect.flip(reviewers("thinking", "nobody", "low"));
+        expect(String(error)).toMatch(/no reviewer nobody; reviewers: deep, opencode/);
+      }),
+    ));
+
   test("refuses a model with no row in the models table, a taken name, and an unknown name", () =>
     withStore(
       rig,
@@ -154,6 +171,21 @@ describe("a rung's thinking level", () => {
         const argv = yield* launches;
         expect(argv["opus-plain"]).toEqual(["claude", "--model", "opus", "go"]);
         expect(argv["opus-set"]).toEqual(["claude", "--model", "opus", "go"]);
+      }),
+    ));
+
+  test("ladder add takes one place: --level beside its rungs, and refuses two places", () =>
+    withStore(
+      flagged,
+      Effect.gen(function* () {
+        const strong = (yield* readRows).find((row) => row.rung === "strong")!;
+        yield* ladder("add", "opus-peer", "opus", "--level", String(strong.level));
+        const rows = yield* readRows;
+        expect(rows.find((row) => row.rung === "opus-peer")?.level).toBe(strong.level);
+        const error = yield* Effect.flip(
+          ladder("add", "x", "opus", "--level", "1", "--above", "cheap"),
+        );
+        expect(String(error)).toMatch(/give one of --above, --below and --level/);
       }),
     ));
 

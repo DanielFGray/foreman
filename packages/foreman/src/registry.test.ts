@@ -86,6 +86,22 @@ describe("the registry ladder", () => {
       }),
     ));
 
+  test("a rung added into a level joins its rungs, last in rank, and moves no level", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const before = yield* readRows;
+        const [cheap, strong] = before;
+        yield* addRow({ ...cheap!, rung: "peer" }, { _tag: "Level", level: strong!.level });
+        const after = yield* readRows;
+        expect(after.map((r) => [r.rung, r.level])).toEqual([
+          ...before.slice(0, 2).map((r) => [r.rung, r.level]),
+          ["peer", strong!.level],
+          ...before.slice(2).map((r) => [r.rung, r.level]),
+        ]);
+      }),
+    ));
+
   test("a moved rung keeps its row and takes its new place", () =>
     withStore(
       rig,

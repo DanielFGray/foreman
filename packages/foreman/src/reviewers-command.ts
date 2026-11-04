@@ -2,7 +2,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
 import { launchArguments } from "./harness.ts";
 import { providerOf } from "./ladder.ts";
-import { addReviewer, readReviewers, removeReviewer } from "./registry.ts";
+import { addReviewer, readReviewers, removeReviewer, setReviewerThinking } from "./registry.ts";
 import type { Reviewer } from "./reviewers.ts";
 
 /**
@@ -27,7 +27,7 @@ export const reviewersCommand = Command.make(
     }),
 ).pipe(
   Command.withDescription("List the reviewers and the arguments that launch each one"),
-  Command.withSubcommands([add(), remove()]),
+  Command.withSubcommands([add(), remove(), thinking()]),
 );
 
 /**
@@ -91,4 +91,29 @@ function remove() {
         yield* Console.log(`${name}: removed from the reviewers`);
       }),
   ).pipe(Command.withDescription("Remove a reviewer"));
+}
+
+function thinking() {
+  return Command.make(
+    "thinking",
+    {
+      name: Argument.String("name").pipe(Argument.withDescription("A reviewer's name")),
+      thinking: Argument.String("thinking").pipe(
+        Argument.withSchema(Schema.NonEmptyString),
+        Argument.withDescription(
+          "How hard it thinks, such as low, medium or high; none passes no flag, so the harness's own default applies",
+        ),
+      ),
+    },
+    ({ name, thinking }) =>
+      Effect.gen(function* () {
+        const level = thinking === "none" ? Option.none() : Option.some(thinking);
+        yield* setReviewerThinking(name, level);
+        yield* Console.log(`${name}: thinking ${thinking}`);
+      }),
+  ).pipe(
+    Command.withDescription(
+      "Set the thinking level a reviewer starts at, or none for the harness's own default",
+    ),
+  );
 }
