@@ -69,7 +69,6 @@ const row = (
 ): RawCandidate => ({
   pool: partial.pool ?? "Test",
   account: partial.account ?? Option.none(),
-  tier: partial.tier ?? "metered",
   rank: partial.rank ?? 1,
   modelsDev: partial.modelsDev ?? Option.none(),
   enabled: partial.enabled ?? true,
@@ -237,7 +236,6 @@ describe("pickRecommendation and billing", () => {
     model: partial.model ?? "m",
     pool: partial.pool ?? "P",
     account: partial.account ?? Option.none(),
-    tier: partial.tier ?? "metered",
     unmetered: partial.unmetered ?? false,
     billing: partial.billing ?? "unknown",
     eligibility: partial.eligibility ?? "eligible",
@@ -293,22 +291,66 @@ describe("pickRecommendation and billing", () => {
     expect(picked.rule).toContain("no incremental metered spend");
   });
 
-  test("registry free tier leads subscription capacity by ladder order", () => {
+  // models.dev lists many free models at zero input and output with no
+  // cache-read rate, so their dollar estimate is unknown.
+  const zeroQuote = {
+    usd: Option.none(),
+    rates: {
+      input: Option.some(0),
+      output: Option.some(0),
+      cacheRead: Option.none(),
+      cacheWrite: Option.none(),
+    },
+    identity: Option.some("opencode/flint-40b-free"),
+    basis: [],
+    assumptions: [],
+    uncertainty: ["cache_read rate unknown"],
+    quoteUnreliable: false,
+  };
+  const subscription = candidate({
+    rung: "cursor-agent",
+    rank: 5,
+    billing: "subscription",
+    account: Option.some("cursor"),
+    quota: available(20),
+  });
+
+  test("zero quoted rates lead subscription capacity by ladder order", () => {
     const free = candidate({
       rung: "flint-free",
       rank: 1,
-      tier: "free",
       billing: "unknown",
+      price: zeroQuote,
       quota: { _tag: "unknown", detail: Option.some("no zen usage") },
     });
-    const sub = candidate({
-      rung: "cursor-agent",
-      rank: 5,
-      billing: "subscription",
-      account: Option.some("cursor"),
-      quota: available(20),
+    expect(Option.getOrNull(pickRecommendation([free, subscription]).candidate)?.rung).toBe(
+      "flint-free",
+    );
+  });
+
+  test("a model with no catalog price is an unknown cost, not a free one", () => {
+    const unpriced = candidate({
+      rung: "qwen-free",
+      rank: 1,
+      billing: "unknown",
+      quota: { _tag: "unknown", detail: Option.none() },
     });
-    expect(Option.getOrNull(pickRecommendation([free, sub]).candidate)?.rung).toBe("flint-free");
+    expect(Option.getOrNull(pickRecommendation([unpriced, subscription]).candidate)?.rung).toBe(
+      "cursor-agent",
+    );
+  });
+
+  test("a quoted rate above zero is not free", () => {
+    const cached = candidate({
+      rung: "cache-billed",
+      rank: 1,
+      billing: "unknown",
+      price: { ...zeroQuote, rates: { ...zeroQuote.rates, cacheRead: Option.some(0.1) } },
+      quota: { _tag: "unknown", detail: Option.none() },
+    });
+    expect(Option.getOrNull(pickRecommendation([cached, subscription]).candidate)?.rung).toBe(
+      "cursor-agent",
+    );
   });
 
   test("Cursor Auto with known capacity is viable without a price", () => {
@@ -407,7 +449,6 @@ describe("advise unmetered applicability", () => {
         rank: 1,
         unmetered: true,
         modelsDev: Option.some("opencode-go/ox-alpha-free"),
-        tier: "free",
       }),
       row({
         rung: "metered",
@@ -451,7 +492,6 @@ describe("advise unmetered applicability", () => {
         rank: 1,
         unmetered: true,
         modelsDev: Option.some("openrouter/x"),
-        tier: "metered",
       }),
       row({
         rung: "cursor-agent",
@@ -693,16 +733,16 @@ describe("medianOf", () => {
   });
 });
 
-/** A scratch store seeded with richer registry rows than e2e/registry.sql: pool, models_dev, tier, retired, runs. */
+/** A scratch store seeded with richer registry rows than e2e/registry.sql: pool, models_dev, retired, runs. */
 const seedAdviceRegistry = async (dir: string): Promise<string> => {
   const path = join(dir, "registry.db");
   await seed(`
     INSERT INTO pools(pool, harness, provider_default) VALUES
       ('OpenAI', 'codex', 'openai'), ('OpenCode Go', 'opencode', 'opencode-go'), ('Cursor', 'cursor', 'cursor');
-    INSERT INTO models(model, provider, pool, harness, models_dev, tier, limit_scope) VALUES
-      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'metered', 'pool'),
-      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'free', 'pool'),
-      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'metered', 'pool');
+    INSERT INTO models(model, provider, pool, harness, models_dev, limit_scope) VALUES
+      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'pool'),
+      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'pool'),
+      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'pool');
     INSERT INTO ladder(rank, level, rung, model, provider, unmetered, enabled) VALUES
       (1, 1, 'promo', 'opencode-go/ox-alpha-free', 'opencode-go', 1, 1),
       (2, 2, 'codex-luna', 'gpt-6-luna', 'openai', 0, 1),

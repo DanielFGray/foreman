@@ -85,7 +85,6 @@ describe("the reviewers", () => {
             model: "opencode/claude-sonnet-5",
             harness: "opencode",
             thinking: "high",
-            tier: "metered",
             provider: "opencode",
             args: ["--model", "opencode/claude-sonnet-5"],
           },
@@ -105,14 +104,13 @@ describe("foreman ladder --json", () => {
           document.rungs.map((rung: Record<string, unknown>) => [
             rung["rung"],
             rung["model"],
-            rung["tier"],
             rung["enabled"],
             rung["state"],
           ]),
         ).toEqual([
-          ["cheap", "opencode/deepseek-v4-pro", "metered", true, "trial"],
-          ["strong", "opencode/claude-sonnet-5", "metered", true, "trial"],
-          ["promo", "opencode-go/ox-alpha-free", "free", true, "trial"],
+          ["cheap", "opencode/deepseek-v4-pro", true, "trial"],
+          ["strong", "opencode/claude-sonnet-5", true, "trial"],
+          ["promo", "opencode-go/ox-alpha-free", true, "trial"],
         ]);
         expect(document.models).toEqual((yield* readModels).map((model) => ({ ...model })));
         expect(document.reviewers.map((one: { name: string }) => one.name)).toEqual(["sonnet"]);

@@ -131,7 +131,7 @@ missing landing target never does, and needs a hand-run command instead.
 
 A held project can be handed to an agent instead of waiting for you. Pick it in
 the dashboard and foreman files a task in that project, opens a workspace on the
-checkout itself, and sends the frontier model in to salvage what is there.
+checkout itself, and sends the top rung in to salvage what is there.
 
 It reads the diff and names what the work was doing, runs the project's own
 typecheck, tests and linter, and decides each untracked file — a new module the

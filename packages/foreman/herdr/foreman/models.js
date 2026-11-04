@@ -27,7 +27,7 @@ import { CARDS_TOP, PAD, columnBody, columnHead, columnsAcross, inBody, reachOf,
 const GAP = 8;
 const CARD_H = 40;
 const STRIPE = 3;
-// Wider than a Board column: a card's first line holds the name, the tier and
+// Wider than a Board column: a card's first line holds the name and
 // the trial state, and its second the model, the thinking and the account.
 const COLUMN_MIN = 260;
 
@@ -178,7 +178,6 @@ export class Models {
     const color = column.color(t);
     const rung = card.kind === "worker" ? card.rung : null;
     const dim = rung !== null && !rung.enabled;
-    const tier = rung?.tier ?? card.entry.tier;
     const account = rung === null ? null : this.accountOf(rung.rung);
     const detail = rung !== null
       ? [rung.model, rung.thinking, account].filter(Boolean).join(" · ")
@@ -196,7 +195,6 @@ export class Models {
         .child(h_flex().gap(6).text_size(12)
           .when(rung !== null, (el) => el.child(this.enabledMark(rung, t)))
           .child(div().flex_1().truncate().child(card.title))
-          .child(div().flex_none().text_size(10).text_color(t.muted).child(tier))
           .when(rung !== null, (el) => el.child(div().flex_none().text_size(10).text_color(t.muted).child(rung.state))))
         .child(div().text_size(10).text_color(t.muted).truncate().child(detail)));
   }

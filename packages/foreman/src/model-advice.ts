@@ -101,7 +101,6 @@ export const AdviceCandidate = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.Option(S.String),
-  tier: S.String,
   rank: S.Number,
   unmetered: S.Boolean,
   billing: BillingKind,
@@ -384,7 +383,6 @@ export const RawCandidate = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.Option(S.String),
-  tier: S.String,
   rank: S.Number,
   modelsDev: S.Option(S.String),
   enabled: S.Boolean,
@@ -454,7 +452,7 @@ export const advise = (
       reasons.push("unmetered: account allowance does not apply (sponsored)");
       if (billingOf(row.account) === "unknown") {
         reasons.push(
-          "unmetered does not mean free — billing remains unknown without a verified free tier or zero list price",
+          "unmetered does not mean free — billing remains unknown without zero quoted rates or a zero list price",
         );
       }
     }
@@ -545,7 +543,6 @@ const buildCandidate = (
     model: row.model,
     pool: row.pool,
     account: row.account,
-    tier: row.tier,
     rank: row.rank,
     unmetered: row.unmetered,
     billing,
@@ -570,8 +567,9 @@ export type PickResult = S.Schema.Type<typeof PickResult>;
 
 /**
  * Preference order (no dollar×percent score):
- * 1. no incremental metered spend — free tier, reliable $0 list quote, or
- *    subscription with confirmed windows on a metered rung (ladder order);
+ * 1. no incremental metered spend — zero quoted rates (`quotesZero`), reliable
+ *    $0 list quote, or subscription with confirmed windows on a metered rung
+ *    (ladder order);
  *    unmetered alone is not free and does not enter this group;
  * 2. reliable known list-price among eligible (price ascending, ladder tie-break);
  * 3. other eligible (ladder order). Unreliable context-tier quotes never enter (2).
@@ -587,7 +585,7 @@ export const pickRecommendation = (candidates: ReadonlyArray<AdviceCandidate>): 
 
   const noMeteredSpend = eligible
     .filter((c) => {
-      if (c.tier === "free") return true;
+      if (quotesZero(c.price)) return true;
       const zeroList = Option.match(c.price.usd, {
         onNone: () => false,
         onSome: (usd) => usd === 0 && !c.price.quoteUnreliable && c.price.uncertainty.length === 0,
@@ -600,7 +598,7 @@ export const pickRecommendation = (candidates: ReadonlyArray<AdviceCandidate>): 
   if (noMeteredSpend[0] !== undefined) {
     return {
       candidate: Option.some(noMeteredSpend[0]),
-      rule: "prefer no incremental metered spend (free tier, reliable $0 list price, or confirmed subscription capacity on a metered rung), then ladder order; unmetered alone is not free",
+      rule: "prefer no incremental metered spend (zero quoted rates, reliable $0 list price, or confirmed subscription capacity on a metered rung), then ladder order; unmetered alone is not free",
     };
   }
 
@@ -626,6 +624,24 @@ export const pickRecommendation = (candidates: ReadonlyArray<AdviceCandidate>): 
     candidate: Option.fromNullishOr(fallback),
     rule: "no reliable price comparison available; prefer ladder order among eligible workers",
   };
+};
+
+/**
+ * The catalog prices input and output at zero and no rate above zero. A rate
+ * the catalog leaves out does not count against it: models.dev lists many free
+ * models with zero input and output and no cache-read rate, which leaves their
+ * dollar estimate unknown. A model with no catalog price is an unknown cost,
+ * not a free one.
+ */
+const quotesZero = (price: PriceEstimate): boolean => {
+  const isZero = (rate: Option.Option<number>) => Option.contains(rate, 0);
+  const { input, output, cacheRead, cacheWrite } = price.rates;
+  return (
+    !price.quoteUnreliable &&
+    isZero(input) &&
+    isZero(output) &&
+    [cacheRead, cacheWrite].every((rate) => Option.getOrElse(rate, () => 0) === 0)
+  );
 };
 
 /** JSON shape for `--json`: observations only, no secrets. Option → null at the edge. */
@@ -660,7 +676,6 @@ const candidateJson = (c: AdviceCandidate) => ({
   model: c.model,
   pool: c.pool,
   account: Option.getOrNull(c.account),
-  tier: c.tier,
   rank: c.rank,
   unmetered: c.unmetered,
   billing: c.billing,
@@ -746,7 +761,6 @@ const CandidateJson = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.NullOr(S.String),
-  tier: S.String,
   rank: S.Number,
   unmetered: S.Boolean,
   billing: BillingKind,

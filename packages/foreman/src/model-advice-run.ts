@@ -64,7 +64,6 @@ const CandidateRow = S.Struct({
   rung_provider: S.NullOr(S.String),
   pool: S.String,
   models_dev: S.NullOr(S.String),
-  tier: S.String,
   retired: S.Number,
   harness: S.String,
   unmetered: S.Number,
@@ -216,7 +215,7 @@ export const readCandidates: Effect.Effect<
     CandidateRow,
     "reading the ladder candidates",
     sql`SELECT l.rank, l.level, l.rung, l.model, l.enabled, l.provider AS rung_provider,
-              l.unmetered, m.pool, m.models_dev, m.tier, m.retired, m.harness
+              l.unmetered, m.pool, m.models_dev, m.retired, m.harness
          FROM ladder l JOIN models m USING (model)
         ORDER BY l.level, l.rank`,
   );
@@ -235,7 +234,6 @@ export const readCandidates: Effect.Effect<
       model: row.model,
       pool: row.pool,
       account: Option.fromNullishOr(providerOf(rung)),
-      tier: row.tier,
       rank: row.rank,
       modelsDev: Option.fromNullishOr(row.models_dev),
       enabled: row.enabled !== 0,

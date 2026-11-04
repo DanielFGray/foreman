@@ -72,8 +72,8 @@ const COPIES: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     "models",
-    `INSERT INTO models (model, provider, pool, harness, models_dev, tier, limit_scope, thinking, retired, notes)
-     SELECT model, provider, pool, harness, models_dev, tier, limit_scope, thinking, retired, notes FROM old.models`,
+    `INSERT INTO models (model, provider, pool, harness, models_dev, limit_scope, thinking, retired, notes)
+     SELECT model, provider, pool, harness, models_dev, limit_scope, thinking, retired, notes FROM old.models`,
   ],
   ["aliases", "INSERT INTO aliases (alias, model) SELECT alias, model FROM old.aliases"],
   // The herd's ladder has no levels: each rung stands alone in its level, as

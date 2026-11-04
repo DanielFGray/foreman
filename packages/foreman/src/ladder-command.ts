@@ -60,7 +60,7 @@ const list = Command.make("list", { json }, ({ json }) =>
   ),
 );
 
-/** Cost per landed slice by model and size: read it before starting a size a tier up. */
+/** Cost per landed slice by model and size: read it before starting a size a level up. */
 const size = Command.make("size", {}, () =>
   Effect.gen(function* () {
     const rows = yield* sizeSummary;
