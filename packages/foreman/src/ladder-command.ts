@@ -1,5 +1,5 @@
 import { Argument, CliError, Command, Flag } from "effect/cli";
-import { Console, Effect, Layer, Option, Schema } from "effect";
+import { Console, Effect, Layer, Match, Option, Schema } from "effect";
 import { launchArguments } from "./harness.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -161,6 +161,10 @@ const disabled = Flag.Boolean("disabled").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Add it disabled"),
 );
+const into = Flag.Int("level").pipe(
+  Flag.withDescription("Put the rung in this level, beside the rungs already there"),
+  Flag.optional,
+);
 const note = Flag.String("note").pipe(Flag.withDescription("A note on the rung"), Flag.optional);
 const thinkingFlag = Flag.String("thinking").pipe(
   Flag.withSchema(Schema.NonEmptyString),
@@ -172,7 +176,7 @@ const thinkingFlag = Flag.String("thinking").pipe(
 
 const add = Command.make(
   "add",
-  { rung, model, thinking: thinkingFlag, above, below, disabled, note },
+  { rung, model, thinking: thinkingFlag, above, below, level: into, disabled, note },
   (args) =>
     Effect.gen(function* () {
       const place = yield* placeOf(args);
@@ -193,13 +197,13 @@ const add = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Add a rung in a level of its own: just --above or --below a rung's level, or at the bottom (the cheapest place)",
+    "Add a rung in a level of its own: just --above or --below a rung's level, or at the bottom (the cheapest place); or in --level n beside its rungs",
   ),
 );
 
 const move = Command.make("move", { rung, above, below }, (args) =>
   Effect.gen(function* () {
-    const place = yield* placeOf(args);
+    const place = yield* placeOf({ ...args, level: Option.none() });
     yield* moveRow(args.rung, place);
     yield* Console.log(`${args.rung}: moved ${whereOf(place)}`);
   }),
@@ -251,23 +255,29 @@ const thinking = Command.make("thinking", { rung, thinking: levelName }, (args) 
   ),
 );
 
-/** The place the --above and --below flags name; neither is the bottom. */
+/** The place the --above, --below and --level flags name; none is the bottom. */
 const placeOf = (args: {
   readonly above: Option.Option<string>;
   readonly below: Option.Option<string>;
-}): Effect.Effect<RungPlace, RegistryError> =>
-  Option.isSome(args.above) && Option.isSome(args.below)
-    ? Effect.fail(new RegistryError({ detail: "give --above or --below, not both" }))
-    : Effect.succeed(
-        Option.isSome(args.above)
-          ? { _tag: "Above", rung: args.above.value }
-          : Option.isSome(args.below)
-            ? { _tag: "Below", rung: args.below.value }
-            : { _tag: "Bottom" },
-      );
+  readonly level: Option.Option<number>;
+}): Effect.Effect<RungPlace, RegistryError> => {
+  const places: ReadonlyArray<RungPlace> = [
+    ...Option.toArray(args.above).map((rung) => ({ _tag: "Above", rung }) satisfies RungPlace),
+    ...Option.toArray(args.below).map((rung) => ({ _tag: "Below", rung }) satisfies RungPlace),
+    ...Option.toArray(args.level).map((level) => ({ _tag: "Level", level }) satisfies RungPlace),
+  ];
+  return places.length > 1
+    ? Effect.fail(new RegistryError({ detail: "give one of --above, --below and --level" }))
+    : Effect.succeed(places[0] ?? { _tag: "Bottom" });
+};
 
 const whereOf = (place: RungPlace) =>
-  place._tag === "Bottom" ? "to the bottom" : `${place._tag.toLowerCase()} ${place.rung}`;
+  Match.valueTags(place, {
+    Bottom: () => "to the bottom",
+    Above: ({ rung }) => `above ${rung}`,
+    Below: ({ rung }) => `below ${rung}`,
+    Level: ({ level }) => `in level ${level}`,
+  });
 
 const toggle = (name: "enable" | "disable") =>
   Command.make(name, { rung }, (args) =>

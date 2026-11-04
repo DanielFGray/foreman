@@ -429,8 +429,9 @@ takes the turn, so peers share the work. The last starts are read from the
 runs once per tick, per role, and each dispatch of the tick counts as a start,
 so one tick's free slots spread over the level and over the reviewers. The
 ladder decides only who writes; who reads is the reviewers' list. `foreman
-ladder level <rung> <n>` groups rungs into a level; `ladder move` and `ladder
-add` put a rung in a level of its own. `foreman ladder author <rung> on|off`
+ladder level <rung> <n>` groups rungs into a level; `ladder move` puts a rung
+in a level of its own, and so does `ladder add` unless `--level` names one to
+join. `foreman ladder author <rung> on|off`
 keeps a rung out of the author pick without retiring it.
 
 A task that named its next model would be a pointer into the ladder, and the
@@ -618,7 +619,7 @@ rung, a reviewer, both or neither, and one model can be a low-thinking rung and
 a high-thinking reviewer. A review run records the reviewer's name in the
 run's `rung` column, and the run's role says which list the name is in
 (`seatOf` in `src/reviewers.ts`), so a reviewer may share a rung's name.
-`foreman reviewers add|remove` changes the list, and `foreman reviewers --json`
+`foreman reviewers add|remove|thinking` changes the list, and `foreman reviewers --json`
 prints each reviewer with its harness, provider and `launchArguments`; the
 council skill reads its roster from there. `foreman ladder --json` prints the
 rungs, every model and the reviewers in one read, for a front end that draws

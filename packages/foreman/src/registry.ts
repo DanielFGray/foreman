@@ -210,20 +210,39 @@ export const addReviewer = (reviewer: NewReviewer) =>
               ${Option.getOrNull(reviewer.provider)})`;
   }).pipe(Effect.mapError(registryError("adding a reviewer")));
 
+/**
+ * Sets the thinking level the reviewer named `name` starts at; none passes no
+ * flag, so the harness's own default applies. Fails naming the reviewers there
+ * are when there is no such reviewer.
+ */
+export const setReviewerThinking = (name: string, thinking: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const changed = yield* sql<{ reviewer: string }>`
+      UPDATE reviewers SET thinking = ${Option.getOrNull(thinking)}
+       WHERE reviewer = ${name} RETURNING reviewer`;
+    if (changed.length === 0) return yield* noReviewer(name);
+  }).pipe(Effect.mapError(registryError("setting a reviewer's thinking level")));
+
 /** Removes the reviewer named `name`, or fails naming the reviewers there are. */
 export const removeReviewer = (name: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const removed = yield* sql<{ reviewer: string }>`
       DELETE FROM reviewers WHERE reviewer = ${name} RETURNING reviewer`;
-    if (removed.length === 0) {
-      const names = yield* sql<{ reviewer: string }>`
-        SELECT reviewer FROM reviewers ORDER BY reviewer`;
-      return yield* new RegistryError({
-        detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
-      });
-    }
+    if (removed.length === 0) return yield* noReviewer(name);
   }).pipe(Effect.mapError(registryError("removing a reviewer")));
+
+/** The failure for a reviewer name that is not listed: it names the ones that are. */
+const noReviewer = (name: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const names = yield* sql<{ reviewer: string }>`
+      SELECT reviewer FROM reviewers ORDER BY reviewer`;
+    return yield* new RegistryError({
+      detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
+    });
+  });
 
 /** Landed slices, rounds and cost per success, by model and size. */
 export const sizeSummary = Effect.gen(function* () {
@@ -314,13 +333,15 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
 
 /**
  * Where a rung goes: in a level of its own just above or below a named rung's
- * level, or below the lowest level, which is the cheapest place. Adding one by
- * appending a row would put it above every paid rung.
+ * level, or below the lowest level, which is the cheapest place; or into a
+ * numbered level, beside the rungs already there. Adding one by appending a
+ * row would put it above every paid rung.
  */
 export type RungPlace =
   | { readonly _tag: "Bottom" }
   | { readonly _tag: "Above"; readonly rung: string }
-  | { readonly _tag: "Below"; readonly rung: string };
+  | { readonly _tag: "Below"; readonly rung: string }
+  | { readonly _tag: "Level"; readonly level: number };
 
 /** Adds `row` to the ladder at `place`, in one validated write. */
 export const addRow = (row: Omit<LadderRow, "level">, place: RungPlace) =>
@@ -337,7 +358,7 @@ export const moveRow = (rung: string, place: RungPlace) =>
   Effect.gen(function* () {
     const rows = yield* readRows;
     const row = yield* rowOf(rows, rung);
-    if (place._tag !== "Bottom" && place.rung === rung) {
+    if ((place._tag === "Above" || place._tag === "Below") && place.rung === rung) {
       return yield* new RegistryError({ detail: `${rung} cannot move next to itself` });
     }
     const rest = rows.filter((other) => other.rung !== rung);
@@ -365,12 +386,14 @@ const rowOf = (rows: ReadonlyArray<LadderRow>, rung: string) => {
 };
 
 /**
- * `rows` with `row` put at `place`, in a level of its own: it takes the level
- * the place names, and every level from there up moves up one to make room.
- * The level a moved rung leaves may stay empty, which orders nothing.
+ * `rows` with `row` put at `place`. A `Level` place joins that level, ranked
+ * last in it. Any other place is a level of its own: it takes the level the
+ * place names, and every level from there up moves up one to make room. The
+ * level a moved rung leaves may stay empty, which orders nothing.
  */
 const placed = (rows: ReadonlyArray<LadderRow>, row: Omit<LadderRow, "level">, place: RungPlace) =>
   Effect.gen(function* () {
+    if (place._tag === "Level") return [...rows, { ...row, level: place.level }];
     const level =
       place._tag === "Bottom"
         ? (rows[0]?.level ?? 1)
