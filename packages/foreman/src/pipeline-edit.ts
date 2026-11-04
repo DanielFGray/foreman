@@ -62,10 +62,9 @@ export type PipelineChange = typeof PipelineChange.Type;
 
 /**
  * The pipeline after `change`, and the id of the block it added, if any. A
- * change the pipeline cannot take answers `refused`: a rejoin that would close
- * a loop or names a block the pipeline lacks, or a setting for another kind of
- * block. A change that names a
- * block or wire the pipeline lacks otherwise leaves it as it was.
+ * change the pipeline cannot take answers `refused`: a rejoin that names a
+ * block the pipeline lacks, or a setting for another kind of block. A change
+ * that names a block or wire the pipeline lacks otherwise leaves it as it was.
  */
 export const applyChange = (
   pipeline: Pipeline,
@@ -92,7 +91,7 @@ export const applyChange = (
         ? changed(rejoined.value)
         : {
             _tag: "Refused",
-            reason: `${change.wire.from} cannot lead to ${change.to}: that would close a loop, or one of them is not in the pipeline`,
+            reason: `${change.wire.from} cannot lead to ${change.to}: one of them is not in the pipeline`,
           };
     }
     case "AddSource": {

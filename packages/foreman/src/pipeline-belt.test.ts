@@ -41,12 +41,10 @@ describe("the standard pipeline as belts", () => {
     expect([belt.columns, belt.rows]).toEqual([10, 2]);
     // The author's two exits onward are two wires to the same gate.
     expect(belt.wires).toHaveLength(14);
-    expect(belt.wires).toContainEqual({
-      from: "review",
-      port: "exit:returned",
-      to: "climb",
-      label: "returned",
-    });
+    // The returned exit runs back to the climb gate, against the flow.
+    expect(belt.wires.filter((wire) => wire.back)).toEqual([
+      { from: "review", port: "exit:returned", to: "climb", label: "returned", back: true },
+    ]);
   });
 });
 
@@ -198,7 +196,7 @@ describe("belt edits", () => {
     expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
   });
 
-  test("a wire rejoins a later block, never an earlier one", () => {
+  test("a wire rejoins a later block or an earlier one, never one the pipeline lacks", () => {
     const skip = rejoin(
       STANDARD_PIPELINES.worktree,
       { from: "climb", port: "next" },
@@ -207,9 +205,20 @@ describe("belt edits", () => {
     expect(Option.map(skip, (pipeline) => node(pipeline, "climb"))).toEqual(
       Option.some({ kind: "gate", id: "climb", step: "climb", next: "review-gate" }),
     );
-    expect(
-      rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, "author"),
-    ).toEqual(Option.none());
+    const looped = rejoin(
+      STANDARD_PIPELINES.worktree,
+      { from: "review", port: "exit:approved" },
+      "start",
+    ).pipe(Option.getOrThrow);
+    expect(beltOf(looped).wires).toContainEqual({
+      from: "review",
+      port: "exit:approved",
+      to: "start",
+      label: "approved",
+      back: true,
+    });
+    // The loop leaves the land unreached, and validation says so.
+    expect(problemsOf(looped, OFFERS)).toContain("no source reaches land");
     expect(
       rejoin(
         STANDARD_PIPELINES.worktree,

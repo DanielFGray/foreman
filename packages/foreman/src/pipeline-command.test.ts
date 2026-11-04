@@ -384,14 +384,26 @@ describe("drawing a draft", () => {
     expect(await refusal("save", "amux")).toMatch(/changed since this draft began/);
   });
 
-  test("a rejoin that would close a loop is refused, and the draft is not written", async () => {
+  test("a rejoin to an earlier block is written, and save names what the loop leaves unreached", async () => {
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "review", port: "exit:approved" }, to: "start" }),
+    );
+    expect(
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "review").exits[0],
+    ).toEqual({ name: "approved", to: "start" });
+    expect(await refusal("save", "amux")).toMatch(/no source reaches land-gate/);
+  });
+
+  test("a rejoin to a block the pipeline lacks is refused, and the draft is not written", async () => {
     expect(
       await refusal(
         "edit",
         "amux",
-        change({ _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "queue" }),
+        change({ _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "nowhere" }),
       ),
-    ).toMatch(/would close a loop/);
+    ).toMatch(/one of them is not in the pipeline/);
     expect(existsSync(drafts)).toBe(false);
   });
 

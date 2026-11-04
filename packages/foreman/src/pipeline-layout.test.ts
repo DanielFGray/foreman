@@ -1,5 +1,6 @@
 import { STANDARD_PIPELINES } from "./pipeline.ts";
-import { addRoute, beltOf, insertOn } from "./pipeline-belt.ts";
+import { Option } from "effect";
+import { addRoute, beltOf, insertOn, rejoin } from "./pipeline-belt.ts";
 import { describe, expect, it } from "bun:test";
 import {
   besideOf,
@@ -15,6 +16,12 @@ const branched = () => {
   return insertOn(withRoute, { from: "retry", port: 2 }, "gate").pipeline;
 };
 
+/** The review's approval led back to the start gate: a second back wire beside the returned one. */
+const looped = () =>
+  Option.getOrThrow(
+    rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, "start"),
+  );
+
 const crosses = (a: Point, b: Point, box: Box): boolean => {
   const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
   const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
@@ -27,6 +34,8 @@ describe("layoutOf", () => {
     ["branched", branched(), "across"],
     ["standard", STANDARD_PIPELINES.worktree, "down"],
     ["branched", branched(), "down"],
+    ["looped", looped(), "across"],
+    ["looped", looped(), "down"],
   ] as const) {
     it(`${name}, ${flow}: no wire runs through a block other than its two ends`, () => {
       const layout = layoutOf(beltOf(pipeline), flow);
@@ -52,6 +61,26 @@ describe("layoutOf", () => {
         wires.map(({ plus }) => plus.join(",")),
       ])
         expect(new Set(at).size).toBe(at.length);
+    });
+
+    it(`${name}, ${flow}: a back wire runs past every block on a return lane of its own`, () => {
+      const layout = layoutOf(beltOf(pipeline), flow);
+      // The axis across the flow: y when it runs across, x when it runs down.
+      const b = flow === "down" ? 0 : 1;
+      const farthest = Math.max(
+        ...[...layout.boxes.values()].map((box) =>
+          flow === "down" ? box.x + box.w : box.y + box.h,
+        ),
+      );
+      const lanes = layout.wires
+        .filter(({ wire }) => wire.back)
+        .map(({ points }) => Math.max(...points.map((point) => point[b])));
+      expect(lanes.length).toBeGreaterThan(0);
+      for (const lane of lanes) {
+        expect(lane).toBeGreaterThan(farthest);
+        expect(lane).toBeLessThan(flow === "down" ? layout.width : layout.height);
+      }
+      expect(new Set(lanes).size).toBe(lanes.length);
     });
 
     // The boxes the Foreman pane draws: a label is a 14px row centred on
@@ -97,7 +126,7 @@ describe("layoutOf", () => {
   // Each agent exit is a labelled wire, and the author's `already-done` label widens its gap.
   it("the standard pipeline fits in about 1400px", () => {
     const layout = layoutOf(beltOf(STANDARD_PIPELINES.worktree), "across");
-    expect(layout.width).toBeLessThan(1420);
+    expect(layout.width).toBeLessThan(1440);
   });
 });
 

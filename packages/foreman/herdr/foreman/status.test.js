@@ -35,8 +35,8 @@ describe("refusalOf", () => {
   test("a one-line refusal is its message", () =>
     expect(refusalOf({
       code: 1,
-      stderr: `[09:18:18.988] ERROR (#2): PipelineError: author cannot lead to branch: that would close a loop\n${stack}\n`,
-    })).toBe("author cannot lead to branch: that would close a loop"));
+      stderr: `[09:18:18.988] ERROR (#2): PipelineError: author cannot lead to nowhere: one of them is not in the pipeline\n${stack}\n`,
+    })).toBe("author cannot lead to nowhere: one of them is not in the pipeline"));
   test("a listed refusal reads on one line, its reasons after the heading", () =>
     expect(refusalOf({
       code: 1,
