@@ -101,8 +101,8 @@ ready` reads edges, never the text of a description.
   `pause`, `resume` and `set` take `--project <name>` to apply to one project
   only, and `clear --project <name>` returns it to the default. The
   dispatcher reads the file on its next tick. A paused fleet, or one with no
-  step on and no grant, writes nothing at all. `foreman dispatch` is not gated:
-  it starts the author you asked for.
+  step on and no grant, writes nothing at all. `foreman dispatch` and
+  `foreman add --dispatch` are not gated: each starts the author you asked for.
 - Sending a reviewer to a finished task, and landing an approved branch, both
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
 - A step set to `ask` stops at its task and waits. `foreman wait --asks` tells
