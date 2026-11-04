@@ -51,11 +51,6 @@ everything.
 3. Name your exit, then stop. A reviewer may send you one mechanical defect: fix
    exactly that, commit, stop again.
 
-If trunk already does everything the task asks, prove it part by part in
-`foreman log {{ task }} -` (code, tests, commits), then name the exit `already-done`,
-which also sends the task to review. Partly done is not done; a claim you cannot
-point at line by line is rejected.
-
 If you are stuck (the same approach failed three times, the task describes code that
 does not exist, or "done" is unclear), log what you tried and stop without naming an
 exit.

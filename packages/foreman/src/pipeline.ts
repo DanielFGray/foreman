@@ -684,6 +684,13 @@ const isRole =
     node.kind === "agent" && node.role === role;
 
 /**
+ * The author exit that claims trunk already does what the task asks. It is the
+ * one exit name foreman's code reads (`claimsAlreadyDone` in `src/lap.ts`), so
+ * a drawing that renames it loses that meaning.
+ */
+export const ALREADY_DONE = "already-done";
+
+/**
  * The exits each kind of block has when the drawing names none: an author's
  * `done` and `already-done` advance, a reviewer's `approved` advances and
  * `returned` sends the task back to the queue charged to its author, and a
@@ -701,7 +708,7 @@ export const standardExits = (
     : node.role === "author"
       ? [
           { name: "done", to: next },
-          { name: "already-done", to: next },
+          { name: ALREADY_DONE, to: next },
         ]
       : [
           { name: "approved", to: next },

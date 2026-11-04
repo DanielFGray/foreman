@@ -3,6 +3,7 @@ import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { labelFor } from "./fleet.ts";
 import { claimsAlreadyDone } from "./lap.ts";
 import {
+  ALREADY_DONE,
   type AgentNode,
   type Exit,
   instructionsOf,
@@ -232,7 +233,7 @@ const taskSection = (block: AgentNode, { task, workspace }: AgentRun): string =>
   if (block.role === "review" && claimsAlreadyDone(task)) {
     lines.push(
       "",
-      "The author ended its run `already-done`: it claims trunk already does what the task asks. Walk the definition of done and find the code and tests on trunk for each part. Approve only when every part is there; otherwise log the missing parts and return it.",
+      `The author ended its run \`${ALREADY_DONE}\`: it claims trunk already does what the task asks. Walk the definition of done and find the code and tests on trunk for each part. Approve only when every part is there; otherwise log the missing parts and return it.`,
     );
   }
   if (block.role === "review" && research) {
@@ -303,7 +304,13 @@ const verification = ({ task, repository, workspace, verify }: AgentRun): string
       ? `Foreman runs \`${verify}\` in ${repository} before and after it merges, and undoes a merge that turns it red, so do not spend a full suite run repeating it: other agents share this machine.`
       : `Foreman lands this branch on git's exit code alone: ${task.project} keeps no \`scripts/verify.sh\`. The full run is yours.`;
 
-/** One line per exit the block declares, then what follows when the agent names none. */
+/**
+ * One line per exit the block declares, then what follows when the agent
+ * names none. This is the only text that names an exit: the instructions
+ * foreman ships name none, so a drawing that renames or removes one cannot
+ * leave them contradicting it. An author block that declares `ALREADY_DONE`,
+ * the one exit name foreman's code reads, is also told when to name it.
+ */
 const exitsSection = (block: AgentNode, { task }: AgentRun): string =>
   [
     "## Exits",
@@ -313,6 +320,12 @@ const exitsSection = (block: AgentNode, { task }: AgentRun): string =>
     ...block.exits.map((exit) => `- \`foreman exit ${task.id} ${exit.name}\`: ${whereTo(exit)}`),
     "",
     `Name exactly one exit; a second replaces the first. If you name none, the task ${block.stopped === "park" ? "parks" : "retries"}.`,
+    ...(block.role === "author" && block.exits.some((exit) => exit.name === ALREADY_DONE)
+      ? [
+          "",
+          `Name \`${ALREADY_DONE}\` only when trunk already does everything the task asks: first prove it part by part in \`foreman log ${task.id} -\` (code, tests, commits). A reviewer reads the claim. Partly done is not done, and a claim you cannot point at line by line is rejected.`,
+        ]
+      : []),
   ].join("\n");
 
 const whereTo = (exit: Exit): string => {
