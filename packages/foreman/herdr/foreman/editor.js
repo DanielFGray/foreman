@@ -123,9 +123,12 @@ export class Editor {
     const { choices } = this.pane.shown;
     const box = v_flex().gap(4).py(4);
     const next = ENDS[(ENDS.indexOf(node.kind) + 1) % ENDS.length];
-    const actions = h_flex().flex_wrap().gap(6).child(ENDS.includes(node.kind)
-      ? chip(t, `turn into a ${next}`, "swap-end", (cx) => change({ _tag: "SwapEnd", id: node.id }, cx))
-      : chip(t, "remove block", "remove", (cx) => change({ _tag: "Remove", id: node.id }, cx)));
+    // An end goes only when no wire enters it, as foreman's `remove` allows.
+    const end = ENDS.includes(node.kind);
+    const entered = this.pane.view().drawing.wires.some((wire) => wire.to === node.id);
+    const actions = h_flex().flex_wrap().gap(6)
+      .when(end, (el) => el.child(chip(t, `turn into a ${next}`, "swap-end", (cx) => change({ _tag: "SwapEnd", id: node.id }, cx))))
+      .when(!end || !entered, (el) => el.child(chip(t, "remove block", "remove", (cx) => change({ _tag: "Remove", id: node.id }, cx))));
     switch (node.kind) {
       case "source":
         return box.child(this.field(t, "filter")).child(actions);

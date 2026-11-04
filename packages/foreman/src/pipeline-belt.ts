@@ -3,10 +3,10 @@
  * where a router splits the row into parallel rows that join again.
  *
  * The drawing is derived from the graph every time, so nothing about it is
- * stored. Every edit keeps the graph a pipeline can be: its edits draw forward
- * wires only (an exit wired back up the belt is drawn as a block's exit),
- * every wire ends at a block, and a block no source reaches is dropped. What an
- * edit cannot guarantee (a gate before each step, a review before each land, a
+ * stored. Every edit keeps every wire ending at a block, and deletes only the
+ * block it names: a block an edit leaves unreached stays, so the operator can
+ * wire it again or take it out. What an edit cannot guarantee (a source that
+ * reaches every block, a gate before each step, a review before each land, a
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
@@ -156,20 +156,19 @@ export const insertOn = (
 };
 
 /**
- * Takes a block out. The wires into it run on to where it went: a router's
- * `else`, an agent's or a check's first exit that does not return the task, or
- * a block's `next`. An end (land, done or park) cannot go, since
- * every route must end somewhere; turn one into another instead. A source takes the
- * blocks only it reached with it.
+ * Takes a block out, and no other. The wires into it run on to where it went:
+ * a router's `else`, an agent's or a check's first exit that does not return
+ * the task, or a block's `next`. An end (land, done or park) goes only when no
+ * wire enters it, since a wire must end at a block; turn one into another
+ * instead. The blocks only this one reached stay, and `problemsOf` names them.
  */
 export const remove = (pipeline: Pipeline, id: string): Pipeline => {
   const node = pipeline.nodes.find((candidate) => candidate.id === id);
-  const onward = node === undefined ? undefined : onwardOf(node);
-  if (onward === undefined) return pipeline;
-  const left = pipeline.nodes
-    .filter((candidate) => candidate.id !== id)
-    .map((candidate) => redirect(candidate, id, onward));
-  return pruned({ nodes: left });
+  if (node === undefined) return pipeline;
+  const others = pipeline.nodes.filter((candidate) => candidate.id !== id);
+  const onward = onwardOf(node);
+  if (onward !== undefined) return { nodes: others.map((other) => redirect(other, id, onward)) };
+  return wiresOf(pipeline).some((wire) => wire.to === id) ? pipeline : { nodes: others };
 };
 
 /** Adds a route to a router. It joins `else` at once, until blocks are put on it. */
@@ -178,14 +177,12 @@ export const addRoute = (pipeline: Pipeline, router: string, when: string): Pipe
     node.kind === "router" ? { ...node, routes: [...node.routes, { when, to: node.else }] } : node,
   );
 
-/** Drops route `index` of a router, and the blocks only it reached. */
+/** Drops route `index` of a router. The blocks only it reached stay. */
 export const removeRoute = (pipeline: Pipeline, router: string, index: number): Pipeline =>
-  pruned(
-    mapNode(pipeline, router, (node) =>
-      node.kind === "router"
-        ? { ...node, routes: node.routes.filter((_, at) => at !== index) }
-        : node,
-    ),
+  mapNode(pipeline, router, (node) =>
+    node.kind === "router"
+      ? { ...node, routes: node.routes.filter((_, at) => at !== index) }
+      : node,
   );
 
 /**
@@ -212,7 +209,7 @@ export const rejoin = (
   return pipeline.nodes.some((node) => node.id === wire.from) &&
     pipeline.nodes.some((node) => node.id === to) &&
     !reaches(wire.from)
-    ? Option.some(pruned(retargeted(pipeline, wire, to)))
+    ? Option.some(retargeted(pipeline, wire, to))
     : Option.none();
 };
 
@@ -394,19 +391,6 @@ const mapNode = (
 ): Pipeline => ({
   nodes: pipeline.nodes.map((node) => (node.id === id ? change(node) : node)),
 });
-
-/** The pipeline without the blocks no source reaches. */
-const pruned = (pipeline: Pipeline): Pipeline => {
-  const wires = wiresOf(pipeline);
-  const reached = new Set<string>();
-  const visit = (id: string) => {
-    if (reached.has(id)) return;
-    reached.add(id);
-    for (const wire of wires) if (wire.from === id) visit(wire.to);
-  };
-  for (const node of pipeline.nodes) if (node.kind === "source") visit(node.id);
-  return { nodes: pipeline.nodes.filter((node) => reached.has(node.id)) };
-};
 
 /**
  * A new `<kind>-<hex>` id. Random rather than counted, because a counted id

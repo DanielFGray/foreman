@@ -173,13 +173,29 @@ describe("belt edits", () => {
     expect(at(pipeline)[id]![1]).toBeGreaterThan(0);
   });
 
-  test("dropping a route drops the blocks only it reached", () => {
+  test("dropping a route keeps the blocks only it reached, named as unreached", () => {
     const routed = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
     const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
     const pipeline = removeRoute(inserted.pipeline, "retry", 2);
-    expect(ids(pipeline)).not.toContain(inserted.id);
-    const withoutRetries = removeRoute(removeRoute(pipeline, "retry", 0), "retry", 0);
-    expect(ids(withoutRetries)).toContain("climb");
+    expect(ids(pipeline)).toContain(inserted.id);
+    expect(problemsOf(pipeline, OFFERS)).toContain(`no source reaches ${inserted.id}`);
+    expect(ids(remove(pipeline, inserted.id))).not.toContain(inserted.id);
+  });
+
+  test("removing the only source removes that block alone, and a new source joins the rest", () => {
+    const pipeline = remove(STANDARD_PIPELINES.worktree, "queue");
+    expect(ids(pipeline)).toEqual(ids(STANDARD_PIPELINES.worktree).filter((id) => id !== "queue"));
+    expect(problemsOf(pipeline, OFFERS)).toEqual(["no source supplied"]);
+    const { pipeline: supplied, id } = addSource(pipeline, "");
+    expect(node(supplied, id)).toMatchObject({ next: "branch" });
+    expect(problemsOf(supplied, OFFERS)).toEqual([]);
+  });
+
+  test("an end no wire enters can go; one a wire enters stays", () => {
+    const routed = insertOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "router");
+    const parked = { nodes: [...routed.pipeline.nodes, { kind: "park" as const, id: "hold" }] };
+    expect(ids(remove(parked, "hold"))).not.toContain("hold");
+    expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
   });
 
   test("a wire rejoins a later block, never an earlier one", () => {

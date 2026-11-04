@@ -369,6 +369,15 @@ describe("drawing a draft", () => {
     expect(draftOf()).toBeDefined();
   });
 
+  test("removing the only source keeps the rest of the draft, and save refuses until a source is added", async () => {
+    await run("edit", "amux", change({ _tag: "Remove", id: "queue" }));
+    expect(draftOf().pipeline.nodes.map((node: { id: string }) => node.id)).toContain("author");
+    expect(await refusal("save", "amux")).toMatch(/no source supplied/);
+    await run("edit", "amux", change({ _tag: "AddSource", filter: "" }));
+    await run("save", "amux");
+    expect(existsSync(path)).toBe(true);
+  });
+
   test("save refuses when the pipeline changed since the draft began", async () => {
     await run("edit", "amux", change({ _tag: "SwapEnd", id: "land" }));
     await run("set", "amux", fileWith(pinned));

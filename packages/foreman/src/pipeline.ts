@@ -879,7 +879,7 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
     ids.add(node.id);
   }
   if (!pipeline.nodes.some((node) => node.kind === "source")) {
-    problems.push("no source takes tasks in");
+    problems.push("no source supplied");
   }
   for (const node of pipeline.nodes) {
     for (const { to } of wiresOf(node)) {
