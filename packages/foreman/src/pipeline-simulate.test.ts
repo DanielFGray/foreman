@@ -175,6 +175,19 @@ describe("simulate", () => {
     expect(run.runsBySeat).toEqual({ author: { cheap: 5 }, review: { dear: 5 } });
   });
 
+  for (const shape of ["checkout", "direct"] as const) {
+    test(`${shape}: the checkout runs one task at a time, whatever the slots`, () => {
+      const run = played(STANDARD_PIPELINES[shape], always("approved"));
+      expect(run.landed).toBe(5);
+      for (const index of run.frames.keys()) {
+        const running = [...boardAt(run.frames, index).values()].filter(
+          (standing) => standing.state === "running",
+        );
+        expect(running.length).toBeLessThanOrEqual(1);
+      }
+    });
+  }
+
   test("parks a task whose author stops at a block that parks a stop", () => {
     const stops: Measured = { agents: [sample("cheap", "author", "stopped", 3)], checks: [] };
     const run = played(withAuthor({ stopped: "park" }), stops, 3);

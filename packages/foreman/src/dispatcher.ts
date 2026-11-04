@@ -717,7 +717,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // An approval is bound to the commit the reviewer read, so every task
       // carries the tip its work has in this reading: its branch's, or, for a
-      // task on the operator's own branch, the checkout's while it occupies it.
+      // direct task, the checkout's while it holds the checkout.
       const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
 
       const withTip = (task: Item): Item => ({
@@ -734,7 +734,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const claimed = tipped.filter((task) => !isUnderReview(placementIn(pipelines, task)));
       const reviewing = tipped.filter((task) => isUnderReview(placementIn(pipelines, task)));
 
-      const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue], checkoutHolds);
+      const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue]);
 
       // The pull request of each task at a pull-request land block. It is the
       // world's record of that landing, so it is read like git, every reading.
@@ -3662,7 +3662,7 @@ const runningPipeline = (
  * checkout on its branch, or the operator's checkout on the operator's branch.
  * Nothing when its project's pipeline is stopped or no source takes it.
  */
-const workspaceOf = (
+export const workspaceOf = (
   pipelines: ReadonlyMap<string, ProjectPipeline>,
   task: Item,
 ): Workspace | undefined => {
@@ -3671,24 +3671,17 @@ const workspaceOf = (
 };
 
 /**
- * The `busy` holds of the tasks that work in their project's checkout. Such a
- * task holds the checkout against every other task (rule 2 of
- * docs/workspace-blocks.md), as a hold that names it. A branch-only task whose
- * branch is out in the checkout already reads as a hold in `checkoutHolds`.
+ * The `busy` holds of the direct tasks that hold their project's checkout
+ * (rule 2 of docs/workspace-blocks.md), each as a hold that names it. A task on
+ * a branch holds the checkout only while git has that branch out there, which
+ * `Repository.isFree` reads as a hold of its own.
  */
 export const occupancyOf = (
   pipelines: ReadonlyMap<string, ProjectPipeline>,
   tasks: ReadonlyArray<Item>,
-  checkoutHolds: ReadonlyArray<Held>,
 ): ReadonlyArray<Held> =>
   tasks
     .filter((task) => occupies(pipelines, task))
-    .filter(
-      (task) =>
-        !checkoutHolds.some(
-          (entry) => entry.project === task.project && entry.branch === labelFor(task.id),
-        ),
-    )
     .map((task) => ({
       project: task.project,
       reason: "busy",
@@ -3697,22 +3690,17 @@ export const occupancyOf = (
     }));
 
 /**
- * Whether the task holds its project's checkout. A task with no worktree
- * occupies the checkout from its first author run until it leaves the
- * pipeline, so no other task starts or lands there in between: its commits
- * sit on the checkout's branch, and a task on the operator's own branch has
- * no undo.
+ * Whether a direct task holds its project's checkout. Its commits sit on the
+ * operator's branch from its first author run there, which records the
+ * checkout's HEAD as its `base`, and its reviewer reads from that base. A
+ * direct task has no undo, so no other task starts or lands there until it
+ * leaves the pipeline. An author run with no base did not work there.
  */
-const occupies = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): boolean => {
-  const workspace = workspaceOf(pipelines, task);
-  return (
-    workspace !== undefined &&
-    workspace !== "worktree" &&
-    task.status !== "done" &&
-    task.status !== "canceled" &&
-    task.runs.some((run) => run.role === "author")
-  );
-};
+const occupies = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): boolean =>
+  workspaceOf(pipelines, task) === "none" &&
+  task.status !== "done" &&
+  task.status !== "canceled" &&
+  directBase(task) !== undefined;
 
 /**
  * A finished branch whose fate is landing rather than the ordinary settle path,

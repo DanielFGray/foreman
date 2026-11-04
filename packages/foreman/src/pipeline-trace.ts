@@ -15,6 +15,7 @@ import {
   type Placement,
   place,
   QUEUE,
+  routeWorkspace,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import type { Item } from "./records.ts";
@@ -250,10 +251,21 @@ export const started = <T extends Pretend>(
   block: AgentNode,
   rung: Seat,
   rules: StepRules,
-): T => folded(task, [startOf(task, block, rung)], rules);
+): T => folded(task, [startOf(task, block, rung, rules.pipeline)], rules);
 
-/** The event a dispatch at `block` makes: a reviewer reads the task's tip. */
-const startOf = (task: Pretend, block: AgentNode, rung: Seat): RunEvent => {
+/**
+ * The event a dispatch at `block` makes: a reviewer reads the task's tip, and
+ * a direct author records the tip it starts from as its base, as the
+ * dispatcher records the checkout's HEAD.
+ */
+const startOf = (
+  task: Pretend,
+  block: AgentNode,
+  rung: Seat,
+  pipeline: Pipeline | undefined,
+): RunEvent => {
+  const direct =
+    pipeline !== undefined && routeWorkspace(pipeline, factsOf(task, pipeline)) === "none";
   const run = newRunFor({
     task,
     branch: `foreman/${task.id}`,
@@ -264,6 +276,7 @@ const startOf = (task: Pretend, block: AgentNode, rung: Seat): RunEvent => {
     role: block.role,
     node: block.id,
     commit: block.role === "review" ? task.tip : undefined,
+    base: block.role === "author" && direct ? task.tip : undefined,
   });
   return block.role === "review" ? { _tag: "ReviewStarted", run } : { _tag: "AuthorStarted", run };
 };

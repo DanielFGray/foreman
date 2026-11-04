@@ -7,8 +7,16 @@
 // the measured rates (`run-rates.ts`). Nothing is read from or written to the
 // store.
 import { drawSeat, type PerRole } from "./agent-rung.ts";
-import { candidatesFrom, occupancyOf, placementIn, type Plan, planFrom } from "./dispatcher.ts";
-import type { Worker } from "./fleet.ts";
+import {
+  candidatesFrom,
+  type Held,
+  occupancyOf,
+  placementIn,
+  type Plan,
+  planFrom,
+  workspaceOf,
+} from "./dispatcher.ts";
+import { labelFor, type Worker } from "./fleet.ts";
 import { isEnabled, mayAuthor } from "./ladder.ts";
 import { isUnderReview, type Pipeline, type Placement, type RunState } from "./pipeline.ts";
 import type { ProjectPipeline } from "./pipeline-file.ts";
@@ -45,7 +53,7 @@ export const SIMULATE_ASSUMES = {
   tasks:
     "The tasks are the project's ready and claimed tasks at the start, in the queue's order. A blocked task stays out, even once its blocker lands. A parked task, and one that every rung has failed, is parked from the start. A claimed task with no open run (work started by hand) stays where it stands. Every author commits something, so a reviewer always has work to read.",
   holds:
-    "No checkout is dirty and no project is paused. A task that works in the checkout holds it, as in the dispatcher.",
+    "No checkout is dirty and no project is paused. A claimed task on a branch in the checkout, once an author has run, has its branch out there, which holds the checkout. A direct task holds it from its first author run until it leaves the pipeline, as in the dispatcher.",
 } as const;
 
 /** The most frames a run writes: events closer than `hours / MAX_FRAMES`, or 0.05 h, share one. */
@@ -389,7 +397,10 @@ const planOf = (sim: Sim) => {
   });
   const active = (task: Item) => ({ task, worker: workerOf(sim, task), kind: undefined });
   const underReview = (task: Item) => isUnderReview(placementOf(sim, task));
-  const held = occupancyOf(pipelines, [...claimed, ...open], []);
+  const held = [
+    ...branchesOut(pipelines, claimed),
+    ...occupancyOf(pipelines, [...claimed, ...open]),
+  ];
   const offered = candidatesFrom({
     claimed: claimed.filter((task) => !underReview(task)).map(active),
     reviewing: claimed.filter(underReview).map(active),
@@ -416,6 +427,29 @@ const planOf = (sim: Sim) => {
   });
   return { parks: [...offered.parks.map(({ task }) => task), ...yours], plan };
 };
+
+/**
+ * The `busy` holds git would read for branch tasks in the checkout. The
+ * simulation runs no git, so it takes a claimed branch task with an author run
+ * to have its branch out there: dispatching that author checks the branch out,
+ * and the landing or requeue that ends the claim checks the operator's branch
+ * out again.
+ */
+const branchesOut = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  claimed: ReadonlyArray<Item>,
+): ReadonlyArray<Held> =>
+  claimed
+    .filter(
+      (task) =>
+        workspaceOf(pipelines, task) === "branch" && task.runs.some((run) => run.role === "author"),
+    )
+    .map((task) => ({
+      project: task.project,
+      reason: "busy",
+      detail: `${labelFor(task.id)} is checked out`,
+      branch: labelFor(task.id),
+    }));
 
 /** Opens a run for each planned dispatch, on the rung a dispatch would draw. */
 const dispatch = (sim: Sim, dispatches: Plan["dispatches"], now: number) => {
