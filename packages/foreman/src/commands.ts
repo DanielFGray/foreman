@@ -1,7 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
 import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./actions.ts";
-import { Dispatcher } from "./dispatcher.ts";
+import { Dispatcher, notAuthored } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
 import { roundsOf } from "./lap.ts";
 import { Records } from "./records.ts";
@@ -124,39 +124,68 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
 
 const dispatch = Command.make("dispatch", { id, rung }, (args) =>
   Effect.gen(function* () {
-    yield* dispatchQueued(yield* Dispatcher, args.id, args.rung);
+    yield* dispatchQueued(yield* Dispatcher, yield* Fleet, args.id, args.rung);
   }),
 ).pipe(
   Command.withDescription(
-    "Start a queued task's author now, on the rung a tick would choose or on --rung",
+    "Start a queued task's author now, on the rung a tick would choose or on --rung; the operator's, never a worker's",
   ),
 );
 
 /** The part of the dispatcher that starts one queued task's author. */
-export type Dispatching = Pick<Dispatcher["Service"], "rungs" | "read" | "state" | "author">;
+export type Dispatching = Pick<Dispatcher["Service"], "read" | "state" | "author">;
+
+/** The part of the fleet that says whether the caller is one of its workers. */
+export type Caller = Pick<Fleet["Service"], "inWorker">;
+
+/**
+ * Starts a queued task's author, unless the caller is a fleet worker.
+ * `foreman dispatch` runs this; `foreman add --dispatch` makes the same check
+ * before it files, then starts the author through `startAuthor`.
+ */
+export const dispatchQueued = Effect.fn("dispatchQueued")(function* (
+  dispatcher: Dispatching,
+  caller: Caller,
+  id: string,
+  rung: Option.Option<string>,
+) {
+  yield* operatorOnly(caller);
+  yield* startAuthor(dispatcher, id, rung);
+});
+
+/** Refuses a caller that runs inside a fleet worker's terminal. */
+const operatorOnly = (caller: Caller) =>
+  caller.inWorker.pipe(
+    Effect.flatMap((worker) =>
+      worker
+        ? new Refused({
+            detail:
+              "a fleet worker files tasks but never dispatches them: run foreman add without --dispatch, and the operator dispatches",
+          })
+        : Effect.void,
+    ),
+  );
 
 /**
  * Starts a queued task's author after one reading of the world, on the rung a
- * tick would choose or on the one named. `foreman dispatch` and
- * `foreman add --dispatch` both start an author through this.
+ * tick would choose or on the one named, and says which rung it started on.
+ * When the dispatcher starts nothing, it refuses with the dispatcher's reason.
  */
-export const dispatchQueued = Effect.fn("dispatchQueued")(function* (
+const startAuthor = Effect.fn("startAuthor")(function* (
   dispatcher: Dispatching,
   id: string,
   rung: Option.Option<string>,
 ) {
-  if (Option.isSome(rung) && !dispatcher.rungs.includes(rung.value)) {
-    return yield* new Refused({
-      detail: `no dispatchable rung ${rung.value}; rungs: ${dispatcher.rungs.join(", ")}`,
-    });
-  }
   yield* dispatcher.read;
   const task = (yield* SubscriptionRef.get(dispatcher.state)).queue.find(
     (candidate) => candidate.id === id,
   );
   if (!task) return yield* new Refused({ detail: `${id} is not in the queue; see foreman queue` });
-  yield* dispatcher.author(task, Option.getOrUndefined(rung));
-  yield* Console.log(`${id}: dispatched; see foreman status, or foreman wait ${id}`);
+  const authored = yield* dispatcher.author(task, rung);
+  if (authored._tag !== "Started") return yield* new Refused({ detail: notAuthored(authored) });
+  yield* Console.log(
+    `${id}: dispatched on ${authored.rung}; see foreman status, or foreman wait ${id}`,
+  );
 });
 
 const title = Argument.String("title").pipe(Argument.withDescription("The new task's title"));
@@ -180,7 +209,9 @@ const labels = Flag.String("label").pipe(
 
 const dispatchNow = Flag.Boolean("dispatch").pipe(
   Flag.withDefault(false),
-  Flag.withDescription("Start the new task's author at once, as foreman dispatch does"),
+  Flag.withDescription(
+    "Start the new task's author at once, as foreman dispatch does; the operator's, never a worker's",
+  ),
 );
 
 const dispatchRung = Flag.String("rung").pipe(
@@ -200,21 +231,25 @@ export interface Filing {
 
 /**
  * Files a task in its project's tracker and prints its id, then, with
- * `dispatch`, starts its author through `dispatchQueued`.
+ * `dispatch`, starts its author.
  *
- * The id is printed before the dispatch, because a dispatch that fails leaves
- * the task filed, and the caller needs its id to dispatch it again.
+ * A fleet worker's `dispatch` is refused before anything is filed, so the
+ * worker's retry without it files the task once. The id is printed before the
+ * dispatch, because a dispatch that fails leaves the task filed, and the
+ * caller needs its id to dispatch it again.
  */
 export const fileTask = Effect.fn("fileTask")(function* (
   filing: Filing,
   tracker: Pick<Tracker["Service"], "add">,
   dispatcher: Dispatching,
+  caller: Caller,
 ) {
   if (Option.isSome(filing.rung) && !filing.dispatch) {
     return yield* new Refused({
       detail: "--rung names the rung of a dispatch, so it needs --dispatch",
     });
   }
+  if (filing.dispatch) yield* operatorOnly(caller);
   const id = yield* tracker.add({
     project: filing.project,
     title: filing.title,
@@ -223,7 +258,7 @@ export const fileTask = Effect.fn("fileTask")(function* (
   });
   yield* Console.log(id);
   if (!filing.dispatch) return;
-  yield* dispatchQueued(dispatcher, id, filing.rung).pipe(
+  yield* startAuthor(dispatcher, id, filing.rung).pipe(
     Effect.catchTag("Refused", (refused) =>
       Effect.fail(new Refused({ detail: `${id} is filed but not dispatched: ${refused.detail}` })),
     ),
@@ -235,11 +270,11 @@ const add = Command.make(
   { title, project, description, labels, dispatch: dispatchNow, rung: dispatchRung },
   (filing) =>
     Effect.gen(function* () {
-      yield* fileTask(filing, yield* Tracker, yield* Dispatcher);
+      yield* fileTask(filing, yield* Tracker, yield* Dispatcher, yield* Fleet);
     }),
 ).pipe(
   Command.withDescription(
-    "File a task in a project's tracker and print its id; --dispatch also starts its author",
+    "File a task in a project's tracker and print its id; --dispatch also starts its author, and a fleet worker may not pass it",
   ),
 );
 

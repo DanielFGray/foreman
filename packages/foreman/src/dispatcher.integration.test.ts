@@ -246,6 +246,7 @@ class World {
       }),
     notify: (title: string) =>
       this.write("fleet.notify", () => void this.notifications.push(title)),
+    inWorker: Effect.succeed(false),
   };
 
   /** The tracker's status moves and log, the calls the dispatcher makes on it directly. */
@@ -1168,6 +1169,60 @@ describe("naming an exit", () => {
 
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
     expect(world.tasks.get(task.id)?.runs[0]).toMatchObject({ ending: "done", commit: "c1" });
+  });
+});
+
+/** Runs `foreman dispatch` on one task after one reading, as the command does. */
+const author = (world: World, task: Item, rung: Option.Option<string>) =>
+  Effect.runPromise(
+    Dispatcher.use((dispatcher) =>
+      dispatcher.read.pipe(Effect.andThen(dispatcher.author(task, rung))),
+    ).pipe(Effect.provide(layerFor(world))),
+  );
+
+describe("starting an author by hand", () => {
+  test("starts a queued task on the rung a tick would choose, and names it", async () => {
+    const task = item("ts-hand", "open", []);
+    const world = new World(task);
+
+    expect(await author(world, task, Option.none())).toEqual({ _tag: "Started", rung: "cheap" });
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("starts nothing for a task whose route has no author block ahead, and says so", async () => {
+    // Its author is done, so its route stands at review: no author block is left.
+    const task = item("ts-reviewing", "in_progress", [], "test", [authorDone("cheap")]);
+    const world = new World(task);
+
+    expect(await author(world, task, Option.none())).toEqual({
+      _tag: "NoAuthorBlock",
+      project: "test",
+    });
+    expect(world.spawned).toEqual([]);
+  });
+
+  test("starts nothing on a rung foreman cannot dispatch, and lists the ones it can", async () => {
+    const task = item("ts-named", "open", []);
+    const world = new World(task);
+
+    expect(await author(world, task, Option.some("missing"))).toEqual({
+      _tag: "UnknownRung",
+      rung: "missing",
+      rungs: ["cheap"],
+    });
+    expect(world.spawned).toEqual([]);
+  });
+
+  test("starts nothing for a task every rung has failed, and says the ladder is spent", async () => {
+    const task = { ...item("ts-spent", "open", []), charges: [charged("cheap")] };
+    const world = new World(task);
+
+    expect(await author(world, task, Option.none())).toEqual({
+      _tag: "NoSeat",
+      seat: "Exhausted",
+      model: "ladder",
+    });
+    expect(world.spawned).toEqual([]);
   });
 });
 

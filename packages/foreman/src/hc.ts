@@ -1,6 +1,6 @@
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer, Option, Schema as S, Stream } from "effect";
+import { Config, Effect, Layer, Option, Schema as S, Stream } from "effect";
 import {
   type AgentRole,
   AgentRole as AgentRoleSchema,
@@ -440,6 +440,25 @@ export function hcFleetOver() {
          * outside, so for now a notice is a log line.
          */
         notify: (title: string, body: string) => Effect.logInfo(`notice: ${title}: ${body}`),
+
+        /**
+         * hc names the terminal a process runs in with `HC_TERMINAL_ID`, and
+         * `spawn` labels every agent terminal with the fleet label, so the
+         * caller's terminal is asked for its labels. No `HC_TERMINAL_ID` means
+         * the process is not in an hc terminal.
+         */
+        inWorker: Effect.gen(function* () {
+          const address = yield* Config.option(Config.String("HC_TERMINAL_ID")).pipe(
+            Effect.mapError(
+              (cause) => new FleetError({ operation: "caller", detail: String(cause) }),
+            ),
+          );
+          if (Option.isNone(address)) return false;
+          const terminal = yield* call(Terminal, "caller", "terminal.get", {
+            terminal: address.value,
+          });
+          return terminal.labels[FLEET] !== undefined;
+        }),
       };
     }),
   );

@@ -59,7 +59,9 @@ decide from your summary alone whether to continue this work or drop it.
 File each real problem you found as its own task with
 `foreman add "<title>" -p {{ project }} -d "<what fails, and the output>"`. Failing types
 and failing tests are ordinary work; they belong in the backlog where the fleet can
-pick them up, not in this task. Then run `foreman exit {{ task }} done`.
+pick them up, not in this task. File without `--dispatch`: a worker files tasks, and the
+operator dispatches them, so `foreman add --dispatch` refuses you. Then run
+`foreman exit {{ task }} done`.
 
 Do not fix anything you found. Do not merge, rebase, push, or delete a branch. Do not
 run `git stash`, `git reset`, `git checkout -- <file>`, or `git clean` — every one of

@@ -949,7 +949,10 @@ proving ground per project, checks after the landings; a second process landing 
 
 Agents read, log and file tasks with `foreman show <id>`, `foreman log <id> -`,
 `foreman list -p <project>` and `foreman add`, which route through
-`ProjectTracker`, so no prompt names a tracker's own CLI.
+`ProjectTracker`, so no prompt names a tracker's own CLI. A worker files but
+never dispatches: starting agents is the operator's, so `foreman dispatch` and
+`foreman add --dispatch` refuse a caller whose hc terminal carries the fleet
+label (`Fleet.inWorker`), and `add` refuses before it files.
 
 `foreman --skill` prints `src/skill.md`, read at runtime like the prompts, so
 the usage an agent reads ships with the binary it describes.
@@ -1039,9 +1042,9 @@ not to have been earned.
 - **The live stores belong to the running fleet.** The dispatcher reads
   `~/.prog/prog.db` and `~/.config/foreman/`, so a test or one-shot command
   that writes them changes the live fleet. Write them only through
-  `foreman log`, `foreman add` and `foreman exit` for your own task. Otherwise
-  point `PROG_DB`, `FOREMAN_STATE`, `FOREMAN_POLICY`, `FOREMAN_PIPELINES` and
-  `FOREMAN_CONFIG` at scratch paths. To read real data, copy the store first:
+  `foreman log`, `foreman add` without `--dispatch`, and `foreman exit` for
+  your own task. Otherwise point `PROG_DB`, `FOREMAN_STATE`, `FOREMAN_POLICY`,
+  `FOREMAN_PIPELINES` and `FOREMAN_CONFIG` at scratch paths. To read real data, copy the store first:
   `sqlite3 ~/.prog/prog.db ".backup <scratch>/prog.db"`.
 - **oxfmt runs from `packages/foreman`.** Its config is
   `packages/foreman/.oxfmtrc.json`. herdr-web has none: keep its style by hand.

@@ -83,7 +83,7 @@ import {
   rungsOn,
   seatsOn,
 } from "./ladder.ts";
-import { drawSeat, type PerRole, seatAt, taskWalls } from "./agent-rung.ts";
+import { type BlockSeat, drawSeat, type PerRole, seatAt, taskWalls } from "./agent-rung.ts";
 import { type Seats, seatOf } from "./reviewers.ts";
 import {
   instructionNames,
@@ -2304,11 +2304,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * The rung `block` runs this task on now, or nothing when none can.
+     * The seat `block` runs this task on now, or why none can.
      *
      * It reads the same tick's allowances as the plan, for the same reason:
      * every dispatch and the plan that offered the task must agree, or the plan
-     * passes over work a dispatch would have found an agent for. `undefined` is
+     * passes over work a dispatch would have found an agent for. No seat is
      * not an error. The task keeps its place and a later tick, or an allowance
      * reset, asks again. The reading is the tick's own: `state` is published
      * before any pass runs, and for an operator's command it is the reading the
@@ -2322,13 +2322,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     ) {
       const walled = walledSeats((yield* SubscriptionRef.get(state)).providers);
       const choice = drawSeat(settings, block, task, walled, drawn, started);
-      if (choice._tag === "Dispatch") return choice.seat;
-      yield* Effect.logInfo(
-        choice._tag === "Waiting"
-          ? `${block.role} of ${task.id} at ${block.id} deferred: no account with room for ${block.model}`
-          : `${block.role} of ${task.id} at ${block.id} deferred: no ${block.role === "author" ? "rung" : "reviewer"} of ${block.model} is left that has not failed it`,
-      );
-      return undefined;
+      if (choice._tag !== "Dispatch") {
+        yield* Effect.logInfo(
+          `${block.role} of ${task.id} at ${block.id} deferred: ${noSeat(block.role, block.model, choice._tag)}`,
+        );
+      }
+      return choice;
     });
 
     /**
@@ -2358,7 +2357,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       blockFor(task, "author").pipe(
         Effect.flatMap((block) =>
           block === undefined
-            ? Effect.void
+            ? Effect.succeed<Authored>({ _tag: "NoAuthorBlock", project: task.project })
             : rung === undefined
               ? dispatchAuthor(task, block)
               : authorAt(task, rung, block),
@@ -2383,8 +2382,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // restart, and the allowances are this tick's reading. `drawn` and
       // `started` are this tick's burst, not the task's history: only `fill`
       // has them, so only it spreads.
-      const rung = yield* seatFor(task, block, drawn, started);
-      if (rung) yield* authorAt(task, rung, block);
+      const choice = yield* seatFor(task, block, drawn, started);
+      if (choice._tag !== "Dispatch") {
+        return { _tag: "NoSeat", seat: choice._tag, model: block.model } satisfies Authored;
+      }
+      return yield* authorAt(task, choice.seat, block);
     });
 
     /** Opens the task's workspace, claims it and starts its author on this rung. */
@@ -2394,7 +2396,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       block: AgentNode,
     ) {
       const project = yield* projectFor(task.project);
-      if (!project) return;
+      if (!project) return { _tag: "Unmanaged", project: task.project } satisfies Authored;
 
       // The workspace opens before the claim. If it opened after, a task
       // would briefly be claimed with nothing to show for it, and that state
@@ -2432,6 +2434,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       yield* Effect.logInfo(
         `dispatched ${task.id} (${task.project}) to ${rung.name} in ${worker.directory}`,
       );
+      return { _tag: "Started", rung: rung.name } satisfies Authored;
     });
 
     const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
@@ -2459,8 +2462,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Resolved here rather than by each caller, so fill, a retry and an
       // intervention all pick a reviewer the same way. The status is untouched
       // when no reviewer can read the diff, so the task keeps its place.
-      const rung = yield* seatFor(task, block, undefined, started);
-      if (!rung) return;
+      const choice = yield* seatFor(task, block, undefined, started);
+      if (choice._tag !== "Dispatch") return;
+      const rung = choice.seat;
       const worker = yield* workspaceFor(task, project);
 
       const prompt = yield* prompts.agent(block, {
@@ -2879,9 +2883,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     return {
       /** What the dashboard renders. Replaced whole on every tick. */
       state,
-      // Only rungs foreman can dispatch: a retired one keeps its place so old
-      // failures still position, but offering it would spawn nothing.
-      rungs: dispatchableRungs(settings.ladder).map((rung) => rung.name),
 
       /** Reads and settles the world once, never stopping for a code change. `run` repeats it. */
       tick: Effect.asVoid(tick(Effect.succeed(false))),
@@ -2958,19 +2959,25 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       /**
        * Starts a queued task's author now, on the rung the tick would choose or
-       * on the one named. A named rung is the operator's choice for this one
+       * on the dispatchable one named, and answers what it started or why it
+       * started nothing. A named rung is the operator's choice for this one
        * dispatch and writes no label, so the task's evidence is unchanged.
        */
-      author: (task: Item, rungName: string | undefined) =>
+      author: (task: Item, rung: Option.Option<string>) =>
         commanded(
-          Effect.gen(function* () {
-            const block = yield* blockFor(task, "author");
-            if (block === undefined) return;
-            const rung =
-              rungName === undefined
-                ? yield* seatFor(task, block)
-                : settings.ladder.find((candidate) => candidate.name === rungName);
-            if (rung) yield* authorAt(task, rung, block);
+          Option.match(rung, {
+            onNone: () => handAuthor(task),
+            onSome: (name) => {
+              const rungs = dispatchableRungs(settings.ladder);
+              const named = rungs.find((candidate) => candidate.name === name);
+              return named
+                ? handAuthor(task, named)
+                : Effect.succeed<Authored>({
+                    _tag: "UnknownRung",
+                    rung: name,
+                    rungs: rungs.map((candidate) => candidate.name),
+                  });
+            },
           }),
         ),
 
@@ -3062,8 +3069,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             if (!project) return;
             const block = yield* blockFor(task, "author");
             if (block === undefined) return;
-            const rung = yield* seatFor(task, block);
-            if (!rung) return;
+            const choice = yield* seatFor(task, block);
+            if (choice._tag !== "Dispatch") return;
+            const rung = choice.seat;
             // The workspace may be gone — the pane that was its only one closed
             // by hand. `fleet.open` resolves to the worktree git still has, so
             // a retry re-adopts the same directory with its edits instead of
@@ -4264,6 +4272,46 @@ export interface Provider extends Usage {
   readonly reviewers: ReadonlyArray<string>;
   readonly unreadable: string | undefined;
 }
+
+/**
+ * What starting a task's author by hand did: the rung it started on, or why it
+ * started nothing. Every reason is a fact of the reading, so the same command
+ * may start the author once the operator or an allowance reset changes it.
+ */
+export type Authored =
+  | { readonly _tag: "Started"; readonly rung: string }
+  /** The project's pipeline is stopped, or the task's route has no author block. */
+  | { readonly _tag: "NoAuthorBlock"; readonly project: string }
+  /** The named rung is not one foreman can dispatch. */
+  | { readonly _tag: "UnknownRung"; readonly rung: string; readonly rungs: ReadonlyArray<string> }
+  /** No seat of the block can take the task now: `seat` says why. */
+  | {
+      readonly _tag: "NoSeat";
+      readonly seat: Exclude<BlockSeat["_tag"], "Dispatch">;
+      readonly model: string;
+    }
+  /** The task's project is no open space's checkout. */
+  | { readonly _tag: "Unmanaged"; readonly project: string };
+
+/** Why an author was not started, as one line. */
+export const notAuthored = (authored: Exclude<Authored, { readonly _tag: "Started" }>): string =>
+  Match.valueTags(authored, {
+    NoAuthorBlock: ({ project }) =>
+      `${project}'s pipeline is stopped, or the task's route has no author block`,
+    UnknownRung: ({ rung, rungs }) => `no dispatchable rung ${rung}; rungs: ${rungs.join(", ")}`,
+    NoSeat: ({ seat, model }) => noSeat("author", model, seat),
+    Unmanaged: ({ project }) => `${project} is not an open project`,
+  });
+
+/** Why an agent block found no seat for a task. */
+const noSeat = (
+  role: AgentRole,
+  model: string,
+  seat: Exclude<BlockSeat["_tag"], "Dispatch">,
+): string =>
+  seat === "Waiting"
+    ? `no account with room for ${model}`
+    : `no ${role === "author" ? "rung" : "reviewer"} of ${model} is left that has not failed it`;
 
 /** A task and the workspace running it, if the multiplexer still has one. */
 export interface Active {
