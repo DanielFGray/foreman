@@ -51,9 +51,10 @@ export class Board {
   columns() {
     const columns = COLUMNS.map(() => []);
     const placements = this.pane.placements();
+    const byTask = this.pane.rowsByTask();
     for (const placement of placements) {
       const index = COLUMNS.findIndex((column) => column.key === placement.column);
-      columns[index].push({ ...placement, row: this.pane.rowOf(placement.key, placement.column) });
+      columns[index].push({ ...placement, row: rowOf(byTask.get(placement.key), placement.column) });
     }
     const placed = new Set(placements.map((placement) => placement.key));
     const needsYou = COLUMNS.findIndex((column) => column.key === "needs-you");
@@ -62,7 +63,7 @@ export class Board {
       columns[needsYou].push({ key: row.key, label: row.label, column: "needs-you", grant: null, runs: [], gates: [], url: row.url, pr: row.pr, row });
     }
     columns[COLUMNS.length - 1] = this.pane.landed()
-      .map((task) => ({ ...task, column: "landed", grant: null, runs: [], gates: [], url: null, pr: null, row: this.pane.rowOf(task.key, "landed") }));
+      .map((task) => ({ ...task, column: "landed", grant: null, runs: [], gates: [], url: null, pr: null, row: rowOf(byTask.get(task.key), "landed") }));
     return columns;
   }
 
@@ -163,6 +164,13 @@ export class Board {
         .when(line !== null, (el) => el.child(div().text_size(10).text_color(card.column === "needs-you" ? t.blocked : t.dim).truncate().child(line))));
   }
 }
+
+// The published view whose row carries a board column's actions.
+const VIEW_OF_COLUMN = { queue: "queue", "needs-you": "attention", authoring: "working", fixing: "working", review: "review", landed: "landed" };
+
+// The row a card stands for, from its task's rows: the one from the view its
+// column shows, since actions are per view, else any row of its task.
+const rowOf = (rows = [], column) => rows.find((row) => row.view === VIEW_OF_COLUMN[column]) ?? rows[0] ?? null;
 
 // The card's third line: why a Needs-you card waits, or the epic a Queue card sits under.
 const lineOf = (card) =>

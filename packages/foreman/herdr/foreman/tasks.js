@@ -88,12 +88,13 @@ export class Tasks {
     const columns = [];
     for (const item of this.report.items) (columns[item.column] ??= []).push(item);
     for (const column of columns) column?.sort((a, b) => a.row - b.row);
+    const placed = new Map(this.pane.placements().map((one) => [one.key, one]));
     return view
       .child(this.bar(t))
       .child(div().id("task-graph").flex_1().overflow_scrollbar().p(GAP)
         .child(h_flex().items_start().gap(GAP)
           .children(columns.map((column, index) => v_flex().id(`column-${index}`).w(CARD_W).gap(GAP)
-            .children((column ?? []).map((item) => this.card(item, t)))))));
+            .children((column ?? []).map((item) => this.card(item, placed.get(item.id), t)))))));
   }
 
   // What a grant gives, the picked cards, and what can be done with them.
@@ -111,7 +112,7 @@ export class Tasks {
       .when(one !== null, (el) => el.child(div().text_color(t.muted).child(one.title)));
   }
 
-  card(item, t) {
+  card(item, placement, t) {
     const picked = this.picked.has(item.id);
     return v_flex().id(`card-${item.id}`).w(CARD_W).p(4).gap(1).rounded(4).border(picked ? 2 : 1)
       .border_color(picked ? t.accent : item.grant !== null ? t.done : t.border)
@@ -124,18 +125,17 @@ export class Tasks {
         .when(item.grant !== null, (el) => el.child(div().text_color(t.done)
           .child(grantMark(item, this.report.grantSteps)))))
       .child(div().text_size(11).truncate().child(item.title))
-      .child(div().text_size(10).text_color(t.dim).truncate().child(this.standing(item)));
-  }
-
-  // Where a card's task stands: at a block on the board, waiting for its
-  // blockers, or neither yet.
-  standing(item) {
-    const placement = this.pane.placements().find((one) => one.key === item.id);
-    if (item.waitsFor.length > 0) return `waits for ${item.waitsFor.join(", ")}`;
-    if (placement !== undefined) return `at ${placement.node}, ${placement.state}`;
-    return item.type === "epic" ? item.status : `${item.status}, not placed`;
+      .child(div().text_size(10).text_color(t.dim).truncate().child(standing(item, placement)));
   }
 }
+
+// Where a card's task stands: at a block on the board, waiting for its
+// blockers, or neither yet.
+const standing = (item, placement) => {
+  if (item.waitsFor.length > 0) return `waits for ${item.waitsFor.join(", ")}`;
+  if (placement !== undefined) return `at ${placement.node}, ${placement.state}`;
+  return item.type === "epic" ? item.status : `${item.status}, not placed`;
+};
 
 // What a grant from this view does, against what runs for every task anyway.
 const stepsLine = (steps, grantSteps) => {

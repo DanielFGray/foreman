@@ -68,8 +68,6 @@ const FIT_MIN = 0.75;
 // The Tasks view's mode, kept in the mod's own storage.
 const TASKS_MODE_KEY = "tasks-mode";
 const PENDING = Symbol("pending");
-// The published view whose row carries a board column's actions.
-const VIEW_OF_COLUMN = { queue: "queue", "needs-you": "attention", authoring: "working", fixing: "working", review: "review", landed: "landed" };
 
 export default class Foreman extends View {
   init(_props, cx) {
@@ -232,19 +230,24 @@ export default class Foreman extends View {
     });
   }
 
-  // The shown project's placements, landed tasks and published rows.
-  placements() { return (this.published?.placements ?? []).filter((one) => one.project === this.project()); }
-  landed() { return (this.published?.landed ?? []).filter((one) => one.project === this.project()); }
+  // The shown project's placements, landed tasks and published rows. Each
+  // reads the project once, outside its filter: `project()` asks herdr for
+  // every space, and a render runs out of time when it asks once per entry.
+  placements() { const project = this.project(); return (this.published?.placements ?? []).filter((one) => one.project === project); }
+  landed() { const project = this.project(); return (this.published?.landed ?? []).filter((one) => one.project === project); }
   // A row in no project (an orphaned worker, a spent account, a branch whose
   // task is gone) shows in every project, so no space hides it.
-  rows() { return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === this.project()); }
+  rows() { const project = this.project(); return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === project); }
 
-  // The row a board card stands for: the one from the view its column shows,
-  // since actions are per view, else any row of its task. A row's key may be
-  // a workspace label that holds the task id.
-  rowOf(key, column) {
-    const mine = [...this.rows(), ...(this.queue ?? [])].filter((row) => row.view !== "quota" && row.key.match(TASK_ID)?.[0] === key);
-    return mine.find((row) => row.view === VIEW_OF_COLUMN[column]) ?? mine[0] ?? null;
+  // Each task's rows by task id: its published rows and its queue row. A
+  // row's key may be a workspace label that holds the task id.
+  rowsByTask() {
+    const byTask = new Map();
+    for (const row of [...this.rows(), ...(this.queue ?? [])]) {
+      const id = row.view === "quota" ? undefined : row.key.match(TASK_ID)?.[0];
+      if (id !== undefined) byTask.set(id, [...(byTask.get(id) ?? []), row]);
+    }
+    return byTask;
   }
 
   // The asks the drawing shows: none while it shows simulated tasks.
@@ -254,7 +257,7 @@ export default class Foreman extends View {
   }
 
   // The shown project as state.json publishes it.
-  projectInfo() { return this.published?.projects.find((one) => one.name === this.project()); }
+  projectInfo() { const project = this.project(); return this.published?.projects.find((one) => one.name === project); }
 
   // The steps a grant from a board gives a task of this project.
   grantSteps() { return this.projectInfo()?.grantSteps ?? []; }
