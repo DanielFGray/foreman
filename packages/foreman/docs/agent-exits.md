@@ -15,12 +15,8 @@ they differ, that section is the rule.
   the form of a name (`[a-z-]+`), because the store reads an ending in that
   form as an exit. A check's exits
   are `passed` and `failed`, id and name alike. An author's exit may declare
-  `empty: claim`: see "Prompts". The pipelines file is `version: 5` and the
-  drafts file `version: 3`, and foreman reads only those.
-  `foreman cutover exit-ids` converts an older file once: each exit's id is its
-  name, an author's `already-done` declares the claim, and version 2 and older
-  get the standard exits wired as they were: `returned` and `failed` go to
-  `queue` with `fails: author`. The standard pipeline wires a returned review to the
+  `empty: claim`: see "Prompts". The pipelines file is `{ pipelines }` and the
+  drafts file `{ drafts }`. The standard pipeline wires a returned review to the
   `climb` gate with `fails: author`, keeping the claim, branch and worktree.
   It also keeps its retry router for queued retries. Agent blocks have
   `instructions`; blocks have no `rounds` yet.
@@ -224,10 +220,7 @@ A charge records the newest run on the task when it was written (`run`), so
   ts-4e763a, 2026-11-01). Today that database is the same file as the built-in
   task store. AGENTS.md's durable-state rule names these records.
 - **Migration.** The store migration `0007_charges_and_parks` makes the two
-  tables. `foreman cutover runs` turns each `failed-by:` label of an
-  unfinished task into a charge, `needs-you` into a park, and each
-  `attempt:<rung>:<n>` into `n` stopped author runs (their `evidence` names the
-  label), then removes the labels. A `walled:` label is removed with no record.
+  tables.
 
 ## Validation
 
@@ -270,13 +263,6 @@ The standard pipeline has no check block. The store's author ending
 
 ## Changes to what exists
 
-- **The pipelines file goes to `version: 3`.** Each agent and check block
-  gets the standard exits for its role, and each agent block gets the
-  instructions for its role. Saved pipelines wire `returned` and `failed` to
-  `queue` with `fails: author`, so they behave as today. Only the standard
-  pipeline wires `returned` back to the author through `climb`. The
-  conversion is now `foreman cutover exit-ids`, and foreman reads only the
-  current version ("What is built").
 - **Prompts.** The files under `prompts/` become the default instructions,
   without the contract text and the `{% %}` logic. That logic moves into the
   generated sections. An operator's files live in `~/.config/foreman/prompts/`

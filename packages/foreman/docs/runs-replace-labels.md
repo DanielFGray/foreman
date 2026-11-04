@@ -156,18 +156,7 @@ the gate.
    `approved` (with the commit rule) and `satisfied`.
 2. Author attribution: `by` and `rounds`.
 3. `passed` and `factsOf` from runs.
-4. The cutover conversion and deleting the label constants.
-
-## Cutover
-
-Tasks in flight at merge time carry the old labels, and imported runs have no
-commit or ending. A one-time conversion turns each in-flight task's labels into
-runs: `by:<rung>` into an author run (open if the task is `in_progress`, else
-closed `handed-off` with the branch tip as `commit`), `review-by:<rung>` into an
-open review run, and `approved` into a closed `approved` review run with the
-branch tip as `commit`. It then removes the converted labels. The conversion is
-part of the cutover script and is tested on a fresh copy of `prog.db` before
-it runs on the live store.
+4. Deleting the label constants.
 
 ## Rules this changes in AGENTS.md
 

@@ -102,11 +102,6 @@ script. A task in your checkout needs no preview: your own dev server serves it.
 - The standard pipeline is: source → branch → retry router → author → review →
   land (merge), in your checkout. The `worktree` choice adds a worktree block
   after the branch; the `direct` choice has neither block and ends at done.
-- Each saved pipeline gets branch → worktree inserted after its sources, once.
-  The pipelines file stores its pipelines under a `version`. A file with no
-  version gets the blocks inserted by `foreman cutover exit-ids`, which converts
-  every older form once; foreman reads only the current form
-  (`docs/agent-exits.md`, "What is built").
 - The policy `checkout` setting and its CLI command are removed. Its git code
   stays: leaving the task's branch before landing, merging the approved commit by
   id, and giving the checkout back.
