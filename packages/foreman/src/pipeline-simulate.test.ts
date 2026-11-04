@@ -7,10 +7,10 @@ import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
 
 const RULES = {
   ladder: [
-    { name: "cheap", harness: "test", model: undefined, provider: undefined },
-    { name: "dear", harness: "test", model: undefined, provider: undefined },
+    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+    { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
   ] as Ladder,
-  attemptsPerRung: 2,
+  attemptsPerLevel: 2,
 };
 
 const item = (id: string, over: Partial<Item> = {}): Item => ({
@@ -184,7 +184,7 @@ describe("simulate", () => {
     const stops: Measured = { agents: [sample("cheap", "author", "stopped", 3)], checks: [] };
     const run = played(STANDARD_PIPELINES.worktree, stops, 3);
     expect(run.parked).toBe(3);
-    // Two tries on each rung before the climb, as attemptsPerRung says.
+    // Two tries on each rung before the climb, as attemptsPerLevel says.
     expect(run.runsByRung).toEqual({ cheap: 6, dear: 6 });
   });
 

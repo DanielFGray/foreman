@@ -207,10 +207,10 @@ describe("the charges and parks cutover", () => {
         });
 
         expect(failuresOf(read(queued))).toEqual(["cheap"]);
-        expect(attemptsOf(read(queued), "strong")).toBe(2);
+        expect(attemptsOf(read(queued), ["strong"])).toBe(2);
         expect(needsYou(read(queued))).toBe(true);
         expect((yield* tasks.require(queued)).labels).toEqual(["size:2"]);
-        expect(attemptsOf(read(recounted), "cheap")).toBe(1);
+        expect(attemptsOf(read(recounted), ["cheap"])).toBe(1);
         expect(failuresOf(read(recounted))).toEqual(["cheap"]);
 
         const again = yield* convert({ root, dryRun: false });

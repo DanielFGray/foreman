@@ -13,14 +13,14 @@ const DEAD = "http://127.0.0.1:1";
 
 const settingsWith = (otlpEndpoint: string) =>
   Layer.succeed(Settings, {
-    ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
+    ladder: [{ name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined }],
     otlpEndpoint,
     pollInterval: 60,
     staleAfter: 24,
     coachWindow: 60,
     stallGrace: 5,
     landedWindow: 7,
-    attemptsPerRung: 2,
+    attemptsPerLevel: 2,
   });
 
 const withTelemetry = <A>(endpoint: string, work: Effect.Effect<A>) =>

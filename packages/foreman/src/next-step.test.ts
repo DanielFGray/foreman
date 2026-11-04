@@ -29,8 +29,8 @@ import { authorRun, authorDone, charged, reviewRun, withRuns } from "./task-fixt
  */
 
 const LADDER: Ladder = [
-  { name: "cheap", harness: "test", model: undefined, provider: undefined },
-  { name: "dear", harness: "test", model: undefined, provider: undefined },
+  { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+  { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
 ];
 
 /**

@@ -151,8 +151,9 @@ describe("queueFrom", () => {
     harness: "opencode",
     model: undefined,
     provider: undefined,
+    level: 0,
   });
-  const ladder: Ladder = [rung("cheap"), rung("top")];
+  const ladder: Ladder = [rung("cheap"), { ...rung("top"), level: 1 }];
   const reading = (ready: ReadonlyArray<Item>, failed: ReadonlyArray<string> = []) => ({
     ready,
     ladder,

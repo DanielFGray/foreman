@@ -8,6 +8,7 @@ import {
   rungsOnAccounts,
   providerOf,
   type Ladder,
+  type LastStarts,
   type Rung,
 } from "./ladder.ts";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
@@ -31,7 +32,8 @@ export type BlockRung =
 /**
  * Which rung `block` runs `task` on.
  *
- * - `ladder`: the cheapest rung above the task's failures (an author).
+ * - `ladder`: the least recently started rung of the lowest level above the
+ *   task's failures (an author).
  * - `above`: the next rung above the author and every reviewer that stopped
  *   with no verdict (a reviewer).
  * - a rung name: that rung. A failure of that rung on this task leaves the
@@ -39,6 +41,7 @@ export type BlockRung =
  *
  * `walled` names the rungs on a spent account. `drawn` names the accounts this
  * tick already dispatched an author on, so one tick spreads its authors.
+ * `lastStarts` is each rung's latest start, so the rungs of a level take turns.
  */
 export const rungAt = (
   ladder: Ladder,
@@ -46,10 +49,11 @@ export const rungAt = (
   task: Pick<Item, "runs" | "charges">,
   walled: ReadonlySet<string>,
   drawn: ReadonlySet<string> = new Set(),
+  lastStarts: LastStarts = new Map(),
 ): BlockRung => {
   const spent = authorWalls(ladder, task, walled);
   if (block.model === "ladder") {
-    const choice = authorFor(ladder, failuresOf(task), spent, drawn);
+    const choice = authorFor(ladder, failuresOf(task), spent, drawn, lastStarts);
     return choice._tag === "Dispatch"
       ? choice
       : choice._tag === "Waiting"
@@ -77,7 +81,9 @@ export const rungAt = (
 
 /**
  * `rungAt` for a dispatch: the account of the rung it chose is added to
- * `drawn`, so the authors one tick dispatches spread over the accounts.
+ * `drawn`, so the authors one tick dispatches spread over the accounts, and
+ * the rung is recorded in `started` as the latest start, so the free slots of
+ * one tick spread over a level. Both are the tick's own copies.
  */
 export const drawRung = (
   ladder: Ladder,
@@ -85,12 +91,22 @@ export const drawRung = (
   task: Pick<Item, "runs" | "charges">,
   walled: ReadonlySet<string>,
   drawn: Set<string> | undefined,
+  started?: Map<string, Date>,
 ): BlockRung => {
-  const choice = rungAt(ladder, block, task, walled, drawn);
-  const provider = choice._tag === "Dispatch" ? providerOf(choice.rung) : undefined;
+  const choice = rungAt(ladder, block, task, walled, drawn, started);
+  if (choice._tag !== "Dispatch") return choice;
+  const provider = providerOf(choice.rung);
   if (provider !== undefined) drawn?.add(provider);
+  started?.set(choice.rung.name, afterEvery(started));
   return choice;
 };
+
+/**
+ * An instant later than every start in `started`. Only the order of the starts
+ * is read, and a tick's copy is dropped when the tick ends, so it needs no clock.
+ */
+const afterEvery = (started: ReadonlyMap<string, Date>): Date =>
+  new Date(Math.max(0, ...[...started.values()].map((start) => start.getTime())) + 1);
 
 /**
  * The rungs an author may not take for this task: those on a spent account in

@@ -170,8 +170,8 @@ SQLite store (built on ts-4e763a). The one label foreman still writes is
 | State | Before | Now |
 |---|---|---|
 | where the task is | the "passed" set, from run endings in the lap | the last named exit (rule 3) |
-| a rung failed the task | the label `failed-by:<rung>` | a `charges` row that is not forgiven: an exit's `fails`, a stop that spent the rung, or a floor the operator chose |
-| attempts on a rung | the label `attempt:<rung>:<n>` | the author runs on the rung that ended `stopped` or `vanished` after the rung's newest charge |
+| a rung failed the task | the label `failed-by:<rung>` | a `charges` row that is not forgiven: an exit's `fails`, a stop that spent the level, or a floor the operator chose |
+| attempts at a level | the label `attempt:<rung>:<n>`, per rung | the author runs on any rung of the level that ended `stopped` or `vanished` after the newest charge on one of them |
 | an account hit its limit on this task | the label `walled:<provider>` | the runs that ended `walled` after the task last landed |
 | the task waits for the operator | the label `needs-you` | a `parks` row: task, reason, time; removed by `descend` |
 | the operator forgave a rung (`descend`) | the `failed-by:` label removed | the rung's charges get `forgiven_at` |

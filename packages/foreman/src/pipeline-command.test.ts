@@ -35,7 +35,7 @@ await Effect.runPromise(
   seed(`
     INSERT INTO pools (pool, harness, provider_default) VALUES ('Pool', 'pi', 'prov');
     INSERT INTO models (model, provider, pool, harness, tier, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'free', 'pool');
-    INSERT INTO ladder (rank, rung, model) VALUES (1, 'cheap', 'm1');
+    INSERT INTO ladder (rank, level, rung, model) VALUES (1, 1, 'cheap', 'm1');
   `).pipe(Effect.provide(store.layer)),
 );
 

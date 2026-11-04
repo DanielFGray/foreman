@@ -32,8 +32,8 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
 
 /** One rung and no drawing: the rules the store tests below need. */
 const RULES: StepRules = {
-  ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
-  attemptsPerRung: 2,
+  ladder: [{ name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined }],
+  attemptsPerLevel: 2,
   pipeline: undefined,
 };
 
@@ -100,6 +100,7 @@ describe("task attribution", () => {
       harness: "opencode",
       model: "opencode/gpt-5.6-sol",
       provider: undefined,
+      level: 0,
     };
     expect(agentLog("author", rung, { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
       "foreman: author assigned to sol (openai/gpt-5.6-sol)",
@@ -112,6 +113,7 @@ describe("task attribution", () => {
       harness: "opencode",
       model: "opencode/claude-sonnet-5",
       provider: undefined,
+      level: 0,
     };
     expect(agentLog("review", rung, { kind: "opencode", model: undefined })).toBe(
       "foreman: review assigned to sonnet (opencode/claude-sonnet-5)",
@@ -119,23 +121,29 @@ describe("task attribution", () => {
   });
 
   test("names the harness for a rung that lets the harness choose", () => {
-    const rung = { name: "claude", harness: "claude", model: undefined, provider: undefined };
+    const rung = {
+      name: "claude",
+      harness: "claude",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+    };
     expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
       "foreman: author assigned to claude (claude)",
     );
   });
 });
 
-describe("stopped attempts on a rung", () => {
+describe("stopped attempts on rungs", () => {
   test("reads zero for a rung that was never tried", () => {
-    expect(attemptsOf(item(), "deepseek")).toBe(0);
-    expect(attemptsOf(authoredOn(item(), "opencode"), "deepseek")).toBe(0);
+    expect(attemptsOf(item(), ["deepseek"])).toBe(0);
+    expect(attemptsOf(authoredOn(item(), "opencode"), ["deepseek"])).toBe(0);
   });
 
   test("counts the rung's author runs that stopped or vanished", () => {
-    expect(attemptsOf(tried(stoppedRun("deepseek")), "deepseek")).toBe(1);
+    expect(attemptsOf(tried(stoppedRun("deepseek")), ["deepseek"])).toBe(1);
     expect(
-      attemptsOf(tried(stoppedRun("deepseek"), stoppedRun("deepseek", "vanished")), "deepseek"),
+      attemptsOf(tried(stoppedRun("deepseek"), stoppedRun("deepseek", "vanished")), ["deepseek"]),
     ).toBe(2);
   });
 
@@ -143,28 +151,38 @@ describe("stopped attempts on a rung", () => {
     // The count follows its rung, so a task pinned elsewhere starts fresh and
     // a climb-away clears nothing it might meet again.
     const deepseek = [stoppedRun("deepseek"), stoppedRun("deepseek")];
-    expect(attemptsOf(tried(...deepseek), "sol")).toBe(0);
-    expect(attemptsOf(tried(...deepseek, stoppedRun("sol")), "sol")).toBe(1);
+    expect(attemptsOf(tried(...deepseek), ["sol"])).toBe(0);
+    expect(attemptsOf(tried(...deepseek, stoppedRun("sol")), ["sol"])).toBe(1);
   });
 
   test("counts only the runs after the rung's newest charge, forgiven or not", () => {
     const runs = [stoppedRun("deepseek"), stoppedRun("deepseek"), stoppedRun("deepseek")];
     const spent = runs[1]!;
     const charge = charged("deepseek", spent.id);
-    expect(attemptsOf({ ...tried(...runs), charges: [charge] }, "deepseek")).toBe(1);
+    expect(attemptsOf({ ...tried(...runs), charges: [charge] }, ["deepseek"])).toBe(1);
     expect(
-      attemptsOf({ ...tried(...runs), charges: [{ ...charge, forgiven: true }] }, "deepseek"),
+      attemptsOf({ ...tried(...runs), charges: [{ ...charge, forgiven: true }] }, ["deepseek"]),
     ).toBe(1);
     // Another rung's charge ends nothing on this one.
-    expect(attemptsOf({ ...tried(...runs), charges: [charged("sol", spent.id)] }, "deepseek")).toBe(
-      3,
-    );
+    expect(
+      attemptsOf({ ...tried(...runs), charges: [charged("sol", spent.id)] }, ["deepseek"]),
+    ).toBe(3);
+  });
+
+  test("counts the stops of every named rung, and a charge on any of them ends the count", () => {
+    const first = stoppedRun("one");
+    const two = stoppedRun("two");
+    const runs = [first, two, stoppedRun("one")];
+    expect(attemptsOf(tried(...runs), ["one", "two"])).toBe(3);
+    expect(
+      attemptsOf({ ...tried(...runs), charges: [charged("two", two.id)] }, ["one", "two"]),
+    ).toBe(1);
   });
 
   test("keeps two rungs whose names share a prefix apart", () => {
     const flash = [stoppedRun("deepseek-flash"), stoppedRun("deepseek-flash")];
-    expect(attemptsOf(tried(...flash), "deepseek")).toBe(0);
-    expect(attemptsOf(tried(...flash), "deepseek-flash")).toBe(2);
+    expect(attemptsOf(tried(...flash), ["deepseek"])).toBe(0);
+    expect(attemptsOf(tried(...flash), ["deepseek-flash"])).toBe(2);
   });
 
   test("ignores runs that named an exit, were released, hit a wall, are open, or reviewed", () => {
@@ -175,7 +193,36 @@ describe("stopped attempts on a rung", () => {
       authorRun("deepseek"),
       reviewRun("deepseek", { open: false, ending: "stopped" }),
     ];
-    expect(attemptsOf(tried(...runs), "deepseek")).toBe(0);
+    expect(attemptsOf(tried(...runs), ["deepseek"])).toBe(0);
+  });
+});
+
+describe("a stop at a level of peers", () => {
+  /** Two peers at one level, under a level above. */
+  const PEERS: StepRules = {
+    ladder: [
+      { name: "one", harness: "test", level: 1, model: undefined, provider: undefined },
+      { name: "two", harness: "test", level: 1, model: undefined, provider: undefined },
+      { name: "high", harness: "test", level: 2, model: undefined, provider: undefined },
+    ],
+    attemptsPerLevel: 2,
+    pipeline: undefined,
+  };
+  const stopped: RunEvent = { _tag: "Stopped", ending: "stopped" };
+
+  test("counts the peers' stops together, so the level is spent across them", () => {
+    const task = tried(stoppedRun("one"), authorRun("two"));
+    const step = stepOf(task, stopped, PEERS);
+
+    expect(step.attempt).toEqual({ rung: "two", count: 2 });
+    expect(step.climb?.failed).toBe("two");
+  });
+
+  test("retries the level while it has attempts left", () => {
+    const step = stepOf(tried(authorRun("two")), stopped, PEERS);
+
+    expect(step.attempt).toEqual({ rung: "two", count: 1 });
+    expect(step.climb).toBeUndefined();
   });
 });
 
@@ -332,8 +379,8 @@ describe("Records against a scratch store", () => {
 
 describe("usage walls", () => {
   const ladder = [
-    { name: "free", harness: "opencode", model: "opencode/free" },
-    { name: "dear", harness: "claude", model: undefined },
+    { name: "free", harness: "opencode", level: 0, model: "opencode/free" },
+    { name: "dear", harness: "claude", level: 1, model: undefined },
   ] as unknown as Parameters<typeof walledBy>[1];
 
   test("a walled run names its rung's account until the task lands", () => {

@@ -76,10 +76,12 @@ const COPIES: ReadonlyArray<readonly [string, string]> = [
      SELECT model, provider, pool, harness, models_dev, tier, limit_scope, thinking, retired, notes FROM old.models`,
   ],
   ["aliases", "INSERT INTO aliases (alias, model) SELECT alias, model FROM old.aliases"],
+  // The herd's ladder has no levels: each rung stands alone in its level, as
+  // `0009_ladder_levels` leaves a store's ladder.
   [
     "ladder",
-    `INSERT INTO ladder (rank, rung, model, enabled, provider, note, unmetered)
-     SELECT rank, rung, model, enabled, provider, note, unmetered FROM old.ladder`,
+    `INSERT INTO ladder (rank, level, rung, model, enabled, provider, note, unmetered)
+     SELECT rank, rank, rung, model, enabled, provider, note, unmetered FROM old.ladder`,
   ],
   [
     "prices",

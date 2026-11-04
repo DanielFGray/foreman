@@ -123,7 +123,7 @@ stateDiagram-v2
 ## Joint table
 
 Built in `src/run-step.ts`. The dispatcher observes an event and gives it to
-`stepOf`, with the task and the rules (the ladder, `attemptsPerRung`, the
+`stepOf`, with the task and the rules (the ladder, `attemptsPerLevel`, the
 task's drawing). `stepOf` returns one row. `Records.write` writes the row in
 one transaction, on the connection the tracker writes on. Then the dispatcher
 does its own I/O: logs, notices, git, stopping panes. `applyRow` makes the

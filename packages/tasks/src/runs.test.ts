@@ -16,6 +16,7 @@ import {
   outcomeOf,
   runsOf,
   nameExit,
+  lastStarts,
   type NewRun,
 } from "./runs.ts";
 
@@ -358,7 +359,8 @@ describe("the exits migration", () => {
         // migrations must go too or exits is skipped and the rename never runs.
         yield* sql.unsafe(
           `DELETE FROM tasks_migrations
-           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council')`,
+           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council',
+                          'ladder_levels')`,
         );
         const endings = [
           ["build", "handed-off"],
@@ -411,7 +413,9 @@ describe("the council migration", () => {
         yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, tier, limit_scope)
           VALUES ('m1', 'p', 'P', 'pi', 'frontier', 'pool')`);
         yield* sql.unsafe(`ALTER TABLE models DROP COLUMN council`);
-        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'council'`);
+        yield* sql.unsafe(
+          `DELETE FROM tasks_migrations WHERE name IN ('council', 'ladder_levels')`,
+        );
       }),
     );
     const rows = await at(
@@ -421,5 +425,68 @@ describe("the council migration", () => {
       }),
     );
     expect(rows).toEqual([{ model: "m1", council: 0 }]);
+  });
+});
+
+describe("lastStarts", () => {
+  test("reads the newest start of each rung's runs, author and review alike", async () => {
+    const starts = await inStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        yield* sql.unsafe(`INSERT INTO runs (project, task, slice, kind, pool, model, work, rung, started_at, closed_at)
+          VALUES
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'a', '2026-01-01 10:00:00', NULL),
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'a', '2026-01-02 10:00:00', NULL),
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'review', 'b', '2026-01-03 09:00:00', NULL),
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', NULL, '2026-01-04 09:00:00', NULL),
+          ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'c', NULL, NULL)`);
+        return yield* lastStarts;
+      }),
+    );
+    expect(starts).toEqual(
+      new Map([
+        ["a", new Date("2026-01-02T10:00:00Z")],
+        ["b", new Date("2026-01-03T09:00:00Z")],
+      ]),
+    );
+  });
+});
+
+describe("the ladder levels migration", () => {
+  test("puts each rung alone in a level of its own rank", async () => {
+    const file = join(dir, `store-${++files}.db`);
+    const at = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
+      Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
+    await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        yield* sql.unsafe(
+          `INSERT INTO pools (pool, harness, provider_default) VALUES ('P', 'pi', 'p')`,
+        );
+        yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, tier, limit_scope)
+          VALUES ('m1', 'p', 'P', 'pi', 'frontier', 'pool')`);
+        // The ladder as migration 0008 left it, with no level.
+        yield* sql.unsafe(`DROP TABLE ladder`);
+        yield* sql.unsafe(`CREATE TABLE ladder (
+          rank INTEGER PRIMARY KEY, rung TEXT NOT NULL UNIQUE,
+          model TEXT NOT NULL REFERENCES models(model), enabled INTEGER NOT NULL DEFAULT 1,
+          provider TEXT, note TEXT, unmetered INTEGER NOT NULL DEFAULT 0,
+          author INTEGER NOT NULL DEFAULT 1, review INTEGER NOT NULL DEFAULT 1)`);
+        yield* sql.unsafe(`INSERT INTO ladder (rank, rung, model, review) VALUES
+          (1, 'cheap', 'm1', 1), (2, 'dear', 'm1', 0)`);
+        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'ladder_levels'`);
+      }),
+    );
+    const rows = await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        return yield* sql<{ rank: number; level: number; rung: string; review: number }>`
+          SELECT rank, level, rung, review FROM ladder ORDER BY rank`;
+      }),
+    );
+    expect(rows).toEqual([
+      { rank: 1, level: 1, rung: "cheap", review: 1 },
+      { rank: 2, level: 2, rung: "dear", review: 0 },
+    ]);
   });
 });

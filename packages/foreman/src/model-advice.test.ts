@@ -703,10 +703,10 @@ const seedAdviceRegistry = async (dir: string): Promise<string> => {
       ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'metered', 'pool'),
       ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'free', 'pool'),
       ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'metered', 'pool');
-    INSERT INTO ladder(rank, rung, model, provider, unmetered, enabled) VALUES
-      (1, 'promo', 'opencode-go/ox-alpha-free', 'opencode-go', 1, 1),
-      (2, 'codex-luna', 'gpt-6-luna', 'openai', 0, 1),
-      (3, 'cursor-agent', 'auto', 'cursor', 0, 1);
+    INSERT INTO ladder(rank, level, rung, model, provider, unmetered, enabled) VALUES
+      (1, 1, 'promo', 'opencode-go/ox-alpha-free', 'opencode-go', 1, 1),
+      (2, 2, 'codex-luna', 'gpt-6-luna', 'openai', 0, 1),
+      (3, 3, 'cursor-agent', 'auto', 'cursor', 0, 1);
     INSERT INTO runs(project, task, slice, kind, pool, model, work, outcome,
                      input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, size)
     VALUES

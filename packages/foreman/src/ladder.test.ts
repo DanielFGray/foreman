@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Array as Arr } from "effect";
 import {
   authorFor,
   dispatchable,
@@ -9,7 +10,7 @@ import {
   providersOf,
   rankOf,
   reviewerFor,
-  rungSpent,
+  levelSpent,
   rungsOn,
   topOf,
 } from "./ladder.ts";
@@ -19,13 +20,16 @@ const rung = (name: string, extra: Partial<Ladder[number]> = {}): Ladder[number]
   harness: "opencode",
   model: undefined,
   provider: undefined,
-
+  level: 0,
   ...extra,
 });
 
+/** The rungs, each alone in its level, cheapest first: the ladder before levels. */
+const stacked = (rungs: Ladder): Ladder => Arr.map(rungs, (one, level) => ({ ...one, level }));
+
 const cheap = rung("cheap", { model: "opencode/deepseek-v4-pro" });
-const middle = rung("middle", { model: "opencode/claude-sonnet-5" });
-const top = rung("top", { harness: "claude" });
+const middle = rung("middle", { model: "opencode/claude-sonnet-5", level: 1 });
+const top = rung("top", { harness: "claude", level: 2 });
 const ladder: Ladder = [cheap, middle, top];
 
 describe("authorFor", () => {
@@ -56,7 +60,7 @@ describe("authorFor", () => {
   test("takes the ordinary rung when every account is already being spent", () => {
     // A preference and never a wall: an account with room is not spent, and a
     // task must not wait for a reset that nothing is waiting on.
-    const oneAccount: Ladder = [cheap, middle];
+    const oneAccount: Ladder = stacked([cheap, middle]);
     expect(authorFor(oneAccount, [], new Set(), new Set(["opencode"]))).toEqual({
       _tag: "Dispatch",
       rung: cheap,
@@ -72,7 +76,7 @@ describe("authorFor", () => {
   test("keeps the floor a retired rung earned while it holds its rank", () => {
     // The whole point of `enabled: false`: the rung is never dispatched, but
     // work that outgrew it must not drop back below it.
-    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    const retired: Ladder = stacked([cheap, rung("middle", { enabled: false }), top]);
     expect(authorFor(retired, ["middle"])).toEqual({ _tag: "Dispatch", rung: top });
     expect(authorFor(retired, ["cheap"])).toEqual({ _tag: "Dispatch", rung: top });
   });
@@ -100,13 +104,65 @@ describe("authorFor", () => {
   });
 
   test("skips a rung whose author role is off", () => {
-    const roles: Ladder = [rung("cheap", { author: false }), middle, top];
+    const roles: Ladder = stacked([rung("cheap", { author: false }), middle, top]);
     expect(authorFor(roles, [])).toEqual({ _tag: "Dispatch", rung: middle });
   });
 });
 
+describe("authorFor across a level", () => {
+  // Three peers between a bottom and a top level.
+  const low = rung("low");
+  const one = rung("one", { level: 1 });
+  const two = rung("two", { level: 1 });
+  const three = rung("three", { level: 1 });
+  const high = rung("high", { harness: "claude", level: 2 });
+  const levels: Ladder = [low, one, two, three, high];
+  const at = (ms: number) => new Date(ms);
+
+  test("takes the peer whose last start is oldest", () => {
+    const starts = new Map([
+      ["one", at(3000)],
+      ["two", at(1000)],
+      ["three", at(2000)],
+    ]);
+    expect(authorFor(levels, ["low"], new Set(), new Set(), starts)).toEqual({
+      _tag: "Dispatch",
+      rung: two,
+    });
+  });
+
+  test("takes a peer that never started before one that has", () => {
+    const starts = new Map([["one", at(1000)]]);
+    expect(authorFor(levels, ["low"], new Set(), new Set(), starts)).toEqual({
+      _tag: "Dispatch",
+      rung: two,
+    });
+  });
+
+  test("takes the peers in rank order when no run has started", () => {
+    expect(authorFor(levels, ["low"])).toEqual({ _tag: "Dispatch", rung: one });
+  });
+
+  test("keeps a lower level ahead of an older start", () => {
+    const starts = new Map([
+      ["low", at(5000)],
+      ["one", at(1000)],
+    ]);
+    expect(authorFor(levels, [], new Set(), new Set(), starts)).toEqual({
+      _tag: "Dispatch",
+      rung: low,
+    });
+  });
+
+  test("climbs past the whole level on one failure in it", () => {
+    expect(authorFor(levels, ["two"])).toEqual({ _tag: "Dispatch", rung: high });
+    expect(floorFor(levels, ["two"])).toBe(2);
+    expect(highestFailure(levels, ["low", "three"])).toBe("three");
+  });
+});
+
 describe("floorFor", () => {
-  test("is the rank above the highest-ranked failure", () => {
+  test("is the level above the highest failed level", () => {
     expect(floorFor(ladder, [])).toBe(0);
     expect(floorFor(ladder, ["cheap"])).toBe(1);
     expect(floorFor(ladder, ["cheap", "middle"])).toBe(2);
@@ -122,7 +178,7 @@ describe("rankOf", () => {
 });
 
 describe("highestFailure", () => {
-  test("names the failure an operator's correction takes back", () => {
+  test("names a failure at the level an operator's correction takes back", () => {
     expect(highestFailure(ladder, ["cheap", "middle"])).toBe("middle");
     expect(highestFailure(ladder, [])).toBeUndefined();
   });
@@ -136,27 +192,27 @@ describe("highestFailure", () => {
 
 describe("dispatchable", () => {
   test("offers only the rungs that can run", () => {
-    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    const retired: Ladder = stacked([cheap, rung("middle", { enabled: false }), top]);
     expect(dispatchable(retired).map((entry) => entry.name)).toEqual(["cheap", "top"]);
   });
 });
 
-describe("rungSpent", () => {
+describe("levelSpent", () => {
   test("retries in place until the rung's attempts run out", () => {
     // A crash, a timeout and a usage wall say nothing about the model, so the
-    // first attemptsPerRung - 1 failures stay on the rung.
-    expect(rungSpent(1, 2)).toBe(false);
-    expect(rungSpent(2, 3)).toBe(false);
+    // first attemptsPerLevel - 1 failures stay on the rung.
+    expect(levelSpent(1, 2)).toBe(false);
+    expect(levelSpent(2, 3)).toBe(false);
   });
 
   test("fails the rung on the attempt that reaches the limit", () => {
-    expect(rungSpent(2, 2)).toBe(true);
-    expect(rungSpent(3, 3)).toBe(true);
-    expect(rungSpent(4, 2)).toBe(true);
+    expect(levelSpent(2, 2)).toBe(true);
+    expect(levelSpent(3, 3)).toBe(true);
+    expect(levelSpent(4, 2)).toBe(true);
   });
 
-  test("with attemptsPerRung 1, every stopped run fails the rung", () => {
-    expect(rungSpent(1, 1)).toBe(true);
+  test("with attemptsPerLevel 1, every stopped run fails the rung", () => {
+    expect(levelSpent(1, 1)).toBe(true);
   });
 });
 
@@ -176,28 +232,28 @@ describe("reviewerFor", () => {
   });
 
   test("never dispatches a retired rung", () => {
-    const retired: Ladder = [cheap, rung("middle", { enabled: false }), top];
+    const retired: Ladder = stacked([cheap, rung("middle", { enabled: false }), top]);
     expect(reviewerFor(retired, "cheap")?.name).toBe("top");
     expect(topOf(retired)?.name).toBe("top");
   });
 
   test("reviews with the top of a one-rung ladder", () => {
-    const uniform: Ladder = [rung("only")];
+    const uniform: Ladder = stacked([rung("only")]);
     expect(reviewerFor(uniform, "only")?.name).toBe("only");
     expect(topOf(uniform)?.name).toBe("only");
   });
 
   test("skips a rung whose review role is off", () => {
-    const roles: Ladder = [cheap, rung("middle", { review: false }), top];
+    const roles: Ladder = stacked([cheap, rung("middle", { review: false }), top]);
     expect(reviewerFor(roles, "cheap")?.name).toBe("top");
   });
 
   test("parks when no review-enabled rung stands above the author", () => {
-    const roles: Ladder = [
+    const roles: Ladder = stacked([
       cheap,
       rung("middle", { review: false }),
       rung("top", { review: false }),
-    ];
+    ]);
     // Cheap is still review-on, but nothing above the author may review — park,
     // rather than handing the author's own work back to itself.
     expect(reviewerFor(roles, "cheap")).toBeUndefined();
@@ -205,11 +261,11 @@ describe("reviewerFor", () => {
   });
 
   test("has no review top when every rung has review off", () => {
-    const none: Ladder = [
+    const none: Ladder = stacked([
       rung("cheap", { review: false }),
       rung("middle", { review: false }),
       rung("top", { review: false }),
-    ];
+    ]);
     expect(topOf(none)).toBeUndefined();
     expect(reviewerFor(none, "cheap")).toBeUndefined();
   });
@@ -304,25 +360,29 @@ describe("providersOf", () => {
   test("leaves out an account only a retired rung spends", () => {
     // Nothing will spend it again, and an allowance nothing can spend is not
     // news the operator has to read every tick.
-    const retired: Ladder = [cheap, middle, rung("top", { harness: "claude", enabled: false })];
+    const retired: Ladder = stacked([
+      cheap,
+      middle,
+      rung("top", { harness: "claude", enabled: false }),
+    ]);
     expect(providersOf(retired)).toEqual(["opencode"]);
   });
 
   test("leaves out an account whose every rung is fed by a promotional pool", () => {
     // No reading of it could stop a dispatch, and it is probed once a tick.
-    const promo: Ladder = [
+    const promo: Ladder = stacked([
       rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
       rung("sponsored", { model: "opencode-go/kimi-free", unmetered: true }),
-    ];
+    ]);
     expect(providersOf(promo)).toEqual([]);
   });
 
   test("still names an account that also has a metered rung", () => {
     // The metered rung is what makes the reading worth having.
-    const mixed: Ladder = [
+    const mixed: Ladder = stacked([
       rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
       rung("metered", { model: "opencode-go/kimi-k2.5" }),
-    ];
+    ]);
     expect(providersOf(mixed)).toEqual(["opencode-go"]);
   });
 });
@@ -339,10 +399,10 @@ describe("rungsOn", () => {
     // The one false wall there is. A promotional model draws on another pool,
     // so walling it on the metered percentage passes over work the account can
     // still pay for, and the task waits for a reset that was never relevant.
-    const promo: Ladder = [
+    const promo: Ladder = stacked([
       rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
       rung("metered", { model: "opencode-go/kimi-k2.5" }),
-    ];
+    ]);
     expect(rungsOn(promo, "opencode-go")).toEqual(["metered"]);
   });
 

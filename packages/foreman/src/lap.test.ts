@@ -182,8 +182,10 @@ describe("the readers against a scratch store", () => {
         records.write(
           id,
           stepOf({ id, labels: [], runs: [], charges: [] }, event, {
-            ladder: [{ name: "low", harness: "test", model: undefined, provider: undefined }],
-            attemptsPerRung: 2,
+            ladder: [
+              { name: "low", harness: "test", level: 0, model: undefined, provider: undefined },
+            ],
+            attemptsPerLevel: 2,
             pipeline: undefined,
           }).row,
         ),

@@ -72,11 +72,13 @@ import {
   dispatchable as dispatchableRungs,
   isEnabled,
   mayAuthor,
-  rankOf,
+  levelOf,
+  levelPeers,
   highestFailure,
   providersOf,
   providerOf,
   type Ladder,
+  type LastStarts,
   type Rung,
   rungsOn,
 } from "./ladder.ts";
@@ -197,7 +199,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       rung: rung.name,
       model: rung.model ?? rung.harness,
       role,
-      attempt: attemptsOf(task, rung.name) + 1,
+      attempt: attemptsOf(task, levelPeers(settings.ladder, rung.name)) + 1,
       labels: task.labels.join(","),
     });
 
@@ -1034,7 +1036,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const readDispatch = (providers: ReadonlyArray<Provider>) =>
       Effect.gen(function* () {
         const failed = failedTasks(yield* Ref.get(dispatchFailures));
-        return dispatchFrom(yield* observe, providers, failed);
+        // Read once per tick, for fill alone: which rung of a level is next
+        // in turn turns no gate, so the wide reading has no use for it.
+        const lastStarts = yield* records.lastStarts;
+        return { ...dispatchFrom(yield* observe, providers, failed), lastStarts };
       });
 
     /**
@@ -2179,7 +2184,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Dispatchable) =>
+    const fill = (current: Dispatchable & { readonly lastStarts: LastStarts }) =>
       Effect.gen(function* () {
         yield* Effect.forEach(current.parks, park, { discard: true });
         // A task whose dispatch has failed twice is held out of the plan.
@@ -2189,12 +2194,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // authors only, and discarded with it. Its whole job is to stop every
         // slot in this pass drawing on the one account the reading calls healthy.
         const drawn = new Set<string>();
+        // This tick's copy of the last starts: each dispatch records its rung as
+        // started, so the free slots of one tick spread over a level.
+        const started = new Map(current.lastStarts);
         yield* Effect.forEach(
           current.dispatches,
           (dispatch) =>
             (dispatch.role === "review"
-              ? dispatchReview(dispatch.task, dispatch.block)
-              : dispatchAuthor(dispatch.task, dispatch.block, drawn)
+              ? dispatchReview(dispatch.task, dispatch.block, started)
+              : dispatchAuthor(dispatch.task, dispatch.block, drawn, started)
             ).pipe(
               Effect.tap(() => admitted(dispatch.permits, dispatch.task.id)),
               Effect.tap(() => clearFailure(dispatch.task.id)),
@@ -2302,9 +2310,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       block: AgentNode,
       drawn?: Set<string>,
+      started?: Map<string, Date>,
     ) {
       const walled = walledRungs((yield* SubscriptionRef.get(state)).providers);
-      const choice = drawRung(settings.ladder, block, task, walled, drawn);
+      const choice = drawRung(settings.ladder, block, task, walled, drawn, started);
       if (choice._tag === "Dispatch") return choice.rung;
       yield* Effect.logInfo(
         choice._tag === "Waiting"
@@ -2333,11 +2342,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       return block;
     });
 
-    /** Starts an author by hand, at the author block on the task's route. */
-    const handAuthor = (task: Item) =>
+    /**
+     * Starts an author by hand, at the author block on the task's route: on
+     * `rung` when one is named, else on the rung a tick would choose.
+     */
+    const handAuthor = (task: Item, rung?: Rung) =>
       blockFor(task, "author").pipe(
         Effect.flatMap((block) =>
-          block === undefined ? Effect.void : dispatchAuthor(task, block),
+          block === undefined
+            ? Effect.void
+            : rung === undefined
+              ? dispatchAuthor(task, block)
+              : authorAt(task, rung, block),
         ),
       );
 
@@ -2353,12 +2369,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       block: AgentNode,
       drawn?: Set<string>,
+      started?: Map<string, Date>,
     ) {
       // The task carries its failures in its labels, so the choice survives a
-      // restart, and the allowances are this tick's reading. `drawn` is this
-      // tick's burst, not the task's history: only `fill` has one, so only it
-      // spreads.
-      const rung = yield* rungFor(task, block, drawn);
+      // restart, and the allowances are this tick's reading. `drawn` and
+      // `started` are this tick's burst, not the task's history: only `fill`
+      // has them, so only it spreads.
+      const rung = yield* rungFor(task, block, drawn, started);
       if (rung) yield* authorAt(task, rung, block);
     });
 
@@ -2412,6 +2429,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
       task: Item,
       block: AgentNode,
+      started?: Map<string, Date>,
     ) {
       const project = yield* projectFor(task.project);
       if (!project) return;
@@ -2433,7 +2451,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Resolved here rather than by each caller, so fill, a retry and an
       // intervention all pick a reviewer the same way. The status is untouched
       // when no rung can read the diff, so the task keeps its place.
-      const rung = yield* rungFor(task, block);
+      const rung = yield* rungFor(task, block, undefined, started);
       if (!rung) return;
       const worker = yield* workspaceFor(task, project);
 
@@ -2540,7 +2558,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const done = stepOf(task, event, {
           ladder: settings.ladder,
-          attemptsPerRung: settings.attemptsPerRung,
+          attemptsPerLevel: settings.attemptsPerLevel,
           pipeline,
         });
         yield* records.write(task.id, done.row);
@@ -2569,7 +2587,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         if (next._tag === "Yours") {
           yield* tracker.log(
             task.id,
-            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then run \`foreman descend ${task.id}\` to take back its highest charge and put it back in the queue.`,
+            `foreman: every rung of the ladder has been tried on ${task.id}. It is yours now — write the decision into this task, then run \`foreman descend ${task.id}\` to take back the charges at its highest failed level and put it back in the queue.`,
           );
           yield* fleet.notify("Needs a decision", `${task.id} ${task.title}`);
         }
@@ -2594,8 +2612,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* tracker.log(
           task.id,
           climb !== undefined
-            ? `${detail} Returned to the queue one rung up — ${attempt.count} attempts on ${attempt.rung} exhausted it.`
-            : `${detail} Returned to the queue to try ${attempt.rung} again (attempt ${attempt.count} of ${settings.attemptsPerRung}).`,
+            ? `${detail} Returned to the queue one level up — ${attempt.count} attempts at ${attempt.rung}'s level exhausted it.`
+            : `${detail} Returned to the queue to try ${attempt.rung}'s level again (attempt ${attempt.count} of ${settings.attemptsPerLevel}).`,
         );
       });
 
@@ -2644,21 +2662,27 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      *
      * The mirror of `climb`, and the correction for every way a rung gets
      * failed without deserving it — a bug, an OOM, an operator killing a run.
-     * One step per press, unwriting exactly the label foreman itself would have
-     * written, so the work drops back to the model below. With nothing recorded
-     * there is nothing to take back: the task is already at the bottom of the
-     * ladder.
+     * One level per press: it clears every failure at the highest failed level,
+     * unwriting exactly the charges foreman itself would have written, so the
+     * floor drops one level. With nothing recorded there is nothing to take
+     * back: the task is already at the bottom of the ladder.
      */
     const descend = (task: Climbing) =>
       Effect.gen(function* () {
-        // A parked task stands above the top rung, so the step down from it is
-        // out of the operator's column and onto the strongest model — which is
+        // A parked task stands above the top level, so the step down from it is
+        // out of the operator's column and onto the strongest models — which is
         // where the failures it already carries put it. Removing the park is
         // that step; the failures are the next one.
         if (needsYou(task)) return yield* records.unpark(task.id);
-        const highest = highestFailure(settings.ladder, failuresOf(task));
+        const failures = failuresOf(task);
+        const highest = highestFailure(settings.ladder, failures);
         if (highest === undefined) return;
-        yield* records.clearFailure(task.id, highest);
+        const level = levelOf(settings.ladder, highest);
+        yield* Effect.forEach(
+          failures.filter((failure) => levelOf(settings.ladder, failure) === level),
+          (failure) => records.clearFailure(task.id, failure),
+          { discard: true },
+        );
       });
 
     /**
@@ -2780,24 +2804,27 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       });
 
     /**
-     * Records every rung below a chosen one as having failed, which is what the
-     * operator saying "carry on from here" means.
+     * Records every rung of every level below a chosen rung's level as having
+     * failed, which is what the operator saying "carry on from here" means.
      *
-     * The only way to start a task at a rung, because a task never names the
-     * rung that runs next — and it stays true if the choice cannot be paid for:
-     * the floor holds and the dispatch steps up to an account with room,
-     * exactly as it would have done for a failure foreman recorded itself.
+     * A task never names the rung that runs next, so the floor is what keeps
+     * the next author from dropping below the chosen level.
      */
     const raiseFloor = (task: Item, rung: Rung) => {
       const already = new Set(failuresOf(task));
-      const beneath = settings.ladder
-        .slice(0, rankOf(settings.ladder, rung.name) ?? 0)
-        .filter((lower) => !already.has(lower.name));
+      const beneath = settings.ladder.filter(
+        (lower) => lower.level < rung.level && !already.has(lower.name),
+      );
       return Effect.forEach(beneath, (lower) => records.markFailure(task.id, lower.name), {
         discard: true,
       });
     };
 
+    /**
+     * Resumes a task on the rung the operator named, with the floor raised to
+     * its level. The named rung runs it, as `foreman dispatch --rung` does: a
+     * peer in its level is not the operator's choice.
+     */
     const dispatchContinuation = (target: InterventionTarget, rungName: string) =>
       Effect.gen(function* () {
         const task = yield* records.show(target.task.id);
@@ -2808,7 +2835,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* records.clearDiagnostic(task.id);
         yield* records.release(task.id);
         yield* raiseFloor(task, rung);
-        yield* handAuthor(yield* records.show(task.id));
+        yield* handAuthor(yield* records.show(task.id), rung);
       });
 
     /** The checkout a project's work lands in, when foreman is configured for it. */
@@ -2843,7 +2870,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     return {
       /** What the dashboard renders. Replaced whole on every tick. */
       state,
-      // Only rungs foreman can dispatch: a retired one keeps its rank so old
+      // Only rungs foreman can dispatch: a retired one keeps its place so old
       // failures still position, but offering it would spawn nothing.
       rungs: dispatchableRungs(settings.ladder).map((rung) => rung.name),
 

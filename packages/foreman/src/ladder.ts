@@ -1,16 +1,24 @@
+import { Array as Arr, Order } from "effect";
+
 /**
- * The models foreman may use, ordered cheapest first.
+ * The models foreman may use, as an ordered list of levels, cheapest first.
  *
- * Order is the rating. There are no price or power numbers to drift out of step
- * with the list, and no map from author to reviewer: the reviewer is the next
- * review-on rung up, and a task that fails a rung records that failure. Both
- * fall out of the order. Per-rung `author` and `review` switches narrow which
- * rungs each rule may pick, without changing the order.
+ * A level holds any number of rungs, and the rungs of one level are peers that
+ * share the author work: an author is the least recently started affordable
+ * rung of the lowest level the task may take. The array holds every rung,
+ * sorted by (level, rank); rank is the order inside a level and breaks ties.
+ * There are no price or power numbers to drift out of step with the list. A
+ * task that fails a rung records that failure, and one failure on any rung of
+ * a level sends the task up a level. Per-rung `author` and `review` switches
+ * narrow which rungs each rule may pick, without changing the order.
+ *
+ * Review reads the rank alone: the reviewer is the next review-on rung up the
+ * array from the author, and the top review-on rung reviews itself.
  *
  * A task never names the model that runs next. It records which models have
  * already failed it, and the rung is chosen here from what is available now —
  * so retiring a model, or spending its allowance, moves work onto the next one
- * that can take it instead of stranding it. Above the last rung is the
+ * that can take it instead of stranding it. Above the last level is the
  * operator, who is not an entry in the array: a rung with no harness and no
  * model is a different kind of thing, and an explicit entry invites putting a
  * person in the middle, where every task below them would stall behind
@@ -24,6 +32,12 @@ export interface Rung {
 
   /** The harness kind: the program that runs (see `harnessLaunch`). */
   readonly harness: string;
+
+  /**
+   * The level this rung stands at. Levels climb in number, and the rungs of one
+   * level are peers. An integer the operator sets (`foreman ladder level`).
+   */
+  readonly level: number;
 
   /**
    * The model this rung runs. Each harness is told in the way it accepts one —
@@ -46,8 +60,8 @@ export interface Rung {
   /**
    * Whether foreman may dispatch this rung. Absent means yes.
    *
-   * A retired model stays in the ladder, disabled, so it keeps its rank: the
-   * failures it recorded still say "cheaper than the rung above was not
+   * A retired model stays in the ladder, disabled, so it keeps its level: the
+   * failures it recorded still say "cheaper than the level above was not
    * enough", which is the whole of what a rung means. Deleting the entry
    * instead says the model is no longer part of the rating at all, and the
    * failures naming it stop positioning anything.
@@ -130,8 +144,14 @@ export type Choice =
   | { readonly _tag: "Yours" };
 
 /**
- * The rung that writes the code next: the cheapest available rung above every
- * rung that has already failed this task.
+ * The latest run start of each rung, by rung name: the turn order inside a
+ * level. A rung with no entry has never started, and so takes the first turn.
+ */
+export type LastStarts = ReadonlyMap<string, Date>;
+
+/**
+ * The rung that writes the code next: from the lowest level above every level
+ * that has failed this task, the affordable rung that started least recently.
  *
  * `failures` is what the task durably records. A failure naming a rung the
  * config no longer has cannot be positioned and so constrains nothing — the
@@ -143,6 +163,9 @@ export type Choice =
  * search steps over them without the task recording anything, and the ordinary
  * rung is chosen again once the account has room.
  *
+ * `lastStarts` orders the rungs of one level, so its peers take turns. Empty,
+ * the order is the rank, which keeps a one-shot reader deterministic.
+ *
  * `drawn` names the accounts this same tick has already dispatched an author
  * on, and is a preference rather than a wall. Every free slot in one tick reads
  * the same allowances, so without it a tick's whole burst draws on the cheapest
@@ -151,20 +174,25 @@ export type Choice =
  * in the list.
  *
  * It can never turn a `Dispatch` into a `Waiting`: when every affordable rung
- * draws on an account already spent this tick, the cheapest affordable rung is
- * taken anyway. An account that has room is never called spent, and a rung
- * whose account cannot be named is never treated as drawn on.
+ * draws on an account already spent this tick, the first affordable rung in
+ * turn order is taken anyway. An account that has room is never called spent,
+ * and a rung whose account cannot be named is never treated as drawn on.
  */
 export const authorFor = (
   ladder: Ladder,
   failures: ReadonlyArray<string>,
   walled: ReadonlySet<string> = new Set(),
   drawn: ReadonlySet<string> = new Set(),
+  lastStarts: LastStarts = new Map(),
 ): Choice => {
-  const candidates = ladder
-    .slice(floorFor(ladder, failures))
-    .filter((candidate) => isEnabled(candidate) && mayAuthor(candidate));
-  const affordable = candidates.filter((candidate) => !walled.has(candidate.name));
+  const floor = floorFor(ladder, failures);
+  const candidates = ladder.filter(
+    (candidate) => candidate.level >= floor && isEnabled(candidate) && mayAuthor(candidate),
+  );
+  const affordable = Arr.sort(
+    candidates.filter((candidate) => !walled.has(candidate.name)),
+    turnOrder(lastStarts),
+  );
   const rung =
     affordable.find((candidate) => !drawn.has(providerOf(candidate) ?? "")) ?? affordable[0];
   if (rung !== undefined) return { _tag: "Dispatch", rung };
@@ -174,27 +202,57 @@ export const authorFor = (
 };
 
 /**
- * The lowest rank an author may take: one above the highest-ranked rung that
- * has failed this task.
+ * Level first, then the least recently started, then rank. The sort is stable
+ * and the ladder is in rank order, so rank needs no key of its own.
+ */
+const turnOrder = (lastStarts: LastStarts): Order.Order<Rung> =>
+  Order.combine(
+    Order.mapInput(Order.Number, (rung: Rung) => rung.level),
+    Order.mapInput(
+      Order.Number,
+      (rung: Rung) => lastStarts.get(rung.name)?.getTime() ?? Number.NEGATIVE_INFINITY,
+    ),
+  );
+
+/**
+ * The lowest level an author may take: one above the highest level that has
+ * failed this task, else the bottom level.
  *
- * Ranks, not names, so a failure on a rung since retired still holds the work
- * above it as long as that rung keeps its place in the config.
+ * Levels, not names, so a failure on a rung since retired still holds the work
+ * above its level as long as that rung keeps its place in the config. One
+ * failure on any rung of a level puts every rung of that level below the floor.
  */
 export const floorFor = (ladder: Ladder, failures: ReadonlyArray<string>): number =>
   failures.reduce((floor, failure) => {
-    const rank = rankOf(ladder, failure);
-    return rank === undefined ? floor : Math.max(floor, rank + 1);
-  }, 0);
+    const level = levelOf(ladder, failure);
+    return level === undefined ? floor : Math.max(floor, level + 1);
+  }, ladder[0].level);
 
-/** Where a rung sits in the rating, or nothing for one the config has dropped. */
+/** Where a rung sits in the order of the array, or nothing for one the config has dropped. */
 export const rankOf = (ladder: Ladder, name: string): number | undefined => {
   const rank = ladder.findIndex((rung) => rung.name === name);
   return rank < 0 ? undefined : rank;
 };
 
+/** The level a rung stands at, or nothing for one the config has dropped. */
+export const levelOf = (ladder: Ladder, name: string): number | undefined =>
+  ladder.find((rung) => rung.name === name)?.level;
+
 /**
- * The highest-ranked rung a task records as having failed it, which is the one
- * the operator's correction takes back.
+ * The names of the rungs at the named rung's level, the named rung among them.
+ * Only the named rung for one the config has dropped: it has no level left to
+ * share.
+ */
+export const levelPeers = (ladder: Ladder, name: string): ReadonlyArray<string> => {
+  const level = levelOf(ladder, name);
+  return level === undefined
+    ? [name]
+    : ladder.filter((rung) => rung.level === level).map((rung) => rung.name);
+};
+
+/**
+ * The highest-ranked rung a task records as having failed it. It stands at the
+ * highest failed level, the level the operator's correction takes back.
  *
  * Unrecognised names are skipped rather than guessed at: a failure that cannot
  * be positioned is not holding the task anywhere, so removing it would correct
@@ -211,18 +269,18 @@ export const highestFailure = (
   }, undefined)?.name;
 
 /**
- * Whether a rung with this many stopped attempts is spent, so the task
- * records the failure and moves up.
+ * Whether a level with this many stopped attempts is spent, so the task
+ * records the failure and moves up a level.
  *
  * An agent that stops without finishing says nothing about its model — a
  * crash, a timeout and a usage wall all end the same way — so the first
- * `attemptsPerRung - 1` failures retry the same rung and the one that reaches
- * `attemptsPerRung` fails it. Judgements never count: a reviewer sending work
- * back, or a branch that broke verification, fails the rung on the strength of
- * the verdict alone.
+ * `attemptsPerLevel - 1` stops retry the level, each on the rung whose turn it
+ * is, and the one that reaches `attemptsPerLevel` fails the rung that ran it.
+ * Judgements never count: a reviewer sending work back, or a branch that broke
+ * verification, fails the rung on the strength of the verdict alone.
  */
-export const rungSpent = (attempts: number, attemptsPerRung: number): boolean =>
-  attempts >= attemptsPerRung;
+export const levelSpent = (attempts: number, attemptsPerLevel: number): boolean =>
+  attempts >= attemptsPerLevel;
 
 /**
  * Who reads the work of a given rung, or nothing when no account can pay.
@@ -326,7 +384,7 @@ export const providerOf = (rung: Rung): string | undefined => {
 /**
  * Every distinct account the ladder draws on, which is what to ask about.
  *
- * Dispatchable rungs only: a retired rung keeps its rank so old failures still
+ * Dispatchable rungs only: a retired rung keeps its place so old failures still
  * position, but nothing will ever spend its account again, and an allowance
  * nothing can spend is not news.
  *

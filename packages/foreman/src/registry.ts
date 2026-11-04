@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Array as Arr, Effect, Order, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { launchArguments } from "./harness.ts";
 import type { Ladder, Rung } from "./ladder.ts";
@@ -27,9 +27,13 @@ export class RegistryError extends Schema.TaggedError<RegistryError>()("Registry
   }
 }
 
-/** One ladder row as an operator edits it. Position in the list is the rank. */
+/**
+ * One ladder row as an operator edits it. The list is sorted by (level, rank),
+ * and a write takes the rank from the position in the list.
+ */
 export interface LadderRow {
   readonly rung: string;
+  readonly level: number;
   readonly model: string;
   readonly enabled: boolean;
   readonly author: boolean;
@@ -39,11 +43,12 @@ export interface LadderRow {
   readonly note: string | null;
 }
 
-/** The ladder, cheapest first, with each rung's launch settings from its model. */
+/** The ladder, cheapest level first, with each rung's launch settings from its model. */
 export const readLadder = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const rungs = yield* sql<{
     rung: string;
+    level: number;
     model: string;
     enabled: number;
     author: number;
@@ -52,13 +57,14 @@ export const readLadder = Effect.gen(function* () {
     unmetered: number;
     harness: string;
     thinking: string;
-  }>`SELECT l.rung, l.model, l.enabled, l.author, l.review, l.provider, l.unmetered,
+  }>`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.review, l.provider, l.unmetered,
             m.harness, m.thinking
        FROM ladder l JOIN models m USING (model)
-      ORDER BY l.rank`;
+      ORDER BY l.level, l.rank`;
   const [bottom, ...rest] = rungs.map((row): Rung => ({
     name: row.rung,
     harness: row.harness,
+    level: row.level,
     model: row.model,
     provider: row.provider ?? undefined,
     enabled: row.enabled !== 0,
@@ -76,6 +82,7 @@ export const readLadder = Effect.gen(function* () {
 /** One rung with the record the registry holds for its model. */
 export interface RungStatus {
   readonly rung: string;
+  readonly level: number;
   readonly harness: string;
   readonly model: string;
   readonly tier: string;
@@ -95,6 +102,7 @@ export const readStatus = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<{
     rung: string;
+    level: number;
     harness: string;
     model: string;
     thinking: string;
@@ -107,11 +115,12 @@ export const readStatus = Effect.gen(function* () {
     slices: number;
     succeeded: number;
     avg_rounds: number | null;
-  }>`SELECT l.rung, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author, l.review,
+  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author, l.review,
             s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
-       FROM ladder l JOIN model_status s USING (model) ORDER BY l.rank`;
+       FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`;
   return rows.map((row): RungStatus => ({
     rung: row.rung,
+    level: row.level,
     harness: row.harness,
     model: row.model,
     thinking: row.thinking,
@@ -212,6 +221,7 @@ export const readRows = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<{
     rung: string;
+    level: number;
     model: string;
     enabled: number;
     author: number;
@@ -219,8 +229,8 @@ export const readRows = Effect.gen(function* () {
     provider: string | null;
     unmetered: number;
     note: string | null;
-  }>`SELECT rung, model, enabled, author, review, provider, unmetered, note
-       FROM ladder ORDER BY rank`;
+  }>`SELECT rung, level, model, enabled, author, review, provider, unmetered, note
+       FROM ladder ORDER BY level, rank`;
   return rows.map((row): LadderRow => ({
     ...row,
     enabled: row.enabled !== 0,
@@ -231,12 +241,13 @@ export const readRows = Effect.gen(function* () {
 }).pipe(Effect.mapError(registryError("reading the ladder rows")));
 
 /**
- * Replaces the ladder with these rows, in this order.
+ * Replaces the ladder with these rows, sorted by level; inside a level they
+ * keep the order given.
  *
  * Rung names are the identity tasks record, so a rename is a different rung and
- * the tasks that recorded the old name stop positioning anything; ranks are
- * only the order and are rewritten from the list. Everything is validated
- * before anything is written, and the write is one transaction, so a bad edit
+ * the tasks that recorded the old name stop positioning anything. Ranks are
+ * rewritten from the sorted list, so the stored rank is the order of the rows
+ * by (level, rank). Everything is validated before anything is written, and the write is one transaction, so a bad edit
  * leaves the ladder as it was.
  */
 export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
@@ -258,6 +269,9 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
           (row) =>
             `rung "${row.rung}" names model "${row.model}", which has no row in the models table`,
         ),
+      ...rows
+        .filter((row) => !Number.isSafeInteger(row.level))
+        .map((row) => `rung "${row.rung}" has level ${row.level}, which is not an integer`),
       ...(rows.some((row) => row.enabled) ? [] : ["every rung is disabled"]),
     ];
     if (problems.length > 0) return yield* new RegistryError({ detail: problems.join("; ") });
@@ -266,10 +280,13 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
       Effect.gen(function* () {
         yield* sql`DELETE FROM ladder`;
         yield* Effect.forEach(
-          rows,
+          Arr.sort(
+            rows,
+            Order.mapInput(Order.Number, (row: LadderRow) => row.level),
+          ),
           (row, index) =>
-            sql`INSERT INTO ladder(rank, rung, model, enabled, author, review, provider, unmetered, note)
-                VALUES (${index + 1}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
+            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, review, provider, unmetered, note)
+                VALUES (${index + 1}, ${row.level}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
                         ${row.author ? 1 : 0}, ${row.review ? 1 : 0},
                         ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note})`,
           { discard: true },
@@ -279,9 +296,9 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
   }).pipe(Effect.mapError(registryError("writing the ladder")));
 
 /**
- * Where a rung goes: next to a named rung, or at the bottom of the ladder,
- * which is the cheapest place. A rung's place is its rank, so adding one by
- * appending a row would rank it above every paid rung.
+ * Where a rung goes: in a level of its own just above or below a named rung's
+ * level, or below the lowest level, which is the cheapest place. Adding one by
+ * appending a row would put it above every paid rung.
  */
 export type RungPlace =
   | { readonly _tag: "Bottom" }
@@ -289,7 +306,7 @@ export type RungPlace =
   | { readonly _tag: "Below"; readonly rung: string };
 
 /** Adds `row` to the ladder at `place`, in one validated write. */
-export const addRow = (row: LadderRow, place: RungPlace) =>
+export const addRow = (row: Omit<LadderRow, "level">, place: RungPlace) =>
   Effect.gen(function* () {
     const rows = yield* readRows;
     if (rows.some((other) => other.rung === row.rung)) {
@@ -298,7 +315,7 @@ export const addRow = (row: LadderRow, place: RungPlace) =>
     yield* writeRows(yield* placed(rows, row, place));
   });
 
-/** Moves a rung to `place`, which re-ranks it; nothing else about it changes. */
+/** Moves a rung to `place`, which gives it a new level; nothing else about it changes. */
 export const moveRow = (rung: string, place: RungPlace) =>
   Effect.gen(function* () {
     const rows = yield* readRows;
@@ -330,13 +347,21 @@ const rowOf = (rows: ReadonlyArray<LadderRow>, rung: string) => {
     : Effect.succeed(row);
 };
 
-/** `rows` with `row` put at `place`. The list is cheapest first, so above is later. */
-const placed = (rows: ReadonlyArray<LadderRow>, row: LadderRow, place: RungPlace) =>
+/**
+ * `rows` with `row` put at `place`, in a level of its own: it takes the level
+ * the place names, and every level from there up moves up one to make room.
+ * The level a moved rung leaves may stay empty, which orders nothing.
+ */
+const placed = (rows: ReadonlyArray<LadderRow>, row: Omit<LadderRow, "level">, place: RungPlace) =>
   Effect.gen(function* () {
-    if (place._tag === "Bottom") return [row, ...rows];
-    const at = rows.indexOf(yield* rowOf(rows, place.rung));
-    const index = place._tag === "Above" ? at + 1 : at;
-    return [...rows.slice(0, index), row, ...rows.slice(index)];
+    const level =
+      place._tag === "Bottom"
+        ? (rows[0]?.level ?? 1)
+        : (yield* rowOf(rows, place.rung)).level + (place._tag === "Above" ? 1 : 0);
+    return [
+      ...rows.map((other) => (other.level >= level ? { ...other, level: other.level + 1 } : other)),
+      { ...row, level },
+    ];
   });
 
 /** Parses the editor's text: a JSONC array of rows, with comments allowed. */
@@ -344,6 +369,7 @@ export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
   const raw: unknown = Bun.JSONC.parse(text);
   return Schema.decodeUnknownSync(Schema.Array(RowFile))(raw).map((row) => ({
     rung: row.rung,
+    level: row.level,
     model: row.model,
     enabled: row.enabled,
     author: row.author,
@@ -357,7 +383,9 @@ export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
 /** The editor's text: one object per rung, so a reorder is moving a block. */
 export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
   [
-    "// The ladder, cheapest first. Order is the rank; move a block to re-rank it.",
+    "// The ladder, cheapest level first. `level` groups the rungs: levels climb in",
+    "// number, and the rungs of one level share the author work. Inside a level,",
+    "// order is the rank; move a block to re-rank it.",
     "// A rung's name is what tasks record: renaming one makes a new rung.",
     "// `model` must already have a row in the registry's models table.",
     "// `author` / `review` say which roles the rung may fill (default both on).",
@@ -367,6 +395,7 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
         "  " +
         JSON.stringify({
           rung: row.rung,
+          level: row.level,
           model: row.model,
           enabled: row.enabled,
           ...(row.author ? {} : { author: false }),
@@ -383,6 +412,7 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
 
 const RowFile = Schema.Struct({
   rung: Schema.NonEmptyString,
+  level: Schema.Int,
   model: Schema.NonEmptyString,
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   author: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),

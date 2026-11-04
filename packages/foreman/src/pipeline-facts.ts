@@ -66,10 +66,10 @@ const sizeOf = (labels: ReadonlyArray<string>): number => {
   return size === undefined ? 1 : Number(size);
 };
 
-/** Each rung's attempt count (`attemptsOf`), summed over the rungs that authored the task. */
+/** Each rung's own attempt count (`attemptsOf`), summed over the rungs that authored the task. */
 const attemptCount = (item: Pick<Item, "runs" | "charges">): number => {
   const rungs = new Set(
     item.runs.flatMap((run) => (run.role === "author" && run.rung !== undefined ? [run.rung] : [])),
   );
-  return [...rungs].reduce((sum, rung) => sum + attemptsOf(item, rung), 0);
+  return [...rungs].reduce((sum, rung) => sum + attemptsOf(item, [rung]), 0);
 };

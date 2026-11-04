@@ -14,6 +14,7 @@ import {
   recordCheck,
   recordExit,
   runsOf,
+  lastStarts,
   unpark,
   type Charge,
   type Ending,
@@ -233,6 +234,12 @@ export class Records extends Context.Service<Records>()("Records", {
           }),
         ),
 
+      /**
+       * The latest start of each rung's runs, author and review alike: the
+       * turn order of the rungs inside a level (`authorFor`).
+       */
+      lastStarts: onStore(lastStarts).pipe(as("read run starts")),
+
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
         Effect.all([lookup(task), tracker.logs(task)]).pipe(
@@ -421,7 +428,7 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
  * Which rungs have already failed this task.
  *
  * The durable half of choosing an author: the ladder reads these as a floor and
- * picks the cheapest rung above them that is available now. Evidence rather
+ * picks a rung from the lowest level above theirs that is available now. Evidence rather
  * than a pointer, so retiring a model or spending its allowance moves the work
  * on instead of naming a rung nothing can dispatch.
  *
@@ -448,25 +455,27 @@ export const needsYou = (item: { readonly parked: string | undefined }): boolean
   item.parked !== undefined;
 
 /**
- * How many author runs on the named rung ended without an exit (`stopped` or
- * `vanished`) since the rung was last charged.
+ * How many author runs on the named rungs ended without an exit (`stopped` or
+ * `vanished`) since any of them was last charged.
  *
- * `0` when the rung has never been tried, or when every such run came before
- * its charge: a charge ends the count. The count is what the escalation reads
- * on a dispatch days later.
+ * The escalation passes a whole level (`levelPeers`), because peers share the
+ * work and so share its count. `0` when none of the rungs has been tried, or
+ * when every such run came before a charge: a charge ends the count. The count
+ * is what the escalation reads on a dispatch days later.
  */
 export const attemptsOf = (
   item: { readonly runs: ReadonlyArray<Run>; readonly charges: ReadonlyArray<Charge> },
-  rung: string,
+  rungs: ReadonlyArray<string>,
 ): number => {
   const after = Math.max(
     -1,
-    ...item.charges.filter((one) => one.rung === rung).map((one) => one.run ?? -1),
+    ...item.charges.filter((one) => rungs.includes(one.rung)).map((one) => one.run ?? -1),
   );
   return item.runs.filter(
     (run) =>
       run.role === "author" &&
-      run.rung === rung &&
+      run.rung !== undefined &&
+      rungs.includes(run.rung) &&
       run.id > after &&
       (run.ending === "stopped" || run.ending === "vanished"),
   ).length;

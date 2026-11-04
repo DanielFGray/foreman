@@ -141,7 +141,7 @@ export const traceReport = (
     source: sources.draft !== undefined ? "draft" : sources.live.drawn ? "saved" : "standard",
     assumes: TRACE_ASSUMES,
     ladder: rules.ladder.map((rung) => rung.name),
-    attemptsPerRung: rules.attemptsPerRung,
+    attemptsPerLevel: rules.attemptsPerLevel,
     steps: traced.steps.map(stepJson),
     refused: traced.refused ?? null,
   };

@@ -41,31 +41,28 @@ export const MIGRATIONS = Migrator.fromRecord({
   // SQLite cannot alter a CHECK, so the table is rebuilt; the views that read
   // it are dropped first and made again after, and the foreign key from
   // `defects` is checked at commit, when the rebuilt table holds every id.
-  "0004_exits": Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    const views = REGISTRY.filter((statement) => statement.startsWith("CREATE VIEW"));
-    yield* sql.unsafe(`PRAGMA defer_foreign_keys = ON`);
-    for (const view of [...views].reverse()) {
-      yield* sql.unsafe(`DROP VIEW IF EXISTS ${/^CREATE VIEW (\w+)/.exec(view)![1]}`);
-    }
-    const columns = yield* sql.unsafe<{ name: string }>(
-      `SELECT name FROM pragma_table_info('runs')`,
-    );
-    const list = columns.map((column) => `"${column.name}"`).join(", ");
-    yield* sql.unsafe(RUNS.replace("CREATE TABLE runs (", "CREATE TABLE runs_next ("));
-    yield* sql.unsafe(`ALTER TABLE runs_next ADD COLUMN base TEXT`);
-    yield* sql.unsafe(
-      `INSERT INTO runs_next (${list}) SELECT ${list.replace(
-        `"ending"`,
-        `CASE ending WHEN 'handed-off' THEN 'done' WHEN 'satisfied' THEN 'already-done'
+  "0004_exits": withViewsRebuilt(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      yield* sql.unsafe(`PRAGMA defer_foreign_keys = ON`);
+      const columns = yield* sql.unsafe<{ name: string }>(
+        `SELECT name FROM pragma_table_info('runs')`,
+      );
+      const list = columns.map((column) => `"${column.name}"`).join(", ");
+      yield* sql.unsafe(RUNS.replace("CREATE TABLE runs (", "CREATE TABLE runs_next ("));
+      yield* sql.unsafe(`ALTER TABLE runs_next ADD COLUMN base TEXT`);
+      yield* sql.unsafe(
+        `INSERT INTO runs_next (${list}) SELECT ${list.replace(
+          `"ending"`,
+          `CASE ending WHEN 'handed-off' THEN 'done' WHEN 'satisfied' THEN 'already-done'
          WHEN 'no-verdict' THEN 'stopped' WHEN 'unfinished' THEN 'stopped' ELSE ending END`,
-      )} FROM runs`,
-    );
-    yield* sql.unsafe(`DROP TABLE runs`);
-    yield* sql.unsafe(`ALTER TABLE runs_next RENAME TO runs`);
-    yield* sql.unsafe(`CREATE INDEX idx_runs_task ON runs(task)`);
-    for (const view of views) yield* sql.unsafe(view);
-  }),
+        )} FROM runs`,
+      );
+      yield* sql.unsafe(`DROP TABLE runs`);
+      yield* sql.unsafe(`ALTER TABLE runs_next RENAME TO runs`);
+      yield* sql.unsafe(`CREATE INDEX idx_runs_task ON runs(task)`);
+    }),
+  ),
   // Which roles a rung may fill. The operator turns author or review off per
   // rung so a free model can write but never read, without retiring it.
   "0005_ladder_roles": Effect.gen(function* () {
@@ -107,7 +104,60 @@ export const MIGRATIONS = Migrator.fromRecord({
       yield* sql.unsafe(`ALTER TABLE models ADD COLUMN council INTEGER NOT NULL DEFAULT 0`);
     }
   }),
+  // The ladder becomes an ordered list of levels: each rung stands at a level,
+  // and the rungs of one level share the author work. Every rung starts alone
+  // in its level (level = rank), so nothing changes until the operator groups
+  // rungs. The level has no default, because a writer that left it out would
+  // put the rung in some level by accident; SQLite adds a NOT NULL column only
+  // with a default, so the table is rebuilt, with the views that read it.
+  "0009_ladder_levels": withViewsRebuilt(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      yield* sql.unsafe(LADDER.replace("CREATE TABLE ladder (", "CREATE TABLE ladder_next ("));
+      yield* sql.unsafe(
+        `INSERT INTO ladder_next (rank, level, rung, model, enabled, provider, note, unmetered, author, review)
+       SELECT rank, rank, rung, model, enabled, provider, note, unmetered, author, review FROM ladder`,
+      );
+      yield* sql.unsafe(`DROP TABLE ladder`);
+      yield* sql.unsafe(`ALTER TABLE ladder_next RENAME TO ladder`);
+    }),
+  ),
 });
+
+/**
+ * Runs `rebuild` with the registry's views dropped, and makes them again
+ * after. SQLite checks every view when a table is renamed, so a table a view
+ * reads cannot be replaced while the view stands.
+ */
+function withViewsRebuilt<E>(rebuild: Effect.Effect<void, E, SqlClient>) {
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const views = REGISTRY.flatMap((statement) => {
+      const name = /^CREATE VIEW (\w+)/.exec(statement)?.[1];
+      return name === undefined ? [] : [{ name, statement }];
+    });
+    for (const view of [...views].reverse()) yield* sql.unsafe(`DROP VIEW IF EXISTS ${view.name}`);
+    yield* rebuild;
+    for (const view of views) yield* sql.unsafe(view.statement);
+  });
+}
+
+/**
+ * The ladder as `0009_ladder_levels` leaves it: `rank` is the order of the
+ * whole list and `level` groups it, so readers sort by (level, rank).
+ */
+const LADDER = `CREATE TABLE ladder (
+    rank      INTEGER PRIMARY KEY,       -- the order by (level, rank); rewritten by every ladder write
+    level     INTEGER NOT NULL,          -- levels climb in number; the rungs of one level are peers
+    rung      TEXT NOT NULL UNIQUE,      -- foreman rung name
+    model     TEXT NOT NULL REFERENCES models(model),
+    enabled   INTEGER NOT NULL DEFAULT 1,
+    provider  TEXT,                      -- foreman provider field, when one is set
+    note      TEXT,
+    unmetered INTEGER NOT NULL DEFAULT 0,
+    author    INTEGER NOT NULL DEFAULT 1, -- may take the ladder (author) rule
+    review    INTEGER NOT NULL DEFAULT 1  -- may take the above (review) rule
+  )`;
 
 export const MIGRATIONS_TABLE = "tasks_migrations";
 
