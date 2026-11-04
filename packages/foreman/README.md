@@ -334,7 +334,8 @@ onto, so you get the exact tree that was verified, and only if your tip has not
 moved meanwhile.
 
 A land block can name the branch it lands onto with `onto`, such as `develop`;
-without it, work lands on the branch your checkout has out. The task's branch is
+without it, work lands on the branch your checkout has out when the task's
+branch is cut. The task's branch is
 cut from the tip of that branch, and git records it as the branch's upstream, so
 the target is fixed when the branch is cut: a later edit to the drawing applies
 to branches cut after it. A target your checkout has out is fast-forwarded as

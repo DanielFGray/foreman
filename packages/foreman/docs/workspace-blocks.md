@@ -63,15 +63,16 @@ script. A task in your checkout needs no preview: your own dev server serves it.
 4. **Direct has no undo.** With no branch, a returned review leaves the author's
    commits on your branch, and the next author continues on top of them. Foreman
    cannot separate them from commits you made meanwhile.
-. **A task lands on one branch, fixed when its branch is cut.** Every land a
+6. **A task lands on one branch, fixed when its branch is cut.** Every land a
    branch block reaches names the same `onto` (absent counts as one target), or
    validation names the blocks. An `onto` that names a `foreman/` branch is a
    problem too. The branch block records the target as the task branch's git
    upstream, and the pull request's base, the reviewer's base, the sweep's
    `merged` and `empty`, and the landing all read that upstream. A drawing edit
-   applies to branches cut after it. A branch with no upstream lands on the
-   branch your checkout has out, and a detached checkout measures against its
-   `HEAD`. A direct route has no land and stays on your branch.
+   applies to branches cut after it. With no `onto`, the branch records the branch
+   your checkout has out when it is cut. A branch with no upstream has no target:
+   its landing holds with a reason that names it, its review and pull request
+   cannot start, and the sweep reads it as work. A direct route has no land and stays on your branch.
 7. **A target that does not exist holds the project.** The held row names the
    target, at dispatch and at landing. A route in your checkout with no worktree
    (branch only) leaves the task's branch by checking its upstream out, so the
@@ -158,11 +159,11 @@ Each line names the old rule, where it stood, and what replaces it.
 - "A `branch` block makes `foreman/<id>` from the trunk tip" and "the branch a
   landing moves is whichever one `HEAD` names" (AGENTS.md, Workspace blocks and
   the operator's checkout): the branch is cut from the tip of `onto`, and the
-  landing moves the branch the task branch's upstream names; with no upstream,
-  `HEAD`'s branch, as before (rules 6 and 7).
+  landing moves the branch the task branch's upstream names; a branch with no
+  upstream holds (rules 6 and 7).
 - "`merged`: `HEAD` already contains the tip" and "`empty`: the tip is still on
   `rev-list --first-parent HEAD`" (AGENTS.md, the branches): both measure
-  against the branch's upstream, else the checkout's branch.
+  against the branch's upstream; a branch with none reads as work.
 - "the proving ground … reset to the checkout's current tip" and "landing's first
   question is whether `HEAD` already contains the branch" (AGENTS.md, the review
   gate): both read the target's tip, and a target out nowhere is moved by a

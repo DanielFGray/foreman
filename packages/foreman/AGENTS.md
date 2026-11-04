@@ -274,16 +274,18 @@ untracked files included, because a fast-forward refuses to overwrite either.
 fast-forward. Holding the whole project on any edit would stop the fleet for as
 long as the operator works.
 
-A checkout with no branch is held. A task's branch that records no target lands
-on whichever branch `HEAD` names, and `git merge` into a detached `HEAD` succeeds: the commits
-land, the operator's branch stays put, and the tick sweep then deletes the only
-ref that reached them. "Free to work against" means there is a branch for the
+A checkout with no branch is held: a branch cut there would record no target,
+and `git merge` into a detached `HEAD` succeeds while the operator's branch stays
+put. "Free to work against" means there is a branch for the
 work to land on.
 
 A target is fixed when the task's branch is cut: the branch block records it as
 the branch's git upstream, and the landing, the pull request's base, the
 reviewer's base and the sweep all read that upstream, so a drawing edit applies
-only to branches cut after it. A target the checkout has out is fast-forwarded
+only to branches cut after it. With no `onto` the branch records the branch the
+checkout has out. A branch with no upstream has no target and no fallback: its
+landing holds (`noBranch`, naming the branch), and the sweep reads it as work.
+A target the checkout has out is fast-forwarded
 there. A target out nowhere is moved by a compare-and-swap of its ref
 (`update-ref <ref> <proved> <old tip>`), which writes no file, so no dirty path
 holds it. A target that does not exist holds the project (`noBranch`, naming it),
@@ -799,8 +801,8 @@ standing in.
 Every other column comes from the task store, which stops mentioning a branch the
 moment its task is closed, reclaimed or deleted — while the commits stay. So
 `Repository.branches` reads foreman's refs directly and answers three questions
-off one read per project, each against the branch it lands on (its upstream, else
-the checkout's branch, else a detached `HEAD`; a target git lacks answers neither):
+off one read per project, each against the branch it lands on, its upstream (a
+branch with none, or whose target git lacks, answers neither):
 
 - **`merged`** — the target already contains the tip, so the ref is free to delete.
 - **`empty`** — the tip is still on the target's first-parent line, and the
