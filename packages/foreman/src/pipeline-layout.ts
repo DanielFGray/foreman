@@ -1,8 +1,8 @@
-// Where a pipeline drawing puts each block and wire. Sizes follow
-// from the kind of block, so the drawing needs no measuring by the renderer: a
+// Where a pipeline drawing puts each block and wire. Sizes follow from
+// what each block shows (`sizeOf`), so the renderer measures nothing: a
 // column is as wide as its widest block, a row as tall as its tallest, and a
 // wire's route is a list of points that the view draws as a path.
-import type { Pipeline, PipelineNode } from "./pipeline.ts";
+import type { Landing, Pipeline, PipelineNode } from "./pipeline.ts";
 import {
   type Belt,
   type BeltWire,
@@ -127,8 +127,46 @@ const PLUS_ROOM = PLUS + 4;
 /** How far apart the return lanes run past the last lane, one per back wire. */
 const RETURN_SPACING = 10;
 
-/** How big a block draws before its exits widen it: gates and routers are chips, the rest are cards. */
-export const sizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly h: number } => {
+/**
+ * How big a block draws before its exits widen it: gates and routers are chips,
+ * the rest are cards. It is at least as wide as its kind's least width and as
+ * what it shows: its id on the title row beside the kind's icon, a gate's mode
+ * chip and a task count, and on a card its summary line. The renderer clips a
+ * block to its box, so a box sized by kind alone cuts a long id short.
+ */
+export const sizeOf = (node: Cell["node"]): { readonly w: number; readonly h: number } => {
+  const least = leastSizeOf(node.kind);
+  const title =
+    BLOCK_PAD * 2 +
+    TITLE_ICON +
+    TITLE_GAP +
+    textWidth(node.id, TITLE_CHAR) +
+    (node.kind === "gate" ? TITLE_GAP + MODE_CHIP : 0) +
+    TITLE_GAP +
+    TASK_COUNT;
+  const summary = least.h >= CARD_H ? BLOCK_PAD * 2 + textWidth(summaryOf(node), SUMMARY_CHAR) : 0;
+  return { w: Math.max(least.w, title, Math.min(summary, SUMMARY_MAX)), h: least.h };
+};
+
+/** A block's padding on each side, and the parts of its title row the pane draws beside the id. */
+const BLOCK_PAD = 6;
+const TITLE_ICON = 12;
+const TITLE_GAP = 4;
+/** A gate's mode chip, wide enough for its longest mode, `ask`. */
+const MODE_CHIP = 24;
+/** A task count of up to three digits. */
+const TASK_COUNT = 18;
+/** The width of one character of the 12px semibold title and of the 10px summary, rounded up so a measured line is never cut. */
+const TITLE_CHAR = 6.8;
+const SUMMARY_CHAR = 6;
+/** A summary longer than this is cut instead of widening its card: a long filter or command would push every column apart. */
+const SUMMARY_MAX = 200;
+/** A block at least this tall is a card, which draws its summary under its title. */
+const CARD_H = 40;
+
+const textWidth = (text: string, perChar: number): number => Math.ceil(text.length * perChar);
+
+const leastSizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly h: number } => {
   switch (kind) {
     case "source":
       return { w: 100, h: 44 };
@@ -291,7 +329,7 @@ const lengthsOf = (
   cell: Cell,
   down: boolean,
 ): { readonly la: number; readonly lb: number } => {
-  const { w, h } = sizeOf(cell.node.kind);
+  const { w, h } = sizeOf(cell.node);
   const leaving = exitsOf(belt, cell.node.id);
   const exits = leaving.length > 1 ? leaving.reduce((sum, wire) => sum + slotOf(wire, down), 0) : 0;
   return down ? { la: h, lb: Math.max(w, exits) } : { la: w, lb: Math.max(h, exits) };
@@ -524,6 +562,12 @@ export const portName = (wire: Pick<Wire, "port">): string =>
       ? wire.port.slice("exit:".length)
       : wire.port;
 
+const LAND_VERB: Record<Landing, string> = {
+  merge: "merges",
+  "fast-forward": "fast-forwards",
+  "pull-request": "opens a pull request",
+};
+
 /** A block's settings in a few words, for its card. */
 export const summaryOf = (node: PipelineNode): string => {
   switch (node.kind) {
@@ -542,7 +586,7 @@ export const summaryOf = (node: PipelineNode): string => {
     case "worktree":
       return "a directory of its own";
     case "land":
-      return `${node.how === "fast-forward" ? "fast-forwards" : "merges"}${node.onto === undefined ? "" : ` onto ${node.onto}`}`;
+      return `${LAND_VERB[node.how ?? "merge"]}${node.onto === undefined ? "" : ` onto ${node.onto}`}`;
     case "done":
       return "completes";
     case "park":

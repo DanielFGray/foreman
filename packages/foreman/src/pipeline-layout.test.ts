@@ -122,11 +122,11 @@ describe("layoutOf", () => {
     });
   }
 
-  // Eleven blocks in ten columns: the branch and worktree chips are as narrow as a land.
+  // Eleven blocks in ten columns, each as wide as its id and what sits beside it.
   // Each agent exit is a labelled wire, and the author's `already-done` label widens its gap.
-  it("the standard pipeline fits in about 1400px", () => {
+  it("the standard pipeline fits in about 1650px", () => {
     const layout = layoutOf(beltOf(STANDARD_PIPELINES.worktree), "across");
-    expect(layout.width).toBeLessThan(1440);
+    expect(layout.width).toBeLessThan(1680);
   });
 });
 
@@ -159,5 +159,39 @@ describe("drawingOf", () => {
       expect({ x, y, w, h }).toEqual(layout.boxes.get(block.id)!);
     }
     expect(JSON.parse(JSON.stringify(drawing))).toEqual(drawing);
+  });
+});
+
+describe("a block's size", () => {
+  const blockOf = (pipeline: typeof STANDARD_PIPELINES.worktree, id: string) =>
+    drawingOf(pipeline, "down").blocks.find((block) => block.id === id)!;
+  const renamed = (from: string, to: string) => ({
+    nodes: STANDARD_PIPELINES.worktree.nodes.map((node) => {
+      const named = node.id === from ? { ...node, id: to } : node;
+      return "next" in named && named.next === from ? { ...named, next: to } : named;
+    }),
+  });
+
+  it("widens with its id, so the renderer never cuts a long one", () => {
+    const short = blockOf(STANDARD_PIPELINES.worktree, "start");
+    const long = blockOf(renamed("start", "start-for-authors"), "start-for-authors");
+    expect(long.w).toBeGreaterThan(short.w);
+    expect(long.w - short.w).toBeGreaterThanOrEqual("start-for-authors".length - "start".length);
+  });
+
+  it("keeps a gate's mode chip and a three-digit count beside the id", () => {
+    const gate = blockOf(STANDARD_PIPELINES.worktree, "review-gate");
+    const plain = blockOf(STANDARD_PIPELINES.worktree, "worktree");
+    // Both ids are about as long, but only the gate draws a mode chip.
+    expect(gate.w).toBeGreaterThan(plain.w + 20);
+  });
+
+  it("names a pull-request landing on its card", () => {
+    const pipeline = {
+      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
+        node.kind === "land" ? { ...node, how: "pull-request" as const } : node,
+      ),
+    };
+    expect(blockOf(pipeline, "land").summary).toBe("opens a pull request");
   });
 });
