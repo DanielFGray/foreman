@@ -163,7 +163,7 @@ export class Models {
       .children(drawn(indexed.filter(({ column }) => column.kind !== "level")))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(this.previewOf(preview, origin, t)))
       .when(floating !== null, (el) => el.child(
-        this.card(dragged.card, dragged.column, { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false).opacity(0.9)));
+        this.face(dragged.card, dragged.column, { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t).opacity(0.9)));
     return v_flex().flex_1().min_h(0).child(board).child(this.accounts(t));
   }
 
@@ -202,7 +202,21 @@ export class Models {
     return this.pane.published?.accounts.find((account) => account.rungs.includes(rung))?.provider ?? null;
   }
 
+  // The card in its column: it drags, and a click on its thinking level sets the next one.
   card(card, column, rect, t, ghost) {
+    const thinking = this.thinking(card, t).id(`models-thinking-${card.key}`)
+      .hover((s) => s.text_color(t.accent))
+      .on_click((_event, cx) => this.run([thinkingArgs(card)], cx));
+    return this.face(card, column, rect, t, thinking).id(`models-card-${card.key}`)
+      .when(ghost, (el) => el.opacity(0.35))
+      .hover((s) => s.border_color(COLORS[column.kind](t)))
+      .cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event));
+  }
+
+  // The card as it looks, taking no input. The copy that follows a drag is
+  // this alone: after a release outside the window the copy stays under the
+  // pointer, and the next press must reach the card beneath it.
+  face(card, column, rect, t, thinking = this.thinking(card, t)) {
     const color = COLORS[column.kind](t);
     const detail = card.kind === "rung"
       ? [card.model, this.accountOf(card.name)].filter(Boolean).join(" · ")
@@ -210,27 +224,21 @@ export class Models {
         ? [card.model, card.reviewer.provider].filter(Boolean).join(" · ")
         : `${card.harness} · no rung`;
     const tag = card.kind === "rung" ? (card.rung.enabled ? card.rung.state : "disabled") : null;
-    return h_flex().id(`models-card-${card.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
+    return h_flex().absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
       .rounded(6).overflow_hidden().bg(t.surface).border(1).border_color(t.border)
-      .when(ghost, (el) => el.opacity(0.35))
-      .hover((s) => s.border_color(color))
-      .cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event))
       .child(div().w(STRIPE).h_full().bg(color).flex_none())
       .child(v_flex().flex_1().min_w(0).px(8).py(4).gap(1)
         .child(h_flex().gap(6).text_size(12)
           .child(div().flex_1().truncate().child(card.name))
           .when(tag !== null, (el) => el.child(div().flex_none().text_size(10).text_color(t.muted).child(tag)))
-          .when(card.kind !== "model", (el) => el.child(this.thinkingChip(card, t))))
+          .when(card.kind !== "model", (el) => el.child(thinking)))
         .child(div().text_size(10).text_color(t.muted).truncate().child(detail)));
   }
 
-  // The card's thinking level; a click sets the next one. "default" is no
-  // level: the harness's own default applies.
-  thinkingChip(card, t) {
-    return div().id(`models-thinking-${card.key}`).flex_none().px(5).rounded(4).text_size(10)
+  // The card's thinking level. "default" is no level: the harness's own default applies.
+  thinking(card, t) {
+    return div().flex_none().px(5).rounded(4).text_size(10)
       .bg(t.canvas).text_color(card.thinking === null ? t.dim : t.foreground)
-      .hover((s) => s.text_color(t.accent))
-      .on_click((_event, cx) => this.run([thinkingArgs(card)], cx))
       .child(card.thinking ?? "default");
   }
 }
