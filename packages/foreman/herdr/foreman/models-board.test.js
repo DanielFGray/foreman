@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { columnsOf, dropsOf, nextThinking, reviewerArgs, rungNameFor, thinkingArgs } from "./models-board.js";
+import { columnsOf, dropsOf, nextThinking, pinnedAcross, reviewerArgs, rungNameFor, thinkingArgs } from "./models-board.js";
 
 const rung = (name, level, enabled, extra = {}) => ({ rung: name, level, model: `m/${name}`, thinking: "low", enabled, ...extra });
 
@@ -27,6 +27,13 @@ test("a column per level with an enabled rung, then Available, then Reviewers", 
     ["Available", ["off", "free"]],
     ["Reviewers", ["rev"]],
   ]);
+});
+
+test("Available and Reviewers stay at the right edge while the levels scroll under them", () => {
+  const four = [{ kind: "level" }, { kind: "level" }, { kind: "available" }, { kind: "reviewers" }];
+  const fits = [12, 122, 232, 342];
+  expect(pinnedAcross(four, fits, 100, { right: 442, gap: 10 })).toEqual({ xs: fits, edge: 227 });
+  expect(pinnedAcross(four, fits.map((x) => x - 50), 100, { right: 442, gap: 10 })).toEqual({ xs: [-38, 72, 232, 342], edge: 227 });
 });
 
 test("an enabled rung joins another level, or takes a level of its own in a gap", () => {

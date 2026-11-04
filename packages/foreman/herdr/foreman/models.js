@@ -11,7 +11,9 @@
 // A drop zone is a column's body, or a strip over the gap between two level
 // columns (and before the first and after the last), which puts a rung in a
 // level of its own there. Where a strip and a column overlap, the strip wins
-// (`drag.js` takes the first target listed).
+// (`drag.js` takes the first target listed). Available and Reviewers stay at
+// the right edge and the level columns scroll under them, so both are a drop
+// from any level (`pinnedAcross`).
 //
 // Under the columns, Accounts lists each account the ladder draws on: its
 // quota row from state.json (what it has left, or why it is unreadable) and
@@ -19,7 +21,7 @@
 // reviewer card name their account.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { columnsOf, dropsOf, thinkingArgs } from "./models-board.js";
+import { columnsOf, dropsOf, pinnedAcross, thinkingArgs } from "./models-board.js";
 import { refusalOf } from "./parts.js";
 import { CARDS_TOP, PAD, columnBody, columnHead, columnsAcross, inBody, reachOf, scrolledBy } from "./columns.js";
 
@@ -68,46 +70,58 @@ export class Models {
   columns() { return this.ladder === null ? [] : columnsOf(this.ladder); }
 
   // Every card's rectangle in view coordinates; each column's x and width; how
-  // far the columns reach past the view's right edge; how far each column can
+  // far the columns reach past the view's right edge; where the level columns
+  // stop showing (`edge`, left of the pinned columns); how far each column can
   // scroll down; and the view's height.
   layout(columns) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
     const height = this.bounds?.height ?? this.pane.size?.height ?? 600;
     const scroll = this.scrollOf(columns);
-    const { xs, columnW, overflow } = columnsAcross(width, columns.length, { min: COLUMN_MIN, gap: GAP, scroll });
+    const across = columnsAcross(width, columns.length, { min: COLUMN_MIN, gap: GAP, scroll });
+    const { xs, edge } = pinnedAcross(columns, across.xs, across.columnW, { right: width - PAD, gap: GAP });
+    const { columnW, overflow } = across;
     const rects = new Map();
     columns.forEach((column, index) => column.cards.forEach((card, row) =>
       rects.set(card.key, { x: xs[index], y: CARDS_TOP - scroll.y[index] + row * (CARD_H + GAP), width: columnW, height: CARD_H })));
     const reach = columns.map((column) => reachOf(column.cards.length * (CARD_H + GAP), height));
-    return { rects, xs, columnW, overflow, reach, height };
+    return { rects, xs, columnW, overflow, edge, reach, height };
   }
 
   // The scroll as `columns.js` takes it: one y per column, in column order.
   scrollOf(columns) { return { x: this.scroll.x, y: columns.map((column) => this.scroll.y[column.key] ?? 0) }; }
 
-  // A drop zone's rectangle in view coordinates.
-  zoneRect(zone, columns, { xs, columnW, height }) {
+  // A drop zone's rectangle in view coordinates, or null when it does not show.
+  // A level column scrolled under the pinned columns, or off the left, shows
+  // in part or not at all. A gap shows while its middle does, and its strip
+  // still reaches into the columns either side.
+  zoneRect(zone, columns, { xs, columnW, edge, height }) {
     const body = { y: CARDS_TOP, height: height - CARDS_TOP };
-    if (zone.kind === "gap") return { ...body, x: xs[zone.at] - GAP / 2 - GAP_ZONE / 2, width: GAP_ZONE };
-    return { ...body, x: xs[columns.findIndex((column) => column.key === zone.key)], width: columnW };
+    if (zone.kind === "gap") {
+      const middle = zone.at === 0 ? xs[0] - GAP / 2 : xs[zone.at - 1] + columnW + GAP / 2;
+      return middle >= 0 && middle <= edge + GAP / 2 ? { ...body, x: middle - GAP_ZONE / 2, width: GAP_ZONE } : null;
+    }
+    const column = columns.find((one) => one.key === zone.key);
+    const rect = { ...body, x: xs[columns.indexOf(column)], width: columnW };
+    return column.kind === "level" ? shown(rect, edge) : rect;
   }
 
   // The drag's targets, in window coordinates: where the card stands, which
-  // runs nothing; every drop `models-board.js` lists for it, strips before
-  // columns; and the card's own column, which runs nothing.
+  // runs nothing; every drop `models-board.js` lists for it that shows, strips
+  // before columns; and the card's own column, which runs nothing.
   targets(card, columns) {
     if (this.bounds === null) return [];
     const layout = this.layout(columns);
     const window = (rect) => ({ ...rect, x: rect.x + this.bounds.x, y: rect.y + this.bounds.y });
     const drops = dropsOf(card, columns, this.ladder);
     const home = columns.find((column) => column.cards.some((one) => one.key === card.key));
+    const own = layout.rects.get(card.key);
     return [
-      { rect: window(layout.rects.get(card.key)), run: null },
+      { rect: home.kind === "level" ? shown(own, layout.edge) : own, run: null },
       ...[...drops.filter((drop) => drop.zone.kind === "gap"), ...drops.filter((drop) => drop.zone.kind === "column")].map((drop) => ({
-        rect: window(this.zoneRect(drop.zone, columns, layout)), gap: drop.zone.kind === "gap", run: (cx) => this.run(drop.commands, cx),
+        rect: this.zoneRect(drop.zone, columns, layout), gap: drop.zone.kind === "gap", run: (cx) => this.run(drop.commands, cx),
       })),
-      { rect: window(this.zoneRect({ kind: "column", key: home.key }, columns, layout)), run: null },
-    ];
+      { rect: this.zoneRect({ kind: "column", key: home.key }, columns, layout), run: null },
+    ].filter((target) => target.rect !== null).map((target) => ({ ...target, rect: window(target.rect) }));
   }
 
   press(card, event) {
@@ -127,19 +141,26 @@ export class Models {
   view(t) {
     if (this.ladder === null) return div().p(12).text_color(t.muted).child("reading the ladder…");
     const columns = this.columns();
-    const { rects, xs, columnW } = this.layout(columns);
+    const { rects, xs, columnW, edge } = this.layout(columns);
     const drag = this.pane.drag;
     const preview = drag.preview();
     const origin = this.bounds ?? { x: 0, y: 0 };
     const cards = columns.flatMap((column) => column.cards.map((card) => ({ card, column })));
     const dragged = cards.find(({ card }) => drag.dragging(card.key));
     const floating = dragged === undefined ? null : drag.floating();
+    const drawn = (list) => [
+      ...list.map(({ column, index }) => columnHead(this.head(column), xs[index], columnW, column.cards.length, t)),
+      ...list.map(({ column, index }) => columnBody(`models-column-${column.key}`, xs[index], columnW)
+        .children(column.cards.map((card) => this.card(card, column, inBody(rects.get(card.key)), t, card === dragged?.card)))),
+    ];
+    const indexed = columns.map((column, index) => ({ column, index }));
     const board = div().id("models-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => this.wheel(event, cx))
-      .children(columns.map((column, index) => columnHead(this.head(column), xs[index], columnW, column.cards.length, t)))
-      .children(columns.map((column, index) => columnBody(`models-column-${column.key}`, xs[index], columnW)
-        .children(column.cards.map((card) => this.card(card, column, inBody(rects.get(card.key)), t, card === dragged?.card)))))
+      // The level columns, cut off where the pinned columns start.
+      .child(div().id("models-levels").absolute().left(0).top(0).w(edge).h_full().overflow_hidden()
+        .children(drawn(indexed.filter(({ column }) => column.kind === "level"))))
+      .children(drawn(indexed.filter(({ column }) => column.kind !== "level")))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(this.previewOf(preview, origin, t)))
       .when(floating !== null, (el) => el.child(
         this.card(dragged.card, dragged.column, { ...floating, x: floating.x - origin.x, y: floating.y - origin.y }, t, false).opacity(0.9)));
@@ -213,3 +234,10 @@ export class Models {
       .child(card.thinking ?? "default");
   }
 }
+
+// `rect` cut to the part between the view's left edge and `edge`, or null when
+// none of it is there.
+const shown = (rect, edge) => {
+  const left = Math.max(rect.x, 0), right = Math.min(rect.x + rect.width, edge);
+  return right > left ? { ...rect, x: left, width: right - left } : null;
+};

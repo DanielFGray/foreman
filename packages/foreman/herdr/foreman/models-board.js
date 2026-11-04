@@ -23,6 +23,17 @@ export const THINKING = [null, "low", "medium", "high"];
 // line can set, steps to none.
 export const nextThinking = (level) => THINKING[(THINKING.indexOf(level ?? null) + 1) % THINKING.length];
 
+// Moves Available and Reviewers to the view's right edge, whatever the level
+// columns are scrolled to. A drag lists its targets once, when it starts
+// (`drag.js`), so a column out of view then is no drop for that drag; pinned,
+// both are always in view. `xs` are the x's `columnsAcross` gives; `right` is
+// where the last column ends. The level columns show up to `edge`.
+export const pinnedAcross = (columns, xs, columnW, { right, gap }) => {
+  const first = columns.findIndex((column) => column.kind !== "level");
+  const at = (index) => right - (columns.length - index) * columnW - (columns.length - 1 - index) * gap;
+  return { xs: xs.map((x, index) => (index < first ? x : at(index))), edge: at(first) - gap / 2 };
+};
+
 export const columnsOf = ({ rungs, models, reviewers }) => {
   const levels = [...new Set(rungs.filter((rung) => rung.enabled).map((rung) => rung.level))].sort((a, b) => a - b);
   const seated = new Set([...rungs, ...reviewers].map((seat) => seat.model));

@@ -61,7 +61,9 @@ stop this project's pipeline.
 
 - **Models** (`foreman ladder --json`): a column per ladder level that holds
   an enabled rung, cheapest first; Available, every disabled rung and every
-  model no rung or reviewer names; and Reviewers. Each change is a drag:
+  model no rung or reviewer names; and Reviewers. Available and Reviewers stay
+  at the right edge, and the level columns scroll across under them, so a rung
+  in any level can reach both. Each change is a drag:
   - A rung dropped on a level column joins that level (`foreman ladder
     level`). Dropped on the gap between two level columns, or before the first
     or after the last, it takes a level of its own there (`foreman ladder
