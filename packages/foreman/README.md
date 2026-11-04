@@ -167,9 +167,12 @@ held for a missing branch has nothing to salvage, so the dashboard says what to
 fix instead of offering the run. The task carries an `onboard` label so the
 queue never starts one on its own.
 
-Agents themselves never enter your checkout, with that one exception. Each works in its own worktree
-under `$XDG_STATE_HOME/foreman/worktrees/`, on a branch off the tip of the branch it lands on,
-and the author prompt forbids touching the main checkout or switching branches.
+Where else an agent works is the project's pipeline: in your checkout on the
+task's branch (the default), in a worktree of its own under
+`$XDG_STATE_HOME/foreman/worktrees/`, or directly on your branch (`foreman
+pipeline use`). A task branch starts at the tip of the branch it lands on. In a
+worktree, the author prompt forbids touching the main checkout or switching
+branches.
 Landing is foreman's own work, not an agent's, so no prompt anywhere hands out
 merge rights. Your tree can go dirty hours after dispatch: foreman re-reads it at
 landing time and leaves the finished branch waiting for a tick that finds it
