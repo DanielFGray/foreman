@@ -11,3 +11,4 @@ export * from "./runs.ts";
 export * from "./endings.ts";
 export * from "./charges.ts";
 export * from "./parks.ts";
+export { prose } from "./cli/text.ts";

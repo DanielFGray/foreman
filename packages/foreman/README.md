@@ -95,7 +95,8 @@ Foreman pane. Both write the file the same way, and the dispatcher reads it on e
 tick. With no file the fleet takes no step. A file that does not decode pauses
 the fleet, and the Foreman pane shows why.
 
-`foreman dispatch` is not gated: it starts the author you asked for.
+`foreman dispatch` and `foreman add --dispatch` are not gated: each starts the
+author you asked for.
 
 The poll interval is how long foreman waits to notice something nobody told it
 about.
@@ -112,6 +113,17 @@ coordinator needs: `foreman status`, `foreman dispatch <id>`, `foreman wait
 <id>`, `foreman prompt author|review <id>`. Each one reads the world once,
 does one thing and exits, so it works with or without the dispatcher running.
 `foreman --skill` prints how to use them.
+
+To file a task and start its author in one command, pipe the brief in:
+
+```sh
+foreman add "<title>" -p <project> -l size:2 -d - --dispatch [--rung <name>] <<'EOF'
+<the brief>
+EOF
+```
+
+It prints the id and how to wait on it. A refused dispatch leaves the task
+filed and names its id.
 
 ## Projects you are working in
 
