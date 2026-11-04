@@ -56,7 +56,7 @@ import { Header } from "./header.js";
 import { Models } from "./models.js";
 import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
-import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf } from "./status.js";
+import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, touches } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
 const VERSION = 6;
@@ -179,8 +179,8 @@ export default class Foreman extends View {
     cx.spawn(async (cx) => {
       try {
         for (;;) {
-          const changed = await watchFolder(stateFolder);
-          if (changed.includes(this.state)) this.reload(cx);
+          if (!touches(await watchFolder(stateFolder), stateFolder, this.state)) continue;
+          this.reload(cx);
           if (this.tasks.report !== null) this.tasks.load(cx);
         }
       } catch { this.watching = false; this.reload(cx); }

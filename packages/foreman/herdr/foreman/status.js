@@ -59,3 +59,9 @@ export const refusalOf = (result) => {
   const [heading = "", ...reasons] = message.split("\n").map((line) => line.trim()).filter((line) => line !== "");
   return [heading, reasons.join("; ")].filter((part) => part !== "").join(" ") || `foreman exited ${result.code}`;
 };
+
+// Whether a batch from herdr's watchFolder on `folder` may hold a change to
+// `file`. herdr bounds the paths it keeps between reads: a batch that names the
+// watched folder itself stands for any change under it, so busy siblings (the
+// worktrees and the log beside state.json) cannot hide a publish.
+export const touches = (changed, folder, file) => changed.includes(file) || changed.includes(folder);

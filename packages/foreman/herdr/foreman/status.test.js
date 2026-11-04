@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, STALE_MS } from "./status.js";
+import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, STALE_MS, touches } from "./status.js";
 
 describe("dispatcherState", () => {
   const at = "2026-11-03T12:00:00.000Z";
@@ -49,4 +49,13 @@ describe("refusalOf", () => {
     })).toBe("the pipeline cannot run: a route from queue reaches worktree with no branch before it; a route from queue reaches land with no branch before it"));
   test("a silent refusal names the exit code", () =>
     expect(refusalOf({ code: 3, stderr: "" })).toBe("foreman exited 3"));
+});
+
+describe("touches", () => {
+  const folder = "/s/foreman";
+  const file = "/s/foreman/state.json";
+  test("a batch naming the file", () => expect(touches([`${folder}/foreman.jsonl`, file], folder, file)).toBe(true));
+  test("a batch naming only the folder stands for any change", () => expect(touches([folder], folder, file)).toBe(true));
+  test("a batch of siblings only", () =>
+    expect(touches([`${folder}/foreman.jsonl`, `${folder}/worktrees/a/x.ts`, `${folder}/.state.json.tmp`], folder, file)).toBe(false));
 });
