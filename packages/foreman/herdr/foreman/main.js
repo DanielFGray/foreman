@@ -55,8 +55,8 @@ import { Detail } from "./detail.js";
 import { Header } from "./header.js";
 import { Models } from "./models.js";
 import { Drag } from "./drag.js";
-import { chip, refusalOf, wiresLayer } from "./parts.js";
-import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir } from "./status.js";
+import { chip, wiresLayer } from "./parts.js";
+import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
 const VERSION = 6;
@@ -295,9 +295,12 @@ export default class Foreman extends View {
   approve(key, cx) { this.act(["approve", key], cx, (_done, cx) => cx.notify()); }
 
   // Runs `foreman pipeline save` or `discard`, then reads the pipeline again.
+  // A refusal changed nothing, so the draft stays on screen with the refusal
+  // above it: a reading would clear the refusal it answers.
   finish(verb, cx) {
     this.act(["pipeline", verb, this.project()], cx, (done, cx) => {
-      if (done && verb === "save" && this.editor.on) this.editor.toggle();
+      if (!done) { cx.notify(); return; }
+      if (verb === "save" && this.editor.on) this.editor.toggle();
       this.loadDrawing(cx);
     });
   }

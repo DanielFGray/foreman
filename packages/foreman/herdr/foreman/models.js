@@ -22,7 +22,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { columnsOf, dropsOf, pinnedAcross, thinkingArgs } from "./models-board.js";
-import { refusalOf } from "./parts.js";
+import { refusalOf } from "./status.js";
 import { CARDS_TOP, PAD, columnBody, columnHead, columnsAcross, inBody, reachOf, scrolledBy } from "./columns.js";
 
 const GAP = 8;

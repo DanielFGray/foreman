@@ -6,6 +6,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { chip, picker } from "./parts.js";
+import { refusalOf } from "./status.js";
 
 const SIZES = ["1", "2", "3"];
 
@@ -34,7 +35,7 @@ export class Simulator {
     const request = { task: { labels, size: Number(this.size) }, events: this.events };
     cx.spawn(async (cx) => {
       const result = await this.pane.foreman(["pipeline", "trace", this.pane.project(), JSON.stringify(request), "--json"]);
-      if (result.code !== 0) this.problem = result.stderr.trim().split("\n").at(-1) || `foreman exited ${result.code}`;
+      if (result.code !== 0) this.problem = refusalOf(result);
       else {
         try { this.trace = JSON.parse(result.stdout); this.problem = null; }
         catch (error) { this.problem = String(error.message ?? error); }

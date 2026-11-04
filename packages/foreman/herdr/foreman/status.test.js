@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, STALE_MS } from "./status.js";
+import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, STALE_MS } from "./status.js";
 
 describe("dispatcherState", () => {
   const at = "2026-11-03T12:00:00.000Z";
@@ -29,3 +29,24 @@ describe("newlyLanded", () => {
 test("pullRequestLine joins what is known", () =>
   expect(pullRequestLine({ number: 7, state: "open", checks: "passing", waiting: "you", url: "u" }))
     .toBe("PR #7 open · checks passing · waits for your approval · u"));
+
+describe("refusalOf", () => {
+  const stack = "    at <anonymous> (/repo/packages/foreman/src/pipeline-command.ts:141:56)";
+  test("a one-line refusal is its message", () =>
+    expect(refusalOf({
+      code: 1,
+      stderr: `[09:18:18.988] ERROR (#2): PipelineError: author cannot lead to branch: that would close a loop\n${stack}\n`,
+    })).toBe("author cannot lead to branch: that would close a loop"));
+  test("a listed refusal reads on one line, its reasons after the heading", () =>
+    expect(refusalOf({
+      code: 1,
+      stderr: [
+        "[09:18:17.864] ERROR (#2): PipelineError: the pipeline cannot run:",
+        "  a route from queue reaches worktree with no branch before it",
+        "  a route from queue reaches land with no branch before it",
+        stack,
+      ].join("\n"),
+    })).toBe("the pipeline cannot run: a route from queue reaches worktree with no branch before it; a route from queue reaches land with no branch before it"));
+  test("a silent refusal names the exit code", () =>
+    expect(refusalOf({ code: 3, stderr: "" })).toBe("foreman exited 3"));
+});

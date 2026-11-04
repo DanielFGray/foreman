@@ -9,7 +9,8 @@
 // picked card: an epic's grant covers every task under it.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { chip, refusalOf } from "./parts.js";
+import { chip } from "./parts.js";
+import { refusalOf } from "./status.js";
 
 const CARD_W = 136;
 const GAP = 6;
@@ -35,7 +36,7 @@ export class Tasks {
       this.loading = false;
       // The space moved to another project while this read ran: read for the one shown now.
       if (this.pane.project() !== project) { this.load(cx); return; }
-      if (result.code !== 0) this.problem = result.stderr.trim().split("\n").at(-1) || `foreman exited ${result.code}`;
+      if (result.code !== 0) this.problem = refusalOf(result);
       else {
         try {
           this.report = JSON.parse(result.stdout);
