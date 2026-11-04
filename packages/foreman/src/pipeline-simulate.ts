@@ -6,10 +6,10 @@
 // each run's outcome and minutes, and each check's result, are drawn, from
 // the measured rates (`run-rates.ts`). Nothing is read from or written to the
 // store.
-import { drawRung } from "./agent-rung.ts";
+import { drawSeat, type PerRole } from "./agent-rung.ts";
 import { candidatesFrom, occupancyOf, placementIn, type Plan, planFrom } from "./dispatcher.ts";
 import type { Worker } from "./fleet.ts";
-import { isEnabled, mayAuthor, mayReview } from "./ladder.ts";
+import { isEnabled, mayAuthor } from "./ladder.ts";
 import { isUnderReview, type Pipeline, type Placement, type RunState } from "./pipeline.ts";
 import type { ProjectPipeline } from "./pipeline-file.ts";
 import {
@@ -108,8 +108,8 @@ export interface SimulatedTask {
 export interface SimulatedRun {
   readonly frames: ReadonlyArray<Frame>;
   readonly tasks: ReadonlyArray<SimulatedTask>;
-  /** The agent runs each rung opened. */
-  readonly runsByRung: Readonly<Record<string, number>>;
+  /** The agent runs each seat opened, per role: a reviewer may share a rung's name. */
+  readonly runsBySeat: PerRole<Readonly<Record<string, number>>>;
   readonly landed: number;
   readonly parked: number;
   readonly inFlight: number;
@@ -190,14 +190,12 @@ export const simulateReport = (
     hours: request.hours,
     slots: world.slots,
     assumes: SIMULATE_ASSUMES,
-    rates: rules.ladder
-      .filter(isEnabled)
-      .flatMap((rung) =>
-        [
-          ...(mayAuthor(rung) ? (["author"] as const) : []),
-          ...(mayReview(rung) ? (["review"] as const) : []),
-        ].map((role) => rateJson(rates.agent(rung.name, role))),
-      ),
+    rates: [
+      ...rules.ladder
+        .filter((rung) => isEnabled(rung) && mayAuthor(rung))
+        .map((rung) => rateJson(rates.agent(rung.name, "author"))),
+      ...rules.reviewers.map((reviewer) => rateJson(rates.agent(reviewer.name, "review"))),
+    ],
     checks: [...new Set(checks)].map((node) => rates.check(node)),
     draft:
       draft === undefined
@@ -213,17 +211,21 @@ export const simulateReport = (
 
 export type SimulateReport = ReturnType<typeof simulateReport>;
 
-/** One run in a line: how many tasks landed, parked and are still in flight, and the runs per rung. */
+/** One run in a line: how many tasks landed, parked and are still in flight, and the runs per seat. */
 export const runSummary = (run: SimulateReport["saved"]): string => {
   const landings = run.tasks.flatMap((task) => (task.landedAt === null ? [] : [task.landedAt]));
   const median = medianOf(landings);
-  const rungs = Object.entries(run.runsByRung)
-    .map(([rung, count]) => `${rung} ${count}`)
-    .join(", ");
+  const counted = (runs: Readonly<Record<string, number>>) =>
+    Object.entries(runs)
+      .map(([seat, count]) => `${seat} ${count}`)
+      .join(", ");
+  const rungs = counted(run.runsBySeat.author);
+  const reviews = counted(run.runsBySeat.review);
   return [
     `${run.source}: ${run.landed} landed, ${run.parked} parked, ${run.inFlight} in flight, ${run.outside} outside`,
     median === undefined ? "" : `median ${Math.round(median * 10) / 10} h to land`,
     `runs: ${rungs || "none"}`,
+    reviews === "" ? "" : `reviews: ${reviews}`,
     ...run.problems.map((problem) => `problem: ${problem}`),
   ]
     .filter((part) => part !== "")
@@ -296,7 +298,7 @@ interface Sim {
     string,
     { readonly at: number; readonly node: string | null; readonly how: "landed" | "parked" }
   >;
-  readonly runsByRung: Map<string, number>;
+  readonly runsBySeat: PerRole<Map<string, number>>;
   readonly frames: Array<Board>;
   /** When the next tick settles again, after a tick that landed, checked or parked something. */
   tick: number | undefined;
@@ -330,7 +332,7 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
     tasks,
     pending: new Map(),
     ended: new Map(),
-    runsByRung: new Map(),
+    runsBySeat: { author: new Map(), review: new Map() },
     frames: [],
     tick: undefined,
   };
@@ -394,8 +396,8 @@ const planOf = (sim: Sim) => {
     queue,
     committed: new Set(claimed.map((task) => task.id)),
     pipelines,
-    ladder: rules.ladder,
-    walled: new Set(),
+    seats: rules,
+    walled: { author: new Set(), review: new Set() },
     held,
   });
   const plan = planFrom({
@@ -421,12 +423,14 @@ const dispatch = (sim: Sim, dispatches: Plan["dispatches"], now: number) => {
   const drawn = new Set<string>();
   for (const { task, block, role } of dispatches) {
     const authors = role === "author" ? drawn : undefined;
-    const rung = drawRung(sim.rules.ladder, block, task, new Set(), authors);
+    const walled = { author: new Set<string>(), review: new Set<string>() };
+    const rung = drawSeat(sim.rules, block, task, walled, authors);
     if (rung._tag !== "Dispatch") continue;
-    const opened = started(sim.tasks.get(task.id)!, block, rung.rung, sim.rules);
+    const opened = started(sim.tasks.get(task.id)!, block, rung.seat, sim.rules);
     sim.tasks.set(task.id, opened);
-    sim.runsByRung.set(rung.rung.name, (sim.runsByRung.get(rung.rung.name) ?? 0) + 1);
-    run(sim, opened, sim.rates.agent(rung.rung.name, block.role), now);
+    const runs = sim.runsBySeat[block.role];
+    runs.set(rung.seat.name, (runs.get(rung.seat.name) ?? 0) + 1);
+    run(sim, opened, sim.rates.agent(rung.seat.name, block.role), now);
   }
 };
 
@@ -501,7 +505,10 @@ const resultOf = (sim: Sim): SimulatedRun => {
       }))
       .filter((frame, index) => index === 0 || frame.moves.length > 0),
     tasks,
-    runsByRung: Object.fromEntries(sim.runsByRung),
+    runsBySeat: {
+      author: Object.fromEntries(sim.runsBySeat.author),
+      review: Object.fromEntries(sim.runsBySeat.review),
+    },
     landed: count((task) => task.landedAt !== null),
     parked: count((task) => task.parkedAt !== null),
     inFlight: count((task) => task.at !== null),

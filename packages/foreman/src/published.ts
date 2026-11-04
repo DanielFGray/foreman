@@ -174,10 +174,13 @@ export const Published = S.Struct({
     }),
   ),
   /**
-   * Each account the ladder draws on, with the rungs it pays for. The quota
-   * rows describe the same accounts by `provider`.
+   * Each account the ladder and the reviewers draw on, with the rungs and the
+   * reviewers it pays for. The quota rows describe the same accounts by
+   * `provider`.
    */
-  accounts: S.Array(S.Struct({ provider: S.String, rungs: S.Array(S.String) })),
+  accounts: S.Array(
+    S.Struct({ provider: S.String, rungs: S.Array(S.String), reviewers: S.Array(S.String) }),
+  ),
   rows: S.Array(PublishedRow),
   /**
    * Each task that stands at a block, in the order the dispatcher placed
@@ -237,7 +240,11 @@ export const publishedOf = (
         null,
       steps: stepModesFor(state.policy, name),
     })),
-    accounts: state.providers.map(({ provider, rungs }) => ({ provider, rungs })),
+    accounts: state.providers.map(({ provider, rungs, reviewers }) => ({
+      provider,
+      rungs,
+      reviewers,
+    })),
     rows: PUBLISHED_VIEWS.flatMap((view) =>
       rowsForView(view, state).map(publishedRow(view, state)),
     ),

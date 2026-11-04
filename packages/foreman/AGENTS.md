@@ -42,7 +42,8 @@ a claim made by hand.
 | Is a reviewer assigned? | an open review run in the task's current lap |
 | Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
-| Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed; a reviewer is the next review-on rung above the author in rank |
+| Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed |
+| Which reviewer reads it? | from the reviewers its review block draws, the one that started a review least recently, off a spent account and off every reviewer that stopped this lap with no verdict, preferring a model other than the author's |
 | How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge |
 | Is this one waiting on a person? | every configured rung has failed it, or it has a park |
 | Is this task mine to review? | it has an author run |
@@ -425,11 +426,12 @@ of one level are peers: one charge on any of them puts the whole level below
 the task. The author comes from the lowest level above every charged level,
 and inside it the available author-on rung whose last run started longest ago
 takes the turn, so peers share the work. The last starts are read from the
-runs once per tick, and each dispatch of the tick counts as a start, so one
-tick's free slots spread over the level. Review reads the rank alone, not the
-level. `foreman ladder level <rung> <n>` groups rungs into a level; `ladder
-move` and `ladder add` put a rung in a level of its own. `foreman ladder role
-<rung> author|review on|off` turns a role off without retiring the rung.
+runs once per tick, per role, and each dispatch of the tick counts as a start,
+so one tick's free slots spread over the level and over the reviewers. The
+ladder decides only who writes; who reads is the reviewers' list. `foreman
+ladder level <rung> <n>` groups rungs into a level; `ladder move` and `ladder
+add` put a rung in a level of its own. `foreman ladder author <rung> on|off`
+keeps a rung out of the author pick without retiring it.
 
 A task that named its next model would be a pointer into the ladder, and the
 ladder outlives no task: remove a rung and every task holding its name
@@ -461,8 +463,8 @@ which stays true however the ladder is edited afterwards.
 
 `Quota` (`src/quota.ts`) reads how much of each provider's allowance is already
 spent. A rung with nothing left is not chosen: the author search takes a peer
-in the same level that can pay, else steps up to the next level, as the
-reviewer search steps up to the next rung that can pay. Nothing is recorded
+in the same level that can pay, else steps up to the next level, and the
+reviewer search takes another reviewer that can pay. Nothing is recorded
 and no attempt is counted — an allowance is evidence about a wallet, never about
 a model — so the ordinary rung is chosen again once the account resets.
 
@@ -608,12 +610,17 @@ into the harness's flag. Each ladder row stores its `level` and its `rank`, and
 readers sort by (level, rank). Every ladder write (`foreman ladder edit`,
 `move`, `add`, `level`) validates the whole ladder, rewrites the ranks from
 that order, and writes it in one transaction.
-The council is a `council` switch on the model row, apart from the ladder, so
-a model is a worker, a council member, both or neither. `foreman council
-add|remove <model>` changes it, and `foreman council --json` prints each member
-with its harness and the `launchArguments` of its row; the council skill reads
-its roster from there. `foreman ladder --json` prints the rungs and every model
-with its switch in one read, for a front end that draws both lists.
+The reviewers are the `reviewers` table, apart from the ladder: each row is a
+name, a model, its own thinking level and an optional provider, so a model is a
+rung, a reviewer, both or neither, and one model can be a low-thinking rung and
+a high-thinking reviewer. A review run records the reviewer's name in the
+run's `rung` column, and the run's role says which list the name is in
+(`seatOf` in `src/reviewers.ts`), so a reviewer may share a rung's name.
+`foreman reviewers add|remove` changes the list, and `foreman reviewers --json`
+prints each reviewer with its harness, provider and `launchArguments`; the
+council skill reads its roster from there. `foreman ladder --json` prints the
+rungs, every model and the reviewers in one read, for a front end that draws
+both lists.
 
 **Two correction rounds, counted.** A reviewer sends mechanical findings to the
 live author with `foreman correct`, which refuses a third round and counts each
@@ -624,13 +631,14 @@ judgement, so foreman asks for it in prose and records nothing about it.
 
 **A reviewer that stops without naming an exit is the reviewer's failure, not the
 author's.** The task stays `in_progress` at its review step, and its review run
-ends `stopped`; `reviewerFor` then reads the next review-on rung above the
-author and every rung whose review in this lap ended that way. No attempt is
-charged to the author. When no review-on rung is left the task is released and
-parked. A reviewer stopped on a usage wall ends `walled` and charges no
-rung. A reviewer whose approval a later commit voided has not failed: the same
-rung may read the new tip. This is the review block's `stopped: retry`; a block
-drawn with `stopped: park` parks the task at the first stop instead.
+ends `stopped`; `reviewerFor` then passes over every reviewer whose review in
+this lap ended that way. No attempt is charged to the author. When no reviewer
+of the block is left the task is released and parked. A reviewer stopped on a
+usage wall ends `walled` and charges no rung. A reviewer whose approval a later
+commit voided has not failed: the same reviewer may read the new tip. A
+reviewer is no rung, so a review block may not draw `fails: self`. This is the
+review block's `stopped: retry`; a block drawn with `stopped: park` parks the
+task at the first stop instead.
 
 **Review state is the current lap's runs.** A lap is the task's latest author
 run and every run after it. A new author run leaves the last lap's reviews
@@ -882,6 +890,7 @@ To change how foreman works, edit one of these.
 | the steps a task goes through | `STANDARD_PIPELINES` in `src/pipeline.ts` (`foreman pipeline use` draws one), or draw one on the page |
 | what an agent is told | the files in `~/.config/foreman/prompts/` |
 | which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`) |
+| which models review | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`) |
 | what runs without asking | the policy file (author, climb, review, publish, land) |
 
 Keep `Records` and `Repository` as they are: the runs and git are how foreman

@@ -182,7 +182,7 @@ describe("the task board", () => {
     });
   });
 
-  test("publishes each account with the rungs it pays for", () => {
+  test("publishes each account with the rungs and reviewers it pays for", () => {
     const published = board([], {
       providers: [
         {
@@ -190,11 +190,14 @@ describe("the task board", () => {
           plan: undefined,
           allowances: [],
           rungs: ["opus"],
+          reviewers: ["opus-high"],
           unreadable: undefined,
         },
       ],
     });
-    expect(published.accounts).toEqual([{ provider: "claude", rungs: ["opus"] }]);
+    expect(published.accounts).toEqual([
+      { provider: "claude", rungs: ["opus"], reviewers: ["opus-high"] },
+    ]);
   });
 
   test("shows the tasks that landed in the last day, newest first", () => {

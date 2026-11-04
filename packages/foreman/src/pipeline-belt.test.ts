@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
-import { type Pipeline, problemsOf, STANDARD_PIPELINES } from "./pipeline.ts";
+import { type Pipeline, problemsOf, type SeatOffers, STANDARD_PIPELINES } from "./pipeline.ts";
 import {
   addRoute,
   addSource,
@@ -13,7 +13,10 @@ import {
   swapEnd,
 } from "./pipeline-belt.ts";
 
-const RUNGS = ["cheap", "strong"].map((name) => ({ name, author: true, review: true }));
+const OFFERS: SeatOffers = {
+  rungs: ["cheap", "strong"].map((name) => ({ name, author: true })),
+  reviewers: ["sharp"],
+};
 const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
 const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
 const at = (pipeline: Pipeline) =>
@@ -68,7 +71,7 @@ describe("belt edits", () => {
       ],
     });
     // A second agent between review and land needs its own gate, and a review after it.
-    expect(problemsOf(pipeline, RUNGS)).toEqual([
+    expect(problemsOf(pipeline, OFFERS)).toEqual([
       `a route from ${id} reaches land with no review after it`,
       `a route from review reaches ${id} through no gate`,
     ]);
@@ -89,7 +92,7 @@ describe("belt edits", () => {
         { name: "failed", to: "queue", fails: "author" },
       ],
     });
-    expect(problemsOf(pipeline, RUNGS)).toEqual([
+    expect(problemsOf(pipeline, OFFERS)).toEqual([
       `${id}: a check runs a command, and it names none`,
     ]);
     const named = configure(pipeline, id, { kind: "check", command: "bun run lint" });
@@ -100,7 +103,9 @@ describe("belt edits", () => {
         { name: "failed", to: "queue" },
       ],
     });
-    expect(problemsOf(named, RUNGS)).toEqual([`a route from author reaches ${id} through no gate`]);
+    expect(problemsOf(named, OFFERS)).toEqual([
+      `a route from author reaches ${id} through no gate`,
+    ]);
   });
 
   test("new blocks never reuse an id", () => {
@@ -114,7 +119,7 @@ describe("belt edits", () => {
     expect(node(pipeline, "worktree")).toMatchObject({ next: "start" });
     // The review's returned exit still reaches climb after the router goes.
     expect(ids(pipeline)).toContain("climb");
-    expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
   });
 
   test("an end stays, and turns from land to done to park and back", () => {
@@ -132,13 +137,13 @@ describe("belt edits", () => {
       how: "fast-forward",
     });
     expect(node(pipeline, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
-    expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
   });
 
   test("taking the worktree out leaves the task's branch in the operator's checkout", () => {
     const pipeline = remove(STANDARD_PIPELINES.worktree, "worktree");
     expect(node(pipeline, "branch")).toMatchObject({ next: "retry" });
-    expect(problemsOf(pipeline, RUNGS)).toEqual([]);
+    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
   });
 
   test("a branch and a worktree go on a wire with nothing to set", () => {
@@ -146,14 +151,14 @@ describe("belt edits", () => {
       remove(remove(STANDARD_PIPELINES.worktree, "worktree"), "branch"),
       "land",
     );
-    expect(problemsOf(direct, RUNGS)).toEqual([]);
+    expect(problemsOf(direct, OFFERS)).toEqual([]);
     const branched = insertOn(direct, { from: "queue", port: "next" }, "branch");
     expect(node(branched.pipeline, branched.id)).toEqual({
       kind: "branch",
       id: branched.id,
       next: "retry",
     });
-    expect(problemsOf(branched.pipeline, RUNGS)).toEqual([
+    expect(problemsOf(branched.pipeline, OFFERS)).toEqual([
       `a route from ${branched.id} ends at land: work on this branch never lands`,
     ]);
   });

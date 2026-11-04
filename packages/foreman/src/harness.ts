@@ -4,7 +4,7 @@
  */
 
 import { Option } from "effect";
-import { providerOf, type Rung } from "./ladder.ts";
+import { providerOf, type Seat } from "./ladder.ts";
 
 /** A program to start: its argv and the environment it needs on top. */
 export interface Launch {
@@ -141,7 +141,7 @@ export const hitWall = (kind: string, screen: string): Option.Option<string> => 
  * wall: the account has a name, and the harness prints a wall text listed
  * below. On any other rung a wall reads as an ordinary stop.
  */
-export const wallAccountOf = (rung: Rung): string | undefined =>
+export const wallAccountOf = (rung: Seat): string | undefined =>
   wallTexts(rung.harness).length > 0 ? providerOf(rung) : undefined;
 
 /**

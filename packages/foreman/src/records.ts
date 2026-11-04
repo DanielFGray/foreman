@@ -24,7 +24,8 @@ import {
   type Run,
 } from "tasks";
 import type { AgentIdentity, AgentRole } from "./fleet.ts";
-import { providerOf, type Ladder, type Rung } from "./ladder.ts";
+import { providerOf, type Seat } from "./ladder.ts";
+import { seatOf, type Seats } from "./reviewers.ts";
 import type { Row } from "./run-step.ts";
 import { ProjectTracker, Tracker, TrackerError } from "./tracker.ts";
 
@@ -235,10 +236,12 @@ export class Records extends Context.Service<Records>()("Records", {
         ),
 
       /**
-       * The latest start of each rung's runs, author and review alike: the
-       * turn order of the rungs inside a level (`authorFor`).
+       * The latest start of each seat, per role: the turn order of the rungs
+       * inside a level (`authorFor`) and of the reviewers (`reviewerFor`).
        */
-      lastStarts: onStore(lastStarts).pipe(as("read run starts")),
+      lastStarts: onStore(
+        Effect.all({ author: lastStarts("author"), review: lastStarts("review") }),
+      ).pipe(as("read run starts")),
 
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
@@ -399,7 +402,7 @@ export interface TaskDetail extends Item {
  * for, so a harness that ignored the request is visible in the log rather than
  * hidden behind foreman's intention.
  */
-export const agentLog = (role: AgentRole, rung: Rung, agent: AgentIdentity): string =>
+export const agentLog = (role: AgentRole, rung: Seat, agent: AgentIdentity): string =>
   `foreman: ${role} assigned to ${rung.name} (${agent.model ?? rung.model ?? rung.harness})`;
 
 /**
@@ -540,22 +543,23 @@ export const RESEARCH = "research";
 
 /**
  * The accounts a task's agents have stopped on a usage wall: the providers of
- * the rungs whose runs ended `walled` since the task last landed.
+ * the seats whose runs ended `walled` since the task last landed, an author's
+ * or a reviewer's.
  *
  * A stop on a usage wall says nothing about the model, so the task is not
- * failed; the wall only keeps rungs on that account off the task's next
+ * failed; the wall only keeps seats on that account off the task's next
  * dispatch. Landing ends it, because the wall describes the account at that
- * time. A rung the ladder no longer has names no account.
+ * time. A seat its list no longer has names no account.
  */
 export const walledBy = (
   item: { readonly runs: ReadonlyArray<Run> },
-  ladder: Ladder,
+  seats: Seats,
 ): ReadonlyArray<string> => {
   const providers = sinceLanded(item)
     .filter((run) => run.ending === "walled")
-    .map((run) => ladder.find((rung) => rung.name === run.rung))
-    .flatMap((rung) => {
-      const provider = rung === undefined ? undefined : providerOf(rung);
+    .flatMap((run) => {
+      const seat = seatOf(seats, run);
+      const provider = seat === undefined ? undefined : providerOf(seat);
       return provider === undefined ? [] : [provider];
     });
   return [...new Set(providers)];

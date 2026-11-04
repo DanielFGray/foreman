@@ -276,14 +276,17 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
   });
 
 /**
- * The latest start of each rung's runs, author and review alike, keyed by rung.
- * A rung with no run that recorded its start has no entry.
+ * The latest start of the runs of `role`, keyed by the name they record: a
+ * rung for an author, a reviewer for a review. The two are separate lists, so
+ * one name may stand in both. A name with no run that recorded its start has
+ * no entry.
  */
-export const lastStarts = Effect.gen(function* () {
+export const lastStarts = Effect.fnUntraced(function* (role: "author" | "review") {
   const sql = yield* SqlClient;
   const rows = yield* sql<{ rung: string; started_at: string }>`
     SELECT rung, max(started_at) AS started_at FROM runs
-     WHERE rung IS NOT NULL AND started_at IS NOT NULL GROUP BY rung`;
+     WHERE rung IS NOT NULL AND started_at IS NOT NULL AND ${ofRole(sql, role)}
+     GROUP BY rung`;
   const starts: ReadonlyMap<string, Date> = new Map(
     rows.flatMap((row) => {
       const started = parseStored(row.started_at);

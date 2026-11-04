@@ -9,7 +9,7 @@ import {
   ParkNode,
   Pipeline,
   type PipelineNode,
-  type RungOffer,
+  type SeatOffers,
   RouterNode,
   SourceNode,
   WorktreeNode,
@@ -35,6 +35,9 @@ export type Pipelines = typeof Pipelines.Type;
  * The file as written: the pipelines under the format's version. Older files
  * read as they ran then, and the next write stores them in this form:
  *
+ * - version 3 named the review rule `above`, the next review-on rung above the
+ *   author. It reads as `reviewers`, the rule that took its place
+ *   (`withReviewers`).
  * - version 2 wired each agent and check block to one `next` block. Each gets
  *   the standard exits for its role, advancing to that block, and returning
  *   to the queue charged to the author.
@@ -42,7 +45,7 @@ export type Pipelines = typeof Pipelines.Type;
  *   reads through `withWorkspace`, so a pipeline the operator then draws with
  *   no worktree is never given one again.
  */
-const PipelinesFile = S.Struct({ version: S.Literal(3), pipelines: Pipelines });
+const PipelinesFile = S.Struct({ version: S.Literal(4), pipelines: Pipelines });
 type PipelinesFile = typeof PipelinesFile.Type;
 
 /** An agent or a check block as version 2 drew it: one wire on. */
@@ -61,6 +64,7 @@ const OldNode = S.Union([
 ]);
 type OldNode = typeof OldNode.Type;
 const OldPipelines = S.Record(S.String, S.Struct({ nodes: S.Array(OldNode) }));
+const V3File = S.Struct({ version: S.Literal(3), pipelines: Pipelines });
 const OldFile = S.Struct({ version: S.Literal(2), pipelines: OldPipelines });
 
 /** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
@@ -82,7 +86,7 @@ export const readPipelines = (path: string) =>
 /** Rewrites the pipelines through `change`, the one way anything writes them. */
 export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
   rewrite(path, PipelinesFile, readFile, (file) => ({
-    version: 3 as const,
+    version: 4 as const,
     pipelines: change(file.pipelines),
   }));
 
@@ -93,6 +97,21 @@ export const withExits = (pipeline: { readonly nodes: ReadonlyArray<OldNode> }):
     const { next, ...rest } = node;
     return { ...rest, exits: standardExits(node, next) };
   }),
+});
+
+/**
+ * A pipeline drawn before the reviewers, as it ran then: its review blocks read
+ * by the rule `above`, which the `reviewers` rule replaced. A review block
+ * pinned to a rung name is left as it is, and the drawing check names it when
+ * no reviewer has that name.
+ */
+export const withReviewers = (pipeline: Pipeline): Pipeline => ({
+  ...pipeline,
+  nodes: pipeline.nodes.map((node) =>
+    node.kind === "agent" && node.role === "review" && node.model === "above"
+      ? { ...node, model: "reviewers" }
+      : node,
+  ),
 });
 
 /**
@@ -123,15 +142,19 @@ export const withWorkspace = (pipeline: Pipeline): Pipeline => {
   };
 };
 
-const NONE: PipelinesFile = { version: 3, pipelines: {} };
+const NONE: PipelinesFile = { version: 4, pipelines: {} };
 
-const each = (
-  pipelines: typeof OldPipelines.Type,
-  upgrade: (pipeline: { readonly nodes: ReadonlyArray<OldNode> }) => Pipeline,
+/** An older file's pipelines as they ran then: `upgrade` reads one in the next form. */
+const each = <Old>(
+  pipelines: { readonly [project: string]: Old },
+  upgrade: (pipeline: Old) => Pipeline,
 ): PipelinesFile => ({
-  version: 3,
+  version: 4,
   pipelines: Object.fromEntries(
-    Object.entries(pipelines).map(([project, pipeline]) => [project, upgrade(pipeline)]),
+    Object.entries(pipelines).map(([project, pipeline]) => [
+      project,
+      withReviewers(upgrade(pipeline)),
+    ]),
   ),
 });
 
@@ -144,8 +167,13 @@ const readFile = (path: string) =>
     // A file that is no form reports why it is not the current one.
     return yield* S.decodeEffect(S.fromJsonString(PipelinesFile))(text.value).pipe(
       Effect.catch((current) =>
-        S.decodeEffect(S.fromJsonString(OldFile))(text.value).pipe(
-          Effect.map((old) => each(old.pipelines, withExits)),
+        S.decodeEffect(S.fromJsonString(V3File))(text.value).pipe(
+          Effect.map((old) => each(old.pipelines, (pipeline) => pipeline)),
+          Effect.catch(() =>
+            S.decodeEffect(S.fromJsonString(OldFile))(text.value).pipe(
+              Effect.map((old) => each(old.pipelines, withExits)),
+            ),
+          ),
           Effect.catch(() =>
             S.decodeEffect(S.fromJsonString(OldPipelines))(text.value).pipe(
               Effect.map((old) => each(old, (pipeline) => withWorkspace(withExits(pipeline)))),
@@ -188,16 +216,19 @@ export type ProjectPipeline =
 
 /**
  * What `project` runs, from one reading of the file, checked against these
- * rungs and the instructions texts read for its agent blocks.
+ * offers and the instructions texts read for its agent blocks.
  */
 export const projectPipeline = (
   read: { readonly value: Pipelines; readonly error: string | undefined },
   project: string,
-  rungs: ReadonlyArray<RungOffer>,
+  offers: SeatOffers,
   instructions: ReadonlyMap<string, string>,
 ): ProjectPipeline => {
   if (read.error !== undefined) return { _tag: "Stopped", problems: [read.error] };
   const { pipeline, drawn } = pipelineFor(read.value, project);
-  const problems = [...problemsOf(pipeline, rungs), ...instructionProblems(pipeline, instructions)];
+  const problems = [
+    ...problemsOf(pipeline, offers),
+    ...instructionProblems(pipeline, instructions),
+  ];
   return problems.length > 0 ? { _tag: "Stopped", problems } : { _tag: "Runs", pipeline, drawn };
 };

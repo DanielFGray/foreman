@@ -323,11 +323,14 @@ already red still takes the merge, because one broken test would otherwise hold
 every task in the fleet. A project names the command by keeping an executable
 `scripts/verify.sh`; without one, a landing rests on the merge alone.
 
-Who reviews whom is derived, not configured: the reviewer is the next rung up
-the list from the one that wrote the code. Review reads that order alone; the
-levels described under the ladder group authors only. Cheap work gets expensive
-eyes; the top rung reviews itself, which still helps — fresh eyes on the same
-model read the diff as a stranger would. Every branch is reviewed: no priority and no label routes work
+The reviewers are a list of their own, apart from the ladder: the ladder says
+who writes, and the reviewers say who reads. A reviewer is a model with its own
+thinking level and account, so one model can be a cheap rung that thinks little
+and a reviewer that thinks hard. A review block takes the reviewer whose last
+review started longest ago, skipping a reviewer on a spent account, and
+prefers a model other than the author's, because a different model has
+different blind spots. A reviewer that stops with no verdict is passed over for
+that task; when none is left, the task parks. Every branch is reviewed: no priority and no label routes work
 around the reviewer, because a task's own estimate of how small it is arrives
 before anybody has read the diff.
 
@@ -342,9 +345,9 @@ A level holds one rung or several, and the rungs of one level are peers that
 share the author work: the author is the rung of the level whose last run
 started longest ago, so one tick with several free slots spreads them over the
 level. One failure on any rung of a level sends the task up a level. There are
-no price or power numbers to drift out of step with the list, and no map from
-author to reviewer: "who reads this" is the next rung up the list, and "who
-tries next" is the next level.
+no price or power numbers to drift out of step with the list: "who tries next"
+is the next level. The ladder decides only who writes; who reads is the
+reviewers' list (see "Reviewers" below).
 
 The ladder is the `ladder` table of the model registry, which lives in the task
 store (`~/.prog/prog.db`; `$PROG_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
@@ -367,6 +370,7 @@ foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
 foreman ladder edit            # edit it in $EDITOR
 foreman ladder disable <rung>  # stop dispatching a rung, keeping its place
 foreman ladder enable <rung>
+foreman ladder author <rung> on|off  # keep a rung out of the author pick, keeping its place
 foreman ladder level <rung> <n>  # put a rung in level n; rungs of one level are peers
 foreman ladder move <rung> [--above R | --below R]
                                # give a rung a level of its own next to R, or at the bottom
@@ -427,6 +431,23 @@ runs that rung once and charges nothing.
 
 Which rung runs is derived at dispatch, never inherited from which slot happened
 to be free.
+
+### Reviewers
+
+The reviewers are the `reviewers` table of the same registry: each has a name,
+a model with a row in `models`, a thinking level and, where the model id does
+not say, a provider. A review block drawn with the rule `reviewers` takes one
+from the whole list; a block drawn with one reviewer's name takes only that
+one. The council skill convenes the same list.
+
+```
+foreman reviewers [--json]     # each reviewer with its harness and launch arguments
+foreman reviewers add <model> [--name N] [--thinking low|medium|high] [--provider P]
+foreman reviewers remove <name>
+```
+
+A review run records the reviewer's name where an author run records its
+rung's, so a reviewer may share a rung's name.
 
 ### Intervening in stuck work
 

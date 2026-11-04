@@ -72,12 +72,12 @@ describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      version: 3,
+      version: 4,
       pipelines: { amux: pinned },
     });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 3, pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 4, pipelines: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -139,7 +139,7 @@ describe("a pipelines file from before the workspace blocks", () => {
     writeFileSync(path, JSON.stringify({ amux: old }));
     await run("set", "other", fileWith(pinned));
 
-    expect(read().version).toBe(3);
+    expect(read().version).toBe(4);
     expect(read().pipelines.amux.nodes.slice(0, 3)).toEqual([
       { kind: "source", id: "queue", filter: "", next: "branch" },
       { kind: "branch", id: "branch", next: "worktree" },
@@ -157,7 +157,7 @@ describe("a pipelines file from before the workspace blocks", () => {
         kind: "agent",
         id: "review",
         role: "review",
-        model: "above",
+        model: "reviewers",
         exits: standardExits({ kind: "agent", role: "review" }, "land"),
       },
       { kind: "land", id: "land" },
@@ -185,7 +185,7 @@ describe("a pipelines file from before the workspace blocks", () => {
           kind: "agent",
           id: "review",
           role: "review",
-          model: "above",
+          model: "reviewers",
           exits: [
             { name: "approved", to: "land-gate" },
             { name: "returned", to: "queue", fails: "author" },
@@ -243,6 +243,22 @@ describe("migrating and reading the pipelines file", () => {
   });
 });
 
+describe("a pipelines file from before the reviewers", () => {
+  test("reads a review block's above as reviewers, and is stored that way once written", async () => {
+    const pipeline = {
+      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
+        node.kind === "agent" && node.role === "review" ? { ...node, model: "above" } : node,
+      ),
+    };
+    writeFileSync(path, JSON.stringify({ version: 3, pipelines: { amux: pipeline } }));
+    await run("set", "other", fileWith(pinned));
+
+    const stored = JSON.parse(readFileSync(path, "utf8"));
+    expect(stored.version).toBe(4);
+    expect(stored.pipelines.amux).toEqual(STANDARD_PIPELINES.worktree);
+  });
+});
+
 describe("a pipelines file from before the exits", () => {
   test("gives each agent and check the standard exits for its role, and is stored that way once written", async () => {
     const drawn = {
@@ -264,7 +280,7 @@ describe("a pipelines file from before the exits", () => {
     await run("set", "other", fileWith(pinned));
 
     const stored = JSON.parse(readFileSync(path, "utf8"));
-    expect(stored.version).toBe(3);
+    expect(stored.version).toBe(4);
     const byId = new Map(
       stored.pipelines.amux.nodes.map((node: { readonly id: string }) => [node.id, node]),
     );
@@ -291,7 +307,7 @@ describe("a pipelines file from before the exits", () => {
       kind: "agent",
       id: "review",
       role: "review",
-      model: "above",
+      model: "reviewers",
       exits: [
         { name: "approved", to: "land-gate" },
         { name: "returned", to: "queue", fails: "author" },
@@ -310,6 +326,22 @@ describe("drawing a draft", () => {
     expect(draftOf().base).toBeNull();
     expect(draftOf().pipeline.nodes.some((node: { id: string }) => node.id === "climb")).toBe(
       false,
+    );
+  });
+
+  test("a version 1 draft reads its review rule above as reviewers", async () => {
+    const old = {
+      nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
+        node.kind === "agent" && node.role === "review" ? { ...node, model: "above" } : node,
+      ),
+    };
+    writeFileSync(
+      drafts,
+      JSON.stringify({ version: 1, drafts: { amux: { base: null, pipeline: old } } }),
+    );
+    await run("save", "amux");
+    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
+      STANDARD_PIPELINES.worktree,
     );
   });
 

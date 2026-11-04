@@ -59,11 +59,13 @@ stop this project's pipeline.
     (`foreman pipeline graph <project> --json`). Pick cards, then `send
     through` grants each one the pipeline's gated steps.
 
-- **Models**: the ladder's rungs, the models and the council, changed by
+- **Models**: the ladder's rungs, the models and the reviewers, changed by
   drag; a dragged rung takes a level of its own (`foreman ladder move`), and
-  `foreman ladder level` puts rungs in one level. Under them are the accounts
-  the ladder draws on: what each has left (the quota rows) and the rungs it
-  pays for.
+  `foreman ladder level` puts rungs in one level. A model dropped on Reviewers
+  runs `foreman reviewers add`, and a reviewer dropped on Models runs
+  `foreman reviewers remove`. Under them are the accounts the ladder and the
+  reviewers draw on: what each has left (the quota rows) and the rungs and
+  reviewers it pays for.
 
 The queue is not in `state.json`: the pane runs `foreman queue --project
 <name> --json` every 5 seconds. A row that newly appears under Landed, in any

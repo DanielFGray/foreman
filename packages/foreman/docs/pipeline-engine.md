@@ -93,11 +93,11 @@ done. Sources, routers, gates, branches and worktrees decide at once.
 
 This table is the standard wiring. An operator may wire any exit to any block
 or to `queue`. An exit with `fails: author` charges the rung of the task's last
-author run, and `fails: self` charges the block's own rung.
+author run, and `fails: self` charges the author block's own rung.
 
 A stop with no exit follows the agent block's `stopped`: `retry` (the default)
-keeps the task at the block, so a reviewer that stops while a rung is left
-tries again on the next one; `park` parks the task. A usage wall, a blocked
+keeps the task at the block, so a reviewer that stops while another reviewer
+is left tries again on that one; `park` parks the task. A usage wall, a blocked
 agent and a dirty checkout are not endings: the task stays at the block. Every
 rung failed, or no reviewer left, parks the task.
 
@@ -144,12 +144,15 @@ names one of the existing steps.
 
 ### Models
 
-`model` is `ladder` (author: from the lowest level above every level with a
-rung the task failed, the author-on rung that started a run least recently),
-`above` (review: the next review-on rung above the author and any failed
-reviewers, by rank, not level), or a rung name (pinned). A pin must allow the
-block's role; a pinned block that has a `failed-by` for its rung has no rung
-left, so the task parks. A router in front of it is how a pipeline sends such a
+`model` is, for an author, `ladder` (from the lowest level above every level
+with a rung the task failed, the author-on rung that started a run least
+recently) or a rung name that may author (pinned); a pinned author block that
+has a `failed-by` for its rung has no rung left, so the task parks. For a
+reviewer, `model` is `reviewers` (the reviewer whose last review started
+longest ago, off a spent account, preferring a model other than the author's)
+or one reviewer's name. A reviewer that stopped this lap with no verdict is
+passed over, and with none left the task parks. The drawing check refuses a
+name that is no reviewer, and `ladder` or `reviewers` on the wrong role. A router in front of it is how a pipeline sends such a
 task elsewhere. `slots` caps how many of the block's tasks run at once, inside
 the fleet's `slots`.
 
@@ -226,6 +229,7 @@ running a flow the operator did not draw is worse than stopping.
 - An agent block declares at least one exit. Exit names are unique on their
   block, match `[a-z-]+`, and are not process endings. A check's exits are
   `passed` and `failed`, and `fails: self` is refused there: a check has no rung.
+  A review block refuses `fails: self` too: a reviewer is no rung.
 - Every cycle can end: an exit on it has `fails`, or a router on it leaves on a
   count that grows each lap (`exits:<name>>=N` or `attempts>=N`). A cycle
   through no work block is a problem.

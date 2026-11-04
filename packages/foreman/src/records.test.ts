@@ -9,6 +9,7 @@ import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { agentLog, attemptsOf, type Item, walledBy } from "./records.ts";
 import { authoredBy, reviewedBy, reviewerNamed, roundsOf, routedCommit } from "./lap.ts";
+import type { Seats } from "./reviewers.ts";
 import { newRunFor } from "./run-record.ts";
 import { NO_WRITES, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
@@ -33,6 +34,7 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
 /** One rung and no drawing: the rules the store tests below need. */
 const RULES: StepRules = {
   ladder: [{ name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined }],
+  reviewers: [],
   attemptsPerLevel: 2,
   pipeline: undefined,
 };
@@ -205,6 +207,7 @@ describe("a stop at a level of peers", () => {
       { name: "two", harness: "test", level: 1, model: undefined, provider: undefined },
       { name: "high", harness: "test", level: 2, model: undefined, provider: undefined },
     ],
+    reviewers: [],
     attemptsPerLevel: 2,
     pipeline: undefined,
   };
@@ -378,18 +381,29 @@ describe("Records against a scratch store", () => {
 });
 
 describe("usage walls", () => {
-  const ladder = [
-    { name: "free", harness: "opencode", level: 0, model: "opencode/free" },
-    { name: "dear", harness: "claude", level: 1, model: undefined },
-  ] as unknown as Parameters<typeof walledBy>[1];
+  const seats: Seats = {
+    ladder: [
+      { name: "free", harness: "opencode", level: 0, model: "opencode/free", provider: undefined },
+      { name: "dear", harness: "claude", level: 1, model: undefined, provider: undefined },
+    ],
+    // A reviewer with a rung's name, on an account of its own.
+    reviewers: [
+      { name: "free", harness: "codex", model: "gpt-6.1-sol", provider: "openai", thinking: "low" },
+    ],
+  };
 
   test("a walled run names its rung's account until the task lands", () => {
     const walled = authorRun("free", { open: false, ending: "walled" });
-    expect(walledBy({ runs: [walled] }, ladder)).toEqual(["opencode"]);
+    expect(walledBy({ runs: [walled] }, seats)).toEqual(["opencode"]);
     const landed = authorRun("dear", { open: false, ending: "done", landed: true });
-    expect(walledBy({ runs: [walled, landed] }, ladder)).toEqual([]);
-    expect(walledBy({ runs: [landed, { ...walled, id: landed.id + 1 }] }, ladder)).toEqual([
+    expect(walledBy({ runs: [walled, landed] }, seats)).toEqual([]);
+    expect(walledBy({ runs: [landed, { ...walled, id: landed.id + 1 }] }, seats)).toEqual([
       "opencode",
     ]);
+  });
+
+  test("a walled review run names its reviewer's account, not a rung's", () => {
+    const walled = reviewRun("free", { open: false, ending: "walled" });
+    expect(walledBy({ runs: [walled] }, seats)).toEqual(["openai"]);
   });
 });

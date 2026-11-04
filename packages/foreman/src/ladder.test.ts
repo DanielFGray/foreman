@@ -9,10 +9,8 @@ import {
   providerOf,
   providersOf,
   rankOf,
-  reviewerFor,
   levelSpent,
   rungsOn,
-  topOf,
 } from "./ladder.ts";
 
 const rung = (name: string, extra: Partial<Ladder[number]> = {}): Ladder[number] => ({
@@ -213,105 +211,6 @@ describe("levelSpent", () => {
 
   test("with attemptsPerLevel 1, every stopped run fails the rung", () => {
     expect(levelSpent(1, 1)).toBe(true);
-  });
-});
-
-describe("reviewerFor", () => {
-  test("reads a rung's work with the rung above it", () => {
-    expect(reviewerFor(ladder, "cheap")?.name).toBe("middle");
-    expect(reviewerFor(ladder, "middle")?.name).toBe("top");
-  });
-
-  test("has the top rung review itself rather than dispatching a person", () => {
-    // Review stays between agents: a person intervenes by taking the pane over.
-    expect(reviewerFor(ladder, "top")?.name).toBe("top");
-  });
-
-  test("gives unattributed work to the top, since nothing says it is easy", () => {
-    expect(reviewerFor(ladder, undefined)?.name).toBe("top");
-  });
-
-  test("never dispatches a retired rung", () => {
-    const retired: Ladder = stacked([cheap, rung("middle", { enabled: false }), top]);
-    expect(reviewerFor(retired, "cheap")?.name).toBe("top");
-    expect(topOf(retired)?.name).toBe("top");
-  });
-
-  test("reviews with the top of a one-rung ladder", () => {
-    const uniform: Ladder = stacked([rung("only")]);
-    expect(reviewerFor(uniform, "only")?.name).toBe("only");
-    expect(topOf(uniform)?.name).toBe("only");
-  });
-
-  test("skips a rung whose review role is off", () => {
-    const roles: Ladder = stacked([cheap, rung("middle", { review: false }), top]);
-    expect(reviewerFor(roles, "cheap")?.name).toBe("top");
-  });
-
-  test("parks when no review-enabled rung stands above the author", () => {
-    const roles: Ladder = stacked([
-      cheap,
-      rung("middle", { review: false }),
-      rung("top", { review: false }),
-    ]);
-    // Cheap is still review-on, but nothing above the author may review — park,
-    // rather than handing the author's own work back to itself.
-    expect(reviewerFor(roles, "cheap")).toBeUndefined();
-    expect(topOf(roles)?.name).toBe("cheap");
-  });
-
-  test("has no review top when every rung has review off", () => {
-    const none: Ladder = stacked([
-      rung("cheap", { review: false }),
-      rung("middle", { review: false }),
-      rung("top", { review: false }),
-    ]);
-    expect(topOf(none)).toBeUndefined();
-    expect(reviewerFor(none, "cheap")).toBeUndefined();
-  });
-
-  test("steps past a spent account to the next rung that can be paid for", () => {
-    // The wall is the middle rung's account, and the top's is untouched, so the
-    // diff is read rather than left waiting on money.
-    expect(reviewerFor(ladder, "cheap", new Set(["middle"]))?.name).toBe("top");
-  });
-
-  test("never resolves downward, even with every rung above spent", () => {
-    // "cheap" already failed this task. Handing the review back to it would
-    // spend a rung the work has outgrown, so no review is the honest answer.
-    expect(reviewerFor(ladder, "middle", new Set(["top"]))).toBeUndefined();
-  });
-
-  test("reads above every reviewer that already stopped without a verdict", () => {
-    expect(reviewerFor(ladder, "cheap", new Set(), ["middle"])?.name).toBe("top");
-  });
-
-  test("ignores a failed reviewer no longer on the ladder", () => {
-    expect(reviewerFor(ladder, "top", new Set(), ["removed"])?.name).toBe("top");
-    expect(reviewerFor(ladder, undefined, new Set(), ["removed"])?.name).toBe("top");
-  });
-
-  test("has no reviewer once the top rung has stopped, rather than reviewing itself again", () => {
-    expect(reviewerFor(ladder, "cheap", new Set(), ["top"])).toBeUndefined();
-    expect(reviewerFor(ladder, "top", new Set(), ["top"])).toBeUndefined();
-  });
-
-  test("still has the top review a top author's work after a lower reviewer stopped", () => {
-    // A reorder can put a reviewer that already stopped below the author.
-    expect(reviewerFor(ladder, "top", new Set(), ["cheap"])?.name).toBe("top");
-  });
-
-  test("gives no reviewer when every rung at or above is spent", () => {
-    expect(reviewerFor(ladder, "cheap", new Set(["middle", "top"]))).toBeUndefined();
-  });
-
-  test("gives no reviewer when the top rung that reviews itself is spent", () => {
-    expect(reviewerFor(ladder, "top", new Set(["top"]))).toBeUndefined();
-    expect(reviewerFor(ladder, undefined, new Set(["top"]))).toBeUndefined();
-  });
-
-  test("ignores a wall below the reviewer, which nothing was going to spend", () => {
-    expect(reviewerFor(ladder, "cheap", new Set(["cheap"]))?.name).toBe("middle");
   });
 });
 

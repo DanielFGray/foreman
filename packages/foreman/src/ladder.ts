@@ -9,11 +9,11 @@ import { Array as Arr, Order } from "effect";
  * sorted by (level, rank); rank is the order inside a level and breaks ties.
  * There are no price or power numbers to drift out of step with the list. A
  * task that fails a rung records that failure, and one failure on any rung of
- * a level sends the task up a level. Per-rung `author` and `review` switches
- * narrow which rungs each rule may pick, without changing the order.
+ * a level sends the task up a level. A rung's `author` switch takes it out of
+ * the author pick without changing the order.
  *
- * Review reads the rank alone: the reviewer is the next review-on rung up the
- * array from the author, and the top review-on rung reviews itself.
+ * The ladder decides only who writes. A review block reads from the
+ * reviewers, a list of its own (`src/reviewers.ts`).
  *
  * A task never names the model that runs next. It records which models have
  * already failed it, and the rung is chosen here from what is available now —
@@ -26,21 +26,20 @@ import { Array as Arr, Order } from "effect";
  */
 export type Ladder = readonly [Rung, ...ReadonlyArray<Rung>];
 
-export interface Rung {
-  /** How this rung is named in the config, in labels, and on the dashboard. */
+/**
+ * A model foreman launches as an agent: a ladder rung, which writes, or a
+ * reviewer (`src/reviewers.ts`), which reads. The launch, the run record and
+ * the account read only these fields.
+ */
+export interface Seat {
+  /** How this entry is named in labels, in the runs it records, and on the dashboard. */
   readonly name: string;
 
   /** The harness kind: the program that runs (see `harnessLaunch`). */
   readonly harness: string;
 
   /**
-   * The level this rung stands at. Levels climb in number, and the rungs of one
-   * level are peers. An integer the operator sets (`foreman ladder level`).
-   */
-  readonly level: number;
-
-  /**
-   * The model this rung runs. Each harness is told in the way it accepts one —
+   * The model this entry runs. Each harness is told in the way it accepts one —
    * `--model` for claude and codex, a private-server config for opencode — and
    * that mapping lives in `src/harness.ts`, not here. Absent means the
    * harness picks, which is what a rung named after a harness rather than a
@@ -49,13 +48,48 @@ export interface Rung {
   readonly model: string | undefined;
 
   /**
-   * The account whose allowance this rung spends, where the model does not say.
+   * The account whose allowance this entry spends, where the model does not say.
    *
    * Quota belongs to an account rather than to a rung, so this is what several
-   * rungs share when they draw on one plan. Usually derivable — see
+   * entries share when they draw on one plan. Usually derivable — see
    * `providerOf` — and stated only where it is not.
    */
   readonly provider: string | undefined;
+
+  /**
+   * Whether the account's allowance says nothing about this entry's room.
+   * Absent means the allowance describes it.
+   *
+   * A model served on promotional access — a launch give-away, a partner's
+   * sponsored endpoint — draws on a pool that is not the one the account's
+   * percentage measures. Walling such a rung on that percentage is the one false
+   * wall there is: it passes over work the account can still pay for, and the
+   * task then waits for a reset that was never going to matter.
+   *
+   * Stated rather than derived, because only the operator knows which models a
+   * provider is currently sponsoring. Getting it wrong in this direction is the
+   * safe one: a metered rung left out is dispatched on an empty account and
+   * meets the wall itself, which is where the fleet stood before any of this was
+   * read at all.
+   */
+  readonly unmetered?: boolean | undefined;
+
+  /**
+   * How hard the model thinks: `low`, `medium`, or `auto` where the harness
+   * decides. A rung takes its model's level from the registry; a reviewer
+   * states its own. The adapter turns it into the flag the harness takes, and
+   * passes nothing for a harness that has none.
+   */
+  readonly thinking?: string | undefined;
+}
+
+/** One rung of the ladder: a seat that writes, at a level. */
+export interface Rung extends Seat {
+  /**
+   * The level this rung stands at. Levels climb in number, and the rungs of one
+   * level are peers. An integer the operator sets (`foreman ladder level`).
+   */
+  readonly level: number;
 
   /**
    * Whether foreman may dispatch this rung. Absent means yes.
@@ -75,46 +109,11 @@ export interface Rung {
   /**
    * Whether this rung may author. Absent means yes.
    *
-   * Independent of `enabled`: a free model that must never review stays on the
-   * ladder with `review: false`, and one that must never write keeps `author:
-   * false`, without retiring either. The `ladder` model rule and a pin to this
-   * rung as an author both require it on.
+   * Independent of `enabled`: a model that must never write keeps `author:
+   * false` without being retired. The `ladder` model rule and a pin to this
+   * rung both require it on.
    */
   readonly author?: boolean | undefined;
-
-  /**
-   * Whether this rung may review. Absent means yes.
-   *
-   * The `above` model rule and a pin to this rung as a reviewer both require
-   * it on. A ladder whose every higher rung has review off parks the task for
-   * the operator, the same as when every reviewer has already stopped.
-   */
-  readonly review?: boolean | undefined;
-
-  /**
-   * Whether the account's allowance says nothing about this rung's room.
-   * Absent means the allowance describes it.
-   *
-   * A model served on promotional access — a launch give-away, a partner's
-   * sponsored endpoint — draws on a pool that is not the one the account's
-   * percentage measures. Walling such a rung on that percentage is the one false
-   * wall there is: it passes over work the account can still pay for, and the
-   * task then waits for a reset that was never going to matter.
-   *
-   * Stated rather than derived, because only the operator knows which models a
-   * provider is currently sponsoring. Getting it wrong in this direction is the
-   * safe one: a metered rung left out is dispatched on an empty account and
-   * meets the wall itself, which is where the fleet stood before any of this was
-   * read at all.
-   */
-  readonly unmetered?: boolean | undefined;
-
-  /**
-   * How hard the model thinks: the registry's level for it (`low`, `medium`),
-   * or `auto` where the harness decides. The adapter turns it into the flag the
-   * harness takes, and passes nothing for a harness that has none.
-   */
-  readonly thinking?: string | undefined;
 }
 
 /** Whether foreman may dispatch a rung: everything but an explicit retirement. */
@@ -123,11 +122,8 @@ export const isEnabled = (rung: Rung): boolean => rung.enabled !== false;
 /** Whether this rung may take an author block (`ladder` or a pin). */
 export const mayAuthor = (rung: Rung): boolean => rung.author !== false;
 
-/** Whether this rung may take a review block (`above` or a pin). */
-export const mayReview = (rung: Rung): boolean => rung.review !== false;
-
-/** Whether this rung's room is described by the allowance of its account. */
-export const isMetered = (rung: Rung): boolean => rung.unmetered !== true;
+/** Whether this entry's room is described by the allowance of its account. */
+export const isMetered = (seat: Seat): boolean => seat.unmetered !== true;
 
 /**
  * Which rung authors next, and why there is none when there is none.
@@ -208,10 +204,14 @@ export const authorFor = (
 const turnOrder = (lastStarts: LastStarts): Order.Order<Rung> =>
   Order.combine(
     Order.mapInput(Order.Number, (rung: Rung) => rung.level),
-    Order.mapInput(
-      Order.Number,
-      (rung: Rung) => lastStarts.get(rung.name)?.getTime() ?? Number.NEGATIVE_INFINITY,
-    ),
+    leastRecentFirst(lastStarts),
+  );
+
+/** The seat whose last run started longest ago first; one that never started before all. */
+export const leastRecentFirst = (lastStarts: LastStarts): Order.Order<Seat> =>
+  Order.mapInput(
+    Order.Number,
+    (seat: Seat) => lastStarts.get(seat.name)?.getTime() ?? Number.NEGATIVE_INFINITY,
   );
 
 /**
@@ -282,158 +282,90 @@ export const highestFailure = (
 export const levelSpent = (attempts: number, attemptsPerLevel: number): boolean =>
   attempts >= attemptsPerLevel;
 
-/**
- * Who reads the work of a given rung, or nothing when no account can pay.
- *
- * The next rung up, so cheap work gets expensive eyes — which is where most of
- * review's value is. The top rung reviews itself: fresh eyes on the same model
- * still catch things, because the reviewer arrives with no sunk cost in the
- * implementation. Work with no author recorded gets the top rung, since nothing
- * says how much judgement it needs.
- *
- * `walled` names the rungs whose account is spent, and the search steps past
- * them to the next rung that can be paid for. An allowance is evidence about a
- * wallet, not about a model, so a spent rung must not stop a diff being read
- * while another account higher up the ladder still has room — that would idle
- * the fleet on money rather than on judgement.
- *
- * **Upward only.** The author's rank records what the work has already earned,
- * and resolving a walled rung downward would silently hand finished work to a
- * model that failed it. Better to leave the review unstarted, which is what
- * `undefined` says: every rung that could read this diff is spent, and the tick
- * passes the task over until an allowance resets.
- *
- * `failed` names rungs whose reviewers already stopped on this task without a
- * verdict; the search starts above the highest of them and the author. When
- * none is left the answer is `undefined` however much allowance remains, so a
- * caller that must tell that from a spent account asks again with no `walled`.
- *
- * Model rungs only. A person intervening in a review takes the pane over; they
- * are never dispatched into one.
- */
-export const reviewerFor = (
-  ladder: Ladder,
-  author: string | undefined,
-  walled: ReadonlySet<string> = new Set(),
-  failed: ReadonlyArray<string> = [],
-): Rung | undefined => {
-  // The reviewer must outrank the author and every reviewer that already
-  // stopped without a verdict on this task.
-  const rankOfName = (name: string) => {
-    const rank = rankOf(ladder, name);
-    return rank === undefined ? [] : [rank];
-  };
-  // A name no longer on the ladder positions nothing, so it cannot exhaust it.
-  const failedRanks = failed.flatMap(rankOfName);
-  const ranks = [...(author === undefined ? [] : rankOfName(author)), ...failedRanks];
-  const rank = ranks.length === 0 ? undefined : Math.max(...ranks);
-  const higher = rank === undefined ? [] : ladder.slice(rank + 1).filter(isEnabled);
-  const above = higher.filter(mayReview);
-  // An unrecognised author, and an author already at the top, fall back to the
-  // top review-on rung, which reviews itself. Enabled rungs above with review
-  // off are not that case: nobody may read this, so the answer is none — the
-  // same park as when every reviewer has already stopped. A failed reviewer
-  // ranked below the author (the ladder was reordered since) rules out nothing.
-  const top = topOf(ladder);
-  const topRank = top === undefined ? undefined : rankOf(ladder, top.name);
-  const candidates =
-    above.length > 0
-      ? above
-      : higher.length === 0 &&
-          top !== undefined &&
-          !failed.includes(top.name) &&
-          (rank === undefined || (topRank !== undefined && topRank >= rank))
-        ? [top]
-        : [];
-  return candidates.find((rung) => !walled.has(rung.name));
-};
-
-/**
- * The dearest review-enabled rung, which reviews itself when nothing stands
- * above the author. Absent when every rung has review off.
- */
-export const topOf = (ladder: Ladder): Rung | undefined => {
-  const reviewable = ladder.filter((rung) => isEnabled(rung) && mayReview(rung));
-  return reviewable[reviewable.length - 1];
-};
-
 /** The rungs foreman may dispatch, in rating order — what a chooser offers. */
 export const dispatchable = (ladder: Ladder): ReadonlyArray<Rung> => ladder.filter(isEnabled);
 
 /**
- * The account a rung spends, which is what has an allowance.
+ * The account a seat spends, which is what has an allowance.
  *
- * opencode names a model `<provider>/<model>`, so for every rung that names one
+ * opencode names a model `<provider>/<model>`, so for every seat that names one
  * the account is already written down and stating it again would let the two
  * drift. The claude harness is the one default that is not in doubt — the
  * `claude` binary is always signed into the claude.ai account, however it
- * picks its model — so a rung on it spends `claude` even when it names no
- * model. Any other rung that names no model, or names one without a provider
+ * picks its model — so a seat on it spends `claude` even when it names no
+ * model. Any other seat that names no model, or names one without a provider
  * on the front, has to be told; until it is, foreman cannot know whether that
- * rung has room left.
+ * seat has room left.
  */
-export const providerOf = (rung: Rung): string | undefined => {
-  if (rung.provider !== undefined) return rung.provider;
-  if (rung.model !== undefined) {
-    const [provider, ...rest] = rung.model.split("/");
+export const providerOf = (seat: Seat): string | undefined => {
+  if (seat.provider !== undefined) return seat.provider;
+  if (seat.model !== undefined) {
+    const [provider, ...rest] = seat.model.split("/");
     if (rest.length > 0 && provider !== undefined && provider.length > 0) return provider;
   }
-  return rung.harness === "claude" ? "claude" : undefined;
+  return seat.harness === "claude" ? "claude" : undefined;
 };
 
 /**
- * Every distinct account the ladder draws on, which is what to ask about.
+ * Every distinct account the ladder and the reviewers draw on, which is what
+ * to ask about.
  *
  * Dispatchable rungs only: a retired rung keeps its place so old failures still
  * position, but nothing will ever spend its account again, and an allowance
  * nothing can spend is not news.
  *
- * Metered rungs only, for the same reason and the same way: an account whose
- * every rung is fed by a promotional pool is asked nothing, because no reading
+ * Metered seats only, for the same reason and the same way: an account whose
+ * every seat is fed by a promotional pool is asked nothing, because no reading
  * of it could stop a dispatch. It is probed once per tick, so this saves a
  * request per tick rather than tidying a list.
  */
-export const providersOf = (ladder: Ladder): ReadonlyArray<string> => [
+export const providersOf = (
+  ladder: Ladder,
+  reviewers: ReadonlyArray<Seat> = [],
+): ReadonlyArray<string> => [
   ...new Set(
-    dispatchable(ladder)
-      .filter(isMetered)
-      .flatMap((rung) => {
-        const provider = providerOf(rung);
-        return provider === undefined ? [] : [provider];
-      }),
+    [...dispatchable(ladder), ...reviewers].filter(isMetered).flatMap((seat) => {
+      const provider = providerOf(seat);
+      return provider === undefined ? [] : [provider];
+    }),
   ),
 ];
 
 /**
- * Every rung on any of the named accounts, metered or not.
+ * Every seat on any of the named accounts, metered or not.
  *
  * A stop on an account's usage wall is the account's own text, not its pool's,
- * so a promotional rung on that account is kept off too. Walls are per task, so
- * these rungs are removed from that task's author choice only.
+ * so a promotional seat on that account is kept off too. Walls are per task, so
+ * these seats are removed from that task's choice only.
  */
-export const rungsOnAccounts = (
-  ladder: Ladder,
+export const seatsOnAccounts = (
+  seats: ReadonlyArray<Seat>,
   providers: ReadonlyArray<string>,
 ): ReadonlySet<string> =>
   new Set(
-    ladder
-      .filter((rung) => {
-        const provider = providerOf(rung);
+    seats
+      .filter((seat) => {
+        const provider = providerOf(seat);
         return provider !== undefined && providers.includes(provider);
       })
-      .map((rung) => rung.name),
+      .map((seat) => seat.name),
   );
 
 /**
  * The rungs a spent account stops: the dispatchable ones on it whose room that
  * allowance describes.
+ */
+export const rungsOn = (ladder: Ladder, provider: string): ReadonlyArray<string> =>
+  seatsOn(dispatchable(ladder), provider);
+
+/**
+ * The seats a spent account stops: those on it whose room that allowance
+ * describes.
  *
- * An unmetered rung is left out even though it draws on the same account. The
- * reading is about the metered pool, and a rung fed by a promotional one has
+ * An unmetered seat is left out even though it draws on the same account. The
+ * reading is about the metered pool, and a seat fed by a promotional one has
  * room whatever the pool says — so including it would stop work the account can
  * still do.
  */
-export const rungsOn = (ladder: Ladder, provider: string): ReadonlyArray<string> =>
-  dispatchable(ladder)
-    .filter((rung) => providerOf(rung) === provider && isMetered(rung))
-    .map((rung) => rung.name);
+export const seatsOn = (seats: ReadonlyArray<Seat>, provider: string): ReadonlyArray<string> =>
+  seats.filter((seat) => providerOf(seat) === provider && isMetered(seat)).map((seat) => seat.name);

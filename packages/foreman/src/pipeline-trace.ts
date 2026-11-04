@@ -4,9 +4,9 @@
 // Nothing is read from or written to the store. The simulator
 // (`pipeline-simulate.ts`) moves its tasks with the same events.
 import type { Run } from "tasks";
-import { type BlockRung, rungAt } from "./agent-rung.ts";
+import { type BlockSeat, seatAt } from "./agent-rung.ts";
 import { wallAccountOf } from "./harness.ts";
-import { providerOf } from "./ladder.ts";
+import { providerOf, type Seat } from "./ladder.ts";
 import {
   type AgentNode,
   type CheckNode,
@@ -18,6 +18,7 @@ import {
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import type { Item } from "./records.ts";
+import { seatOf } from "./reviewers.ts";
 import { newRunFor } from "./run-record.ts";
 import { applyRow, openAgentOf, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 
@@ -44,7 +45,7 @@ export interface TraceStep {
   readonly event: TraceEvent | undefined;
   readonly placement: Placement;
   /** The rung an agent block chose for its run; none away from an agent block. */
-  readonly rung: BlockRung | undefined;
+  readonly rung: BlockSeat | undefined;
   /** Why the task is parked for the operator, which ends the trace. */
   readonly parked: string | undefined;
   /** The task's tip, made up: `c0` where its branch starts, then one more for each author handoff. */
@@ -157,7 +158,7 @@ const stepJson = (step: TraceStep) => ({
     step.rung === undefined
       ? null
       : step.rung._tag === "Dispatch"
-        ? { _tag: "Dispatch", name: step.rung.rung.name }
+        ? { _tag: "Dispatch", name: step.rung.seat.name }
         : step.rung,
   parked: step.parked ?? null,
   tip: step.tip,
@@ -214,7 +215,7 @@ const dispatched = (
 ): {
   readonly task: Pretend;
   readonly placement: Placement;
-  readonly rung: BlockRung | undefined;
+  readonly rung: BlockSeat | undefined;
 } => {
   const placement = place(rules.pipeline, factsOf(task, rules.pipeline));
   if (
@@ -226,9 +227,9 @@ const dispatched = (
     const open = placement._tag === "At" && placement.node.kind === "agent";
     return { task, placement, rung: open ? openRung(task, rules) : undefined };
   }
-  const rung = rungAt(rules.ladder, placement.node, task, new Set());
+  const rung = seatAt(rules, placement.node, task, { author: new Set(), review: new Set() });
   if (rung._tag !== "Dispatch") return { task, placement, rung };
-  const opened = started(task, placement.node, rung.rung, rules);
+  const opened = started(task, placement.node, rung.seat, rules);
   return {
     task: opened,
     placement: place(rules.pipeline, factsOf(opened, rules.pipeline)),
@@ -236,23 +237,23 @@ const dispatched = (
   };
 };
 
-/** The rung of the task's open agent run, as a dispatch chose it. */
-export const openRung = (task: Pretend, rules: StepRules): BlockRung | undefined => {
-  const name = openAgentOf(rules.pipeline, task)?.run.rung;
-  const rung = rules.ladder.find((candidate) => candidate.name === name);
-  return rung === undefined ? undefined : { _tag: "Dispatch", rung };
+/** The seat of the task's open agent run, as a dispatch chose it. */
+export const openRung = (task: Pretend, rules: StepRules): BlockSeat | undefined => {
+  const run = openAgentOf(rules.pipeline, task)?.run;
+  const seat = run === undefined ? undefined : seatOf(rules, run);
+  return seat === undefined ? undefined : { _tag: "Dispatch", seat };
 };
 
 /** The task once a dispatch at `block` opens its run on `rung`. */
 export const started = <T extends Pretend>(
   task: T,
   block: AgentNode,
-  rung: StepRules["ladder"][number],
+  rung: Seat,
   rules: StepRules,
 ): T => folded(task, [startOf(task, block, rung)], rules);
 
 /** The event a dispatch at `block` makes: a reviewer reads the task's tip. */
-const startOf = (task: Pretend, block: AgentNode, rung: StepRules["ladder"][number]): RunEvent => {
+const startOf = (task: Pretend, block: AgentNode, rung: Seat): RunEvent => {
   const run = newRunFor({
     task,
     branch: `foreman/${task.id}`,
@@ -365,14 +366,14 @@ const checkedAt = (task: Pretend, block: CheckNode, ending: "passed" | "failed")
  */
 export const offersAt = (
   placement: Placement,
-  rung: BlockRung | undefined,
+  rung: BlockSeat | undefined,
 ): ReadonlyArray<TraceEvent> => {
   if (placement._tag !== "At") return [];
   const { node, state } = placement;
   switch (node.kind) {
     case "agent": {
       if (state !== "running") return [];
-      const named = rung?._tag === "Dispatch" && wallAccountOf(rung.rung) !== undefined;
+      const named = rung?._tag === "Dispatch" && wallAccountOf(rung.seat) !== undefined;
       return [
         ...node.exits.map((exit) => `${EXIT}${exit.name}`),
         "stop",

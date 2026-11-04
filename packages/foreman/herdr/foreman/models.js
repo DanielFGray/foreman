@@ -1,13 +1,14 @@
-// The Foreman pane's Models view: the ladder's rungs and the council, from
-// one `foreman ladder --json`. A model can be a worker, a council member, both
-// or neither, so three columns show it: Workers (the rungs, cheapest first,
-// in rank order), Models (the models that are neither) and Council.
+// The Foreman pane's Models view: the ladder's rungs and the reviewers, from
+// one `foreman ladder --json`. A model can be a worker, a reviewer, both or
+// neither, so three columns show it: Workers (the rungs, cheapest first, in
+// rank order), Models (the models that are neither) and Reviewers.
 //
 // Every change is one foreman command, and the view reads `foreman ladder
 // --json` again after it: the lists never change before foreman answers.
 // - A worker dragged to another place in Workers runs `foreman ladder move`.
-// - A worker or a Models card dropped on Council runs `foreman council add`.
-// - A Council card dropped on Models runs `foreman council remove`.
+// - A worker or a Models card dropped on Reviewers runs `foreman reviewers add`,
+//   which names the reviewer after its model, at the model's thinking level.
+// - A Reviewers card dropped on Models runs `foreman reviewers remove`.
 // - A click on a rung's enabled mark runs `foreman ladder enable|disable`.
 //
 // The view lays its cards out itself, so a drag's targets are the rectangles
@@ -15,7 +16,8 @@
 //
 // Under the columns, Accounts lists each account the ladder draws on: its
 // quota row from state.json (what it has left, or why it is unreadable) and
-// the rungs it pays for (`accounts` there). A worker card names its account.
+// the rungs and reviewers it pays for (`accounts` there). A worker card and a
+// reviewer card name their account.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { moveArgs } from "./ladder-order.js";
@@ -32,14 +34,14 @@ const COLUMN_MIN = 260;
 const COLUMNS = [
   { key: "workers", label: "Workers", color: (t) => t.working },
   { key: "models", label: "Models", color: (t) => t.muted },
-  { key: "council", label: "Council", color: (t) => t.accent },
+  { key: "reviewers", label: "Reviewers", color: (t) => t.accent },
 ];
-const [WORKERS, MODELS, COUNCIL] = [0, 1, 2];
+const [WORKERS, MODELS, REVIEWERS] = [0, 1, 2];
 
 export class Models {
   constructor(pane) {
     this.pane = pane;
-    // The last `foreman ladder --json`: { rungs, models }.
+    // The last `foreman ladder --json`: { rungs, models, reviewers }.
     this.ladder = null;
     this.bounds = null;
     this.scroll = unscrolled(COLUMNS.length);
@@ -64,14 +66,13 @@ export class Models {
   // Each column's cards. A card's key is unique across the view.
   columns() {
     if (this.ladder === null) return [[], [], []];
-    const { rungs, models } = this.ladder;
-    const workers = new Set(rungs.map((rung) => rung.model));
+    const { rungs, models, reviewers } = this.ladder;
+    const placed = new Set([...rungs, ...reviewers].map((seat) => seat.model));
     return [
       rungs.map((rung) => ({ key: `w:${rung.rung}`, kind: "worker", rung, model: rung.model, title: rung.rung })),
-      models.filter((one) => !one.council && !workers.has(one.model))
+      models.filter((one) => !placed.has(one.model))
         .map((one) => ({ key: `m:${one.model}`, kind: "model", model: one.model, title: one.model, entry: one })),
-      models.filter((one) => one.council)
-        .map((one) => ({ key: `c:${one.model}`, kind: "council", model: one.model, title: one.model, entry: one })),
+      reviewers.map((one) => ({ key: `r:${one.name}`, kind: "reviewer", model: one.model, title: one.name, entry: one })),
     ];
   }
 
@@ -90,8 +91,8 @@ export class Models {
   }
 
   // The states a card can reach: where it stands, which runs nothing; for a
-  // worker, every other place in Workers; for a model not in the council, the
-  // foot of Council; for a council card, the foot of Models.
+  // worker, every other place in Workers; for a model no reviewer runs, the
+  // foot of Reviewers; for a reviewer card, the foot of Models.
   targets(card, columns) {
     if (this.bounds === null) return [];
     const window = (rect) => ({ ...rect, x: rect.x + this.bounds.x, y: rect.y + this.bounds.y });
@@ -107,14 +108,14 @@ export class Models {
         targets.push({ rect: at(moved), run: (cx) => this.run(moveArgs(rungs, card.rung.rung, index), cx) });
       }
     }
-    const inCouncil = this.ladder.models.some((one) => one.model === card.model && one.council);
-    if (card.kind !== "council" && !inCouncil) {
-      const moved = without.map((cards, column) => column === COUNCIL ? [...cards, card] : cards);
-      targets.push({ rect: at(moved), run: (cx) => this.run(["council", "add", card.model], cx) });
+    const reviews = this.ladder.reviewers.some((one) => one.model === card.model);
+    if (card.kind !== "reviewer" && !reviews) {
+      const moved = without.map((cards, column) => column === REVIEWERS ? [...cards, card] : cards);
+      targets.push({ rect: at(moved), run: (cx) => this.run(["reviewers", "add", card.model], cx) });
     }
-    if (card.kind === "council") {
+    if (card.kind === "reviewer") {
       const moved = without.map((cards, column) => column === MODELS ? [...cards, card] : cards);
-      targets.push({ rect: at(moved), run: (cx) => this.run(["council", "remove", card.model], cx) });
+      targets.push({ rect: at(moved), run: (cx) => this.run(["reviewers", "remove", card.entry.name], cx) });
     }
     return targets;
   }
@@ -150,7 +151,7 @@ export class Models {
     return v_flex().flex_1().min_h(0).child(board).child(this.accounts(t));
   }
 
-  // Each account: its quota row, and the rungs that draw on it.
+  // Each account: its quota row, and the rungs and reviewers that draw on it.
   accounts(t) {
     const published = this.pane.published;
     const quota = (published?.rows ?? []).filter((row) => row.view === "quota");
@@ -158,11 +159,12 @@ export class Models {
       .child(div().text_size(11).text_color(t.dim).child("ACCOUNTS"))
       .when(quota.length === 0, (el) => el.child(div().text_color(t.muted).child("no account reading yet")))
       .children(quota.map((row) => {
-        const rungs = published.accounts.find((account) => account.provider === row.key)?.rungs ?? [];
+        const account = published.accounts.find((one) => one.provider === row.key);
+        const seats = [...(account?.rungs ?? []), ...(account?.reviewers ?? []).map((name) => `reviewer ${name}`)];
         return v_flex().gap(1)
           .child(h_flex().gap(8)
             .child(div().font_semibold().child(row.label))
-            .child(div().text_color(t.muted).truncate().child(rungs.length === 0 ? "no rung draws on it" : rungs.join(", "))))
+            .child(div().text_color(t.muted).truncate().child(seats.length === 0 ? "nothing draws on it" : seats.join(", "))))
           .when(row.detail != null, (el) => el.child(div().text_size(11).text_color(t.muted).child(row.detail)));
       }));
   }
@@ -178,7 +180,11 @@ export class Models {
     const dim = rung !== null && !rung.enabled;
     const tier = rung?.tier ?? card.entry.tier;
     const account = rung === null ? null : this.accountOf(rung.rung);
-    const detail = rung === null ? card.entry.harness : [rung.model, rung.thinking, account].filter(Boolean).join(" · ");
+    const detail = rung !== null
+      ? [rung.model, rung.thinking, account].filter(Boolean).join(" · ")
+      : card.kind === "reviewer"
+        ? [card.entry.model, card.entry.thinking, card.entry.provider].filter(Boolean).join(" · ")
+        : card.entry.harness;
     return h_flex().id(`models-card-${card.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
       .rounded(6).overflow_hidden().bg(t.surface).border(1).border_color(t.border)
       .when(ghost, (el) => el.opacity(0.35))

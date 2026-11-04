@@ -8,7 +8,7 @@
 // - Tasks: in Board mode (`board.js`), the dispatcher's board columns, with a
 //   detail strip for the selected card (`detail.js`); in Graph mode
 //   (`tasks.js`), the task graph by what each task waits for.
-// - Models (`models.js`): the ladder, the council and the accounts.
+// - Models (`models.js`): the ladder, the reviewers and the accounts.
 //
 // The project is the one foreman uses: the folder name of the main checkout
 // the shown space's folder sits in, asked of git, so it holds while no
