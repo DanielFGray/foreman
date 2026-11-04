@@ -73,13 +73,10 @@ const pinned = {
 describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      version: 5,
-      pipelines: { amux: pinned },
-    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: { amux: pinned } });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 5, pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -134,16 +131,6 @@ describe("reading the pipelines file", () => {
     );
     expect(read.error).toStartWith(`${path} does not decode: `);
     expect(read.error?.length).toBeGreaterThan(`${path} does not decode: `.length);
-  });
-
-  // The cutover is the one reader of the older forms, so a file in one stops
-  // every project rather than placing tasks by exits with no ids.
-  test("a file from before exit ids does not decode", async () => {
-    writeFileSync(path, JSON.stringify({ version: 4, pipelines: {} }));
-    const read = await Effect.runPromise(
-      readPipelines(path).pipe(Effect.provide(BunServices.layer)),
-    );
-    expect(read.error).toStartWith(`${path} does not decode: `);
   });
 });
 

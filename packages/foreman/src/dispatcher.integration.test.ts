@@ -606,7 +606,7 @@ process.env["FOREMAN_PIPELINES"] = join(policies, "pipelines.json");
 beforeEach(() =>
   writeFileSync(
     join(policies, "pipelines.json"),
-    JSON.stringify({ version: 5, pipelines: { test: STANDARD_PIPELINES.worktree } }),
+    JSON.stringify({ pipelines: { test: STANDARD_PIPELINES.worktree } }),
   ),
 );
 afterAll(() => {
@@ -2192,7 +2192,7 @@ describe("a policy change", () => {
 describe("a route's workspace blocks", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   const BRANCH_ONLY = STANDARD_PIPELINES.checkout.nodes;
@@ -2796,7 +2796,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           }
         : node,
     );
-    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ pipelines: { test: { nodes } } }));
     try {
       const id = "ts-looped";
       const world = new World(item(id, "open", []));
@@ -2846,7 +2846,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 describe("a drawn pipeline", () => {
   const drawn = join(policies, "pipelines.json");
   const draw = (nodes: ReadonlyArray<PipelineNode>) =>
-    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: { nodes } } }));
+    writeFileSync(drawn, JSON.stringify({ pipelines: { test: { nodes } } }));
   afterEach(() => rmSync(drawn, { force: true }));
 
   /** The standard pipeline with `change` made to its author block. */
@@ -3283,7 +3283,7 @@ describe("foreman pipeline trace", () => {
   /** Runs the events through the dispatcher and through the trace, and compares where each puts the task. */
   const agree = async (ladder: Ladder, pipeline: Pipeline, events: ReadonlyArray<TraceEvent>) => {
     if (pipeline !== STANDARD_PIPELINES.worktree) {
-      writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: pipeline } }));
+      writeFileSync(drawn, JSON.stringify({ pipelines: { test: pipeline } }));
     }
     const world = await played(ladder, pipeline, events);
     const trace = traceOf({ labels: [], size: undefined, priority: 1, parent: undefined }, events, {
@@ -3403,9 +3403,7 @@ describe("a pull-request landing", () => {
       { kind: "gate", id: "publish-gate", step: "publish", next: "land-gate" },
     ],
   };
-  beforeEach(() =>
-    writeFileSync(drawn, JSON.stringify({ version: 5, pipelines: { test: PULL_REQUEST } })),
-  );
+  beforeEach(() => writeFileSync(drawn, JSON.stringify({ pipelines: { test: PULL_REQUEST } })));
 
   const steps = (modes: { publish: string; land: string }, extra: object = {}) =>
     usePolicy({
