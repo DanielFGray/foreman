@@ -329,8 +329,10 @@ export default class Foreman extends View {
 
   // Takes a reading of the pipeline, and drops a pick that names a block it no longer has.
   showing(shown, cx) {
+    const before = this.shown === null ? undefined : this.selectedNode();
     this.shown = shown;
     if (this.selected !== null && !this.view().drawing.blocks.some((block) => block.id === this.selected)) this.select(null);
+    else this.editor.follow(before, this.selectedNode());
     if (this.fitted) this.fit(cx);
     // A change to the draft can change every step after it.
     if (this.sim.on) this.sim.run(cx);

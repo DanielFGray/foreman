@@ -10,21 +10,11 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { chip, picker, portName } from "./parts.js";
+import { FIELDS, changedSettings, settingsOf } from "./editor-settings.js";
 
 // The ends of a route, in the order `SwapEnd` turns one into the next.
 const ENDS = ["land", "done", "park"];
 
-// Each text setting: its label, what the empty input says, and the value it
-// starts with for a block (`newRoute` and `newSource` always start empty).
-const FIELDS = {
-  filter: { label: "filter", placeholder: "empty takes every task", of: (node) => node.filter },
-  model: { label: "model", placeholder: "ladder, above, or a rung's name", of: (node) => node.model },
-  slots: { label: "slots", placeholder: "how many at once; empty is no limit", of: (node) => node.slots ?? "" },
-  command: { label: "command", placeholder: "the command that must pass", of: (node) => node.command },
-  when: { label: "when", placeholder: "a tasks filter", of: () => "" },
-  newRoute: { label: "new route", placeholder: "a tasks filter, then Enter", of: () => "" },
-  newSource: { label: "filter", placeholder: "a tasks filter; empty takes every task", of: () => "" },
-};
 
 export class Editor {
   // Runs in the pane's `init`, the one place besides a handler that may make inputs.
@@ -48,7 +38,12 @@ export class Editor {
   // Fills the inputs from the block just selected.
   load(node) {
     this.route = null;
-    for (const [key, field] of Object.entries(FIELDS)) this.inputs[key].set_value(node === undefined ? "" : String(field.of(node) ?? ""));
+    for (const [key, value] of settingsOf(node)) this.inputs[key].set_value(value);
+  }
+
+  // Refills the inputs whose settings a reading changed under them.
+  follow(before, after) {
+    for (const [key, value] of changedSettings(before, after)) this.inputs[key].set_value(value);
   }
 
   // Enter in a text setting: the change it makes to the selected block, or the new source.
