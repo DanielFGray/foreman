@@ -230,9 +230,14 @@ running a flow the operator did not draw is worse than stopping.
   block, match `[a-z-]+`, and are not process endings. A check's exits are
   `passed` and `failed`, and `fails: self` is refused there: a check has no rung.
   A review block refuses `fails: self` too: a reviewer is no rung.
-- Every cycle can end: an exit on it has `fails`, or a router on it leaves on a
-  count that grows each lap (`exits:<name>>=N` or `attempts>=N`). A cycle
-  through no work block is a problem.
+- Every lap of every cycle can end: each lap passes an exit that has `fails`,
+  or a router that leaves on a count that grows each lap (`exits:<name>>=N` or
+  `attempts>=N`). A smaller loop inside a cycle that passes neither is a
+  problem, even when the larger cycle charges. A cycle through no work block is
+  a problem.
+- A router filter that counts an exit (`exit:<name>` or `exits:<name>>=N`)
+  names an exit some block declares, or a process ending. A rename or a removal
+  that leaves the filter counting nothing is a problem.
 - **Every path to a land or a done passes a review agent after its last
   author.** With the reviewers taken out of the graph, no land or done is
   reachable from a source or an author.

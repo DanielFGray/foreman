@@ -54,8 +54,9 @@ a claim made by hand.
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
 
-The policy file (`src/policy.ts`), the pipelines file (`src/pipeline-file.ts`)
-and the drafts file beside it (`src/pipeline-draft.ts`)
+The policy file (`src/policy.ts`), the pipelines file (`src/pipeline-file.ts`),
+the drafts file beside it (`src/pipeline-draft.ts`) and the instructions files
+in `prompts/` beside them (`src/prompt.ts`)
 are the only durable things foreman holds, because nothing in the world records
 the operator's intention. The policy holds `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `publish`, `land`)
@@ -83,6 +84,10 @@ pipeline changed since the draft began. `foreman pipeline trace` reads the
 draft, else the drawn pipeline, else the standard one, and writes nothing.
 `foreman pipeline simulate` reads the draft and the pipeline the project runs,
 and writes nothing.
+`foreman pipeline prompt` renders an agent block of the draft, else of the
+drawn pipeline, else of the standard one, for a pretend task, and writes nothing.
+`foreman pipeline instructions` prints an instructions file, or writes the
+operator's copy in `prompts/`, which the next dispatch reads.
 
 `modeOf` in `src/policy.ts` reads three states out of it. `paused` is the
 operator's stop; `idle` is every step off and no grant; `running` is anything
@@ -126,8 +131,8 @@ The wake queue beside it holds no state: it only ends the poll wait early, after
 `commanded` in the dispatcher's own process. A one-shot command in another
 process does not wake it: the dispatcher reads its change on the next poll.
 
-**Durable state beyond the policy, pipelines and drafts files and foreman's
-own records is a wall.** Foreman's own records are what it writes about its
+**Durable state beyond the policy, pipelines, drafts and instructions files and
+foreman's own records is a wall.** Foreman's own records are what it writes about its
 runs, in its database beside the task store and keyed by task id: the runs, the
 charges (a rung charged with failing a task) and the parks (a task waiting for
 the operator), so a tracker carries only task state. Needing any other state
@@ -913,6 +918,11 @@ draws the `drawing` that `foreman pipeline show --json` prints, laid out by
 `--flow` is `down` in a pane taller than it is wide, else `across`. It edits a
 project's draft through `foreman pipeline edit`, `save` and `discard`, and the
 block kinds, steps, roles and landings it offers are the `choices` in that JSON.
+An exit wired into a block that reaches it back is a back wire, laid out on a
+return lane past every block and drawn dashed. While the operator edits an agent
+block, the pane edits its instructions through `foreman pipeline instructions`
+and shows the prompt the block sends a pretend task from `foreman pipeline
+prompt`, which renders through `Prompts.agent` as `foreman prompt` does.
 `foreman pipeline trace <project> --json` walks a pretend task through the
 draft with the events a front end chose, from scratch on each call
 (`src/pipeline-trace.ts`). It folds the dispatcher's own rows over a task held

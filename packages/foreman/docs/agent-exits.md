@@ -1,9 +1,9 @@
 # Agent exits: the operator designs the contract
 
-Status: rules 1 to 6 and the store's endings are built (ts-48b15f, ts-c3fdcf).
-Rule 7, the State section and the page's exit editing are not. "What is built"
-says where the build differs from the text below; where they differ, that
-section is the rule.
+Status: rules 1 to 6, the store's endings and the page's exit editing are
+built (ts-48b15f, ts-c3fdcf, ts-13f794). Rule 7 and the State section are
+not. "What is built" says where the build differs from the text below; where
+they differ, that section is the rule.
 
 ## What is built
 
@@ -35,7 +35,27 @@ section is the rule.
   An unknown placeholder or a missing instructions file stops the pipeline.
   The onboard and diagnose prompts are not agent blocks: they stay whole
   files, with the same lookup and their own placeholders.
-
+  The instructions foreman ships name no exit: only the generated Exits
+  section names exits, from the block, so a renamed exit cannot leave the
+  instructions contradicting it. The one exit name foreman's code reads is
+  `already-done` (`ALREADY_DONE` in `src/pipeline.ts`), and the Exits section
+  explains it only to an author block that declares it. A drawing that renames
+  it loses the explanation and the meaning together. An operator's own
+  instructions may still name exits; validation does not read them for exit
+  names.
+- **The page.** The Foreman pane's inspector lists an agent's or a check's
+  exits from the block, each with where it leads and the rung it charges. The
+  operator adds, renames and removes an agent's exits, charges one, and leads
+  one to any block, an earlier one included, or back to the queue. Each is a
+  `PipelineChange` (`AddExit`, `RenameExit`, `RemoveExit`, `ChargeExit`,
+  `Rejoin`) sent through `foreman pipeline edit`. A rename leaves the router
+  filters and the runs that name the old exit as they are. A wire into a block
+  that reaches the block it leaves, no deeper from the sources, is a back wire
+  (`beltOf` in `src/pipeline-belt.ts`): it is laid out on a return lane past
+  every block and drawn dashed. The inspector edits the instructions an agent
+  reads with `foreman pipeline instructions`, and shows the prompt the block
+  sends a pretend task with `foreman pipeline prompt`, which renders through
+  `Prompts.agent` as `foreman prompt` does.
 Today the contract between an agent and foreman is fixed in two places: the
 prompts ("run `tasks verdict <id> approved|returned`") and the store
 (`REVIEW_ENDINGS`, `AUTHOR_ENDINGS` and `VERDICTS` in
@@ -132,14 +152,16 @@ a process outcome, not an exit.
 
    With these, an operator can send a third `returned` to park, or route
    `needs-tests` and `returned` differently out of one router.
-5. **Every cycle can end.** A cycle is valid when at least one of these is true:
-   - it passes a router with a route that leaves the cycle, and that route's
-     filter is a count that grows on each lap, such as `exits:returned>=3` or
+5. **Every cycle can end.** Each lap of a cycle passes at least one of these:
+   - a router with a route that leaves the cycle, and that route's filter is a
+     count that grows on each lap, such as `exits:returned>=3` or
      `attempts>=2`;
-   - one of its exits has `fails`. Each lap charges a rung, and a task that
-     every rung has failed parks, as today.
+   - an exit that has `fails`. Each lap charges a rung, and a task that every
+     rung has failed parks, as today.
 
-   Validation names each cycle that can loop forever. A gate stands before every
+   A smaller loop inside the cycle that passes neither can go round forever,
+   even when the larger cycle charges, so validation names it too. Validation
+   names each cycle that can loop forever. A gate stands before every
    work block in a cycle, as on any route, so the policy can stop a loop at any
    time.
 6. **The prompt's contract section comes from the drawing.** Foreman makes the
@@ -202,6 +224,7 @@ These are problems: a pipeline with any of them does not run.
   `[a-z-]+`.
 - An agent block has at least one exit.
 - Every cycle can end (rule 5).
+- A router filter that counts an exit names one some block declares.
 - Every block is reachable from a source, and from every block some route
   reaches a land, a done or a park. This replaces "no cycle" and "every path
   ends at a land, a done or a park".
@@ -253,10 +276,10 @@ The standard pipeline has no check block. The store's author ending
 - **`corrected` and `rereadReview` are removed.** They move a review run's
   commit after a correction round. Rule 2 records the commit when the exit is
   named, so nothing needs to move.
-- **The page.** The inspector lists an agent block's exits, which the operator
-  adds, renames and wires as router routes are edited today. A wire may point
-  back up the belt. The inspector also edits the instructions file and shows a
-  preview of the full prompt from `foreman prompt <role> <id>`.
+- **The page.** See "What is built". The prompt preview renders the draft's
+  block for a pretend task (`foreman pipeline prompt`), not a real task's
+  prompt (`foreman prompt <role> <id>`): a block being drawn has no task yet,
+  and `foreman prompt` reads the whole world first.
 
 ## Rules this replaces
 
