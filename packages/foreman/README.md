@@ -95,9 +95,9 @@ Foreman pane. Both write the file the same way, and the dispatcher reads it on e
 tick. With no file the fleet takes no step. A file that does not decode pauses
 the fleet, and the Foreman pane shows why.
 
-`foreman dispatch` and `foreman add --dispatch` are not gated: each starts the
-author you asked for. They are the operator's: each refuses a caller in a fleet
-worker's terminal, and a worker files with `foreman add` alone.
+`foreman dispatch` and `foreman add --dispatch` are not gated by the policy: each
+starts the author you asked for. They are the operator's: each refuses a caller
+in a fleet worker's terminal, and a worker files with `foreman add` alone.
 
 The poll interval is how long foreman waits to notice something nobody told it
 about.

@@ -103,7 +103,8 @@ ready` reads edges, never the text of a description.
   only, and `clear --project <name>` returns it to the default. The
   dispatcher reads the file on its next tick. A paused fleet, or one with no
   step on and no grant, writes nothing at all. `foreman dispatch` and
-  `foreman add --dispatch` are not gated: each starts the author you asked for.
+  `foreman add --dispatch` are not gated by the policy: each starts the author
+  you asked for.
   They refuse a caller in a fleet worker's terminal: workers file, you dispatch.
 - Sending a reviewer to a finished task, and landing an approved branch, both
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
