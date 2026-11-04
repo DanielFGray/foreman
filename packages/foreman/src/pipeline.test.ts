@@ -543,7 +543,7 @@ describe("validation", () => {
     );
   });
 
-  test("refuses a wire back to an earlier block", () => {
+  test("refuses a wire back to an earlier block that nothing lets leave the loop", () => {
     const problems = problemsOf(
       replace({ kind: "gate", id: "land-gate", step: "land", next: "author" }),
       OFFERS,

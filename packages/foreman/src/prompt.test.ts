@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import {
   type AgentNode,
   instructionProblems,
+  instructionsOf,
   STANDARD_PIPELINES,
   type Workspace,
 } from "./pipeline.ts";
@@ -463,8 +464,9 @@ describe("Prompts", () => {
 });
 
 // A drawing may rename or remove any exit, so the instructions foreman ships
-// name none: only the generated Exits section does, from the block itself.
-describe("the instructions foreman ships", () => {
+// for agent blocks name none: only the generated Exits section does, from the
+// block itself.
+describe("the instructions foreman ships for agent blocks", () => {
   const exitNames = new Set(
     Object.values(STANDARD_PIPELINES).flatMap((pipeline) =>
       pipeline.nodes.flatMap((node) =>
@@ -473,7 +475,13 @@ describe("the instructions foreman ships", () => {
     ),
   );
 
-  for (const name of ["author", "review"]) {
+  const shipped = new Set(
+    Object.values(STANDARD_PIPELINES).flatMap((pipeline) =>
+      pipeline.nodes.flatMap((node) => (node.kind === "agent" ? [instructionsOf(node)] : [])),
+    ),
+  );
+
+  for (const name of shipped) {
     test(`${name}.md names no exit`, () => {
       const text = readFileSync(join(import.meta.dir, "..", "prompts", `${name}.md`), "utf8");
       expect(text).not.toContain("foreman exit");

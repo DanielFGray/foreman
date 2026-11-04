@@ -35,8 +35,8 @@ they differ, that section is the rule.
   An unknown placeholder or a missing instructions file stops the pipeline.
   The onboard and diagnose prompts are not agent blocks: they stay whole
   files, with the same lookup and their own placeholders.
-  The instructions foreman ships name no exit: only the generated Exits
-  section names exits, from the block, so a renamed exit cannot leave the
+  The instructions foreman ships for agent blocks name no exit: only the
+  generated Exits section names exits, from the block, so a renamed exit cannot leave the
   instructions contradicting it. The one exit name foreman's code reads is
   `already-done` (`ALREADY_DONE` in `src/pipeline.ts`), and the Exits section
   explains it only to an author block that declares it. A drawing that renames

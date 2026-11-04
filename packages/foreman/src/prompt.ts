@@ -306,8 +306,8 @@ const verification = ({ task, repository, workspace, verify }: AgentRun): string
 
 /**
  * One line per exit the block declares, then what follows when the agent
- * names none. This is the only text that names an exit: the instructions
- * foreman ships name none, so a drawing that renames or removes one cannot
+ * names none. This is the only text an agent block's prompt uses to name an
+ * exit: the instructions foreman ships for agent blocks name none, so a drawing that renames or removes one cannot
  * leave them contradicting it. An author block that declares `ALREADY_DONE`,
  * the one exit name foreman's code reads, is also told when to name it.
  */
