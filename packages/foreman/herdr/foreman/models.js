@@ -20,12 +20,14 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { moveArgs } from "./ladder-order.js";
 import { refusalOf } from "./parts.js";
+import { HEAD, PAD, columnHead, columnsAcross, scrolledBy } from "./columns.js";
 
-const PAD = 12;
 const GAP = 8;
-const HEAD = 30;
 const CARD_H = 40;
 const STRIPE = 3;
+// Wider than a Board column: a card's first line holds the name, the tier and
+// the trial state, and its second the model, the thinking and the account.
+const COLUMN_MIN = 260;
 
 const COLUMNS = [
   { key: "workers", label: "Workers", color: (t) => t.working },
@@ -40,7 +42,7 @@ export class Models {
     // The last `foreman ladder --json`: { rungs, models }.
     this.ladder = null;
     this.bounds = null;
-    this.scroll = 0;
+    this.scroll = { x: 0, y: 0 };
   }
 
   // Reads the ladder and the models again, and draws them.
@@ -73,15 +75,15 @@ export class Models {
     ];
   }
 
-  // Every card's rectangle in view coordinates, and each column's x and width.
+  // Every card's rectangle in view coordinates, each column's x and width, and
+  // how far the columns reach past the view's right edge.
   layout(columns) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
-    const columnW = Math.max(120, (width - 2 * PAD - (COLUMNS.length - 1) * GAP) / COLUMNS.length);
-    const xs = COLUMNS.map((_, index) => PAD + index * (columnW + GAP));
+    const { xs, columnW, overflow } = columnsAcross(width, COLUMNS.length, { min: COLUMN_MIN, gap: GAP, scroll: this.scroll });
     const rects = new Map();
     columns.forEach((cards, index) => cards.forEach((card, row) =>
-      rects.set(card.key, { x: xs[index], y: PAD + HEAD - this.scroll + row * (CARD_H + GAP), width: columnW, height: CARD_H })));
-    return { rects, xs, columnW };
+      rects.set(card.key, { x: xs[index], y: PAD + HEAD - this.scroll.y + row * (CARD_H + GAP), width: columnW, height: CARD_H })));
+    return { rects, xs, columnW, overflow };
   }
 
   // The states a card can reach: where it stands, which runs nothing; for a
@@ -132,13 +134,8 @@ export class Models {
     const floating = dragged === undefined ? null : drag.floating();
     const board = div().id("models-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
-      .on_scroll_wheel((event, cx) => { this.scroll = Math.max(0, this.scroll + (event.delta?.y ?? 0)); cx.notify(); })
-      .children(COLUMNS.map((column, index) => h_flex().absolute().left(xs[index]).top(PAD).w(columnW).h(HEAD - 6)
-        .items_center().gap(8).px(3)
-        .child(div().size(8).rounded(8).bg(column.color(t)).flex_none())
-        .child(div().text_size(13).font_semibold().truncate().child(column.label))
-        .child(div().px(6).rounded(4).bg(`${column.color(t)}26`).text_size(10).text_color(column.color(t))
-          .child(String(columns[index].length)))))
+      .on_scroll_wheel((event, cx) => { this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()).overflow); cx.notify(); })
+      .children(COLUMNS.map((column, index) => columnHead(column, xs[index], columnW, columns[index].length, t)))
       .children(columns.flatMap((cards, index) => cards.map((card) =>
         this.card(card, COLUMNS[index], rects.get(card.key), t, card === dragged))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
