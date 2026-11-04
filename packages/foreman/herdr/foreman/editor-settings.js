@@ -2,7 +2,8 @@
 // uses no herdr-app globals, so `bun test` runs it.
 
 // Each text setting: its label, what the empty input says, and the value it
-// starts with for a block (`when`, `newRoute` and `newSource` always start empty).
+// starts with for a block (`when`, `newRoute`, `newSource`, `exitName` and
+// `newExit` always start empty).
 export const FIELDS = {
   filter: { label: "filter", placeholder: "empty takes every task", of: (node) => node.filter },
   model: { label: "model", placeholder: "ladder, above, or a rung's name", of: (node) => node.model },
@@ -11,6 +12,8 @@ export const FIELDS = {
   when: { label: "when", placeholder: "a tasks filter", of: () => "" },
   newRoute: { label: "new route", placeholder: "a tasks filter, then Enter", of: () => "" },
   newSource: { label: "filter", placeholder: "a tasks filter; empty takes every task", of: () => "" },
+  exitName: { label: "name", placeholder: "lower-case words and hyphens, then Enter", of: () => "" },
+  newExit: { label: "new exit", placeholder: "a name for the agent to end its run with, then Enter", of: () => "" },
 };
 
 // What each input shows for a block, or for no block.

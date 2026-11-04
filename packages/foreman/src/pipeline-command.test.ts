@@ -396,6 +396,65 @@ describe("drawing a draft", () => {
     expect(await refusal("save", "amux")).toMatch(/no source reaches land-gate/);
   });
 
+  test("an exit added, wired back to the author's gate and charged lets the draft save", async () => {
+    await run("edit", "amux", change({ _tag: "AddExit", id: "author", name: "stuck" }));
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "Rejoin", wire: { from: "author", port: "exit:stuck" }, to: "start" }),
+    );
+    expect(await refusal("save", "amux")).toMatch(/loop through author, start, and nothing ends/);
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "ChargeExit", id: "author", name: "stuck", fails: "self" }),
+    );
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "RenameExit", id: "author", name: "stuck", to: "blocked" }),
+    );
+    await run("save", "amux");
+    expect(
+      JSON.parse(readFileSync(path, "utf8")).pipelines.amux.nodes.find(
+        (node: { id: string }) => node.id === "author",
+      ).exits,
+    ).toEqual([
+      { name: "done", to: "review-gate" },
+      { name: "already-done", to: "review-gate" },
+      { name: "blocked", to: "start", fails: "self" },
+    ]);
+    await run("edit", "amux", change({ _tag: "RemoveExit", id: "author", name: "blocked" }));
+    expect(
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "author").exits,
+    ).toHaveLength(2);
+  });
+
+  test("an exit name the block has, or an exit on a check, is refused", async () => {
+    expect(
+      await refusal("edit", "amux", change({ _tag: "AddExit", id: "author", name: "done" })),
+    ).toMatch(/author already has an exit named done/);
+    expect(
+      await refusal(
+        "edit",
+        "amux",
+        change({ _tag: "RenameExit", id: "review", name: "returned", to: "approved" }),
+      ),
+    ).toMatch(/review already has an exit named approved/);
+    expect(existsSync(drafts)).toBe(false);
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "InsertOn", wire: { from: "author", port: "exit:done" }, kind: "check" }),
+    );
+    const check = draftOf().pipeline.nodes.find(
+      (node: { kind: string }) => node.kind === "check",
+    ).id;
+    expect(
+      await refusal("edit", "amux", change({ _tag: "RemoveExit", id: check, name: "failed" })),
+    ).toMatch(/a check's exits are passed and failed/);
+  });
+
   test("a rejoin to a block the pipeline lacks is refused, and the draft is not written", async () => {
     expect(
       await refusal(

@@ -13,6 +13,7 @@ import { Option } from "effect";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   type AgentNode,
+  type Exit,
   type Landing,
   type Pipeline,
   type PipelineNode,
@@ -198,7 +199,8 @@ export const removeRoute = (pipeline: Pipeline, router: string, index: number): 
 /**
  * Points a wire at another block, which may stand before it: a wire that
  * closes a loop is drawn as a back wire, and `problemsOf` reports a loop that
- * nothing ends. Refused (none) when either block is not in the pipeline.
+ * nothing ends. An exit may also lead to `queue`, a return. Refused (none)
+ * when either block is not in the pipeline.
  */
 export const rejoin = (
   pipeline: Pipeline,
@@ -206,7 +208,8 @@ export const rejoin = (
   to: string,
 ): Option.Option<Pipeline> =>
   pipeline.nodes.some((node) => node.id === wire.from) &&
-  pipeline.nodes.some((node) => node.id === to)
+  (pipeline.nodes.some((node) => node.id === to) ||
+    (to === QUEUE && typeof wire.port === "string" && wire.port.startsWith("exit:")))
     ? Option.some(retargeted(pipeline, wire, to))
     : Option.none();
 
@@ -237,6 +240,40 @@ export const swapEnd = (pipeline: Pipeline, id: string): Pipeline =>
           : node,
   );
 
+/**
+ * Adds an exit named `name` to an agent, leading where its first exit leads,
+ * or back to the queue when it has none. The operator rewires it after.
+ */
+export const addExit = (pipeline: Pipeline, id: string, name: string): Pipeline =>
+  mapExits(pipeline, id, (exits) => [...exits, { name, to: exits[0]?.to ?? QUEUE }]);
+
+/**
+ * Renames an exit, keeping where it leads. A task whose last exit had the old
+ * name no longer finds it drawn, so placement walks it from the source again.
+ */
+export const renameExit = (pipeline: Pipeline, id: string, name: string, to: string): Pipeline =>
+  mapExits(pipeline, id, (exits) =>
+    exits.map((exit) => (exit.name === name ? { ...exit, name: to } : exit)),
+  );
+
+/** Drops an exit. The blocks only it reached stay, as with a dropped route. */
+export const removeExit = (pipeline: Pipeline, id: string, name: string): Pipeline =>
+  mapExits(pipeline, id, (exits) => exits.filter((exit) => exit.name !== name));
+
+/** Sets which rung an exit charges with failing the task, or none. */
+export const chargeExit = (
+  pipeline: Pipeline,
+  id: string,
+  name: string,
+  fails: Exit["fails"],
+): Pipeline =>
+  mapExits(pipeline, id, (exits) =>
+    exits.map((exit) => {
+      if (exit.name !== name) return exit;
+      const { fails: _fails, ...rest } = exit;
+      return fails === undefined ? rest : { ...rest, fails };
+    }),
+  );
 /**
  * Changes what a block does, never where it is wired or what it is called:
  * the id is what a task's facts name, and the wires are the belt's to change.
@@ -417,6 +454,15 @@ const mapNode = (
 ): Pipeline => ({
   nodes: pipeline.nodes.map((node) => (node.id === id ? change(node) : node)),
 });
+
+const mapExits = (
+  pipeline: Pipeline,
+  id: string,
+  change: (exits: ReadonlyArray<Exit>) => ReadonlyArray<Exit>,
+): Pipeline =>
+  mapNode(pipeline, id, (node) =>
+    node.kind === "agent" || node.kind === "check" ? { ...node, exits: change(node.exits) } : node,
+  );
 
 /**
  * A new `<kind>-<hex>` id. Random rather than counted, because a counted id

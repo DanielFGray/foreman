@@ -11,6 +11,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { chip, picker, portName } from "./parts.js";
 import { FIELDS, changedSettings, settingsOf } from "./editor-settings.js";
+import { QUEUE, chargeChange, exitRows } from "./editor-exits.js";
 
 // The ends of a route, in the order `SwapEnd` turns one into the next.
 const ENDS = ["land", "done", "park"];
@@ -23,8 +24,9 @@ export class Editor {
     this.on = false;
     // The wire a "+" was clicked on, the wire waiting for the block it should
     // lead to, whether a new source's filter is being typed, and the router
-    // route whose filter the `when` input holds.
-    this.inserting = null; this.rejoining = null; this.addingSource = false; this.route = null;
+    // route whose filter the `when` input holds, and the exit whose name the
+    // `exitName` input holds.
+    this.inserting = null; this.rejoining = null; this.addingSource = false; this.route = null; this.exit = null;
     this.inputs = {};
     for (const [key, field] of Object.entries(FIELDS)) {
       const input = InputState.new({ placeholder: field.placeholder });
@@ -37,7 +39,7 @@ export class Editor {
 
   // Fills the inputs from the block just selected.
   load(node) {
-    this.route = null;
+    this.route = null; this.exit = null;
     for (const [key, value] of settingsOf(node)) this.inputs[key].set_value(value);
   }
 
@@ -65,6 +67,13 @@ export class Editor {
       }
       case "when": if (this.route !== null) configure({ route: this.route, when: value }); return;
       case "newRoute": this.inputs.newRoute.set_value(""); return change({ _tag: "AddRoute", router: node.id, when: value });
+      case "exitName": {
+        if (this.exit === null) return;
+        const name = this.exit;
+        this.exit = null;
+        return change({ _tag: "RenameExit", id: node.id, name, to: value });
+      }
+      case "newExit": this.inputs.newExit.set_value(""); return change({ _tag: "AddExit", id: node.id, name: value });
     }
   }
 
@@ -163,12 +172,43 @@ export class Editor {
     }
   }
 
-  // The wires that leave the selected block, each with a way to point it at another block.
+  // The ways out of the selected block, each with a way to point it at another
+  // block. An agent's or a check's exits are listed from the block itself, so a
+  // return to the queue, which the drawing has no wire for, is listed too.
   exits(t, drawing, node) {
+    if (node.kind === "agent" || node.kind === "check") return this.exitList(t, node);
     return v_flex().gap(3).pb(4)
       .children(drawing.wires.filter((wire) => wire.from === node.id).map((wire, index) => h_flex().gap(6).items_center()
         .child(div().text_color(t.muted).child(`${portName(wire)} → ${wire.to}`))
         .child(chip(t, "lead elsewhere", `rejoin-${index}`, (cx) => { this.rejoining = wire; this.inserting = null; cx.notify(); }))));
+  }
+
+  // An agent's or a check's exits: where each leads, the rung it charges, and
+  // the changes it takes. A check's exits keep their names.
+  exitList(t, node) {
+    const change = (one, cx) => this.pane.change(one, cx);
+    return v_flex().gap(3).pb(4)
+      .children(exitRows(node).map((row, index) => {
+        const port = { from: node.id, port: `exit:${row.name}`, label: row.name };
+        // The row's id keeps each row's picker ids apart.
+        return h_flex().id(`exit-row-${index}`).flex_wrap().gap(6).items_center()
+          .child(div().id(`exit-${index}`).px(6).rounded(4).border(1)
+            .border_color(this.exit === row.name ? t.accent : t.border)
+            .when(!row.fixed, (el) => el.hover((s) => s.bg(t.hover))
+              .on_click((_event, cx) => { this.exit = row.name; this.inputs.exitName.set_value(row.name); this.inputs.exitName.focus(); cx.notify(); }))
+            .child(row.name))
+          .child(div().text_color(t.muted).child(row.returns ? "→ back to the queue" : `→ ${row.to}`))
+          .child(picker(t, "charges", row.charges, row.fails, (choice, cx) => change(chargeChange(node, row.name, choice), cx)))
+          .child(chip(t, "lead elsewhere", `rejoin-${index}`, (cx) => { this.rejoining = port; this.inserting = null; cx.notify(); }))
+          .when(!row.returns, (el) => el.child(chip(t, "return to the queue", `return-${index}`, (cx) =>
+            change({ _tag: "Rejoin", wire: { from: node.id, port: port.port }, to: QUEUE }, cx))))
+          .when(!row.fixed, (el) => el.child(chip(t, "remove exit", `remove-exit-${index}`, (cx) => {
+            if (this.exit === row.name) this.exit = null;
+            change({ _tag: "RemoveExit", id: node.id, name: row.name }, cx);
+          })));
+      }))
+      .when(this.exit !== null, (el) => el.child(this.field(t, "exitName", `rename ${this.exit}`)))
+      .when(node.kind === "agent", (el) => el.child(this.field(t, "newExit")));
   }
 
   // A text setting, which changes the draft when Enter is pressed in it.
