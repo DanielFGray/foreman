@@ -57,6 +57,7 @@ export class SuggestError extends S.TaggedError<SuggestError>()("SuggestError", 
 
 const CandidateRow = S.Struct({
   rank: S.Number,
+  level: S.Number,
   rung: S.String,
   model: S.String,
   enabled: S.Number,
@@ -214,15 +215,16 @@ export const readCandidates: Effect.Effect<
   const rows = yield* rowsOf(
     CandidateRow,
     "reading the ladder candidates",
-    sql`SELECT l.rank, l.rung, l.model, l.enabled, l.provider AS rung_provider,
+    sql`SELECT l.rank, l.level, l.rung, l.model, l.enabled, l.provider AS rung_provider,
               l.unmetered, m.pool, m.models_dev, m.tier, m.retired, m.harness
          FROM ladder l JOIN models m USING (model)
-        ORDER BY l.rank`,
+        ORDER BY l.level, l.rank`,
   );
   return rows.map((row): RawCandidate => {
     const rung: Rung = {
       name: row.rung,
       harness: row.harness,
+      level: row.level,
       model: row.model,
       provider: row.rung_provider ?? undefined,
       enabled: row.enabled !== 0,

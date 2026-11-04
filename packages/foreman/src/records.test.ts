@@ -32,7 +32,7 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
 
 /** One rung and no drawing: the rules the store tests below need. */
 const RULES: StepRules = {
-  ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
+  ladder: [{ name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined }],
   attemptsPerRung: 2,
   pipeline: undefined,
 };
@@ -100,6 +100,7 @@ describe("task attribution", () => {
       harness: "opencode",
       model: "opencode/gpt-5.6-sol",
       provider: undefined,
+      level: 0,
     };
     expect(agentLog("author", rung, { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
       "foreman: author assigned to sol (openai/gpt-5.6-sol)",
@@ -112,6 +113,7 @@ describe("task attribution", () => {
       harness: "opencode",
       model: "opencode/claude-sonnet-5",
       provider: undefined,
+      level: 0,
     };
     expect(agentLog("review", rung, { kind: "opencode", model: undefined })).toBe(
       "foreman: review assigned to sonnet (opencode/claude-sonnet-5)",
@@ -119,7 +121,13 @@ describe("task attribution", () => {
   });
 
   test("names the harness for a rung that lets the harness choose", () => {
-    const rung = { name: "claude", harness: "claude", model: undefined, provider: undefined };
+    const rung = {
+      name: "claude",
+      harness: "claude",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+    };
     expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
       "foreman: author assigned to claude (claude)",
     );
@@ -332,8 +340,8 @@ describe("Records against a scratch store", () => {
 
 describe("usage walls", () => {
   const ladder = [
-    { name: "free", harness: "opencode", model: "opencode/free" },
-    { name: "dear", harness: "claude", model: undefined },
+    { name: "free", harness: "opencode", level: 0, model: "opencode/free" },
+    { name: "dear", harness: "claude", level: 1, model: undefined },
   ] as unknown as Parameters<typeof walledBy>[1];
 
   test("a walled run names its rung's account until the task lands", () => {

@@ -7,8 +7,8 @@ import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
 
 const RULES = {
   ladder: [
-    { name: "cheap", harness: "test", model: undefined, provider: undefined },
-    { name: "dear", harness: "test", model: undefined, provider: undefined },
+    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+    { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
   ] as Ladder,
   attemptsPerRung: 2,
 };

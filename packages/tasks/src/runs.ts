@@ -3,6 +3,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import type { TaskEvent } from "./item.ts";
 import { PROCESS_ENDINGS } from "./endings.ts";
 import { Tasks, TaskError } from "./store.ts";
+import { parseStored } from "./time.ts";
 
 /** A check run is written closed: its command exited 0, or it did not. */
 export const CHECK_ENDINGS = ["passed", "failed"] as const;
@@ -273,6 +274,24 @@ export const runsOf = (tasks: ReadonlyArray<string>) =>
     }
     return grouped as ReadonlyMap<string, ReadonlyArray<Run>>;
   });
+
+/**
+ * The latest start of each rung's runs, author and review alike, keyed by rung.
+ * A rung with no run that recorded its start has no entry.
+ */
+export const lastStarts = Effect.gen(function* () {
+  const sql = yield* SqlClient;
+  const rows = yield* sql<{ rung: string; started_at: string }>`
+    SELECT rung, max(started_at) AS started_at FROM runs
+     WHERE rung IS NOT NULL AND started_at IS NOT NULL GROUP BY rung`;
+  const starts: ReadonlyMap<string, Date> = new Map(
+    rows.flatMap((row) => {
+      const started = parseStored(row.started_at);
+      return started === undefined ? [] : [[row.rung, started] as const];
+    }),
+  );
+  return starts;
+});
 
 export class RunError extends S.TaggedError<RunError>()("RunError", {
   id: S.Number,

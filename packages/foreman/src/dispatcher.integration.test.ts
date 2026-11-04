@@ -383,6 +383,19 @@ class World {
         this.update(id, (task) => ({ ...task, status: "open" }));
         return "open" as const;
       }),
+    // Run ids climb in the order runs open, so the newest id stands in for the
+    // newest start.
+    lastStarts: Effect.sync(
+      (): ReadonlyMap<string, Date> =>
+        new Map(
+          [...this.tasks.values()]
+            .flatMap((task) => task.runs)
+            .toSorted((a, b) => a.id - b.id)
+            .flatMap((run) =>
+              run.rung === undefined ? [] : [[run.rung, new Date(run.id)] as const],
+            ),
+        ),
+    ),
     children: () => Effect.succeed([]),
     countRound: () => this.write("records.countRound", () => 1),
   };
@@ -591,7 +604,9 @@ const layerFor = (world: World) =>
     Dispatcher.Default,
     Layer.mergeAll(
       Layer.succeed(Settings, {
-        ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }],
+        ladder: [
+          { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+        ],
         otlpEndpoint: "http://localhost:4318",
         pollInterval: 60,
         staleAfter: 24,
@@ -1357,7 +1372,9 @@ describe("quota probing", () => {
       Layer.mergeAll(
         Layer.succeed(Settings, {
           // A rung whose model names its provider is one the gate can ask about.
-          ladder: [{ name: "cheap", harness: "test", model: "openai/gpt", provider: undefined }],
+          ladder: [
+            { name: "cheap", harness: "test", level: 0, model: "openai/gpt", provider: undefined },
+          ],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
           staleAfter: 24,
@@ -1435,8 +1452,14 @@ describe("a spent account and the reviewer above it", () => {
       Layer.mergeAll(
         Layer.succeed(Settings, {
           ladder: [
-            { name: "cheap", harness: "test", model: "openai/gpt", provider: undefined },
-            { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+            { name: "cheap", harness: "test", level: 0, model: "openai/gpt", provider: undefined },
+            {
+              name: "dear",
+              harness: "test",
+              level: 1,
+              model: "anthropic/claude",
+              provider: undefined,
+            },
           ],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
@@ -1783,8 +1806,14 @@ describe("unassign", () => {
 describe("a usage wall", () => {
   /** A free opencode rung, cheapest, then a rung on another account. */
   const ladder: Ladder = [
-    { name: "free", harness: "opencode", model: "opencode/free-model", provider: undefined },
-    { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+    {
+      name: "free",
+      harness: "opencode",
+      level: 0,
+      model: "opencode/free-model",
+      provider: undefined,
+    },
+    { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
   ];
   const layerFor = (world: World) =>
     Layer.provideMerge(
@@ -2428,9 +2457,9 @@ describe("a reviewer that stops without naming an exit, and one that names retur
       Layer.mergeAll(
         Layer.succeed(Settings, {
           ladder: [
-            { name: "low", harness: "test", model: "a/low", provider: undefined },
-            { name: "mid", harness: "test", model: "b/mid", provider: undefined },
-            { name: "high", harness: "test", model: "c/high", provider: undefined },
+            { name: "low", harness: "test", level: 0, model: "a/low", provider: undefined },
+            { name: "mid", harness: "test", level: 1, model: "b/mid", provider: undefined },
+            { name: "high", harness: "test", level: 2, model: "c/high", provider: undefined },
           ],
           otlpEndpoint: "http://localhost:4318",
           pollInterval: 60,
@@ -2690,8 +2719,20 @@ describe("a drawn pipeline", () => {
             Layer.mergeAll(
               Layer.succeed(Settings, {
                 ladder: [
-                  { name: "cheap", harness: "test", model: undefined, provider: undefined },
-                  { name: "dear", harness: "test", model: undefined, provider: undefined },
+                  {
+                    name: "cheap",
+                    harness: "test",
+                    level: 0,
+                    model: undefined,
+                    provider: undefined,
+                  },
+                  {
+                    name: "dear",
+                    harness: "test",
+                    level: 1,
+                    model: undefined,
+                    provider: undefined,
+                  },
                 ],
                 otlpEndpoint: "http://localhost:4318",
                 pollInterval: 60,
@@ -2874,14 +2915,20 @@ describe("foreman pipeline trace", () => {
   afterEach(() => rmSync(drawn, { force: true }));
   /** Three rungs on one bare harness, so a review always has a rung above its author. */
   const THREE: Ladder = [
-    { name: "low", harness: "test", model: "a/low", provider: undefined },
-    { name: "mid", harness: "test", model: "b/mid", provider: undefined },
-    { name: "high", harness: "test", model: "c/high", provider: undefined },
+    { name: "low", harness: "test", level: 0, model: "a/low", provider: undefined },
+    { name: "mid", harness: "test", level: 1, model: "b/mid", provider: undefined },
+    { name: "high", harness: "test", level: 2, model: "c/high", provider: undefined },
   ];
   /** A free opencode rung, whose screen can show a usage wall, then a rung on another account. */
   const WALLED: Ladder = [
-    { name: "free", harness: "opencode", model: "opencode/free-model", provider: undefined },
-    { name: "dear", harness: "test", model: "anthropic/claude", provider: undefined },
+    {
+      name: "free",
+      harness: "opencode",
+      level: 0,
+      model: "opencode/free-model",
+      provider: undefined,
+    },
+    { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
   ];
 
   const layerWith = (world: World, ladder: Ladder) =>
@@ -3485,5 +3532,89 @@ describe("a pull-request landing", () => {
 
     expect(world.tasks.get("ts-pr")?.status).toBe("in_progress");
     expect(world.writes).toEqual([]);
+  });
+});
+
+describe("ladder levels", () => {
+  /** Three peers between a bottom and a top level, all on one bare harness. */
+  const LEVELS: Ladder = [
+    { name: "low", harness: "test", level: 0, model: undefined, provider: undefined },
+    { name: "one", harness: "test", level: 1, model: undefined, provider: undefined },
+    { name: "two", harness: "test", level: 1, model: undefined, provider: undefined },
+    { name: "three", harness: "test", level: 1, model: undefined, provider: undefined },
+    { name: "high", harness: "test", level: 2, model: undefined, provider: undefined },
+  ];
+  const layerFor = (world: World) =>
+    Layer.provideMerge(
+      Dispatcher.Default,
+      Layer.mergeAll(
+        Layer.succeed(Settings, {
+          ladder: LEVELS,
+          otlpEndpoint: "http://localhost:4318",
+          pollInterval: 60,
+          staleAfter: 24,
+          coachWindow: 60,
+          stallGrace: 5,
+          landedWindow: 7,
+          attemptsPerRung: 2,
+        }),
+        Layer.succeed(Fleet, world.fleet),
+        Layer.succeed(Records, world.records),
+        Layer.succeed(Tracker, world.tracker),
+        Layer.succeed(Repository, world.repository),
+        world.github,
+        Quota.Default,
+        prompts,
+        BunServices.layer,
+      ),
+    );
+  const tick = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.tick).pipe(Effect.provide(layerFor(world))),
+    );
+  /** A queued task the bottom level has failed. */
+  const pastLow = (id: string) => ({ ...item(id, "open", []), charges: [charged("low")] });
+  const authors = (world: World) =>
+    [...world.tasks.values()].map((task) => authoredBy(task)).filter((rung) => rung !== undefined);
+
+  test("one tick spreads its free slots over the peers of a level", async () => {
+    usePolicy({ ...ALLOWED, slots: 3 });
+    const world = new World(pastLow("ts-a"), pastLow("ts-b"), pastLow("ts-c"));
+    await tick(world);
+
+    expect(authors(world).toSorted()).toEqual(["one", "three", "two"]);
+  });
+
+  test("the next tick takes the peer that started longest ago", async () => {
+    const world = new World(pastLow("ts-first"));
+    await tick(world);
+    expect(authors(world)).toEqual(["one"]);
+
+    world.tasks.set("ts-second", pastLow("ts-second"));
+    usePolicy({ ...ALLOWED, slots: 2 });
+    await tick(world);
+    expect(authors(world)).toEqual(["one", "two"]);
+  });
+
+  test("one failure on a peer sends the task past the whole level", async () => {
+    const world = new World({ ...item("ts-up", "open", []), charges: [charged("two")] });
+    await tick(world);
+
+    expect(authors(world)).toEqual(["high"]);
+  });
+
+  test("descend takes back every charge at the highest failed level", async () => {
+    const task = {
+      ...item("ts-down", "open", []),
+      charges: [charged("low"), charged("one"), charged("three")],
+    };
+    const world = new World(task);
+    await Effect.runPromise(
+      Dispatcher.use((dispatcher) => dispatcher.descend(task)).pipe(
+        Effect.provide(layerFor(world)),
+      ),
+    );
+
+    expect([...world.tasks.values()].map(failuresOf)).toEqual([["low"]]);
   });
 });

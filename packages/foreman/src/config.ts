@@ -81,7 +81,7 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
     // line commented out.
     if (dispatchable(ladder).length === 0) {
       return yield* new ConfigError({
-        detail: `every rung in the registry is disabled — a retired rung keeps its rank so old failures still position, but at least one rung must be dispatchable`,
+        detail: `every rung in the registry is disabled — a retired rung keeps its place so old failures still position, but at least one rung must be dispatchable`,
       });
     }
 

@@ -144,13 +144,14 @@ names one of the existing steps.
 
 ### Models
 
-`model` is `ladder` (author: the cheapest author-on rung above the task's
-failures), `above` (review: the next review-on rung above the author and any
-failed reviewers), or a rung name (pinned). A pin must allow the block's role;
-a pinned block that has a `failed-by` for its rung has no rung left, so the
-task parks. A router in front of it is how a pipeline sends such a task
-elsewhere. `slots` caps how many of the block's tasks run at once, inside the
-fleet's `slots`.
+`model` is `ladder` (author: from the lowest level above every level with a
+rung the task failed, the author-on rung that started a run least recently),
+`above` (review: the next review-on rung above the author and any failed
+reviewers, by rank, not level), or a rung name (pinned). A pin must allow the
+block's role; a pinned block that has a `failed-by` for its rung has no rung
+left, so the task parks. A router in front of it is how a pipeline sends such a
+task elsewhere. `slots` caps how many of the block's tasks run at once, inside
+the fleet's `slots`.
 
 ### Filters
 

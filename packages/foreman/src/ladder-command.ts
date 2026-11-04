@@ -41,19 +41,21 @@ const list = Command.make("list", { json }, ({ json }) =>
   Effect.gen(function* () {
     const rows = yield* readStatus;
     if (json) return yield* Console.log(JSON.stringify(rows, null, 2));
-    for (const [index, row] of rows.entries()) {
+    for (const row of rows) {
       const record =
         row.slices === 0
           ? "no trials"
           : `${row.succeeded}/${row.slices} landed, ${row.avgRounds ?? "?"} rounds avg`;
       const roles = `author ${row.author ? "on" : "off"}  review ${row.review ? "on" : "off"}`;
       yield* Console.log(
-        `${String(index + 1).padStart(2)}  ${row.rung.padEnd(26)} ${row.state.padEnd(8)} ${roles}  ${row.model}  ${record}  ${launchHint(row)}`,
+        `${String(row.level).padStart(2)}  ${row.rung.padEnd(26)} ${row.state.padEnd(8)} ${roles}  ${row.model}  ${record}  ${launchHint(row)}`,
       );
     }
   }),
 ).pipe(
-  Command.withDescription("Print the ladder: state, roles, trial record and launch arguments"),
+  Command.withDescription(
+    "Print the ladder by level: state, roles, trial record and launch arguments",
+  ),
 );
 
 /** Cost per landed slice by model and size: read it before starting a size a tier up. */
@@ -178,7 +180,7 @@ const add = Command.make("add", { rung, model, above, below, disabled, note }, (
   }),
 ).pipe(
   Command.withDescription(
-    "Add a rung at its place: --above or --below a rung, or at the bottom (the cheapest place)",
+    "Add a rung in a level of its own: just --above or --below a rung's level, or at the bottom (the cheapest place)",
   ),
 );
 
@@ -190,8 +192,27 @@ const move = Command.make("move", { rung, above, below }, (args) =>
   }),
 ).pipe(
   Command.withDescription(
-    "Re-rank a rung: --above or --below a rung, or to the bottom (the cheapest place)",
+    "Move a rung to a level of its own: just --above or --below a rung's level, or to the bottom (the cheapest place)",
   ),
+);
+
+const levelNumber = Argument.Int("level").pipe(
+  Argument.withDescription(
+    "The level: levels climb in number, and the rungs of one level are peers",
+  ),
+);
+
+/**
+ * Put a rung in a level. Rungs that share a level share the author work, and
+ * one failure on any of them sends a task up a level.
+ */
+const level = Command.make("level", { rung, level: levelNumber }, (args) =>
+  Effect.gen(function* () {
+    yield* changeRow(args.rung, (row) => ({ ...row, level: args.level }));
+    yield* Console.log(`${args.rung}: level ${args.level}`);
+  }),
+).pipe(
+  Command.withDescription("Put a rung in a level; the rungs of one level share the author work"),
 );
 
 /** The place the --above and --below flags name; neither is the bottom. */
@@ -222,7 +243,7 @@ const toggle = (name: "enable" | "disable") =>
     Command.withDescription(
       name === "enable"
         ? "Let foreman dispatch a rung again"
-        : "Stop dispatching a rung; it keeps its rank so old failures still position",
+        : "Stop dispatching a rung; it keeps its place so old failures still position",
     ),
   );
 
@@ -253,7 +274,7 @@ const role = Command.make("role", { rung, which, switch: switch_ }, (args) =>
   }),
 ).pipe(
   Command.withDescription(
-    "Turn a rung's author or review role on or off; it keeps its rank either way",
+    "Turn a rung's author or review role on or off; it keeps its place either way",
   ),
 );
 
@@ -332,7 +353,7 @@ const suggest = Command.make(
 );
 
 /**
- * `foreman ladder --json`: every rung in rank order and every model with its
+ * `foreman ladder --json`: every rung in (level, rank) order with its level, and every model with its
  * council switch, so a front end draws the worker list and the council list
  * from one read.
  */
@@ -355,6 +376,7 @@ export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
     toggle("disable"),
     role,
     move,
+    level,
   ]),
 );
 
@@ -371,6 +393,10 @@ const describeChange = (
       before.find((old) => old.rung === row.rung)?.enabled !== row.enabled &&
       !added.includes(row.rung),
   );
+  const regrouped = after.flatMap((row) => {
+    const old = before.find((other) => other.rung === row.rung)?.level;
+    return old === undefined || old === row.level ? [] : [{ row, old }];
+  });
   const kept = (rows: ReadonlyArray<LadderRow>, other: ReadonlyArray<LadderRow>) =>
     names(rows).filter((name) => names(other).includes(name));
   const moved = kept(before, after).join() !== kept(after, before).join();
@@ -378,6 +404,7 @@ const describeChange = (
     ...(added.length ? [`added: ${added.join(", ")}`] : []),
     ...(dropped.length ? [`dropped: ${dropped.join(", ")}`] : []),
     ...toggled.map((row) => `${row.rung}: ${row.enabled ? "enabled" : "disabled"}`),
+    ...regrouped.map(({ row, old }) => `${row.rung}: level ${old} → ${row.level}`),
     ...(moved ? ["reordered"] : []),
   ];
   return lines.length ? lines.join("\n") : "ladder unchanged";

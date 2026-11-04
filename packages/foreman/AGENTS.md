@@ -42,7 +42,7 @@ a claim made by hand.
 | Is a reviewer assigned? | an open review run in the task's current lap |
 | Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
-| Which rung comes next? | the cheapest configured, enabled, author-on, funded rung above every rung charged with failing the task, off the accounts its runs ended `walled` on since it last landed; a reviewer is the next review-on rung above the author |
+| Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed; a reviewer is the next review-on rung above the author in rank |
 | How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge |
 | Is this one waiting on a person? | every configured rung has failed it, or it has a park |
 | Is this task mine to review? | it has an author run |
@@ -418,9 +418,16 @@ queue and the operator's column, and both the tick and `foreman queue` call it.
 The rung is chosen at the moment of dispatch, from what is configured, enabled,
 author-on and funded then — `authorFor` in `src/ladder.ts`. What the task
 durably carries is evidence: a charge per rung that was tried and was not
-enough (`failuresOf`). The author is the cheapest available author-on rung
-above all of them. `foreman ladder role <rung> author|review on|off` turns a
-role off without retiring the rung.
+enough (`failuresOf`). The ladder is an ordered list of levels, and the rungs
+of one level are peers: one charge on any of them puts the whole level below
+the task. The author comes from the lowest level above every charged level,
+and inside it the available author-on rung whose last run started longest ago
+takes the turn, so peers share the work. The last starts are read from the
+runs once per tick, and each dispatch of the tick counts as a start, so one
+tick's free slots spread over the level. Review reads the rank alone, not the
+level. `foreman ladder level <rung> <n>` groups rungs into a level; `ladder
+move` and `ladder add` put a rung in a level of its own. `foreman ladder role
+<rung> author|review on|off` turns a role off without retiring the rung.
 
 A task that named its next model would be a pointer into the ladder, and the
 ladder outlives no task: remove a rung and every task holding its name
@@ -428,8 +435,8 @@ becomes work no rung can take, which reads as a backlog full of decisions
 waiting on a person. Evidence cannot rot that way — it describes what happened,
 which stays true however the ladder is edited afterwards.
 
-- **A retired rung stays listed with `enabled: false`.** It keeps its rank, so
-  the failures naming it still position the work above it, and nothing
+- **A retired rung stays listed with `enabled: false`.** It keeps its level and
+  rank, so the failures naming it still position the work above it, and nothing
   dispatches it. Deleting the entry outright is the other statement — the model
   is no longer part of the rating — and its failures then position nothing.
 - **`Waiting` and `Yours` are different answers.** No rung with room is a fact
@@ -440,8 +447,8 @@ which stays true however the ladder is edited afterwards.
 - **A park is the one durable way into the operator's column.** Only foreman
   writes one, when a block parks a task or no reviewer is left. Everything else
   there is derived, so it clears itself when a rung is added or an account
-  resets. `descend` takes back the park first and then the charges, one call
-  at a time, which is how the operator's column is left without an answer
+  resets. `descend` takes back the park first and then the charges, one level
+  per call, which is how the operator's column is left without an answer
   action. Work that is not ready for an agent is a `draft`, not a park.
 - **Every label foreman reads is `<kind>:<value>`** (`size:N`,
   `diagnosing:<intent>`). Rung names contain hyphens, so only a separator no
@@ -451,8 +458,9 @@ which stays true however the ladder is edited afterwards.
 ### An allowance belongs to an account, not to a rung
 
 `Quota` (`src/quota.ts`) reads how much of each provider's allowance is already
-spent. A rung with nothing left is not chosen: the author search steps up to the
-next rung that can pay, exactly as the reviewer search does. Nothing is recorded
+spent. A rung with nothing left is not chosen: the author search takes a peer
+in the same level that can pay, else steps up to the next level, as the
+reviewer search steps up to the next rung that can pay. Nothing is recorded
 and no attempt is counted — an allowance is evidence about a wallet, never about
 a model — so the ordinary rung is chosen again once the account resets.
 
@@ -594,8 +602,10 @@ the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. A
 store with no rungs is a startup error, not a fallback, because a
 fallback is a second ladder that can drift. The model row carries the harness
 and the thinking level, and `launchArguments` in `src/harness.ts` turns the level
-into the harness's flag. `foreman ladder edit` is the one way to change the
-order: it validates the whole edit and writes it in one transaction.
+into the harness's flag. Each ladder row stores its `level` and its `rank`, and
+readers sort by (level, rank). Every ladder write (`foreman ladder edit`,
+`move`, `add`, `level`) validates the whole ladder, rewrites the ranks from
+that order, and writes it in one transaction.
 The council is a `council` switch on the model row, apart from the ladder, so
 a model is a worker, a council member, both or neither. `foreman council
 add|remove <model>` changes it, and `foreman council --json` prints each member
@@ -966,10 +976,11 @@ refuses an action the row cannot take. Decisions are named from the task's
 status: only the status — neither claimed nor under review — marks a worker as
 residue.
 
-The two corrections follow the records, not the views. `descend` forgives one
-charged rung, because a rung is only ever as good as the evidence that wrote
-it and a bug, an OOM or a killed run all write one nothing earned; one step per
-call, and with nothing charged there is nothing to take back. A forgiven charge
+The two corrections follow the records, not the views. `descend` forgives the
+charges at the highest charged level, because a charge is only ever as good as
+the evidence that wrote it and a bug, an OOM or a killed run all write one
+nothing earned; one level per call, so the floor drops one level, and with
+nothing charged there is nothing to take back. A forgiven charge
 stays in the table, marked, so the history keeps it. `unassign` ends
 an open review run no reviewer is behind, as `released`, which charges no rung —
 the world records whether a reviewer was dispatched, not whether it is still

@@ -67,8 +67,8 @@ export const GateNode = S.Struct({
 /**
  * Runs an agent on the task.
  *
- * `model` is `ladder` (an author on the cheapest author-enabled rung above the
- * task's failures), `above` (a reviewer on the next review-enabled rung above
+ * `model` is `ladder` (an author on an author-enabled rung of the lowest level
+ * above the task's failures, the peer that started least recently), `above` (a reviewer on the next review-enabled rung above
  * the author), or a rung name, which pins the block to that rung — and that
  * rung must allow the block's role. `slots` caps how many of this block's
  * tasks run at once, inside the fleet's own limit. `exits` are the names the

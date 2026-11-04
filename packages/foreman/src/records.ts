@@ -14,6 +14,7 @@ import {
   recordCheck,
   recordExit,
   runsOf,
+  lastStarts,
   unpark,
   type Charge,
   type Ending,
@@ -233,6 +234,12 @@ export class Records extends Context.Service<Records>()("Records", {
           }),
         ),
 
+      /**
+       * The latest start of each rung's runs, author and review alike: the
+       * turn order of the rungs inside a level (`authorFor`).
+       */
+      lastStarts: onStore(lastStarts).pipe(as("read run starts")),
+
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
         Effect.all([lookup(task), tracker.logs(task)]).pipe(
@@ -421,7 +428,7 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
  * Which rungs have already failed this task.
  *
  * The durable half of choosing an author: the ladder reads these as a floor and
- * picks the cheapest rung above them that is available now. Evidence rather
+ * picks a rung from the lowest level above theirs that is available now. Evidence rather
  * than a pointer, so retiring a model or spending its allowance moves the work
  * on instead of naming a rung nothing can dispatch.
  *

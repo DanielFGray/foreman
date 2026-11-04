@@ -5,7 +5,9 @@ import { configure } from "./pipeline-belt.ts";
 import { traceReport } from "./pipeline-trace.ts";
 
 const RULES = {
-  ladder: [{ name: "cheap", harness: "test", model: undefined, provider: undefined }] as Ladder,
+  ladder: [
+    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+  ] as Ladder,
   attemptsPerRung: 2,
 };
 const REQUEST = { task: { labels: [], size: 2, priority: 2, parent: undefined }, events: [] };

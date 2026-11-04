@@ -60,8 +60,10 @@ stop this project's pipeline.
     through` grants each one the pipeline's gated steps.
 
 - **Models**: the ladder's rungs, the models and the council, changed by
-  drag, and under them the accounts the ladder draws on: what each has left
-  (the quota rows) and the rungs it pays for.
+  drag; a dragged rung takes a level of its own (`foreman ladder move`), and
+  `foreman ladder level` puts rungs in one level. Under them are the accounts
+  the ladder draws on: what each has left (the quota rows) and the rungs it
+  pays for.
 
 The queue is not in `state.json`: the pane runs `foreman queue --project
 <name> --json` every 5 seconds. A row that newly appears under Landed, in any

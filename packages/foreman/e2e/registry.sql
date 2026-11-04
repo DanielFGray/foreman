@@ -12,7 +12,7 @@ INSERT INTO models(model, provider, pool, harness, tier, limit_scope, thinking) 
   ('opencode/deepseek-v4-pro', 'opencode', 'OpenCode Zen', 'opencode', 'metered', 'pool', 'medium'),
   ('opencode/claude-sonnet-5', 'opencode', 'OpenCode Zen', 'opencode', 'metered', 'pool', 'medium'),
   ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'free', 'pool', 'medium');
-INSERT INTO ladder(rank, rung, model, unmetered) VALUES
-  (1, 'cheap',  'opencode/deepseek-v4-pro', 0),
-  (2, 'strong', 'opencode/claude-sonnet-5', 0),
-  (3, 'promo',  'opencode-go/ox-alpha-free', 1);
+INSERT INTO ladder(rank, level, rung, model, unmetered) VALUES
+  (1, 1, 'cheap',  'opencode/deepseek-v4-pro', 0),
+  (2, 2, 'strong', 'opencode/claude-sonnet-5', 0),
+  (3, 3, 'promo',  'opencode-go/ox-alpha-free', 1);

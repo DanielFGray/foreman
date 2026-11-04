@@ -323,10 +323,11 @@ already red still takes the merge, because one broken test would otherwise hold
 every task in the fleet. A project names the command by keeping an executable
 `scripts/verify.sh`; without one, a landing rests on the merge alone.
 
-Who reviews whom is derived, not configured: the reviewer is the rung above the
-one that wrote the code. Cheap work gets expensive eyes; the top rung reviews
-itself, which still helps — fresh eyes on the same model read the diff as a
-stranger would. Every branch is reviewed: no priority and no label routes work
+Who reviews whom is derived, not configured: the reviewer is the next rung up
+the list from the one that wrote the code. Review reads that order alone; the
+levels described under the ladder group authors only. Cheap work gets expensive
+eyes; the top rung reviews itself, which still helps — fresh eyes on the same
+model read the diff as a stranger would. Every branch is reviewed: no priority and no label routes work
 around the reviewer, because a task's own estimate of how small it is arrives
 before anybody has read the diff.
 
@@ -336,10 +337,14 @@ the task.
 
 ## The ladder
 
-Every model foreman may use is one ordered list, cheapest first. Order is the
-rating — there are no price or power numbers to drift out of step with the list,
-and no map from author to reviewer, because both "who reads this" and "who tries
-next" fall out of the order.
+Every model foreman may use is one ordered list of levels, cheapest level first.
+A level holds one rung or several, and the rungs of one level are peers that
+share the author work: the author is the rung of the level whose last run
+started longest ago, so one tick with several free slots spreads them over the
+level. One failure on any rung of a level sends the task up a level. There are
+no price or power numbers to drift out of step with the list, and no map from
+author to reviewer: "who reads this" is the next rung up the list, and "who
+tries next" is the next level.
 
 The ladder is the `ladder` table of the model registry, which lives in the task
 store (`~/.prog/prog.db`; `$PROG_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
@@ -350,7 +355,7 @@ launch (`--effort` for claude, `-c model_reasoning_effort=` for codex,
 `--thinking` for pi; opencode and cursor choose their own).
 
 ```
-foreman ladder                 # print the ladder: state, trial record, launch arguments
+foreman ladder list            # print the ladder by level: state, trial record, launch arguments
 foreman ladder size            # landed slices and cost per success, by model and size
 foreman ladder drift           # rungs opencode no longer lists; free models no rung names
 foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
@@ -360,8 +365,11 @@ foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
                                # advise an economical enabled rung from models.dev
                                # list prices and current subscription quotas (no dispatch)
 foreman ladder edit            # edit it in $EDITOR
-foreman ladder disable <rung>  # stop dispatching a rung, keeping its rank
+foreman ladder disable <rung>  # stop dispatching a rung, keeping its place
 foreman ladder enable <rung>
+foreman ladder level <rung> <n>  # put a rung in level n; rungs of one level are peers
+foreman ladder move <rung> [--above R | --below R]
+                               # give a rung a level of its own next to R, or at the bottom
 ```
 
 `suggest` is advisory only. It does not change rung order or dispatch anyone:
@@ -374,8 +382,9 @@ and reset times are shown as observed facts, never as dollars or predicted runs.
 Unknown price, quota or billing stays visibly unknown. An `unmetered` rung is not
 walled by a spent account allowance.
 
-`edit` opens one JSON object per rung, cheapest first. Reordering is moving a
-block; the result is validated (known models, unique names, at least one rung on)
+`edit` opens one JSON object per rung, cheapest level first. Each carries its
+`level`; inside a level, reordering is moving a block, and a block moved to
+another level takes that `level` number. the result is validated (known models, unique names, at least one rung on)
 and written in one transaction, so a typo changes nothing. A rung may carry
 `provider`, `unmetered` and `note`.
 
@@ -388,19 +397,19 @@ claude harness always spends the claude.ai account, and any other rung that is
 only a harness has to be told, or foreman cannot tell whether that rung has any
 allowance left before it dispatches. `foreman quota` reports what each account has
 left and which rungs are stopped, and a rung whose account is spent is stepped
-over — the next rung that can pay takes the work, and if none can the task waits
+over — a peer in its level that can pay takes the work, else the next level, and if none can the task waits
 in the queue with nothing recorded against it, because an empty allowance says
 nothing about the work or the model.
 
 `enabled` defaults to true. Disabling a rung retires it without deleting it,
-which keeps its rank: the failures already recorded against it still position
+which keeps its place: the failures already recorded against it still position
 every task that earned its way past it.
 
 A task names no rung. What foreman records is evidence: a charge for each rung
 that was tried and was not enough, and the runs that ended without an exit,
-which count the retries. Foreman picks the author at dispatch — the cheapest
-rung that is in the ladder, enabled, funded, and above every rung recorded as having
-failed this task. So a rung disabled in the registry, or an account with
+which count the retries. Foreman picks the author at dispatch — from the lowest
+level above every level with a rung recorded as having failed this task, the rung
+that is in the ladder, enabled and funded, and started a run least recently. So a rung disabled in the registry, or an account with
 nothing left, moves work along instead of stranding it.
 
 A failure is written on real evidence only: a reviewer sent the work back, the
@@ -409,9 +418,10 @@ that ended without finishing. An agent that merely stopped unfinished has said
 nothing about its model — a crash, a timeout and a usage wall all end the same
 way — so nothing is recorded and the same rung is tried again. The evidence lives
 in foreman's database rather than in its memory, because a dispatch days later,
-after a restart, is exactly what reads it. To start a task above a rung you know
-is not enough, launch it on the rung you want, or intervene and continue on it:
-either charges every rung below.
+after a restart, is exactly what reads it. To start a task above a level you know
+is not enough, intervene and continue on the rung you want: that charges every
+rung of every level below it. A launch on a rung (`foreman dispatch --rung`)
+runs that rung once and charges nothing.
 
 Which rung runs is derived at dispatch, never inherited from which slot happened
 to be free.
@@ -450,7 +460,7 @@ task with `tasks append`, then press `x` (`foreman descend <task>`), in that
 order. The next author reads the answer in the description.
 
 `x` takes back one thing that put the task here: its park, otherwise the
-highest charged rung. Evidence is only ever as good as the run that wrote it,
+charges at its highest charged level. Evidence is only ever as good as the run that wrote it,
 and a bug or a killed run can charge a rung that never earned it, so the
 operator takes it back. The charge stays in foreman's database, marked
 forgiven.
