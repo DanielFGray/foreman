@@ -265,6 +265,12 @@ it is still there next tick — so waiting changes nothing. Clear the cause and
 press `r` to retry; the log records the failure once with a count rather than a
 line every poll.
 
+A task whose last exit you removed from the drawing, or whose block you removed,
+appears under **Attention** as `exit gone`, with the reason. Its run says where
+the task went, and the drawing no longer says where that leads, so foreman does
+not guess. Release it to the queue or intervene. Renaming an exit keeps its
+tasks where they were.
+
 Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
 ## Review
@@ -290,10 +296,11 @@ trunk already does what the task asks. A backlog outlives the code it describes,
 and an author sent to an entry like that has nothing it can honestly write —
 committing anything invents work, and stopping reads as a crash, which costs a
 rung and buys the same discovery again at a dearer model. So it records the
-finding by naming the exit `already-done`. The second is a task labelled
+finding by naming its block's claim, the exit the drawing declares `empty:
+claim` (`already-done` in the standard pipelines). The second is a task labelled
 `research`, whose deliverable is a report in its own log — a measurement or an
-investigation — and never a diff. Neither is an approval: the reviewer confirms an
-`already-done` claim against the trunk and a `research` report against its cited
+investigation — and never a diff. Neither is an approval: the reviewer confirms the
+author's claim against the trunk and a `research` report against its cited
 evidence, part by part, and only its `approved` closes the task — with nothing
 merged and nothing verified, because there is nothing to merge. A claim the
 reviewer cannot confirm is returned like any other work.
@@ -620,6 +627,15 @@ bun src/main.ts status          # one reading, printed
 ```
 
 What it starts by itself is the policy's to say; see above.
+
+After an upgrade that changes the pipelines file's form, stop serve and
+convert the files once before it starts again. A file in an older form stops
+every project until then.
+
+```bash
+bun src/main.ts cutover exit-ids --dry-run  # what it would convert
+bun src/main.ts cutover exit-ids
+```
 
 foreman opens workspaces in the session it is running in, so serve must
 reach that hc server.

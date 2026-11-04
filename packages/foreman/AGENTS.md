@@ -40,7 +40,7 @@ a claim made by hand.
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
 | Who authored this branch? | the rung of the task's latest author run |
 | Is a reviewer assigned? | an open review run in the task's current lap |
-| Where is this task? | where its last named exit leads in the drawing as it is now, while the tip is the commit that exit was named on |
+| Where is this task? | where the exit its last run named leads in the drawing as it is now, looked up by the exit's id, while the tip is the commit that exit was named on; a decision for the operator when the drawing no longer has that exit |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
 | Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed |
 | Which reviewer reads it? | from the reviewers its review block draws, the one that started a review least recently, off a spent account and off every reviewer that stopped this lap with no verdict, preferring a model other than the author's |
@@ -205,6 +205,15 @@ claim foreman's own agent made, which its author run records. A claim made by
 hand or by another session is its owner's to give up: foreman cannot tell an
 abandoned one from one whose owner is away.
 
+A lost exit is a decision too. A run stores the id of the exit it named, and a
+rename changes only the name, so a rename leaves the task where it was. When
+the drawing no longer has the stored exit, or its block, the run says where the
+task went and the drawing cannot say where that leads now. Placing the task
+from its source would read the gap as evidence that the work must start over.
+So placement answers `ExitGone`, and the task is published in attention with
+the reason and the answers `release` and `intervene`. Nothing reclaims it, and
+it holds its claim until the operator answers.
+
 Absence is an unknown, not evidence. A task climbs a rung on real evidence only:
 a reviewer sending work back, a branch that broke the project's verification, or
 a level spent by `attemptsPerLevel` `stopped` endings. A branch that merely would
@@ -326,9 +335,12 @@ records whether they are passed, so tasks in flight place as before.
   `fast-forward` lands only a commit that descends from the trunk tip, and a
   trunk that moved returns the task like a conflict. Foreman never rebases: a
   rebase makes a commit the reviewer did not read.
-- **A pipelines file with no `version` predates the blocks.** It reads with
-  branch → worktree after each source, which is how it ran, and the next write
-  stores the versioned form.
+- **The pipelines and drafts files are read in their current form only.**
+  `foreman cutover exit-ids` converts an older file once, before the
+  dispatcher starts again: a file with no `version` gets branch → worktree
+  after each source, which is how it ran, and each exit gets its name as its
+  id, so every stored run places as before. The cutover is the one reader of
+  the older forms.
 
 ### Onboarding salvages the operator's checkout
 
@@ -563,8 +575,11 @@ hand, and the entry stays open. Every ending an author can reach there says
 something false — committing invents work, and stopping is indistinguishable
 from a crash, so the task climbs a rung and buys the same discovery again at a
 dearer model until the ladder runs out at the operator. So the author ends its
-run by naming the exit `already-done` (`foreman exit <task> already-done`), and
-`reviewable` sends that one empty branch to a reviewer.
+run by naming its block's claim: the one exit the drawing declares `empty:
+claim` (`already-done` in the standard pipelines), and `reviewable` sends that
+one empty branch to a reviewer. The meaning is the declared property, not the
+name, so a renamed claim stays a claim. Validation allows one claim per author
+block, and its route reaches a review before any other author.
 
 A task labelled `research` is the second such branch: its deliverable is a report
 in its own log, so it never has a diff to commit. That label is set when the task
@@ -572,15 +587,15 @@ is filed and survives a requeue, because it names the kind of work rather than
 one attempt.
 
 Both are claims, never approvals. "It is already done" is exactly what a model too
-weak for a task would say to escape it, so the reviewer confirms an `already-done`
+weak for a task would say to escape it, so the reviewer confirms the author's
 claim against the trunk and a `research` report against its cited evidence, each
 part by part, and its `approved` exit is what closes the task; a rejection
 sends it back like any other. Landing needs no special case — an empty branch is
 contained by any checkout, so `merge` answers `Present` and completes the task
 without merging or verifying. The author run's ending and the `research` label
 tell the causes of `Present` apart in the log. A new author run starts a new
-lap, so an `already-done` exit stops counting with no code that clears it, while
-`research` names the work and stays.
+lap, so a claim stops counting with no code that clears it, while `research`
+names the work and stays.
 
 Nothing skips review. A task's priority and its labels are written before anyone
 has read the diff, so they cannot say whether the diff is worth reading — and
@@ -990,9 +1005,10 @@ first of its tasks (`queueRows`), not as a view of its own, because an epic is
 read to decide what the queue under it should do next. An epic row takes no
 action: it has no branch and no worker.
 
-Attention combines the exceptional states in urgency order: vanished-worker
-decisions, yours, stale reviews, unreviewed branches, orphaned workers, held
-projects, and last the spent accounts. Each row keeps its source kind, so
+Attention combines the exceptional states in urgency order: decisions
+(vanished workers, failed dispatches and lost exits), yours, stale reviews,
+unreviewed branches, orphaned workers, held projects, and last the spent
+accounts. Each row keeps its source kind, so
 combining their display does not combine their actions.
 
 Every reading carries `observedAt`, when the dispatcher last read the world. A
