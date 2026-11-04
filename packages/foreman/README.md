@@ -352,10 +352,12 @@ reviewers' list (see "Reviewers" below).
 The ladder is the `ladder` table of the model registry, which lives in the task
 store (`~/.prog/prog.db`; `$PROG_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
 copy of the order in a config file would be a copy that can disagree. Each rung
-is a name, a model, and flags; the model's row in the `models` table says which
-harness runs it and at what thinking level, and foreman passes that level at
-launch (`--effort` for claude, `-c model_reasoning_effort=` for codex,
-`--thinking` for pi; opencode and cursor choose their own).
+is a name, a model, a thinking level, and flags; the model's row in the `models`
+table says which harness runs it. Foreman passes the rung's level at launch
+(`--effort` for claude, `-c model_reasoning_effort=` for codex, `--thinking` for
+pi; opencode and cursor take no flag). A rung with no level passes no flag, so
+the harness's own default applies. Two rungs of one model may think at
+different levels.
 
 ```
 foreman ladder list            # print the ladder by level: state, trial record, launch arguments
@@ -368,6 +370,10 @@ foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
                                # the rung dispatch would pick next, with models.dev
                                # list prices and current subscription quotas (no dispatch)
 foreman ladder edit            # edit it in $EDITOR
+foreman ladder add <rung> <model> [--thinking L] [--above R | --below R] [--disabled] [--note N]
+                               # add a rung in a level of its own next to R, or at the bottom
+foreman ladder thinking <rung> <level|none>
+                               # set the level a rung starts at; none passes no flag
 foreman ladder disable <rung>  # stop dispatching a rung, keeping its place
 foreman ladder enable <rung>
 foreman ladder author <rung> on|off  # keep a rung out of the author pick, keeping its place
@@ -437,8 +443,8 @@ to be free.
 ### Reviewers
 
 The reviewers are the `reviewers` table of the same registry: each has a name,
-a model with a row in `models`, a thinking level and, where the model id does
-not say, a provider. A review block drawn with the rule `reviewers` takes one
+a model with a row in `models`, an optional thinking level (absent passes no
+flag) and, where the model id does not say, a provider. A review block drawn with the rule `reviewers` takes one
 from the whole list; a block drawn with one reviewer's name takes only that
 one. The council skill convenes the same list.
 

@@ -183,6 +183,45 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
+  // The thinking level moves from the model to each rung and reviewer, so one
+  // model can be two rungs that think differently. Each rung takes its model's
+  // level, and the model loses the column: one source per seat. An absent
+  // level means the harness's own default, which `auto` meant, so `auto`
+  // becomes absent, and a reviewer's level may now be absent too. Each step
+  // checks the shape it changes, so a re-run of the older migrations is safe.
+  "0012_rung_thinking": withViewsRebuilt(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      const columnsOf = (table: string) =>
+        sql.unsafe<{ name: string; notnull: number }>(
+          `SELECT name, "notnull" FROM pragma_table_info('${table}')`,
+        );
+      if (!(yield* columnsOf("ladder")).some((column) => column.name === "thinking")) {
+        yield* sql.unsafe(`ALTER TABLE ladder ADD COLUMN thinking TEXT`);
+      }
+      if ((yield* columnsOf("models")).some((column) => column.name === "thinking")) {
+        yield* sql.unsafe(
+          `UPDATE ladder SET thinking =
+             (SELECT nullif(m.thinking, 'auto') FROM models m WHERE m.model = ladder.model)`,
+        );
+        yield* sql.unsafe(`ALTER TABLE models DROP COLUMN thinking`);
+      }
+      const reviewerLevel = (yield* columnsOf("reviewers")).find(
+        (column) => column.name === "thinking",
+      );
+      if (reviewerLevel?.notnull) {
+        yield* sql.unsafe(
+          REVIEWERS_LEVELS.replace("CREATE TABLE reviewers (", "CREATE TABLE reviewers_next ("),
+        );
+        yield* sql.unsafe(
+          `INSERT INTO reviewers_next (reviewer, model, thinking, provider)
+           SELECT reviewer, model, nullif(thinking, 'auto'), provider FROM reviewers`,
+        );
+        yield* sql.unsafe(`DROP TABLE reviewers`);
+        yield* sql.unsafe(`ALTER TABLE reviewers_next RENAME TO reviewers`);
+      }
+    }),
+  ),
 });
 
 /**
@@ -243,6 +282,17 @@ const REVIEWERS = `CREATE TABLE IF NOT EXISTS reviewers (
     reviewer TEXT PRIMARY KEY,           -- the name review runs record
     model    TEXT NOT NULL REFERENCES models(model),
     thinking TEXT NOT NULL,              -- this entry's level, apart from the model row's
+    provider TEXT                        -- the account it spends, where the model does not say
+  )`;
+
+/**
+ * The reviewers as `0012_rung_thinking` leaves them: an absent level passes no
+ * thinking flag, so the harness's own default applies.
+ */
+const REVIEWERS_LEVELS = `CREATE TABLE reviewers (
+    reviewer TEXT PRIMARY KEY,           -- the name review runs record
+    model    TEXT NOT NULL REFERENCES models(model),
+    thinking TEXT,                       -- this entry's level; NULL = the harness's default
     provider TEXT                        -- the account it spends, where the model does not say
   )`;
 
@@ -442,7 +492,8 @@ const RUNS = `CREATE TABLE runs (
 
 /**
  * The registry tables as `0002_registry` makes them; later migrations change
- * them (`models` loses `council` and `tier`). `withViewsRebuilt` makes the
+ * them (`models` loses `council`, `tier` and `thinking`; `ladder` gains `level`
+ * and `thinking` and loses `review`). `withViewsRebuilt` makes the
  * views again after each such change, so the views read the tables as the
  * last migration leaves them.
  */
@@ -573,7 +624,7 @@ const REGISTRY = [
   WHERE t.closed_at IS NOT NULL AND t.work <> 'check'`,
   `CREATE VIEW model_status AS
   SELECT m.model, m.provider, m.pool, m.harness, m.limit_scope,
-         m.thinking, m.retired, m.models_dev,
+         m.retired, m.models_dev,
          l.rank, l.rung, l.enabled, l.provider AS rung_provider,
          COUNT(t.id) AS slices,
          COALESCE(SUM(t.outcome IN ('committed','answered')), 0) AS succeeded,

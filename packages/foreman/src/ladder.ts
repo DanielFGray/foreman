@@ -75,10 +75,11 @@ export interface Seat {
   readonly unmetered?: boolean | undefined;
 
   /**
-   * How hard the model thinks: `low`, `medium`, or `auto` where the harness
-   * decides. A rung takes its model's level from the registry; a reviewer
-   * states its own. The adapter turns it into the flag the harness takes, and
-   * passes nothing for a harness that has none.
+   * How hard the model thinks, such as `low` or `medium`. Each rung and each
+   * reviewer states its own, so two entries of one model may think
+   * differently. The adapter turns it into the flag the harness takes. Absent,
+   * or on a harness with no such flag, no flag is passed and the harness's own
+   * default applies.
    */
   readonly thinking?: string | undefined;
 }

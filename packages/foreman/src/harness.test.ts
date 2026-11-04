@@ -25,8 +25,8 @@ describe("launchArguments", () => {
     ]);
   });
 
-  test("passes no flag for a level the harness picks or cannot take", () => {
-    expect(launchArguments({ kind: "cursor", model: undefined, thinking: "auto" })).toEqual([]);
+  test("passes no flag for an absent level or a harness that cannot take one", () => {
+    expect(launchArguments({ kind: "cursor", model: undefined, thinking: "high" })).toEqual([]);
     expect(launchArguments({ kind: "claude", model: undefined, thinking: undefined })).toEqual([]);
   });
 });

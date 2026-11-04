@@ -70,6 +70,9 @@ describe("importRegistry", () => {
     expect(db.query("SELECT model, slices, succeeded, status FROM model_status").all()).toEqual([
       { model: "m1", slices: 2, succeeded: 2, status: "proven" },
     ]);
+    expect(db.query("SELECT rung, thinking FROM ladder").all()).toEqual([
+      { rung: "cheap", thinking: "medium" },
+    ]);
     db.close();
   });
 

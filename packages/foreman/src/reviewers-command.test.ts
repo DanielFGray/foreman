@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import { Effect } from "effect";
 import { Command } from "effect/cli";
+import { harnessLaunch } from "./harness.ts";
 import { ladderCommand } from "./ladder-command.ts";
-import { readModels, readReviewers, removeReviewer } from "./registry.ts";
+import { readLadder, readModels, readReviewers, readRows, removeReviewer } from "./registry.ts";
 import { reviewersCommand } from "./reviewers-command.ts";
 import { withStore } from "./scratch-store.ts";
 
@@ -47,7 +48,7 @@ describe("the reviewers", () => {
       }),
     ));
 
-  test("add takes the model's thinking level unless one is given", () =>
+  test("add takes the level given, and none when none is given", () =>
     withStore(
       rig,
       Effect.gen(function* () {
@@ -55,7 +56,7 @@ describe("the reviewers", () => {
         yield* reviewers("add", "opencode/claude-sonnet-5", "--name", "deep", "--thinking", "high");
         expect((yield* readReviewers).map((one) => [one.name, one.thinking])).toEqual([
           ["deep", "high"],
-          ["opencode/claude-sonnet-5", "medium"],
+          ["opencode/claude-sonnet-5", undefined],
         ]);
       }),
     ));
@@ -89,6 +90,82 @@ describe("the reviewers", () => {
             args: ["--model", "opencode/claude-sonnet-5"],
           },
         ]);
+      }),
+    ));
+});
+
+/** Two harnesses that take a thinking flag, for rungs whose levels show in their launch. */
+const flagged = `${rig}
+INSERT INTO models(model, provider, pool, harness, limit_scope) VALUES
+  ('opus', 'anthropic', 'OpenCode Zen', 'claude', 'pool'),
+  ('gpt-6.1-sol', 'openai', 'OpenCode Zen', 'codex', 'pool');
+`;
+
+/** The argv each enabled rung's harness starts with, by rung name. */
+const launches = readLadder.pipe(
+  Effect.map((rungs) =>
+    Object.fromEntries(
+      rungs.map((rung) => [
+        rung.name,
+        harnessLaunch({
+          kind: rung.harness,
+          model: rung.model,
+          thinking: rung.thinking,
+          prompt: "go",
+          directory: "/w",
+        }).argv,
+      ]),
+    ),
+  ),
+);
+
+describe("a rung's thinking level", () => {
+  test("two rungs of one model at different levels launch with different flags", () =>
+    withStore(
+      flagged,
+      Effect.gen(function* () {
+        yield* ladder("add", "opus-low", "opus", "--thinking", "low");
+        yield* ladder("add", "opus-high", "opus", "--thinking", "high", "--above", "opus-low");
+        yield* ladder("add", "sol-low", "gpt-6.1-sol", "--thinking", "low");
+        yield* ladder("add", "sol-high", "gpt-6.1-sol", "--thinking", "high");
+        const argv = yield* launches;
+        expect(argv["opus-low"]).toEqual(["claude", "--model", "opus", "--effort", "low", "go"]);
+        expect(argv["opus-high"]).toEqual(["claude", "--model", "opus", "--effort", "high", "go"]);
+        expect(argv["sol-low"]).toEqual([
+          "codex",
+          "--no-daemon",
+          "--model",
+          "gpt-6.1-sol",
+          "-c",
+          "model_reasoning_effort=low",
+          "go",
+        ]);
+        expect(argv["sol-high"]).toContain("model_reasoning_effort=high");
+      }),
+    ));
+
+  test("a rung with no level passes no thinking flag", () =>
+    withStore(
+      flagged,
+      Effect.gen(function* () {
+        yield* ladder("add", "opus-plain", "opus");
+        yield* ladder("add", "opus-set", "opus", "--thinking", "medium");
+        yield* ladder("thinking", "opus-set", "none");
+        const argv = yield* launches;
+        expect(argv["opus-plain"]).toEqual(["claude", "--model", "opus", "go"]);
+        expect(argv["opus-set"]).toEqual(["claude", "--model", "opus", "go"]);
+      }),
+    ));
+
+  test("ladder thinking sets one rung's level and leaves the others", () =>
+    withStore(
+      flagged,
+      Effect.gen(function* () {
+        yield* ladder("add", "opus-a", "opus", "--thinking", "low");
+        yield* ladder("add", "opus-b", "opus", "--thinking", "low");
+        yield* ladder("thinking", "opus-a", "high");
+        const levels = Object.fromEntries((yield* readRows).map((row) => [row.rung, row.thinking]));
+        expect(levels).toMatchObject({ "opus-a": "high", "opus-b": "low", cheap: "medium" });
       }),
     ));
 });

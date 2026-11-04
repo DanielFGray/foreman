@@ -56,16 +56,15 @@ export const harnessLaunch = (options: {
 
 /**
  * The flags that start a harness on a rung's model and thinking level. Each
- * harness spells the level its own way; one with no such flag, or a rung whose
- * level the harness picks (`auto`), gets none.
+ * harness spells the level its own way; one with no such flag, or an entry
+ * with no level, gets none, so the harness's own default applies.
  */
 export const launchArguments = (options: {
   readonly kind: string;
   readonly model: string | undefined;
   readonly thinking?: string | undefined;
 }): ReadonlyArray<string> => {
-  const level =
-    options.thinking === undefined || options.thinking === "auto" ? undefined : options.thinking;
+  const level = options.thinking;
   const effort =
     level === undefined
       ? []

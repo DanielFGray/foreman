@@ -355,12 +355,15 @@ describe("the exits migration", () => {
         yield* sql.unsafe(`DROP TABLE parks`);
         yield* sql.unsafe(`DROP TABLE runs`);
         yield* sql.unsafe(OLD_RUNS);
+        // The models as these migrations found them, with the thinking level
+        // the reviewers migration copies.
+        yield* sql.unsafe(`ALTER TABLE models ADD COLUMN thinking TEXT NOT NULL DEFAULT 'medium'`);
         // The migrator only runs ids above the latest recorded row, so later
         // migrations must go too or exits is skipped and the rename never runs.
         yield* sql.unsafe(
           `DELETE FROM tasks_migrations
            WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council',
-                          'ladder_levels', 'reviewers', 'no_price_class')`,
+                          'ladder_levels', 'reviewers', 'no_price_class', 'rung_thinking')`,
         );
         const endings = [
           ["build", "handed-off"],
@@ -410,12 +413,13 @@ describe("the reviewers migration", () => {
         yield* sql.unsafe(
           `INSERT INTO pools (pool, harness, provider_default) VALUES ('P', 'pi', 'p')`,
         );
+        // The store as migration 0009 left it: a thinking level and a council
+        // switch on the model, and a review switch on the rung.
+        yield* sql.unsafe(`ALTER TABLE models ADD COLUMN thinking TEXT NOT NULL DEFAULT 'medium'`);
         yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, limit_scope, thinking)
           VALUES ('m1', 'p', 'P', 'pi', 'pool', 'low'),
                  ('m2', 'p', 'P', 'pi', 'pool', 'medium'),
                  ('m3', 'p', 'P', 'pi', 'pool', 'medium')`);
-        // The store as migration 0009 left it: a council switch on the model
-        // and a review switch on the rung.
         yield* sql.unsafe(`ALTER TABLE models ADD COLUMN council INTEGER NOT NULL DEFAULT 0`);
         yield* sql.unsafe(`UPDATE models SET council = 1 WHERE model IN ('m1', 'm2')`);
         yield* sql.unsafe(`ALTER TABLE ladder ADD COLUMN review INTEGER NOT NULL DEFAULT 1`);
@@ -423,7 +427,8 @@ describe("the reviewers migration", () => {
           (1, 1, 'cheap', 'm3', NULL, 1), (2, 2, 'dear', 'm1', 'acct', 0), (3, 3, 'dearer', 'm1', NULL, 1)`);
         yield* sql.unsafe(`DROP TABLE reviewers`);
         yield* sql.unsafe(
-          `DELETE FROM tasks_migrations WHERE name IN ('reviewers', 'no_price_class')`,
+          `DELETE FROM tasks_migrations
+           WHERE name IN ('reviewers', 'no_price_class', 'rung_thinking')`,
         );
       }),
     );
@@ -475,7 +480,9 @@ describe("the price class migration", () => {
         yield* sql.unsafe(
           `INSERT INTO reviewers (reviewer, model, thinking) VALUES ('dear', 'm2', 'high')`,
         );
-        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'no_price_class'`);
+        yield* sql.unsafe(
+          `DELETE FROM tasks_migrations WHERE name IN ('no_price_class', 'rung_thinking')`,
+        );
       }),
     );
     const after = await at(
@@ -494,6 +501,67 @@ describe("the price class migration", () => {
       { model: "m2", rung: null },
     ]);
     expect(after.reviewers).toEqual([{ reviewer: "dear" }]);
+  });
+});
+
+describe("the rung thinking migration", () => {
+  test("gives each rung its model's level, absent for auto, and drops the model's", async () => {
+    const file = join(dir, `store-${++files}.db`);
+    const at = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
+      Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
+    await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        // The store as migration 0011 left it: the level on the model, and a
+        // reviewer's level required.
+        yield* sql.unsafe(`ALTER TABLE models ADD COLUMN thinking TEXT NOT NULL DEFAULT 'medium'`);
+        yield* sql.unsafe(`DROP TABLE reviewers`);
+        yield* sql.unsafe(`CREATE TABLE reviewers (reviewer TEXT PRIMARY KEY,
+          model TEXT NOT NULL REFERENCES models(model), thinking TEXT NOT NULL, provider TEXT)`);
+        yield* sql.unsafe(`DROP TABLE ladder`);
+        yield* sql.unsafe(`CREATE TABLE ladder (rank INTEGER PRIMARY KEY, level INTEGER NOT NULL,
+          rung TEXT NOT NULL UNIQUE, model TEXT NOT NULL REFERENCES models(model),
+          enabled INTEGER NOT NULL DEFAULT 1, provider TEXT, note TEXT,
+          unmetered INTEGER NOT NULL DEFAULT 0, author INTEGER NOT NULL DEFAULT 1)`);
+        yield* sql.unsafe(
+          `INSERT INTO pools (pool, harness, provider_default) VALUES ('P', 'pi', 'p')`,
+        );
+        yield* sql.unsafe(`INSERT INTO models (model, provider, pool, harness, limit_scope, thinking)
+          VALUES ('m1', 'p', 'P', 'pi', 'pool', 'low'), ('auto', 'p', 'P', 'cursor', 'pool', 'auto')`);
+        yield* sql.unsafe(`INSERT INTO ladder (rank, level, rung, model) VALUES
+          (1, 1, 'picks', 'auto'), (2, 2, 'cheap', 'm1'), (3, 2, 'peer', 'm1')`);
+        yield* sql.unsafe(
+          `INSERT INTO reviewers (reviewer, model, thinking) VALUES ('deep', 'm1', 'high')`,
+        );
+        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'rung_thinking'`);
+      }),
+    );
+    const after = await at(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const rungs = yield* sql<{ rung: string; thinking: string | null }>`
+          SELECT rung, thinking FROM ladder ORDER BY rank`;
+        const columns = yield* sql<{ name: string }>`SELECT name FROM pragma_table_info('models')`;
+        yield* sql`INSERT INTO reviewers (reviewer, model) VALUES ('plain', 'm1')`;
+        const reviewers = yield* sql<{ reviewer: string; thinking: string | null }>`
+          SELECT reviewer, thinking FROM reviewers ORDER BY reviewer`;
+        const statuses = yield* sql<{
+          model: string;
+        }>`SELECT model FROM model_status ORDER BY model`;
+        return { rungs, columns: columns.map((column) => column.name), reviewers, statuses };
+      }),
+    );
+    expect(after.rungs).toEqual([
+      { rung: "picks", thinking: null },
+      { rung: "cheap", thinking: "low" },
+      { rung: "peer", thinking: "low" },
+    ]);
+    expect(after.columns).not.toContain("thinking");
+    expect(after.reviewers).toEqual([
+      { reviewer: "deep", thinking: "high" },
+      { reviewer: "plain", thinking: null },
+    ]);
+    expect(after.statuses).toEqual([{ model: "auto" }, { model: "m1" }]);
   });
 });
 
@@ -546,7 +614,8 @@ describe("the ladder levels migration", () => {
         yield* sql.unsafe(`INSERT INTO ladder (rank, rung, model, review) VALUES
           (1, 'cheap', 'm1', 1), (2, 'dear', 'm1', 0)`);
         yield* sql.unsafe(
-          `DELETE FROM tasks_migrations WHERE name IN ('ladder_levels', 'reviewers', 'no_price_class')`,
+          `DELETE FROM tasks_migrations
+           WHERE name IN ('ladder_levels', 'reviewers', 'no_price_class', 'rung_thinking')`,
         );
       }),
     );
