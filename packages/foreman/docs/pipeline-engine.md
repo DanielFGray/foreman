@@ -287,8 +287,8 @@ and the policy step that holds the retry is unchanged.
 ## Rules this changes in AGENTS.md
 
 - "Durable state beyond the policy file is a wall" and "The policy file is the
-  one durable thing foreman holds": changed. The operator's intention is in two
-  files, the policy and the pipelines, written the same way.
+  one durable thing foreman holds": changed. The operator's intention is in the
+  policy, pipelines, drafts and instructions files, all written the same way.
 - "Nothing skips review": kept, and enforced by validation.
 - "Order inside a tick ... reviews are filled before new work": generalised to
   nearest-to-the-end first. Same order in the standard pipeline.
