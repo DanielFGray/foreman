@@ -31,6 +31,13 @@ export type Hold =
 /** A checkout with no branch for a landing to move, so there is no branch to land on. */
 const DETACHED = "no checked-out branch (detached HEAD)";
 
+/**
+ * Why a task's branch has no target: it records no upstream, so foreman
+ * cannot say where it lands. Every branch foreman cuts records one.
+ */
+export const noTarget = (branch: string): string =>
+  `${branch} records no branch it lands on: set one with git branch --set-upstream-to=<branch> ${branch}`;
+
 /** The `noBranch` detail for a landing target git does not have. */
 export const missingTarget = (target: string): string =>
   `${target}, the branch this project's work lands on, does not exist`;
@@ -227,72 +234,43 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       ).pipe(Effect.map((upstream) => (upstream === "" ? undefined : upstream)));
 
     /**
-     * The name of the branch a task's branch lands on, or nothing for a
-     * detached checkout.
-     *
-     * The task branch's upstream says it when it has one. A branch is cut
-     * with the target as its upstream when its route's land names one
-     * (`onto`), and branch-only mode always sets the branch the checkout
-     * left, so git records the target and foreman remembers nothing. With no
-     * upstream the work lands where the checkout's work lands
-     * (`checkoutTarget`).
+     * The name of the branch a task's branch lands on: its upstream. Every
+     * branch is cut with its target as its upstream (`addWorktree`,
+     * `checkoutBranch`), so git records the target and foreman remembers
+     * nothing. A branch with none fails with a reason that names it
+     * (`noTarget`): foreman cannot say where it lands.
      */
     const landsOn = (directory: string, branch: string) =>
       upstreamOf(directory, branch).pipe(
         Effect.flatMap((upstream) =>
-          upstream === undefined ? checkoutTarget(directory) : Effect.succeed(upstream),
+          upstream === undefined
+            ? Effect.fail(new RepositoryError({ directory, detail: noTarget(branch) }))
+            : Effect.succeed(upstream),
         ),
       );
 
-    /**
-     * The branch the checkout's own work lands on: the branch it has out, or
-     * nothing for a detached HEAD.
-     *
-     * A checkout with a task's branch out (branch-only mode) has that branch's
-     * upstream as its trunk: read as the trunk, the task branch itself would
-     * read as merged and empty and give its reviewer an empty diff. A task
-     * branch with no upstream fails here: the checkout was put on it by hand,
-     * and foreman cannot say where it lands.
-     */
-    const checkoutTarget = (directory: string) =>
-      Effect.gen(function* () {
-        const head = yield* headBranch(directory);
-        if (head === undefined || !head.startsWith(ours)) return head;
-        const upstream = yield* upstreamOf(directory, head);
-        if (upstream === undefined) {
-          return yield* new RepositoryError({
-            directory,
-            detail: `${head} is checked out with no upstream, so foreman cannot say where work lands`,
-          });
-        }
-        return upstream;
-      });
-
-    /** The revision a task's branch is measured against (see `revisionOf`). */
+    /** The revision a task's branch is measured against: the tip of the branch it lands on. */
     const trunkOf = (directory: string, branch: string) =>
-      landsOn(directory, branch).pipe(Effect.map(revisionOf));
+      landsOn(directory, branch).pipe(Effect.map((target) => `refs/heads/${target}`));
 
     /**
-     * The commits work is measured against: the tip of the branch it lands
-     * on, or the commit a detached checkout has out, which is all a detached
-     * checkout offers to measure against.
-     */
-    const revisionOf = (target: string | undefined) =>
-      target === undefined ? "HEAD" : `refs/heads/${target}`;
-
-    /**
-     * Each of `refs` as git sees it against `trunk`; see `branches`. A trunk
-     * git does not have measures nothing, and what it cannot say reads as
-     * work, as an unknown creation does: not merged, not empty, not stale.
+     * Each of `refs` as git sees it against `target`, the branch they land on
+     * (empty for a branch with no upstream); see `branches`. A target that is
+     * not named or that git does not have measures nothing, and what it cannot
+     * say reads as work, as an unknown creation does: not merged, not empty,
+     * not stale.
      */
     const measure = (
       directory: string,
-      trunk: string,
+      target: string,
       refs: ReadonlyArray<{ readonly tip: string; readonly branch: string }>,
     ) =>
       Effect.gen(function* () {
-        const known = (yield* git(directory, "rev-parse", "--verify", "--quiet", trunk)).exitCode;
-        if (known !== 0) {
+        const trunk = `refs/heads/${target}`;
+        const known =
+          target !== "" &&
+          (yield* git(directory, "rev-parse", "--verify", "--quiet", trunk)).exitCode === 0;
+        if (!known) {
           return refs.map(({ tip, branch }): Branch => ({
             branch,
             tip,
@@ -779,17 +757,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       Effect.gen(function* () {
         if ((yield* headBranch(directory)) !== branch) return "elsewhere" as const;
         if ((yield* status(directory, "all")) !== "") return "dirty" as const;
-        // Branch-only mode set the branch it left as the upstream. One with
-        // none was put on the task's branch by hand, and foreman cannot say
-        // where it returns.
-        const upstream = yield* upstreamOf(directory, branch);
-        if (upstream === undefined) {
-          return yield* new RepositoryError({
-            directory,
-            detail: `${branch} has no upstream, so foreman cannot say which branch to check out again`,
-          });
-        }
-        yield* gitOutput(directory, "checkout", "--quiet", upstream);
+        // Branch-only mode set the branch it left as the upstream, which is
+        // also the branch the task lands on.
+        yield* gitOutput(directory, "checkout", "--quiet", yield* landsOn(directory, branch));
         return "left" as const;
       });
 
@@ -855,17 +825,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
       /**
        * The name of the branch a task's branch lands on (`landsOn`), which a
-       * pull request names as its base. A detached checkout with no upstream
-       * to read has none and fails.
+       * pull request names as its base.
        */
-      trunkBranch: (directory: string, branch: string) =>
-        Effect.gen(function* () {
-          const name = yield* landsOn(directory, branch);
-          if (name === undefined) {
-            return yield* new RepositoryError({ directory, detail: "HEAD names no branch" });
-          }
-          return name;
-        }),
+      trunkBranch: landsOn,
 
       /** The branch the checkout has out, or nothing for a detached HEAD. */
       checkedOut: headBranch,
@@ -979,21 +941,20 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        */
       branches: (directory: string) =>
         Effect.gen(function* () {
-          const fallback = yield* checkoutTarget(directory);
           const refs = (yield* lines(
             directory,
             "for-each-ref",
             "--format=%(objectname) %(refname:short) %(upstream:short)",
             `refs/heads/${ours}`,
           )).flatMap((line) => {
-            const [tip, branch, upstream] = line.split(" ");
-            return tip && branch ? [{ tip, branch, trunk: revisionOf(upstream || fallback) }] : [];
+            const [tip, branch, upstream = ""] = line.split(" ");
+            return tip && branch ? [{ tip, branch, upstream }] : [];
           });
           // Each branch is measured against the branch it lands on, so the
           // refs are read once per target rather than once per branch.
           const measured = yield* Effect.forEach(
-            Object.entries(Arr.groupBy(refs, (ref) => ref.trunk)),
-            ([trunk, group]) => measure(directory, trunk, group),
+            Object.entries(Arr.groupBy(refs, (ref) => ref.upstream)),
+            ([upstream, group]) => measure(directory, upstream, group),
           );
           const byBranch = new Map(measured.flat().map((ref) => [ref.branch, ref] as const));
           return refs.flatMap((ref) => byBranch.get(ref.branch) ?? []);
@@ -1040,9 +1001,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
       /**
        * Makes a task's worktree at `path` with `branch` out, cutting the
-       * branch when it does not exist yet: from the tip of `onto`, the branch
-       * its route lands on, which becomes its upstream, or from HEAD when the
-       * route lands on the checkout's branch.
+       * branch when it does not exist yet from the tip of its target: `onto`,
+       * the branch its route lands on, else the branch the checkout has out.
+       * The target becomes its upstream, so it is fixed when the branch is cut.
        *
        * The upstream is how every later step finds where the task lands
        * (`landsOn`), even after its task is gone, with nothing kept outside
@@ -1067,10 +1028,16 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             yield* gitOutput(directory, "worktree", "add", path, branch);
             return;
           }
-          yield* gitOutput(directory, "worktree", "add", "-b", branch, path, onto ?? "HEAD");
-          if (onto !== undefined) {
-            yield* gitOutput(directory, "branch", "--quiet", `--set-upstream-to=${onto}`, branch);
+          const head = yield* headBranch(directory);
+          const target = onto ?? (head === undefined || head.startsWith(ours) ? undefined : head);
+          if (target === undefined) {
+            return yield* new RepositoryError({
+              directory,
+              detail: `the checkout has ${head ?? "no branch"} out, which is no branch ${branch} can land on`,
+            });
           }
+          yield* gitOutput(directory, "worktree", "add", "-b", branch, path, target);
+          yield* gitOutput(directory, "branch", "--quiet", `--set-upstream-to=${target}`, branch);
         }),
 
       /**
@@ -1275,9 +1242,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             } as const;
           }
 
-          const target = yield* landsOn(directory, branch);
+          const target = yield* upstreamOf(directory, branch);
           if (target === undefined) {
-            return { _tag: "Held", reason: "noBranch", detail: DETACHED } as const;
+            return { _tag: "Held", reason: "noBranch", detail: noTarget(branch) } as const;
           }
           const ref = `refs/heads/${target}`;
           if ((yield* git(directory, "rev-parse", "--verify", "--quiet", ref)).exitCode !== 0) {

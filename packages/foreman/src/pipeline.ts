@@ -149,8 +149,8 @@ export type Landing = (typeof LANDINGS)[number];
 
 /**
  * Proves and applies the task's branch to the branch `onto` names, which
- * completes it. `how` is `merge` (a merge commit) when absent. `onto` is the
- * branch the checkout has out when absent; a pull-request landing names it
+ * completes it. `how` is `merge` (a merge commit) when absent. `onto`, when
+ * absent, is the branch the checkout has out when the task's branch is cut; a pull-request landing names it
  * as the pull request's base.
  */
 export const LandNode = S.Struct({

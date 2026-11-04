@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Option } from "effect";
-import { Repository } from "./repository.ts";
+import { noTarget, Repository } from "./repository.ts";
 
 const run = <A, E>(f: (repository: Repository["Service"]) => Effect.Effect<A, E>) =>
   Effect.runPromise(Repository.use(f).pipe(Effect.provide(Repository.Default)));
@@ -49,6 +49,8 @@ const git = (...args: Array<string>) => Bun.$`git -C ${directory} ${args}`.quiet
 describe("Repository", () => {
   test("leaves a git checkout free while the operator edits in it", async () => {
     await git("init", "-q");
+    // Every branch foreman cuts records its target as its upstream; so does every branch here.
+    await git("config", "branch.autoSetupMerge", "always");
     await git("config", "user.email", "foreman@test");
     await git("config", "user.name", "foreman");
     await writeFile(join(directory, "tracked.txt"), "committed\n");
@@ -696,6 +698,7 @@ describe("Repository's git", () => {
     Object.assign(process.env, identity);
     try {
       await at("init", "-q", "-b", "main");
+      await at("config", "branch.autoSetupMerge", "always");
       await writeFile(join(here, "a.txt"), "a\n");
       await at("add", "a.txt");
       await at("commit", "-qm", "initial");
@@ -729,6 +732,7 @@ describe("Repository in branch mode", () => {
     const sh = (...args: Array<string>) =>
       Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
     await sh("init", "-q", "-b", "trunk");
+    await sh("config", "branch.autoSetupMerge", "always");
     await writeFile(join(here, "a.txt"), "a\n");
     await sh("add", "a.txt");
     await sh("commit", "-qm", "initial");
@@ -840,6 +844,7 @@ describe("Repository in branch mode, after the task's run", () => {
     const sh = (...args: Array<string>) =>
       Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
     await sh("init", "-q", "-b", "trunk");
+    await sh("config", "branch.autoSetupMerge", "always");
     await writeFile(join(here, "a.txt"), "a\n");
     await sh("add", "a.txt");
     await sh("commit", "-qm", "initial");
@@ -1004,6 +1009,7 @@ describe("Repository landing by fast-forward", () => {
     const sh = (...args: Array<string>) =>
       Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
     await sh("init", "-q", "-b", "trunk");
+    await sh("config", "branch.autoSetupMerge", "always");
     await writeFile(join(here, "a.txt"), "a\n");
     await sh("add", "a.txt");
     await sh("commit", "-qm", "initial");
@@ -1108,6 +1114,7 @@ describe("Repository against a remote", () => {
       Bun.$`git -C ${directory} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
     await Bun.$`git init -q --bare -b trunk ${origin}`.quiet();
     await Bun.$`git init -q -b trunk ${here}`.quiet();
+    await sh(here, "config", "branch.autoSetupMerge", "always");
     await writeFile(join(here, "a.txt"), "a\n");
     await sh(here, "add", "a.txt");
     await sh(here, "commit", "-qm", "initial");
@@ -1180,7 +1187,7 @@ describe("Repository landing onto a named branch", () => {
 
   // The operator's checkout has `trunk` out; `develop` is ahead of it and out
   // nowhere. The task's branch is cut for `develop` in a worktree.
-  const checkout = async (onto: string) => {
+  const checkout = async (onto: string | undefined) => {
     const root = await mkdtemp(join(tmpdir(), "foreman-onto-"));
     const here = join(root, "checkout");
     const tree = join(root, "worktree");
@@ -1295,6 +1302,67 @@ describe("Repository landing onto a named branch", () => {
       detail: "develop, the branch this project's work lands on, does not exist",
     });
     // Nothing can be measured against a missing target, so the branch reads as work.
+    expect(await branchOf(here)).toMatchObject({ merged: false, empty: false, stale: undefined });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("lands onto a branch another worktree has out by fast-forwarding that worktree", async () => {
+    const { root, here, sh, out } = await checkout("develop");
+    const other = join(root, "develop");
+    await sh(here, "worktree", "add", "-q", other, "develop");
+    const work = await out(here, "rev-parse", task);
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    expect(await out(other, "rev-parse", "HEAD^2")).toBe(work);
+    // The worktree's files follow its branch, as a moved ref alone would not do.
+    expect(await out(other, "status", "--porcelain")).toBe("");
+    expect(await Bun.file(join(other, "b.txt")).text()).toBe("b\n");
+    await rm(root, { recursive: true, force: true });
+    await rm(`${here}.grounds`, { recursive: true, force: true });
+  });
+
+  test("pushing the branch keeps onto as the branch it lands on", async () => {
+    const { root, here, sh, out } = await checkout("develop");
+    const origin = join(root, "origin.git");
+    await Bun.$`git init -q --bare ${origin}`.quiet();
+    await sh(here, "remote", "add", "origin", origin);
+    await run((repository) =>
+      Effect.gen(function* () {
+        const commit = yield* repository.tip(here, task);
+        if (commit === undefined) return yield* Effect.die(`${task} has no tip`);
+        yield* repository.push(here, commit, task);
+      }),
+    );
+    expect(await out(origin, "rev-parse", task)).toBe(await out(here, "rev-parse", task));
+    expect(await run((repository) => repository.trunkBranch(here, task))).toBe("develop");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("cut with no onto, a branch records the branch the checkout had out, and lands there after the checkout moves", async () => {
+    const { root, here, sh, out } = await checkout(undefined);
+    expect(await out(here, "rev-parse", "--abbrev-ref", `${task}@{upstream}`)).toBe("trunk");
+    const trunk = await out(here, "rev-parse", "trunk");
+    await sh(here, "checkout", "-q", "develop");
+    const develop = await out(here, "rev-parse", "develop");
+    expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
+    expect(await out(here, "rev-parse", "trunk^1")).toBe(trunk);
+    expect(await out(here, "rev-parse", "develop")).toBe(develop);
+    await rm(root, { recursive: true, force: true });
+    await rm(`${here}.grounds`, { recursive: true, force: true });
+  });
+
+  test("a branch that records no target holds its landing, and names the branch", async () => {
+    const { root, here, sh } = await checkout("develop");
+    await sh(here, "branch", "--unset-upstream", task);
+    const reason = noTarget(task);
+    expect(await land(here)).toEqual({ _tag: "Held", reason: "noBranch", detail: reason });
+    const refused = await Effect.runPromise(
+      Repository.use((repository) => repository.trunkBranch(here, task)).pipe(
+        Effect.flip,
+        Effect.provide(Repository.Default),
+      ),
+    );
+    expect(refused.detail).toBe(reason);
+    // Nothing can be measured against no target, so the branch reads as work.
     expect(await branchOf(here)).toMatchObject({ merged: false, empty: false, stale: undefined });
     await rm(root, { recursive: true, force: true });
   });

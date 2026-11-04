@@ -169,7 +169,8 @@ export interface OpenOptions {
 
   /**
    * The branch the task's route lands on, which a new branch is cut from and
-   * records as its upstream; absent when it lands on the checkout's branch.
+   * records as its upstream; absent when it lands on the branch the checkout has
+   * out, which the new branch then records.
    */
   readonly onto: string | undefined;
 }

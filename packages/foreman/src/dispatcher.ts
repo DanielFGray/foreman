@@ -2318,16 +2318,26 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     /**
      * The branch the task's work lands on, which its prompt names as trunk:
-     * the one its branch lands on (`Repository.trunkBranch`), or, before the
-     * branch is cut, the one its route names.
+     * the one its branch records (`Repository.trunkBranch`), or, before the
+     * branch is cut and for a direct task, which has none, the one its route
+     * names, else the branch the checkout has out.
      */
     const trunkNameOf = (task: Item, project: Project) =>
       Effect.gen(function* () {
+        const branch = labelFor(task.id);
+        if ((yield* repository.tip(project.directory, branch)) !== undefined) {
+          return yield* repository.trunkBranch(project.directory, branch);
+        }
         const onto = yield* targetOfTask(task);
-        const cut = (yield* repository.tip(project.directory, labelFor(task.id))) !== undefined;
-        return onto !== undefined && !cut
-          ? onto
-          : yield* repository.trunkBranch(project.directory, labelFor(task.id));
+        if (onto !== undefined) return onto;
+        const head = yield* repository.checkedOut(project.directory);
+        if (head === undefined) {
+          return yield* new RepositoryError({
+            directory: project.directory,
+            detail: "the checkout has no branch out",
+          });
+        }
+        return head;
       });
 
     /** The branch the task's route lands on, when its lands name one. */
