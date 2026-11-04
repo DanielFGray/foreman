@@ -9,6 +9,7 @@ export const FIELDS = {
   model: { label: "model", placeholder: "ladder, above, or a rung's name", of: (node) => node.model },
   slots: { label: "slots", placeholder: "how many at once; empty is no limit", of: (node) => node.slots ?? "" },
   command: { label: "command", placeholder: "the command that must pass", of: (node) => node.command },
+  onto: { label: "onto", placeholder: "a branch; empty lands on the branch the checkout has out", of: (node) => node.onto ?? "" },
   when: { label: "when", placeholder: "a tasks filter", of: () => "" },
   newRoute: { label: "new route", placeholder: "a tasks filter, then Enter", of: () => "" },
   newSource: { label: "filter", placeholder: "a tasks filter; empty takes every task", of: () => "" },

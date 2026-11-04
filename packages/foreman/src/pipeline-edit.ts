@@ -3,7 +3,7 @@
 // this module names each one, so herdr-web's editor and `foreman pipeline
 // edit` decode the same changes.
 import { Schema as S } from "effect";
-import { AgentNode, Exit, LANDINGS, type Pipeline } from "./pipeline.ts";
+import { AgentNode, Exit, LandNode, LANDINGS, type Pipeline } from "./pipeline.ts";
 import {
   addExit,
   addRoute,
@@ -48,7 +48,7 @@ export const BlockSetting = S.Union([
   }),
   S.Struct({ kind: S.Literal("router"), route: S.Int, when: S.String }),
   S.Struct({ kind: S.Literal("check"), command: S.String }),
-  S.Struct({ kind: S.Literal("land"), how: S.Literals(LANDINGS) }),
+  S.Struct({ kind: S.Literal("land"), how: S.Literals(LANDINGS), onto: LandNode.fields.onto }),
 ]);
 export type BlockSetting = typeof BlockSetting.Type;
 

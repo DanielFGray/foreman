@@ -11,6 +11,7 @@ import {
   type Placement,
   offersOf,
   problemsOf,
+  routeTarget,
   routeWorkspace,
   STANDARD_PIPELINES,
   toMermaid,
@@ -229,6 +230,7 @@ const prompt = Command.make(
         repository,
         workspace,
         base: "<base>",
+        trunk: routeTarget(pipeline, factsOf(task, pipeline)) ?? "<trunk>",
         verify: "./scripts/verify.sh",
         pipeline,
       });

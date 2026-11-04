@@ -542,7 +542,7 @@ export const summaryOf = (node: PipelineNode): string => {
     case "worktree":
       return "a directory of its own";
     case "land":
-      return node.how === "fast-forward" ? "fast-forwards" : "merges";
+      return `${node.how === "fast-forward" ? "fast-forwards" : "merges"}${node.onto === undefined ? "" : ` onto ${node.onto}`}`;
     case "done":
       return "completes";
     case "park":

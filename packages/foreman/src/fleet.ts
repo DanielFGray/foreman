@@ -166,6 +166,13 @@ export interface OpenOptions {
   readonly repository: string;
   readonly branch: string;
   readonly directory: string;
+
+  /**
+   * The branch the task's route lands on, which a new branch is cut from and
+   * records as its upstream; absent when it lands on the branch the checkout has
+   * out, which the new branch then records.
+   */
+  readonly onto: string | undefined;
 }
 
 export interface CloseOptions {

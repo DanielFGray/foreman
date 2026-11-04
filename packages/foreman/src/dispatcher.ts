@@ -65,7 +65,14 @@ import {
 } from "./pull-request-landing.ts";
 import { queueFrom } from "./queue.ts";
 import { phaseOf } from "./task-phase.ts";
-import { Repository, RepositoryError, type Hold, type HoldReason } from "./repository.ts";
+import {
+  missingTarget,
+  Repository,
+  RepositoryError,
+  type Hold,
+  type HoldReason,
+  wrongBranch,
+} from "./repository.ts";
 import { Quota, type Usage, walledSeats } from "./quota.ts";
 import {
   authorFor,
@@ -90,7 +97,9 @@ import {
   nextAgent,
   isUnderReview,
   place,
+  routeTarget,
   routeWorkspace,
+  targetsOf,
   type AgentNode,
   type CheckNode,
   type DoneNode,
@@ -689,6 +698,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           projectPipeline(drawings, project.name, offers, instructions),
         ]),
       );
+      const targetHolds = yield* Effect.forEach(projects, (project) => {
+        const pipeline = runningPipeline(pipelines, project.name);
+        return pipeline === undefined ? Effect.succeed([]) : targetHoldsOf(project, pipeline);
+      }).pipe(Effect.map((rows) => rows.flat()));
       const scopes = yield* scopesOf(policy.grants, records.lookup, records.children);
 
       // Foreman's branches, in every project. One read, three questions: which
@@ -774,7 +787,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           task: Option.map(task, withTip),
         })),
         roster,
-        held: [...checkoutHolds, ...occupancy],
+        held: [...checkoutHolds, ...targetHolds, ...occupancy],
         claimed,
         reviewing,
         epics,
@@ -1706,7 +1719,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const closes = closingLine(task.id, trackerOf(policy, task.project));
           const number = yield* createPullRequest(repo, {
             head: branch,
-            base: yield* repository.trunkBranch(project.directory),
+            base: yield* repository.trunkBranch(project.directory, branch),
             title: task.title,
             body: [`foreman: ${task.id}, reviewed and approved at ${block.id}.`, closes]
               .filter((line) => line !== undefined)
@@ -2283,13 +2296,53 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
     /**
      * The commit an author's work starts from, which its prompt names as
-     * `{{ base }}`: the task's base, or the checkout's HEAD before there is
-     * one, since that is where a first direct run or a new branch starts.
+     * `{{ base }}`: the task's base, or, before there is one, where a first
+     * run starts: the tip of the branch its route lands on, else the
+     * checkout's HEAD.
      */
     const authorBaseOf = (task: Item, project: Project) =>
       Effect.gen(function* () {
-        return (yield* baseOf(task, project)) ?? (yield* repository.head(project.directory));
+        const base = yield* baseOf(task, project);
+        if (base !== undefined) return base;
+        const onto = yield* targetOfTask(task);
+        if (onto === undefined) return yield* repository.head(project.directory);
+        const tip = yield* repository.tip(project.directory, onto);
+        if (tip === undefined) {
+          return yield* new RepositoryError({
+            directory: project.directory,
+            detail: missingTarget(onto),
+          });
+        }
+        return tip;
       });
+
+    /**
+     * The branch the task's work lands on, which its prompt names as trunk:
+     * the one its branch records (`Repository.trunkBranch`), or, before the
+     * branch is cut and for a direct task, which has none, the one its route
+     * names, else the branch the checkout has out.
+     */
+    const trunkNameOf = (task: Item, project: Project) =>
+      Effect.gen(function* () {
+        const branch = labelFor(task.id);
+        if ((yield* repository.tip(project.directory, branch)) !== undefined) {
+          return yield* repository.trunkBranch(project.directory, branch);
+        }
+        const onto = yield* targetOfTask(task);
+        if (onto !== undefined) return onto;
+        const head = yield* repository.checkedOut(project.directory);
+        if (head === undefined) {
+          return yield* new RepositoryError({
+            directory: project.directory,
+            detail: "the checkout has no branch out",
+          });
+        }
+        return head;
+      });
+
+    /** The branch the task's route lands on, when its lands name one. */
+    const targetOfTask = (task: Item) =>
+      SubscriptionRef.get(state).pipe(Effect.map(({ pipelines }) => targetOf(pipelines, task)));
 
     /**
      * The workspace a task's agents run in, with its worktree made usable.
@@ -2313,6 +2366,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 repository: project.directory,
                 branch: labelFor(task.id),
                 directory,
+                onto: yield* targetOfTask(task),
               });
         const setup = yield* repository.setup(worker.directory);
         if (setup && !setup.passed) {
@@ -2435,6 +2489,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         repository: project.directory,
         workspace,
         base: yield* authorBaseOf(task, project),
+        trunk: yield* trunkNameOf(task, project),
       });
       yield* record(
         task,
@@ -2496,6 +2551,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         repository: project.directory,
         workspace,
         base,
+        trunk: yield* trunkNameOf(task, project),
         verify: project.verify,
       });
       // The run records the tip the reviewer is about to read: its approval
@@ -2744,6 +2800,41 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const projectFor = (name: string) =>
       SubscriptionRef.get(state).pipe(
         Effect.map(({ projects }) => projects.find((candidate) => candidate.name === name)),
+      );
+
+    /**
+     * The `noBranch` holds a project's landing targets put on it: a branch
+     * its lands name that git does not have, and a target a route in the
+     * checkout lands on that the checkout does not have out (rule 7 of
+     * docs/workspace-blocks.md). Both hold dispatch and landing alike, and
+     * both clear the tick the operator makes or checks out the branch. A
+     * checkout with no branch out, or a task's, is held by `isFree` already.
+     */
+    const targetHoldsOf = (project: Project, pipeline: Pipeline) =>
+      Effect.gen(function* () {
+        const { named, inCheckout } = targetsOf(pipeline);
+        const missing = yield* Effect.filter(named, (target) =>
+          repository.tip(project.directory, target).pipe(Effect.map((tip) => tip === undefined)),
+        );
+        const head = yield* repository.checkedOut(project.directory);
+        const elsewhere =
+          head === undefined || taskOf(head) !== undefined
+            ? []
+            : inCheckout
+                .filter((target) => target !== head && !missing.includes(target))
+                .map((target) => wrongBranch(target, head));
+        return [...missing.map(missingTarget), ...elsewhere].map((detail): Held => ({
+          project: project.name,
+          reason: "noBranch",
+          detail,
+        }));
+      }).pipe(
+        // An unreadable checkout is held by `isFree` already, with its reason.
+        Effect.catch((error: RepositoryError) =>
+          Effect.logWarning(`reading ${project.name}'s landing targets: ${error}`).pipe(
+            Effect.as<ReadonlyArray<Held>>([]),
+          ),
+        ),
       );
 
     const branchCommitted = (task: Item) =>
@@ -3029,6 +3120,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             repository: project.directory,
             workspace,
             base,
+            trunk: yield* trunkNameOf(task, project),
             verify: project.verify,
           });
         }),
@@ -3108,6 +3200,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
               repository: project.directory,
               workspace: yield* routeOf(task),
               base: yield* authorBaseOf(task, project),
+              trunk: yield* trunkNameOf(task, project),
             });
             const agent = yield* fleet.spawn(worker, spawnAs(rung, prompt, "author"));
             // The vanished author's run is still open; the new author starts a new lap.
@@ -3702,6 +3795,19 @@ export const workspaceOf = (
 ): Workspace | undefined => {
   const pipeline = runningPipeline(pipelines, task.project);
   return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task, pipeline));
+};
+
+/**
+ * The branch the task's route lands on, when its lands name one. Nothing when
+ * they land on the checkout's branch, when its route has no branch, or when
+ * its project's pipeline is stopped.
+ */
+export const targetOf = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): string | undefined => {
+  const pipeline = runningPipeline(pipelines, task.project);
+  return pipeline === undefined ? undefined : routeTarget(pipeline, factsOf(task, pipeline));
 };
 
 /**

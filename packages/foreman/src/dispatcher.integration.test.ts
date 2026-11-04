@@ -164,6 +164,8 @@ class World {
   readonly prompts: string[] = [];
   /** The directory of every workspace `open` was asked for, in order. */
   readonly opened: string[] = [];
+  /** The branch every `open` was told its task lands on, in order. */
+  readonly ontos: Array<string | undefined> = [];
   landing: Landing = { _tag: "Merged", verified: false };
   /** What every check block's command answers. */
   checking: Checked = { _tag: "Passed", verified: true };
@@ -204,8 +206,15 @@ class World {
   readonly fleet = {
     // Opening the checkout itself checks the task's branch out there, as
     // `Repository.checkoutBranch` does.
-    open: (options: { task: string; repository: string; branch: string; directory: string }) =>
+    open: (options: {
+      task: string;
+      repository: string;
+      branch: string;
+      directory: string;
+      onto: string | undefined;
+    }) =>
       this.write("fleet.open", () => {
+        this.ontos.push(options.onto);
         if (options.directory === options.repository) this.checkedOut = options.branch;
         return this.workerIn(options.task, options.repository, options.directory);
       }),
@@ -498,6 +507,8 @@ class World {
         this.branches.delete(branch);
       }),
     trunkBranch: () => Effect.succeed("main"),
+    // The operator's branch is `main`; `checkedOut` holds a task's branch out.
+    checkedOut: () => Effect.sync(() => this.checkedOut ?? "main"),
   };
 
   /**
@@ -2440,6 +2451,56 @@ describe("a route's workspace blocks", () => {
       expect(world.spawned.at(-1)).toEqual([second.id, "author"]);
     });
   }
+
+  /** `nodes` with every land landing onto `onto`. */
+  const landingOnto = (nodes: ReadonlyArray<PipelineNode>, onto: string) =>
+    nodes.map((node) => (node.kind === "land" ? { ...node, onto } : node));
+
+  test("a target that does not exist holds the project, and names the target", async () => {
+    draw(landingOnto(STANDARD_PIPELINES.worktree.nodes, "develop"));
+    const world = new World(item("ts-new", "open", []));
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(state.held).toEqual([
+      {
+        project: "test",
+        reason: "noBranch",
+        detail: "develop, the branch this project's work lands on, does not exist",
+      },
+    ]);
+  });
+
+  test("a worktree task is opened on the branch its route lands on", async () => {
+    draw(landingOnto(STANDARD_PIPELINES.worktree.nodes, "develop"));
+    const world = new World(item("ts-new", "open", []));
+    world.movedTips.set("develop", "d1");
+
+    const state = await reading(world);
+
+    expect(state.held).toEqual([]);
+    expect(world.spawned).toEqual([["ts-new", "author"]]);
+    expect(world.ontos).toEqual(["develop"]);
+  });
+
+  test("branch only holds a checkout that does not have the target out, and names both branches", async () => {
+    draw(landingOnto(BRANCH_ONLY, "develop"));
+    const world = new World(item("ts-new", "open", []));
+    world.movedTips.set("develop", "d1");
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(state.held).toEqual([
+      {
+        project: "test",
+        reason: "noBranch",
+        detail:
+          "work in this checkout lands on develop, but the checkout has main out: check develop out",
+      },
+    ]);
+  });
 
   const reading = (world: World) =>
     Effect.runPromise(

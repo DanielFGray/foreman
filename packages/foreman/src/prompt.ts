@@ -176,6 +176,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
  * the checkout and how it reads trunk; with none, the task works in a
  * worktree, as in the standard pipeline. `base` is the commit the work
  * starts from, the only way to name the work on the operator's own branch.
+ * `trunk` is the branch the work lands on, which the agent reads trunk from.
  * `verify` is the project's own verification command, which a reviewer is
  * told about.
  */
@@ -185,6 +186,7 @@ export interface AgentRun {
   readonly repository: string;
   readonly workspace: Workspace | undefined;
   readonly base: string;
+  readonly trunk: string;
   readonly verify?: string | undefined;
   /** The pipeline the task runs, which says whether its author made a claim; absent when its project runs none. */
   readonly pipeline: Pipeline | undefined;
@@ -219,7 +221,7 @@ const fill = (name: string, body: string, values: Values) =>
  * reaches only the runs whose task calls for it, so every other prompt stays
  * short.
  */
-const taskSection = (block: AgentNode, { task, workspace, pipeline }: AgentRun): string => {
+const taskSection = (block: AgentNode, { task, workspace, pipeline, trunk }: AgentRun): string => {
   const lines = [
     "## Task",
     "",
@@ -237,7 +239,7 @@ const taskSection = (block: AgentNode, { task, workspace, pipeline }: AgentRun):
   if (block.role === "review" && claim !== undefined) {
     lines.push(
       "",
-      `The author ended its run \`${claim.name}\`: it claims trunk already does what the task asks. Walk the definition of done and find the code and tests on trunk for each part. Approve only when every part is there; otherwise log the missing parts and return it.`,
+      `The author ended its run \`${claim.name}\`: it claims trunk (\`${trunk}\`) already does what the task asks. Walk the definition of done and find the code and tests on ${trunk} for each part. Approve only when every part is there; otherwise log the missing parts and return it.`,
     );
   }
   if (block.role === "review" && research) {
@@ -256,7 +258,7 @@ const taskSection = (block: AgentNode, { task, workspace, pipeline }: AgentRun):
  * landing mid-merge.
  */
 const workspaceSection = (block: AgentNode, run: AgentRun): string => {
-  const { task, worktree, repository, workspace, base } = run;
+  const { task, worktree, repository, workspace, base, trunk } = run;
   const branch = labelFor(task.id);
   const author = block.role === "author";
   const branchLine =
@@ -270,10 +272,10 @@ const workspaceSection = (block: AgentNode, run: AgentRun): string => {
         : `Run every command in ${worktree}: the operator's own checkout and branch, where the author committed. Nothing else runs here until this task ends. Never switch branches, and never stash, reset or clean: the commits are already on the operator's branch, so a return asks for new commits, never an undo. Do not read another task's worktree.`
       : workspace === "branch"
         ? author
-          ? `Work only in ${worktree}, on ${branch}. This is the operator's own checkout, put on your branch for this task; no other agent or landing runs here until it lands. Never switch branches, and never stash, reset or clean: foreman checks the operator's branch out again when it lands, from a clean tree. To see trunk, use \`git log @{upstream}\` and \`git diff @{upstream}...HEAD\`.`
+          ? `Work only in ${worktree}, on ${branch}. This is the operator's own checkout, put on your branch for this task; no other agent or landing runs here until it lands. Never switch branches, and never stash, reset or clean: foreman checks the operator's branch out again when it lands, from a clean tree. To see trunk, use \`git log ${trunk}\` and \`git diff ${trunk}...HEAD\`.`
           : `Run every command in ${worktree}: the operator's own checkout, which has the task's branch out. No landing runs here until this task lands. Never switch branches, and never stash, reset or clean. Do not read another task's worktree.`
         : author
-          ? `Work only in ${worktree}, on ${branch}. Never enter ${repository} or switch branches, and do not read another task's worktree. To see trunk, find its commit with \`git worktree list --porcelain\` and use \`git show\` or \`git diff\` from here.`
+          ? `Work only in ${worktree}, on ${branch}. Never enter ${repository} or switch branches, and do not read another task's worktree. To see trunk, use \`git log ${trunk}\` and \`git diff ${trunk}...HEAD\` from here.`
           : `Run every command in ${worktree}. Never run git in ${repository}: foreman merges there, and a git command of yours mid-merge fails the landing. Do not read another task's worktree.`;
   const work = `Your task's work: \`git log ${base}..HEAD\` and \`git diff ${base} HEAD\`.`;
   const landing =
