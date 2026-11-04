@@ -19,13 +19,8 @@ import { configDirectory, type Read, rewrite } from "./shared-file.ts";
 export const Pipelines = S.Record(S.String, Pipeline);
 export type Pipelines = typeof Pipelines.Type;
 
-/**
- * The file as written: the pipelines under the format's version. A file in an
- * older form does not decode, and so stops every project: `foreman cutover
- * exit-ids` (`src/cutover-exits.ts`) converts it once, and nothing else reads
- * the older forms.
- */
-export const PipelinesFile = S.Struct({ version: S.Literal(5), pipelines: Pipelines });
+/** The file as written: the pipelines under one key. */
+export const PipelinesFile = S.Struct({ pipelines: Pipelines });
 export type PipelinesFile = typeof PipelinesFile.Type;
 
 /** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
@@ -46,12 +41,9 @@ export const readPipelines = (path: string) =>
 
 /** Rewrites the pipelines through `change`, the one way anything writes them. */
 export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
-  rewrite(path, PipelinesFile, readFile, (file) => ({
-    version: 5 as const,
-    pipelines: change(file.pipelines),
-  }));
+  rewrite(path, PipelinesFile, readFile, (file) => ({ pipelines: change(file.pipelines) }));
 
-const NONE: PipelinesFile = { version: 5, pipelines: {} };
+const NONE: PipelinesFile = { pipelines: {} };
 
 /** The file as stored. */
 const readFile = (path: string) =>

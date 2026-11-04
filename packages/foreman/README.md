@@ -628,15 +628,6 @@ bun src/main.ts status          # one reading, printed
 
 What it starts by itself is the policy's to say; see above.
 
-After an upgrade that changes the pipelines file's form, stop serve and
-convert the files once before it starts again. A file in an older form stops
-every project until then.
-
-```bash
-bun src/main.ts cutover exit-ids --dry-run  # what it would convert
-bun src/main.ts cutover exit-ids
-```
-
 foreman opens workspaces in the session it is running in, so serve must
 reach that hc server.
 

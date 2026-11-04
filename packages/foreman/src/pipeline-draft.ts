@@ -18,12 +18,8 @@ export type Draft = typeof Draft.Type;
 export const Drafts = S.Record(S.String, Draft);
 export type Drafts = typeof Drafts.Type;
 
-/**
- * The file as written. A file in an older form does not decode: `foreman
- * cutover exit-ids` (`src/cutover-exits.ts`) converts it once, base and draft
- * alike, so a draft's base still matches the drawn pipeline it began from.
- */
-export const DraftsFile = S.Struct({ version: S.Literal(3), drafts: Drafts });
+/** The file as written: the drafts under one key. */
+export const DraftsFile = S.Struct({ drafts: Drafts });
 export type DraftsFile = typeof DraftsFile.Type;
 
 /** Where the drafts live: beside the pipelines file, named after it. */
@@ -34,17 +30,14 @@ export const readDrafts = (path: string) =>
 
 /** Rewrites the drafts through `change`, the one way anything writes them. */
 export const updateDrafts = (path: string, change: (drafts: Drafts) => Drafts) =>
-  rewrite(path, DraftsFile, readFile, (file) => ({
-    version: 3 as const,
-    drafts: change(file.drafts),
-  }));
+  rewrite(path, DraftsFile, readFile, (file) => ({ drafts: change(file.drafts) }));
 
 /** Whether two pipelines are the same drawing, compared as the file stores them. */
 export const sameDrawing = (one: Pipeline | null, other: Pipeline | null): boolean =>
   JSON.stringify(one === null ? null : S.encodeSync(Pipeline)(one)) ===
   JSON.stringify(other === null ? null : S.encodeSync(Pipeline)(other));
 
-const NONE: DraftsFile = { version: 3, drafts: {} };
+const NONE: DraftsFile = { drafts: {} };
 
 const readFile = (path: string) =>
   Effect.gen(function* () {

@@ -76,7 +76,8 @@ The pipelines file holds each project's pipeline (`docs/pipeline-engine.md`); it
 sits in the policy file's directory, and both are written through `rewrite` in
 `src/shared-file.ts`. The drafts file (`pipelines.draft.json`, beside it) holds
 the pipeline the operator is still drawing for a project, with the drawn
-pipeline the draft began from. A draft may not run yet, so the dispatcher never
+pipeline the draft began from. The files are `{ pipelines }` and `{ drafts }`,
+and a pipelines file that does not decode stops every project. A draft may not run yet, so the dispatcher never
 reads it. `foreman pipeline edit` changes it one `PipelineChange`
 (`src/pipeline-edit.ts`) at a time, and `foreman pipeline save` checks it and
 writes it through the same `runPipeline` as `set`, refusing when the drawn
@@ -335,12 +336,6 @@ records whether they are passed, so tasks in flight place as before.
   `fast-forward` lands only a commit that descends from the trunk tip, and a
   trunk that moved returns the task like a conflict. Foreman never rebases: a
   rebase makes a commit the reviewer did not read.
-- **The pipelines and drafts files are read in their current form only.**
-  `foreman cutover exit-ids` converts an older file once, before the
-  dispatcher starts again: a file with no `version` gets branch → worktree
-  after each source, which is how it ran, and each exit gets its name as its
-  id, so every stored run places as before. The cutover is the one reader of
-  the older forms.
 
 ### Onboarding salvages the operator's checkout
 
