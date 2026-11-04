@@ -17,7 +17,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { TASK_ID } from "./status.js";
-import { HEAD, PAD, columnHead, columnsAcross, scrolledBy } from "./columns.js";
+import { CARDS_TOP, columnBody, columnHead, columnsAcross, inBody, reachOf, scrolledBy, unscrolled } from "./columns.js";
 
 const GAP = 10;
 const CARD_H = 50;
@@ -46,7 +46,7 @@ export class Board {
     this.pane = pane;
     // The board's bounds in the window, from the last move over it.
     this.bounds = null;
-    this.scroll = { x: 0, y: 0 };
+    this.scroll = unscrolled(COLUMNS.length);
   }
 
   // Each column's cards: a placement, or a landed task, with the row it
@@ -76,21 +76,24 @@ export class Board {
   // The selected card, as the board shows it now.
   selected() { return this.columns().flat().find((card) => card.key === this.pane.detail.key); }
 
-  // Every card's rectangle in board coordinates, keyed by `slot`, each column's x and width,
-  // and how far the columns reach past the board's right edge.
+  // Every card's rectangle in board coordinates, keyed by `slot`; each
+  // column's x and width; how far the columns reach past the board's right
+  // edge; and how far each column can scroll down.
   layout(columns) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
+    const height = this.bounds?.height ?? this.pane.size?.height ?? 600;
     const { xs, columnW, overflow } = columnsAcross(width, COLUMNS.length, { min: COLUMN_MIN, gap: GAP, scroll: this.scroll });
     const rects = new Map();
-    columns.forEach((cards, index) => {
-      let y = PAD + HEAD - this.scroll.y;
+    const reach = columns.map((cards, index) => {
+      let y = 0;
       for (const card of cards) {
-        const height = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
-        rects.set(slot(index, card.key), { x: xs[index], y, width: columnW, height });
-        y += height + GAP;
+        const tall = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
+        rects.set(slot(index, card.key), { x: xs[index], y: CARDS_TOP + y - this.scroll.y[index], width: columnW, height: tall });
+        y += tall + GAP;
       }
+      return reachOf(y, height);
     });
-    return { rects, xs, columnW, overflow };
+    return { rects, xs, columnW, overflow, reach };
   }
 
   // A Queue card lists two target states: where it stands, which runs
@@ -116,7 +119,7 @@ export class Board {
   }
 
   scrolled(event, cx) {
-    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()).overflow);
+    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()));
     cx.notify();
   }
 
@@ -132,8 +135,8 @@ export class Board {
       .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
       .on_scroll_wheel((event, cx) => this.scrolled(event, cx))
       .children(COLUMNS.map((column, index) => columnHead(column, xs[index], columnW, columns[index].length, t)))
-      .children(columns.flatMap((cards, index) => cards.map((card) =>
-        this.card(card, COLUMNS[index], rects.get(slot(index, card.key)), t, card === dragged))))
+      .children(columns.map((cards, index) => columnBody(`board-column-${COLUMNS[index].key}`, xs[index], columnW)
+        .children(cards.map((card) => this.card(card, COLUMNS[index], inBody(rects.get(slot(index, card.key))), t, card === dragged)))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(
         outline(preview.rect, origin, t)))
       .when(floating !== null, (el) => el.child(
