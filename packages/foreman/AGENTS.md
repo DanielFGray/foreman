@@ -1011,6 +1011,20 @@ not to have been earned.
   verification and completing the task. With a pull-request landing and land
   off, the operator merges on GitHub, and foreman completes the task when it
   reads the merge.
+- **The live stores belong to the running fleet.** The dispatcher reads
+  `~/.prog/prog.db` and `~/.config/foreman/`, so a test or one-shot command
+  that writes them changes the live fleet. Write them only through
+  `foreman log`, `foreman add` and `foreman exit` for your own task. Otherwise
+  point `PROG_DB`, `FOREMAN_STATE`, `FOREMAN_POLICY`, `FOREMAN_PIPELINES` and
+  `FOREMAN_CONFIG` at scratch paths. To read real data, copy the store first:
+  `sqlite3 ~/.prog/prog.db ".backup <scratch>/prog.db"`.
+- **oxfmt runs from `packages/foreman`.** Its config is
+  `packages/foreman/.oxfmtrc.json`. herdr-web has none: keep its style by hand.
+- **`CLAUDE.md` is a symlink to `AGENTS.md`.** `sed -i` or `perl -i` on it
+  replaces the link with a copy. Edit `AGENTS.md`.
+- **The operator's screen is live.** Leave herdr-app spaces, panes and focus
+  alone. Start no herdr-web server: the operator's runs as the `herdr-web` user
+  service.
 
 ## House rules
 
@@ -1019,7 +1033,7 @@ not to have been earned.
   deleting a concept, not adding one. Report a blocker instead.
 - Use `prog` for task tracking. The epic is `ep-0e6a7e`.
 - Bun, not node. Effect-TS throughout.
-- Edit only foreman, `~/build/server-ansible` and this machine's `~/.config/foreman/`. When a sweep reaches another project, list those files and file the work with `prog -p <project> add`.
+- Edit only foreman and `~/build/server-ansible`. When a sweep reaches another project, list those files and file the work with `prog -p <project> add`.
 - **A gap in hc or herdr-app is a task in `amux`, not a workaround here.**
   Foreman is their heaviest user, so it finds the missing capabilities first,
   and the cost of each is a shim here encoding what hc should have told us. File
