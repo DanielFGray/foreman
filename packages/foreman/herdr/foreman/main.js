@@ -346,7 +346,8 @@ export default class Foreman extends View {
 
   render(cx) {
     const t = theme();
-    const root = v_flex().id("root").relative().size_full().bg(t.canvas).text_size(12).text_color(t.foreground)
+    // The frame herdr's Files and Changes panels draw, since this pane shares their stack.
+    const root = v_flex().id("root").relative().size_full().rounded(10).overflow_hidden().border_1().border_color(t.border).bg(t.background).text_size(12).text_color(t.foreground)
       .on_mouse_down("left", () => this.drag.pressedAnywhere())
       .on_mouse_move((event, cx) => { this.origin = event.bounds; if (this.drag.moved(event.position)) cx.notify(); })
       .on_mouse_up("left", (event, cx) => {
