@@ -24,6 +24,9 @@ const HEAD = 30;
 const CARD_H = 50;
 const LINE_H = 16;
 const STRIPE = 3;
+// A column never narrows past this, so a card shows a title, not a word or
+// two. A pane too narrow for six such columns scrolls across them.
+const COLUMN_MIN = 200;
 
 const COLUMNS = [
   { key: "queue", label: "Queue", color: (t) => t.muted },
@@ -40,7 +43,7 @@ export class Board {
     this.pane = pane;
     // The board's bounds in the window, from the last move over it.
     this.bounds = null;
-    this.scroll = 0;
+    this.scroll = { x: 0, y: 0 };
   }
 
   // Each column's cards: a placement, or a landed task, with the row it
@@ -70,22 +73,26 @@ export class Board {
   // The selected card, as the board shows it now.
   selected() { return this.columns().flat().find((card) => card.key === this.pane.detail.key); }
 
-  // Every card's rectangle in board coordinates, and each column's x and width.
+  // Every card's rectangle in board coordinates, each column's x and width,
+  // and how far the columns reach past the board's right edge.
   layout(columns) {
-    const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
-    const columnW = Math.max(80, (width - 2 * PAD - (COLUMNS.length - 1) * GAP) / COLUMNS.length);
+    const width = this.width();
+    const columnW = Math.max(COLUMN_MIN, (width - 2 * PAD - (COLUMNS.length - 1) * GAP) / COLUMNS.length);
+    const overflow = Math.max(0, 2 * PAD + COLUMNS.length * columnW + (COLUMNS.length - 1) * GAP - width);
     const rects = new Map();
-    const xs = COLUMNS.map((_, index) => PAD + index * (columnW + GAP));
+    const xs = COLUMNS.map((_, index) => PAD + index * (columnW + GAP) - this.scroll.x);
     columns.forEach((cards, index) => {
-      let y = PAD + HEAD - this.scroll;
+      let y = PAD + HEAD - this.scroll.y;
       for (const card of cards) {
         const height = CARD_H + (lineOf(card) === null ? 0 : LINE_H);
         rects.set(card.key, { x: xs[index], y, width: columnW, height });
         y += height + GAP;
       }
     });
-    return { rects, xs, columnW };
+    return { rects, xs, columnW, overflow };
   }
+
+  width() { return this.bounds?.width ?? this.pane.size?.width ?? 600; }
 
   // A Queue card lists two target states: where it stands, which runs
   // nothing, and granted, at the foot of Authoring. A card with no grant to
@@ -109,8 +116,16 @@ export class Board {
     this.pane.drag.press(card.key, event.position, { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
   }
 
+  // A wheel scrolls down the columns; a sideways scroll, or a wheel with shift
+  // held, scrolls across them as far as the last column's right edge.
   scrolled(event, cx) {
-    this.scroll = Math.max(0, this.scroll + (event.delta?.y ?? 0));
+    const dx = event.delta?.x ?? 0, dy = event.delta?.y ?? 0;
+    const [across, down] = event.modifiers?.shift && dx === 0 ? [dy, 0] : [dx, dy];
+    const { overflow } = this.layout(this.columns());
+    this.scroll = {
+      x: Math.min(overflow, Math.max(0, this.scroll.x + across)),
+      y: Math.max(0, this.scroll.y + down),
+    };
     cx.notify();
   }
 
