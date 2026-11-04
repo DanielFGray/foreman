@@ -147,6 +147,17 @@ export class Fleet extends Context.Service<
      * has not written to the task store or the checkout, it must not call it.
      */
     readonly notify: (title: string, body: string) => Effect.Effect<void, FleetError>;
+
+    /**
+     * Whether this process runs inside one of the fleet's agent terminals.
+     *
+     * A worker may file tasks but never start an agent: dispatching is the
+     * operator's, so `foreman dispatch` and `foreman add --dispatch` refuse a
+     * worker. A process outside the multiplexer is the operator's. A terminal
+     * the multiplexer cannot describe is an error, never the operator, so a
+     * worker is not let through by a question nobody answered.
+     */
+    readonly inWorker: Effect.Effect<boolean, FleetError>;
   }
 >()("Fleet") {}
 

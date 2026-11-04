@@ -38,7 +38,8 @@ everything.
   task section names the command) and match on the test name, not on wording. If a
   task describes it, do not file a new one: `foreman log <id> "<what failed>"` and name
   that task in your log. File with `foreman add` only when nothing in the backlog
-  describes it.
+  describes it, and file it without `--dispatch`: a worker files tasks, and the
+  operator dispatches them, so `foreman add --dispatch` refuses you.
 
 ## Finish
 

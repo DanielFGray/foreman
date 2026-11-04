@@ -87,8 +87,9 @@ ready` reads edges, never the text of a description.
 
   It prints the id, then the `foreman wait` command. Use it only for a task
   with no prerequisites: a `tasks blocks` edge needs the task to exist, and
-  the author is already running by then. A refused dispatch leaves the task
-  filed and names its id; start it later with `foreman dispatch <id>`.
+  the author is already running by then. A refused dispatch says why no author
+  started, leaves the task filed and names its id; start it later with
+  `foreman dispatch <id>`.
 
 - When `wait` returns, read the result with `foreman show <id>`. A task
   `in_progress` at a review step goes to a reviewer on the dispatcher's next
@@ -103,6 +104,7 @@ ready` reads edges, never the text of a description.
   dispatcher reads the file on its next tick. A paused fleet, or one with no
   step on and no grant, writes nothing at all. `foreman dispatch` and
   `foreman add --dispatch` are not gated: each starts the author you asked for.
+  They refuse a caller in a fleet worker's terminal: workers file, you dispatch.
 - Sending a reviewer to a finished task, and landing an approved branch, both
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
 - A step set to `ask` stops at its task and waits. `foreman wait --asks` tells
