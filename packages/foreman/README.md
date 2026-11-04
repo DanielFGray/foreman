@@ -131,7 +131,7 @@ missing landing target never does, and needs a hand-run command instead.
 
 A held project can be handed to an agent instead of waiting for you. Pick it in
 the dashboard and foreman files a task in that project, opens a workspace on the
-checkout itself, and sends the frontier model in to salvage what is there.
+checkout itself, and sends the top rung in to salvage what is there.
 
 It reads the diff and names what the work was doing, runs the project's own
 typecheck, tests and linter, and decides each untracked file — a new module the
@@ -365,7 +365,7 @@ foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
                                # [--context-tokens N] [--input-tokens N]
                                # [--cache-read-tokens N] [--cache-write-tokens N]
                                # [--output-tokens N]
-                               # advise an economical enabled rung from models.dev
+                               # the rung dispatch would pick next, with models.dev
                                # list prices and current subscription quotas (no dispatch)
 foreman ladder edit            # edit it in $EDITOR
 foreman ladder disable <rung>  # stop dispatching a rung, keeping its place
@@ -376,8 +376,10 @@ foreman ladder move <rung> [--above R | --below R]
                                # give a rung a level of its own next to R, or at the bottom
 ```
 
-`suggest` is advisory only. It does not change rung order or dispatch anyone:
-`authorFor` and failure evidence stay authoritative. It prices a four-part token
+`suggest` is advisory only. It does not change rung order or dispatch anyone.
+Its recommendation is the rung `authorFor` would dispatch next, from the same
+ladder, the same spent accounts and the same last starts; `--after` adds that
+rung's failure. Price does not change the pick. It prices a four-part token
 budget (uncached input, cache read, cache write, output) from the median of
 recorded trials (optionally filtered with `--size`), or from the token flags when
 you pass them, against exact `models.models_dev` identities in the models.dev

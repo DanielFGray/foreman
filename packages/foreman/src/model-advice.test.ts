@@ -10,9 +10,8 @@ import {
   estimatePrice,
   medianOf,
   mergeBudget,
-  pickRecommendation,
+  ladderChoice,
   quotaStatusOf,
-  type AdviceCandidate,
   type QuotaStatus,
   type RawCandidate,
   type TokenBudget,
@@ -24,7 +23,19 @@ import {
   runSuggest,
   SuggestOptions,
 } from "./model-advice-run.ts";
-import { Quota, QuotaError, type Usage } from "./quota.ts";
+import {
+  authorFor,
+  floorFor,
+  isEnabled,
+  isMetered,
+  type Ladder,
+  type LastStarts,
+  mayAuthor,
+  providerOf,
+  providersOf,
+  rungsOn,
+} from "./ladder.ts";
+import { Quota, QuotaError, type Usage, walledSeats } from "./quota.ts";
 import { RegistryError } from "./registry.ts";
 import { seed } from "./scratch-store.ts";
 import { connectionAt } from "tasks";
@@ -69,21 +80,14 @@ const row = (
 ): RawCandidate => ({
   pool: partial.pool ?? "Test",
   account: partial.account ?? Option.none(),
-  tier: partial.tier ?? "metered",
   rank: partial.rank ?? 1,
+  level: partial.level ?? partial.rank ?? 1,
+  author: partial.author ?? true,
   modelsDev: partial.modelsDev ?? Option.none(),
   enabled: partial.enabled ?? true,
   retired: partial.retired ?? false,
   unmetered: partial.unmetered ?? false,
   ...partial,
-});
-
-const available = (used = 10): QuotaStatus => ({
-  _tag: "available",
-  plan: Option.some("pro"),
-  allowances: [
-    { window: "monthly", usedPercent: used, resetsAt: new Date("2026-11-01T00:00:00Z") },
-  ],
 });
 
 const exhaustedMulti: QuotaStatus = {
@@ -230,296 +234,175 @@ describe("quotaStatusOf", () => {
   });
 });
 
-describe("pickRecommendation and billing", () => {
-  const candidate = (
-    partial: Partial<AdviceCandidate> & Pick<AdviceCandidate, "rung" | "rank">,
-  ): AdviceCandidate => ({
-    model: partial.model ?? "m",
-    pool: partial.pool ?? "P",
-    account: partial.account ?? Option.none(),
-    tier: partial.tier ?? "metered",
-    unmetered: partial.unmetered ?? false,
-    billing: partial.billing ?? "unknown",
-    eligibility: partial.eligibility ?? "eligible",
-    price: partial.price ?? {
-      usd: Option.none(),
-      rates: {
-        input: Option.none(),
-        output: Option.none(),
-        cacheRead: Option.none(),
-        cacheWrite: Option.none(),
-      },
-      identity: Option.none(),
-      basis: [],
-      assumptions: [],
-      uncertainty: [],
-      quoteUnreliable: false,
-    },
-    quota: partial.quota ?? { _tag: "unknown", detail: Option.none() },
-    reasons: partial.reasons ?? [],
-    ...partial,
-  });
-
+describe("billingOf", () => {
   test("catalog rates do not make billing list-price", () => {
     expect(billingOf(Option.some("opencode"))).toBe("unknown");
     expect(billingOf(Option.some("cursor"))).toBe("subscription");
   });
+});
 
-  test("prefers confirmed subscription capacity over a cheaper metered price", () => {
-    const metered = candidate({
-      rung: "cheap-api",
-      rank: 1,
-      billing: "unknown",
-      price: {
-        usd: Option.some(0.01),
-        rates: rates(0.01),
-        identity: Option.some("x/y"),
-        basis: [],
-        assumptions: [],
-        uncertainty: [],
-        quoteUnreliable: false,
-      },
-      quota: { _tag: "unknown", detail: Option.some("no zen usage") },
-    });
-    const sub = candidate({
-      rung: "cursor-agent",
-      rank: 5,
-      billing: "subscription",
-      account: Option.some("cursor"),
-      quota: available(20),
-    });
-    const picked = pickRecommendation([metered, sub]);
-    expect(Option.getOrNull(picked.candidate)?.rung).toBe("cursor-agent");
-    expect(picked.rule).toContain("no incremental metered spend");
+/** The registry rows a ladder's rungs read as, for `advise`. */
+const rowsOf = (ladder: Ladder): ReadonlyArray<RawCandidate> =>
+  ladder.map((rung, rank) =>
+    row({
+      rung: rung.name,
+      model: rung.model ?? rung.name,
+      rank,
+      level: rung.level,
+      account: Option.fromNullishOr(providerOf(rung)),
+      enabled: isEnabled(rung),
+      author: mayAuthor(rung),
+      unmetered: !isMetered(rung),
+    }),
+  );
+
+const usage = (provider: string, used: number): Usage => ({
+  provider,
+  plan: "pro",
+  allowances: [{ window: "weekly", usedPercent: used, resetsAt: new Date("2026-11-01T00:00:00Z") }],
+});
+
+/** What `foreman ladder suggest` recommends, from the inputs dispatch reads. */
+const suggested = (
+  ladder: Ladder,
+  failures: ReadonlyArray<string>,
+  readings: ReadonlyMap<string, Usage>,
+  starts: LastStarts,
+) => {
+  const usageOf = (provider: string) => Option.fromNullishOr(readings.get(provider));
+  return advise(
+    rowsOf(ladder),
+    { level: floorFor(ladder, failures), label: Option.fromNullishOr(failures[0]) },
+    () => Option.none(),
+    budget(),
+    (account) =>
+      quotaStatusOf(
+        Option.map(Option.flatMap(account, usageOf), (found) => ({
+          _tag: "usage" as const,
+          usage: found,
+        })),
+      ),
+    ladderChoice(ladder, failures, usageOf, starts),
+  );
+};
+
+/** What dispatch would hand the task: the providers as the dispatcher builds them. */
+const dispatched = (
+  ladder: Ladder,
+  failures: ReadonlyArray<string>,
+  readings: ReadonlyMap<string, Usage>,
+  starts: LastStarts,
+) => {
+  const providers = providersOf(ladder).flatMap((provider) => {
+    const found = readings.get(provider);
+    return found === undefined
+      ? []
+      : [{ ...found, rungs: rungsOn(ladder, provider), reviewers: [] }];
   });
+  return authorFor(ladder, failures, walledSeats(providers).author, new Set(), starts);
+};
 
-  test("registry free tier leads subscription capacity by ladder order", () => {
-    const free = candidate({
-      rung: "flint-free",
-      rank: 1,
-      tier: "free",
-      billing: "unknown",
-      quota: { _tag: "unknown", detail: Option.some("no zen usage") },
-    });
-    const sub = candidate({
-      rung: "cursor-agent",
-      rank: 5,
-      billing: "subscription",
-      account: Option.some("cursor"),
-      quota: available(20),
-    });
-    expect(Option.getOrNull(pickRecommendation([free, sub]).candidate)?.rung).toBe("flint-free");
-  });
-
-  test("Cursor Auto with known capacity is viable without a price", () => {
-    const auto = candidate({
-      rung: "cursor-agent",
-      rank: 3,
-      model: "auto",
-      account: Option.some("cursor"),
-      billing: "subscription",
-      quota: available(5),
-    });
-    expect(Option.getOrNull(pickRecommendation([auto]).candidate)?.rung).toBe("cursor-agent");
-  });
-
-  test("unmetered with unknown billing is not treated as confirmed no-spend", () => {
-    const sponsored = candidate({
-      rung: "sponsored-unknown",
-      rank: 1,
+describe("ladder suggest picks as dispatch does", () => {
+  // Rank order and authorFor's order disagree at every step: an author-off rung
+  // leads the bottom level, its two peers took turns in the wrong order for
+  // rank, a metered rung sits on a spent account, and an unmetered rung on the
+  // same account is not walled by it.
+  const ladder: Ladder = [
+    {
+      name: "off",
+      harness: "pi",
+      provider: undefined,
+      level: 1,
+      model: "acct-a/m0",
+      author: false,
+    },
+    { name: "peer-a", harness: "pi", provider: undefined, level: 1, model: "acct-a/m1" },
+    { name: "peer-b", harness: "pi", provider: undefined, level: 1, model: "acct-a/m2" },
+    { name: "spent", harness: "pi", provider: undefined, level: 2, model: "spent-acct/m3" },
+    {
+      name: "promo",
+      harness: "pi",
+      provider: undefined,
+      level: 3,
+      model: "spent-acct/m4",
       unmetered: true,
-      billing: "unknown",
-      account: Option.some("openrouter"),
-      quota: available(5),
-      price: {
-        usd: Option.some(0.5),
-        rates: rates(0.5),
-        identity: Option.some("openrouter/x"),
-        basis: [],
-        assumptions: [],
-        uncertainty: [],
-        quoteUnreliable: false,
-      },
-    });
-    const meteredSub = candidate({
-      rung: "cursor-agent",
-      rank: 9,
-      billing: "subscription",
-      account: Option.some("cursor"),
-      quota: available(20),
-    });
-    const picked = pickRecommendation([sponsored, meteredSub]);
-    expect(Option.getOrNull(picked.candidate)?.rung).toBe("cursor-agent");
-    expect(picked.rule).toContain("unmetered alone is not free");
+    },
+    { name: "top", harness: "pi", provider: undefined, level: 4, model: "spent-acct/m5" },
+  ];
+  const readings = new Map([
+    ["acct-a", usage("acct-a", 10)],
+    ["spent-acct", usage("spent-acct", 100)],
+  ]);
+  const starts: LastStarts = new Map([
+    ["peer-a", new Date("2026-10-02T00:00:00Z")],
+    ["peer-b", new Date("2026-10-01T00:00:00Z")],
+  ]);
+
+  test.each([
+    { failures: [], rung: "peer-b" },
+    { failures: ["peer-a"], rung: "promo" },
+  ])("after $failures it recommends $rung, the rung authorFor dispatches", ({ failures, rung }) => {
+    const choice = dispatched(ladder, failures, readings, starts);
+    expect(choice._tag === "Dispatch" ? choice.rung.name : choice._tag).toBe(rung);
+    const report = suggested(ladder, failures, readings, starts);
+    expect(Option.map(report.recommendation, (c) => c.rung)).toEqual(Option.some(rung));
   });
 
-  test("unreliable context-tier quotes are not ranked as definite cheapest", () => {
-    const unreliableCheap = candidate({
-      rung: "tiered-cheap",
-      rank: 2,
-      billing: "unknown",
-      price: {
-        usd: Option.some(0.01),
-        rates: rates(0.01),
-        identity: Option.some("p/m"),
-        basis: [],
-        assumptions: [],
-        uncertainty: ["catalog has context-dependent price tiers"],
-        quoteUnreliable: true,
-      },
+  test("lists the author-off rung and the walled rung apart from the pick", () => {
+    const report = suggested(ladder, ["peer-a"], readings, starts);
+    expect(report.exclusions).toContainEqual({ rung: "off", reason: "author off" });
+    expect(report.exclusions).toContainEqual({ rung: "spent", reason: "account exhausted" });
+    expect(report.exclusions).toContainEqual({
+      rung: "peer-b",
+      reason: "below escalation floor after peer-a",
     });
-    const firmDear = candidate({
-      rung: "firm",
-      rank: 3,
-      billing: "unknown",
-      price: {
-        usd: Option.some(1),
-        rates: rates(1),
-        identity: Option.some("p/n"),
-        basis: [],
-        assumptions: [],
-        uncertainty: [],
-        quoteUnreliable: false,
-      },
-    });
-    expect(Option.getOrNull(pickRecommendation([unreliableCheap, firmDear]).candidate)?.rung).toBe(
-      "firm",
-    );
   });
 
-  test("no eligible candidate yields no recommendation with an explicit rule", () => {
-    const picked = pickRecommendation([
-      candidate({ rung: "spent", rank: 1, eligibility: "exhausted", quota: exhaustedMulti }),
-      candidate({ rung: "low", rank: 0, eligibility: "below-floor" }),
-    ]);
-    expect(Option.isNone(picked.candidate)).toBe(true);
-    expect(picked.rule).toContain("no eligible");
+  test("when every rung above the floor is walled it recommends nothing, as dispatch waits", () => {
+    expect(dispatched(ladder, ["promo"], readings, starts)).toEqual({
+      _tag: "Waiting",
+      walled: ["top"],
+    });
+    const report = suggested(ladder, ["promo"], readings, starts);
+    expect(report.recommendation).toEqual(Option.none());
+    expect(report.selectionRule).toContain("spent account: top");
   });
 });
 
 describe("advise unmetered applicability", () => {
   test("a sponsored unmetered rung stays eligible when its account is exhausted", () => {
-    const rows = [
-      row({
-        rung: "promo",
+    const ladder: Ladder = [
+      {
+        name: "promo",
+        harness: "opencode",
+        level: 1,
         model: "opencode-go/ox-alpha-free",
-        account: Option.some("opencode-go"),
-        rank: 1,
         unmetered: true,
-        modelsDev: Option.some("opencode-go/ox-alpha-free"),
-        tier: "free",
-      }),
-      row({
-        rung: "metered",
-        model: "gpt-6-luna",
-        account: Option.some("openai"),
-        rank: 2,
-        modelsDev: Option.some("openai/gpt-6-luna"),
-      }),
+        provider: undefined,
+      },
+      { name: "metered", harness: "codex", level: 2, model: "gpt-6-luna", provider: "openai" },
     ];
-    const report = advise(
-      rows,
-      { rank: 0, label: Option.none() },
-      () =>
-        Option.some({
-          rates: rates(0),
-          assumptions: [],
-          uncertainty: [],
-          basis: [],
-          quoteUnreliable: false,
-        }),
-      budget(),
-      (account) =>
-        Option.match(account, {
-          onNone: () => ({ _tag: "unknown" as const, detail: Option.none() }),
-          onSome: (name) => (name === "opencode-go" ? exhaustedMulti : available()),
-        }),
+    const report = suggested(
+      ladder,
+      [],
+      new Map([
+        ["opencode-go", usage("opencode-go", 100)],
+        ["openai", usage("openai", 10)],
+      ]),
+      new Map(),
     );
     const promo = report.candidates.find((c) => c.rung === "promo");
     expect(promo?.eligibility).toBe("eligible");
     expect(promo?.quota._tag).toBe("exhausted");
-    expect(promo?.reasons.some((r) => r.includes("unmetered does not mean free"))).toBe(false);
     expect(Option.getOrNull(report.recommendation)?.rung).toBe("promo");
   });
 
-  test("unmetered unknown-billing candidate explains it cannot claim confirmed capacity", () => {
-    const rows = [
-      row({
-        rung: "sponsored",
-        model: "openrouter/x",
-        account: Option.some("openrouter"),
-        rank: 1,
-        unmetered: true,
-        modelsDev: Option.some("openrouter/x"),
-        tier: "metered",
-      }),
-      row({
-        rung: "cursor-agent",
-        model: "auto",
-        account: Option.some("cursor"),
-        rank: 2,
-        modelsDev: Option.none(),
-      }),
+  test("escalation floor after a rung excludes lower levels", () => {
+    const ladder: Ladder = [
+      { name: "a", harness: "codex", level: 1, model: "m1", provider: "openai" },
+      { name: "b", harness: "codex", level: 2, model: "m2", provider: "openai" },
     ];
-    const report = advise(
-      rows,
-      { rank: 0, label: Option.none() },
-      (id) =>
-        Option.match(id, {
-          onNone: () => Option.none(),
-          onSome: () =>
-            Option.some({
-              rates: rates(1),
-              assumptions: [],
-              uncertainty: [],
-              basis: [],
-              quoteUnreliable: false,
-            }),
-        }),
-      budget(),
-      (account) =>
-        Option.match(account, {
-          onNone: () => ({ _tag: "unknown" as const, detail: Option.none() }),
-          onSome: () => available(),
-        }),
-    );
-    const sponsored = report.candidates.find((c) => c.rung === "sponsored");
-    expect(sponsored?.billing).toBe("unknown");
-    expect(sponsored?.reasons.some((r) => r.includes("unmetered does not mean free"))).toBe(true);
-    expect(Option.getOrNull(report.recommendation)?.rung).toBe("cursor-agent");
-  });
-
-  test("escalation floor after a rung excludes lower ranks", () => {
-    const rows = [
-      row({
-        rung: "a",
-        model: "m1",
-        rank: 1,
-        account: Option.some("openai"),
-        modelsDev: Option.some("openai/a"),
-      }),
-      row({
-        rung: "b",
-        model: "m2",
-        rank: 2,
-        account: Option.some("openai"),
-        modelsDev: Option.some("openai/b"),
-      }),
-    ];
-    const report = advise(
-      rows,
-      { rank: 2, label: Option.some("a") },
-      () =>
-        Option.some({
-          rates: rates(1),
-          assumptions: [],
-          uncertainty: [],
-          basis: [],
-          quoteUnreliable: false,
-        }),
-      budget(),
-      () => available(),
-    );
+    const report = suggested(ladder, ["a"], new Map([["openai", usage("openai", 10)]]), new Map());
     expect(report.candidates.find((c) => c.rung === "a")?.eligibility).toBe("below-floor");
     expect(Option.getOrNull(report.recommendation)?.rung).toBe("b");
   });
@@ -693,16 +576,16 @@ describe("medianOf", () => {
   });
 });
 
-/** A scratch store seeded with richer registry rows than e2e/registry.sql: pool, models_dev, tier, retired, runs. */
+/** A scratch store seeded with richer registry rows than e2e/registry.sql: pool, models_dev, retired, runs. */
 const seedAdviceRegistry = async (dir: string): Promise<string> => {
   const path = join(dir, "registry.db");
   await seed(`
     INSERT INTO pools(pool, harness, provider_default) VALUES
       ('OpenAI', 'codex', 'openai'), ('OpenCode Go', 'opencode', 'opencode-go'), ('Cursor', 'cursor', 'cursor');
-    INSERT INTO models(model, provider, pool, harness, models_dev, tier, limit_scope) VALUES
-      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'metered', 'pool'),
-      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'free', 'pool'),
-      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'metered', 'pool');
+    INSERT INTO models(model, provider, pool, harness, models_dev, limit_scope) VALUES
+      ('gpt-6-luna', 'openai', 'OpenAI', 'codex', 'openai/gpt-6-luna', 'pool'),
+      ('opencode-go/ox-alpha-free', 'opencode-go', 'OpenCode Go', 'opencode', 'opencode-go/ox-alpha-free', 'pool'),
+      ('auto', 'cursor', 'Cursor', 'cursor', NULL, 'pool');
     INSERT INTO ladder(rank, level, rung, model, provider, unmetered, enabled) VALUES
       (1, 1, 'promo', 'opencode-go/ox-alpha-free', 'opencode-go', 1, 1),
       (2, 2, 'codex-luna', 'gpt-6-luna', 'openai', 0, 1),
@@ -946,8 +829,8 @@ describe("runSuggest I/O boundary", () => {
     );
     const storeLayer = connectionAt(registry);
 
-    // Force recommendation onto codex-luna by disabling free promo via after floor past promo
-    // and spending nothing on openai.
+    // `--after promo` puts the floor above level 1, so codex-luna is the pick,
+    // with room on openai.
     const text = await Effect.runPromise(
       runSuggest({
         json: true,

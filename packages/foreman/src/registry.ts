@@ -83,7 +83,6 @@ export interface RungStatus {
   readonly level: number;
   readonly harness: string;
   readonly model: string;
-  readonly tier: string;
   readonly thinking: string;
   readonly enabled: boolean;
   /** `retired`, `disabled`, or the model's derived `proven` / `trial`. */
@@ -103,7 +102,6 @@ export const readStatus = Effect.gen(function* () {
     harness: string;
     model: string;
     thinking: string;
-    tier: string;
     enabled: number;
     author: number;
     retired: number;
@@ -111,7 +109,7 @@ export const readStatus = Effect.gen(function* () {
     slices: number;
     succeeded: number;
     avg_rounds: number | null;
-  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, s.tier, l.enabled, l.author,
+  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, l.enabled, l.author,
             s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
        FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`;
   return rows.map((row): RungStatus => ({
@@ -120,7 +118,6 @@ export const readStatus = Effect.gen(function* () {
     harness: row.harness,
     model: row.model,
     thinking: row.thinking,
-    tier: row.tier,
     enabled: row.enabled !== 0,
     state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
     author: row.author !== 0,
@@ -137,11 +134,10 @@ export const knownModels = Effect.gen(function* () {
   return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
 }).pipe(Effect.mapError(registryError("reading the models")));
 
-/** One model with its tier, for a pane that draws the lists. */
+/** One model with its harness, for a pane that draws the lists. */
 export interface ModelEntry {
   readonly model: string;
   readonly harness: string;
-  readonly tier: string;
   readonly retired: boolean;
 }
 
@@ -151,16 +147,10 @@ export const readModels = Effect.gen(function* () {
   const rows = yield* sql<{
     model: string;
     harness: string;
-    tier: string;
     retired: number;
-  }>`SELECT model, harness, tier, retired FROM models ORDER BY model`;
+  }>`SELECT model, harness, retired FROM models ORDER BY model`;
   return rows.map((row): ModelEntry => ({ ...row, retired: row.retired !== 0 }));
 }).pipe(Effect.mapError(registryError("reading the models")));
-
-/** A reviewer with its model's tier, for a reader that lists them. */
-export interface ReviewerEntry extends Reviewer {
-  readonly tier: string;
-}
 
 /**
  * The reviewers, by name. A reviewer whose model is retired is left out: it is
@@ -174,17 +164,15 @@ export const readReviewers = Effect.gen(function* () {
     thinking: string;
     provider: string | null;
     harness: string;
-    tier: string;
-  }>`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness, m.tier
+  }>`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness
        FROM reviewers r JOIN models m USING (model)
       WHERE m.retired = 0 ORDER BY r.reviewer`;
-  return rows.map((row): ReviewerEntry => ({
+  return rows.map((row): Reviewer => ({
     name: row.reviewer,
     harness: row.harness,
     model: row.model,
     provider: row.provider ?? undefined,
     thinking: row.thinking,
-    tier: row.tier,
   }));
 }).pipe(Effect.mapError(registryError("reading the reviewers")));
 

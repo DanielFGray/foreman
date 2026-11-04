@@ -60,7 +60,7 @@ const list = Command.make("list", { json }, ({ json }) =>
   ),
 );
 
-/** Cost per landed slice by model and size: read it before starting a size a tier up. */
+/** Cost per landed slice by model and size: read it before starting a size a level up. */
 const size = Command.make("size", {}, () =>
   Effect.gen(function* () {
     const rows = yield* sizeSummary;
@@ -275,7 +275,9 @@ const catalog = Flag.String("catalog").pipe(
   Flag.optional,
 );
 const after = Flag.String("after").pipe(
-  Flag.withDescription("Only suggest rungs above this one (escalation floor)"),
+  Flag.withDescription(
+    "Only suggest rungs at a level above this rung's (escalation floor), as if it had failed the task",
+  ),
   Flag.optional,
 );
 const optionalNonNeg = (name: string, description: string) =>
@@ -305,9 +307,9 @@ const sizeFilter = Flag.Int("size").pipe(
 );
 
 /**
- * Read-only advice: which enabled rung looks cheapest given models.dev list
- * prices and current subscription windows. Does not dispatch or rewrite the
- * ladder — `authorFor` stays authoritative.
+ * Read-only advice: the rung dispatch would pick (`authorFor`), with models.dev
+ * list prices and current subscription windows beside each rung. Does not
+ * dispatch or rewrite the ladder.
  */
 const suggest = Command.make(
   "suggest",
@@ -340,7 +342,7 @@ const suggest = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Recommend an economical worker from catalog list prices and current quotas (advisory only)",
+    "Show the rung dispatch would pick next, with catalog list prices and current quotas (advisory only)",
   ),
 );
 

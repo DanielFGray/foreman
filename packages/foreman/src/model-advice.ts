@@ -1,13 +1,21 @@
 /**
- * Read-only worker-model advice: list-price estimates and observed quota, never
- * a second dispatcher. `authorFor` and failure evidence stay authoritative; this
- * module only makes the cheap-first ladder, current room and catalog prices
- * inspectable together.
+ * Read-only worker-model advice, never a second dispatcher: the pick is
+ * `authorFor`'s, from the inputs dispatch reads (`ladderChoice`). List-price
+ * estimates and observed quota are shown beside each rung as information, so
+ * the ladder, current room and catalog prices are inspectable together.
  */
 
 import { Match, Option, Schema as S } from "effect";
+import {
+  authorFor,
+  type Choice,
+  type Ladder,
+  type LastStarts,
+  providersOf,
+  rungsOn,
+} from "./ladder.ts";
 import type { Allowance, Usage } from "./quota.ts";
-import { exhausted, freeAt } from "./quota.ts";
+import { exhausted, freeAt, walledSeats } from "./quota.ts";
 
 /** USD per million tokens. Absence means the catalog states no rate. */
 export const RateSheet = S.Struct({
@@ -101,7 +109,6 @@ export const AdviceCandidate = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.Option(S.String),
-  tier: S.String,
   rank: S.Number,
   unmetered: S.Boolean,
   billing: BillingKind,
@@ -141,13 +148,13 @@ export const billingOf = (account: Option.Option<string>): BillingKind =>
       SUBSCRIPTION_ACCOUNTS.has(name) ? ("subscription" as const) : ("unknown" as const),
   });
 
+/** One account's quota: its usage, or why foreman could not read it. */
+export type QuotaReading =
+  | { readonly _tag: "usage"; readonly usage: Usage }
+  | { readonly _tag: "unreadable"; readonly detail: string };
+
 /** Quota reading folded into the status the advisor prints. */
-export const quotaStatusOf = (
-  reading: Option.Option<
-    | { readonly _tag: "usage"; readonly usage: Usage }
-    | { readonly _tag: "unreadable"; readonly detail: string }
-  >,
-): QuotaStatus =>
+export const quotaStatusOf = (reading: Option.Option<QuotaReading>): QuotaStatus =>
   Option.match(reading, {
     onNone: () => ({ _tag: "unknown" as const, detail: Option.some("no account to probe") }),
     onSome: (value) => {
@@ -384,10 +391,12 @@ export const RawCandidate = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.Option(S.String),
-  tier: S.String,
   rank: S.Number,
+  level: S.Int,
   modelsDev: S.Option(S.String),
   enabled: S.Boolean,
+  /** The rung may take an author block (ladder `mayAuthor`). */
+  author: S.Boolean,
   retired: S.Boolean,
   /** When true, account allowance does not wall this rung (ladder `isMetered`). */
   unmetered: S.Boolean,
@@ -403,16 +412,21 @@ export const CatalogLookup = S.Struct({
 });
 export type CatalogLookup = S.Schema.Type<typeof CatalogLookup>;
 
-/** Resolved escalation floor — validated once at the CLI/registry boundary. */
+/**
+ * Resolved escalation floor — validated once at the CLI/registry boundary.
+ * `level` is the lowest level an author may take (`floorFor`), and `label`
+ * the rung it was set after.
+ */
 export const EscalationFloor = S.Struct({
-  rank: S.Number,
+  level: S.Int,
   label: S.Option(S.String),
 });
 export type EscalationFloor = S.Schema.Type<typeof EscalationFloor>;
 
 /**
- * Build candidates and pick a recommendation without inventing a score that
- * mixes dollars and percentages. Account exhaustion walls only metered rungs.
+ * Build the candidates with their prices and quotas, and recommend the rung
+ * `choice` names. The pick is the ladder's (`ladderChoice`); price and quota
+ * are information beside it. Account exhaustion walls only metered rungs.
  */
 export const advise = (
   rows: ReadonlyArray<RawCandidate>,
@@ -420,6 +434,7 @@ export const advise = (
   lookup: (modelsDev: Option.Option<string>) => Option.Option<CatalogLookup>,
   budget: TokenBudget,
   quotaOf: (account: Option.Option<string>) => QuotaStatus,
+  choice: Choice,
 ): AdviceReport => {
   const exclusions: Array<{ rung: string; reason: string }> = [];
   const candidates: AdviceCandidate[] = [];
@@ -433,11 +448,15 @@ export const advise = (
       exclusions.push({ rung: row.rung, reason: "disabled" });
       continue;
     }
+    if (!row.author) {
+      exclusions.push({ rung: row.rung, reason: "author off" });
+      continue;
+    }
     if (row.retired) {
       exclusions.push({ rung: row.rung, reason: "retired" });
       continue;
     }
-    if (row.rank < floor.rank) {
+    if (row.level < floor.level) {
       candidates.push(
         buildCandidate(row, budget, lookup, quotaOf(row.account), "below-floor", [belowReason]),
       );
@@ -452,11 +471,6 @@ export const advise = (
     const reasons: string[] = [];
     if (row.unmetered) {
       reasons.push("unmetered: account allowance does not apply (sponsored)");
-      if (billingOf(row.account) === "unknown") {
-        reasons.push(
-          "unmetered does not mean free — billing remains unknown without a verified free tier or zero list price",
-        );
-      }
     }
     if (eligibility === "exhausted") {
       reasons.push("account exhausted");
@@ -489,7 +503,22 @@ export const advise = (
     candidates.push(buildCandidate(row, budget, lookup, quota, eligibility, reasons));
   }
 
-  const picked = pickRecommendation(candidates);
+  const picked = Match.value(choice).pipe(
+    Match.tagsExhaustive({
+      Dispatch: ({ rung }) => ({
+        candidate: Option.fromNullishOr(candidates.find((c) => c.rung === rung.name)),
+        rule: LADDER_RULE,
+      }),
+      Waiting: ({ walled }) => ({
+        candidate: Option.none<AdviceCandidate>(),
+        rule: `every author rung at or above the floor is on a spent account: ${walled.join(", ")}`,
+      }),
+      Yours: () => ({
+        candidate: Option.none<AdviceCandidate>(),
+        rule: "no enabled author rung at or above the floor",
+      }),
+    }),
+  );
   return {
     catalog: { source: "", fetchedAt: Option.none(), ageSeconds: Option.none() },
     budget,
@@ -545,7 +574,6 @@ const buildCandidate = (
     model: row.model,
     pool: row.pool,
     account: row.account,
-    tier: row.tier,
     rank: row.rank,
     unmetered: row.unmetered,
     billing,
@@ -562,71 +590,32 @@ const buildCandidate = (
   };
 };
 
-export const PickResult = S.Struct({
-  candidate: S.Option(AdviceCandidate),
-  rule: S.String,
-});
-export type PickResult = S.Schema.Type<typeof PickResult>;
-
 /**
- * Preference order (no dollar×percent score):
- * 1. no incremental metered spend — free tier, reliable $0 list quote, or
- *    subscription with confirmed windows on a metered rung (ladder order);
- *    unmetered alone is not free and does not enter this group;
- * 2. reliable known list-price among eligible (price ascending, ladder tie-break);
- * 3. other eligible (ladder order). Unreliable context-tier quotes never enter (2).
+ * The rung dispatch would give a task that `failures` failed: `authorFor` over
+ * the ladder, passing over the rungs a spent account stops, read from the same
+ * account readings dispatch takes (`walledSeats`). An account with no reading
+ * walls nothing, as in dispatch.
+ *
+ * No task is in hand, so no usage wall on a task's own runs (`walledBy`) applies,
+ * and no tick has drawn an account yet: those two inputs of dispatch are empty.
  */
-export const pickRecommendation = (candidates: ReadonlyArray<AdviceCandidate>): PickResult => {
-  const eligible = candidates.filter((c) => c.eligibility === "eligible");
-  if (eligible.length === 0) {
-    return {
-      candidate: Option.none(),
-      rule: "no eligible worker under the current floor and quotas",
-    };
-  }
-
-  const noMeteredSpend = eligible
-    .filter((c) => {
-      if (c.tier === "free") return true;
-      const zeroList = Option.match(c.price.usd, {
-        onNone: () => false,
-        onSome: (usd) => usd === 0 && !c.price.quoteUnreliable && c.price.uncertainty.length === 0,
-      });
-      if (zeroList) return true;
-      // Unmetered means allowance does not apply — not that spend is free.
-      return c.billing === "subscription" && c.quota._tag === "available" && !c.unmetered;
-    })
-    .sort((a, b) => a.rank - b.rank);
-  if (noMeteredSpend[0] !== undefined) {
-    return {
-      candidate: Option.some(noMeteredSpend[0]),
-      rule: "prefer no incremental metered spend (free tier, reliable $0 list price, or confirmed subscription capacity on a metered rung), then ladder order; unmetered alone is not free",
-    };
-  }
-
-  const priced = eligible
-    .filter(
-      (c) =>
-        Option.isSome(c.price.usd) && !c.price.quoteUnreliable && c.price.uncertainty.length === 0,
-    )
-    .sort((a, b) => {
-      const pa = Option.getOrElse(a.price.usd, () => Number.POSITIVE_INFINITY);
-      const pb = Option.getOrElse(b.price.usd, () => Number.POSITIVE_INFINITY);
-      return pa === pb ? a.rank - b.rank : pa - pb;
-    });
-  if (priced[0] !== undefined) {
-    return {
-      candidate: Option.some(priced[0]),
-      rule: "among eligible workers with a reliable list-price quote, prefer lower list price then ladder order",
-    };
-  }
-
-  const fallback = [...eligible].sort((a, b) => a.rank - b.rank)[0];
-  return {
-    candidate: Option.fromNullishOr(fallback),
-    rule: "no reliable price comparison available; prefer ladder order among eligible workers",
-  };
+export const ladderChoice = (
+  ladder: Ladder,
+  failures: ReadonlyArray<string>,
+  usageOf: (provider: string) => Option.Option<Usage>,
+  lastStarts: LastStarts,
+): Choice => {
+  const providers = providersOf(ladder).flatMap((provider) =>
+    Option.match(usageOf(provider), {
+      onNone: () => [],
+      onSome: (usage) => [{ ...usage, rungs: rungsOn(ladder, provider), reviewers: [] }],
+    }),
+  );
+  return authorFor(ladder, failures, walledSeats(providers).author, new Set(), lastStarts);
 };
+
+const LADDER_RULE =
+  "the ladder's order, as dispatch picks an author: the lowest level at or above the floor, then the rung whose last run started longest ago, passing over rungs on a spent account; price is information only";
 
 /** JSON shape for `--json`: observations only, no secrets. Option → null at the edge. */
 export const adviceJson = (report: AdviceReport): string =>
@@ -660,7 +649,6 @@ const candidateJson = (c: AdviceCandidate) => ({
   model: c.model,
   pool: c.pool,
   account: Option.getOrNull(c.account),
-  tier: c.tier,
   rank: c.rank,
   unmetered: c.unmetered,
   billing: c.billing,
@@ -746,7 +734,6 @@ const CandidateJson = S.Struct({
   model: S.String,
   pool: S.String,
   account: S.NullOr(S.String),
-  tier: S.String,
   rank: S.Number,
   unmetered: S.Boolean,
   billing: BillingKind,

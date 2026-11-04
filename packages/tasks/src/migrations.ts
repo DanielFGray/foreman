@@ -167,6 +167,22 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
+  // A model's price class (free, metered, frontier) goes: it mixed cost with
+  // power, and dispatch never read it. Model advice reads a model's price from
+  // the catalog instead. SQLite drops a column whose only CHECK is its own, so
+  // the table keeps its rows and the foreign keys that name it. The check
+  // keeps a re-run of the older migrations, which brings no column back, safe.
+  "0011_no_price_class": withViewsRebuilt(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      const columns = yield* sql.unsafe<{ name: string }>(
+        `SELECT name FROM pragma_table_info('models')`,
+      );
+      if (columns.some((column) => column.name === "tier")) {
+        yield* sql.unsafe(`ALTER TABLE models DROP COLUMN tier`);
+      }
+    }),
+  ),
 });
 
 /**
@@ -424,6 +440,12 @@ const RUNS = `CREATE TABLE runs (
       OR (work <> 'check' AND ending <> '' AND ending NOT GLOB '*[^a-z-]*'))
   )`;
 
+/**
+ * The registry tables as `0002_registry` makes them; later migrations change
+ * them (`models` loses `council` and `tier`). `withViewsRebuilt` makes the
+ * views again after each such change, so the views read the tables as the
+ * last migration leaves them.
+ */
 const REGISTRY = [
   `CREATE TABLE providers (
     provider   TEXT PRIMARY KEY,
@@ -550,7 +572,7 @@ const REGISTRY = [
   LEFT JOIN aliases a ON a.alias = t.model
   WHERE t.closed_at IS NOT NULL AND t.work <> 'check'`,
   `CREATE VIEW model_status AS
-  SELECT m.model, m.provider, m.pool, m.harness, m.tier, m.limit_scope,
+  SELECT m.model, m.provider, m.pool, m.harness, m.limit_scope,
          m.thinking, m.retired, m.models_dev,
          l.rank, l.rung, l.enabled, l.provider AS rung_provider,
          COUNT(t.id) AS slices,

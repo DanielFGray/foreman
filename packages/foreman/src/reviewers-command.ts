@@ -2,7 +2,8 @@ import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option } from "effect";
 import { launchArguments } from "./harness.ts";
 import { providerOf } from "./ladder.ts";
-import { addReviewer, readReviewers, type ReviewerEntry, removeReviewer } from "./registry.ts";
+import { addReviewer, readReviewers, removeReviewer } from "./registry.ts";
+import type { Reviewer } from "./reviewers.ts";
 
 /**
  * `foreman reviewers`: read and change the reviewers, the list a pipeline's
@@ -35,12 +36,11 @@ export const reviewersCommand = Command.make(
  * flags are the caller's: they depend on what the caller asks the reviewer to
  * do, not on the model.
  */
-export const reviewerJson = (reviewer: ReviewerEntry) => ({
+export const reviewerJson = (reviewer: Reviewer) => ({
   name: reviewer.name,
   model: reviewer.model,
   harness: reviewer.harness,
   thinking: reviewer.thinking,
-  tier: reviewer.tier,
   provider: providerOf(reviewer) ?? null,
   args: launchArguments({
     kind: reviewer.harness,

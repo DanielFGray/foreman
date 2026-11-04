@@ -4,7 +4,7 @@
  * Identity is the registry's `models.models_dev` value (`provider/bare`), never
  * a guessed alias. Missing cost stays missing. Context tiers apply only when
  * the request context size is known; otherwise base rates carry uncertainty and
- * must not be ranked as a definite cheapest quote.
+ * are marked `quoteUnreliable`.
  */
 
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
@@ -136,8 +136,8 @@ export const catalogLayer = Layer.mergeAll(BunServices.layer, FetchHttpClient.la
 
 /**
  * Exact identity lookup. When context tiers exist and context is unknown, base
- * rates are returned with `quoteUnreliable: true` so ranking will not treat
- * them as a definite cheapest quote.
+ * rates are returned with `quoteUnreliable: true`, so the report does not show
+ * them as a firm quote.
  */
 export const lookupRates = (
   catalog: Catalog,
