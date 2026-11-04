@@ -72,16 +72,20 @@ const COPIES: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     "models",
-    `INSERT INTO models (model, provider, pool, harness, models_dev, limit_scope, thinking, retired, notes)
-     SELECT model, provider, pool, harness, models_dev, limit_scope, thinking, retired, notes FROM old.models`,
+    `INSERT INTO models (model, provider, pool, harness, models_dev, limit_scope, retired, notes)
+     SELECT model, provider, pool, harness, models_dev, limit_scope, retired, notes FROM old.models`,
   ],
   ["aliases", "INSERT INTO aliases (alias, model) SELECT alias, model FROM old.aliases"],
   // The herd's ladder has no levels: each rung stands alone in its level, as
-  // `0009_ladder_levels` leaves a store's ladder.
+  // `0009_ladder_levels` leaves a store's ladder. The herd keeps the thinking
+  // level on the model, so each rung takes its model's, as `0012_rung_thinking`
+  // does.
   [
     "ladder",
-    `INSERT INTO ladder (rank, level, rung, model, enabled, provider, note, unmetered)
-     SELECT rank, rank, rung, model, enabled, provider, note, unmetered FROM old.ladder`,
+    `INSERT INTO ladder (rank, level, rung, model, enabled, provider, note, unmetered, thinking)
+     SELECT l.rank, l.rank, l.rung, l.model, l.enabled, l.provider, l.note, l.unmetered,
+            nullif(m.thinking, 'auto')
+       FROM old.ladder l LEFT JOIN old.models m USING (model)`,
   ],
   [
     "prices",

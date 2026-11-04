@@ -17,7 +17,6 @@ import { type Ladder, type LastStarts, leastRecentFirst, type Seat } from "./lad
  */
 export interface Reviewer extends Seat {
   readonly model: string;
-  readonly thinking: string;
 }
 
 /**

@@ -162,24 +162,35 @@ const disabled = Flag.Boolean("disabled").pipe(
   Flag.withDescription("Add it disabled"),
 );
 const note = Flag.String("note").pipe(Flag.withDescription("A note on the rung"), Flag.optional);
+const thinkingFlag = Flag.String("thinking").pipe(
+  Flag.withSchema(Schema.NonEmptyString),
+  Flag.withDescription(
+    "How hard it thinks, such as low, medium or high (default: no flag, so the harness's own default)",
+  ),
+  Flag.optional,
+);
 
-const add = Command.make("add", { rung, model, above, below, disabled, note }, (args) =>
-  Effect.gen(function* () {
-    const place = yield* placeOf(args);
-    yield* addRow(
-      {
-        rung: args.rung,
-        model: args.model,
-        enabled: !args.disabled,
-        author: true,
-        provider: null,
-        unmetered: false,
-        note: Option.getOrNull(args.note),
-      },
-      place,
-    );
-    yield* Console.log(`${args.rung}: added ${whereOf(place)}`);
-  }),
+const add = Command.make(
+  "add",
+  { rung, model, thinking: thinkingFlag, above, below, disabled, note },
+  (args) =>
+    Effect.gen(function* () {
+      const place = yield* placeOf(args);
+      yield* addRow(
+        {
+          rung: args.rung,
+          model: args.model,
+          thinking: Option.getOrNull(args.thinking),
+          enabled: !args.disabled,
+          author: true,
+          provider: null,
+          unmetered: false,
+          note: Option.getOrNull(args.note),
+        },
+        place,
+      );
+      yield* Console.log(`${args.rung}: added ${whereOf(place)}`);
+    }),
 ).pipe(
   Command.withDescription(
     "Add a rung in a level of its own: just --above or --below a rung's level, or at the bottom (the cheapest place)",
@@ -215,6 +226,29 @@ const level = Command.make("level", { rung, level: levelNumber }, (args) =>
   }),
 ).pipe(
   Command.withDescription("Put a rung in a level; the rungs of one level share the author work"),
+);
+
+const levelName = Argument.String("thinking").pipe(
+  Argument.withSchema(Schema.NonEmptyString),
+  Argument.withDescription(
+    "How hard it thinks, such as low, medium or high; none passes no flag, so the harness's own default applies",
+  ),
+);
+
+/**
+ * Set the thinking level a rung's harness starts at. Each rung owns its level,
+ * so two rungs of one model may think differently.
+ */
+const thinking = Command.make("thinking", { rung, thinking: levelName }, (args) =>
+  Effect.gen(function* () {
+    const level = args.thinking === "none" ? null : args.thinking;
+    yield* changeRow(args.rung, (row) => ({ ...row, thinking: level }));
+    yield* Console.log(`${args.rung}: thinking ${level ?? "none"}`);
+  }),
+).pipe(
+  Command.withDescription(
+    "Set the thinking level a rung starts at, or none for the harness's own default",
+  ),
 );
 
 /** The place the --above and --below flags name; neither is the bottom. */
@@ -375,6 +409,7 @@ export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
     author,
     move,
     level,
+    thinking,
   ]),
 );
 
@@ -395,6 +430,10 @@ const describeChange = (
     const old = before.find((other) => other.rung === row.rung)?.level;
     return old === undefined || old === row.level ? [] : [{ row, old }];
   });
+  const rethought = after.flatMap((row) => {
+    const old = before.find((other) => other.rung === row.rung);
+    return old === undefined || old.thinking === row.thinking ? [] : [{ row, old: old.thinking }];
+  });
   const kept = (rows: ReadonlyArray<LadderRow>, other: ReadonlyArray<LadderRow>) =>
     names(rows).filter((name) => names(other).includes(name));
   const moved = kept(before, after).join() !== kept(after, before).join();
@@ -403,6 +442,9 @@ const describeChange = (
     ...(dropped.length ? [`dropped: ${dropped.join(", ")}`] : []),
     ...toggled.map((row) => `${row.rung}: ${row.enabled ? "enabled" : "disabled"}`),
     ...regrouped.map(({ row, old }) => `${row.rung}: level ${old} → ${row.level}`),
+    ...rethought.map(
+      ({ row, old }) => `${row.rung}: thinking ${old ?? "none"} → ${row.thinking ?? "none"}`,
+    ),
     ...(moved ? ["reordered"] : []),
   ];
   return lines.length ? lines.join("\n") : "ladder unchanged";
@@ -420,5 +462,9 @@ const launchHint = (row: RungStatus): string => {
       .replaceAll("-", " ");
     return `TUI picker search "${search}"`;
   }
-  return launchArguments({ kind: row.harness, model: row.model, thinking: row.thinking }).join(" ");
+  return launchArguments({
+    kind: row.harness,
+    model: row.model,
+    thinking: row.thinking ?? undefined,
+  }).join(" ");
 };

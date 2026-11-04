@@ -604,12 +604,14 @@ gate, and there the full run is the reviewer's after all.
 `models` tables of the task store (`PROG_DB`, else `~/.prog/prog.db`), through
 the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. A
 store with no rungs is a startup error, not a fallback, because a
-fallback is a second ladder that can drift. The model row carries the harness
-and the thinking level, and `launchArguments` in `src/harness.ts` turns the level
-into the harness's flag. Each ladder row stores its `level` and its `rank`, and
-readers sort by (level, rank). Every ladder write (`foreman ladder edit`,
-`move`, `add`, `level`) validates the whole ladder, rewrites the ranks from
-that order, and writes it in one transaction.
+fallback is a second ladder that can drift. The model row carries the harness.
+Each ladder row and each reviewer row carries its own thinking level, and
+`launchArguments` in `src/harness.ts` turns it into the harness's flag; the
+model has none, so a seat's level has one source. An absent level passes no
+flag, and the harness's own default applies. Each ladder row stores its `level`
+and its `rank`, and readers sort by (level, rank). Every ladder write (`foreman
+ladder edit`, `move`, `add`, `level`, `thinking`) validates the whole ladder,
+rewrites the ranks from that order, and writes it in one transaction.
 The reviewers are the `reviewers` table, apart from the ladder: each row is a
 name, a model, its own thinking level and an optional provider, so a model is a
 rung, a reviewer, both or neither, and one model can be a low-thinking rung and

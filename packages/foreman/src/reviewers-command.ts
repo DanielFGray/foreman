@@ -1,5 +1,5 @@
 import { Argument, Command, Flag } from "effect/cli";
-import { Console, Effect, Option } from "effect";
+import { Console, Effect, Option, Schema } from "effect";
 import { launchArguments } from "./harness.ts";
 import { providerOf } from "./ladder.ts";
 import { addReviewer, readReviewers, removeReviewer } from "./registry.ts";
@@ -40,7 +40,7 @@ export const reviewerJson = (reviewer: Reviewer) => ({
   name: reviewer.name,
   model: reviewer.model,
   harness: reviewer.harness,
-  thinking: reviewer.thinking,
+  thinking: reviewer.thinking ?? null,
   provider: providerOf(reviewer) ?? null,
   args: launchArguments({
     kind: reviewer.harness,
@@ -61,8 +61,11 @@ function add() {
         Flag.withDescription("The name review runs record (default: the model id)"),
       ),
       thinking: Flag.String("thinking").pipe(
+        Flag.withSchema(Schema.NonEmptyString),
         Flag.optional,
-        Flag.withDescription("How hard it thinks: low, medium, high (default: the model's level)"),
+        Flag.withDescription(
+          "How hard it thinks, such as low, medium or high (default: no flag, so the harness's own default)",
+        ),
       ),
       provider: Flag.String("provider").pipe(
         Flag.optional,

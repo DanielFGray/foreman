@@ -13,11 +13,11 @@ import type { Reviewer } from "./reviewers.ts";
  * it on every start and refuses to run without it: a second copy of the order
  * in a config file is a copy that can disagree.
  *
- * Models themselves (harness, pool, thinking level) are rows the task store's
- * migrations define and the operator seeds. This module edits the ladder, which
- * is the part an operator reorders, enables and disables, and the reviewers, the
- * list a review block takes its reader from: a model may be a rung, a reviewer,
- * both or neither.
+ * Models themselves (harness, pool) are rows the task store's migrations
+ * define and the operator seeds. This module edits the ladder, which is the
+ * part an operator reorders, enables and disables, and the reviewers, the list
+ * a review block takes its reader from: a model may be a rung, a reviewer, both
+ * or neither, and each rung and reviewer states its own thinking level.
  */
 
 export class RegistryError extends Schema.TaggedError<RegistryError>()("RegistryError", {
@@ -41,9 +41,11 @@ export interface LadderRow {
   readonly provider: string | null;
   readonly unmetered: boolean;
   readonly note: string | null;
+  /** The rung's thinking level; null passes no flag, so the harness's default applies. */
+  readonly thinking: string | null;
 }
 
-/** The ladder, cheapest level first, with each rung's launch settings from its model. */
+/** The ladder, cheapest level first, with each rung's harness from its model. */
 export const readLadder = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const rungs = yield* sql<{
@@ -55,9 +57,9 @@ export const readLadder = Effect.gen(function* () {
     provider: string | null;
     unmetered: number;
     harness: string;
-    thinking: string;
+    thinking: string | null;
   }>`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.provider, l.unmetered,
-            m.harness, m.thinking
+            l.thinking, m.harness
        FROM ladder l JOIN models m USING (model)
       ORDER BY l.level, l.rank`;
   const [bottom, ...rest] = rungs.map((row): Rung => ({
@@ -69,7 +71,7 @@ export const readLadder = Effect.gen(function* () {
     enabled: row.enabled !== 0,
     author: row.author !== 0 ? undefined : false,
     unmetered: row.unmetered !== 0 ? true : undefined,
-    thinking: row.thinking,
+    thinking: row.thinking ?? undefined,
   }));
   if (bottom === undefined) {
     return yield* new RegistryError({ detail: "the ladder table has no rungs" });
@@ -83,7 +85,7 @@ export interface RungStatus {
   readonly level: number;
   readonly harness: string;
   readonly model: string;
-  readonly thinking: string;
+  readonly thinking: string | null;
   readonly enabled: boolean;
   /** `retired`, `disabled`, or the model's derived `proven` / `trial`. */
   readonly state: string;
@@ -101,7 +103,7 @@ export const readStatus = Effect.gen(function* () {
     level: number;
     harness: string;
     model: string;
-    thinking: string;
+    thinking: string | null;
     enabled: number;
     author: number;
     retired: number;
@@ -109,7 +111,7 @@ export const readStatus = Effect.gen(function* () {
     slices: number;
     succeeded: number;
     avg_rounds: number | null;
-  }>`SELECT l.rung, l.level, s.harness, s.model, s.thinking, l.enabled, l.author,
+  }>`SELECT l.rung, l.level, s.harness, s.model, l.thinking, l.enabled, l.author,
             s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
        FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`;
   return rows.map((row): RungStatus => ({
@@ -161,7 +163,7 @@ export const readReviewers = Effect.gen(function* () {
   const rows = yield* sql<{
     reviewer: string;
     model: string;
-    thinking: string;
+    thinking: string | null;
     provider: string | null;
     harness: string;
   }>`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness
@@ -172,15 +174,15 @@ export const readReviewers = Effect.gen(function* () {
     harness: row.harness,
     model: row.model,
     provider: row.provider ?? undefined,
-    thinking: row.thinking,
+    thinking: row.thinking ?? undefined,
   }));
 }).pipe(Effect.mapError(registryError("reading the reviewers")));
 
-/** A reviewer as `foreman reviewers add` states it; the absent fields come from the model. */
+/** A reviewer as `foreman reviewers add` states it. */
 export interface NewReviewer {
   readonly name: string;
   readonly model: string;
-  /** The model row's level when absent. */
+  /** No flag, so the harness's own default, when absent. */
   readonly thinking: Option.Option<string>;
   /** Derived from the model when absent (`providerOf`). */
   readonly provider: Option.Option<string>;
@@ -190,10 +192,9 @@ export interface NewReviewer {
 export const addReviewer = (reviewer: NewReviewer) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const model = yield* sql<{ thinking: string }>`
-      SELECT thinking FROM models WHERE model = ${reviewer.model}`;
-    const row = model[0];
-    if (row === undefined) {
+    const model = yield* sql<{ model: string }>`
+      SELECT model FROM models WHERE model = ${reviewer.model}`;
+    if (model.length === 0) {
       return yield* new RegistryError({
         detail: `model "${reviewer.model}" has no row in the models table`,
       });
@@ -205,7 +206,7 @@ export const addReviewer = (reviewer: NewReviewer) =>
     }
     yield* sql`INSERT INTO reviewers (reviewer, model, thinking, provider)
       VALUES (${reviewer.name}, ${reviewer.model},
-              ${Option.getOrElse(reviewer.thinking, () => row.thinking)},
+              ${Option.getOrNull(reviewer.thinking)},
               ${Option.getOrNull(reviewer.provider)})`;
   }).pipe(Effect.mapError(registryError("adding a reviewer")));
 
@@ -245,7 +246,8 @@ export const readRows = Effect.gen(function* () {
     provider: string | null;
     unmetered: number;
     note: string | null;
-  }>`SELECT rung, level, model, enabled, author, provider, unmetered, note
+    thinking: string | null;
+  }>`SELECT rung, level, model, enabled, author, provider, unmetered, note, thinking
        FROM ladder ORDER BY level, rank`;
   return rows.map((row): LadderRow => ({
     ...row,
@@ -300,10 +302,10 @@ export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
             Order.mapInput(Order.Number, (row: LadderRow) => row.level),
           ),
           (row, index) =>
-            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, provider, unmetered, note)
+            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, provider, unmetered, note, thinking)
                 VALUES (${index + 1}, ${row.level}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
                         ${row.author ? 1 : 0},
-                        ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note})`,
+                        ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note}, ${row.thinking})`,
           { discard: true },
         );
       }),
@@ -391,6 +393,7 @@ export const parseRows = (text: string): ReadonlyArray<LadderRow> => {
     provider: row.provider ?? null,
     unmetered: row.unmetered,
     note: row.note ?? null,
+    thinking: row.thinking ?? null,
   }));
 };
 
@@ -402,6 +405,8 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
     "// order is the rank; move a block to re-rank it.",
     "// A rung's name is what tasks record: renaming one makes a new rung.",
     "// `model` must already have a row in the registry's models table.",
+    "// `thinking` is the level the rung's harness is started at; a rung without",
+    "// one passes no flag, so the harness's own default applies.",
     "// `author: false` keeps a rung out of the author pick without retiring it.",
     "[",
     ...rows.map(
@@ -411,6 +416,7 @@ export const renderRows = (rows: ReadonlyArray<LadderRow>): string =>
           rung: row.rung,
           level: row.level,
           model: row.model,
+          thinking: row.thinking ?? undefined,
           enabled: row.enabled,
           ...(row.author ? {} : { author: false }),
           ...(row.provider ? { provider: row.provider } : {}),
@@ -427,6 +433,7 @@ const RowFile = Schema.Struct({
   rung: Schema.NonEmptyString,
   level: Schema.Int,
   model: Schema.NonEmptyString,
+  thinking: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   author: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   provider: Schema.optional(Schema.NullOr(Schema.String)),

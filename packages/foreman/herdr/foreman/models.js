@@ -7,7 +7,8 @@
 // --json` again after it: the lists never change before foreman answers.
 // - A worker dragged to another place in Workers runs `foreman ladder move`.
 // - A worker or a Models card dropped on Reviewers runs `foreman reviewers add`,
-//   which names the reviewer after its model, at the model's thinking level.
+//   which names the reviewer after its model. A worker passes its rung's
+//   thinking level; a Models card passes none, so the harness's default applies.
 // - A Reviewers card dropped on Models runs `foreman reviewers remove`.
 // - A click on a rung's enabled mark runs `foreman ladder enable|disable`.
 //
@@ -111,7 +112,8 @@ export class Models {
     const reviews = this.ladder.reviewers.some((one) => one.model === card.model);
     if (card.kind !== "reviewer" && !reviews) {
       const moved = without.map((cards, column) => column === REVIEWERS ? [...cards, card] : cards);
-      targets.push({ rect: at(moved), run: (cx) => this.run(["reviewers", "add", card.model], cx) });
+      const level = card.kind === "worker" && card.rung.thinking ? ["--thinking", card.rung.thinking] : [];
+      targets.push({ rect: at(moved), run: (cx) => this.run(["reviewers", "add", card.model, ...level], cx) });
     }
     if (card.kind === "reviewer") {
       const moved = without.map((cards, column) => column === MODELS ? [...cards, card] : cards);

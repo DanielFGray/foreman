@@ -16,7 +16,7 @@ import { withStore } from "./scratch-store.ts";
 const rig = readFileSync(join(import.meta.dir, "..", "e2e", "registry.sql"), "utf8");
 
 describe("the registry ladder", () => {
-  test("reads rungs cheapest first with the model's harness and thinking level", () =>
+  test("reads rungs cheapest first with the model's harness and the rung's thinking level", () =>
     withStore(
       rig,
       Effect.gen(function* () {
@@ -38,6 +38,23 @@ describe("the registry ladder", () => {
         const after = yield* readRows;
         expect(after.map((row) => row.rung)).toEqual(["strong", "promo", "cheap"]);
         expect(after[1]?.unmetered).toBe(true);
+      }),
+    ));
+
+  test("an edit keeps each rung's thinking level, and an absent one stays absent", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const [cheap, strong, promo] = yield* readRows;
+        yield* writeRows([cheap!, { ...strong!, thinking: "high" }, { ...promo!, thinking: null }]);
+        const text = renderRows(yield* readRows);
+        expect(text).not.toMatch(/"promo".*thinking/);
+        yield* writeRows(parseRows(text));
+        expect((yield* readRows).map((row) => [row.rung, row.thinking])).toEqual([
+          ["cheap", "medium"],
+          ["strong", "high"],
+          ["promo", null],
+        ]);
       }),
     ));
 
