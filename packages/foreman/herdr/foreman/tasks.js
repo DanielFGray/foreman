@@ -12,7 +12,9 @@ import { v_flex, h_flex } from "gpui-base";
 import { chip } from "./parts.js";
 import { refusalOf } from "./status.js";
 
-const CARD_W = 136;
+// A graph card is wide enough for a few words a line. Its title wraps instead
+// of being cut: the graph's columns grow to fit their cards.
+const CARD_W = 220;
 const GAP = 6;
 
 export class Tasks {
@@ -130,7 +132,7 @@ export class Tasks {
         .child(div().flex_1())
         .when(item.grant !== null, (el) => el.child(div().text_color(t.done)
           .child(grantMark(item, this.report.grantSteps)))))
-      .child(div().text_size(11).truncate().child(item.title))
+      .child(div().text_size(11).whitespace_normal().child(item.title))
       .child(div().text_size(10).text_color(t.dim).truncate().child(standing(item, placement)));
   }
 }
