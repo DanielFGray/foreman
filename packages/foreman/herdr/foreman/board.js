@@ -136,7 +136,7 @@ export class Board {
   }
 
   scrolled(event, cx) {
-    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()));
+    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()), this.bounds ?? { x: 0 });
     cx.notify();
   }
 

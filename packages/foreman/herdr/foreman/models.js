@@ -133,7 +133,7 @@ export class Models {
 
   wheel(event, cx) {
     const columns = this.columns();
-    const scrolled = scrolledBy(this.scrollOf(columns), event, this.layout(columns));
+    const scrolled = scrolledBy(this.scrollOf(columns), event, this.layout(columns), this.bounds ?? { x: 0 });
     this.scroll = { x: scrolled.x, y: Object.fromEntries(columns.map((column, index) => [column.key, scrolled.y[index]])) };
     cx.notify();
   }

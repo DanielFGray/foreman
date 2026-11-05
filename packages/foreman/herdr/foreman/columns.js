@@ -32,13 +32,14 @@ export const columnsAcross = (width, count, { min, gap, scroll }) => {
 export const reachOf = (content, height) => Math.max(0, content + PAD - (height - CARDS_TOP));
 
 // The scroll after one wheel event, from the view's layout: `xs`, `columnW`,
-// `overflow` and each column's `reach`. A wheel scrolls the column under the
+// `overflow` and each column's `reach`. `origin` is the view's bounds in the
+// window, from its last mouse move: a wheel event may carry no bounds. A wheel scrolls the column under the
 // pointer down; a sideways scroll, or a wheel with shift held, scrolls every
 // column across.
-export const scrolledBy = (scroll, event, { xs, columnW, overflow, reach }) => {
+export const scrolledBy = (scroll, event, { xs, columnW, overflow, reach }, origin) => {
   const dx = event.delta?.x ?? 0, dy = event.delta?.y ?? 0;
   const [across, down] = event.modifiers?.shift && dx === 0 ? [dy, 0] : [dx, dy];
-  const left = event.position.x - (event.bounds?.x ?? 0);
+  const left = event.position.x - origin.x;
   // Columns may overlap: the Models view pins columns over the level columns
   // scrolled under them. A later column is drawn on top, so the last column
   // under the pointer is the one the operator sees.
