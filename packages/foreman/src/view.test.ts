@@ -393,8 +393,8 @@ describe("quota view and accounts", () => {
   };
 
   test("a spent account is the last thing in attention", () => {
-    // Every other row there is something a person can act on now. This one is
-    // a wait, so it goes under them rather than above the work.
+    // Every other row there is something a person can act on. This one is a
+    // wait, so it goes under them rather than above the work.
     const rows = rowsForView("attention", withQuota);
     expect(rows[rows.length - 1]?.column).toBe("quota");
   });
@@ -737,7 +737,7 @@ describe("pull requests and projects in the published reading", () => {
     reviewed: [],
   } as const;
   const atLand = task("ts-pr", "in_progress", []);
-  // The land gate as the plan decided it: merged now, asked, or denied.
+  // The land gate as the plan decided it: merging, asked, or denied.
   const reading = (
     checks: "pending" | "pass" | "fail" | "none",
     gate: "merge" | "ask" | "deny",

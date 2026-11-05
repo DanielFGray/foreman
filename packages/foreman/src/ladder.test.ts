@@ -69,8 +69,8 @@ describe("authorFor", () => {
   });
 
   test("ignores a failure naming a rung the config has dropped", () => {
-    // Deleting the entry outright says the model is no longer part of the
-    // rating, so what it recorded cannot position anything.
+    // Deleting the entry drops the model from the rating, so what it recorded
+    // cannot position anything.
     expect(authorFor(ladder, ["retired"])).toEqual({ _tag: "Dispatch", rung: cheap });
   });
 
@@ -234,7 +234,7 @@ describe("providerOf", () => {
 
   test("names no account for a rung that is only a generic harness", () => {
     // `opencode` running whatever it defaults to could be signed in to
-    // anything, so nothing here can say whose allowance it spends.
+    // anything, so its account stays unnamed.
     expect(providerOf(rung("top"))).toBeUndefined();
   });
 
@@ -300,7 +300,7 @@ describe("rungsOn", () => {
   test("leaves out a rung the account's percentage does not describe", () => {
     // The one false wall there is. A promotional model draws on another pool,
     // so walling it on the metered percentage passes over work the account can
-    // still pay for, and the task waits for a reset that was never relevant.
+    // still pay for, and the task waits for a reset that does not free that pool.
     const promo: Ladder = stacked([
       rung("promo", { model: "opencode-go/ox-alpha-free", unmetered: true }),
       rung("metered", { model: "opencode-go/kimi-k2.5" }),

@@ -30,7 +30,7 @@ export type { Status as TaskStatus } from "tasks";
 export interface Item extends TaskItem {
   readonly runs: ReadonlyArray<Run>;
   readonly charges: ReadonlyArray<Charge>;
-  /** Why the task is parked for the operator; empty when it is not. */
+  /** Why the task is parked for the operator; empty when the task is free. */
   readonly parked: string | undefined;
   readonly tip: string | undefined;
 }
@@ -397,7 +397,7 @@ export const agentLog = (role: AgentRole, rung: Seat, agent: AgentIdentity): str
  *
  * The report lives in the task's own log, so the branch is legitimately empty
  * and the reviewer reads evidence instead of a diff. `research` is set when the
- * task is filed and survives every attempt, unlike the `already-done` exit, which is the
+ * task is filed and survives every attempt; the `already-done` exit is the
  * author's claim about one attempt.
  */
 export const isResearch = (item: { readonly labels: ReadonlyArray<string> }): boolean =>
@@ -418,7 +418,7 @@ export const isOnboarding = (item: { readonly labels: ReadonlyArray<string> }): 
  * Which rungs have already failed this task.
  *
  * The durable half of choosing an author: the ladder reads these as a floor and
- * picks a rung from the lowest level above theirs that is available now. Evidence rather
+ * picks a rung from the lowest level above theirs that can run. Evidence rather
  * than a pointer, so retiring a model or spending its allowance moves the work
  * on instead of naming a rung nothing can dispatch.
  *
@@ -475,16 +475,13 @@ export const attemptsOf = (
 /**
  * Every label foreman writes is `<kind>:<value>`, so reading one is a split.
  *
- * The separator is not decoration. Rung names contain hyphens, so under the
- * older `attempt-<rung>-<n>` a label could only be read by guessing where the
- * model's name ended — and labels are durable, so the guess was made again on
- * every dispatch for the whole life of the task. Splitting on a character that
- * appears in no name asks nothing and cannot be fooled by a rung named after
- * another rung's prefix.
+ * The separator is the split boundary. Rung names contain hyphens, so only a
+ * character that appears in no name splits kind from value without guessing
+ * where the model's name ends.
  */
 export const kindOf = (label: string): string => label.split(":")[0] ?? label;
 
-/** What a label of this kind says, or nothing if it is not one. */
+/** What a label of this kind says, or nothing when the kind differs. */
 export const valueOf = (label: string, kind: string): string | undefined => {
   const [head, ...rest] = label.split(":");
   return head === kind && rest.length > 0 ? rest.join(":") : undefined;
@@ -534,10 +531,10 @@ export const RESEARCH = "research";
  * the seats whose runs ended `walled` since the task last landed, an author's
  * or a reviewer's.
  *
- * A stop on a usage wall says nothing about the model, so the task is not
- * failed; the wall only keeps seats on that account off the task's next
+ * A stop on a usage wall names the account, not the model, so the task stays
+ * open; the wall only keeps seats on that account off the task's next
  * dispatch. Landing ends it, because the wall describes the account at that
- * time. A seat its list no longer has names no account.
+ * time. Only a seat on the list names an account.
  */
 export const walledBy = (
   item: { readonly runs: ReadonlyArray<Run> },

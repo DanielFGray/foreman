@@ -60,9 +60,9 @@ export class Fleet extends Context.Service<
      * undefined) ends its turn, or a check-in passes, or its terminal goes away.
      * Returns at once when none is working.
      *
-     * One return is not the end of the work: the caller reads the roster again
-     * and calls this again while any agent still works. A blocked agent is not
-     * working, so this does not wait on it.
+     * The caller reads the roster again after each return, and calls this again
+     * while any agent still works. A blocked agent is not working, so this does
+     * not wait on it.
      */
     readonly awaitTurn: (
       task: string,
@@ -133,13 +133,13 @@ export class Fleet extends Context.Service<
     /**
      * Notifies the operator.
      *
-     * Two rules decide what may come through here, and both exist because they
-     * were broken at once and the fleet dinged on every poll.
+     * Two rules decide what may come through here. Without them, the fleet
+     * dings on every poll.
      *
      * **Only what foreman itself did.** An agent that blocked, stopped or
      * handed off is the multiplexer's event: it sees it first and already alerts.
      * Foreman announces what the multiplexer cannot know — a branch that landed, a task
-     * that climbed onto the operator, a merge that was undone.
+     * that climbed onto the operator, an undone merge.
      *
      * **Only on a transition, never on a condition.** A tick reads the whole
      * world back, so a notification on a path that writes nothing fires again
@@ -240,8 +240,8 @@ export interface Worker {
    * the workspace is attached to a checkout that was already there.
    *
    * Read back from the multiplexer every tick rather than remembered, because
-   * it decides whether teardown may delete the directory — and getting that
-   * from foreman's own memory is how you eventually delete somebody's work.
+   * it decides whether teardown may delete the directory, and a value from
+   * foreman's own memory can name a directory that holds a person's work.
    */
   readonly worktree: string | undefined;
 

@@ -16,9 +16,8 @@ export interface TaskPhaseInput {
   readonly holdsWork: boolean;
   readonly handoffExpired: boolean;
   /**
-   * Placement puts the task past the author's running turn (at review, land
-   * or done, or an author that named its exit). Replaces the old `reviewing`
-   * status as the signal that the author has handed off.
+   * Placement puts the task past the author's running turn: at review, land,
+   * done, or an author that named its exit.
    */
   readonly underReview: boolean;
   /**

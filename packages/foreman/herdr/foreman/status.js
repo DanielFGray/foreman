@@ -1,9 +1,8 @@
 // Pure rules the Foreman pane reads the published file and the world by. This
 // module uses no herdr-app globals, so `bun test` runs it.
 
-// Older than this, the reading is no longer the dispatcher working: its host is
-// gone or it is wedged inside a tick, and the pane says so rather than showing
-// it as live.
+// A reading older than this is stale: its host is gone or it is wedged inside
+// a tick, and the pane says so rather than showing it as live.
 export const STALE_MS = 120000;
 
 // A step cycles through its modes: on runs it, ask waits for one approval per

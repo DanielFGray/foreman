@@ -16,13 +16,12 @@ import { Array as Arr, Order } from "effect";
  * reviewers, a list of its own (`src/reviewers.ts`).
  *
  * A task never names the model that runs next. It records which models have
- * already failed it, and the rung is chosen here from what is available now —
+ * already failed it, and the rung is chosen here from what is available —
  * so retiring a model, or spending its allowance, moves work onto the next one
  * that can take it instead of stranding it. Above the last level is the
- * operator, who is not an entry in the array: a rung with no harness and no
- * model is a different kind of thing, and an explicit entry invites putting a
- * person in the middle, where every task below them would stall behind
- * somebody asleep.
+ * operator, who sits outside the array: a rung with no harness and no model is
+ * a different kind of thing, and an explicit entry invites putting a person in
+ * the middle, where every task below them would stall behind somebody asleep.
  */
 export type Ladder = readonly [Rung, ...ReadonlyArray<Rung>];
 
@@ -61,16 +60,15 @@ export interface Seat {
    * False means the allowance describes it.
    *
    * A model served on promotional access — a launch give-away, a partner's
-   * sponsored endpoint — draws on a pool that is not the one the account's
+   * sponsored endpoint — draws on a pool other than the one the account's
    * percentage measures. Walling such a rung on that percentage is the one false
    * wall there is: it passes over work the account can still pay for, and the
-   * task then waits for a reset that was never going to matter.
+   * task then waits for a reset that does not free that pool.
    *
    * Stated rather than derived, because only the operator knows which models a
    * provider is currently sponsoring. Getting it wrong in this direction is the
    * safe one: a metered rung left out is dispatched on an empty account and
-   * meets the wall itself, which is where the fleet stood before any of this was
-   * read at all.
+   * meets the wall itself.
    */
   readonly unmetered: boolean;
 
@@ -98,8 +96,8 @@ export interface Rung extends Seat {
    * A retired model stays in the ladder, disabled, so it keeps its level: the
    * failures it recorded still say "cheaper than the level above was not
    * enough", which is the whole of what a rung means. Deleting the entry
-   * instead says the model is no longer part of the rating at all, and the
-   * failures naming it stop positioning anything.
+   * drops the model from the rating, and the failures naming it stop
+   * positioning anything.
    */
   readonly enabled: boolean;
 
@@ -146,10 +144,9 @@ export type LastStarts = ReadonlyMap<string, Date>;
  * The rung that writes the code next: from the lowest level above every level
  * that has failed this task, the affordable rung that started least recently.
  *
- * `failures` is what the task durably records. A failure naming a rung the
- * config no longer has cannot be positioned and so constrains nothing — the
- * config having dropped that model is the operator saying it is not part of
- * the rating any more.
+ * `failures` is what the task durably records. A failure naming a rung absent
+ * from the config cannot be positioned and so constrains nothing — dropping
+ * that model from the config takes it out of the rating.
  *
  * `walled` names the rungs whose account is spent. They are unavailable rather
  * than failed: nothing about an allowance is evidence about a model, so the
@@ -215,7 +212,7 @@ export const leastRecentFirst = (lastStarts: LastStarts): Order.Order<Seat> =>
  * The lowest level an author may take: one above the highest level that has
  * failed this task, else the bottom level.
  *
- * Levels, not names, so a failure on a rung since retired still holds the work
+ * Levels, not names, so a failure on a retired rung still holds the work
  * above its level as long as that rung keeps its place in the config. One
  * failure on any rung of a level puts every rung of that level below the floor.
  */
@@ -287,12 +284,11 @@ export const dispatchable = (ladder: Ladder): ReadonlyArray<Rung> => ladder.filt
  *
  * opencode names a model `<provider>/<model>`, so for every seat that names one
  * the account is already written down and stating it again would let the two
- * drift. The claude harness is the one default that is not in doubt — the
- * `claude` binary is always signed into the claude.ai account, however it
- * picks its model — so a seat on it spends `claude` even when it names no
- * model. Any other seat that names no model, or names one without a provider
- * on the front, has to be told; until it is, foreman cannot know whether that
- * seat has room left.
+ * drift. The claude harness is the one settled default — the `claude` binary
+ * is always signed into the claude.ai account, however it picks its model —
+ * so a seat on it spends `claude` even when it names no model. Any other seat
+ * that names no model, or names one without a provider on the front, has to be
+ * told; until it is, foreman cannot know whether that seat has room left.
  */
 export const providerOf = (seat: Seat): string | undefined => {
   if (seat.provider !== undefined) return seat.provider;
@@ -307,9 +303,9 @@ export const providerOf = (seat: Seat): string | undefined => {
  * Every distinct account the ladder and the reviewers draw on, which is what
  * to ask about.
  *
- * Dispatchable rungs only: a retired rung keeps its place so old failures still
- * position, but nothing will ever spend its account again, and an allowance
- * nothing can spend is not news.
+ * Dispatchable rungs only: a retired rung keeps its place so failures naming
+ * it still position, but nothing will ever spend its account again, and an
+ * allowance nothing can spend stays off the list.
  *
  * Metered seats only, for the same reason and the same way: an account whose
  * every seat is fed by a promotional pool is asked nothing, because no reading

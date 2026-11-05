@@ -6,11 +6,10 @@ export class ImportError extends S.TaggedError<ImportError>()("ImportError", {
 }) {}
 
 /**
- * Copies an older trials database into the store: every registry table,
- * `trials` as closed `runs`, and `defects`. Optional migration only — a cold
- * store is seeded with `foreman models add` instead.
+ * Copies registry tables, closed runs, and defects from a trials database into
+ * the store. A cold store uses `foreman models add` for its registry.
  *
- * Run ids are the trial ids, because each defect names its trial by id. The
+ * Run ids keep the trial ids, because each defect names its run by id. The
  * copy is one transaction, and it refuses a store that already holds any of
  * these rows: run twice, or after foreman has recorded a run, it would mix two
  * histories. Answers the number of rows copied per table.
@@ -77,9 +76,8 @@ const COPIES: ReadonlyArray<readonly [string, string]> = [
      SELECT model, provider, pool, harness, models_dev, limit_scope, retired, notes FROM old.models`,
   ],
   ["aliases", "INSERT INTO aliases (alias, model) SELECT alias, model FROM old.aliases"],
-  // An older trials ladder has no levels: each rung stands alone in its level,
-  // as `0009_ladder_levels` leaves a store's ladder. Thinking lived on the
-  // model, so each rung takes its model's, as `0012_rung_thinking` does.
+  // A trials ladder has no levels, so each rung gets its own level. Thinking
+  // belongs to the model in that store, so each rung takes the model's level.
   [
     "ladder",
     `INSERT INTO ladder (rank, level, rung, model, enabled, provider, note, unmetered, thinking)

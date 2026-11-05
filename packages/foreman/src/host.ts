@@ -27,17 +27,17 @@ import { telemetry } from "./telemetry.ts";
 /**
  * Every service the dispatcher and the one-shot commands read.
  *
- * hc is the only multiplexer foreman speaks to today. Swapping `HcFleet` for
- * another adapter is the whole of that migration. The base set supplies
- * Dispatcher with every port it cannot build itself.
+ * hc is the only multiplexer foreman speaks to. Swapping `HcFleet` for another
+ * adapter is the whole swap. The base set supplies Dispatcher with every port
+ * it cannot build itself.
  *
  * `telemetry` reads the endpoint out of the same `Settings` the rest of the set
  * is given, so it is provided that layer rather than merged beside it; one
  * reference means the config is still built once. It sets the tracer, and
  * `logging` replaces the logger, for whatever this layer is provided to — which
  * is why a host provides it to the dispatcher alone and not to the whole
- * process. If DevTools is ever added it must come *before* the tracing layers,
- * or the tracer it patches is not the one foreman ends up using.
+ * process. DevTools must come *before* the tracing layers, or it patches a
+ * different tracer than the one foreman uses.
  *
  * `store` is the one connection to the task store: Records, the registry in
  * `Settings` and run recording all read it, and a layer value is built once.

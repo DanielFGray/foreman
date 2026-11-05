@@ -70,8 +70,8 @@ const size = Command.make("size", {}, () =>
 ).pipe(Command.withDescription("Landed slices, rounds and cost per success, by model and size"));
 
 /**
- * Where the registry and the world disagree: a rung opencode no longer lists, and
- * a free opencode model no registry row names.
+ * Where the registry and the world disagree: a rung whose model is absent from
+ * `opencode models`, and a free opencode model no registry row names.
  *
  * An empty listing is a failed probe, not proof that every rung is gone, so it
  * stops the check instead of reporting every rung as drifted.

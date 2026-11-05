@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect";
 import { Settings } from "./config.ts";
 
 /**
- * What foreman calls itself wherever it is not the only thing running.
+ * What foreman calls itself wherever other services run beside it.
  *
  * The CLI's version and the `service.version` on every span are the same claim,
  * so they are the same constant. Stating it twice is how the two drift.
@@ -26,15 +26,15 @@ export const VERSION = "0.1.0";
  * are all the collector's concerns, and keeping them there is what lets the
  * gateway move without foreman being touched.
  *
- * **An unreachable collector must never be a stalled fleet.** It is not: the
- * exporter batches onto its own fiber, so no tick ever waits for an export, and
- * a failed export disables the exporter for a minute rather than failing. That
- * is why the error channel is `never` — lost telemetry is the intended outcome
- * of a collector being off, not a fault to surface.
+ * **An unreachable collector must never be a stalled fleet.** The exporter
+ * batches onto its own fiber, so no tick ever waits for an export, and a failed
+ * export disables the exporter for a minute rather than failing. That is why
+ * the error channel is `never` — lost telemetry is the intended outcome of a
+ * collector being off, not a fault to surface.
  *
- * It also matters that the exporter reports trouble at debug level through
- * Effect's logger, which foreman has replaced with a file. A telemetry layer
- * writing to the terminal would tear the dashboard, which owns it.
+ * The exporter reports trouble at debug level through Effect's logger, which
+ * writes to a file foreman owns. A telemetry layer writing to the terminal
+ * would tear the dashboard, which owns it.
  *
  * Traces and metrics only. `effect/observability` also ships `OtlpLogger`, but
  * foreman's log is one file that the dashboard reads back, and a second

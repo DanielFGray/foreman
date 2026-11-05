@@ -8,8 +8,8 @@ export const QUEUE = "queue";
 // Each exit of `node`: its name, where it leads (or that it returns the task to
 // the queue), the rung it charges and the charges it may take, what an empty
 // branch on it means and the meanings it may take, and whether its name is
-// fixed. A reviewer is no rung, and neither is a check, so only an author's
-// exit may charge `self`. Only an author's branch can be empty of its own
+// fixed. Only an author's exit may charge `self`: a reviewer and a check have
+// no rung. Only an author's branch can be empty of its own
 // work, so only an author's exit may be the claim that trunk already does the
 // task. A check's exits are always passed and failed.
 export const exitRows = (node) => {

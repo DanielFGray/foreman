@@ -212,11 +212,11 @@ describe("Prompts", () => {
     expect(prompt).toContain("Never approve work that landing would omit");
   });
 
-  // A reviewer's git process in the operator's checkout is what took the index
-  // lock out from under a landing, so the whole prompt is asserted to run git
-  // nowhere but the worktree — not merely to avoid merging there. The fork
-  // point is what makes that possible: without it the author's work cannot be
-  // named from inside the worktree at all.
+  // A git process in the operator's checkout collides with a landing that
+  // holds the index lock, so the whole prompt is asserted to run git nowhere
+  // but the worktree, not merely to avoid merging there. The fork point is
+  // what makes that possible: without it the author's work cannot be named
+  // from inside the worktree at all.
   test("keeps every reviewer command out of the operator's checkout", async () => {
     const prompt = await run((prompts) =>
       reviewPrompt(

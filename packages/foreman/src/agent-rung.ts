@@ -86,8 +86,8 @@ const rungAt = (
   if (failuresOf(task).includes(block.model)) return { _tag: "Exhausted" };
   const rung = ladder.find((candidate) => candidate.name === block.model);
   // The operator can enable a rung or switch its author role on again, so a
-  // pin to a rung that may not take the block now waits, as it does for a
-  // spent account.
+  // pin to a rung that cannot take the block waits, as it does for a spent
+  // account.
   return rung !== undefined && isEnabled(rung) && mayAuthor(rung) && !walled.has(rung.name)
     ? { _tag: "Dispatch", seat: rung }
     : { _tag: "Waiting" };

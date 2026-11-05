@@ -6,10 +6,9 @@ import { Cause, Effect, Layer, Logger } from "effect";
 /**
  * Every line foreman logs, written to one file and nowhere else.
  *
- * The questions worth asking about an unattended fleet are all asked long
- * after the event: why did this task go to that model, why was this claim
- * released, what did it do at 3am. One JSON object per line, so the answer is
- * a jq query rather than a full read.
+ * An unattended fleet is diagnosed from this file: which model took a task,
+ * why a claim was released, what ran at 3am. One JSON object per line, so the
+ * answer is a jq query rather than a full read.
  *
  * It replaces Effect's default logger rather than joining it, because the
  * dashboard owns the terminal for as long as it runs and a second logger
@@ -35,8 +34,8 @@ export const logging = (path = logPath()): Layer.Layer<never> =>
       return Logger.make(({ date, logLevel, message, cause }) => {
         const said = Array.isArray(message) ? message.map(String).join(" ") : String(message);
         // A fiber that dies logs an empty message and puts everything in the
-        // cause. Reading only the message wrote a blank ERROR line for every
-        // crash foreman ever had — the one event the file exists to explain.
+        // cause. Reading only the message leaves a blank ERROR line for a
+        // crash — the event the file exists to explain.
         const text = [said, cause.reasons.length === 0 ? "" : Cause.pretty(cause)]
           .filter((part) => part !== "")
           .join("\n");

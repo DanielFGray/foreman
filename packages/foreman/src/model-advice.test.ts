@@ -182,7 +182,7 @@ describe("mergeBudget", () => {
     expect(Option.getOrNull(merged.input)).toBe(99);
     expect(Option.getOrNull(merged.cacheRead)).toBe(20);
     expect(merged.source).toBe("mixed");
-    // Overrides do not pretend to use a trial sample.
+    // An override reports no trial sample.
     expect(merged.samples.input).toBe(0);
     expect(merged.samples.cacheRead).toBe(4);
   });

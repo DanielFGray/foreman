@@ -207,8 +207,7 @@ describe("diagnostic intervention", () => {
 });
 
 describe("working", () => {
-  // A claim made by hand has no rung and no agent, so listing it as the fleet's
-  // work showed dozens of rows that nobody was running.
+  // A hand-made claim has no rung or agent, so it does not represent active fleet work.
   test("counts a claim as the fleet's only when foreman authored it or holds a worker on it", () => {
     expect(isFleetWork(active(task("ts-1", [], "in_progress"), undefined))).toBe(false);
     expect(
@@ -888,8 +887,7 @@ describe("the landed column", () => {
   const now = DateTime.fromDateUnsafe(new Date("2026-08-21T12:00:00Z"));
 
   test("orders by when each task landed, newest first", () => {
-    // the task store returns done tasks grouped by project in config order; the column
-    // is history, so it reads in landing order instead.
+    // The task store groups done tasks by project in config order. The column orders them by landing time.
     const landed = [
       at(task("ts-old", [], "done", 1, "other"), new Date("2026-08-19T09:00:00Z")),
       at(task("ts-new", [], "done"), new Date("2026-08-21T11:00:00Z")),

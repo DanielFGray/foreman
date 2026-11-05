@@ -262,7 +262,7 @@ running a flow the operator did not draw is worse than stopping.
   that never comes. So changing a land's `how` brings these gates with it, in
   one change: to `pull-request`, a gate of each step a route to the land lacks
   goes directly before the land; away from it, each publish gate that reached a
-  pull-request land and now reaches none is taken out, its wires running on to
+  pull-request land and reaches none is taken out, its wires running on to
   its next block (`configure` in `src/pipeline-belt.ts`).
 - Every land a branch block reaches names the same `onto`, absent counting as
   one target, because the branch block cuts the task's branch from that

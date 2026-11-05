@@ -312,7 +312,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * Publishes each change to the policy file as it happens, then wakes the
      * loop so the next tick acts on it. A change to the pipelines file only
      * wakes the loop, because every tick reads that file. The directory is
-     * watched, not the files, because both are replaced by rename. A pipelines
+     * watched, not the files, because writes use atomic rename. A pipelines
      * file outside the policy's directory, and a watcher that cannot start,
      * cost only the delay: the poll still reads both files.
      */
@@ -426,8 +426,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       const current = yield* interpret(observation, providers);
       yield* SubscriptionRef.set(state, current);
-      // The file may have changed after this reading took its copy; the
-      // watcher already published that change, and this set replaced it.
+      // The file may have changed after this reading took its copy, and then
+      // this set overwrote the watcher's newer copy, so publish the file again.
       yield* publishPolicy;
       return { current, providers };
     });
@@ -487,8 +487,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * counted as spent: an unreachable usage endpoint is foreman's own network
      * trouble, and stopping the fleet on it would be the opposite of what the
      * gate is for. Its rungs stay dispatchable and an agent meets the wall
-     * itself, which is exactly where the fleet stood before any of this was
-     * read.
+     * itself.
      */
     const readProviders = Effect.forEach(
       providersOf(settings.ladder, settings.reviewers),
@@ -707,7 +706,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Foreman's branches, in every project. One read, three questions: which
       // branches nothing in the pipeline accounts for, whether a task handed
       // back for review has anything on it, and which refs the sweep may
-      // delete. They were three reads once, and the answers disagreed.
+      // delete. One read keeps these answers consistent.
       const branches = yield* eachProject(projects, (project) =>
         repository.branches(project.directory).pipe(
           Effect.map((refs) =>
@@ -875,15 +874,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       // A branch the trunk has overtaken, under a task still in review. The
       // branch cannot land, so the review of it cannot be applied either — the
-      // review pass holds it out and the operator decides instead. Only the
-      // reviewing status surfaces: an open branch will reach this same row
-      // when its author hands off, and an in-progress one is being worked on
-      // in a column that already shows it. Oldest first, the order the fleet
-      // was about to spend on them.
+      // review pass holds it out and the operator decides instead. Only a task at
+      // review surfaces: an open branch reaches this same row when its author
+      // hands off, and one an author is working on shows in its own column.
+      // Oldest first, the order the fleet spends on them.
       //
       // The task is joined off the review list rather than read back: only a
-      // reviewing task ever survived this filter, so every row's item is one
-      // the same reading already holds.
+      // task at review passes this filter, so every row's item is one the same
+      // reading already holds.
       const underReview = new Map(reviewing.map((task) => [task.id, task]));
       const stale = branches
         .flatMap(({ stale, project, branch, task }) => {
@@ -916,7 +914,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // operator is being asked about.
       //
       // An orphan's task is deleted, so it is in none of the lists above, yet
-      // its terminal may still stand in the worktree. The sweep now removes
+      // its terminal may still stand in the worktree. The sweep removes
       // that worktree, so the orphan's branch is kept for the operator to close.
       const accounted = new Set([...claimed, ...reviewing, ...queue].map((task) => task.id));
       const orphaned = new Set(orphans.map((worker) => worker.task));
@@ -1734,7 +1732,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           return yield* Effect.logInfo(`opened PR #${number} for ${task.id} (${project.name})`);
         }
 
-        // Somebody pushed to the PR. The head is now the task's tip, so the
+        // Somebody pushed to the PR. The head is the task's tip, so the
         // approval is void and placement sends the task to review again.
         case "Moved": {
           const fetched = yield* repository.fetchBranch(project.directory, branch);
@@ -2184,7 +2182,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * Puts the longest-waiting recoverable branch back in front of a reviewer.
      *
      * Everything else foreman does about a branch is reached through its task,
-     * and these are the branches whose task no longer reaches anything. Nothing
+     * and these are branches with no task in the pipeline. Nothing
      * will pick them up, so nothing will pick them up next tick either: without
      * this they wait on an operator noticing a row, which is the manual step
      * this exists to delete.
@@ -3000,7 +2998,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       ).pipe(Effect.map((perProject) => perProject.flat()));
 
     return {
-      /** What the dashboard renders. Replaced whole on every tick. */
+      /** The dashboard state, replaced as a whole on every tick. */
       state,
 
       /** Reads and settles the world once, never stopping for a code change. `run` repeats it. */
@@ -3138,7 +3136,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // before the claim, so the task is still open (or still reviewing,
             // when the review dispatch failed). Retrying clears the failure and
             // dispatches fresh, which claims it on the way; a failed retry
-            // starts the tally over instead of resurrecting the old one. The
+            // starts a new tally instead of restoring the previous one. The
             // threshold, not mere presence, is the test: a task can carry a
             // single remembered failure and still be claimed, and that is an
             // author to retry, not a dispatch to re-attempt.
@@ -3402,7 +3400,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
  * neither takes a slot.
  *
  * An agent block with `slots` runs at most that many of its tasks at once,
- * inside the fleet's own limit. The tasks running there now are counted from
+ * inside the fleet's own limit. The tasks running there are counted from
  * where `placed` stands them, and each dispatch this pass plans there counts
  * too.
  */
@@ -3714,7 +3712,7 @@ export interface Plan {
 
 /**
  * A step the policy holds for one approval. Derived from each reading and
- * stored nowhere: once the world no longer calls for the step, the ask is gone.
+ * stored nowhere: each reading derives the steps that need approval.
  *
  * `rung` is the rung the decision turns on: the author's for a review, the
  * reviewer's for a landing. An author's rung is chosen at dispatch, so it is
@@ -4259,8 +4257,7 @@ export interface FleetState {
   readonly stale: ReadonlyArray<StaleRow>;
 
   /**
-   * Workspaces in a project foreman manages whose task the store no longer
-   * has.
+   * Workspaces in a project foreman manages whose tasks are absent from the store.
    *
    * A task can be deleted while its workspace is open, and after that nothing
    * in the pipeline mentions the workspace: no column shows it, no slot counts

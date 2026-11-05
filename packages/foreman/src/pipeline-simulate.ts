@@ -573,7 +573,6 @@ const resultOf = (sim: Sim): SimulatedRun => {
   };
 };
 
-/** The tasks that have not landed or parked, in the queue's order at the start. */
 /** The standings in `board` that differ from `before`'s; all of them when there is none. */
 const movesSince = (before: Board | undefined, board: Board): ReadonlyArray<Standing> =>
   board.standings.filter((standing, index) => {

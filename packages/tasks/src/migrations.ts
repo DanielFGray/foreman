@@ -6,9 +6,8 @@ import { PROCESS_ENDINGS } from "./endings.ts";
 /**
  * The tables of the store, as Effect migrations.
  *
- * `0001_tasks` creates the task tables in the layout the former Go `prog` left
- * after its last migration, so `tasks` can make a store on its own. Every
- * statement is `IF NOT EXISTS`.
+ * `0001_tasks` creates task tables in the layout shared with Go `prog` stores.
+ * Every statement is `IF NOT EXISTS`.
  *
  * A store without a `user_version` gets `GO_SCHEMA_VERSION` (the version that
  * layout corresponds to). Migrations record themselves in `tasks_migrations`.
@@ -33,9 +32,8 @@ export const MIGRATIONS = Migrator.fromRecord({
     const sql = yield* SqlClient;
     yield* sql.unsafe(`ALTER TABLE runs ADD COLUMN base TEXT`);
   }),
-  // An agent run's ending becomes an exit name the agent named, or a process
-  // ending foreman observed. The old author and review endings are renamed,
-  // and the CHECK that listed them per work kind accepts any exit name.
+  // An agent run's ending is an exit name the agent named, or a process
+  // ending foreman observed. The CHECK accepts any exit name for agent runs.
   // SQLite cannot alter a CHECK, so the table is rebuilt; the views that read
   // it are dropped first and made again after, and the foreign key from
   // `defects` is checked at commit, when the rebuilt table holds every id.
@@ -83,8 +81,7 @@ export const MIGRATIONS = Migrator.fromRecord({
     const sql = yield* SqlClient;
     yield* sql.unsafe(`UPDATE items SET status = 'in_progress' WHERE status = 'reviewing'`);
   }),
-  // Two records foreman kept as labels on the task and now keeps beside its
-  // runs, so a tracker carries only task state: the rungs charged with
+  // Two records foreman keeps beside the task's runs, so a tracker carries only task state: the rungs charged with
   // failing a task, and the tasks parked for the operator.
   "0007_charges_and_parks": Effect.gen(function* () {
     const sql = yield* SqlClient;
@@ -130,8 +127,7 @@ export const MIGRATIONS = Migrator.fromRecord({
   // runs already recorded under that rung's name read as the reviewer's; a
   // member no rung runs is named by its model id.
   //
-  // Each step checks the shape it changes: a test that re-runs the older
-  // migrations brings the council switch and the review column back.
+  // Each migration checks the columns it reads before it changes a table.
   "0010_reviewers": withViewsRebuilt(
     Effect.gen(function* () {
       const sql = yield* SqlClient;
@@ -165,11 +161,9 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
-  // A model's price class (free, metered, frontier) goes: it mixed cost with
-  // power, and dispatch never read it. Model advice reads a model's price from
-  // the catalog instead. SQLite drops a column whose only CHECK is its own, so
-  // the table keeps its rows and the foreign keys that name it. The check
-  // keeps a re-run of the older migrations, which brings no column back, safe.
+  // Model advice reads price from the catalog. SQLite drops the price class
+  // column while keeping model rows and foreign keys. The column check makes
+  // this migration safe when the schema already lacks tier.
   "0011_no_price_class": withViewsRebuilt(
     Effect.gen(function* () {
       const sql = yield* SqlClient;
@@ -181,12 +175,10 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
-  // The thinking level moves from the model to each rung and reviewer, so one
-  // model can be two rungs that think differently. Each rung takes its model's
-  // level, and the model loses the column: one source per seat. An absent
-  // level means the harness's own default, which `auto` meant, so `auto`
-  // becomes absent, and a reviewer's level may now be absent too. Each step
-  // checks the shape it changes, so a re-run of the older migrations is safe.
+  // Each rung and reviewer stores its thinking level, so one model can have
+  // different levels in different roles. A rung takes its model's level.
+  // `auto` becomes absent because an absent level uses the harness default.
+  // Each step checks its input columns before it changes a table.
   "0012_rung_thinking": withViewsRebuilt(
     Effect.gen(function* () {
       const sql = yield* SqlClient;
@@ -220,8 +212,8 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
-  // A store that came from Go `prog` holds its learnings. `tasks` has no
-  // command that reads or writes them, so the tables go. Each table is dropped
+  // Go `prog` stores contain learning tables. The `tasks` CLI does not read or
+  // write them, so each table is dropped
   // after the tables whose foreign keys name it, and its triggers go with it.
   "0013_no_learnings": Effect.gen(function* () {
     const sql = yield* SqlClient;
@@ -238,8 +230,8 @@ export const MIGRATIONS = Migrator.fromRecord({
 });
 
 /**
- * Runs `rebuild` with the registry's views dropped, and makes them again
- * after. SQLite checks every view when a table is renamed, so a table a view
+ * Runs `rebuild` with the registry's views dropped, then recreates them.
+ * SQLite checks every view when a table is renamed, so a table a view
  * reads cannot be replaced while the view stands.
  */
 function withViewsRebuilt<E>(rebuild: Effect.Effect<void, E, SqlClient>) {
@@ -256,8 +248,8 @@ function withViewsRebuilt<E>(rebuild: Effect.Effect<void, E, SqlClient>) {
 }
 
 /**
- * The ladder as `0009_ladder_levels` leaves it: `rank` is the order of the
- * whole list and `level` groups it, so readers sort by (level, rank).
+ * The ladder that `0009_ladder_levels` makes: `rank` is the order of the whole
+ * list and `level` groups it, so readers sort by (level, rank).
  */
 const LADDER_LEVELS = `CREATE TABLE ladder (
     rank      INTEGER PRIMARY KEY,       -- the order by (level, rank); rewritten by every ladder write
@@ -272,7 +264,7 @@ const LADDER_LEVELS = `CREATE TABLE ladder (
     review    INTEGER NOT NULL DEFAULT 1  -- may take the above (review) rule
   )`;
 
-/** The ladder as `0010_reviewers` leaves it: a rung only writes, so it has no review switch. */
+/** The ladder that `0010_reviewers` makes: a rung only writes, so it has no review switch. */
 const LADDER = `CREATE TABLE ladder (
     rank      INTEGER PRIMARY KEY,       -- the order by (level, rank); rewritten by every ladder write
     level     INTEGER NOT NULL,          -- levels climb in number; the rungs of one level are peers
@@ -299,7 +291,7 @@ const REVIEWERS = `CREATE TABLE IF NOT EXISTS reviewers (
   )`;
 
 /**
- * The reviewers as `0012_rung_thinking` leaves them: an absent level passes no
+ * The reviewers that `0012_rung_thinking` makes: an absent level passes no
  * thinking flag, so the harness's own default applies.
  */
 const REVIEWERS_LEVELS = `CREATE TABLE reviewers (
@@ -312,8 +304,8 @@ const REVIEWERS_LEVELS = `CREATE TABLE reviewers (
 export const MIGRATIONS_TABLE = "tasks_migrations";
 
 /**
- * Tasks (`items`, `deps`, `logs`, `projects`, `labels`, `item_labels`), named
- * as Go's `prog` named them.
+ * Task tables: `items`, `deps`, `logs`, `projects`, `labels`, and
+ * `item_labels`.
  */
 const TASKS = [
   `CREATE TABLE IF NOT EXISTS items (
@@ -370,11 +362,10 @@ const TASKS = [
 ];
 
 /**
- * The model registry and the record of runs, moved here from an older
- * `model-trials.db` so that tasks, the runs on them and the models that ran
- * them live in one file.
+ * The model registry and run records. Tasks, their runs, and the models that
+ * ran them share one file.
  *
- * `runs` is the old `trials` table, with a run able to be open: `closed_at` and
+ * `runs` records agent and check runs. An agent run can be open: `closed_at` and
  * `outcome` are both empty until it ends, and the check keeps them together.
  * `node` names the pipeline block the run belongs to, so a task's place in its
  * pipeline is replayed from its runs rather than stored.
@@ -436,11 +427,8 @@ const RUNS = `CREATE TABLE runs (
   )`;
 
 /**
- * The registry tables as `0002_registry` makes them; later migrations change
- * them (`models` loses `council`, `tier` and `thinking`; `ladder` gains `level`
- * and `thinking` and loses `review`). `withViewsRebuilt` makes the
- * views again after each such change, so the views read the tables as the
- * last migration leaves them.
+ * The registry tables. Migrations update their columns and recreate the views
+ * after table changes.
  */
 const REGISTRY = [
   `CREATE TABLE providers (
@@ -463,7 +451,7 @@ const REGISTRY = [
     model       TEXT PRIMARY KEY,        -- exact harness id, as in runs.model
     provider    TEXT NOT NULL,           -- pi-catalog provider, for herd-models identity
     pool        TEXT NOT NULL REFERENCES pools(pool),
-    harness     TEXT NOT NULL,           -- herdr kind used to launch it
+    harness     TEXT NOT NULL,           -- herdr kind that launched it
     models_dev  TEXT,                    -- exact models.dev provider/bare key; NULL = none
     tier        TEXT NOT NULL CHECK (tier IN ('free','metered','frontier')),
     limit_scope TEXT NOT NULL CHECK (limit_scope IN ('pool','model')),

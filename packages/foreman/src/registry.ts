@@ -243,8 +243,8 @@ export class Registry extends Context.Service<Registry>()("Registry", {
     }).pipe(Effect.mapError(registryError("reading the models")));
 
     /**
-     * The reviewers, by name. A reviewer whose model is retired is left out: it is
-     * never dispatched, and a drawing pinned to it no longer runs.
+     * The reviewers, by name. A reviewer whose model is retired is left out: it
+     * is never dispatched, and a drawing pinned to it does not run.
      */
     const readReviewers = Effect.gen(function* () {
       const rows = yield* sql`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness
@@ -382,11 +382,11 @@ export class Registry extends Context.Service<Registry>()("Registry", {
      * Replaces the ladder with these rows, sorted by level; inside a level they
      * keep the order given.
      *
-     * Rung names are the identity tasks record, so a rename is a different rung and
-     * the tasks that recorded the old name stop positioning anything. Ranks are
+     * Rung names are the identity tasks record, so a renamed rung is a different
+     * rung, and a task that recorded the former name positions nothing. Ranks are
      * rewritten from the sorted list, so the stored rank is the order of the rows
-     * by (level, rank). Everything is validated before anything is written, and the write is one transaction, so a bad edit
-     * leaves the ladder as it was.
+     * by (level, rank). Everything is validated before anything is written, and
+     * the write is one transaction, so a bad edit leaves the ladder unchanged.
      */
     const writeRows = (rows: ReadonlyArray<LadderRow>) =>
       Effect.gen(function* () {

@@ -10,7 +10,7 @@ import { exitAt, type Facts, type NamedExit, type Pipeline, QUEUE } from "./pipe
  * A run stores the id of the exit it named; each named exit carries its name
  * as the drawing stands now, which filters read. The task's exits count from
  * the last time it left a source: a return to the queue starts the count
- * again. An exit the drawing no longer has is no return: nothing says where it
+ * again. An exit the drawing lacks is no return: nothing says where it
  * led, so it stays, and placement asks the operator about it.
  */
 export const factsOf = (

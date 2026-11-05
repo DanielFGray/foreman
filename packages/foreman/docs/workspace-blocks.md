@@ -117,8 +117,8 @@ script. A task in your checkout needs no preview: your own dev server serves it.
   rung, as a conflict does. Foreman never rebases: a rebase makes a commit the
   reviewer did not read.
 - **Empty-branch detection reads the branch's own history.** After a fast-forward
-  landing the tip is on the trunk's first-parent line, so "the tip is on the
-  first-parent line" no longer means "nothing was committed".
+  landing the tip can be on the trunk's first-parent line and still contain
+  commits from the task branch.
 - **A direct review reads the commits since the first author started.** Each
   direct author run records the checkout's HEAD as its `base` when it opens. The
   reviewer diffs from the first such base (rule 4), the task's tip is the

@@ -75,7 +75,7 @@ export interface Seats {
 
 /**
  * The seat a run ran on: its rung for an author run, its reviewer for a
- * review. Nothing for a name the list of its role no longer holds.
+ * review. A name resolves only when its role's list contains it.
  */
 export const seatOf = (seats: Seats, run: Pick<Run, "role" | "rung">): Seat | undefined =>
   (run.role === "review" ? seats.reviewers : seats.ladder).find((seat) =>

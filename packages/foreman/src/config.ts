@@ -12,8 +12,7 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * Loads and resolves foreman's configuration.
  *
  * Command line beats config file, and both are folded in here rather than
- * anywhere later: one value of each setting exists, and no code downstream has
- * to know an override was ever possible.
+ * anywhere later: one value of each setting exists for everything downstream.
  *
  * The projects are not configured: they are the operator's open spaces, read
  * every tick (`src/projects.ts`).

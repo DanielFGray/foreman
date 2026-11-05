@@ -12,8 +12,8 @@
  * Nothing here stores where a task is. `place` reads the task's last exit and
  * walks its wire as the drawing stands now, so an edit to a wire moves the
  * task. A run stores the id of the block it ran at and the id of the exit it
- * named, never a name, so a rename moves nothing. An exit the drawing no longer
- * has, or one at a block it no longer has, places the task nowhere: where it
+ * named, never a name, so a rename moves nothing. An exit the drawing lacks,
+ * or one at a block it lacks, places the task nowhere: where it
  * goes then is the operator's decision. The editor keeps a block's id and an
  * exit's id across edits for the same reason.
  */
@@ -199,7 +199,7 @@ export type Pipeline = typeof Pipeline.Type;
 
 /**
  * An exit a task's run named: the block that named it, the exit's id, its
- * name as the drawing stands now (absent when the drawing no longer has it),
+ * name as the drawing stands now (absent when the drawing lacks it),
  * and the commit it was named on.
  */
 export interface NamedExit {
@@ -252,8 +252,8 @@ export type Placement =
   | { readonly _tag: "Outside" }
   | { readonly _tag: "Parked"; readonly node: string }
   /**
-   * The task's last exit is one the drawing no longer has, or was named at a
-   * block it no longer has. Absence is an unknown, not evidence, so the task
+   * The task's last exit is one the drawing lacks, or was named at a block
+   * the drawing lacks. Absence is an unknown, not evidence, so the task
    * waits for the operator rather than starting at its source again.
    */
   | {
@@ -288,7 +288,7 @@ export type Placement =
  * drawing stands now, and goes on through routers, gates and workspace blocks
  * to the next work block. A task with no exit, or an open one (back in the
  * queue), walks from the first source whose filter matches. A task whose last
- * exit names a block or an exit no longer drawn is `ExitGone`.
+ * exit names a block or an exit the drawing lacks is `ExitGone`.
  *
  * An exit holds for the commit it was named on. A check passes one commit, and
  * a land or a done takes the commit the exit before it was named on, so an
@@ -312,7 +312,7 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   const named = facts.status === "open" ? [] : facts.named;
   let reached = walk(nodes, source.next, facts, bound);
   // A named exit that still wires places the task. One wired to the queue
-  // leaves the walk at the source; one the drawing lost places it nowhere.
+  // leaves the walk at the source; one the drawing lacks places it nowhere.
   let viaExit = false;
   let gone: NamedExit | undefined;
   for (let last = named.length - 1; last >= 0; last--) {
@@ -1361,7 +1361,7 @@ const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
 
 /**
  * The exit with id `exit` at block `node`, as the drawing stands now: nothing
- * when the block or the exit is gone.
+ * when the block or the exit is absent.
  */
 export const exitAt = (
   pipeline: Pipeline,
@@ -1380,7 +1380,7 @@ export const claimOf = (node: AgentNode): Exit | undefined =>
 
 /**
  * What a named exit leads to as the drawing stands now: its wire, a return to
- * the queue, or nothing at all, when its block or the exit itself is gone.
+ * the queue, or nothing at all, when its block or the exit itself is absent.
  */
 const wireOf = (
   nodes: ReadonlyMap<string, PipelineNode>,

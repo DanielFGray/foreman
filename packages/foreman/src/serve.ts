@@ -35,8 +35,9 @@ export const serveCommand = Command.make("serve", {}, () =>
       yield* holdLock(lockPath(path));
       yield* supervise(buildHost, path);
       // The dispatcher returns only when foreman's own checkout has a new
-      // commit. A new dispatcher in this process would still run the old
-      // code, so the process exits and its service manager starts it again.
+      // commit. A new dispatcher in this process would still load the code
+      // already in memory, so the process exits and its service manager starts
+      // it again.
       yield* Effect.logInfo(
         "foreman's code changed; serve stops so its service starts it on the new code",
       );
@@ -60,7 +61,7 @@ export interface Supervised<E, R> {
  *
  * A failure is logged and published over the last reading, and a new
  * dispatcher is built after a pause. An interruption is the process stopping,
- * not a failure to recover from, so it is not retried.
+ * so supervise ends without a retry.
  */
 export const supervise = <E, RR, BE, R>(
   build: Effect.Effect<Supervised<E, RR>, BE, R | Scope.Scope>,
@@ -79,8 +80,8 @@ export const supervise = <E, RR, BE, R>(
         ),
       );
 
-    // One life of the dispatcher. The state before its first reading is not a
-    // reading: published, it would say the fleet is empty.
+    // One life of the dispatcher. State before its first reading is unpublished:
+    // publishing it would say the fleet is empty.
     const attempt = Effect.scoped(
       Effect.gen(function* () {
         const host = yield* build;

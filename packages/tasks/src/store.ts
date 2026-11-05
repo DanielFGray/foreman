@@ -2,7 +2,7 @@
  * The task store, read and written in process.
  *
  * The file is `TASKS_DB`, else `~/.tasks/tasks.db`. Item, label, log and
- * dependency tables keep the layout the former Go `prog` wrote; this module
+ * dependency tables keep the Go `prog` schema layout; this module
  * owns that schema through its migrator. Tables `tasks` adds are in
  * `migrations.ts`.
  */

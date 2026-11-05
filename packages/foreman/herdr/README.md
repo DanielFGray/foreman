@@ -82,11 +82,11 @@ stop this project's pipeline.
   draw on: what each has left (the quota rows) and the rungs and reviewers it
   pays for.
 
-The queue is not in `state.json`: the pane runs `foreman queue --project
-<name> --json` every 5 seconds. A row that newly appears under Landed, in any
+The pane reads the queue with `foreman queue --project <name> --json` every
+5 seconds, not from `state.json`. A row that newly appears under Landed, in any
 project, posts a notification. The pane never runs `tasks`.
 
-The pane keeps no state but the Tasks mode. It reads the file that
+The pane's only persisted state is the Tasks mode. It reads the file that
 `src/published.ts` writes, and the schema there is the contract; a row from
 `foreman queue --json` has the shape of a published row. `foreman serve`
 writes the file. Bump `PUBLISHED_VERSION` and `VERSION` in `foreman/main.js`
@@ -119,7 +119,7 @@ Both are optional:
   config is reached through `env`:
   `["env", "FOREMAN_CONFIG=/abs/config.jsonc", "FOREMAN_POLICY=/abs/policy.json", "bun", "/abs/src/main.ts"]`.
 
-## What it does not do yet
+## Actions taken from the command line
 
 - `complete` and `intervene` need an answer the pane has no input for. Run
   them from the command line.

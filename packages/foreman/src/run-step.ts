@@ -217,8 +217,8 @@ export const stoppedAt = (
 ): "retry" | "park" => openAgentOf(pipeline, task)?.block.stopped ?? "retry";
 
 /**
- * The exit the agent of the task's open run named, as the drawing declares it
- * now: nothing when no agent named one, or the block or exit is gone.
+ * The exit the agent of the task's open run named, as the drawing declares it:
+ * nothing when no agent named one, or the block or exit is gone.
  */
 export const openExitOf = (
   pipeline: Pipeline | undefined,
@@ -244,11 +244,11 @@ export const openAgentOf = (
  * The rung whose run has just ended, which is the one a verdict is about.
  *
  * Read from the task rather than recomputed: the author run says which model
- * actually ran, while the ladder would answer with whichever rung is
- * available now — and the two differ exactly when an account went spent
- * mid-run, which is when charging the wrong model would be worst. A task
- * with no author recorded has never been dispatched, so the rung it would
- * get next is the honest answer.
+ * actually ran, while the ladder would answer with whichever rung is available now —
+ * and the two differ exactly when an account went spent mid-run, which is
+ * when charging the wrong model would be worst. A task with no author
+ * recorded has never been dispatched, so the rung it would get next is the
+ * honest answer.
  */
 export const ranAt = (task: Pick<Item, "runs" | "charges">, ladder: Ladder): string => {
   const next = authorFor(ladder, failuresOf(task));

@@ -151,22 +151,21 @@ export const wallAccountOf = (rung: Seat): string | undefined =>
 
 /**
  * How many non-blank lines at the bottom of a screen are read for a wall. A
- * harness prints its stop as its last message, so the screen's history above
- * is not searched: an agent's own prompt quotes these strings, and a match in
- * that history would wall a run that merely read about walls.
+ * harness prints its stop as its last message, so the screen's scrollback above
+ * stays unread: an agent's own prompt quotes these strings, and a match in
+ * that scrollback would wall a run that merely read about walls.
  */
 const WALL_WINDOW_LINES = 12;
 
 /**
  * The literal text each harness prints when its account has no allowance left.
  *
- * Only strings read out of the harness's own binary are listed. Empty means
- * the text is not confirmed, so a run that stops on that harness is never read
- * as a wall: it stays an ordinary `stopped` ending.
+ * Only strings read out of the harness's own binary are listed. Empty lists
+ * no wall text, so a run that stops on that harness stays an ordinary
+ * `stopped` ending.
  *
  * Claude's session limit is built from a template in its binary, so only its
- * literal spend-limit and shared-budget messages are listed. Cursor's text was
- * not found in its binary.
+ * literal spend-limit and shared-budget messages are listed.
  */
 const wallTexts = (kind: string): ReadonlyArray<string> => {
   switch (kind) {

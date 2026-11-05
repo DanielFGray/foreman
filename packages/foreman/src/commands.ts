@@ -15,7 +15,7 @@ import { prose } from "tasks";
  * The lifecycle as one-shot commands.
  *
  * Each command reads the world once, the way a tick begins, and then does one
- * thing a dashboard key or a tick would do. Nothing here holds state between
+ * thing a dashboard key or a tick would do. Commands hold no state between
  * runs, so a command and the running dispatcher act on the same world without
  * coordinating: whatever one changes, the other reads back on its next look.
  * Pausing is `foreman policy`, because the pause lives in the policy file,

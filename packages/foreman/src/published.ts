@@ -44,10 +44,10 @@ import {
 export const PUBLISHED_VERSION = 6;
 
 /**
- * The views the file carries: foreman's own. The queue is not one of them.
- * It is the task store's ready list as foreman ranks it, read on demand with
- * `foreman queue` or `queueOf`, so a reader shows it for the project it is
- * looking at.
+ * The views the file carries: foreman's own. The queue is read on demand, not
+ * stored here: it is the task store's ready list as foreman ranks it, read
+ * with `foreman queue` or `queueOf`, so a reader shows it for the project it
+ * is looking at.
  */
 export const PUBLISHED_VIEWS = VIEWS.filter((view) => view !== "queue");
 
@@ -100,7 +100,7 @@ export const PublishedPlacement = S.Struct({
   node: S.String,
   /** The block a board draws the task on (`stands` on a placement); `node` is the block it waits for or runs at. */
   stands: S.String,
-  /** `gone`: its last exit is one the drawing no longer has (`ExitGone`), so it waits for the operator. */
+  /** `gone`: its last exit is one the drawing lacks (`ExitGone`), so it waits for the operator. */
   state: S.Literals(["waiting", "running", "ended", "parked", "gone"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
   /** The board column the task shows in (`columnOf`). */
@@ -114,7 +114,7 @@ export const PublishedPlacement = S.Struct({
   /**
    * The task's runs, oldest first: the block each ran at, its role, its rung,
    * whether it is still open, and how it ended. A closed run that foreman did
-   * not settle has no ending; a run from before blocks were recorded has no block.
+   * not settle has no ending; a run stored without a block has no block.
    */
   runs: S.Array(
     S.Struct({

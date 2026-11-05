@@ -20,7 +20,7 @@ export interface AgentSample {
   readonly rung: string;
   readonly role: AgentRole;
   readonly ending: string;
-  /** From start to close; none for a run recorded before starts were kept. */
+  /** From start to close; none when the run has no start time. */
   readonly minutes: number | undefined;
 }
 
@@ -37,7 +37,7 @@ export interface Measured {
 
 /**
  * The closed live runs that have a rung, and every check run. A live run is
- * one foreman recorded as it happened, not one backfilled from history.
+ * one foreman recorded as the agent ran.
  */
 export const readMeasured = Effect.gen(function* () {
   const sql = yield* SqlClient;

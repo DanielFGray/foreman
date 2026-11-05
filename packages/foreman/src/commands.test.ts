@@ -47,7 +47,7 @@ interface Setup {
 /**
  * The doubles one command runs against: a tracker that answers `FILED`, a
  * dispatcher whose reading queues `queued` and whose author answers `answer`,
- * and a caller that is or is not a fleet worker. Each records what it was asked.
+ * and a caller that may be a fleet worker. Each records what it was asked.
  */
 const doubles = (setup: Setup) =>
   Effect.gen(function* () {

@@ -156,8 +156,8 @@ const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
 };
 
 /**
- * The task as the step reads it, with each run id replaced by its place in
- * the task: the store numbers runs across every task, the fold within one.
+ * The task as the step reads it, with each run id mapped to its place in the
+ * task: the store numbers runs across every task, the fold within one.
  */
 const view = (task: Item) => {
   const place = new Map(task.runs.map((run, index) => [run.id, index + 1]));

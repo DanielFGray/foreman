@@ -1,9 +1,7 @@
 # The end-to-end rig
 
-`config.jsonc` points foreman at one scratch project and nothing else, so a
-dispatcher started with it cannot see the real backlog. That is the whole point:
-two earlier verification runs claimed real tasks that had to be unwound by
-hand.
+`config.jsonc` points foreman at one scratch project. A dispatcher started
+with it cannot see the real backlog, so a test run claims no real task.
 
 ```
 export TASKS_DB=/tmp/foreman-e2e.db   # the rig's own task store

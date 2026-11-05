@@ -295,9 +295,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           ({ branch }) =>
             git(directory, "merge-tree", "--write-tree", trunk, branch).pipe(
               // 0 is a clean merge and 1 is conflicts; anything else means
-              // merge-tree could not answer, which is not evidence the branch
-              // would merge — but it is not a conflict either, so it reads as
-              // clean, the same way an unreadable ref reads as absent.
+              // merge-tree could not answer. That is neither evidence the
+              // branch would merge nor a conflict, so it reads as clean, the
+              // same way an unreadable ref reads as absent.
               Effect.map(
                 (result) =>
                   [branch, result.exitCode === 1 ? conflictsOf(result.stdout) : undefined] as const,
@@ -448,7 +448,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * It is re-derived, never remembered: one git has registered is reset to
      * the commit being proved against, and any other is removed and remade.
      * What survives between landings is only what a package manager installed,
-     * which is the whole reason it is not a fresh directory each time.
+     * which is why the same directory is reused.
      *
      * A ground that will not reset is remade too. The usual cause is an
      * `index.lock` left by a git that was killed there, by a restart of the
@@ -487,19 +487,13 @@ export class Repository extends Context.Service<Repository>()("Repository", {
      * checkout: would this branch merge, and does the project still work if it
      * does.
      *
-     * Everything that used to make the operator's checkout the proving ground
-     * follows from moving it here. Verification no longer runs in a directory a
-     * person is using, so the test suites that spawn their own processes there
-     * — and strand an `index.lock` that the landing's own git then trips over —
-     * have nothing of the operator's to touch. The undo disappears with it:
-     * backing a merge out was only ever needed because the merge had already
-     * been applied to prove it, and a `reset --hard` that fails in the shared
-     * checkout leaves an unverified merge sitting in it.
+     * Verification runs here, out of the directory a person is using, because
+     * test suites spawn their own processes and can leave an `index.lock` that
+     * the landing's own git then fails on. Nothing reaches the shared checkout
+     * until it is proved, so no merge there ever needs to be backed out.
      *
-     * The lazy baseline survives unchanged, and for the same reason: a merge
-     * that passes has already answered the only question the baseline exists to
-     * answer, so it is asked only after a failure. It is just half the price of
-     * a failure now, because resetting the ground costs nothing.
+     * The baseline runs only after a failure: a merge that passes has already
+     * answered the only question the baseline exists to answer.
      */
     const gitProve = (
       proving: string,
@@ -844,13 +838,13 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       /**
        * Whether a task worktree holds anything the agent that lived in it made.
        *
-       * Untracked files count, unlike in the operator's checkout. That checkout
-       * has collected untracked build output and scratch notes for months. A task worktree
-       * was created empty minutes ago, so anything git does not follow arrived
-       * with the agent: a new module it wrote, or the leavings of a test run it
-       * got as far as starting. Either way the agent was working, which is the
-       * question — and the two mistakes are not the same size. A worktree kept
-       * for nothing costs disk; a worktree deleted wrongly costs the work.
+       * Untracked files count, unlike in the operator's checkout, which holds
+       * untracked build output and scratch notes. A task worktree starts
+       * empty, so anything git does not follow arrived with the agent: a new
+       * module it wrote, or the leavings of a test run it started. Either way
+       * the agent was working, which is the question — and the two mistakes
+       * are not the same size. A worktree kept for nothing costs disk; a
+       * worktree deleted wrongly costs the work.
        *
        * Always git: `addWorktree` makes these with `git worktree add`, so a worktree is
        * git's whatever the project checkout it came from is.
@@ -883,15 +877,10 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * The commit a task's branch was cut from, so a reviewer can read the
        * author's work without going near the operator's checkout.
        *
-       * A reviewer used to be told to run `git -C <repository> diff
-       * HEAD...<branch>`, because naming the author's work needs both ends of
-       * it and only the checkout knew where the branch forked. That put an
-       * agent's git process in the one directory foreman claims no agent
-       * writes to, and `git diff` refreshes the index: it collided with a
-       * landing mid-merge, left `index.lock` behind, and the failed merge was
-       * charged to the branch — a task climbed a rung for foreman's own
-       * concurrency. Resolving the fork point here instead leaves the reviewer
-       * one revision it can diff entirely inside its own worktree.
+       * With this revision the reviewer diffs entirely inside its own
+       * worktree. A git process in the operator's checkout, such as `git
+       * diff`, refreshes the index: it can collide with a landing mid-merge,
+       * leave `index.lock` behind, and make the branch look at fault.
        *
        * A commit rather than the trunk's name, because the operator's branch
        * moves while a review runs, and the question is what this author wrote.
@@ -919,10 +908,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * (`landsOn`), read from its upstream, so a task whose record is gone is
        * still measured against the branch it was cut for.
        *
-       * `empty` is the fact that cannot be inferred from `merged`, and getting
-       * it wrong once cost a landed task. A branch nobody committed to and a
-       * branch whose commits are already on its trunk are both reachable
-       * from the trunk, so "not unmerged" says nothing about whether an author
+       * `empty` is a separate fact from `merged`. A branch nobody committed to
+       * and a branch whose commits are already on its trunk are both reachable
+       * from the trunk, so reachability alone does not say whether an author
        * wrote anything. What separates them is where the tip sits: an untouched
        * branch still points at the trunk commit it was cut from, while a merged
        * branch's tip arrives through a merge commit's second parent. A
@@ -1135,11 +1123,9 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * Makes a fresh worktree usable, and says whether it worked.
        *
        * A worktree does not share the checkout's installed dependencies, so
-       * something has to install them. That used to be a paragraph in the
-       * author and reviewer prompts, which is the wrong place for a step with
-       * one right answer: it spent tokens on it every dispatch, a cheap model
-       * could skip it and misread the resulting failure as the task's, and it
-       * was prose in two files that had to stay in sync.
+       * something has to install them. Foreman runs it, not the agent's
+       * prompt, because a model can skip a prompt step and misread the
+       * resulting failure as the task's.
        *
        * The project records the command, not foreman's config — a checked-in
        * script is a fact about the project that foreman reads back like every
@@ -1287,19 +1273,19 @@ export type How = "merge" | "fast-forward";
 /** What became of a branch foreman tried to put into the operator's checkout. */
 export type Landing =
   /**
-   * Not now. The checkout was not in a state to land into, which says nothing
-   * about the branch — so the verdict stays on the task and a later tick tries
+   * Deferred. The checkout cannot accept a landing yet, which is a fact about
+   * the checkout — so the verdict stays on the task and a later tick tries
    * again. `reason` is present when the cleanliness gate itself said no, and
    * `detail` names the obstacle when it was not simply the operator working
    * there.
    */
   | { readonly _tag: "Held"; readonly reason?: HoldReason; readonly detail: string | undefined }
   /**
-   * The checkout already had the commits, so nothing was merged and nothing
-   * was verified. Distinct from `Merged` because no write happened: foreman
-   * cannot claim to have landed the branch, and cannot claim the checkout was
-   * green either. What it can do is finish the task, which is the step a
-   * landing interrupted after its merge would otherwise never reach.
+   * The checkout already holds the commits, so nothing is merged and nothing
+   * is verified. Distinct from `Merged` because no write happens: foreman
+   * cannot claim to have landed the branch, and cannot claim the checkout is
+   * green either. What it can do is finish the task, which is the step an
+   * interrupted landing still owes after its merge.
    */
   | { readonly _tag: "Present" }
   | { readonly _tag: "Rejected"; readonly detail: string }
@@ -1308,7 +1294,7 @@ export type Landing =
 
 /** What a check block's command said about one commit. */
 export type Checked =
-  /** The proving ground could not be made ready, which says nothing about the commit. */
+  /** The proving ground could not be made ready, which is no evidence about the commit. */
   | { readonly _tag: "Held"; readonly detail: string }
   /** `verified` is false when the command fails on the branch's base as well. */
   | { readonly _tag: "Passed"; readonly verified: boolean }
@@ -1340,16 +1326,15 @@ export interface Branch {
 
 /** Why an unmerged branch would not land, and the problem that blocks it. */
 export interface Stale {
-  /** The paths both sides now claim, which is what a rebase would have to face. */
+  /** The paths both branches change, which a rebase would have to reconcile. */
   readonly paths: ReadonlyArray<string>;
 
   /**
    * Whether any conflict is trunk having deleted what the branch patches.
    *
-   * A different problem from a content conflict, and it needs a different
-   * answer: the trunk's own refactor decided the file was gone, so the
-   * branch's work on it is either superseded or must be re-expressed against
-   * whatever replaced it.
+   * A modify/delete conflict needs a different answer from a content conflict:
+   * the target deleted a path the branch changed, so the branch's change is
+   * either superseded or must be re-expressed against what replaced the path.
    */
   readonly modifyDelete: boolean;
 }

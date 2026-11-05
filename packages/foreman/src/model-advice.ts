@@ -136,8 +136,8 @@ export const AdviceReport = S.Struct({
 export type AdviceReport = S.Schema.Type<typeof AdviceReport>;
 
 /**
- * Accounts Quota probes as subscription plans. Catalog list price never
- * promotes an account into this set.
+ * Accounts that Quota probes as subscription plans. An account joins this set
+ * only through that probe, and catalog list prices do not add one.
  */
 const SUBSCRIPTION_ACCOUNTS = new Set(["claude", "anthropic", "openai", "cursor", "opencode-go"]);
 

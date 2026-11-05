@@ -567,7 +567,7 @@ describe("validation", () => {
         },
       ),
     ).toEqual(["author: cheap may not author"]);
-    // A rung is no reviewer, even when a reviewer has the same model.
+    // A rung and a reviewer are separate lists, even when both name the same model.
     expect(problemsOf(replace({ ...reviewBlock, model: "strong" }), OFFERS)).toEqual([
       "review: strong is no reviewer",
     ]);

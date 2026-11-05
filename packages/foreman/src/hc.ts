@@ -441,7 +441,7 @@ export function hcFleetOver() {
 
         /**
          * hc has no notification of its own and the window takes none from
-         * outside, so for now a notice is a log line.
+         * outside, so a notice is a log line.
          */
         notify: (title: string, body: string) => Effect.logInfo(`notice: ${title}: ${body}`),
 

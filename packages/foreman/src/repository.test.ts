@@ -9,7 +9,7 @@ const run = <A, E>(f: (repository: Repository["Service"]) => Effect.Effect<A, E>
   Effect.runPromise(Repository.use(f).pipe(Effect.provide(Repository.Default)));
 
 const isFree = (directory: string) => run((repository) => repository.isFree(directory));
-/** The clean answer every assertion below that is not a hold expects. */
+/** The clean answer every assertion below that expects a free checkout. */
 const clean = { _tag: "Clean" } as const;
 
 const detached = {
@@ -393,9 +393,8 @@ describe("Repository", () => {
     // Left behind, the branch would join the listing the next assertions make.
     await git("branch", "-D", "foreman/ts-subject");
 
-    // The merged branch is the one that used to read as an author who wrote
-    // nothing: its commits are in the checkout, so it is not unmerged — and
-    // reading that as an empty branch sent finished work back to the queue.
+    // A merged branch still contains work: merged status alone does not mark
+    // it empty. Classifying it as empty would return finished work to the queue.
     expect(await branches(directory)).toEqual([
       {
         branch: "foreman/ts-aaaaaa",
@@ -1049,7 +1048,7 @@ describe("Repository landing by fast-forward", () => {
 
     expect(await land(here)).toEqual({ _tag: "Merged", verified: false });
     expect(await out("rev-parse", "HEAD")).toBe(work);
-    // The branch that landed by fast-forward holds work, though its tip is now
+    // The branch that landed by fast-forward holds work, though its tip sits
     // on the trunk's first-parent line.
     expect(await branchOf(here)).toMatchObject({ merged: true, empty: false });
   });

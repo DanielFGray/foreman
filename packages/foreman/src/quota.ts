@@ -32,7 +32,7 @@ import {
 /**
  * How long one provider's reading may take. The dispatcher reads every
  * provider in its tick, so a probe that never answers stops the whole fleet:
- * `codex app-server` can wait forever for a reply after the machine sleeps.
+ * `codex app-server` can wait forever for a reply after the host wakes from sleep.
  */
 const PROBE_TIMEOUT = Duration.seconds(30);
 
@@ -518,8 +518,8 @@ const claudeProbe = Effect.gen(function* () {
 
 /**
  * codex names its windows by rank rather than by length, so the length is put
- * back: "primary" says nothing an operator can plan around, and the same rank
- * means a week on one plan and a day on another.
+ * back: "primary" names no duration an operator can plan around, and the same
+ * rank means a week on one plan and a day on another.
  */
 
 // ----------------------------------------------------------- cursor
@@ -529,8 +529,7 @@ const claudeProbe = Effect.gen(function* () {
  *
  * `https://cursor.com/api/usage-summary` answers the billing cycle, the model
  * family splits (`auto` vs `api`) and the on-demand meter in one call. The
- * JWT's `sub` names the user for the session cookie; the same token is the
- * bearer for the legacy request-count endpoint, which is only a fallback.
+ * JWT's `sub` names the user for the session cookie.
  */
 const cursorProbe = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;

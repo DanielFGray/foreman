@@ -39,10 +39,10 @@
 // save` checks the draft and makes it the pipeline. foreman owns the draft, so
 // it outlives this pane.
 //
-// The queue is not in state.json: the pane reads `foreman queue --project
-// <name> --json` every 5 seconds, for the Queue cards' actions and epics. A
-// row that newly appears under Landed posts a notification. The pane keeps no
-// state of its own but the Tasks view's mode, and never runs `tasks`.
+// The pane reads the queue with `foreman queue --project <name> --json` every
+// 5 seconds, not from state.json, for the Queue cards' actions and epics. A
+// row that newly appears under Landed posts a notification. The pane's only
+// own state is the Tasks view's mode, and it never runs `tasks`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify } from "herdr";
@@ -327,7 +327,7 @@ export default class Foreman extends View {
     return exec(cmd, [...rest, ...args]);
   }
 
-  // Takes a reading of the pipeline, and drops a pick that names a block it no longer has.
+  // Takes a reading of the pipeline, and drops a pick that names a block the drawing lacks.
   showing(shown, cx) {
     const before = this.shown === null ? undefined : this.selectedNode();
     this.shown = shown;

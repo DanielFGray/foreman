@@ -4,7 +4,7 @@
  *
  * The drawing is derived from the graph every time, so nothing about it is
  * stored. Every edit keeps every wire ending at a block, and deletes only the
- * block it names, or a publish gate a land's new `how` no longer needs
+ * block it names, or a publish gate that a land's `how` does not need
  * (`configure`): a block an edit leaves unreached stays, so the operator can
  * wire it again or take it out. What an edit cannot guarantee (a source that
  * reaches every block, a gate before each step, a review before each land, a
@@ -515,7 +515,7 @@ const retargeted = (pipeline: Pipeline, wire: Pick<Wire, "from" | "port">, to: s
     return node;
   });
 
-/** Every wire of `node` that ran to `from` now runs to `to`. */
+/** Retargets every wire of `node` that ran to `from` so it runs to `to`. */
 const redirect = (node: PipelineNode, from: string, to: string): PipelineNode => {
   const swap = (id: string) => (id === from ? to : id);
   switch (node.kind) {

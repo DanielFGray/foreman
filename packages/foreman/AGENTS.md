@@ -40,7 +40,7 @@ a claim made by hand.
 | What am I working on? | the worktree git has registered for `foreman/<task-id>` |
 | Who authored this branch? | the rung of the task's latest author run |
 | Is a reviewer assigned? | an open review run in the task's current lap |
-| Where is this task? | where the exit its last run named leads in the drawing as it is now, looked up by the exit's id, while the tip is the commit that exit was named on; a decision for the operator when the drawing no longer has that exit |
+| Where is this task? | where the exit its last run named leads in the drawing, looked up by the exit's id, while the tip is the commit that exit was named on; a decision for the operator when the drawing lacks that exit |
 | Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
 | Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed |
 | Which reviewer reads it? | from the reviewers its review block draws, the one that started a review least recently, off a spent account and off every reviewer that stopped this lap with no verdict, preferring a model other than the author's |
@@ -208,7 +208,7 @@ abandoned one from one whose owner is away.
 
 A lost exit is a decision too. A run stores the id of the exit it named, and a
 rename changes only the name, so a rename leaves the task where it was. When
-the drawing no longer has the stored exit, or its block, the run says where the
+the drawing lacks the stored exit, or its block, the run says where the
 task went and the drawing cannot say where that leads now. Placing the task
 from its source would read the gap as evidence that the work must start over.
 So placement answers `ExitGone`, and the task is published in attention with
@@ -332,13 +332,13 @@ records whether they are passed, so tasks in flight place as before.
   direct task from its first author run there (the run's `base`) until it leaves
   the pipeline. Either shows as a `busy` hold that names the task. Author runs
   alone are no evidence: a task whose authors worked in a worktree, or whose
-  branch is no longer out in the checkout, holds nothing. The hold covers every other task in the
+  branch is absent from the checkout, holds nothing. The hold covers every other task in the
   project, landings included. A dispatch the
   planner sends into a free checkout takes it in the same pass, and needs a clean
   tree (`Repository.dirty`), because git carries uncommitted edits into the
   agent's commits. That dirty tree is not a held row: a row would hold
   the project's worktree tasks too, which uncommitted work must not do.
-- **Branch only keeps the old branch-mode git code.** `Fleet.open` with the
+- **Branch-only routes use checkout git operations.** `Fleet.open` with the
   checkout as the directory runs `Repository.checkoutBranch`, which sets the
   branch it left as the upstream; `trunkOf` reads that upstream as the trunk while
   the task branch is out; landing and teardown (`leaveBranch`) check the
@@ -480,8 +480,8 @@ which stays true however the ladder is edited afterwards.
 
 - **A retired rung stays listed with `enabled: false`.** It keeps its level and
   rank, so the failures naming it still position the work above it, and nothing
-  dispatches it. Deleting the entry outright is the other statement — the model
-  is no longer part of the rating — and its failures then position nothing.
+  dispatches it. Deleting the entry removes the model from the rating, so its
+  failures do not position the work.
 - **`Waiting` and `Yours` are different answers.** No rung with room is a fact
   about a wallet that an allowance reset clears by itself, so the task stays in
   the queue, marked; every configured rung having failed it is a fact about the
@@ -825,7 +825,7 @@ that nothing was committed, and a reviewer reading an empty diff costs less than
 finished work handed back as empty.
 
 The sweep is not a step inside landing. Every tick, in every project, the
-dispatcher deletes refs that are `merged` **and** whose task no longer appears in
+dispatcher deletes refs that are `merged` **and** whose task is absent from
 the queue, the claims or the review list — so a branch merged by hand disappears
 the same way a landed one does. Both halves are required: sweeping on `merged`
 alone deletes the branch of a task still under review, which is the evidence the

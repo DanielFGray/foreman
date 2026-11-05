@@ -197,12 +197,10 @@ or when the review answers. The worktree and anything uncommitted in it outlive
 the pane, so the next role picks up where the last one stopped, and the
 workspace closes when its last pane does.
 
-A fresh worktree holds committed files only, so the project's dependencies are
-not installed in it and every test, typecheck and lint command fails until they
-are. Both prompts tell the agent to install them the way the project does.
-Foreman does not run the install itself: it cannot know the package manager for
-every language, and a table of the JavaScript ones would bias it toward npm
-while helping no other ecosystem.
+A fresh worktree holds committed files only. Before each dispatch, foreman
+runs the project's `scripts/worktree-setup.sh` there when the project has one,
+and refuses a worktree whose setup failed. The script must be safe to run
+again.
 
 The branch outlives the workspace only as long as it is the only copy of the
 work. Every tick deletes foreman's merged branches from each project, so a
@@ -268,11 +266,10 @@ it is still there next tick — so waiting changes nothing. Clear the cause and
 press `r` to retry; the log records the failure once with a count rather than a
 line every poll.
 
-A task whose last exit you removed from the drawing, or whose block you removed,
-appears under **Attention** as `exit gone`, with the reason. Its run says where
-the task went, and the drawing no longer says where that leads, so foreman does
-not guess. Release it to the queue or intervene. Renaming an exit keeps its
-tasks where they were.
+A task whose last exit or block is absent from the drawing appears under
+**Attention** as `exit gone`, with the reason. The run records the exit id, and
+the drawing must contain that exit to determine the next step. Release the task
+to the queue or intervene. Renaming an exit keeps its tasks where they were.
 
 Absence is an unknown, not evidence of failure. Escalation needs real evidence.
 
@@ -420,7 +417,7 @@ foreman models add <model> --harness <kind> --provider <id> --pool <name>
                                # create the pool when missing; run before ladder add
 foreman ladder list            # print the ladder by level: state, trial record, launch arguments
 foreman ladder size            # landed slices and cost per success, by model and size
-foreman ladder drift           # rungs opencode no longer lists; free models no rung names
+foreman ladder drift           # rungs opencode does not list; free models with no rung names
 foreman ladder suggest [--json] [--catalog PATH] [--after RUNG] [--size N]
                                # [--context-tokens N] [--input-tokens N]
                                # [--cache-read-tokens N] [--cache-write-tokens N]

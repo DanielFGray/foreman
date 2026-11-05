@@ -167,7 +167,7 @@ export class Board {
 
   // An epic's head in one column: +/− for its fold, its title, how many of
   // its tasks are done, and, folded, how many cards it hides here. An epic
-  // foreman no longer drives, such as one a landed task closed, shows its key.
+  // foreman does not drive, such as one a landed task closed, shows its key.
   epicHead(epic, info, count, column, rect, t) {
     const folded = this.folded.has(epic);
     return h_flex().id(`board-epic-${column.key}-${epic}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)

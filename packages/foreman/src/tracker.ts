@@ -65,7 +65,7 @@ export class Tracker extends Context.Service<
      * The status moves. Each skips a task that already has the status it
      * leads to, so a caller need not check the status first.
      *
-     * Takes the task: after this it is no longer ready. Open, done and
+     * Takes the task out of ready work. Open, done and
      * canceled work may all be claimed — done or canceled when an unread
      * branch on them needs a reader.
      *

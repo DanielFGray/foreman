@@ -107,10 +107,9 @@ export const directBase = (task: Runs): string | undefined =>
  * its name as drawn, only to a block that declares one (`exitsSection` in
  * `src/prompt.ts`).
  *
- * It is a claim and not a verdict: "it is already done" is exactly what a model
- * too weak for the task would say to escape it, so a reviewer confirms it
- * against the trunk like any other diff, and only the reviewer's approval
- * closes the task.
+ * It is a claim: "it is already done" is exactly what a model too weak for the
+ * task would say to escape it, so a reviewer confirms it against the trunk
+ * like any other diff, and only the reviewer's approval closes the task.
  */
 export const authorClaim = (task: Runs, pipeline: Pipeline): Exit | undefined => {
   const author = lapOf(task).find((run) => run.role === "author");

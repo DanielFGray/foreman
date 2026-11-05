@@ -4,10 +4,10 @@ import { countOf, isResearch, SIZE, type Item } from "./records.ts";
 /**
  * The store's words for foreman's accounts.
  *
- * A table rather than a convention, because the two sides were written by
- * different hands: foreman keys an account by what reads it (`opencode-go`),
- * the table names it as an operator reads it. An unlisted provider is written as
- * its own key, which is the honest answer rather than a wrong name.
+ * A table rather than a convention, because the two sides use different words:
+ * foreman keys an account by what reads it (`opencode-go`), the table names it
+ * as an operator reads it. An unlisted provider is written as its own key,
+ * which is the honest answer rather than a wrong name.
  */
 const POOLS: Record<string, string> = {
   openai: "OpenAI",

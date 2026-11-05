@@ -17,7 +17,7 @@ const fresh = () => join(dir, `store-${++files}.db`);
 const inStore = <A, E>(file: string, use: Effect.Effect<A, E, SqlClient>) =>
   Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
 
-/** An older trials database layout, holding one model, two trials and a defect. */
+/** A trials database layout with one model, two trials, and a defect. */
 const herdFile = () => {
   const file = join(dir, `herd-${++files}.db`);
   const db = new Database(file);
@@ -48,7 +48,7 @@ const herdFile = () => {
     `INSERT INTO models (model, provider, pool, harness, tier, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'free', 'pool')`,
   );
   db.run(`INSERT INTO ladder (rank, rung, model) VALUES (1, 'cheap', 'm1')`);
-  // Ids with a gap, as deleted trials leave them: a defect must still find its run.
+  // A gap in ids must not stop a defect from finding its run.
   db.run(`INSERT INTO trials (id, project, task, slice, kind, pool, model, work, outcome)
     VALUES (3, 'p', 'ts-000001', 'one', 'pi', 'Pool', 'm1', 'build', 'committed'),
            (7, 'p', 'ts-000002', 'two', 'pi', 'Pool', 'm1', 'build', 'committed')`);
