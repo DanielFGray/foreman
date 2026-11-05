@@ -217,8 +217,10 @@ export class Models {
       ? [card.model, this.accountOf(card.name)].filter(Boolean).join(" · ")
       : card.kind === "reviewer"
         ? [card.model, card.reviewer.provider].filter(Boolean).join(" · ")
-        : `${card.harness} · no rung`;
-    const tag = card.kind === "rung" ? (card.rung.enabled ? card.rung.state : "disabled") : null;
+        : card.harness;
+    // Only a rung in a level shows its trial state: in Available, an old rung and a
+    // bare model are the same choice, and a drop on a level takes either.
+    const tag = card.kind === "rung" && card.rung.enabled ? card.rung.state : null;
     return h_flex().absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height)
       .rounded(6).overflow_hidden().bg(t.surface).border(1).border_color(t.border)
       .child(div().w(STRIPE).h_full().bg(color).flex_none())
