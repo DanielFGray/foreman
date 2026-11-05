@@ -58,7 +58,9 @@ answer it: log the question and stop without naming an exit.
 
 ## Decide
 
-Before you name an exit that sends the task back, log findings detailed enough for
-the next agent. Then name the exit the Exits section gives for your verdict.
+Name the exit the Exits section gives for your verdict, and pass your findings as its
+notes, in the form the Exits section shows. Write each finding in full, enough for the
+next agent to act on it. `foreman show` prints the notes to that agent, so do not log
+the findings as well.
 
 Do not start any other work.

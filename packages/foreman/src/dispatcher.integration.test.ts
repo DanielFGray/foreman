@@ -705,7 +705,9 @@ const tick = (world: World) =>
 /** Runs `foreman exit` for the agent of the task's open run. */
 const exit = (world: World, id: string, name: string) =>
   Effect.runPromise(
-    Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(Effect.provide(layerFor(world))),
+    Dispatcher.use((dispatcher) => dispatcher.exit(id, name, Option.none())).pipe(
+      Effect.provide(layerFor(world)),
+    ),
   );
 
 describe("Dispatcher tick", () => {
@@ -2410,7 +2412,7 @@ describe("a route's workspace blocks", () => {
     world.headCommit = "h2";
 
     await Effect.runPromise(
-      Dispatcher.use((dispatcher) => dispatcher.exit(task.id, "approved")).pipe(
+      Dispatcher.use((dispatcher) => dispatcher.exit(task.id, "approved", Option.none())).pipe(
         Effect.provide(layerFor(world)),
       ),
     );
@@ -2787,7 +2789,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     const world = new World(item(id, "open", []));
     const exitNamed = (name: string) =>
       Effect.runPromise(
-        Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
+        Dispatcher.use((dispatcher) => dispatcher.exit(id, name, Option.none())).pipe(
           Effect.provide(layerFor(world)),
         ),
       );
@@ -2869,7 +2871,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
       const world = new World(item(id, "open", []));
       const exitNamed = (name: string) =>
         Effect.runPromise(
-          Dispatcher.use((dispatcher) => dispatcher.exit(id, name)).pipe(
+          Dispatcher.use((dispatcher) => dispatcher.exit(id, name, Option.none())).pipe(
             Effect.provide(layerFor(world)),
           ),
         );
@@ -3349,7 +3351,7 @@ describe("foreman pipeline trace", () => {
           tip: `c${Number(branch.tip.slice(1)) + 1}`,
         });
       }
-      await run(Dispatcher.use((d) => d.exit(id, event.slice("exit:".length))));
+      await run(Dispatcher.use((d) => d.exit(id, event.slice("exit:".length), Option.none())));
     }
     if (event === "wall") world.screens.set(id, "Free usage limit reached. Connect a provider");
     world.workers.set(id, {

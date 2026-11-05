@@ -1,7 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Clock, Console, DateTime, Effect, Option, Schema } from "effect";
 import { durationOf, type Item, prose, RunRecord } from "tasks";
-import { RunSummary, summarizeRuns } from "./run-summary.ts";
+import { notesLines, RunSummary, summarizeRuns } from "./run-summary.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
@@ -164,6 +164,9 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
       yield* Console.log("");
       for (const line of runTable(history)) yield* Console.log(line);
       yield* Console.log(summaryLine(summary));
+      const notes = notesLines(history);
+      if (notes.length > 0) yield* Console.log("");
+      for (const line of notes) yield* Console.log(line);
     }
     for (const log of task.logs)
       yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);

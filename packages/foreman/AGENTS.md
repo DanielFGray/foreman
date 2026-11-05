@@ -691,11 +691,12 @@ behind, so no transition clears review state, and no path can forget to.
 **A review passes one commit.** The reviewer runs `foreman exit <task>
 approved|returned`, which reads the task's tip by its route and writes the exit
 and that commit to its run, and moves the status the exit implies, in one
-transaction. A second exit in the same run replaces the first. The exit holds
-only while the tip is still that commit, so any other commit after it voids it,
-and a correction round needs no special case: the reviewer names its exit after
-the round, on the new tip. For a local landing, foreman
-re-checks the checkout and the tip, merges the approved commit by its id, never
+transaction. The exit may carry notes, which are stored on the run and printed
+by `foreman show`. A second exit in the same run replaces the first, notes
+included. The exit holds only while the tip is still that commit, so any other
+commit after it voids it, and a correction round needs no special case:
+the reviewer names its exit after the round, on the new tip. For a local
+landing, foreman re-checks the checkout and the tip, merges the approved commit by its id, never
 the branch name, and only then completes the task. A pull-request landing
 merges with `--match-head-commit`, and the task completes when foreman reads
 the PR merged. A tip that moved since the

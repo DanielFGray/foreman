@@ -11,7 +11,7 @@ these steps:
 
 1. **Queue.** The task is ready in the task store.
 2. **Author.** An agent works in the task's worktree, commits, and names its exit.
-3. **Review.** An agent one rung up reads the diff and names its exit with `foreman exit <id> approved` or `foreman exit <id> returned`.
+3. **Review.** An agent one rung up reads the diff and names its exit with `foreman exit <id> approved` or `foreman exit <id> returned`, with its findings as the exit's notes (`foreman exit <id> returned -`, findings on stdin).
 4. **Land.** Foreman proves the merge in a scratch checkout, runs the project's verify command, merges, and marks the task done in its tracker. A pull-request landing opens a pull request instead, and merges it once its required checks pass.
 
 Every command below reads the world (the task store, herdr, git) once, does one thing,
@@ -32,6 +32,7 @@ Run `foreman <command> --help` for the options.
 | `foreman list -p <project> [--json]`                                                  | Prints every task of a project from its tracker, any status                                                      |
 | `foreman add "<title>" -p <project> [-l L]... [-d <text>\|-] [--dispatch [--rung R]]` | Files a task in the project's tracker and prints its id; `-d -` reads stdin; `--dispatch` also starts its author |
 | `foreman status [--json]`                                                             | Prints every row and the commands each takes; `--json` is the shape written to `state.json`                      |
+| `foreman exit <id> <exit> [notes\|-]`                                                 | Names the exit that ends the agent's run, with the notes the next agent reads in `foreman show`; `-` reads stdin |
 | `foreman dispatch <id> [--rung R]`                                                    | Starts a queued task's author now                                                                                |
 | `foreman wait <id> [--role R]`                                                        | Blocks until the task's agents (or one role) stop working, then prints its status                                |
 | `foreman wait --asks`                                                                 | Blocks until a new step waits for your approval, then prints its task and the approve command                    |

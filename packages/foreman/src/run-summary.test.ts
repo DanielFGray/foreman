@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import type { RunRecord } from "tasks";
-import { summarizeRuns } from "./run-summary.ts";
+import { notesLines, summarizeRuns } from "./run-summary.ts";
 
 const at = (iso: string) => Option.some(new Date(iso));
 
@@ -15,6 +15,7 @@ const run = (fields: Partial<RunRecord> & Pick<RunRecord, "id" | "work">): RunRe
   ending: Option.none(),
   outcome: Option.none(),
   rounds: Option.none(),
+  notes: Option.none(),
   startedAt: Option.none(),
   closedAt: Option.none(),
   costUsd: Option.none(),
@@ -118,5 +119,27 @@ describe("summarizeRuns", () => {
     expect(summary.authorRuns).toBe(2);
     expect(summary.returned).toBe(1);
     expect(summary.rounds).toEqual(Option.some(3));
+  });
+});
+
+describe("notesLines", () => {
+  test("a run with notes is headed by its id, work and exit, its notes indented beneath", () => {
+    expect(
+      notesLines([
+        run({ id: 1, work: "build", ending: Option.some("done") }),
+        run({
+          id: 2,
+          work: "review",
+          ending: Option.some("returned"),
+          notes: Option.some("no test\nthe new path is unread"),
+        }),
+      ]),
+    ).toEqual(["run 2 review returned:", "  no test", "  the new path is unread"]);
+  });
+
+  test("a run with no notes prints nothing", () => {
+    expect(notesLines([run({ id: 1, work: "review", ending: Option.some("approved") })])).toEqual(
+      [],
+    );
   });
 });

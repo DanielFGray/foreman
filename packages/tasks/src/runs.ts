@@ -138,6 +138,8 @@ export const ExitRecord = S.Struct({
   ending: S.String,
   /** The task's tip when the exit is named; absent when the task has no tip to read. */
   commit: S.OptionFromOptional(S.String),
+  /** What the agent wrote with its exit, such as a reviewer's findings. A second exit replaces it, so absent clears it. */
+  notes: S.OptionFromOptional(S.String),
 });
 export type ExitRecord = typeof ExitRecord.Type;
 export type ExitRecordInput = typeof ExitRecord.Encoded;
@@ -216,6 +218,8 @@ export const RunRecord = S.Struct({
   ending: S.OptionFromNullOr(S.String),
   outcome: S.OptionFromNullOr(Outcome),
   rounds: S.OptionFromNullOr(S.Int),
+  /** The notes the run's exit carried. */
+  notes: S.OptionFromNullOr(S.String),
   /** Absent for a run recorded before starts were kept. */
   startedAt: S.OptionFromNullOr(S.Date),
   /** Absent while the run is open. */
@@ -245,6 +249,7 @@ const RecordRow = S.Struct({
   ending: S.OptionFromNullOr(S.String),
   outcome: S.OptionFromNullOr(Outcome),
   rounds: S.OptionFromNullOr(S.Int),
+  notes: S.OptionFromNullOr(S.String),
   started_at: S.OptionFromNullOr(S.String),
   closed_at: S.OptionFromNullOr(S.String),
   actual_cost_usd: S.OptionFromNullOr(S.Finite),
@@ -386,17 +391,20 @@ export class Runs extends Context.Service<Runs>()("Runs", {
       });
 
     /**
-     * Writes the exit and its commit on the task's open agent run, and nothing
-     * else: the caller makes the status move, in the same transaction when it
-     * wants the two together. Fails when the task has no open agent run, since
-     * a closed run cannot change its exit, or when `ending` is no exit.
+     * Writes the exit, its commit and its notes on the task's open agent run,
+     * and nothing else: the caller makes the status move, in the same
+     * transaction when it wants the two together. The notes are replaced, not
+     * kept, so an exit without notes clears those of the exit it replaces.
+     * Fails when the task has no open agent run, since a closed run cannot
+     * change its exit, or when `ending` is no exit.
      */
     const writeExit = (task: string, exit: ExitRecord) =>
       Effect.gen(function* () {
         if (!isExit(exit.ending))
           return yield* new TaskError({ id: task, detail: `${exit.ending} is no exit` });
         const changed = yield* sql`UPDATE runs
-          SET ending = ${exit.ending}, "commit" = coalesce(${Option.getOrNull(exit.commit)}, "commit")
+          SET ending = ${exit.ending}, "commit" = coalesce(${Option.getOrNull(exit.commit)}, "commit"),
+            notes = ${Option.getOrNull(exit.notes)}
           WHERE id = (SELECT max(id) FROM runs WHERE task = ${task} AND closed_at IS NULL
                         AND work <> 'check')
           RETURNING id`;
@@ -457,7 +465,7 @@ export class Runs extends Context.Service<Runs>()("Runs", {
       });
 
     const RECORD_COLUMNS = sql.literal(`id, project, task, work, rung, model, node, "commit",
-      ending, outcome, rounds, started_at, closed_at, actual_cost_usd`);
+      ending, outcome, rounds, notes, started_at, closed_at, actual_cost_usd`);
 
     /** The history of these tasks' runs, oldest first. */
     const recordsOf = (ids: ReadonlyArray<string>) =>

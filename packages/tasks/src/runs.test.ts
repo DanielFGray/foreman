@@ -348,6 +348,25 @@ describe("naming an exit", () => {
     expect(runs).toEqual([["returned", "c2"]]);
   });
 
+  test("an exit's notes are stored, and a second exit without notes clears them", async () => {
+    const [withNotes, cleared] = await inRuns(
+      Effect.gen(function* () {
+        const runs = yield* Runs;
+        const tasks = yield* Tasks;
+        const id = yield* filed;
+        yield* tasks.send(id, "start");
+        yield* runs.openRun(run({ task: id, work: "review", node: "review" }));
+        yield* runs.recordExit(id, { ending: "returned", notes: "the new path has no test" });
+        const first = (yield* runs.recordsOf([id])).map((r) => Option.getOrUndefined(r.notes));
+        yield* runs.recordExit(id, { ending: "approved" });
+        const second = (yield* runs.recordsOf([id])).map((r) => Option.getOrUndefined(r.notes));
+        return [first, second];
+      }),
+    );
+    expect(withNotes).toEqual(["the new path has no test"]);
+    expect(cleared).toEqual([undefined]);
+  });
+
   test("is refused with no open run, or with a process ending's name, and moves nothing", async () => {
     const [none, process, status] = await inRuns(
       Effect.gen(function* () {

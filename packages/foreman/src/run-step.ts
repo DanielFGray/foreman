@@ -25,8 +25,16 @@ export type RunEvent =
    * reviewer this one replaces, so it ends `released`.
    */
   | { readonly _tag: "ReviewStarted"; readonly run: NewRunInput }
-  /** The agent of the open run names the exit with id `exit`, on the commit the task's tip is at. */
-  | { readonly _tag: "ExitNamed"; readonly exit: string; readonly commit: string | undefined }
+  /**
+   * The agent of the open run names the exit with id `exit`, on the commit the
+   * task's tip is at, with the notes it wrote for the next agent.
+   */
+  | {
+      readonly _tag: "ExitNamed";
+      readonly exit: string;
+      readonly commit: string | undefined;
+      readonly notes: Option.Option<string>;
+    }
   /**
    * The pane of an agent that named an exit is idle: its exit is charged and
    * its runs close, an author that named none at the task's tip.
@@ -95,7 +103,13 @@ export interface Row {
       }
     | undefined;
   /** Names the exit of the open agent run by its id, with the commit it is named on. */
-  readonly exit: { readonly ending: string; readonly commit: string | undefined } | undefined;
+  readonly exit:
+    | {
+        readonly ending: string;
+        readonly commit: string | undefined;
+        readonly notes: Option.Option<string>;
+      }
+    | undefined;
   /** A check run, written closed. */
   readonly check: CheckRun | undefined;
   /** The rungs charged with failing the task. */
@@ -290,7 +304,7 @@ const named = (
     (candidate) => candidate.id === event.exit,
   );
   return step({
-    exit: { ending: event.exit, commit: event.commit },
+    exit: { ending: event.exit, commit: event.commit, notes: event.notes },
     move: exit?.to === QUEUE ? "reopen" : undefined,
   });
 };

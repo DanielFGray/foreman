@@ -91,19 +91,19 @@ const fixed = (event: RunEvent) => (): RunEvent => event;
 const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
   "approved and landed": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     reviewOn("dear", "c1"),
-    fixed({ _tag: "ExitNamed", exit: "approved", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "approved", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     fixed({ _tag: "Landed" }),
   ],
   "returned with findings that fail the author": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     reviewOn("dear", "c1"),
-    fixed({ _tag: "ExitNamed", exit: "returned", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "returned", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "ReviewReturned" }),
     authorOn("dear"),
   ],
@@ -118,7 +118,7 @@ const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
   ],
   "a stalled reviewer with no reviewer left parks": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     reviewOn("dear", "c1"),
     fixed({ _tag: "Stalled", role: "review", who: "reviewer dear" }),
@@ -127,26 +127,26 @@ const scenarios: Record<string, ReadonlyArray<(id: string) => RunEvent>> = {
     authorOn("cheap"),
     fixed({ _tag: "Walled", role: "author" }),
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     reviewOn("dear", "c1"),
     fixed({ _tag: "Walled", role: "review" }),
   ],
   "checks pass, then fail back to the queue": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     (id) => checked(id, "passed", "c1"),
     (id) => checked(id, "failed", "c1"),
   ],
   "a requeued task closes its open run, and its exit stands": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "already-done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "already-done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "Requeued" }),
   ],
   "a landing that conflicts, breaks, and is climbed by hand": [
     authorOn("cheap"),
-    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1" }),
+    fixed({ _tag: "ExitNamed", exit: "done", commit: "c1", notes: Option.none() }),
     fixed({ _tag: "HandedOff", tip: "c1" }),
     fixed({ _tag: "Conflicted" }),
     authorOn("cheap"),
@@ -247,5 +247,27 @@ describe("applyRow agrees with the store", () => {
       "park",
       "reopen",
     ]);
+  });
+});
+
+describe("stepOf writes an exit's notes with the exit", () => {
+  test("the exit row carries the notes the event names, absent or not", () => {
+    const task = { id: "t", labels: [], runs: [], charges: [] };
+    const noted = stepOf(
+      task,
+      { _tag: "ExitNamed", exit: "returned", commit: "c1", notes: Option.some("no test") },
+      rules,
+    );
+    const bare = stepOf(
+      task,
+      { _tag: "ExitNamed", exit: "returned", commit: "c1", notes: Option.none() },
+      rules,
+    );
+    expect(noted.row.exit).toEqual({
+      ending: "returned",
+      commit: "c1",
+      notes: Option.some("no test"),
+    });
+    expect(bare.row.exit?.notes).toEqual(Option.none());
   });
 });

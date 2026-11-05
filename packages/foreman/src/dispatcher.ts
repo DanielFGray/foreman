@@ -3287,9 +3287,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
        * status move is the one the exit's wire implies: a return to the queue
        * reopens the task, and settle releases it; a wire to another block leaves
        * the status alone — the task stays `in_progress` and placement reads the
-       * step from the exit.
+       * step from the exit. The notes are stored on the run and replace any the
+       * run's earlier exit carried.
        */
-      exit: (id: string, name: string) =>
+      exit: (id: string, name: string, notes: Option.Option<string>) =>
         commanded(
           Effect.gen(function* () {
             const task = yield* records.show(id);
@@ -3311,7 +3312,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             }
             const project = yield* projectFor(task.project);
             const commit = project ? yield* tipOf(task, project) : undefined;
-            yield* record(task, { _tag: "ExitNamed", exit: exit.id, commit }, pipeline);
+            yield* record(task, { _tag: "ExitNamed", exit: exit.id, commit, notes }, pipeline);
             return { _tag: "Named", block: block.id, commit } as const;
           }),
         ),

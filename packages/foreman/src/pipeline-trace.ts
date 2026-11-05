@@ -338,7 +338,7 @@ const atAgent = <T extends Pretend>(
       : task.tip;
   const named = folded(
     { ...task, tip },
-    [{ _tag: "ExitNamed", exit: exit.id, commit: tip }],
+    [{ _tag: "ExitNamed", exit: exit.id, commit: tip, notes: Option.none() }],
     rules,
   );
   return handedOff(named, node, exit, rules);

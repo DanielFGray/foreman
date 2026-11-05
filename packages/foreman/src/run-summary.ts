@@ -63,3 +63,19 @@ export const summarizeRuns = (
     rounds: sumOf(authorRuns.flatMap((run) => Option.toArray(run.rounds))),
   };
 };
+
+/**
+ * The notes `foreman show` prints under its run table: one block per run that
+ * carries notes, headed by the run and its exit, with each note line indented
+ * so a multi-line finding stays under its run.
+ */
+export const notesLines = (runs: ReadonlyArray<RunRecord>): ReadonlyArray<string> =>
+  runs.flatMap((run) =>
+    Option.match(run.notes, {
+      onNone: (): ReadonlyArray<string> => [],
+      onSome: (notes) => [
+        `run ${run.id} ${run.work} ${Option.getOrElse(run.ending, () => "-")}:`,
+        ...notes.split("\n").map((line) => `  ${line}`),
+      ],
+    }),
+  );

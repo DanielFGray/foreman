@@ -206,7 +206,12 @@ export class Records extends Context.Service<Records>()("Records", {
           `write ${task}`,
           Effect.gen(function* () {
             if (row.close !== undefined) yield* runs.closeOpenRuns(task, row.close);
-            if (row.exit !== undefined) yield* runs.recordExit(task, row.exit);
+            if (row.exit !== undefined)
+              yield* runs.recordExit(task, {
+                ending: row.exit.ending,
+                commit: row.exit.commit,
+                notes: Option.getOrUndefined(row.exit.notes),
+              });
             if (row.check !== undefined) yield* runs.recordCheck(row.check);
             for (const rung of row.charges) yield* runs.charge(task, rung);
             if (row.park !== undefined) yield* runs.park(task, row.park);

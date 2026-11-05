@@ -331,6 +331,7 @@ const exitsSection = (block: AgentNode, { task }: AgentRun): string => {
     ...block.exits.map((exit) => `- \`foreman exit ${task.id} ${exit.name}\`: ${whereTo(exit)}`),
     "",
     `Name exactly one exit; a second replaces the first. If you name none, the task ${block.stopped === "park" ? "parks" : "retries"}.`,
+    `Give the exit your notes for the next agent as a third argument: \`foreman exit ${task.id} <exit> -\` reads them from stdin. \`foreman show\` prints them, so a reviewer's findings go here.`,
     ...(claim === undefined
       ? []
       : [

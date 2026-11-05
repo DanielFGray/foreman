@@ -354,9 +354,21 @@ const exitName = Argument.String("exit").pipe(
   Argument.withDescription("The exit to name, one the block of the task's open run declares"),
 );
 
-const exit = Command.make("exit", { id, name: exitName }, (args) =>
+const exitNotes = Argument.String("notes").pipe(
+  Argument.withDescription(
+    "What the next agent should know, such as a reviewer's findings; - reads it from stdin",
+  ),
+  Argument.optional,
+);
+
+const exit = Command.make("exit", { id, name: exitName, notes: exitNotes }, (args) =>
   Effect.gen(function* () {
-    const named = yield* (yield* Dispatcher).exit(args.id, args.name);
+    const text = Option.isSome(args.notes) ? (yield* prose(args.notes.value)).trim() : "";
+    const named = yield* (yield* Dispatcher).exit(
+      args.id,
+      args.name,
+      text === "" ? Option.none() : Option.some(text),
+    );
     if (named._tag === "NoRun") {
       return yield* new Refused({ detail: `${args.id} has no open agent run to name an exit on` });
     }
