@@ -4,7 +4,8 @@
 //
 // The columns, in the order the view stacks them as rows:
 // - one per ladder level that holds an enabled rung, cheapest first, with its
-//   enabled rungs in rank order. A level of disabled rungs only has no column:
+//   enabled rungs in rank order. A level is labelled by its place, 1 up: the
+//   number the ladder stores only orders the levels, and has gaps. A level of disabled rungs only has no column:
 //   most stored levels hold one retired rung each.
 // - Reviewers.
 // - Available: every disabled rung, then every model that no rung and no
@@ -27,8 +28,8 @@ export const columnsOf = ({ rungs, models, reviewers }) => {
   const levels = [...new Set(rungs.filter((rung) => rung.enabled).map((rung) => rung.level))].sort((a, b) => a - b);
   const seated = new Set([...rungs, ...reviewers].map((seat) => seat.model));
   return [
-    ...levels.map((level) => ({
-      key: `level:${level}`, kind: "level", level, label: `Level ${level}`,
+    ...levels.map((level, index) => ({
+      key: `level:${level}`, kind: "level", level, label: `Level ${index + 1}`,
       cards: rungs.filter((rung) => rung.enabled && rung.level === level).map(rungCard),
     })),
     {

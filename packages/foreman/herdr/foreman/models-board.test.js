@@ -23,7 +23,7 @@ const drop = (key, zone) => dropsOf(card(key), columns, ladder).find((one) => JS
 test("a column per level with an enabled rung, then Reviewers, then Available", () => {
   expect(columns.map((column) => [column.label, column.cards.map((one) => one.name)])).toEqual([
     ["Level 1", ["a", "b"]],
-    ["Level 4", ["c"]],
+    ["Level 2", ["c"]],
     ["Reviewers", ["rev"]],
     ["Available", ["off", "free"]],
   ]);
