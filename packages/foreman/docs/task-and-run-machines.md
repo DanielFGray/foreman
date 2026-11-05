@@ -1,52 +1,34 @@
 # Task and run machines
 
-Status: partly built. Approved on 2026-11-02, then cut to what pays now: the
-tracker seam, one-transaction `Records` functions for the paired writes listed
-under Problem, and six statuses. The records beside the runs were built on
-ts-4e763a, because the pipeline tracer needs them. The joint table is built
-as a pure step (`src/run-step.ts`), and `foreman pipeline trace` folds the
-same rows over a pretend task (`src/pipeline-trace.ts`). The run machine and
-the in-memory test world wait until the hand-written rules cause a failure.
+A task has two kinds of state. Its status is a machine in the tracker. Its runs
+are foreman's records. This page says what each one is, and how one dispatcher
+event changes both.
 
-## Problem
+## Why one row per event
 
 A task's status has a machine: `TASK_MACHINE` in `packages/tasks/src/item.ts`
-lists every move, and the store refuses any other. A run has none. Its moves
-are SQL spread over `packages/tasks/src/runs.ts` (`closeRun` keeps a named
-exit, `landAuthorRun` sets the outcome, `deleteOpenRunOf` removes the row),
-and its ending is a plain string.
+lists every move, and the store refuses any other. The runs have no machine.
+Their moves are SQL in `packages/tasks/src/runs.ts` (`closeRun` keeps a named
+exit, `landAuthorRun` sets the outcome, `deleteOpenRunOf` removes the row), and
+a run's ending is a plain string.
 
-Foreman pairs the two by hand. Each composite in `Records` (`release`,
-`abandon`, `complete`, `nameExit`) holds one row of a transition table for
-both machines. The dispatcher holds more rows as separate writes with
-hand-written undo:
-
-- `tracker.claim`, then `records.attribute`, with `release` in `tapError`
-  (`dispatcher.ts`, dispatch). A crash between them leaves a claimed task with
-  no author run.
-- `endRuns(stopped)`, then `release`; `endReview(stopped)`, then `release`:
-  two transactions each.
-- `if (task.status !== "open") release` in five places, because
-  `TASK_MACHINE` refuses `open` from `open`.
-- The exit's status move, an inline conditional with a guard on the status.
-
-The integration test's fake world copies all of this a second time, without
-the guards, so a move the store refuses passes in the tests.
+A dispatcher event changes both kinds of state. Foreman writes the effect of
+each event as one **joint row**: the tracker move and the run writes that go
+together. `Records` runs a row in one transaction. So the two kinds of state
+change together, or not at all.
 
 ## Terms
 
-- **Run machine**: the states a run row can be in, and the moves between
-  them. Written as a `Machine` (`packages/tasks/src/machine.ts`), as the task
-  machine is.
-- **Joint table**: one row per foreman event, giving the tracker move and the
-  run moves that go together. `Records` runs a row in one transaction.
 - **Tracker move**: a `Tracker` method that changes a task's status (`claim`,
   `reopen`, `complete`).
+- **Joint row**: the tracker move and the run writes that one event makes.
+  `stepOf` decides it.
+- **Joint table**: the rows for every event, in `src/run-step.ts`.
 
 ## Six statuses
 
-From ts-881e9e. `reviewing` goes; a task under review is `in_progress`, and
-its step is the name of the block placement puts it at.
+`reviewing` is not a status. A task under review is `in_progress`, and its step
+is the name of the block that placement puts it at.
 
 ```mermaid
 stateDiagram-v2
@@ -73,18 +55,13 @@ stateDiagram-v2
   in_progress --> canceled: cancel
 ```
 
-The `review` and `submit` events go. `start` also takes a done or canceled
-task back to work, which is what foreman does with an unread branch on it.
-A person can do the same with `tasks start`. The step shows only in foreman's
-views (the dashboard and `foreman show`): the `tasks` package does not read
-the drawing, and a task's runs already name the blocks it was at.
+`start` also takes a done or canceled task back to work. Foreman does this with
+an unread branch on it. A person does the same with `tasks start`. The step
+shows only in foreman's views (the dashboard and `foreman show`). The `tasks`
+package does not read the drawing. A task's runs already name the blocks it was
+at.
 
-## Run machine
-
-Not built: there is no `RUN_MACHINE` and no `stateOf`. The SQL in
-`packages/tasks/src/runs.ts` makes these moves, and `applyRow` in
-`src/run-step.ts` makes the same moves on runs held in memory. The rest of
-this section is the design.
+## Runs
 
 A run's state comes from its columns. There is no state column.
 
@@ -92,50 +69,31 @@ A run's state comes from its columns. There is no state column.
 |---|---|
 | open | `closed_at` empty, `ending` empty |
 | named | `closed_at` empty, `ending` holds an exit |
-| closed | `closed_at` set, outcome `handed-off` or `dropped` or empty |
+| closed | `closed_at` set, outcome `handed-off`, `dropped` or empty |
 | landed | `closed_at` set, outcome `committed` or `answered` |
 
-```mermaid
-stateDiagram-v2
-  [*] --> open: dispatch
-  [*] --> closed: check
-  open --> named: name
-  named --> named: name
-  open --> closed: close
-  named --> closed: close
-  open --> [*]: abandon
-  closed --> landed: land
-```
-
-- `stateOf(row)` reads the state, and each write in `runs.ts` checks its move
-  with `transition(RUN_MACHINE, stateOf(row), event)`. That replaces the
-  "not an open run" checks.
-- `close` writes the process ending it is given (`stopped`, `vanished`,
-  `walled`, `released`, `canceled`) only from `open`. From `named`, the exit
-  stands, with the commit it was named on.
-- `abandon` deletes the row: the agent never started. It is refused from
-  `named`, because an agent that named an exit started.
-- A check run is written `closed`; it has no agent.
-- A correction round changes `rounds`, which is data, not state.
-- A charge (from ts-4e763a) is a row in `charges`, not data on the run: an
-  operator's floor charges rungs that never ran.
+- A close writes a process ending (`stopped`, `vanished`, `walled`, `released`,
+  `canceled`). An exit that the run already named stands. The close does not
+  replace it.
+- An abandoned run is deleted. An agent that named an exit started, so the
+  delete never removes a named run.
+- A check run is written closed. It has no agent.
+- A correction round changes `rounds`. That is data, not state.
+- A charge is a row in `charges`, not data on the run. An operator's floor
+  charges rungs that never ran.
 
 ## Joint table
 
-Built in `src/run-step.ts`. The dispatcher observes an event and gives it to
-`stepOf`, with the task and the rules (the ladder, `attemptsPerLevel`, the
-task's drawing). `stepOf` returns one row. `Records.write` writes the row in
-one transaction, on the connection the tracker writes on. Then the dispatcher
-does its own I/O: logs, notices, git, stopping panes. `applyRow` makes the
-same writes on a task held in memory; `src/run-step.test.ts` proves that it
-agrees with the store. `foreman pipeline trace` folds `stepOf` and `applyRow`
-over a pretend task, and the integration tests check that it places the task
-where the dispatcher does after each event.
+`stepOf` in `src/run-step.ts` takes an event, the task, and the rules: the
+ladder, `attemptsPerLevel`, and the task's drawing. It returns one row.
+`Records.write` writes the row in one transaction, on the connection the tracker
+writes on. Then the dispatcher does its own I/O: logs, notices, git and stopping
+panes.
 
 A row writes in this order: complete, close, name the exit, record the check,
 charge, park, open, land, then claim or reopen. A charge records the task's
-newest run, so it follows the check run it is about and comes before the run
-the row opens.
+newest run. So a charge follows the check run it is about, and comes before the
+run the row opens.
 
 | Event | Tracker move | Author run | Review run | Charges, park | Opens |
 |---|---|---|---|---|---|
@@ -149,80 +107,55 @@ the row opens.
 | `Stalled`, block says `park` | reopen | close `stopped` | close `stopped` | park | |
 | `Stalled` reviewer, a reviewer is left | | | close `stopped` | | |
 | `Stalled` reviewer, none left | reopen | close `released` | close `stopped` | park | |
-| `Stalled` author, `Stopped` | reopen | close `stopped` or `vanished` | close `released` | climb if the stop spends the rung | |
+| `Stopped`, block says `retry` | reopen | close `stopped` or `vanished` | close `released` | climb if the stop spends the rung | |
 | `Walled` author | reopen | close `walled` | close `released` | | |
 | `Walled` reviewer | | | close `walled` | | |
 | `Checked`, passed | | | | | check, written closed |
 | `Checked`, failed | reopen if `failed` goes to `queue` | close `released` if it reopens | close `released` if it reopens | the `failed` exit's `fails` | check, written closed |
-| `Landed` | complete | close `released`, then land | close `released` | | |
+| `Landed` | complete | close `released`, then land (`answered` for a `research` task) | close `released` | | |
 | `Conflicted` | reopen | close `released` | close `released` | | |
+| `Withdrawn` | reopen | close `released` | close `released` | | |
 | `Broke` | reopen | close `released` | close `released` | climb | |
 | `Climbed` | | | | climb | |
 
-- **An exit stands.** A close writes its ending only on a run with no exit.
-  An author run that named an exit keeps the commit it named it on.
-- **Charges.** `fails: author` is a climb: it charges the rung of the task's
-  last author run. `fails: self` charges the rung of the author block that named
-  the exit; a check and a reviewer have no rung, so the drawing check refuses it
-  there.
+- **An exit stands.** A close writes its ending only on a run with no exit. An
+  author run that named an exit keeps the commit it named.
+- **Charges.** `fails: author` is a climb. It charges the rung of the task's last
+  author run. `fails: self` charges the rung of the author block that named the
+  exit. A check and a reviewer have no rung, so the drawing check refuses
+  `fails: self` there.
 - **Skip rule.** `Records` skips a tracker move to the status the task already
   has.
 - **Exit moves come from the drawing.** The exit's wire decides whether naming
   it reopens the task.
-- **Not in the table.** The operator's own moves (release, kill, unassign,
-  descend, the floor, adopt, diagnose), the tidy passes, a park block, a block
-  with no rung left, settle's close of a task completed or canceled by hand,
-  abandoning a run that never started, and correction rounds still call
-  `Records` methods directly. Each is one write, or a move the tracer does not
-  make.
 
-## Records beside the runs
+**Not in the table.** These paths make one write, or a move the tracer does not
+make. They call `Records` methods directly: the operator's own moves (release,
+kill, unassign, descend, the floor, adopt, diagnose), the tidy passes, a park
+block, a block with no rung left, settle's close of a task completed or canceled
+by hand, abandoning a run that never started, and correction rounds.
 
-From the State section of `docs/agent-exits.md` (ts-4e763a). Labels stop
-carrying foreman's state:
+## Tracing
 
-Built on ts-4e763a; `docs/agent-exits.md`, State, has the table. `Records`
-writes `charges` (`markFailure`, `clearFailure`) and `parks` (`park`,
-`unpark`); attempts and walls are read from the runs. The tracker carries only
-task state, the operator's own labels (`size:N`, `research`) and
-`diagnosing:<intent>`.
+`foreman pipeline trace` folds `stepOf` and `applyRow` over a pretend task. It
+prints the placement after each event. `applyRow` in `src/run-step.ts` applies a
+row to a task held in memory. The integration tests check that the trace places
+the task where the dispatcher does after each event.
 
 ## Tests
 
-Built in part: the fake world's `records.write` applies each row with
-`applyRow`, so it holds no copy of the joint table. Its other `Records`
-methods are still written by hand. The plan:
+The fake world in `src/dispatcher.integration.test.ts` applies each row with
+`records.write` and `applyRow`. So it holds no copy of the joint table.
 
-The integration tests run the real `Records` and `TasksTracker` over an
-in-memory SQLite store, so no fake copies either machine. The fake world keeps
-only the fleet, the repository and the clock.
+## Records beside the runs
 
-## Build order
+Foreman's records are in the same SQLite store as the runs, keyed by task id:
 
-One branch, in this order. Each step passes the gate (tests, typecheck, lint,
-project verify, place-diff identical) before the next one starts.
+- `charges`: one row each time a rung is charged with failing a task. `run` is
+  the newest run on the task at that time. `forgiven_at` is set when the
+  operator takes the charge back.
+- `parks`: one row per task parked for the operator. The row goes when the
+  operator acts.
 
-1. Tracker seam: `Tracker` and `Records` (done, not committed).
-2. Six statuses in the tasks package: the machine, a migration from
-   `reviewing` to `in_progress`, and `tasks review` removed.
-3. Run machine in the tasks package: `RUN_MACHINE`, `stateOf`, checked
-   writes, and the `charged` column.
-4. Joint table; the dispatcher's paired writes become rows (built as
-   `src/run-step.ts` and `Records.write`).
-5. `parks` and `forgiven` tables, and the label migration.
-6. Integration tests on the in-memory store; the fake records go.
-
-## Rules this replaces
-
-- `docs/agent-exits.md`, "What is built", Status bullet: "an author's exit puts
-  it in `reviewing`". Replaced by the six statuses.
-- `docs/agent-exits.md`, Changes, "The store": "`tasks verdict` and `tasks
-  review` stay for people who use `tasks` without foreman". Conflicts with
-  ts-881e9e, which removes `tasks review`. ts-881e9e wins (operator decision
-  2026-11-02).
-- `docs/agent-exits.md`, open question 2: answered by the six statuses.
-- `packages/foreman/AGENTS.md`, "The review gate": "`reviewing` is a status
-  anything can set", and "The task stays in `reviewing`". Replaced by the six
-  statuses.
-- `docs/runs-replace-labels.md` and `docs/pipeline-engine.md`: rules on what
-  `Prog.release` clears. Replaced by the joint table's `release` row.
+Labels carry no foreman state. The tracker holds task state, the operator's own
+labels (`size:N`, `research`) and `diagnosing:<intent>`.

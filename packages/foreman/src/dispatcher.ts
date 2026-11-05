@@ -2808,7 +2808,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     /**
      * The `noBranch` holds a project's landing targets put on it: a branch
      * its lands name that git does not have, and a target a route in the
-     * checkout lands on that the checkout does not have out (rule 7 of
+     * checkout lands on that the checkout does not have out (rule 6 of
      * docs/workspace-blocks.md). Both hold dispatch and landing alike, and
      * both clear the tick the operator makes or checks out the branch. A
      * checkout with no branch out, or a task's, is held by `isFree` already.

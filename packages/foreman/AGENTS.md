@@ -1109,10 +1109,11 @@ not to have been earned.
   deleting a concept, not adding one. Report a blocker instead.
 - Use `tasks` for task tracking.
 - Bun, not node. Effect-TS throughout.
-- Edit only this repository. When a sweep reaches another project, list those
-  files and file the work with `tasks -p <project> add`.
-- **A gap in hc or herdr-app is a task in that project's tracker, not a
-  workaround here.** Foreman is their heaviest user, so it finds the missing
-  capabilities first, and the cost of each is a shim here encoding what hc
-  should have told us. File the capability rather than the symptom, and say in
-  the foreman task that it is blocked on it.
+- Edit only this repository. When a sweep reaches another project the operator
+  owns, list those files and file the work with `tasks -p <project> add`. A
+  project the operator does not own gets no task of its own.
+- **A gap in hc or herdr-app is a foreman task, not a workaround here.**
+  Foreman builds on them but does not own them, so file nothing in their
+  trackers. A workaround is a shim here that encodes what hc should have told
+  us. Record the missing capability, not the symptom, in a foreman task, and
+  mark the foreman work that waits on it as blocked by that task.
