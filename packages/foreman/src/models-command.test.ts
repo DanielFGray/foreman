@@ -9,9 +9,7 @@ import { reviewersCommand } from "./reviewers-command.ts";
 import { withStore } from "./scratch-store.ts";
 
 const models = (...args: ReadonlyArray<string>) =>
-  Command.runWith(modelsCommand, { version: "test" })(args).pipe(
-    Effect.provide(BunServices.layer),
-  );
+  Command.runWith(modelsCommand, { version: "test" })(args).pipe(Effect.provide(BunServices.layer));
 const ladder = (...args: ReadonlyArray<string>) =>
   Command.runWith(ladderCommand, { version: "test" })(args).pipe(Effect.provide(BunServices.layer));
 const reviewers = (...args: ReadonlyArray<string>) =>
@@ -50,9 +48,7 @@ describe("foreman models add", () => {
         expect((yield* readLadder).map((rung) => rung.name)).toEqual(["cheap"]);
 
         yield* reviewers("add", "opencode/deepseek-v4-pro");
-        expect((yield* readReviewers).map((one) => one.name)).toEqual([
-          "opencode/deepseek-v4-pro",
-        ]);
+        expect((yield* readReviewers).map((one) => one.name)).toEqual(["opencode/deepseek-v4-pro"]);
       }),
     ));
 
@@ -80,10 +76,7 @@ describe("foreman models add", () => {
           "--pool",
           "Shared",
         );
-        expect((yield* readModels).map((one) => one.model)).toEqual([
-          "opencode/a",
-          "opencode/b",
-        ]);
+        expect((yield* readModels).map((one) => one.model)).toEqual(["opencode/a", "opencode/b"]);
         const taken = yield* Effect.flip(
           models(
             "add",

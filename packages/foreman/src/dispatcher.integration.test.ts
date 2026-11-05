@@ -2691,10 +2691,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
               testRung("mid", { level: 1, model: "b/mid" }),
               testRung("high", { level: 2, model: "c/high" }),
             ],
-            [
-              testReviewer("mid", { model: "b/mid" }),
-              testReviewer("high", { model: "c/high" }),
-            ],
+            [testReviewer("mid", { model: "b/mid" }), testReviewer("high", { model: "c/high" })],
           ),
         ),
         Layer.succeed(Fleet, world.fleet),

@@ -515,22 +515,23 @@ describe("the policy gate on dispatch", () => {
   });
 
   test("a check takes no slot and runs once its gate permits it", () => {
-    const checked = STANDARD_PIPELINES.worktree.nodes.flatMap((node): ReadonlyArray<PipelineNode> =>
-      node.kind === "agent" && node.id === "author"
-        ? [
-            { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
-            { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
-            {
-              kind: "check",
-              id: "lint",
-              command: "bun run lint",
-              exits: [
-                { id: "passed", name: "passed", to: "review-gate" },
-                { id: "failed", name: "failed", to: "queue", fails: "author" },
-              ],
-            },
-          ]
-        : [node],
+    const checked = STANDARD_PIPELINES.worktree.nodes.flatMap(
+      (node): ReadonlyArray<PipelineNode> =>
+        node.kind === "agent" && node.id === "author"
+          ? [
+              { ...node, exits: node.exits.map((exit) => ({ ...exit, to: "lint-gate" })) },
+              { kind: "gate", id: "lint-gate", step: "review", next: "lint" },
+              {
+                kind: "check",
+                id: "lint",
+                command: "bun run lint",
+                exits: [
+                  { id: "passed", name: "passed", to: "review-gate" },
+                  { id: "failed", name: "failed", to: "queue", fails: "author" },
+                ],
+              },
+            ]
+          : [node],
     );
     const handed = active(authoredOn(task("ts-c", []), "cheap", true), undefined);
     const planFor = (steps: Partial<Policy["default"]>) =>

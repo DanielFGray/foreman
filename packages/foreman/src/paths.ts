@@ -58,10 +58,7 @@ export class Paths extends Context.Service<
         ? path.join(configDirectory, "config.jsonc")
         : path.resolve(configured);
 
-    const pipelines = override(
-      "FOREMAN_PIPELINES",
-      path.join(configDirectory, "pipelines.json"),
-    );
+    const pipelines = override("FOREMAN_PIPELINES", path.join(configDirectory, "pipelines.json"));
     // Drafts sit beside the live pipelines file (named after it), so a custom
     // FOREMAN_PIPELINES keeps draft and live in one directory.
     const drafts = override("FOREMAN_DRAFTS", pipelines.replace(/(\.json)?$/, ".draft.json"));

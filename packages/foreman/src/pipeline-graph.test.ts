@@ -1,26 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
-import type { Item } from "tasks";
+import { Item } from "tasks";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { type GraphWorld, graphReport } from "./pipeline-graph.ts";
 import { DEFAULT_POLICY, grant } from "./policy.ts";
 
-const item = (id: string, over: Partial<Item> = {}): Item => ({
-  id,
-  title: `Task ${id}`,
-  project: "p",
-  type: "task",
-  status: "open",
-  priority: 2,
-  parent: Option.none(),
-  labels: [],
-  description: "",
-  definitionOfDone: Option.none(),
-  createdAt: new Date(0),
-  updatedAt: new Date(0),
-  lastActivityAt: new Date(0),
-  ...over,
-});
+const item = (id: string, over: Partial<Item> = {}): Item =>
+  Item.make({
+    id,
+    title: `Task ${id}`,
+    project: "p",
+    type: "task",
+    status: "open",
+    priority: 2,
+    parent: Option.none(),
+    labels: [],
+    description: "",
+    definitionOfDone: Option.none(),
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    lastActivityAt: new Date(0),
+    ...over,
+  });
 
 const world = (over: Partial<GraphWorld>): GraphWorld => {
   const items = over.items ?? [];

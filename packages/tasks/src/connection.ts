@@ -38,7 +38,5 @@ export const storePath: Effect.Effect<string, Config.ConfigError, Path.Path> = E
  * gets that file. BunServices supplies Path and ConfigProvider for the read.
  */
 export const store = Layer.suspend(() =>
-  Layer.unwrap(
-    Effect.map(storePath, connectionAt).pipe(Effect.provide(BunServices.layer)),
-  ),
+  Layer.unwrap(Effect.map(storePath, connectionAt).pipe(Effect.provide(BunServices.layer))),
 );

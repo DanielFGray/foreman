@@ -503,8 +503,7 @@ export const knownModels = Registry.use((registry) => registry.knownModels);
 export const readModels = Registry.use((registry) => registry.readModels);
 
 /** Adds a model, creating its pool when missing. */
-export const addModel = (entry: NewModel) =>
-  Registry.use((registry) => registry.addModel(entry));
+export const addModel = (entry: NewModel) => Registry.use((registry) => registry.addModel(entry));
 
 /** The reviewers, by name; a reviewer whose model is retired is left out. */
 export const readReviewers = Registry.use((registry) => registry.readReviewers);
