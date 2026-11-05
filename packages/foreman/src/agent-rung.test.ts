@@ -7,14 +7,46 @@ import type { Reviewer } from "./reviewers.ts";
 import { authorDone, authorRun, charged, reviewRun } from "./task-fixture.ts";
 
 const LADDER: Ladder = [
-  { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
-  { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
+  {
+    name: "cheap",
+    harness: "test",
+    level: 0,
+    model: undefined,
+    provider: undefined,
+    enabled: true,
+    author: true,
+    unmetered: false,
+  },
+  {
+    name: "dear",
+    harness: "test",
+    level: 1,
+    model: undefined,
+    provider: undefined,
+    enabled: true,
+    author: true,
+    unmetered: false,
+  },
 ];
 
 // "dear" is also a reviewer's name: a run's role says which list it is in.
 const REVIEWERS: ReadonlyArray<Reviewer> = [
-  { name: "dear", harness: "test", model: "m-dear", provider: "acct-a", thinking: "high" },
-  { name: "keen", harness: "test", model: "m-keen", provider: "acct-b", thinking: "high" },
+  {
+    name: "dear",
+    harness: "test",
+    model: "m-dear",
+    provider: "acct-a",
+    thinking: "high",
+    unmetered: false,
+  },
+  {
+    name: "keen",
+    harness: "test",
+    model: "m-keen",
+    provider: "acct-b",
+    thinking: "high",
+    unmetered: false,
+  },
 ];
 
 /** No seat walled for either role, or these for the given role. */
@@ -120,7 +152,16 @@ describe("the rung an agent block runs a task on", () => {
 describe("the seats a task may not take", () => {
   test("a walled run's account walls the seats of its own role's list", () => {
     const ladder: Ladder = [
-      { name: "dear", harness: "test", level: 0, model: undefined, provider: "acct-b" },
+      {
+        name: "dear",
+        harness: "test",
+        level: 0,
+        model: undefined,
+        provider: "acct-b",
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ];
     const seats = { ladder, reviewers: REVIEWERS };
     // The review run "dear" ran on acct-a, the reviewer's account, not the rung's.

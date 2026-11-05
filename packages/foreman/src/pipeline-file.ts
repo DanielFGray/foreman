@@ -6,7 +6,8 @@ import {
   problemsOf,
   type SeatOffers,
 } from "./pipeline.ts";
-import { configDirectory, type Read, rewrite } from "./shared-file.ts";
+import { pipelinesPath } from "./paths.ts";
+import { type Read, rewrite } from "./shared-file.ts";
 
 /**
  * The pipelines the operator drew, one per project, in a file of their own
@@ -23,9 +24,7 @@ export type Pipelines = typeof Pipelines.Type;
 export const PipelinesFile = S.Struct({ pipelines: Pipelines });
 export type PipelinesFile = typeof PipelinesFile.Type;
 
-/** Where the pipelines live: `$FOREMAN_PIPELINES`, else beside the policy. */
-export const pipelinesPath = (): string =>
-  process.env["FOREMAN_PIPELINES"] ?? `${configDirectory()}/pipelines.json`;
+export { pipelinesPath };
 
 /**
  * The pipelines as the file states them.

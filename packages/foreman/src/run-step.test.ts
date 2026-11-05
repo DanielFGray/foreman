@@ -17,11 +17,36 @@ process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy
 
 const rules: StepRules = {
   ladder: [
-    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
-    { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
+    {
+      name: "cheap",
+      harness: "test",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "dear",
+      harness: "test",
+      level: 1,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ],
   reviewers: [
-    { name: "dear", harness: "test", model: "m-dear", provider: undefined, thinking: "high" },
+    {
+      name: "dear",
+      harness: "test",
+      model: "m-dear",
+      provider: undefined,
+      thinking: "high",
+      unmetered: false,
+    },
   ],
   attemptsPerLevel: 2,
   pipeline: STANDARD_PIPELINES.worktree,

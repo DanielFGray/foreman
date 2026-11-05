@@ -15,7 +15,7 @@ import {
 import { Command } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { BunServices } from "@effect/platform-bun";
-import { configDirectory } from "./shared-file.ts";
+import { tokenPath } from "./paths.ts";
 
 /** Where foreman's Linear OAuth app talks to Linear, and where Linear sends the browser back. */
 export interface LinearOAuth {
@@ -52,7 +52,7 @@ export class LinearAuth extends Context.Service<
 
 const REFRESH_EARLY_MS = 30 * 60 * 1000;
 
-export const tokenPath = (): string => `${configDirectory()}/linear-token.json`;
+export { tokenPath };
 
 /** Builds the `token` effect over the token file, with its one lock. */
 export function linearAuth(oauth: LinearOAuth) {

@@ -3,8 +3,8 @@
 // check that names no command yet, so it never goes in the pipelines file,
 // which the dispatcher runs. Saving checks it and writes it there.
 import { Effect, FileSystem, Option, Schema as S } from "effect";
+import { draftsPath } from "./paths.ts";
 import { Pipeline } from "./pipeline.ts";
-import { pipelinesPath } from "./pipeline-file.ts";
 import { type Read, rewrite } from "./shared-file.ts";
 
 /**
@@ -22,8 +22,7 @@ export type Drafts = typeof Drafts.Type;
 export const DraftsFile = S.Struct({ drafts: Drafts });
 export type DraftsFile = typeof DraftsFile.Type;
 
-/** Where the drafts live: beside the pipelines file, named after it. */
-export const draftsPath = (): string => pipelinesPath().replace(/(\.json)?$/, ".draft.json");
+export { draftsPath };
 
 export const readDrafts = (path: string) =>
   readFile(path).pipe(Effect.map((read): Read<Drafts> => ({ ...read, value: read.value.drafts })));

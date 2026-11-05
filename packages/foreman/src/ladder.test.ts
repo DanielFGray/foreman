@@ -19,6 +19,9 @@ const rung = (name: string, extra: Partial<Ladder[number]> = {}): Ladder[number]
   model: undefined,
   provider: undefined,
   level: 0,
+  enabled: true,
+  author: true,
+  unmetered: false,
   ...extra,
 });
 

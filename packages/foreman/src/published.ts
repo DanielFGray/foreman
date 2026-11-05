@@ -350,11 +350,7 @@ export const publishedQueue = (
 export const commandName = (action: Action): string =>
   action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
-/** Where the dispatcher's host publishes, beside the log. */
-export const publishedPath = (): string => {
-  const stateHome = process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"] ?? ""}/.local/state`;
-  return process.env["FOREMAN_STATE"] ?? `${stateHome}/foreman/state.json`;
-};
+export { publishedPath } from "./paths.ts";
 
 /**
  * Replaces the published file whole.

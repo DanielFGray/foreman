@@ -33,7 +33,18 @@ const dispatchOf = (id: string, role: "author" | "review", rung: string, commit?
 
 /** One rung and no drawing: the rules the store tests below need. */
 const RULES: StepRules = {
-  ladder: [{ name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined }],
+  ladder: [
+    {
+      name: "cheap",
+      harness: "test",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+  ],
   reviewers: [],
   attemptsPerLevel: 2,
   pipeline: undefined,
@@ -107,6 +118,9 @@ describe("task attribution", () => {
       model: "opencode/gpt-5.6-sol",
       provider: undefined,
       level: 0,
+      enabled: true,
+      author: true,
+      unmetered: false,
     };
     expect(agentLog("author", rung, { kind: "opencode", model: "openai/gpt-5.6-sol" })).toBe(
       "foreman: author assigned to sol (openai/gpt-5.6-sol)",
@@ -120,6 +134,9 @@ describe("task attribution", () => {
       model: "opencode/claude-sonnet-5",
       provider: undefined,
       level: 0,
+      enabled: true,
+      author: true,
+      unmetered: false,
     };
     expect(agentLog("review", rung, { kind: "opencode", model: undefined })).toBe(
       "foreman: review assigned to sonnet (opencode/claude-sonnet-5)",
@@ -133,6 +150,9 @@ describe("task attribution", () => {
       level: 0,
       model: undefined,
       provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
     };
     expect(agentLog("author", rung, { kind: "claude", model: undefined })).toBe(
       "foreman: author assigned to claude (claude)",
@@ -207,9 +227,36 @@ describe("a stop at a level of peers", () => {
   /** Two peers at one level, under a level above. */
   const PEERS: StepRules = {
     ladder: [
-      { name: "one", harness: "test", level: 1, model: undefined, provider: undefined },
-      { name: "two", harness: "test", level: 1, model: undefined, provider: undefined },
-      { name: "high", harness: "test", level: 2, model: undefined, provider: undefined },
+      {
+        name: "one",
+        harness: "test",
+        level: 1,
+        model: undefined,
+        provider: undefined,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
+      {
+        name: "two",
+        harness: "test",
+        level: 1,
+        model: undefined,
+        provider: undefined,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
+      {
+        name: "high",
+        harness: "test",
+        level: 2,
+        model: undefined,
+        provider: undefined,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ],
     reviewers: [],
     attemptsPerLevel: 2,
@@ -398,12 +445,37 @@ describe("Records against a scratch store", () => {
 describe("usage walls", () => {
   const seats: Seats = {
     ladder: [
-      { name: "free", harness: "opencode", level: 0, model: "opencode/free", provider: undefined },
-      { name: "dear", harness: "claude", level: 1, model: undefined, provider: undefined },
+      {
+        name: "free",
+        harness: "opencode",
+        level: 0,
+        model: "opencode/free",
+        provider: undefined,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
+      {
+        name: "dear",
+        harness: "claude",
+        level: 1,
+        model: undefined,
+        provider: undefined,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ],
     // A reviewer with a rung's name, on an account of its own.
     reviewers: [
-      { name: "free", harness: "codex", model: "gpt-6.1-sol", provider: "openai", thinking: "low" },
+      {
+        name: "free",
+        harness: "codex",
+        model: "gpt-6.1-sol",
+        provider: "openai",
+        thinking: "low",
+        unmetered: false,
+      },
     ],
   };
 

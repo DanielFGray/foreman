@@ -8,12 +8,37 @@ import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
 
 const RULES = {
   ladder: [
-    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
-    { name: "dear", harness: "test", level: 1, model: undefined, provider: undefined },
+    {
+      name: "cheap",
+      harness: "test",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "dear",
+      harness: "test",
+      level: 1,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ] as Ladder,
   // The reviewer has the upper rung's name, so one sample name covers both roles.
   reviewers: [
-    { name: "dear", harness: "test", model: "m-dear", provider: undefined, thinking: "high" },
+    {
+      name: "dear",
+      harness: "test",
+      model: "m-dear",
+      provider: undefined,
+      thinking: "high",
+      unmetered: false,
+    },
   ],
   attemptsPerLevel: 2,
 };

@@ -5,7 +5,8 @@ import { connectionAt, store } from "tasks";
 import { join } from "node:path";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { Settings, settings } from "./config.ts";
+import { Settings, settingsLayer } from "./config.ts";
+import { Paths } from "./paths.ts";
 import { seed } from "./scratch-store.ts";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -16,7 +17,8 @@ const loadLadder = (db = process.env["TASKS_DB"]) =>
     return config.ladder;
   }).pipe(
     Effect.provide(
-      Layer.fresh(settings).pipe(
+      Layer.fresh(settingsLayer).pipe(
+        Layer.provide(Layer.fresh(Paths.layer)),
         Layer.provide(db === undefined ? Layer.fresh(store) : connectionAt(db)),
         Layer.provide(BunServices.layer),
       ),
@@ -73,7 +75,7 @@ describe("settings", () => {
     await scratchRegistry();
     const ladder = await loadLadder();
     expect(ladder.find((rung) => rung.name === "promo")?.unmetered).toBe(true);
-    expect(ladder.find((rung) => rung.name === "cheap")?.unmetered).toBeUndefined();
+    expect(ladder.find((rung) => rung.name === "cheap")?.unmetered).toBe(false);
   });
 
   test("refuses to start without a registry", async () => {

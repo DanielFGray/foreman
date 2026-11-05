@@ -58,7 +58,7 @@ export interface Seat {
 
   /**
    * Whether the account's allowance says nothing about this entry's room.
-   * Absent means the allowance describes it.
+   * False means the allowance describes it.
    *
    * A model served on promotional access — a launch give-away, a partner's
    * sponsored endpoint — draws on a pool that is not the one the account's
@@ -72,7 +72,7 @@ export interface Seat {
    * meets the wall itself, which is where the fleet stood before any of this was
    * read at all.
    */
-  readonly unmetered?: boolean | undefined;
+  readonly unmetered: boolean;
 
   /**
    * How hard the model thinks, such as `low` or `medium`. Each rung and each
@@ -93,38 +93,34 @@ export interface Rung extends Seat {
   readonly level: number;
 
   /**
-   * Whether foreman may dispatch this rung. Absent means yes.
+   * Whether foreman may dispatch this rung.
    *
    * A retired model stays in the ladder, disabled, so it keeps its level: the
    * failures it recorded still say "cheaper than the level above was not
    * enough", which is the whole of what a rung means. Deleting the entry
    * instead says the model is no longer part of the rating at all, and the
    * failures naming it stop positioning anything.
-   *
-   * Optional because retiring a rung is the exception. A rung is written to be
-   * used, so only the config that takes one out of service says anything about
-   * this at all.
    */
-  readonly enabled?: boolean | undefined;
+  readonly enabled: boolean;
 
   /**
-   * Whether this rung may author. Absent means yes.
+   * Whether this rung may author.
    *
    * Independent of `enabled`: a model that must never write keeps `author:
    * false` without being retired. The `ladder` model rule and a pin to this
    * rung both require it on.
    */
-  readonly author?: boolean | undefined;
+  readonly author: boolean;
 }
 
-/** Whether foreman may dispatch a rung: everything but an explicit retirement. */
-export const isEnabled = (rung: Rung): boolean => rung.enabled !== false;
+/** Whether foreman may dispatch a rung: everything but a retirement. */
+export const isEnabled = (rung: Rung): boolean => rung.enabled;
 
 /** Whether this rung may take an author block (`ladder` or a pin). */
-export const mayAuthor = (rung: Rung): boolean => rung.author !== false;
+export const mayAuthor = (rung: Rung): boolean => rung.author;
 
 /** Whether this entry's room is described by the allowance of its account. */
-export const isMetered = (seat: Seat): boolean => seat.unmetered !== true;
+export const isMetered = (seat: Seat): boolean => !seat.unmetered;
 
 /**
  * Which rung authors next, and why there is none when there is none.

@@ -63,14 +63,14 @@ const CandidateRow = S.Struct({
   level: S.Number,
   rung: S.String,
   model: S.String,
-  enabled: S.Number,
+  enabled: S.BooleanFromBit,
   rung_provider: S.NullOr(S.String),
   pool: S.String,
   models_dev: S.NullOr(S.String),
-  retired: S.Number,
+  retired: S.BooleanFromBit,
   harness: S.String,
-  unmetered: S.Number,
-  author: S.Int,
+  unmetered: S.BooleanFromBit,
+  author: S.BooleanFromBit,
 });
 
 const RunTokenRow = S.Struct({
@@ -246,8 +246,9 @@ export const readCandidates: Effect.Effect<
       level: row.level,
       model: row.model,
       provider: row.rung_provider ?? undefined,
-      enabled: row.enabled !== 0,
-      unmetered: row.unmetered !== 0 ? true : undefined,
+      enabled: row.enabled,
+      author: row.author,
+      unmetered: row.unmetered,
     };
     return {
       rung: row.rung,
@@ -257,9 +258,9 @@ export const readCandidates: Effect.Effect<
       rank: row.rank,
       level: row.level,
       modelsDev: Option.fromNullishOr(row.models_dev),
-      enabled: row.enabled !== 0,
-      author: row.author !== 0,
-      retired: row.retired !== 0,
+      enabled: row.enabled,
+      author: row.author,
+      retired: row.retired,
       unmetered: !isMetered(rung),
     };
   });

@@ -153,6 +153,9 @@ describe("queueFrom", () => {
     model: undefined,
     provider: undefined,
     level: 0,
+    enabled: true,
+    author: true,
+    unmetered: false,
   });
   const ladder: Ladder = [rung("cheap"), { ...rung("top"), level: 1 }];
   const reading = (ready: ReadonlyArray<Item>, failed: ReadonlyArray<string> = []) => ({

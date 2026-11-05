@@ -1,8 +1,8 @@
-import { BunServices } from "@effect/platform-bun";
-import { Context, Effect, Layer, Path, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
-import { readLadder, readReviewers, RegistryError } from "./registry.ts";
+import { Paths, PathsError } from "./paths.ts";
+import { Registry, RegistryError } from "./registry.ts";
 import type { Reviewer } from "./reviewers.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
@@ -18,25 +18,10 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * The projects are not configured: they are the operator's open spaces, read
  * every tick (`src/projects.ts`).
  */
-export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> = Layer.effect(
-  Settings,
+const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths | Registry> =
   Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const home = yield* Effect.sync(() => process.env["HOME"] ?? "");
-
-    // A FOREMAN_CONFIG that is relative must be resolved against the working
-    // directory here: it is handed to a dynamic import() below, which treats
-    // a relative string as a module specifier and looks for it beside this
-    // file instead. Absolute paths pass through resolve unchanged.
-    const configured = process.env["FOREMAN_CONFIG"];
-    const file =
-      configured === undefined
-        ? path.join(
-            process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"),
-            "foreman",
-            "config.jsonc",
-          )
-        : path.resolve(configured);
+    const paths = yield* Paths;
+    const file = paths.configFile;
 
     // Imported rather than read and parsed: Bun's loader accepts comments and
     // trailing commas in .jsonc, so the config can explain itself without
@@ -56,9 +41,10 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
 
     // The ladder and the reviewers are the registry's, not the config file's:
     // one copy of each list, shared with the herd skill and the trial record.
+    const registry = yield* Registry;
     const { ladder, reviewers } = yield* Effect.all({
-      ladder: readLadder,
-      reviewers: readReviewers,
+      ladder: registry.readLadder,
+      reviewers: registry.readReviewers,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -109,7 +95,7 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       );
     }
 
-    return {
+    return Settings.of({
       ladder,
       reviewers,
       pollInterval: raw.pollSeconds,
@@ -121,9 +107,17 @@ export const settings: Layer.Layer<Settings, ConfigError, SqlClient.SqlClient> =
       stallGrace: raw.stallGraceMinutes,
       landedWindow: raw.landedWindowDays,
       attemptsPerLevel: raw.attemptsPerLevel,
-    } as const;
-  }),
-).pipe(Layer.provide(BunServices.layer));
+    });
+  });
+
+/** Settings over a `Paths` the caller provides, so tests can freshen paths. */
+export const settingsLayer = Layer.effect(Settings, loadSettings).pipe(
+  Layer.provide(Registry.layerSql),
+);
+
+/** Settings over the process config file and the shared registry. */
+export const settings: Layer.Layer<Settings, ConfigError | PathsError, SqlClient.SqlClient> =
+  settingsLayer.pipe(Layer.provide(Paths.layer));
 
 interface SettingsShape {
   readonly ladder: Ladder;

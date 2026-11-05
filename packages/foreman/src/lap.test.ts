@@ -205,7 +205,16 @@ describe("the readers against a scratch store", () => {
           id,
           stepOf({ id, labels: [], runs: [], charges: [] }, event, {
             ladder: [
-              { name: "low", harness: "test", level: 0, model: undefined, provider: undefined },
+              {
+                name: "low",
+                harness: "test",
+                level: 0,
+                model: undefined,
+                provider: undefined,
+                enabled: true,
+                author: true,
+                unmetered: false,
+              },
             ],
             reviewers: [],
             attemptsPerLevel: 2,

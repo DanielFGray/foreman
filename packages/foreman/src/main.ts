@@ -4,6 +4,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Cause, Console, Effect, FileSystem, Layer, Logger, Runtime } from "effect";
 import { Runs, store } from "tasks";
 import { settings, Settings } from "./config.ts";
+import { Registry } from "./registry.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
@@ -129,8 +130,8 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
   Command.withSubcommands([
     serveCommand,
     quotaCommand,
-    Command.provide(ladderCommand, Runs.layer),
-    Command.provide(reviewersCommand, store),
+    Command.provide(ladderCommand, Registry.layerSql.pipe(Layer.provideMerge(Runs.layer))),
+    Command.provide(reviewersCommand, Registry.layer),
     statsCommand,
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),
@@ -138,7 +139,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(listCommand, storeServices),
     policyCommand,
     linearCommand,
-    Command.provide(pipelineCommand(services), store),
+    Command.provide(pipelineCommand(services), Registry.layer),
     ...subcommands(services),
   ]),
 );

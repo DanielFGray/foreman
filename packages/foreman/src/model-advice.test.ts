@@ -36,7 +36,7 @@ import {
   rungsOn,
 } from "./ladder.ts";
 import { Quota, QuotaError, type Usage, walledSeats } from "./quota.ts";
-import { RegistryError } from "./registry.ts";
+import { Registry, RegistryError } from "./registry.ts";
 import { seed } from "./scratch-store.ts";
 import { connectionAt, Runs } from "tasks";
 import { SqlClient } from "effect/sql";
@@ -315,10 +315,39 @@ describe("ladder suggest picks as dispatch does", () => {
       level: 1,
       model: "acct-a/m0",
       author: false,
+      enabled: true,
+      unmetered: false,
     },
-    { name: "peer-a", harness: "pi", provider: undefined, level: 1, model: "acct-a/m1" },
-    { name: "peer-b", harness: "pi", provider: undefined, level: 1, model: "acct-a/m2" },
-    { name: "spent", harness: "pi", provider: undefined, level: 2, model: "spent-acct/m3" },
+    {
+      name: "peer-a",
+      harness: "pi",
+      provider: undefined,
+      level: 1,
+      model: "acct-a/m1",
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "peer-b",
+      harness: "pi",
+      provider: undefined,
+      level: 1,
+      model: "acct-a/m2",
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "spent",
+      harness: "pi",
+      provider: undefined,
+      level: 2,
+      model: "spent-acct/m3",
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
     {
       name: "promo",
       harness: "pi",
@@ -326,8 +355,19 @@ describe("ladder suggest picks as dispatch does", () => {
       level: 3,
       model: "spent-acct/m4",
       unmetered: true,
+      enabled: true,
+      author: true,
     },
-    { name: "top", harness: "pi", provider: undefined, level: 4, model: "spent-acct/m5" },
+    {
+      name: "top",
+      harness: "pi",
+      provider: undefined,
+      level: 4,
+      model: "spent-acct/m5",
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ];
   const readings = new Map([
     ["acct-a", usage("acct-a", 10)],
@@ -379,8 +419,19 @@ describe("advise unmetered applicability", () => {
         model: "opencode-go/ox-alpha-free",
         unmetered: true,
         provider: undefined,
+        enabled: true,
+        author: true,
       },
-      { name: "metered", harness: "codex", level: 2, model: "gpt-6-luna", provider: "openai" },
+      {
+        name: "metered",
+        harness: "codex",
+        level: 2,
+        model: "gpt-6-luna",
+        provider: "openai",
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ];
     const report = suggested(
       ladder,
@@ -399,8 +450,26 @@ describe("advise unmetered applicability", () => {
 
   test("escalation floor after a rung excludes lower levels", () => {
     const ladder: Ladder = [
-      { name: "a", harness: "codex", level: 1, model: "m1", provider: "openai" },
-      { name: "b", harness: "codex", level: 2, model: "m2", provider: "openai" },
+      {
+        name: "a",
+        harness: "codex",
+        level: 1,
+        model: "m1",
+        provider: "openai",
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
+      {
+        name: "b",
+        harness: "codex",
+        level: 2,
+        model: "m2",
+        provider: "openai",
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ];
     const report = suggested(ladder, ["a"], new Map([["openai", usage("openai", 10)]]), new Map());
     expect(report.candidates.find((c) => c.rung === "a")?.eligibility).toBe("below-floor");
@@ -650,7 +719,7 @@ describe("runSuggest I/O boundary", () => {
     const dir = scratchDir();
     const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    const storeLayer = Runs.layerAt(registry);
+    const storeLayer = Registry.layerSql.pipe(Layer.provideMerge(Runs.layerAt(registry)));
 
     const room = (provider: string, used: number): Usage => ({
       provider,
@@ -714,7 +783,7 @@ describe("runSuggest I/O boundary", () => {
     const dir = scratchDir();
     const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    const storeLayer = Runs.layerAt(registry);
+    const storeLayer = Registry.layerSql.pipe(Layer.provideMerge(Runs.layerAt(registry)));
 
     const text = await Effect.runPromise(
       runSuggest({
@@ -827,7 +896,7 @@ describe("runSuggest I/O boundary", () => {
         },
       }),
     );
-    const storeLayer = Runs.layerAt(registry);
+    const storeLayer = Registry.layerSql.pipe(Layer.provideMerge(Runs.layerAt(registry)));
 
     // `--after promo` puts the floor above level 1, so codex-luna is the pick,
     // with room on openai.

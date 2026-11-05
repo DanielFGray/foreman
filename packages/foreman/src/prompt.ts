@@ -13,8 +13,8 @@ import {
   QUEUE,
   type Workspace,
 } from "./pipeline.ts";
+import { Paths } from "./paths.ts";
 import type { DiagnosticIntent, Item } from "./records.ts";
-import { configDirectory } from "./shared-file.ts";
 
 /**
  * The messages workers receive.
@@ -35,8 +35,9 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
   make: Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const paths = yield* Paths;
     const packaged = path.join(import.meta.dir, "..", "prompts");
-    const own = () => path.join(configDirectory(), "prompts");
+    const own = () => path.join(paths.configDirectory, "prompts");
 
     /**
      * The text of instructions `name`, or `undefined` when no directory has
@@ -168,7 +169,10 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
     } as const;
   }),
 }) {
-  static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
+  static readonly Default = Layer.effect(this, this.make).pipe(
+    Layer.provide(Paths.layer),
+    Layer.provide(BunServices.layer),
+  );
 }
 
 /**

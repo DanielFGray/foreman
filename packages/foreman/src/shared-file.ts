@@ -61,6 +61,4 @@ export class RewriteError extends S.TaggedError<RewriteError>()("RewriteError", 
   }
 }
 
-/** The directory foreman's operator files live in: beside the config. */
-export const configDirectory = (): string =>
-  `${process.env["XDG_CONFIG_HOME"] ?? `${process.env["HOME"] ?? ""}/.config`}/foreman`;
+export { configDirectory } from "./paths.ts";

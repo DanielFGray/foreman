@@ -33,7 +33,8 @@
  */
 import { Effect, FileSystem, Option, Schema as S } from "effect";
 import type { Item } from "./records.ts";
-import { configDirectory, rewrite } from "./shared-file.ts";
+import { policyPath } from "./paths.ts";
+import { rewrite } from "./shared-file.ts";
 
 export const STEPS = ["author", "climb", "review", "publish", "land"] as const;
 export type Step = (typeof STEPS)[number];
@@ -346,9 +347,7 @@ export const scopesOf = <E>(
 
 const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
 
-/** Where the policy lives: `$FOREMAN_POLICY`, else beside the config. */
-export const policyPath = (): string =>
-  process.env["FOREMAN_POLICY"] ?? `${configDirectory()}/policy.json`;
+export { policyPath };
 
 /**
  * The policy as the file states it.

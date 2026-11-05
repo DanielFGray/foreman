@@ -6,7 +6,16 @@ import { traceReport } from "./pipeline-trace.ts";
 
 const RULES = {
   ladder: [
-    { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
+    {
+      name: "cheap",
+      harness: "test",
+      level: 0,
+      model: undefined,
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ] as Ladder,
   reviewers: [],
   attemptsPerLevel: 2,

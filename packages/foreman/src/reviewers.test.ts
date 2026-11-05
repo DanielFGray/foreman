@@ -9,6 +9,7 @@ const reviewer = (name: string, model: string, provider?: string): Reviewer => (
   model,
   provider,
   thinking: "high",
+  unmetered: false,
 });
 
 const opus = reviewer("opus", "opus", "anthropic");
@@ -16,13 +17,25 @@ const sol = reviewer("sol", "gpt-6.1-sol", "openai");
 const sonnet = reviewer("sonnet", "sonnet", "anthropic");
 const reviewers = [opus, sol, sonnet];
 
-const author = { name: "cheap", harness: "claude", model: "haiku", provider: undefined, level: 0 };
+const author = {
+  name: "cheap",
+  harness: "claude",
+  model: "haiku",
+  provider: undefined,
+  level: 0,
+  enabled: true,
+  author: true,
+  unmetered: false,
+};
 const opusAuthor = {
   name: "opus-low",
   harness: "claude",
   model: "opus",
   provider: undefined,
   level: 1,
+  enabled: true,
+  author: true,
+  unmetered: false,
 };
 
 describe("reviewerFor", () => {
@@ -102,7 +115,16 @@ describe("drawnBy", () => {
 
 describe("seatOf", () => {
   const ladder: Ladder = [
-    { name: "opus", harness: "claude", model: "opus", provider: undefined, level: 0 },
+    {
+      name: "opus",
+      harness: "claude",
+      model: "opus",
+      provider: undefined,
+      level: 0,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ];
 
   test("reads a review run's name in the reviewers, an author run's in the ladder", () => {
@@ -116,7 +138,16 @@ describe("seatOf", () => {
 describe("providersOf with reviewers", () => {
   test("names an account that only a reviewer spends", () => {
     const ladder: Ladder = [
-      { name: "opus", harness: "claude", model: "opus", provider: undefined, level: 0 },
+      {
+        name: "opus",
+        harness: "claude",
+        model: "opus",
+        provider: undefined,
+        level: 0,
+        enabled: true,
+        author: true,
+        unmetered: false,
+      },
     ];
     expect(providersOf(ladder, [sol])).toEqual(["claude", "openai"]);
   });

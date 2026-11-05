@@ -9,6 +9,7 @@ import { STANDARD_PIPELINES, standardOf, standardPipeline, WORKSPACE_CHOICES } f
 import { Dispatcher } from "./dispatcher.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { readPipelines } from "./pipeline-file.ts";
+import { Registry } from "./registry.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-pipeline-command-"));
@@ -41,11 +42,11 @@ await Effect.runPromise(
   `).pipe(Effect.provide(store.layer)),
 );
 
+const platform = Layer.merge(BunServices.layer, store.registry);
+
 const run = (...args: ReadonlyArray<string>) =>
   Effect.runPromise(
-    Command.runWith(pipelineCommand, { version: "test" })(args).pipe(
-      Effect.provide(Layer.merge(BunServices.layer, store.layer)),
-    ),
+    Command.runWith(pipelineCommand, { version: "test" })(args).pipe(Effect.provide(platform)),
   );
 
 /** The detail of the error a refused command fails with. */
@@ -54,7 +55,7 @@ const refusal = (...args: ReadonlyArray<string>) =>
     Command.runWith(pipelineCommand, { version: "test" })(args).pipe(
       Effect.flip,
       Effect.map((error) => ("detail" in error ? String(error.detail) : String(error))),
-      Effect.provide(Layer.merge(BunServices.layer, store.layer)),
+      Effect.provide(platform),
     ),
   );
 

@@ -1,5 +1,6 @@
-import { Array as Arr, Effect, Option, Order, Schema } from "effect";
+import { Array as Arr, Context, Effect, Layer, Option, Order, Schema } from "effect";
 import { SqlClient } from "effect/sql";
+import { store } from "tasks";
 import type { Ladder, Rung } from "./ladder.ts";
 import type { Reviewer } from "./reviewers.ts";
 
@@ -18,6 +19,10 @@ import type { Reviewer } from "./reviewers.ts";
  * part an operator reorders, enables and disables, and the reviewers, the list
  * a review block takes its reader from: a model may be a rung, a reviewer, both
  * or neither, and each rung and reviewer states its own thinking level.
+ *
+ * `Registry` is the service. The free effects below it (`readLadder`,
+ * `writeRows`, ...) are `Registry.use` over its members, for callers that
+ * want one read without naming the service.
  */
 
 export class RegistryError extends Schema.TaggedError<RegistryError>()("RegistryError", {
@@ -45,40 +50,6 @@ export interface LadderRow {
   readonly thinking: string | null;
 }
 
-/** The ladder, cheapest level first, with each rung's harness from its model. */
-export const readLadder = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rungs = yield* sql<{
-    rung: string;
-    level: number;
-    model: string;
-    enabled: number;
-    author: number;
-    provider: string | null;
-    unmetered: number;
-    harness: string;
-    thinking: string | null;
-  }>`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.provider, l.unmetered,
-            l.thinking, m.harness
-       FROM ladder l JOIN models m USING (model)
-      ORDER BY l.level, l.rank`;
-  const [bottom, ...rest] = rungs.map((row): Rung => ({
-    name: row.rung,
-    harness: row.harness,
-    level: row.level,
-    model: row.model,
-    provider: row.provider ?? undefined,
-    enabled: row.enabled !== 0,
-    author: row.author !== 0 ? undefined : false,
-    unmetered: row.unmetered !== 0 ? true : undefined,
-    thinking: row.thinking ?? undefined,
-  }));
-  if (bottom === undefined) {
-    return yield* new RegistryError({ detail: "the ladder table has no rungs" });
-  }
-  return [bottom, ...rest] as Ladder;
-}).pipe(Effect.mapError(registryError("reading the ladder")));
-
 /** One rung with the record the registry holds for its model. */
 export interface RungStatus {
   readonly rung: string;
@@ -95,88 +66,12 @@ export interface RungStatus {
   readonly avgRounds: number | null;
 }
 
-/** The ladder joined to `model_status`, for `foreman ladder` to print. */
-export const readStatus = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{
-    rung: string;
-    level: number;
-    harness: string;
-    model: string;
-    thinking: string | null;
-    enabled: number;
-    author: number;
-    retired: number;
-    status: string;
-    slices: number;
-    succeeded: number;
-    avg_rounds: number | null;
-  }>`SELECT l.rung, l.level, s.harness, s.model, l.thinking, l.enabled, l.author,
-            s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
-       FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`;
-  return rows.map((row): RungStatus => ({
-    rung: row.rung,
-    level: row.level,
-    harness: row.harness,
-    model: row.model,
-    thinking: row.thinking,
-    enabled: row.enabled !== 0,
-    state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
-    author: row.author !== 0,
-    slices: row.slices,
-    succeeded: row.succeeded,
-    avgRounds: row.avg_rounds,
-  }));
-}).pipe(Effect.mapError(registryError("reading the ladder's record")));
-
-/** Every model id the registry knows, for drift checks. */
-export const knownModels = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ model: string }>`SELECT model FROM models`;
-  return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
-}).pipe(Effect.mapError(registryError("reading the models")));
-
 /** One model with its harness, for a pane that draws the lists. */
 export interface ModelEntry {
   readonly model: string;
   readonly harness: string;
   readonly retired: boolean;
 }
-
-/** Every model the registry knows, by model id. */
-export const readModels = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{
-    model: string;
-    harness: string;
-    retired: number;
-  }>`SELECT model, harness, retired FROM models ORDER BY model`;
-  return rows.map((row): ModelEntry => ({ ...row, retired: row.retired !== 0 }));
-}).pipe(Effect.mapError(registryError("reading the models")));
-
-/**
- * The reviewers, by name. A reviewer whose model is retired is left out: it is
- * never dispatched, and a drawing pinned to it no longer runs.
- */
-export const readReviewers = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{
-    reviewer: string;
-    model: string;
-    thinking: string | null;
-    provider: string | null;
-    harness: string;
-  }>`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness
-       FROM reviewers r JOIN models m USING (model)
-      WHERE m.retired = 0 ORDER BY r.reviewer`;
-  return rows.map((row): Reviewer => ({
-    name: row.reviewer,
-    harness: row.harness,
-    model: row.model,
-    provider: row.provider ?? undefined,
-    thinking: row.thinking ?? undefined,
-  }));
-}).pipe(Effect.mapError(registryError("reading the reviewers")));
 
 /** A reviewer as `foreman reviewers add` states it. */
 export interface NewReviewer {
@@ -187,149 +82,6 @@ export interface NewReviewer {
   /** Derived from the model when absent (`providerOf`). */
   readonly provider: Option.Option<string>;
 }
-
-/** Adds a reviewer. Its model must have a row, and its name must be new. */
-export const addReviewer = (reviewer: NewReviewer) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const model = yield* sql<{ model: string }>`
-      SELECT model FROM models WHERE model = ${reviewer.model}`;
-    if (model.length === 0) {
-      return yield* new RegistryError({
-        detail: `model "${reviewer.model}" has no row in the models table`,
-      });
-    }
-    const taken = yield* sql<{ reviewer: string }>`
-      SELECT reviewer FROM reviewers WHERE reviewer = ${reviewer.name}`;
-    if (taken.length > 0) {
-      return yield* new RegistryError({ detail: `reviewer ${reviewer.name} is already listed` });
-    }
-    yield* sql`INSERT INTO reviewers (reviewer, model, thinking, provider)
-      VALUES (${reviewer.name}, ${reviewer.model},
-              ${Option.getOrNull(reviewer.thinking)},
-              ${Option.getOrNull(reviewer.provider)})`;
-  }).pipe(Effect.mapError(registryError("adding a reviewer")));
-
-/**
- * Sets the thinking level the reviewer named `name` starts at; none passes no
- * flag, so the harness's own default applies. Fails naming the reviewers there
- * are when there is no such reviewer.
- */
-export const setReviewerThinking = (name: string, thinking: Option.Option<string>) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const changed = yield* sql<{ reviewer: string }>`
-      UPDATE reviewers SET thinking = ${Option.getOrNull(thinking)}
-       WHERE reviewer = ${name} RETURNING reviewer`;
-    if (changed.length === 0) return yield* noReviewer(name);
-  }).pipe(Effect.mapError(registryError("setting a reviewer's thinking level")));
-
-/** Removes the reviewer named `name`, or fails naming the reviewers there are. */
-export const removeReviewer = (name: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const removed = yield* sql<{ reviewer: string }>`
-      DELETE FROM reviewers WHERE reviewer = ${name} RETURNING reviewer`;
-    if (removed.length === 0) return yield* noReviewer(name);
-  }).pipe(Effect.mapError(registryError("removing a reviewer")));
-
-/** The failure for a reviewer name that is not listed: it names the ones that are. */
-const noReviewer = (name: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const names = yield* sql<{ reviewer: string }>`
-      SELECT reviewer FROM reviewers ORDER BY reviewer`;
-    return yield* new RegistryError({
-      detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
-    });
-  });
-
-/** Landed slices, rounds and cost per success, by model and size. */
-export const sizeSummary = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  return (yield* sql<Record<string, unknown>>`
-    SELECT * FROM size_summary ORDER BY size, cost_per_success_usd`) as ReadonlyArray<
-    Record<string, unknown>
-  >;
-}).pipe(Effect.mapError(registryError("reading the size summary")));
-
-/** The ladder as editable rows, for `foreman ladder` and its editor. */
-export const readRows = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{
-    rung: string;
-    level: number;
-    model: string;
-    enabled: number;
-    author: number;
-    provider: string | null;
-    unmetered: number;
-    note: string | null;
-    thinking: string | null;
-  }>`SELECT rung, level, model, enabled, author, provider, unmetered, note, thinking
-       FROM ladder ORDER BY level, rank`;
-  return rows.map((row): LadderRow => ({
-    ...row,
-    enabled: row.enabled !== 0,
-    author: row.author !== 0,
-    unmetered: row.unmetered !== 0,
-  }));
-}).pipe(Effect.mapError(registryError("reading the ladder rows")));
-
-/**
- * Replaces the ladder with these rows, sorted by level; inside a level they
- * keep the order given.
- *
- * Rung names are the identity tasks record, so a rename is a different rung and
- * the tasks that recorded the old name stop positioning anything. Ranks are
- * rewritten from the sorted list, so the stored rank is the order of the rows
- * by (level, rank). Everything is validated before anything is written, and the write is one transaction, so a bad edit
- * leaves the ladder as it was.
- */
-export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const known = new Set(
-      (yield* sql<{ model: string }>`SELECT model FROM models`).map((row) => row.model),
-    );
-    const problems = [
-      ...(rows.length === 0 ? ["the ladder needs at least one rung"] : []),
-      ...rows.flatMap((row, index) =>
-        rows.findIndex((other) => other.rung === row.rung) !== index
-          ? [`rung "${row.rung}" appears twice`]
-          : [],
-      ),
-      ...rows
-        .filter((row) => !known.has(row.model))
-        .map(
-          (row) =>
-            `rung "${row.rung}" names model "${row.model}", which has no row in the models table`,
-        ),
-      ...rows
-        .filter((row) => !Number.isSafeInteger(row.level))
-        .map((row) => `rung "${row.rung}" has level ${row.level}, which is not an integer`),
-      ...(rows.some((row) => row.enabled) ? [] : ["every rung is disabled"]),
-    ];
-    if (problems.length > 0) return yield* new RegistryError({ detail: problems.join("; ") });
-
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`DELETE FROM ladder`;
-        yield* Effect.forEach(
-          Arr.sort(
-            rows,
-            Order.mapInput(Order.Number, (row: LadderRow) => row.level),
-          ),
-          (row, index) =>
-            sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, provider, unmetered, note, thinking)
-                VALUES (${index + 1}, ${row.level}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
-                        ${row.author ? 1 : 0},
-                        ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note}, ${row.thinking})`,
-          { discard: true },
-        );
-      }),
-    );
-  }).pipe(Effect.mapError(registryError("writing the ladder")));
 
 /**
  * Where a rung goes: in a level of its own just above or below a named rung's
@@ -343,35 +95,400 @@ export type RungPlace =
   | { readonly _tag: "Below"; readonly rung: string }
   | { readonly _tag: "Level"; readonly level: number };
 
+/** SQLite keeps a flag as 0 or 1; a row that holds anything else is a defect. */
+const EditableRow = Schema.Struct({
+  rung: Schema.String,
+  level: Schema.Int,
+  model: Schema.String,
+  enabled: Schema.BooleanFromBit,
+  author: Schema.BooleanFromBit,
+  provider: Schema.OptionFromNullOr(Schema.String),
+  unmetered: Schema.BooleanFromBit,
+  note: Schema.OptionFromNullOr(Schema.String),
+  thinking: Schema.OptionFromNullOr(Schema.String),
+});
+
+const RungRow = Schema.Struct({
+  rung: Schema.String,
+  level: Schema.Int,
+  model: Schema.String,
+  enabled: Schema.BooleanFromBit,
+  author: Schema.BooleanFromBit,
+  provider: Schema.OptionFromNullOr(Schema.String),
+  unmetered: Schema.BooleanFromBit,
+  harness: Schema.String,
+  thinking: Schema.OptionFromNullOr(Schema.String),
+});
+
+const StatusRow = Schema.Struct({
+  rung: Schema.String,
+  level: Schema.Int,
+  harness: Schema.String,
+  model: Schema.String,
+  thinking: Schema.OptionFromNullOr(Schema.String),
+  enabled: Schema.BooleanFromBit,
+  author: Schema.BooleanFromBit,
+  retired: Schema.BooleanFromBit,
+  status: Schema.String,
+  slices: Schema.Finite,
+  succeeded: Schema.Finite,
+  avg_rounds: Schema.OptionFromNullOr(Schema.Finite),
+});
+
+const ModelRow = Schema.Struct({
+  model: Schema.String,
+  harness: Schema.String,
+  retired: Schema.BooleanFromBit,
+});
+
+const ModelIdRow = Schema.Struct({ model: Schema.String });
+
+const ReviewerRow = Schema.Struct({
+  reviewer: Schema.String,
+  model: Schema.String,
+  thinking: Schema.OptionFromNullOr(Schema.String),
+  provider: Schema.OptionFromNullOr(Schema.String),
+  harness: Schema.String,
+});
+
+const ReviewerNameRow = Schema.Struct({ reviewer: Schema.String });
+
+/** The size summary view's columns are the view's to name, so its rows stay loose. */
+const SummaryRow = Schema.Record(Schema.String, Schema.Unknown);
+
+/** Decodes the rows a query answered; a row the schema refuses is a defect. */
+const rowsOf =
+  <A, I>(schema: Schema.Codec<A, I>) =>
+  (rows: ReadonlyArray<unknown>) =>
+    Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(Effect.orDie);
+
+export class Registry extends Context.Service<Registry>()("Registry", {
+  make: Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    /** The ladder, cheapest level first, with each rung's harness from its model. */
+    const readLadder = Effect.gen(function* () {
+      const rungs = yield* sql`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.provider,
+            l.unmetered, l.thinking, m.harness
+       FROM ladder l JOIN models m USING (model)
+      ORDER BY l.level, l.rank`.pipe(Effect.flatMap(rowsOf(RungRow)));
+      const [bottom, ...rest] = rungs.map((row): Rung => ({
+        name: row.rung,
+        harness: row.harness,
+        level: row.level,
+        model: row.model,
+        provider: Option.getOrUndefined(row.provider),
+        enabled: row.enabled,
+        author: row.author,
+        unmetered: row.unmetered,
+        thinking: Option.getOrUndefined(row.thinking),
+      }));
+      if (bottom === undefined) {
+        return yield* new RegistryError({ detail: "the ladder table has no rungs" });
+      }
+      return [bottom, ...rest] as Ladder;
+    }).pipe(Effect.mapError(registryError("reading the ladder")));
+
+    /** The ladder joined to `model_status`, for `foreman ladder` to print. */
+    const readStatus = Effect.gen(function* () {
+      const rows =
+        yield* sql`SELECT l.rung, l.level, s.harness, s.model, l.thinking, l.enabled, l.author,
+            s.retired, s.status, s.slices, s.succeeded, s.avg_rounds
+       FROM ladder l JOIN model_status s USING (model) ORDER BY l.level, l.rank`.pipe(
+          Effect.flatMap(rowsOf(StatusRow)),
+        );
+      return rows.map((row): RungStatus => ({
+        rung: row.rung,
+        level: row.level,
+        harness: row.harness,
+        model: row.model,
+        thinking: Option.getOrNull(row.thinking),
+        enabled: row.enabled,
+        state: row.retired ? "retired" : row.enabled ? row.status : "disabled",
+        author: row.author,
+        slices: row.slices,
+        succeeded: row.succeeded,
+        avgRounds: Option.getOrNull(row.avg_rounds),
+      }));
+    }).pipe(Effect.mapError(registryError("reading the ladder's record")));
+
+    /** Every model id the registry knows, for drift checks. */
+    const knownModels = Effect.gen(function* () {
+      const rows = yield* sql`SELECT model FROM models`.pipe(Effect.flatMap(rowsOf(ModelIdRow)));
+      return new Set(rows.map((row) => row.model)) as ReadonlySet<string>;
+    }).pipe(Effect.mapError(registryError("reading the models")));
+
+    /** Every model the registry knows, by model id. */
+    const readModels = Effect.gen(function* () {
+      const rows = yield* sql`SELECT model, harness, retired FROM models ORDER BY model`.pipe(
+        Effect.flatMap(rowsOf(ModelRow)),
+      );
+      return rows.map((row): ModelEntry => ({ ...row }));
+    }).pipe(Effect.mapError(registryError("reading the models")));
+
+    /**
+     * The reviewers, by name. A reviewer whose model is retired is left out: it is
+     * never dispatched, and a drawing pinned to it no longer runs.
+     */
+    const readReviewers = Effect.gen(function* () {
+      const rows = yield* sql`SELECT r.reviewer, r.model, r.thinking, r.provider, m.harness
+       FROM reviewers r JOIN models m USING (model)
+      WHERE m.retired = 0 ORDER BY r.reviewer`.pipe(Effect.flatMap(rowsOf(ReviewerRow)));
+      return rows.map((row): Reviewer => ({
+        name: row.reviewer,
+        harness: row.harness,
+        model: row.model,
+        provider: Option.getOrUndefined(row.provider),
+        // A reviewer has no allowance switch: the account's reading describes it.
+        unmetered: false,
+        thinking: Option.getOrUndefined(row.thinking),
+      }));
+    }).pipe(Effect.mapError(registryError("reading the reviewers")));
+
+    /** The failure for a reviewer name that is not listed: it names the ones that are. */
+    const noReviewer = (name: string) =>
+      Effect.gen(function* () {
+        const names = yield* sql`
+          SELECT reviewer FROM reviewers ORDER BY reviewer`.pipe(
+          Effect.flatMap(rowsOf(ReviewerNameRow)),
+        );
+        return yield* new RegistryError({
+          detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
+        });
+      });
+
+    /** Adds a reviewer. Its model must have a row, and its name must be new. */
+    const addReviewer = (reviewer: NewReviewer) =>
+      Effect.gen(function* () {
+        const model = yield* sql`
+          SELECT model FROM models WHERE model = ${reviewer.model}`.pipe(
+          Effect.flatMap(rowsOf(ModelIdRow)),
+        );
+        if (model.length === 0) {
+          return yield* new RegistryError({
+            detail: `model "${reviewer.model}" has no row in the models table`,
+          });
+        }
+        const taken = yield* sql`
+          SELECT reviewer FROM reviewers WHERE reviewer = ${reviewer.name}`.pipe(
+          Effect.flatMap(rowsOf(ReviewerNameRow)),
+        );
+        if (taken.length > 0) {
+          return yield* new RegistryError({
+            detail: `reviewer ${reviewer.name} is already listed`,
+          });
+        }
+        yield* sql`INSERT INTO reviewers (reviewer, model, thinking, provider)
+          VALUES (${reviewer.name}, ${reviewer.model},
+                  ${Option.getOrNull(reviewer.thinking)},
+                  ${Option.getOrNull(reviewer.provider)})`;
+      }).pipe(Effect.mapError(registryError("adding a reviewer")));
+
+    /**
+     * Sets the thinking level the reviewer named `name` starts at; none passes no
+     * flag, so the harness's own default applies. Fails naming the reviewers there
+     * are when there is no such reviewer.
+     */
+    const setReviewerThinking = (name: string, thinking: Option.Option<string>) =>
+      Effect.gen(function* () {
+        const changed = yield* sql`
+          UPDATE reviewers SET thinking = ${Option.getOrNull(thinking)}
+           WHERE reviewer = ${name} RETURNING reviewer`.pipe(
+          Effect.flatMap(rowsOf(ReviewerNameRow)),
+        );
+        if (changed.length === 0) return yield* noReviewer(name);
+      }).pipe(Effect.mapError(registryError("setting a reviewer's thinking level")));
+
+    /** Removes the reviewer named `name`, or fails naming the reviewers there are. */
+    const removeReviewer = (name: string) =>
+      Effect.gen(function* () {
+        const removed = yield* sql`
+          DELETE FROM reviewers WHERE reviewer = ${name} RETURNING reviewer`.pipe(
+          Effect.flatMap(rowsOf(ReviewerNameRow)),
+        );
+        if (removed.length === 0) return yield* noReviewer(name);
+      }).pipe(Effect.mapError(registryError("removing a reviewer")));
+
+    /** Landed slices, rounds and cost per success, by model and size. */
+    const sizeSummary = Effect.gen(function* () {
+      return (yield* sql`
+        SELECT * FROM size_summary ORDER BY size, cost_per_success_usd`.pipe(
+        Effect.flatMap(rowsOf(SummaryRow)),
+      )) as ReadonlyArray<Record<string, unknown>>;
+    }).pipe(Effect.mapError(registryError("reading the size summary")));
+
+    /** The ladder as editable rows, for `foreman ladder` and its editor. */
+    const readRows = Effect.gen(function* () {
+      const rows =
+        yield* sql`SELECT rung, level, model, enabled, author, provider, unmetered, note, thinking
+       FROM ladder ORDER BY level, rank`.pipe(Effect.flatMap(rowsOf(EditableRow)));
+      return rows.map((row): LadderRow => ({
+        ...row,
+        provider: Option.getOrNull(row.provider),
+        note: Option.getOrNull(row.note),
+        thinking: Option.getOrNull(row.thinking),
+      }));
+    }).pipe(Effect.mapError(registryError("reading the ladder rows")));
+
+    /**
+     * Replaces the ladder with these rows, sorted by level; inside a level they
+     * keep the order given.
+     *
+     * Rung names are the identity tasks record, so a rename is a different rung and
+     * the tasks that recorded the old name stop positioning anything. Ranks are
+     * rewritten from the sorted list, so the stored rank is the order of the rows
+     * by (level, rank). Everything is validated before anything is written, and the write is one transaction, so a bad edit
+     * leaves the ladder as it was.
+     */
+    const writeRows = (rows: ReadonlyArray<LadderRow>) =>
+      Effect.gen(function* () {
+        const known = new Set(
+          (yield* sql`SELECT model FROM models`.pipe(Effect.flatMap(rowsOf(ModelIdRow)))).map(
+            (row) => row.model,
+          ),
+        );
+        const problems = [
+          ...(rows.length === 0 ? ["the ladder needs at least one rung"] : []),
+          ...rows.flatMap((row, index) =>
+            rows.findIndex((other) => other.rung === row.rung) !== index
+              ? [`rung "${row.rung}" appears twice`]
+              : [],
+          ),
+          ...rows
+            .filter((row) => !known.has(row.model))
+            .map(
+              (row) =>
+                `rung "${row.rung}" names model "${row.model}", which has no row in the models table`,
+            ),
+          ...rows
+            .filter((row) => !Number.isSafeInteger(row.level))
+            .map((row) => `rung "${row.rung}" has level ${row.level}, which is not an integer`),
+          ...(rows.some((row) => row.enabled) ? [] : ["every rung is disabled"]),
+        ];
+        if (problems.length > 0) return yield* new RegistryError({ detail: problems.join("; ") });
+
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM ladder`;
+            yield* Effect.forEach(
+              Arr.sort(
+                rows,
+                Order.mapInput(Order.Number, (row: LadderRow) => row.level),
+              ),
+              (row, index) =>
+                sql`INSERT INTO ladder(rank, level, rung, model, enabled, author, provider, unmetered, note, thinking)
+                VALUES (${index + 1}, ${row.level}, ${row.rung}, ${row.model}, ${row.enabled ? 1 : 0},
+                        ${row.author ? 1 : 0},
+                        ${row.provider}, ${row.unmetered ? 1 : 0}, ${row.note}, ${row.thinking})`,
+              { discard: true },
+            );
+          }),
+        );
+      }).pipe(Effect.mapError(registryError("writing the ladder")));
+
+    /** Adds `row` to the ladder at `place`, in one validated write. */
+    const addRow = (row: Omit<LadderRow, "level">, place: RungPlace) =>
+      Effect.gen(function* () {
+        const rows = yield* readRows;
+        if (rows.some((other) => other.rung === row.rung)) {
+          return yield* new RegistryError({ detail: `rung ${row.rung} is already on the ladder` });
+        }
+        yield* writeRows(yield* placed(rows, row, place));
+      });
+
+    /** Moves a rung to `place`, which gives it a new level; nothing else about it changes. */
+    const moveRow = (rung: string, place: RungPlace) =>
+      Effect.gen(function* () {
+        const rows = yield* readRows;
+        const row = yield* rowOf(rows, rung);
+        if ((place._tag === "Above" || place._tag === "Below") && place.rung === rung) {
+          return yield* new RegistryError({ detail: `${rung} cannot move next to itself` });
+        }
+        const rest = rows.filter((other) => other.rung !== rung);
+        yield* writeRows(yield* placed(rest, row, place));
+      });
+
+    /** Rewrites one rung with `change`, in one validated write. */
+    const changeRow = (rung: string, change: (row: LadderRow) => LadderRow) =>
+      Effect.gen(function* () {
+        const rows = yield* readRows;
+        yield* rowOf(rows, rung);
+        yield* writeRows(rows.map((row) => (row.rung === rung ? change(row) : row)));
+      });
+
+    return {
+      readLadder,
+      readStatus,
+      knownModels,
+      readModels,
+      readReviewers,
+      addReviewer,
+      setReviewerThinking,
+      removeReviewer,
+      sizeSummary,
+      readRows,
+      writeRows,
+      addRow,
+      moveRow,
+      changeRow,
+    } as const;
+  }),
+}) {
+  /** The registry over a `SqlClient` the caller provides, so services share one connection. */
+  static readonly layerSql = Layer.effect(this, this.make);
+
+  /** Default registry: `Registry` over the process's shared connection. */
+  static readonly layer = Registry.layerSql.pipe(Layer.provideMerge(store));
+}
+
+/** The ladder, cheapest level first, with each rung's harness from its model. */
+export const readLadder = Registry.use((registry) => registry.readLadder);
+
+/** The ladder joined to `model_status`, for `foreman ladder` to print. */
+export const readStatus = Registry.use((registry) => registry.readStatus);
+
+/** Every model id the registry knows, for drift checks. */
+export const knownModels = Registry.use((registry) => registry.knownModels);
+
+/** Every model the registry knows, by model id. */
+export const readModels = Registry.use((registry) => registry.readModels);
+
+/** The reviewers, by name; a reviewer whose model is retired is left out. */
+export const readReviewers = Registry.use((registry) => registry.readReviewers);
+
+/** Adds a reviewer. Its model must have a row, and its name must be new. */
+export const addReviewer = (reviewer: NewReviewer) =>
+  Registry.use((registry) => registry.addReviewer(reviewer));
+
+/** Sets a reviewer's thinking level; none passes no flag. */
+export const setReviewerThinking = (name: string, thinking: Option.Option<string>) =>
+  Registry.use((registry) => registry.setReviewerThinking(name, thinking));
+
+/** Removes the reviewer named `name`, or fails naming the reviewers there are. */
+export const removeReviewer = (name: string) =>
+  Registry.use((registry) => registry.removeReviewer(name));
+
+/** Landed slices, rounds and cost per success, by model and size. */
+export const sizeSummary = Registry.use((registry) => registry.sizeSummary);
+
+/** The ladder as editable rows, for `foreman ladder` and its editor. */
+export const readRows = Registry.use((registry) => registry.readRows);
+
+/** Replaces the ladder with these rows, validated, in one transaction. */
+export const writeRows = (rows: ReadonlyArray<LadderRow>) =>
+  Registry.use((registry) => registry.writeRows(rows));
+
 /** Adds `row` to the ladder at `place`, in one validated write. */
 export const addRow = (row: Omit<LadderRow, "level">, place: RungPlace) =>
-  Effect.gen(function* () {
-    const rows = yield* readRows;
-    if (rows.some((other) => other.rung === row.rung)) {
-      return yield* new RegistryError({ detail: `rung ${row.rung} is already on the ladder` });
-    }
-    yield* writeRows(yield* placed(rows, row, place));
-  });
+  Registry.use((registry) => registry.addRow(row, place));
 
-/** Moves a rung to `place`, which gives it a new level; nothing else about it changes. */
+/** Moves a rung to `place`, which gives it a new level. */
 export const moveRow = (rung: string, place: RungPlace) =>
-  Effect.gen(function* () {
-    const rows = yield* readRows;
-    const row = yield* rowOf(rows, rung);
-    if ((place._tag === "Above" || place._tag === "Below") && place.rung === rung) {
-      return yield* new RegistryError({ detail: `${rung} cannot move next to itself` });
-    }
-    const rest = rows.filter((other) => other.rung !== rung);
-    yield* writeRows(yield* placed(rest, row, place));
-  });
+  Registry.use((registry) => registry.moveRow(rung, place));
 
 /** Rewrites one rung with `change`, in one validated write. */
 export const changeRow = (rung: string, change: (row: LadderRow) => LadderRow) =>
-  Effect.gen(function* () {
-    const rows = yield* readRows;
-    yield* rowOf(rows, rung);
-    yield* writeRows(rows.map((row) => (row.rung === rung ? change(row) : row)));
-  });
+  Registry.use((registry) => registry.changeRow(rung, change));
 
 /** The row named `rung`, or a failure that lists the rungs there are. */
 const rowOf = (rows: ReadonlyArray<LadderRow>, rung: string) => {

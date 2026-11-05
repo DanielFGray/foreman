@@ -44,6 +44,44 @@ import type { GhOptions, GhResult } from "./github.ts";
 
 const now = new Date();
 
+/** A rung for these tests: dispatchable and metered unless `extra` says otherwise. */
+const testRung = (name: string, extra: Partial<Ladder[number]> = {}): Ladder[number] => ({
+  name,
+  harness: "test",
+  level: 0,
+  model: undefined,
+  provider: undefined,
+  enabled: true,
+  author: true,
+  unmetered: false,
+  ...extra,
+});
+
+/** A reviewer for these tests: metered, thinking high, unless `extra` says otherwise. */
+const testReviewer = (name: string, extra: Partial<Reviewer> = {}): Reviewer => ({
+  name,
+  harness: "test",
+  model: name,
+  provider: undefined,
+  thinking: "high",
+  unmetered: false,
+  ...extra,
+});
+
+/** Poll/window numbers shared by every dispatcher layer in this file. */
+const testSettings = (ladder: Ladder, reviewers: ReadonlyArray<Reviewer> = []) =>
+  ({
+    ladder,
+    reviewers,
+    otlpEndpoint: "http://localhost:4318",
+    pollInterval: 60,
+    staleAfter: 24,
+    coachWindow: 60,
+    stallGrace: 5,
+    landedWindow: 7,
+    attemptsPerLevel: 2,
+  }) as const;
+
 const item = (
   id: string,
   status: Item["status"],
@@ -640,22 +678,8 @@ const layerFor = (world: World) =>
   Layer.provideMerge(
     Dispatcher.Default,
     Layer.mergeAll(
-      Layer.succeed(Settings, {
-        ladder: [
-          { name: "cheap", harness: "test", level: 0, model: undefined, provider: undefined },
-        ],
-        // A reviewer with the rung's name, on no account either.
-        reviewers: [
-          { name: "cheap", harness: "test", model: "cheap", provider: undefined, thinking: "high" },
-        ],
-        otlpEndpoint: "http://localhost:4318",
-        pollInterval: 60,
-        staleAfter: 24,
-        coachWindow: 60,
-        stallGrace: 5,
-        landedWindow: 7,
-        attemptsPerLevel: 2,
-      }),
+      // A reviewer with the rung's name, on no account either.
+      Layer.succeed(Settings, testSettings([testRung("cheap")], [testReviewer("cheap")])),
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Records, world.records),
       Layer.succeed(Tracker, world.tracker),
@@ -1468,20 +1492,8 @@ describe("quota probing", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          // A rung whose model names its provider is one the gate can ask about.
-          ladder: [
-            { name: "cheap", harness: "test", level: 0, model: "openai/gpt", provider: undefined },
-          ],
-          reviewers: [],
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        // A rung whose model names its provider is one the gate can ask about.
+        Layer.succeed(Settings, testSettings([testRung("cheap", { model: "openai/gpt" })])),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -1549,42 +1561,20 @@ describe("a spent account and the reviewers", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          ladder: [
-            { name: "cheap", harness: "test", level: 0, model: "openai/gpt", provider: undefined },
-            {
-              name: "dear",
-              harness: "test",
-              level: 1,
-              model: "anthropic/claude",
-              provider: undefined,
-            },
-          ],
-          // One reviewer on each account; "cheap" shares the author's model.
-          reviewers: [
-            {
-              name: "cheap",
-              harness: "test",
-              model: "openai/gpt",
-              provider: undefined,
-              thinking: "high",
-            },
-            {
-              name: "dear",
-              harness: "test",
-              model: "anthropic/claude",
-              provider: undefined,
-              thinking: "high",
-            },
-          ],
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        // One reviewer on each account; "cheap" shares the author's model.
+        Layer.succeed(
+          Settings,
+          testSettings(
+            [
+              testRung("cheap", { model: "openai/gpt" }),
+              testRung("dear", { level: 1, model: "anthropic/claude" }),
+            ],
+            [
+              testReviewer("cheap", { model: "openai/gpt" }),
+              testReviewer("dear", { model: "anthropic/claude" }),
+            ],
+          ),
+        ),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -1942,8 +1932,20 @@ describe("a usage wall", () => {
       level: 0,
       model: "opencode/free-model",
       provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
     },
-    { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
+    {
+      name: "dear",
+      harness: "test",
+      level: 1,
+      model: "anthropic/claude",
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ];
   /** The same two models as reviewers, each named after its rung. */
   const reviewers: ReadonlyArray<Reviewer> = [
@@ -1953,6 +1955,7 @@ describe("a usage wall", () => {
       model: "opencode/free-model",
       provider: undefined,
       thinking: "high",
+      unmetered: false,
     },
     {
       name: "dear",
@@ -1960,6 +1963,7 @@ describe("a usage wall", () => {
       model: "anthropic/claude",
       provider: undefined,
       thinking: "high",
+      unmetered: false,
     },
   ];
   const seats = { ladder, reviewers };
@@ -1967,17 +1971,7 @@ describe("a usage wall", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          ladder,
-          reviewers,
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        Layer.succeed(Settings, testSettings(ladder, reviewers)),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -2689,30 +2683,20 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          ladder: [
-            { name: "low", harness: "test", level: 0, model: "a/low", provider: undefined },
-            { name: "mid", harness: "test", level: 1, model: "b/mid", provider: undefined },
-            { name: "high", harness: "test", level: 2, model: "c/high", provider: undefined },
-          ],
-          reviewers: [
-            { name: "mid", harness: "test", model: "b/mid", provider: undefined, thinking: "high" },
-            {
-              name: "high",
-              harness: "test",
-              model: "c/high",
-              provider: undefined,
-              thinking: "high",
-            },
-          ],
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        Layer.succeed(
+          Settings,
+          testSettings(
+            [
+              testRung("low", { model: "a/low" }),
+              testRung("mid", { level: 1, model: "b/mid" }),
+              testRung("high", { level: 2, model: "c/high" }),
+            ],
+            [
+              testReviewer("mid", { model: "b/mid" }),
+              testReviewer("high", { model: "c/high" }),
+            ],
+          ),
+        ),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -2848,7 +2832,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           ...console,
           log: (...args: ReadonlyArray<string>) => printed.push(args.join(" ")),
         }),
-        Effect.provide(Layer.merge(BunServices.layer, store.layer)),
+        Effect.provide(Layer.merge(BunServices.layer, store.registry)),
         Effect.ensuring(Effect.sync(store.cleanup)),
       ),
     );
@@ -3023,32 +3007,10 @@ describe("a drawn pipeline", () => {
           Layer.provideMerge(
             Dispatcher.Default,
             Layer.mergeAll(
-              Layer.succeed(Settings, {
-                ladder: [
-                  {
-                    name: "cheap",
-                    harness: "test",
-                    level: 0,
-                    model: undefined,
-                    provider: undefined,
-                  },
-                  {
-                    name: "dear",
-                    harness: "test",
-                    level: 1,
-                    model: undefined,
-                    provider: undefined,
-                  },
-                ],
-                reviewers: [],
-                otlpEndpoint: "http://localhost:4318",
-                pollInterval: 60,
-                staleAfter: 24,
-                coachWindow: 60,
-                stallGrace: 5,
-                landedWindow: 7,
-                attemptsPerLevel: 2,
-              }),
+              Layer.succeed(
+                Settings,
+                testSettings([testRung("cheap"), testRung("dear", { level: 1 })]),
+              ),
               Layer.succeed(Fleet, world.fleet),
               Layer.succeed(Records, world.records),
               Layer.succeed(Tracker, world.tracker),
@@ -3207,7 +3169,7 @@ describe("foreman pipeline place", () => {
           ...console,
           log: (...args: ReadonlyArray<string>) => printed.push(args.join(" ")),
         }),
-        Effect.provide(Layer.merge(BunServices.layer, store.layer)),
+        Effect.provide(Layer.merge(BunServices.layer, store.registry)),
         Effect.ensuring(Effect.sync(store.cleanup)),
       ),
     );
@@ -3226,9 +3188,36 @@ describe("foreman pipeline trace", () => {
   afterEach(() => rmSync(drawn, { force: true }));
   /** Three rungs on one bare harness, so a review always has a rung above its author. */
   const THREE: Ladder = [
-    { name: "low", harness: "test", level: 0, model: "a/low", provider: undefined },
-    { name: "mid", harness: "test", level: 1, model: "b/mid", provider: undefined },
-    { name: "high", harness: "test", level: 2, model: "c/high", provider: undefined },
+    {
+      name: "low",
+      harness: "test",
+      level: 0,
+      model: "a/low",
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "mid",
+      harness: "test",
+      level: 1,
+      model: "b/mid",
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
+    {
+      name: "high",
+      harness: "test",
+      level: 2,
+      model: "c/high",
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ];
   /** A free opencode rung, whose screen can show a usage wall, then a rung on another account. */
   const WALLED: Ladder = [
@@ -3238,8 +3227,20 @@ describe("foreman pipeline trace", () => {
       level: 0,
       model: "opencode/free-model",
       provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
     },
-    { name: "dear", harness: "test", level: 1, model: "anthropic/claude", provider: undefined },
+    {
+      name: "dear",
+      harness: "test",
+      level: 1,
+      model: "anthropic/claude",
+      provider: undefined,
+      enabled: true,
+      author: true,
+      unmetered: false,
+    },
   ];
 
   /**
@@ -3254,23 +3255,14 @@ describe("foreman pipeline trace", () => {
       model: rung.model ?? rung.name,
       provider: rung.provider,
       thinking: "high",
+      unmetered: false,
     }));
 
   const layerWith = (world: World, ladder: Ladder) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          ladder,
-          reviewers: reviewersOf(ladder),
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        Layer.succeed(Settings, testSettings(ladder, reviewersOf(ladder))),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -3863,27 +3855,17 @@ describe("a pull-request landing", () => {
 describe("ladder levels", () => {
   /** Three peers between a bottom and a top level, all on one bare harness. */
   const LEVELS: Ladder = [
-    { name: "low", harness: "test", level: 0, model: undefined, provider: undefined },
-    { name: "one", harness: "test", level: 1, model: undefined, provider: undefined },
-    { name: "two", harness: "test", level: 1, model: undefined, provider: undefined },
-    { name: "three", harness: "test", level: 1, model: undefined, provider: undefined },
-    { name: "high", harness: "test", level: 2, model: undefined, provider: undefined },
+    testRung("low"),
+    testRung("one", { level: 1 }),
+    testRung("two", { level: 1 }),
+    testRung("three", { level: 1 }),
+    testRung("high", { level: 2 }),
   ];
   const layerFor = (world: World) =>
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, {
-          ladder: LEVELS,
-          reviewers: [],
-          otlpEndpoint: "http://localhost:4318",
-          pollInterval: 60,
-          staleAfter: 24,
-          coachWindow: 60,
-          stallGrace: 5,
-          landedWindow: 7,
-          attemptsPerLevel: 2,
-        }),
+        Layer.succeed(Settings, testSettings(LEVELS)),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
