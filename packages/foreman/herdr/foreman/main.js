@@ -45,7 +45,8 @@
 // own state is the Tasks view's mode, and it never runs `tasks`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify } from "herdr";
+import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify, settings } from "herdr";
+import { drawnAt } from "./units.js";
 import { Editor } from "./editor.js";
 import { Simulator } from "./simulate.js";
 import { Fleet } from "./fleet.js";
@@ -356,7 +357,7 @@ export default class Foreman extends View {
     // The frame herdr's Files and Changes panels draw, since this pane shares their stack.
     const root = v_flex().id("root").relative().size_full().rounded(10).overflow_hidden().border_1().border_color(t.border).bg(t.background).text_size(12).text_color(t.foreground)
       .on_mouse_down("left", () => this.drag.pressedAnywhere())
-      .on_mouse_move((event, cx) => { this.origin = event.bounds; if (this.drag.moved(event.position)) cx.notify(); })
+      .on_mouse_move((event, cx) => { this.origin = this.drawn(event.bounds); if (this.drag.moved(this.drawn(event.position))) cx.notify(); })
       .on_mouse_up("left", (event, cx) => {
         const target = this.drag.released();
         if (target?.run != null) target.run(cx);
@@ -364,7 +365,7 @@ export default class Foreman extends View {
       })
       .on_size_change((size, cx) => {
         const before = this.size === null ? null : this.flow();
-        this.size = size;
+        this.size = this.drawn(size);
         if (this.mode === "pipeline" && this.flow() !== before) this.loadDrawing(cx);
         else if (this.fitted) this.fit(cx);
         cx.notify();
@@ -424,6 +425,10 @@ export default class Foreman extends View {
       .child(chip(t, "+", "zoom-in", (cx) => this.zoomBy(1.2, cx)))
       .child(chip(t, "fit", "zoom-fit", (cx) => this.fit(cx)));
   }
+
+  // A point, size or bounds herdr-app reported, in the lengths the
+  // pane draws (`units.js`).
+  drawn(measured) { return drawnAt(measured, settings().zoom ?? 1); }
 
   // A window rectangle in pane coordinates, for what the pane draws over itself.
   local(rect) {
@@ -519,7 +524,8 @@ export default class Foreman extends View {
   }
 
   scroll(event, cx) {
-    const [dx, dy] = event.delta ? [event.delta.x ?? 0, event.delta.y ?? 0] : [0, 0];
+    const delta = this.drawn(event.delta);
+    const [dx, dy] = delta ? [delta.x ?? 0, delta.y ?? 0] : [0, 0];
     if (event.modifiers?.control || event.modifiers?.platform) { this.zoomBy(dy > 0 ? 1.1 : 1 / 1.1, cx); return; }
     this.fitted = false;
     this.pan = [this.pan[0] + dx, this.pan[1] + dy];

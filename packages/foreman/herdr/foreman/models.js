@@ -128,12 +128,12 @@ export class Models {
     const columns = this.columns();
     const rect = this.layout(columns).rects.get(card.key);
     const origin = this.bounds ?? { x: 0, y: 0 };
-    this.pane.drag.press(card.key, event.position, { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
+    this.pane.drag.press(card.key, this.pane.drawn(event.position), { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
   }
 
   wheel(event, cx) {
     const columns = this.columns();
-    const scrolled = scrolledBy(this.scrollOf(columns), event, this.layout(columns), this.bounds ?? { x: 0 });
+    const scrolled = scrolledBy(this.scrollOf(columns), { delta: this.pane.drawn(event.delta), position: this.pane.drawn(event.position), modifiers: event.modifiers }, this.layout(columns), this.bounds ?? { x: 0 });
     this.scroll = { x: scrolled.x, y: Object.fromEntries(columns.map((column, index) => [column.key, scrolled.y[index]])) };
     cx.notify();
   }
@@ -155,7 +155,7 @@ export class Models {
     ];
     const indexed = columns.map((column, index) => ({ column, index }));
     const board = div().id("models-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
-      .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
+      .on_mouse_move((event, _cx) => { this.bounds = this.pane.drawn(event.bounds); })
       .on_scroll_wheel((event, cx) => this.wheel(event, cx))
       // The level columns, cut off where the pinned columns start.
       .child(div().id("models-levels").absolute().left(0).top(0).w(edge).h_full().overflow_hidden()
