@@ -39,7 +39,10 @@ export const scrolledBy = (scroll, event, { xs, columnW, overflow, reach }) => {
   const dx = event.delta?.x ?? 0, dy = event.delta?.y ?? 0;
   const [across, down] = event.modifiers?.shift && dx === 0 ? [dy, 0] : [dx, dy];
   const left = event.position.x - (event.bounds?.x ?? 0);
-  const under = xs.findIndex((x) => left >= x && left < x + columnW);
+  // Columns may overlap: the Models view pins columns over the level columns
+  // scrolled under them. A later column is drawn on top, so the last column
+  // under the pointer is the one the operator sees.
+  const under = xs.findLastIndex((x) => left >= x && left < x + columnW);
   return {
     x: clamp(scroll.x + across, overflow),
     y: scroll.y.map((at, index) => index === under ? clamp(at + down, reach[index]) : at),
