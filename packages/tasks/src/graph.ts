@@ -21,15 +21,12 @@ export interface GraphNode {
  * The ids of a cycle among `edges`, the first id repeated at the end, or
  * nothing when the edges are acyclic.
  */
-export const cycleIn = (edges: ReadonlyArray<Dependency>): ReadonlyArray<string> | undefined => {
+export const cycleIn = (edges: ReadonlyArray<Dependency>): Option.Option<ReadonlyArray<string>> => {
   const { graph, idOf } = build(
     edges.flatMap((e) => [node(e.item), node(e.dependsOn)]),
     edges,
   );
-  return Option.match(Graph.findCycle(graph), {
-    onNone: () => undefined,
-    onSome: (cycle) => cycle.path.map(idOf),
-  });
+  return Option.map(Graph.findCycle(graph), (cycle) => cycle.path.map(idOf));
 };
 
 /** The graph as a Mermaid flowchart: an arrow runs from a task to the tasks that wait for it. */
@@ -85,10 +82,12 @@ const node = (id: string): GraphNode => ({ id, title: "", status: "" });
 const build = (nodes: ReadonlyArray<GraphNode>, edges: ReadonlyArray<Dependency>) => {
   const index = new Map<string, Graph.NodeIndex>();
   const graph = Graph.directed<GraphNode, string>((mutable) => {
-    const place = (n: GraphNode) => {
-      if (!index.has(n.id)) index.set(n.id, Graph.addNode(mutable, n));
-      return index.get(n.id)!;
-    };
+    const place = (n: GraphNode) =>
+      Option.getOrElse(Option.fromNullishOr(index.get(n.id)), () => {
+        const at = Graph.addNode(mutable, n);
+        index.set(n.id, at);
+        return at;
+      });
     for (const n of nodes) place(n);
     for (const edge of edges) {
       Graph.addEdge(mutable, place(node(edge.dependsOn)), place(node(edge.item)), "blocks");

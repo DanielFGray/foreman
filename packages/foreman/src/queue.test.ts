@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import type { Ladder } from "./ladder.ts";
 import { interleave, queueFrom } from "./queue.ts";
 import type { Item } from "./records.ts";
@@ -19,11 +20,11 @@ const task = (
   title: id,
   labels,
   description: "",
-  parent: undefined,
+  parent: Option.none(),
   createdAt: createdAt,
   updatedAt: new Date(0),
   lastActivityAt: new Date(0),
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   type: "task",
   status: "open",
   runs: [],
@@ -208,14 +209,14 @@ describe("queueFrom", () => {
       lastActivityAt: now,
       createdAt: now,
       updatedAt: new Date(0),
-      definitionOfDone: undefined,
-      parent: "ep",
+      definitionOfDone: Option.none(),
+      parent: Option.some("ep"),
       runs: [],
       charges: [],
       parked: undefined,
       tip: undefined,
     });
-    const epic = { ...child("ep", "in_progress"), type: "epic" as const, parent: undefined };
+    const epic = { ...child("ep", "in_progress"), type: "epic" as const, parent: Option.none() };
     const split = queueFrom({
       ...reading([task("plain", "a", 2), task("last", "a", 2)]),
       epics: [{ epic, children: [child("done", "done"), child("last", "open")] }],

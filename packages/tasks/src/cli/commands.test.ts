@@ -2,9 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer, Stdio, Stream } from "effect";
 import { Command } from "effect/cli";
-import { connectionAt } from "../connection.ts";
-import { Tasks } from "../store.ts";
-import { nameExit, openRun } from "../runs.ts";
+import { Runs } from "../runs.ts";
 import { tasksCommand } from "./commands.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +24,7 @@ const services = (stdin?: string) =>
     stdin === undefined
       ? Layer.empty
       : Stdio.layerTest({ stdin: Stream.make(new TextEncoder().encode(stdin)) }),
-    Tasks.layerSql.pipe(Layer.provideMerge(connectionAt(scratch.file))),
+    Runs.layerAt(scratch.file),
   );
 
 const runCommand = (args: ReadonlyArray<string>, stdin?: string) =>
@@ -130,7 +128,8 @@ describe("tasks add, show, list and ready", () => {
     const task = await created("Worked", "-p", "c");
     await Effect.runPromise(
       Effect.gen(function* () {
-        yield* openRun({
+        const runs = yield* Runs;
+        yield* runs.openRun({
           project: "c",
           task,
           slice: "Worked",
@@ -141,7 +140,7 @@ describe("tasks add, show, list and ready", () => {
           node: "author",
           work: "build",
         });
-        yield* nameExit(task, { ending: "done", commit: "0123456789abcdef", event: undefined });
+        yield* runs.nameExit(task, { ending: "done", commit: "0123456789abcdef" });
       }).pipe(Effect.provide(services())),
     );
     const shown = JSON.parse(await run(["show", task, "--json"]));

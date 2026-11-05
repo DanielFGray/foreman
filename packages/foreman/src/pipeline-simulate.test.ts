@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import type { Ladder } from "./ladder.ts";
 import { type Pipeline, STANDARD_PIPELINES, standardExits } from "./pipeline.ts";
 import { simulate, simulateReport, type Frame, type SimulateWorld } from "./pipeline-simulate.ts";
@@ -24,10 +25,10 @@ const item = (id: string, over: Partial<Item> = {}): Item => ({
   type: "task",
   status: "open",
   priority: 2,
-  parent: undefined,
+  parent: Option.none(),
   labels: [],
   description: "",
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   createdAt: new Date(0),
   updatedAt: new Date(0),
   lastActivityAt: new Date(0),

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import { type Ladder, providersOf } from "./ladder.ts";
 import { drawnBy, type Reviewer, reviewerFor, seatOf } from "./reviewers.ts";
 
@@ -106,9 +107,9 @@ describe("seatOf", () => {
 
   test("reads a review run's name in the reviewers, an author run's in the ladder", () => {
     const seats = { ladder, reviewers };
-    expect(seatOf(seats, { role: "review", rung: "opus" })).toBe(opus);
-    expect(seatOf(seats, { role: "author", rung: "opus" })).toBe(ladder[0]);
-    expect(seatOf(seats, { role: "author", rung: "sol" })).toBeUndefined();
+    expect(seatOf(seats, { role: "review", rung: Option.some("opus") })).toBe(opus);
+    expect(seatOf(seats, { role: "author", rung: Option.some("opus") })).toBe(ladder[0]);
+    expect(seatOf(seats, { role: "author", rung: Option.some("sol") })).toBeUndefined();
   });
 });
 

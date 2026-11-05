@@ -1,5 +1,5 @@
 import { Clock, Effect, Exit, Option, Ref, Schedule, Schema as S } from "effect";
-import type { Dependency, Item, ListFilter, Status } from "tasks";
+import { type Dependency, Item, type ListFilterInput, type Status } from "tasks";
 import type { Fleet } from "./fleet.ts";
 import { Github, GithubError } from "./github.ts";
 import { openCheckouts, projectSet } from "./projects.ts";
@@ -460,11 +460,11 @@ const starved = (rate: RateLimit, now: number) =>
   rate.remaining < rate.limit / 10 && now < new Date(rate.resetAt).getTime();
 
 const matches =
-  (filter: ListFilter) =>
+  (filter: ListFilterInput) =>
   (item: Item): boolean =>
     (filter.status === undefined || item.status === filter.status) &&
     (filter.type === undefined || item.type === filter.type) &&
-    (filter.parent === undefined || item.parent === filter.parent) &&
+    (filter.parent === undefined || Option.getOrUndefined(item.parent) === filter.parent) &&
     (filter.labels ?? []).every((label) => item.labels.includes(label));
 
 /** The issue as foreman's `Item` (docs/issue-trackers.md, "The issue as an `Item`"). */
@@ -477,19 +477,20 @@ export const itemOf = (project: string, repo: string, issue: IssueNode): Item =>
   })[0];
   const updatedAt = new Date(issue.updatedAt);
   const lastComment = issue.comments.nodes[0]?.createdAt;
-  return {
+  return Item.make({
     id: `${project}#${issue.number}`,
     project,
     type: issue.subIssuesSummary.total > 0 || issue.issueType?.name === "Epic" ? "epic" : "task",
     title: issue.title,
     description,
-    definitionOfDone,
+    definitionOfDone: Option.fromNullishOr(definitionOfDone),
     status: statusOf(issue, labels),
     priority: priority ?? 2,
-    parent:
+    parent: Option.fromNullishOr(
       issue.parent && issue.parent.repository.nameWithOwner === repo
         ? `${project}#${issue.parent.number}`
         : undefined,
+    ),
     labels: labels.filter((name) => !reserved(name)),
     createdAt: new Date(issue.createdAt),
     updatedAt,
@@ -497,7 +498,7 @@ export const itemOf = (project: string, repo: string, issue: IssueNode): Item =>
       lastComment !== undefined && new Date(lastComment) > updatedAt
         ? new Date(lastComment)
         : updatedAt,
-  };
+  });
 };
 
 /**

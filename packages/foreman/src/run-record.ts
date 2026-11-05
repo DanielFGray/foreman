@@ -1,4 +1,4 @@
-import type { NewRun, Role } from "tasks";
+import type { NewRunInput, Role } from "tasks";
 import { countOf, isResearch, SIZE, type Item } from "./records.ts";
 
 /**
@@ -50,7 +50,7 @@ export const newRunFor = (input: {
   readonly commit?: string | undefined;
   /** An author on the operator's own branch records the commit it starts from. */
   readonly base?: string | undefined;
-}): NewRun => ({
+}): NewRunInput => ({
   project: input.task.project,
   task: input.task.id,
   // What the slice does, in words: the task's own title is the only sentence

@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import { isExit, type Run } from "tasks";
 import { attemptsOf, failuresOf, type Item, valueOf } from "./records.ts";
 import { exitAt, type Facts, type NamedExit, type Pipeline, QUEUE } from "./pipeline.ts";
@@ -21,13 +22,18 @@ export const factsOf = (
   return {
     status: item.status,
     priority: item.priority,
-    epic: item.parent,
+    epic: Option.getOrUndefined(item.parent),
     size: sizeOf(item.labels),
     labels: new Set(item.labels),
     failedBy: new Set(failuresOf(item)),
     attempts: attemptCount(item),
     tip: item.tip,
-    running: open?.node === undefined ? undefined : { node: open.node, named: isExit(open.ending) },
+    running: Option.fromNullishOr(open).pipe(
+      Option.flatMap((run) =>
+        Option.map(run.node, (node) => ({ node, named: Option.exists(run.ending, isExit) })),
+      ),
+      Option.getOrUndefined,
+    ),
     named: sinceSource(exits, pipeline),
     exit: exits.at(-1)?.name,
   };
@@ -35,16 +41,15 @@ export const factsOf = (
 
 /** The exit a run named, if it named one at a block. */
 const namedBy = (run: Run, pipeline: Pipeline): ReadonlyArray<NamedExit> =>
-  run.node !== undefined && isExit(run.ending)
-    ? [
-        {
-          node: run.node,
-          id: run.ending,
-          name: exitAt(pipeline, run.node, run.ending)?.name,
-          commit: run.commit,
-        },
-      ]
-    : [];
+  Option.all({ node: run.node, id: Option.filter(run.ending, isExit) }).pipe(
+    Option.map(({ node, id }) => ({
+      node,
+      id,
+      name: exitAt(pipeline, node, id)?.name,
+      commit: Option.getOrUndefined(run.commit),
+    })),
+    Option.toArray,
+  );
 
 /** The exits after the last one that sent the task back to its source. */
 const sinceSource = (
@@ -70,7 +75,7 @@ const sizeOf = (labels: ReadonlyArray<string>): number => {
 /** Each rung's own attempt count (`attemptsOf`), summed over the rungs that authored the task. */
 const attemptCount = (item: Pick<Item, "runs" | "charges">): number => {
   const rungs = new Set(
-    item.runs.flatMap((run) => (run.role === "author" && run.rung !== undefined ? [run.rung] : [])),
+    item.runs.flatMap((run) => (run.role === "author" ? Option.toArray(run.rung) : [])),
   );
   return [...rungs].reduce((sum, rung) => sum + attemptsOf(item, [rung]), 0);
 };

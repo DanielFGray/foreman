@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import { isExit, type Run } from "tasks";
 import { type Exit, exitAt, type Pipeline } from "./pipeline.ts";
 
@@ -20,37 +21,60 @@ export const lapOf = ({ runs }: Runs): ReadonlyArray<Run> => {
 };
 
 /** The rung of the task's latest author run: who authored its branch. Empty before any author ran. */
+const lastAuthor = (task: Runs): Option.Option<Run> =>
+  Option.fromNullishOr(task.runs.findLast((run) => run.role === "author"));
+
 export const authoredBy = (task: Runs): string | undefined =>
-  task.runs.findLast((run) => run.role === "author")?.rung;
+  lastAuthor(task).pipe(
+    Option.flatMap((run) => run.rung),
+    Option.getOrUndefined,
+  );
 
 /** The correction rounds the current author has been sent. */
 export const roundsOf = (task: Runs): number =>
-  task.runs.findLast((run) => run.role === "author")?.rounds ?? 0;
+  lastAuthor(task).pipe(
+    Option.flatMap((run) => run.rounds),
+    Option.getOrElse(() => 0),
+  );
 
 /** The name of the lap's open review run: the reviewer that owns the task now. */
 export const reviewedBy = (task: Runs): string | undefined =>
-  lapOf(task).find((run) => run.role === "review" && run.open)?.rung;
+  Option.fromNullishOr(lapOf(task).find((run) => run.role === "review" && run.open)).pipe(
+    Option.flatMap((run) => run.rung),
+    Option.getOrUndefined,
+  );
 
 /** The reviewers that stopped this lap without naming an exit. */
 export const reviewFailedBy = (task: Runs): ReadonlyArray<string> =>
   lapOf(task).flatMap((run) =>
-    run.role === "review" && run.ending === "stopped" && run.rung !== undefined ? [run.rung] : [],
+    run.role === "review" && Option.contains(run.ending, "stopped") ? Option.toArray(run.rung) : [],
   );
 
 /** The lap's last run that named an exit: the one that placed the task where it is. */
 export const lastExit = (task: Runs): Run | undefined =>
-  lapOf(task).findLast((run) => isExit(run.ending));
+  lapOf(task).findLast((run) => Option.exists(run.ending, isExit));
 
 /**
  * The commit a land or a done takes: the one the exit that routed the task
  * there was named on. Landing merges this commit by id, and refuses a tip that
  * has moved past it.
  */
-export const routedCommit = (task: Runs): string | undefined => lastExit(task)?.commit;
+export const routedCommit = (task: Runs): string | undefined =>
+  Option.fromNullishOr(lastExit(task)).pipe(
+    Option.flatMap((run) => run.commit),
+    Option.getOrUndefined,
+  );
+
+/** The rung of the run that named the exit that placed the task where it is. */
+export const routedRung = (task: Runs): string | undefined =>
+  Option.fromNullishOr(lastExit(task)).pipe(
+    Option.flatMap((run) => run.rung),
+    Option.getOrUndefined,
+  );
 
 /** Whether the open reviewer named its exit, and settle has not yet closed its run. */
 export const reviewerNamed = (task: Runs): boolean =>
-  lapOf(task).some((run) => run.role === "review" && run.open && run.ending !== undefined);
+  lapOf(task).some((run) => run.role === "review" && run.open && Option.isSome(run.ending));
 
 /**
  * The commit a task working on the operator's branch started from: the base
@@ -58,7 +82,12 @@ export const reviewerNamed = (task: Runs): boolean =>
  * that work (a return has no undo there), so a reviewer reads all of it.
  */
 export const directBase = (task: Runs): string | undefined =>
-  task.runs.find((run) => run.role === "author" && run.base !== undefined)?.base;
+  Option.fromNullishOr(
+    task.runs.find((run) => run.role === "author" && Option.isSome(run.base)),
+  ).pipe(
+    Option.flatMap((run) => run.base),
+    Option.getOrUndefined,
+  );
 
 /**
  * The claim exit the lap's author named, as drawn now: its claim that the
@@ -85,6 +114,10 @@ export const directBase = (task: Runs): string | undefined =>
  */
 export const authorClaim = (task: Runs, pipeline: Pipeline): Exit | undefined => {
   const author = lapOf(task).find((run) => run.role === "author");
-  const exit = exitAt(pipeline, author?.node, author?.ending);
+  const exit = exitAt(
+    pipeline,
+    Option.getOrUndefined(author?.node ?? Option.none()),
+    Option.getOrUndefined(author?.ending ?? Option.none()),
+  );
   return exit?.empty === "claim" ? exit : undefined;
 };

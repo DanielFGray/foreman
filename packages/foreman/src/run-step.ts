@@ -4,7 +4,8 @@
 // `Records.write` write it, and then does its own I/O. The pipeline tracer
 // folds the same rows over a task held in memory with `applyRow`, so both read
 // one copy of the rules.
-import type { Charge, CheckRun, Ending, NewRun, Run } from "tasks";
+import { Option } from "effect";
+import type { Charge, CheckRun, Ending, NewRunInput, Run } from "tasks";
 import { authoredBy, lapOf, reviewedBy, reviewFailedBy } from "./lap.ts";
 import { authorFor, type Choice, type Ladder, levelSpent, levelPeers } from "./ladder.ts";
 import { drawnBy, reviewerFor, type Reviewer, type Seats } from "./reviewers.ts";
@@ -15,15 +16,15 @@ import { attemptsOf, failuresOf, isResearch, type Item, type TaskStatus } from "
 /** What happened to a task: what the dispatcher observed, or what the tracer pretends. */
 export type RunEvent =
   /** An author starts at its block: the task is claimed and its run opens. */
-  | { readonly _tag: "AuthorStarted"; readonly run: NewRun }
+  | { readonly _tag: "AuthorStarted"; readonly run: NewRunInput }
   /** A new author replaces one whose pane vanished, whose run ends `vanished`. */
-  | { readonly _tag: "AuthorReplaced"; readonly run: NewRun }
+  | { readonly _tag: "AuthorReplaced"; readonly run: NewRunInput }
   /**
    * A reviewer starts, reading the tip its run records. The author's run
    * closes `done` at that tip, and a review run still open belongs to a
    * reviewer this one replaces, so it ends `released`.
    */
-  | { readonly _tag: "ReviewStarted"; readonly run: NewRun }
+  | { readonly _tag: "ReviewStarted"; readonly run: NewRunInput }
   /** The agent of the open run names the exit with id `exit`, on the commit the task's tip is at. */
   | { readonly _tag: "ExitNamed"; readonly exit: string; readonly commit: string | undefined }
   /**
@@ -101,7 +102,7 @@ export interface Row {
   readonly charges: ReadonlyArray<string>;
   /** Why the task is parked for the operator. */
   readonly park: string | undefined;
-  readonly open: NewRun | undefined;
+  readonly open: NewRunInput | undefined;
   /** What landing made of the lap's author run. */
   readonly land: "committed" | "answered" | undefined;
 }
@@ -141,13 +142,16 @@ export const stepOf = (task: Stepping, event: RunEvent, rules: StepRules): RunSt
     case "ExitNamed":
       return named(task, event, rules);
     case "HandedOff":
-      return adding(exitCharge(task, openAgentOf(rules.pipeline, task)?.run.rung, rules), {
-        close: { author: "done", review: "stopped", commit: event.tip },
-      });
+      return adding(
+        exitCharge(task, openAgentOf(rules.pipeline, task)?.run.rung ?? Option.none(), rules),
+        {
+          close: { author: "done", review: "stopped", commit: event.tip },
+        },
+      );
     case "ReviewReturned":
       // A reviewer is no rung, so a review exit charges only the author
       // (`fails: author`); validation refuses `fails: self` on a review block.
-      return adding(exitCharge(task, undefined, rules), { close: { review: "released" } });
+      return adding(exitCharge(task, Option.none(), rules), { close: { review: "released" } });
     case "Requeued":
       return step({ close: { author: "released", review: "released" } });
     case "Stalled":
@@ -196,7 +200,11 @@ export const applyRow = <
     status: row.move === undefined ? task.status : STATUS_AFTER[row.move],
     charges: [
       ...task.charges,
-      ...row.charges.map((rung): Charge => ({ rung, run: ended.at(-1)?.id, forgiven: false })),
+      ...row.charges.map((rung): Charge => ({
+        rung,
+        run: Option.fromNullishOr(ended.at(-1)?.id),
+        forgiven: false,
+      })),
     ],
     parked: row.park ?? task.parked,
   };
@@ -217,7 +225,7 @@ export const openExitOf = (
   task: Pick<Item, "runs">,
 ): Exit | undefined => {
   const open = openAgentOf(pipeline, task);
-  return open?.block.exits.find((exit) => exit.id === open.run.ending);
+  return open?.block.exits.find((exit) => Option.contains(open.run.ending, exit.id));
 };
 
 /** The task's open agent run and its block in the drawing, while that block is still an agent. */
@@ -226,7 +234,9 @@ export const openAgentOf = (
   task: Pick<Item, "runs">,
 ): { readonly run: Run; readonly block: AgentNode } | undefined => {
   const run = task.runs.findLast((candidate) => candidate.open && candidate.role !== "check");
-  const block = pipeline?.nodes.find((node) => node.id === run?.node);
+  const block = pipeline?.nodes.find(
+    (node) => run !== undefined && Option.contains(run.node, node.id),
+  );
   return run !== undefined && block?.kind === "agent" ? { run, block } : undefined;
 };
 
@@ -286,7 +296,7 @@ const named = (
 };
 
 /** Charges what the exit the open agent run named says, `self` being `rung`. */
-const exitCharge = (task: Stepping, rung: string | undefined, rules: StepRules): RunStep =>
+const exitCharge = (task: Stepping, rung: Option.Option<string>, rules: StepRules): RunStep =>
   charge(task, openExitOf(rules.pipeline, task)?.fails, rung, rules);
 
 /**
@@ -319,7 +329,7 @@ const checked = (
 ): RunStep => {
   if (event.check.ending === "passed") return step({ check: event.check });
   const failed = event.block.exits.find((candidate) => candidate.id === "failed");
-  return adding(charge(task, failed?.fails, undefined, rules), {
+  return adding(charge(task, failed?.fails, Option.none(), rules), {
     check: event.check,
     ...(failed?.to === QUEUE ? releasing({}) : {}),
   });
@@ -344,12 +354,12 @@ const endedRuns = (task: Stepping, row: Row): ReadonlyArray<Run> => {
       id: nextId(named),
       task: task.id,
       role: "check",
-      rung: undefined,
-      node: row.check.node,
-      commit: row.check.commit,
-      base: undefined,
-      ending: row.check.ending,
-      rounds: undefined,
+      rung: Option.none(),
+      node: Option.some(row.check.node),
+      commit: Option.some(row.check.commit),
+      base: Option.none(),
+      ending: Option.some(row.check.ending),
+      rounds: Option.none(),
       open: false,
       landed: false,
     },
@@ -360,12 +370,18 @@ const endedRuns = (task: Stepping, row: Row): ReadonlyArray<Run> => {
 const namedExit = (runs: ReadonlyArray<Run>, exit: NonNullable<Row["exit"]>) => {
   const open = runs.findLast((run) => run.open && run.role !== "check");
   return runs.map((run) =>
-    run === open ? { ...run, ending: exit.ending, commit: exit.commit ?? run.commit } : run,
+    run === open
+      ? {
+          ...run,
+          ending: Option.some(exit.ending),
+          commit: Option.orElse(Option.fromNullishOr(exit.commit), () => run.commit),
+        }
+      : run,
   );
 };
 
 /** `runs` with the run `open` describes, open. */
-const opened = (task: Stepping, runs: ReadonlyArray<Run>, open: NewRun | undefined) =>
+const opened = (task: Stepping, runs: ReadonlyArray<Run>, open: NewRunInput | undefined) =>
   open === undefined
     ? runs
     : [
@@ -374,12 +390,12 @@ const opened = (task: Stepping, runs: ReadonlyArray<Run>, open: NewRun | undefin
           id: nextId(runs),
           task: task.id,
           role: open.work === "review" ? ("review" as const) : ("author" as const),
-          rung: open.rung,
-          node: open.node,
-          commit: open.commit,
-          base: open.base,
-          ending: undefined,
-          rounds: open.rounds,
+          rung: Option.fromNullishOr(open.rung),
+          node: Option.some(open.node),
+          commit: Option.fromNullishOr(open.commit),
+          base: Option.fromNullishOr(open.base),
+          ending: Option.none(),
+          rounds: Option.fromNullishOr(open.rounds),
           open: true,
           landed: false,
         },
@@ -413,13 +429,13 @@ const releasing = (endings: {
 const charge = (
   task: Stepping,
   fails: Exit["fails"],
-  rung: string | undefined,
+  rung: Option.Option<string>,
   rules: StepRules,
 ): RunStep =>
   fails === "author"
     ? climb(task, rules)
-    : fails === "self" && rung !== undefined
-      ? step({ charges: [rung] })
+    : fails === "self" && Option.isSome(rung)
+      ? step({ charges: [rung.value] })
       : step({});
 
 /** Charges the rung that just ran with failing the task, and reads the author the ladder offers next. */
@@ -458,7 +474,7 @@ const retry = (task: Stepping, ending: Ending, rules: StepRules): RunStep => {
 const reviewerStop = (task: Stepping, rules: StepRules): RunStep => {
   const ran = reviewedBy(task);
   const said = lapOf(task).some(
-    (run) => run.role === "review" && run.open && run.ending !== undefined,
+    (run) => run.role === "review" && run.open && Option.isSome(run.ending),
   );
   const failed = [...reviewFailedBy(task), ...(ran === undefined || said ? [] : [ran])];
   const rule = openAgentOf(rules.pipeline, task)?.block.model ?? "reviewers";
@@ -480,11 +496,14 @@ const closed = (run: Run, close: NonNullable<Row["close"]>): Run => {
   const ending =
     run.role === "review" ? close.review : run.role === "author" ? close.author : undefined;
   if (!run.open || ending === undefined) return run;
-  const named = run.ending !== undefined;
+  const named = Option.isSome(run.ending);
   return {
     ...run,
     open: false,
-    ending: run.ending ?? ending,
-    commit: !named && run.role === "author" ? (close.commit ?? run.commit) : run.commit,
+    ending: Option.orElse(run.ending, () => Option.some(ending)),
+    commit:
+      !named && run.role === "author"
+        ? Option.orElse(Option.fromNullishOr(close.commit), () => run.commit)
+        : run.commit,
   };
 };

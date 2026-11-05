@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import type { Run } from "tasks";
-import { connectionAt, nameExit, store, Tasks } from "tasks";
+import { connectionAt, Runs } from "tasks";
 import {
   authoredBy,
   authorClaim,
@@ -34,7 +34,15 @@ const blockOf = (runs: ReadonlyArray<Run>, tip: string | undefined) => {
   const placement = place(
     STANDARD_PIPELINES.worktree,
     factsOf(
-      { status: "in_progress", priority: 2, parent: undefined, labels: [], runs, charges: [], tip },
+      {
+        status: "in_progress",
+        priority: 2,
+        parent: Option.none(),
+        labels: [],
+        runs,
+        charges: [],
+        tip,
+      },
       STANDARD_PIPELINES.worktree,
     ),
   );
@@ -61,7 +69,7 @@ describe("a task's lap", () => {
       reviewRun("mid", { open: false, ending: "returned", commit: "c1" }),
     ];
 
-    expect(lastExit({ runs })?.ending).toBe("returned");
+    expect(lastExit({ runs })?.ending).toEqual(Option.some("returned"));
     expect(blockOf(runs, "c1")).toBe("author");
   });
 
@@ -88,14 +96,16 @@ describe("a task's lap", () => {
     expect(reviewedBy({ runs })).toBe("high");
     expect(reviewFailedBy({ runs })).toEqual(["mid"]);
     expect(reviewerNamed({ runs })).toBe(false);
-    const named = runs.map((run) => (run.open ? { ...run, ending: "approved" } : run));
+    const named = runs.map((run) => (run.open ? { ...run, ending: Option.some("approved") } : run));
     expect(reviewerNamed({ runs: named })).toBe(true);
   });
 
   test("a stale reviewer is cleared by ending its run", () => {
     const stale = [authorDone("low"), reviewRun("mid")];
     const cleared = stale.map((run) =>
-      run.open && run.role === "review" ? { ...run, open: false, ending: "stopped" } : run,
+      run.open && run.role === "review"
+        ? { ...run, open: false, ending: Option.some("stopped") }
+        : run,
     );
 
     expect(reviewedBy({ runs: stale })).toBe("mid");
@@ -181,7 +191,9 @@ describe("the readers against a scratch store", () => {
           return yield* f(yield* Records, yield* Tracker);
         }).pipe(
           Effect.provide(
-            Records.layer.pipe(Layer.provide(Layer.mergeAll(store, BunServices.layer))),
+            Records.layer.pipe(
+              Layer.provide(Layer.mergeAll(connectionAt(process.env.TASKS_DB!), BunServices.layer)),
+            ),
           ),
         ),
       );
@@ -205,8 +217,8 @@ describe("the readers against a scratch store", () => {
     await run((_, tracker) => tracker.claim(id));
     await started({ _tag: "ReviewStarted", run: dispatch("review", "mid", "c1") });
     await Effect.runPromise(
-      nameExit(id, { ending: "approved", commit: "c1", event: undefined }).pipe(
-        Effect.provide(Tasks.layerSql.pipe(Layer.provideMerge(store))),
+      Runs.use((runs) => runs.nameExit(id, { ending: "approved", commit: "c1" })).pipe(
+        Effect.provide(Runs.layerAt(process.env.TASKS_DB!)),
       ),
     );
 

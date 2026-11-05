@@ -138,7 +138,7 @@ import {
   directBase,
   authorClaim,
   reviewerNamed,
-  lastExit,
+  routedRung,
   routedCommit,
   reviewedBy,
 } from "./lap.ts";
@@ -1407,10 +1407,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         current.owned.filter(({ task, worker }) => {
           const pipeline = pipelineOf(task);
           const run = task.runs.at(-1);
-          const block = pipeline?.nodes.find((node) => node.id === run?.node);
+          const block = pipeline?.nodes.find(
+            (node) => run !== undefined && Option.contains(run.node, node.id),
+          );
           const exit =
             block?.kind === "agent" || block?.kind === "check"
-              ? block.exits.find((candidate) => candidate.id === run?.ending)
+              ? block.exits.find(
+                  (candidate) => run !== undefined && Option.contains(run.ending, candidate.id),
+                )
               : undefined;
           const placement = pipeline && place(pipeline, factsOf(task, pipeline));
           return (
@@ -1463,7 +1467,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             // the reviewer where one owns the pane, else the author.
             const ran = reviewedBy(task) ?? authoredBy(task);
             const role = reviewedBy(task) ? "review" : "author";
-            const rung = ran === undefined ? undefined : seatOf(settings, { role, rung: ran });
+            const rung =
+              ran === undefined ? undefined : seatOf(settings, { role, rung: Option.some(ran) });
             // Only a stop without a verdict can be a wall: an onboarding worker
             // stands in the operator's own tree, which foreman never commits, so
             // it is left to the ordinary path.
@@ -3498,7 +3503,7 @@ export const planFrom = (
         }));
       const denied = gates.some(({ given }) => given._tag === "Denied");
       const asking = denied ? undefined : gates.find(({ given }) => given._tag === "Ask");
-      if (asking !== undefined) asks.push({ task, step: asking.step, rung: lastExit(task)?.rung });
+      if (asking !== undefined) asks.push({ task, step: asking.step, rung: routedRung(task) });
       const merge = !denied && asking === undefined;
       // An open PR still takes its review post, and its conflicts and failed
       // checks still return the task, while the merge waits for the operator.
@@ -3528,7 +3533,7 @@ export const planFrom = (
         step: asking.step,
         rung:
           node.kind === "land" || node.kind === "done"
-            ? lastExit(task)?.rung
+            ? routedRung(task)
             : node.kind === "agent" && node.role === "review"
               ? authoredBy(task)
               : undefined,

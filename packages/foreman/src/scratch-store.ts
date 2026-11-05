@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
-import { connectionAt } from "tasks";
+import { connectionAt, Runs } from "tasks";
 
 /**
  * A task store in a temporary file, for tests: the migration makes the schema,
@@ -38,13 +38,13 @@ export const seed = (script: string) =>
     yield* Effect.forEach(statements, (statement) => sql.unsafe(statement), { discard: true });
   });
 
-/** Runs `effect` on a fresh scratch store seeded with `script`, then removes the file. */
+/** Runs `effect` on a fresh scratch store seeded with `script`, then removes the file. The run records are provided beside the connection. */
 export const withStore = <A, E>(
   script: string,
-  effect: Effect.Effect<A, E, SqlClient.SqlClient>,
+  effect: Effect.Effect<A, E, SqlClient.SqlClient | Runs>,
 ): Promise<A> => {
   const store = scratchStore();
   return seed(script)
-    .pipe(Effect.andThen(effect), Effect.provide(store.layer), Effect.runPromise)
+    .pipe(Effect.andThen(effect), Effect.provide(Runs.layerAt(store.file)), Effect.runPromise)
     .finally(store.cleanup);
 };

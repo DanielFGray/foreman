@@ -1,14 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option } from "effect";
-import {
-  dependencyMermaid,
-  STATUSES,
-  TaskError,
-  Tasks,
-  nameExit,
-  runsOf,
-  type TaskEvent,
-} from "tasks";
+import { dependencyMermaid, STATUSES, TaskError, Tasks, Runs, type TaskEvent } from "tasks";
 import { PRIME } from "./prime.ts";
 import { detail, detailJson, json, lines } from "./render.ts";
 import { prose } from "./text.ts";
@@ -88,18 +80,19 @@ const add = Command.make(
 const show = Command.make("show", { id, json: asJson }, (args) =>
   Effect.gen(function* () {
     const tasks = yield* Tasks;
+    const runs = yield* Runs;
     const item = yield* tasks.require(args.id);
-    const [dependencies, dependents, children, logs, runs] = yield* Effect.all([
+    const [dependencies, dependents, children, logs, recorded] = yield* Effect.all([
       tasks.dependencies(args.id),
       tasks.dependents(args.id),
       tasks.list({ parent: args.id }),
       tasks.logs(args.id),
-      runsOf([args.id]).pipe(Effect.map((byTask) => byTask.get(args.id) ?? [])),
+      runs.runsOf([args.id]).pipe(Effect.map((byTask) => byTask.get(args.id) ?? [])),
     ]);
     yield* Console.log(
       args.json
-        ? detailJson(item, dependencies, dependents, children, logs, runs)
-        : detail(item, dependencies, dependents, logs, runs),
+        ? detailJson(item, dependencies, dependents, children, logs, recorded)
+        : detail(item, dependencies, dependents, logs, recorded),
     );
   }),
 ).pipe(
@@ -369,9 +362,11 @@ const verdictCommand = Command.make(
     ),
   },
   ({ id, said }) =>
-    nameExit(id, { ending: said, commit: undefined, event: VERDICT_MOVES[said] }).pipe(
-      Effect.andThen(Console.log(`${id}: ${said}`)),
-    ),
+    Effect.gen(function* () {
+      const runs = yield* Runs;
+      yield* runs.nameExit(id, { ending: said, event: VERDICT_MOVES[said] });
+      yield* Console.log(`${id}: ${said}`);
+    }),
 ).pipe(
   Command.withDescription(
     "Name the exit that ends your run: approved or returned (a reviewer), already-done (an author whose task the trunk already does). returned reopens the task; already-done leaves the status and records the exit; a second verdict replaces the first",

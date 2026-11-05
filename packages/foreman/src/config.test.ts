@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { connectionAt, store } from "tasks";
 import { join } from "node:path";
@@ -9,11 +10,19 @@ import { seed } from "./scratch-store.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 
-const loadLadder = () =>
+const loadLadder = (db = process.env["TASKS_DB"]) =>
   Effect.gen(function* () {
     const config = yield* Settings;
     return config.ladder;
-  }).pipe(Effect.provide(settings.pipe(Layer.provide(store))), Effect.runPromise);
+  }).pipe(
+    Effect.provide(
+      Layer.fresh(settings).pipe(
+        Layer.provide(db === undefined ? Layer.fresh(store) : connectionAt(db)),
+        Layer.provide(BunServices.layer),
+      ),
+    ),
+    Effect.runPromise,
+  );
 
 describe("settings", () => {
   const savedCwd = process.cwd();
@@ -70,7 +79,9 @@ describe("settings", () => {
   test("refuses to start without a registry", async () => {
     // A store that has never held a ladder is created and migrated empty on open.
     process.env["FOREMAN_CONFIG"] = join(repoRoot, "e2e", "config.jsonc");
-    process.env["TASKS_DB"] = join(mkdtempSync(join(tmpdir(), "foreman-registry-")), "empty.db");
-    await expect(loadLadder()).rejects.toThrow(/the ladder table has no rungs/);
+    const empty = join(mkdtempSync(join(tmpdir(), "foreman-registry-")), "empty.db");
+    process.env["TASKS_DB"] = empty;
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(empty))));
+    await expect(loadLadder(empty)).rejects.toThrow(/the ladder table has no rungs/);
   });
 });

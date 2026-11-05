@@ -106,7 +106,7 @@ describe("facts read from labels, runs and charges", () => {
       {
         status: "in_progress",
         priority: 1,
-        parent: "ep-1",
+        parent: Option.some("ep-1"),
         labels: ["size:3"],
         runs: [
           stoppedRun("strong"),
@@ -734,7 +734,7 @@ describe("a check block", () => {
         {
           status: "in_progress",
           priority: 1,
-          parent: undefined,
+          parent: Option.none(),
           labels: [],
           runs: [authorDone("cheap", "c1"), ...runs],
           charges: [],

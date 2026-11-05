@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import type { Item } from "tasks";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { type GraphWorld, graphReport } from "./pipeline-graph.ts";
@@ -11,10 +12,10 @@ const item = (id: string, over: Partial<Item> = {}): Item => ({
   type: "task",
   status: "open",
   priority: 2,
-  parent: undefined,
+  parent: Option.none(),
   labels: [],
   description: "",
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   createdAt: new Date(0),
   updatedAt: new Date(0),
   lastActivityAt: new Date(0),
@@ -60,7 +61,7 @@ describe("graphReport", () => {
       world({
         items: [
           item("ep", { type: "epic", status: "in_progress" }),
-          item("t", { parent: "ep" }),
+          item("t", { parent: Option.some("ep") }),
           item("u"),
         ],
         policy,
@@ -84,7 +85,11 @@ describe("graphReport", () => {
     } as const;
     const report = graphReport(
       world({
-        items: [item("t", { parent: "ep" }), item("u", { parent: "ep" }), item("v")],
+        items: [
+          item("t", { parent: Option.some("ep") }),
+          item("u", { parent: Option.some("ep") }),
+          item("v"),
+        ],
         policy,
         scopes: new Map([
           ["ep", new Set(["t", "u"])],
@@ -115,9 +120,9 @@ describe("graphReport", () => {
     const report = graphReport(
       world({
         items: [
-          item("x", { parent: "e2" }),
-          item("y", { parent: "e1" }),
-          item("z", { priority: 1, parent: "e2" }),
+          item("x", { parent: Option.some("e2") }),
+          item("y", { parent: Option.some("e1") }),
+          item("z", { priority: 1, parent: Option.some("e2") }),
         ],
       }),
     );

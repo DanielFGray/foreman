@@ -80,11 +80,9 @@ describe("reads", () => {
     );
     expect(Option.isSome(actual.item)).toBe(true);
     if (Option.isNone(actual.item)) return;
-    expect(actual.item.value).toMatchObject({
-      status: "in_progress",
-      labels: ["by:cheap"],
-      parent: undefined,
-    });
+    expect(actual.item.value.status).toBe("in_progress");
+    expect(actual.item.value.labels).toEqual(["by:cheap"]);
+    expect(actual.item.value.parent).toEqual(Option.none());
     expect(actual.dependencies).toEqual([ids.first!]);
     expect(actual.logs.map((entry) => entry.message)).toEqual(["started on cheap"]);
   });
@@ -104,7 +102,9 @@ describe("reads", () => {
       if ("status" in filter)
         expect(items.every((item) => item.status === filter.status)).toBe(true);
       if ("parent" in filter)
-        expect(items.every((item) => item.parent === filter.parent)).toBe(true);
+        expect(items.every((item) => Option.getOrUndefined(item.parent) === filter.parent)).toBe(
+          true,
+        );
       if ("type" in filter) expect(items.every((item) => item.type === filter.type)).toBe(true);
     }
   });
@@ -162,16 +162,16 @@ describe("writes", () => {
         labels: ["bug"],
       }),
     );
-    const item = await withTasks((tasks) => tasks.get(id));
-    expect(Option.getOrThrow(item)).toMatchObject({
+    const item = Option.getOrThrow(await withTasks((tasks) => tasks.get(id)));
+    expect(item).toMatchObject({
       id,
       title: "Added",
       project: "fresh",
       description: "body",
       priority: 1,
-      parent: ids.epic!,
       labels: ["bug"],
     });
+    expect(item.parent).toEqual(Option.some(ids.epic!));
     const sqlite = new Database(file, { readonly: true });
     try {
       expect(sqlite.query("SELECT name FROM projects WHERE name = 'fresh'").all()).toEqual([

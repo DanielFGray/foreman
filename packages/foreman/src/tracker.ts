@@ -4,7 +4,7 @@ import {
   TaskError,
   type Dependency,
   type Item,
-  type ListFilter,
+  type ListFilterInput,
   type LogEntry,
   type Status,
   type TaskEvent,
@@ -44,7 +44,7 @@ export class Tracker extends Context.Service<
     readonly refresh: (project: string) => Effect.Effect<void, TrackerError>;
     /** One task, or nothing when the tracker has no such task. */
     readonly lookup: (task: string) => Effect.Effect<Option.Option<Item>, TrackerError>;
-    readonly list: (filter: ListFilter) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
+    readonly list: (filter: ListFilterInput) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
     /** Every dependency edge from an item of `project`, whatever the status of either end. */
     readonly dependencies: (
       project: string,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Option } from "effect";
 import type { Run } from "tasks";
 import { planFrom, reviewable } from "./dispatcher.ts";
 import type { Ladder } from "./ladder.ts";
@@ -53,11 +54,11 @@ const task = (
       priority: 1,
       labels: [],
       description: "",
-      parent: undefined,
+      parent: Option.none(),
       lastActivityAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(0),
-      definitionOfDone: undefined,
+      definitionOfDone: Option.none(),
       runs: [],
       charges: (marks.failedBy ?? []).map((rung) => charged(rung, runs.at(-1)?.id)),
       parked: marks.parked,

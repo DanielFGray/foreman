@@ -5,7 +5,7 @@
 
 import { Effect, Option, Schema as S } from "effect";
 import { SqlClient } from "effect/sql";
-import { lastStarts } from "tasks";
+import { Runs } from "tasks";
 import { floorFor, isMetered, type Choice, type Ladder, providerOf, type Rung } from "./ladder.ts";
 import {
   advise,
@@ -98,9 +98,10 @@ export const runSuggest = (rawOptions: unknown) =>
     const rows = yield* readCandidates;
     const ladder = yield* readLadder;
     const floor = yield* resolveFloor(options.after, ladder);
-    const starts = yield* lastStarts("author").pipe(
-      Effect.mapError(registryError("reading the rungs' last starts")),
-    );
+    const runs = yield* Runs;
+    const starts = yield* runs
+      .lastStarts("author")
+      .pipe(Effect.mapError(registryError("reading the rungs' last starts")));
 
     const byAccount = yield* readAccounts(
       rows.filter((row) => row.enabled && !row.retired && row.level >= floor.level),

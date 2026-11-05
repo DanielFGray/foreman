@@ -1,21 +1,8 @@
 import { Context, Effect, Layer, Option, Schema as S } from "effect";
 import { SqlClient } from "effect/sql";
 import {
-  addRound,
-  charge,
-  chargesOf,
-  closeOpenRuns,
-  deleteOpenRunOf,
-  forgive,
-  landAuthorRun,
-  openRun,
-  park,
-  parksOf,
-  recordCheck,
-  recordExit,
-  runsOf,
-  lastStarts,
-  unpark,
+  Runs,
+  Tasks,
   type Charge,
   type Ending,
   type Item as TaskItem,
@@ -72,6 +59,7 @@ export class Records extends Context.Service<Records>()("Records", {
   make: Effect.gen(function* () {
     const tracker = yield* Tracker;
     const sql = yield* SqlClient.SqlClient;
+    const runs = yield* Runs;
 
     /** Runs a records write, naming the operation in its failure. */
     const as =
@@ -95,10 +83,6 @@ export class Records extends Context.Service<Records>()("Records", {
     const together = <A, E>(command: string, effect: Effect.Effect<A, E>) =>
       sql.withTransaction(effect).pipe(as(command));
 
-    /** A run write, on the store's connection and so inside the caller's transaction. */
-    const onStore = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-      effect.pipe(Effect.provideService(SqlClient.SqlClient, sql));
-
     /** Closes the task's open runs with these endings; `commit` is the branch tip they leave. */
     const endRuns = (
       task: string,
@@ -107,20 +91,20 @@ export class Records extends Context.Service<Records>()("Records", {
         readonly review?: Ending;
         readonly commit?: string | undefined;
       },
-    ) => together(`end runs of ${task}`, onStore(closeOpenRuns(task, endings)));
+    ) => together(`end runs of ${task}`, runs.closeOpenRuns(task, endings));
 
     /** The tasks with their runs and charges, oldest first, and their parks. */
     const withRuns = (
       items: ReadonlyArray<TaskItem>,
     ): Effect.Effect<ReadonlyArray<Item>, RecordsError | TrackerError> => {
       const ids = items.map((item) => item.id);
-      return onStore(Effect.all([runsOf(ids), chargesOf(ids), parksOf(ids)])).pipe(
-        Effect.map(([runs, charges, parks]) =>
+      return Effect.all([runs.runsOf(ids), runs.chargesOf(ids), runs.parksOf(ids)]).pipe(
+        Effect.map(([found, charged, parked]) =>
           items.map((item): Item => ({
             ...item,
-            runs: runs.get(item.id) ?? [],
-            charges: charges.get(item.id) ?? [],
-            parked: parks.get(item.id),
+            runs: found.get(item.id) ?? [],
+            charges: charged.get(item.id) ?? [],
+            parked: parked.get(item.id),
             tip: undefined,
           })),
         ),
@@ -169,12 +153,12 @@ export class Records extends Context.Service<Records>()("Records", {
 
     /** Closes the task's open runs with these endings, `released` by default, and requeues it. */
     const releasing = (task: string, endings: Endings) =>
-      onStore(
-        closeOpenRuns(task, {
+      runs
+        .closeOpenRuns(task, {
           author: endings.author ?? "released",
           review: endings.review ?? "released",
-        }),
-      ).pipe(Effect.andThen(tracker.reopen(task)));
+        })
+        .pipe(Effect.andThen(tracker.reopen(task)));
 
     /**
      * Returns a task to the queue and closes its open runs in one transaction,
@@ -221,14 +205,13 @@ export class Records extends Context.Service<Records>()("Records", {
         together(
           `write ${task}`,
           Effect.gen(function* () {
-            if (row.close !== undefined) yield* onStore(closeOpenRuns(task, row.close));
-            if (row.exit !== undefined) yield* onStore(recordExit(task, row.exit));
-            if (row.check !== undefined) yield* onStore(recordCheck(row.check));
-            for (const rung of row.charges) yield* onStore(charge(task, rung));
-            if (row.park !== undefined) yield* onStore(park(task, row.park));
-            if (row.open !== undefined) yield* onStore(openRun(row.open));
-            if (row.land !== undefined)
-              yield* onStore(landAuthorRun(task, row.land === "answered"));
+            if (row.close !== undefined) yield* runs.closeOpenRuns(task, row.close);
+            if (row.exit !== undefined) yield* runs.recordExit(task, row.exit);
+            if (row.check !== undefined) yield* runs.recordCheck(row.check);
+            for (const rung of row.charges) yield* runs.charge(task, rung);
+            if (row.park !== undefined) yield* runs.park(task, row.park);
+            if (row.open !== undefined) yield* runs.openRun(row.open);
+            if (row.land !== undefined) yield* runs.landAuthorRun(task, row.land === "answered");
             if (row.move === "complete") yield* tracker.complete(task);
             if (row.move === "claim") yield* tracker.claim(task);
             if (row.move === "reopen") yield* tracker.reopen(task);
@@ -239,9 +222,10 @@ export class Records extends Context.Service<Records>()("Records", {
        * The latest start of each seat, per role: the turn order of the rungs
        * inside a level (`authorFor`) and of the reviewers (`reviewerFor`).
        */
-      lastStarts: onStore(
-        Effect.all({ author: lastStarts("author"), review: lastStarts("review") }),
-      ).pipe(as("read run starts")),
+      lastStarts: Effect.all({
+        author: runs.lastStarts("author"),
+        review: runs.lastStarts("review"),
+      }).pipe(as("read run starts")),
 
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
@@ -262,12 +246,12 @@ export class Records extends Context.Service<Records>()("Records", {
        * Only an epic with a task in hand can change that task's rank, so the
        * children of every other epic are not read.
        */
-      epicsOver: (over: ReadonlyArray<{ readonly parent: string | undefined }>) =>
+      epicsOver: (over: ReadonlyArray<{ readonly parent: Option.Option<string> }>) =>
         tracker.list({ status: "in_progress", type: "epic" }).pipe(
           Effect.flatMap(withRuns),
           Effect.flatMap((epics) =>
             Effect.forEach(
-              epics.filter((epic) => over.some((task) => task.parent === epic.id)),
+              epics.filter((epic) => over.some((task) => Option.contains(task.parent, epic.id))),
               (epic) =>
                 children(epic.id).pipe(
                   Effect.map((items): EpicProgress => ({ epic, children: items })),
@@ -297,7 +281,7 @@ export class Records extends Context.Service<Records>()("Records", {
        * Counts one more correction round sent to the current author, and
        * answers the new count.
        */
-      countRound: (task: string) => onStore(addRound(task)).pipe(as(`count round ${task}`)),
+      countRound: (task: string) => runs.addRound(task).pipe(as(`count round ${task}`)),
 
       /**
        * Ends the task's open review run with a reason the reviewer did not
@@ -316,9 +300,9 @@ export class Records extends Context.Service<Records>()("Records", {
       abandon: (task: string, role: Role) =>
         together(
           `abandon ${role} of ${task}`,
-          onStore(deleteOpenRunOf(task, role)).pipe(
-            Effect.andThen(role === "author" ? tracker.reopen(task) : Effect.void),
-          ),
+          runs
+            .deleteOpenRunOf(task, role)
+            .pipe(Effect.andThen(role === "author" ? tracker.reopen(task) : Effect.void)),
         ),
 
       release,
@@ -331,7 +315,7 @@ export class Records extends Context.Service<Records>()("Records", {
       park: (task: string, reason: string, endings: Endings = {}) =>
         together(
           `park ${task}`,
-          onStore(park(task, reason)).pipe(Effect.andThen(releasing(task, endings))),
+          runs.park(task, reason).pipe(Effect.andThen(releasing(task, endings))),
         ),
 
       /**
@@ -350,7 +334,7 @@ export class Records extends Context.Service<Records>()("Records", {
        * must not inherit a verdict it has not earned again.
        */
       markFailure: (task: string, rung: string) =>
-        onStore(charge(task, rung)).pipe(as(`charge ${rung} on ${task}`)),
+        runs.charge(task, rung).pipe(as(`charge ${rung} on ${task}`)),
 
       /**
        * Takes back the record that one rung failed this task.
@@ -362,10 +346,10 @@ export class Records extends Context.Service<Records>()("Records", {
        * deserved", and the work drops back to the model below.
        */
       clearFailure: (task: string, rung: string) =>
-        onStore(forgive(task, rung)).pipe(as(`forgive ${rung} on ${task}`)),
+        runs.forgive(task, rung).pipe(as(`forgive ${rung} on ${task}`)),
 
       /** Puts a parked task back in the queue at the rung it had earned. */
-      unpark: (task: string) => onStore(unpark(task)).pipe(as(`unpark ${task}`)),
+      unpark: (task: string) => runs.unpark(task).pipe(as(`unpark ${task}`)),
 
       markDiagnostic: (task: string, intent: DiagnosticIntent) =>
         replaceKinds(task, [DIAGNOSING], `${DIAGNOSING}:${intent}`),
@@ -375,11 +359,14 @@ export class Records extends Context.Service<Records>()("Records", {
   }),
 }) {
   /**
-   * Records and the tasks tracker over one store connection, which the caller
-   * provides once. Both services come out, and they share that connection,
-   * which is what makes `together` atomic across them.
+   * Records, the run records and the tasks tracker over one store connection,
+   * which the caller provides once. The services come out, and they share that
+   * connection, which is what makes `together` atomic across them.
    */
-  static readonly layer = Layer.effect(this, this.make).pipe(Layer.provideMerge(ProjectTracker));
+  static readonly layer = Layer.effect(this, this.make).pipe(
+    Layer.provideMerge(Runs.layerSql.pipe(Layer.provideMerge(Tasks.layerSql))),
+    Layer.provideMerge(ProjectTracker),
+  );
 }
 
 /** An epic being driven, and its direct children: how close it is to done. */
@@ -472,15 +459,16 @@ export const attemptsOf = (
 ): number => {
   const after = Math.max(
     -1,
-    ...item.charges.filter((one) => rungs.includes(one.rung)).map((one) => one.run ?? -1),
+    ...item.charges
+      .filter((one) => rungs.includes(one.rung))
+      .map((one) => Option.getOrElse(one.run, () => -1)),
   );
   return item.runs.filter(
     (run) =>
       run.role === "author" &&
-      run.rung !== undefined &&
-      rungs.includes(run.rung) &&
+      Option.exists(run.rung, (rung) => rungs.includes(rung)) &&
       run.id > after &&
-      (run.ending === "stopped" || run.ending === "vanished"),
+      (Option.contains(run.ending, "stopped") || Option.contains(run.ending, "vanished")),
   ).length;
 };
 
@@ -556,7 +544,7 @@ export const walledBy = (
   seats: Seats,
 ): ReadonlyArray<string> => {
   const providers = sinceLanded(item)
-    .filter((run) => run.ending === "walled")
+    .filter((run) => Option.contains(run.ending, "walled"))
     .flatMap((run) => {
       const seat = seatOf(seats, run);
       const provider = seat === undefined ? undefined : providerOf(seat);

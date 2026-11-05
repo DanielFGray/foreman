@@ -1,4 +1,4 @@
-import { Match } from "effect";
+import { Match, Option } from "effect";
 import type {
   Active,
   Ask,
@@ -348,9 +348,10 @@ export const queueRows = (
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<ColumnRow> =>
   queue.flatMap((task, index) => {
-    const progress = epics.find(({ epic }) => epic.id === task.parent);
+    const progress = epics.find(({ epic }) => Option.contains(task.parent, epic.id));
     const leads =
-      progress !== undefined && queue.findIndex((other) => other.parent === task.parent) === index;
+      progress !== undefined &&
+      queue.findIndex((other) => Option.contains(other.parent, progress.epic.id)) === index;
     return leads ? [epicRow(progress), queueRow(task)] : [queueRow(task)];
   });
 

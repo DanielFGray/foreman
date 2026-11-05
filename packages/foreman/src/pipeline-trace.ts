@@ -3,6 +3,7 @@
 // over a task held in memory, and `place` reads where it stands after each.
 // Nothing is read from or written to the store. The simulator
 // (`pipeline-simulate.ts`) moves its tasks with the same events.
+import { Option } from "effect";
 import type { Run } from "tasks";
 import { type BlockSeat, seatAt } from "./agent-rung.ts";
 import { wallAccountOf } from "./harness.ts";
@@ -191,7 +192,7 @@ export const pretend = (task: PretendTask): Pretend => ({
   project: "trace",
   status: "open",
   priority: task.priority,
-  parent: task.parent,
+  parent: Option.fromNullishOr(task.parent),
   labels: task.size === undefined ? task.labels : [...task.labels, `size:${task.size}`],
   runs: [],
   charges: [],
@@ -204,7 +205,7 @@ export const pretend = (task: PretendTask): Pretend => ({
  * records, else `c0`. An author's exit names a new made-up commit (`atAgent`).
  */
 export const tipOf = (runs: ReadonlyArray<Pick<Run, "commit">>): string =>
-  runs.findLast((run) => run.commit !== undefined)?.commit ?? "c0";
+  runs.flatMap((run) => Option.toArray(run.commit)).at(-1) ?? "c0";
 
 /**
  * The task placed, after an agent block it waits at opens its run. A parked
@@ -317,7 +318,10 @@ const atAgent = <T extends Pretend>(
   event: TraceEvent,
   rules: TraceRules,
 ): T => {
-  const ran = openAgentOf(rules.pipeline, task)?.run.rung;
+  const ran = Option.fromNullishOr(openAgentOf(rules.pipeline, task)).pipe(
+    Option.flatMap((open) => open.run.rung),
+    Option.getOrUndefined,
+  );
   if (event === "stop") {
     const who = node.role === "review" ? `reviewer ${ran}` : (ran ?? "agent");
     return folded(task, [{ _tag: "Stalled", role: node.role, who }], rules);

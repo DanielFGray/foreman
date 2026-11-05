@@ -17,11 +17,11 @@ const task = (id: string, status: TaskStatus, runs: Item["runs"] = []): Item => 
   priority: 2,
   labels: [],
   description: "",
-  parent: undefined,
+  parent: Option.none(),
   lastActivityAt: new Date(0),
   createdAt: new Date(0),
   updatedAt: new Date(0),
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   runs: runs.map((run) => ({ ...run, task: id })),
   charges: [],
   parked: undefined,
@@ -234,9 +234,11 @@ describe("the task board", () => {
 
   test("names each task's epic, and how far the epic has come", () => {
     const epic: Item = { ...task("ep-1", "in_progress"), type: "epic" };
-    const under = { ...task("ts-under", "open"), parent: "ep-1" };
+    const under = { ...task("ts-under", "open"), parent: Option.some("ep-1") };
     const published = board([under, task("ts-loose", "open")], {
-      epics: [{ epic, children: [under, { ...task("ts-shipped", "done"), parent: "ep-1" }] }],
+      epics: [
+        { epic, children: [under, { ...task("ts-shipped", "done"), parent: Option.some("ep-1") }] },
+      ],
     });
     expect(published.placements.map(({ key, parent }) => [key, parent])).toEqual([
       ["ts-under", "ep-1"],

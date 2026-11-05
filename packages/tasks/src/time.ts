@@ -8,23 +8,26 @@
  * `2026-11-01 22:39:22`, in UTC. Readers compare these columns as text, so a
  * writer keeps each column in the layout already there.
  */
+import { Option } from "effect";
 
 const GO = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)? ([+-])(\d{2})(\d{2}) \S+/;
 const SQLITE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d+)?Z?$/;
 
 /** Reads a stored time in either layout, or nothing when it is neither. */
-export const parseStored = (text: string): Date | undefined => {
+export const parseStored = (text: string): Option.Option<Date> => {
   const go = GO.exec(text);
   if (go !== null) {
     const [, day, clock, fraction = "", sign, hours, minutes] = go;
-    return new Date(`${day}T${clock}${fraction.slice(0, 4)}${sign}${hours}:${minutes}`);
+    return Option.some(
+      new Date(`${day}T${clock}${fraction.slice(0, 4)}${sign}${hours}:${minutes}`),
+    );
   }
   const sqlite = SQLITE.exec(text);
   if (sqlite !== null) {
     const [, day, clock, fraction = ""] = sqlite;
-    return new Date(`${day}T${clock}${fraction.slice(0, 4)}Z`);
+    return Option.some(new Date(`${day}T${clock}${fraction.slice(0, 4)}Z`));
   }
-  return undefined;
+  return Option.none();
 };
 
 /**

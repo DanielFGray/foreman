@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import type { Charge, Run } from "tasks";
 import type { Item } from "./records.ts";
 
@@ -9,24 +10,39 @@ import type { Item } from "./records.ts";
 
 let ids = 0;
 
+/** What a builder overrides: the Option fields of a run, as plain values. */
+export interface RunOver extends Partial<
+  Omit<Run, "rung" | "node" | "commit" | "base" | "ending" | "rounds">
+> {
+  readonly rung?: string | undefined;
+  readonly node?: string | undefined;
+  readonly commit?: string | undefined;
+  readonly base?: string | undefined;
+  readonly ending?: string | undefined;
+  readonly rounds?: number | undefined;
+}
+
 /** An open author run on `rung`; `over` closes it or gives it an ending. */
-export const authorRun = (rung: string, over: Partial<Run> = {}): Run => ({
-  id: ++ids,
-  task: "ts-1",
-  role: "author",
-  rung,
-  node: "author",
-  commit: undefined,
-  base: undefined,
-  ending: undefined,
-  rounds: undefined,
-  open: true,
-  landed: false,
-  ...over,
-});
+export const authorRun = (rung: string | undefined, over: RunOver = {}): Run => {
+  const { rung: ownRung, node, commit, base, ending, rounds, ...rest } = over;
+  return {
+    id: ++ids,
+    task: "ts-1",
+    role: "author",
+    rung: Option.fromNullishOr("rung" in over ? ownRung : rung),
+    node: Option.fromNullishOr("node" in over ? node : "author"),
+    commit: Option.fromNullishOr(commit),
+    base: Option.fromNullishOr(base),
+    ending: Option.fromNullishOr(ending),
+    rounds: Option.fromNullishOr(rounds),
+    open: true,
+    landed: false,
+    ...rest,
+  };
+};
 
 /** An open review run on `rung`. */
-export const reviewRun = (rung: string, over: Partial<Run> = {}): Run =>
+export const reviewRun = (rung: string, over: RunOver = {}): Run =>
   authorRun(rung, { role: "review", node: "review", ...over });
 
 /** A closed review run that approved the commit it read. */
@@ -58,11 +74,15 @@ export const authoredOn = (task: Item, rung: string, ended = false): Item =>
 
 /** A check run at block `node` that ran on `commit` and ended `ending`. */
 export const checkRun = (node: string, commit: string, ending: "passed" | "failed"): Run =>
-  authorRun("", { role: "check", rung: undefined, node, commit, ending, open: false });
+  authorRun(undefined, { role: "check", node, commit, ending, open: false });
 
 /** A closed author run on `rung` that ended without an exit: one attempt on that rung. */
 export const stoppedRun = (rung: string, ending: "stopped" | "vanished" = "stopped"): Run =>
   authorRun(rung, { open: false, ending });
 
 /** A standing charge against `rung`, written after run `run` (none when the task had no runs). */
-export const charged = (rung: string, run?: number): Charge => ({ rung, run, forgiven: false });
+export const charged = (rung: string, run?: number): Charge => ({
+  rung,
+  run: Option.fromNullishOr(run),
+  forgiven: false,
+});

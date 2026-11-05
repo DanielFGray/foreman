@@ -23,7 +23,7 @@ import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
-import type { Ending, NewRun, Role } from "tasks";
+import type { Ending, NewRunInput, Role } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { Ladder } from "./ladder.ts";
@@ -61,11 +61,11 @@ const item = (
       priority: 1,
       labels: [...labels],
       description: "",
-      parent: undefined,
+      parent: Option.none(),
       lastActivityAt: now,
       createdAt: now,
       updatedAt: new Date(0),
-      definitionOfDone: undefined,
+      definitionOfDone: Option.none(),
       runs: [],
       charges: [],
       parked: undefined,
@@ -84,7 +84,12 @@ const newestRun = (task: Item): number | undefined =>
 
 /** The rung of the task's open review run, if a reviewer is assigned. */
 const reviewerOf = (world: World, id: string) =>
-  world.tasks.get(id)?.runs.find((run) => run.open && run.role === "review")?.rung;
+  Option.fromNullishOr(
+    world.tasks.get(id)?.runs.find((run) => run.open && run.role === "review"),
+  ).pipe(
+    Option.flatMap((run) => run.rung),
+    Option.getOrUndefined,
+  );
 
 const worker = (task: string, role: "author" | "review", state: WorkerState): Worker => ({
   task,
@@ -378,7 +383,10 @@ class World {
       this.write("records.markFailure", () =>
         this.update(id, (task) => ({
           ...task,
-          charges: [...task.charges, { rung, run: newestRun(task), forgiven: false }],
+          charges: [
+            ...task.charges,
+            { rung, run: Option.fromNullishOr(newestRun(task)), forgiven: false },
+          ],
         })),
       ),
     unpark: (id: string) =>
@@ -415,7 +423,7 @@ class World {
             .filter((run) => run.role === role)
             .toSorted((a, b) => a.id - b.id)
             .flatMap((run) =>
-              run.rung === undefined ? [] : [[run.rung, new Date(run.id)] as const],
+              Option.toArray(run.rung).map((rung) => [rung, new Date(run.id)] as const),
             ),
         );
       return { author: startsOf("author"), review: startsOf("review") };
@@ -522,7 +530,7 @@ class World {
     });
   }
 
-  private openRun(id: string, run: NewRun): number {
+  private openRun(id: string, run: NewRunInput): number {
     const found = this.tasks.get(id);
     const opened = (found === undefined ? 0 : (newestRun(found) ?? 0)) + 1;
     this.update(id, (task) => ({
@@ -533,12 +541,12 @@ class World {
           id: opened,
           task: id,
           role: run.work === "review" ? "review" : "author",
-          rung: run.rung,
-          node: run.node,
-          commit: run.commit,
-          base: run.base,
-          ending: undefined,
-          rounds: undefined,
+          rung: Option.fromNullishOr(run.rung),
+          node: Option.some(run.node),
+          commit: Option.fromNullishOr(run.commit),
+          base: Option.fromNullishOr(run.base),
+          ending: Option.none(),
+          rounds: Option.none(),
           open: true,
           landed: false,
         },
@@ -560,11 +568,11 @@ class World {
           ? {
               ...run,
               open: false,
-              ending: run.ending ?? ending,
+              ending: Option.orElse(run.ending, () => Option.some(ending)),
               // A named exit keeps the commit it was named on.
               commit:
-                run.role === "author" && run.ending === undefined
-                  ? (endings.commit ?? run.commit)
+                run.role === "author" && Option.isNone(run.ending)
+                  ? Option.orElse(Option.fromNullishOr(endings.commit), () => run.commit)
                   : run.commit,
             }
           : run;
@@ -854,8 +862,8 @@ describe("Dispatcher tick", () => {
     await tick(world);
 
     expect(world.tasks.get(task.id)?.runs).toMatchObject([
-      { role: "author", open: false, ending: "done", commit: "c1" },
-      { role: "review", open: true, commit: "c1" },
+      { role: "author", open: false, ending: Option.some("done"), commit: Option.some("c1") },
+      { role: "review", open: true, commit: Option.some("c1") },
     ]);
   });
 
@@ -873,7 +881,7 @@ describe("Dispatcher tick", () => {
 
     await tick(world);
 
-    expect(world.tasks.get(task.id)?.runs).toMatchObject([{ open: true, ending: undefined }]);
+    expect(world.tasks.get(task.id)?.runs).toMatchObject([{ open: true, ending: Option.none() }]);
   });
 
   test("returns a review handoff with no commit to the queue", async () => {
@@ -1052,7 +1060,7 @@ describe("Dispatcher tick", () => {
     expect(world.tasks.get(task.id)?.runs.at(-1)).toMatchObject({
       role: "review",
       open: true,
-      commit: "c2",
+      commit: Option.some("c2"),
     });
   });
 
@@ -1152,9 +1160,9 @@ describe("naming an exit", () => {
     await tick(world);
 
     expect(world.merged).toEqual([]);
-    expect(world.tasks.get(task.id)?.runs.find((run) => run.ending === "approved")?.commit).toBe(
-      "c1",
-    );
+    expect(
+      world.tasks.get(task.id)?.runs.find((run) => Option.contains(run.ending, "approved"))?.commit,
+    ).toEqual(Option.some("c1"));
   });
 
   test("refuses a name the block does not declare, lists the ones it does, and writes nothing", async () => {
@@ -1175,7 +1183,7 @@ describe("naming an exit", () => {
     await exit(world, task.id, "returned");
 
     const review = world.tasks.get(task.id)?.runs.filter((run) => run.role === "review");
-    expect(review?.map((run) => run.ending)).toEqual(["returned"]);
+    expect(review?.map((run) => run.ending)).toEqual([Option.some("returned")]);
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
   });
 
@@ -1193,7 +1201,10 @@ describe("naming an exit", () => {
     await exit(world, task.id, "done");
 
     expect(world.tasks.get(task.id)?.status).toBe("in_progress");
-    expect(world.tasks.get(task.id)?.runs[0]).toMatchObject({ ending: "done", commit: "c1" });
+    expect(world.tasks.get(task.id)?.runs[0]).toMatchObject({
+      ending: Option.some("done"),
+      commit: Option.some("c1"),
+    });
   });
 });
 
@@ -1913,7 +1924,11 @@ describe("unassign", () => {
     );
 
     const runs = world.tasks.get(task.id)?.runs ?? [];
-    expect(runs.at(-1)).toMatchObject({ rung: "mid", open: false, ending: "released" });
+    expect(runs.at(-1)).toMatchObject({
+      rung: Option.some("mid"),
+      open: false,
+      ending: Option.some("released"),
+    });
     expect(reviewFailedBy({ runs })).toEqual([]);
   });
 });
@@ -2013,7 +2028,10 @@ describe("a usage wall", () => {
     expect(walledBy(walled, seats)).toEqual(["opencode"]);
     expect(attemptsOf(walled, ["free"])).toBe(0);
     expect(failuresOf(walled)).toEqual([]);
-    expect(world.tasks.get("ts-walled")?.runs[0]).toMatchObject({ open: false, ending: "walled" });
+    expect(world.tasks.get("ts-walled")?.runs[0]).toMatchObject({
+      open: false,
+      ending: Option.some("walled"),
+    });
     expect(world.logs.map(([, message]) => message).join("\n")).toContain("opencode");
     // Settle runs before fill in the same tick, so the next author is already
     // dispatched onto the rung on the other account.
@@ -2045,7 +2063,7 @@ describe("a usage wall", () => {
     const found = world.tasks.get(task.id);
     expect(found?.status).toBe("in_progress");
     expect(walledBy(found!, seats)).toEqual(["opencode"]);
-    expect(found?.runs.some((run) => run.ending === "stopped")).toBe(false);
+    expect(found?.runs.some((run) => Option.contains(run.ending, "stopped"))).toBe(false);
     expect(reviewerOf(world, task.id)).toBe("dear");
   });
 
@@ -2073,7 +2091,7 @@ describe("a usage wall", () => {
     expect(world.commits).toHaveLength(0);
     expect(world.tasks.get("ts-plain")?.runs[0]).toMatchObject({
       open: false,
-      ending: "stopped",
+      ending: Option.some("stopped"),
     });
   });
 
@@ -2263,7 +2281,7 @@ describe("a route's workspace blocks", () => {
     expect(world.opened[0]).toBe(directoryFor("test", task.id));
     expect(world.prompts).toEqual(["author", "review from base"]);
     expect(world.merged).toEqual(["c1"]);
-    expect(authorRuns(world, task.id)[0]?.base).toBeUndefined();
+    expect(authorRuns(world, task.id)[0]?.base).toEqual(Option.none());
   });
 
   test("a landing whose completion failed after its records is completed by the next landing", async () => {
@@ -2337,10 +2355,12 @@ describe("a route's workspace blocks", () => {
     });
 
     expect(world.opened[0]).toBe("/build/test");
-    expect(authorRuns(world, task.id)[0]?.base).toBe("h0");
+    expect(authorRuns(world, task.id)[0]?.base).toEqual(Option.some("h0"));
     expect(world.prompts).toEqual(["author", "review from h0"]);
     // The reviewer's approval holds for the commit the checkout had when it read.
-    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toBe("h1");
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toEqual(
+      Option.some("h1"),
+    );
     expect(world.merged).toEqual([]);
     expect(
       world.logs.some(([id, line]) => id === task.id && line.includes("completed at done")),
@@ -2377,8 +2397,8 @@ describe("a route's workspace blocks", () => {
 
     expect(world.checked).toEqual([["h1", "bun run lint"]]);
     expect(world.checkBases).toEqual(["h0"]);
-    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "check")?.ending).toBe(
-      "passed",
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "check")?.ending).toEqual(
+      Option.some("passed"),
     );
     expect(world.spawned).toEqual([[task.id, "review"]]);
   });
@@ -2398,7 +2418,9 @@ describe("a route's workspace blocks", () => {
       ),
     );
 
-    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toBe("h2");
+    expect(world.tasks.get(task.id)?.runs.find((run) => run.role === "review")?.commit).toEqual(
+      Option.some("h2"),
+    );
   });
 
   test("direct: a commit after the approval stops the task completing, and it goes to review again", async () => {
@@ -2737,8 +2759,8 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     expect(task?.charges).toEqual([]);
     expect(task?.parked).toBeUndefined();
     expect(task?.runs.slice(1)).toMatchObject([
-      { rung: "mid", open: false, ending: "stopped" },
-      { rung: "high", open: true },
+      { rung: Option.some("mid"), open: false, ending: Option.some("stopped") },
+      { rung: Option.some("high"), open: true },
     ]);
     expect(world.spawned).toEqual([["ts-stopped", "review"]]);
   });
@@ -2754,8 +2776,8 @@ describe("a reviewer that stops without naming an exit, and one that names retur
 
     const runs = world.tasks.get("ts-spawn")?.runs ?? [];
     expect(runs).toMatchObject([
-      { role: "author", ending: "already-done" },
-      { rung: "mid", open: false, ending: "stopped" },
+      { role: "author", ending: Option.some("already-done") },
+      { rung: Option.some("mid"), open: false, ending: Option.some("stopped") },
     ]);
     expect(world.tasks.get("ts-spawn")?.status).toBe("in_progress");
   });
@@ -3102,9 +3124,9 @@ describe("a drawn pipeline", () => {
 
       expect(world.checked).toEqual([["c1", "bun run lint"]]);
       expect(world.tasks.get("ts-lint")?.runs.find((run) => run.role === "check")).toMatchObject({
-        node: "lint",
-        commit: "c1",
-        ending: "passed",
+        node: Option.some("lint"),
+        commit: Option.some("c1"),
+        ending: Option.some("passed"),
       });
       expect(world.spawned).toEqual([["ts-lint", "review"]]);
     });
@@ -3136,7 +3158,11 @@ describe("a drawn pipeline", () => {
       const task = world.tasks.get("ts-red");
       expect(task?.status).toBe("open");
       expect(failuresOf(task!)).toContain("cheap");
-      expect(task?.runs.at(-1)).toMatchObject({ role: "check", commit: "c1", ending: "failed" });
+      expect(task?.runs.at(-1)).toMatchObject({
+        role: "check",
+        commit: Option.some("c1"),
+        ending: Option.some("failed"),
+      });
       expect(
         world.logs.some(([id, message]) => id === "ts-red" && message.includes("lint: 3 problems")),
       ).toBe(true);

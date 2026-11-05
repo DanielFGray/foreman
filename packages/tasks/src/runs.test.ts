@@ -1,42 +1,21 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectionAt } from "./connection.ts";
 import { Tasks } from "./store.ts";
-import {
-  addRound,
-  closeRun,
-  deleteOpenRun,
-  landAuthorRun,
-  openRun,
-  recordCheck,
-  outcomeOf,
-  runsOf,
-  nameExit,
-  lastStarts,
-  type NewRun,
-} from "./runs.ts";
+import { outcomeOf, Runs, type NewRunInput } from "./runs.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "tasks-runs-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 let files = 0;
-const inStore = <A, E>(use: Effect.Effect<A, E, SqlClient>) =>
-  Effect.runPromise(use.pipe(Effect.provide(connectionAt(join(dir, `store-${++files}.db`)))));
+const inRuns = <A, E>(use: Effect.Effect<A, E, Runs | Tasks | SqlClient>) =>
+  Effect.runPromise(use.pipe(Effect.provide(Runs.layerAt(join(dir, `store-${++files}.db`)))));
 
-const inTasks = <A, E>(use: Effect.Effect<A, E, SqlClient | Tasks>) =>
-  Effect.runPromise(
-    use.pipe(
-      Effect.provide(
-        Tasks.layerSql.pipe(Layer.provideMerge(connectionAt(join(dir, `store-${++files}.db`)))),
-      ),
-    ),
-  );
-
-const run = (over: Partial<NewRun> = {}): NewRun => ({
+const run = (over: Partial<NewRunInput> = {}): NewRunInput => ({
   project: "p",
   task: "ts-1",
   slice: "a slice",
@@ -51,114 +30,143 @@ const run = (over: Partial<NewRun> = {}): NewRun => ({
 
 describe("runs", () => {
   test("an author on the operator's branch keeps the commit it started from after it closes", async () => {
-    const runs = await inStore(
+    const runs = await inRuns(
       Effect.gen(function* () {
-        const id = yield* openRun(run({ base: "start" }));
-        yield* closeRun(id, { ending: "done", commit: "end" });
-        return (yield* runsOf(["ts-1"])).get("ts-1");
+        const runs = yield* Runs;
+        const id = yield* runs.openRun(run({ base: "start" }));
+        yield* runs.closeRun(id, { ending: "done", commit: "end" });
+        return (yield* runs.runsOf(["ts-1"])).get("ts-1");
       }),
     );
-    expect(runs?.[0]).toMatchObject({ base: "start", commit: "end" });
+    expect(runs?.[0]).toMatchObject({ base: Option.some("start"), commit: Option.some("end") });
   });
 
   test("a run is open until closed, and closes with its outcome and commit", async () => {
-    const [open, closed] = await inStore(
+    const [open, closed] = await inRuns(
       Effect.gen(function* () {
-        const id = yield* openRun(run());
-        const open = (yield* runsOf(["ts-1"])).get("ts-1");
-        yield* closeRun(id, { ending: "done", commit: "abc" });
-        return [open, (yield* runsOf(["ts-1"])).get("ts-1")] as const;
+        const runs = yield* Runs;
+        const id = yield* runs.openRun(run());
+        const open = (yield* runs.runsOf(["ts-1"])).get("ts-1");
+        yield* runs.closeRun(id, { ending: "done", commit: "abc" });
+        return [open, (yield* runs.runsOf(["ts-1"])).get("ts-1")] as const;
       }),
     );
-    expect(open?.map((r) => [r.open, r.ending, r.role])).toEqual([[true, undefined, "author"]]);
-    expect(closed?.map((r) => [r.open, r.ending, r.commit])).toEqual([[false, "done", "abc"]]);
+    expect(open?.map((r) => [r.open, Option.getOrUndefined(r.ending), r.role])).toEqual([
+      [true, undefined, "author"],
+    ]);
+    expect(
+      closed?.map((r) => [
+        r.open,
+        Option.getOrUndefined(r.ending),
+        Option.getOrUndefined(r.commit),
+      ]),
+    ).toEqual([[false, "done", "abc"]]);
   });
 
   test("a review run keeps the tip it opened with when it closes", async () => {
-    const runs = await inStore(
+    const runs = await inRuns(
       Effect.gen(function* () {
-        const id = yield* openRun(run({ work: "review", node: "review", commit: "tip1" }));
-        yield* closeRun(id, { ending: "approved" });
-        return (yield* runsOf(["ts-1"])).get("ts-1");
+        const runs = yield* Runs;
+        const id = yield* runs.openRun(run({ work: "review", node: "review", commit: "tip1" }));
+        yield* runs.closeRun(id, { ending: "approved" });
+        return (yield* runs.runsOf(["ts-1"])).get("ts-1");
       }),
     );
-    expect(runs?.[0]).toMatchObject({ role: "review", ending: "approved", commit: "tip1" });
+    expect(runs?.[0]).toMatchObject({
+      role: "review",
+      ending: Option.some("approved"),
+      commit: Option.some("tip1"),
+    });
   });
 
   test("an exit keeps the commit it was named on when settle closes the run", async () => {
-    const runs = await inTasks(
+    const runs = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const tasks = yield* Tasks;
         const id = yield* tasks.add({ project: "p", title: "t" });
-        const review = yield* openRun(
+        const review = yield* runs.openRun(
           run({ task: id, work: "review", node: "review", commit: "tip1" }),
         );
-        yield* nameExit(id, { ending: "approved", commit: "tip2", event: undefined });
-        yield* closeRun(review, { ending: "stopped", commit: "tip3" });
-        return (yield* runsOf([id])).get(id);
+        yield* runs.nameExit(id, { ending: "approved", commit: "tip2", event: undefined });
+        yield* runs.closeRun(review, { ending: "stopped", commit: "tip3" });
+        return (yield* runs.runsOf([id])).get(id);
       }),
     );
-    expect(runs?.map((r) => [r.ending, r.commit])).toEqual([["approved", "tip2"]]);
+    expect(
+      runs?.map((r) => [Option.getOrUndefined(r.ending), Option.getOrUndefined(r.commit)]),
+    ).toEqual([["approved", "tip2"]]);
   });
 
   test("runs read oldest first, per task", async () => {
-    const byTask = await inStore(
+    const byTask = await inRuns(
       Effect.gen(function* () {
-        yield* openRun(run({ rung: "a" }));
-        yield* openRun(run({ task: "ts-2", rung: "x" }));
-        yield* openRun(run({ rung: "b" }));
-        return yield* runsOf(["ts-1", "ts-2", "ts-3"]);
+        const runs = yield* Runs;
+        yield* runs.openRun(run({ rung: "a" }));
+        yield* runs.openRun(run({ task: "ts-2", rung: "x" }));
+        yield* runs.openRun(run({ rung: "b" }));
+        return yield* runs.runsOf(["ts-1", "ts-2", "ts-3"]);
       }),
     );
-    expect(byTask.get("ts-1")?.map((r) => r.rung)).toEqual(["a", "b"]);
-    expect(byTask.get("ts-2")?.map((r) => r.rung)).toEqual(["x"]);
+    expect(byTask.get("ts-1")?.map((r) => Option.getOrUndefined(r.rung))).toEqual(["a", "b"]);
+    expect(byTask.get("ts-2")?.map((r) => Option.getOrUndefined(r.rung))).toEqual(["x"]);
     expect(byTask.has("ts-3")).toBe(false);
   });
 
   test("an open run that never started can be deleted, a closed one cannot", async () => {
-    const result = await inStore(
+    const result = await inRuns(
       Effect.gen(function* () {
-        const never = yield* openRun(run());
-        yield* deleteOpenRun(never);
-        const done = yield* openRun(run());
-        yield* closeRun(done, { ending: "stopped" });
-        const refused = yield* deleteOpenRun(done).pipe(Effect.flip);
-        return { left: (yield* runsOf(["ts-1"])).get("ts-1")?.length, refused: refused._tag };
+        const runs = yield* Runs;
+        const never = yield* runs.openRun(run());
+        yield* runs.deleteOpenRun(never);
+        const done = yield* runs.openRun(run());
+        yield* runs.closeRun(done, { ending: "stopped" });
+        const refused = yield* runs.deleteOpenRun(done).pipe(Effect.flip);
+        return { left: (yield* runs.runsOf(["ts-1"])).get("ts-1")?.length, refused: refused._tag };
       }),
     );
     expect(result).toEqual({ left: 1, refused: "RunError" });
   });
 
   test("rounds count on the latest author run, open or closed, and never on a review", async () => {
-    const counts = await inStore(
+    const counts = await inRuns(
       Effect.gen(function* () {
-        const author = yield* openRun(run());
-        yield* openRun(run({ work: "review" }));
-        const first = yield* addRound("ts-1");
-        yield* closeRun(author, { ending: "done" });
-        const second = yield* addRound("ts-1");
-        const none = yield* addRound("ts-none").pipe(Effect.flip);
+        const runs = yield* Runs;
+        const author = yield* runs.openRun(run());
+        yield* runs.openRun(run({ work: "review" }));
+        const first = yield* runs.addRound("ts-1");
+        yield* runs.closeRun(author, { ending: "done" });
+        const second = yield* runs.addRound("ts-1");
+        const none = yield* runs.addRound("ts-none").pipe(Effect.flip);
         return [first, second, none._tag];
       }),
     );
     expect(counts).toEqual([1, 2, "TaskError"]);
   });
 
-  test("the store refuses an agent ending that is no exit name", async () => {
-    const refused = await inStore(
+  test("an agent ending that is no exit name is refused before it is written, and by the table", async () => {
+    const [closed, refused] = await inRuns(
       Effect.gen(function* () {
-        const review = yield* openRun(run({ work: "review" }));
-        return yield* closeRun(review, { ending: "Handed Off" }).pipe(Effect.flip);
+        const runs = yield* Runs;
+        const sql = yield* SqlClient;
+        const review = yield* runs.openRun(run({ work: "review" }));
+        const closed = yield* runs.closeRun(review, { ending: "Handed Off" }).pipe(Effect.exit);
+        const refused = yield* sql`UPDATE runs SET ending = 'Handed Off' WHERE id = ${review}`.pipe(
+          Effect.flip,
+        );
+        return [closed, refused._tag] as const;
       }),
     );
-    expect(refused._tag).toBe("SqlError");
+    expect(Exit.hasDies(closed)).toBe(true);
+    expect(refused).toBe("SqlError");
   });
 
   test("only an exit stands on an open run", async () => {
-    const sql = await inStore(
+    const sql = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
-        const id = yield* openRun(run());
+        const id = yield* runs.openRun(run());
         const settle = yield* sql`UPDATE runs SET ending = 'stopped' WHERE id = ${id}`.pipe(
           Effect.flip,
         );
@@ -170,27 +178,31 @@ describe("runs", () => {
   });
 
   test("settle keeps the ending the agent wrote", async () => {
-    const closed = await inStore(
+    const closed = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
-        const id = yield* openRun(run({ work: "review", node: "review", commit: "t" }));
+        const id = yield* runs.openRun(run({ work: "review", node: "review", commit: "t" }));
         yield* sql`UPDATE runs SET ending = 'approved' WHERE id = ${id}`;
-        yield* closeRun(id, { ending: "stopped" });
-        return (yield* runsOf(["ts-1"])).get("ts-1");
+        yield* runs.closeRun(id, { ending: "stopped" });
+        return (yield* runs.runsOf(["ts-1"])).get("ts-1");
       }),
     );
-    expect(closed?.map((r) => [r.open, r.ending])).toEqual([[false, "approved"]]);
+    expect(closed?.map((r) => [r.open, Option.getOrUndefined(r.ending)])).toEqual([
+      [false, "approved"],
+    ]);
   });
 
   test("the outcome follows the ending, and landing sets the author's outcome", async () => {
     expect(outcomeOf("canceled")).toBe("dropped");
     expect(outcomeOf("approved")).toBe("handed-off");
-    const outcomes = await inStore(
+    const outcomes = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
-        const author = yield* openRun(run());
-        yield* closeRun(author, { ending: "done", commit: "x" });
-        yield* landAuthorRun("ts-1", false);
+        const author = yield* runs.openRun(run());
+        yield* runs.closeRun(author, { ending: "done", commit: "x" });
+        yield* runs.landAuthorRun("ts-1", false);
         return yield* sql<{ outcome: string }>`SELECT outcome FROM runs`;
       }),
     );
@@ -202,28 +214,38 @@ describe("check runs", () => {
   const check = { project: "p", task: "ts-1", node: "lint", command: "bun run lint" } as const;
 
   test("are written closed with their ending and the commit they ran on", async () => {
-    const runs = await inStore(
+    const runs = await inRuns(
       Effect.gen(function* () {
-        yield* recordCheck({ ...check, commit: "c1", ending: "failed" });
-        yield* recordCheck({ ...check, commit: "c2", ending: "passed" });
-        return (yield* runsOf(["ts-1"])).get("ts-1");
+        const runs = yield* Runs;
+        yield* runs.recordCheck({ ...check, commit: "c1", ending: "failed" });
+        yield* runs.recordCheck({ ...check, commit: "c2", ending: "passed" });
+        return (yield* runs.runsOf(["ts-1"])).get("ts-1");
       }),
     );
-    expect(runs?.map((r) => [r.role, r.node, r.commit, r.ending, r.open])).toEqual([
+    expect(
+      runs?.map((r) => [
+        r.role,
+        Option.getOrUndefined(r.node),
+        Option.getOrUndefined(r.commit),
+        Option.getOrUndefined(r.ending),
+        r.open,
+      ]),
+    ).toEqual([
       ["check", "lint", "c1", "failed", false],
       ["check", "lint", "c2", "passed", false],
     ]);
   });
 
   test("are never an author's run: rounds and landing pass over them", async () => {
-    const [rounds, rows] = await inStore(
+    const [rounds, rows] = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
-        const author = yield* openRun(run());
-        yield* closeRun(author, { ending: "done", commit: "c1" });
-        yield* recordCheck({ ...check, commit: "c1", ending: "passed" });
-        const rounds = yield* addRound("ts-1");
-        yield* landAuthorRun("ts-1", false);
+        const author = yield* runs.openRun(run());
+        yield* runs.closeRun(author, { ending: "done", commit: "c1" });
+        yield* runs.recordCheck({ ...check, commit: "c1", ending: "passed" });
+        const rounds = yield* runs.addRound("ts-1");
+        yield* runs.landAuthorRun("ts-1", false);
         const rows = yield* sql<{ work: string; outcome: string | null; rounds: number | null }>`
           SELECT work, outcome, rounds FROM runs ORDER BY id`;
         return [rounds, rows] as const;
@@ -237,8 +259,9 @@ describe("check runs", () => {
   });
 
   test("the store refuses a check with a model or an agent's ending", async () => {
-    const refused = await inStore(
+    const refused = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
         const withModel =
           yield* sql`INSERT INTO runs (project, task, slice, model, node, work, ending)
@@ -252,12 +275,13 @@ describe("check runs", () => {
   });
 
   test("count in no view about models", async () => {
-    const rows = await inStore(
+    const rows = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
-        const author = yield* openRun(run());
-        yield* closeRun(author, { ending: "done", commit: "c1" });
-        yield* recordCheck({ ...check, commit: "c1", ending: "passed" });
+        const author = yield* runs.openRun(run());
+        yield* runs.closeRun(author, { ending: "done", commit: "c1" });
+        yield* runs.recordCheck({ ...check, commit: "c1", ending: "passed" });
         const summary = yield* sql<{ model: string | null; slices: number }>`
           SELECT model, slices FROM model_summary`;
         // model_status and herd_roster read their runs through run_identity.
@@ -278,30 +302,37 @@ describe("naming an exit", () => {
 
   // Foreman gives a new exit a random id of letters, and the run stores it.
   test("stores an exit id that is no name an agent was ever given", async () => {
-    const runs = await inTasks(
+    const runs = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const tasks = yield* Tasks;
         const id = yield* filed;
         yield* tasks.send(id, "start");
-        yield* openRun(run({ task: id, work: "build", node: "author" }));
-        yield* nameExit(id, { ending: "exit-qzvmktrwpa", commit: "c1", event: undefined });
-        return (yield* runsOf([id])).get(id)?.map((r) => r.ending);
+        yield* runs.openRun(run({ task: id, work: "build", node: "author" }));
+        yield* runs.nameExit(id, { ending: "exit-qzvmktrwpa", commit: "c1", event: undefined });
+        return (yield* runs.runsOf([id])).get(id)?.map((r) => Option.getOrUndefined(r.ending));
       }),
     );
     expect(runs).toEqual(["exit-qzvmktrwpa"]);
   });
 
   test("a second exit replaces the first, commit and all, and makes its status move", async () => {
-    const [status, runs] = await inTasks(
+    const [status, runs] = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const tasks = yield* Tasks;
         const id = yield* filed;
         yield* tasks.send(id, "start");
-        yield* openRun(run({ task: id, work: "review", node: "review" }));
-        yield* nameExit(id, { ending: "approved", commit: "c1", event: undefined });
-        yield* nameExit(id, { ending: "returned", commit: "c2", event: "open" });
+        yield* runs.openRun(run({ task: id, work: "review", node: "review" }));
+        yield* runs.nameExit(id, { ending: "approved", commit: "c1", event: undefined });
+        yield* runs.nameExit(id, { ending: "returned", commit: "c2", event: "open" });
         const task = yield* tasks.require(id);
-        return [task.status, (yield* runsOf([id])).get(id)?.map((r) => [r.ending, r.commit])];
+        return [
+          task.status,
+          (yield* runs.runsOf([id]))
+            .get(id)
+            ?.map((r) => [Option.getOrUndefined(r.ending), Option.getOrUndefined(r.commit)]),
+        ];
       }),
     );
     expect(status).toBe("open");
@@ -309,22 +340,27 @@ describe("naming an exit", () => {
   });
 
   test("is refused with no open run, or with a process ending's name, and moves nothing", async () => {
-    const [none, process, status] = await inTasks(
+    const [none, process, status] = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const tasks = yield* Tasks;
         const id = yield* filed;
         yield* tasks.send(id, "start");
-        const none = yield* nameExit(id, {
-          ending: "returned",
-          commit: undefined,
-          event: "open",
-        }).pipe(Effect.flip);
-        yield* openRun(run({ task: id }));
-        const process = yield* nameExit(id, {
-          ending: "stopped",
-          commit: undefined,
-          event: undefined,
-        }).pipe(Effect.flip);
+        const none = yield* runs
+          .nameExit(id, {
+            ending: "returned",
+            commit: undefined,
+            event: "open",
+          })
+          .pipe(Effect.flip);
+        yield* runs.openRun(run({ task: id }));
+        const process = yield* runs
+          .nameExit(id, {
+            ending: "stopped",
+            commit: undefined,
+            event: undefined,
+          })
+          .pipe(Effect.flip);
         return [none._tag, process._tag, (yield* tasks.require(id)).status] as const;
       }),
     );
@@ -582,8 +618,9 @@ describe("the rung thinking migration", () => {
 
 describe("lastStarts", () => {
   test("reads the newest start of each name's runs of one role", async () => {
-    const starts = await inStore(
+    const starts = await inRuns(
       Effect.gen(function* () {
+        const runs = yield* Runs;
         const sql = yield* SqlClient;
         yield* sql.unsafe(`INSERT INTO runs (project, task, slice, kind, pool, model, work, rung, started_at, closed_at)
           VALUES
@@ -593,7 +630,10 @@ describe("lastStarts", () => {
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'review', 'a', '2026-01-05 09:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', NULL, '2026-01-04 09:00:00', NULL),
           ('p', 'ts-1', 's', 'k', 'P', 'm', 'build', 'c', NULL, NULL)`);
-        return { author: yield* lastStarts("author"), review: yield* lastStarts("review") };
+        return {
+          author: yield* runs.lastStarts("author"),
+          review: yield* runs.lastStarts("review"),
+        };
       }),
     );
     expect(starts.author).toEqual(new Map([["a", new Date("2026-01-02T10:00:00Z")]]));

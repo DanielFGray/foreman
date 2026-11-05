@@ -3,7 +3,7 @@
  * work is, from where it stands in its project's pipeline. Foreman decides
  * the column, so the herdr-app pane only draws it.
  */
-import { DateTime } from "effect";
+import { DateTime, Option } from "effect";
 import { PROCESS_ENDINGS, type Ending } from "tasks";
 import { sinceLanded, type Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
@@ -75,6 +75,6 @@ export const recentlyLanded = (
  * gave no verdict.
  */
 const sentBack = (run: Item["runs"][number]): boolean =>
-  run.role !== "author" && !run.open && run.ending !== undefined && !PROCESS.has(run.ending);
+  run.role !== "author" && !run.open && Option.exists(run.ending, (ending) => !PROCESS.has(ending));
 
 const PROCESS: ReadonlySet<Ending> = new Set(PROCESS_ENDINGS);

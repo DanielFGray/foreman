@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
-import { connectionAt, store } from "tasks";
+import { Effect, Layer, Option } from "effect";
+import { connectionAt } from "tasks";
 import type { CheckNode } from "./pipeline.ts";
 import { QUEUE, STANDARD_PIPELINES } from "./pipeline.ts";
 import { type Item, Records } from "./records.ts";
@@ -141,7 +141,7 @@ const view = (task: Item) => {
     parked: task.parked,
     charges: task.charges.map((charge) => ({
       ...charge,
-      run: charge.run === undefined ? undefined : place.get(charge.run),
+      run: Option.flatMap(charge.run, (run) => Option.fromNullishOr(place.get(run))),
     })),
     runs: task.runs.map(({ id, ...run }) => ({ ...run, id: place.get(id) })),
   };
@@ -154,7 +154,11 @@ const run = <A, E>(
     Effect.gen(function* () {
       return yield* f(yield* Records, yield* Tracker);
     }).pipe(
-      Effect.provide(Records.layer.pipe(Layer.provide(Layer.mergeAll(store, BunServices.layer)))),
+      Effect.provide(
+        Records.layer.pipe(
+          Layer.provide(Layer.mergeAll(connectionAt(process.env.TASKS_DB!), BunServices.layer)),
+        ),
+      ),
     ),
   );
 

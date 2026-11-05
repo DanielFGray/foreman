@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
-import { connectionAt, store, type Run } from "tasks";
+import { Effect, Layer, Option } from "effect";
+import { connectionAt, type Run } from "tasks";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { agentLog, attemptsOf, type Item, walledBy } from "./records.ts";
@@ -55,7 +55,11 @@ const run = <A, E>(
     Effect.gen(function* () {
       return yield* f(yield* Records, yield* Tracker);
     }).pipe(
-      Effect.provide(Records.layer.pipe(Layer.provide(Layer.mergeAll(store, BunServices.layer)))),
+      Effect.provide(
+        Records.layer.pipe(
+          Layer.provide(Layer.mergeAll(connectionAt(process.env.TASKS_DB!), BunServices.layer)),
+        ),
+      ),
     ),
   );
 
@@ -68,11 +72,11 @@ const item = (): Item => ({
   priority: 1,
   labels: [],
   description: "",
-  parent: undefined,
+  parent: Option.none(),
   lastActivityAt: new Date(),
   createdAt: new Date(),
   updatedAt: new Date(0),
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   runs: [],
   charges: [],
   parked: undefined,
@@ -257,7 +261,7 @@ describe("Records against a scratch store", () => {
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "dear") });
     const after = await run((records) => records.show(id));
     expect(after.status).toBe("in_progress");
-    expect(after.runs.map((run) => [run.role, run.ending])).toEqual([
+    expect(after.runs.map((run) => [run.role, Option.getOrUndefined(run.ending)])).toEqual([
       ["author", "done"],
       ["review", "returned"],
       ["author", undefined],
@@ -277,7 +281,7 @@ describe("Records against a scratch store", () => {
     const after = await run((records) => records.show(id));
 
     expect(after.status).toBe("open");
-    expect(after.runs.map((r) => [r.role, r.open, r.ending])).toEqual([
+    expect(after.runs.map((r) => [r.role, r.open, Option.getOrUndefined(r.ending)])).toEqual([
       ["author", false, "done"],
       ["review", false, "released"],
     ]);
@@ -292,7 +296,14 @@ describe("Records against a scratch store", () => {
     await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
 
     const after = await run((records) => records.show(id));
-    expect(after.runs.map((r) => [r.role, r.rung, r.open, r.ending])).toEqual([
+    expect(
+      after.runs.map((r) => [
+        r.role,
+        Option.getOrUndefined(r.rung),
+        r.open,
+        Option.getOrUndefined(r.ending),
+      ]),
+    ).toEqual([
       ["author", "cheap", false, "done"],
       ["review", "cheap", false, "released"],
       ["review", "dear", true, undefined],
@@ -331,7 +342,11 @@ describe("Records against a scratch store", () => {
     expect(after.labels).toEqual([]);
     expect(after.charges).toEqual([]);
     expect(after.parked).toBeUndefined();
-    expect(after.runs.at(-1)).toMatchObject({ role: "author", rung: "cheap", open: true });
+    expect(after.runs.at(-1)).toMatchObject({
+      role: "author",
+      rung: Option.some("cheap"),
+      open: true,
+    });
   });
 
   test("names the operation a store failure came from", async () => {

@@ -6,6 +6,7 @@
 // each run's outcome and minutes, and each check's result, are drawn, from
 // the measured rates (`run-rates.ts`). Nothing is read from or written to the
 // store.
+import { Option } from "effect";
 import { drawSeat, type PerRole } from "./agent-rung.ts";
 import {
   candidatesFrom,
@@ -364,10 +365,12 @@ const startOf = (input: Parameters<typeof simulate>[0]): Sim => {
     const open = openAgentOf(sim.rules.pipeline, task);
     if (placement._tag !== "At" || open === undefined) continue;
     if (placement.state === "ended") {
-      const exit = open.block.exits.find((candidate) => candidate.id === open.run.ending);
+      const exit = open.block.exits.find((candidate) =>
+        Option.contains(open.run.ending, candidate.id),
+      );
       tasks.set(task.id, handedOff(task, open.block, exit, sim.rules));
     } else if (placement.state === "running") {
-      run(sim, task, sim.rates.agent(open.run.rung, open.block.role), 0);
+      run(sim, task, sim.rates.agent(Option.getOrUndefined(open.run.rung), open.block.role), 0);
     }
   }
   return sim;

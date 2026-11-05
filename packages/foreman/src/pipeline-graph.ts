@@ -3,6 +3,7 @@
 // covers it, and the steps the project's pipeline gates on. The pane lays
 // nothing out and picks no steps itself: dropping a card on the board grants
 // it `grantSteps`.
+import { Option } from "effect";
 import { columnsOf, type Dependency, type Item } from "tasks";
 import type { Pipeline } from "./pipeline.ts";
 import {
@@ -83,7 +84,9 @@ export const graphReport = (world: GraphWorld): GraphReport => {
   const ordered = [...items].sort(
     (a, b) =>
       a.priority - b.priority ||
-      (a.parent ?? a.id).localeCompare(b.parent ?? b.id) ||
+      Option.getOrElse(a.parent, () => a.id).localeCompare(
+        Option.getOrElse(b.parent, () => b.id),
+      ) ||
       a.id.localeCompare(b.id),
   );
   const rows = new Map<string, number>();
@@ -102,7 +105,7 @@ export const graphReport = (world: GraphWorld): GraphReport => {
       type: item.type,
       status: item.status,
       priority: item.priority,
-      parent: item.parent ?? null,
+      parent: Option.getOrNull(item.parent),
       column: columns.get(item.id) ?? 0,
       row: rows.get(item.id) ?? 0,
       waitsFor: unfinished.filter((edge) => edge.item === item.id).map((edge) => edge.dependsOn),

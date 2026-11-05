@@ -1,7 +1,9 @@
+/**
+ * The SQLite connection to the task store, migrated on open.
+ */
+import { BunServices } from "@effect/platform-bun";
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-bun";
-import { Layer } from "effect";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { Config, Effect, Layer, Option, Path } from "effect";
 import { MIGRATIONS, MIGRATIONS_TABLE } from "./migrations.ts";
 
 /**
@@ -15,13 +17,28 @@ export const connectionAt = (filename: string) =>
     Layer.provideMerge(SqliteClient.layer({ filename, busyTimeout: "5 seconds" })),
   );
 
-/** The task store's file: `TASKS_DB`, else `~/.tasks/tasks.db`. */
-export const storePath = (): string =>
-  process.env.TASKS_DB ?? join(homedir(), ".tasks", "tasks.db");
+/**
+ * The task store's file: `TASKS_DB` when set, else `$HOME/.tasks/tasks.db`.
+ * Unset `HOME` with no `TASKS_DB` is a typed config failure, not a silent path.
+ */
+export const storePath: Effect.Effect<string, Config.ConfigError, Path.Path> = Effect.gen(
+  function* () {
+    const path = yield* Path.Path;
+    return yield* Option.match(yield* Config.option(Config.String("TASKS_DB")), {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Config.String("HOME").pipe(Effect.map((home) => path.join(home, ".tasks", "tasks.db"))),
+    });
+  },
+);
 
 /**
- * The store's connection, built once per process: a layer value is memoized by
- * reference, so every service that requires it shares the one connection.
- * `TASKS_DB` is read when the layer is built.
+ * The store's connection. `Layer.suspend` re-reads `TASKS_DB` each time a
+ * process builds the layer, so a test that points `TASKS_DB` at a scratch file
+ * gets that file. BunServices supplies Path and ConfigProvider for the read.
  */
-export const store = Layer.suspend(() => connectionAt(storePath()));
+export const store = Layer.suspend(() =>
+  Layer.unwrap(
+    Effect.map(storePath, connectionAt).pipe(Effect.provide(BunServices.layer)),
+  ),
+);

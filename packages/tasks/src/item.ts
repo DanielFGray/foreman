@@ -26,27 +26,38 @@ export type TaskState = Exclude<Status, "blocked">;
 export const ItemType = S.Literals(["task", "epic"]);
 export type ItemType = typeof ItemType.Type;
 
-export interface Item {
-  readonly id: string;
-  readonly project: string;
-  readonly type: ItemType;
-  readonly title: string;
-  readonly description: string;
-  readonly definitionOfDone: string | undefined;
+export const TaskState = S.Literals([
+  "proposed",
+  "draft",
+  "open",
+  "in_progress",
+  "done",
+  "canceled",
+] as const);
+
+/** One item of the task store. */
+export class Item extends S.Class<Item>("tasks/Item")({
+  id: S.String,
+  project: S.String,
+  type: ItemType,
+  title: S.String,
+  description: S.String,
+  definitionOfDone: S.Option(S.String),
   /** For an epic, derived from its children unless it was closed by hand. */
-  readonly status: Status;
+  status: Status,
   /** 1 is high, 3 is low. */
-  readonly priority: number;
-  readonly parent: string | undefined;
-  readonly labels: ReadonlyArray<string>;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
+  priority: S.Finite,
+  parent: S.Option(S.String),
+  labels: S.Array(S.String),
+  createdAt: S.Date,
+  updatedAt: S.Date,
   /** The later of `updatedAt` and the newest log entry. */
-  readonly lastActivityAt: Date;
-}
+  lastActivityAt: S.Date,
+}) {}
 
 export const TASK_EVENTS = ["propose", "draft", "open", "start", "done", "cancel"] as const;
-export type TaskEvent = (typeof TASK_EVENTS)[number];
+export const TaskEvent = S.Literals(TASK_EVENTS);
+export type TaskEvent = typeof TaskEvent.Type;
 
 const STORED: ReadonlyArray<TaskState> = STATUSES.filter(
   (status): status is TaskState => status !== "blocked",

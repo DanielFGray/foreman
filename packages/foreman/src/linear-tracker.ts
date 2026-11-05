@@ -1,5 +1,5 @@
 import { Clock, Effect, Exit, Option, Ref, Schema as S } from "effect";
-import type { Dependency, Item, ListFilter, Status } from "tasks";
+import { type Dependency, Item, type ListFilterInput, type Status } from "tasks";
 import { confirm, splitBody } from "./github-tracker.ts";
 import { Linear, LinearError, type LinearRate } from "./linear.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
@@ -415,11 +415,11 @@ const starved = (rate: LinearRate, now: number) =>
     (rate.complexity !== undefined && rate.complexity.remaining < rate.complexity.limit / 10));
 
 const matches =
-  (filter: ListFilter) =>
+  (filter: ListFilterInput) =>
   (item: Item): boolean =>
     (filter.status === undefined || item.status === filter.status) &&
     (filter.type === undefined || item.type === filter.type) &&
-    (filter.parent === undefined || item.parent === filter.parent) &&
+    (filter.parent === undefined || Option.getOrUndefined(item.parent) === filter.parent) &&
     (filter.labels ?? []).every((label) => item.labels.includes(label));
 
 const closedTypes = new Set(["completed", "canceled"]);
@@ -438,19 +438,20 @@ export const itemOf = (
   const { description, definitionOfDone } = splitBody(issue.description ?? "");
   const updatedAt = new Date(issue.updatedAt);
   const lastComment = issue.comments.nodes[0]?.createdAt;
-  return {
+  return Item.make({
     id: `${project}#${issue.identifier}`,
     project,
     type: issue.children.nodes.length > 0 ? "epic" : "task",
     title: issue.title,
     description,
-    definitionOfDone,
+    definitionOfDone: Option.fromNullishOr(definitionOfDone),
     status: statusOf(issue),
     priority: priorityOf(issue.priority),
-    parent:
+    parent: Option.fromNullishOr(
       issue.parent && issue.parent.project?.id === read.projectId
         ? `${project}#${issue.parent.identifier}`
         : undefined,
+    ),
     labels: issue.labels.nodes.map((label) => label.name),
     createdAt: new Date(issue.createdAt),
     updatedAt,
@@ -458,7 +459,7 @@ export const itemOf = (
       lastComment !== undefined && new Date(lastComment) > updatedAt
         ? new Date(lastComment)
         : updatedAt,
-  };
+  });
 };
 
 /** Linear's 1 urgent and 2 high are foreman's 1; 3 medium and 0 none are 2; 4 low is 3. */

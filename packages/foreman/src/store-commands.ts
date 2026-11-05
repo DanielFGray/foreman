@@ -1,6 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option, Schema } from "effect";
-import { prose } from "tasks";
+import { type Item, prose } from "tasks";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
@@ -21,6 +21,13 @@ import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
  * tasks store is one `Records` implementation away. They read the store only:
  * no roster, no checkout gates, no `Dispatcher.read`, which takes seconds.
  */
+
+/** An item as JSON readers know it: `parent` and `definitionOfDone` are strings, absent when none. */
+const plainOptions = <A extends Item>(item: A) => ({
+  ...item,
+  parent: Option.getOrUndefined(item.parent),
+  definitionOfDone: Option.getOrUndefined(item.definitionOfDone),
+});
 
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));
 
@@ -72,14 +79,15 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
     const { pipeline } = pipelineFor(drawings.value, task.project);
     const step = stepOf(place(pipeline, factsOf(task, pipeline)));
     if (args.json) {
-      return yield* Console.log(JSON.stringify({ ...task, step }));
+      return yield* Console.log(JSON.stringify({ ...plainOptions(task), step }));
     }
     yield* Console.log(
       `${task.id} [${task.project}] ${task.status}${step === undefined ? "" : ` at ${step}`} p${task.priority} ${task.title}`,
     );
     if (task.labels.length > 0) yield* Console.log(task.labels.join(" "));
     if (task.description) yield* Console.log(`\n${task.description}`);
-    if (task.definitionOfDone) yield* Console.log(`\nDone when: ${task.definitionOfDone}`);
+    const done = Option.getOrUndefined(task.definitionOfDone);
+    if (done) yield* Console.log(`\nDone when: ${done}`);
     for (const log of task.logs)
       yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);
   }),
@@ -114,7 +122,7 @@ const inProject = Flag.String("project").pipe(
 export const listCommand = Command.make("list", { project: inProject, json }, (args) =>
   Effect.gen(function* () {
     const items = yield* (yield* Tracker).list({ project: args.project });
-    if (args.json) return yield* Console.log(JSON.stringify(items));
+    if (args.json) return yield* Console.log(JSON.stringify(items.map(plainOptions)));
     if (items.length === 0) return yield* Console.log(`no tasks in ${args.project}`);
     for (const item of items) {
       yield* Console.log(`${item.id} ${item.status} p${item.priority} ${item.title}`);

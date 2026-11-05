@@ -1,4 +1,4 @@
-import { Array as Arr } from "effect";
+import { Array as Arr, Option } from "effect";
 import type { Run } from "tasks";
 import { type Ladder, type LastStarts, leastRecentFirst, type Seat } from "./ladder.ts";
 
@@ -78,7 +78,9 @@ export interface Seats {
  * review. Nothing for a name the list of its role no longer holds.
  */
 export const seatOf = (seats: Seats, run: Pick<Run, "role" | "rung">): Seat | undefined =>
-  (run.role === "review" ? seats.reviewers : seats.ladder).find((seat) => seat.name === run.rung);
+  (run.role === "review" ? seats.reviewers : seats.ladder).find((seat) =>
+    Option.contains(run.rung, seat.name),
+  );
 
 /**
  * The reviewers a review block draws from: every reviewer for the `reviewers`

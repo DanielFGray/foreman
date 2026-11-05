@@ -213,7 +213,7 @@ describe("linearTracker", () => {
       status: "open",
       priority: 1,
       description: "Body of 1.",
-      definitionOfDone: "It works.",
+      definitionOfDone: Option.some("It works."),
     });
     expect(byId.get("foreman#ENG-2")).toMatchObject({ status: "in_progress", labels: ["size:2"] });
     expect(byId.get("foreman#ENG-3")).toMatchObject({ status: "blocked", priority: 3 });

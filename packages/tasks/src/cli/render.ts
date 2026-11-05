@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import type { Item, LogEntry, Run } from "tasks";
 
 /** One line: id, status, priority, project, then the title behind its labels. */
@@ -40,12 +41,12 @@ export const detailJson = (
       runs: runs.map((run) => ({
         id: run.id,
         role: run.role,
-        rung: run.rung ?? null,
-        node: run.node ?? null,
-        ending: run.ending ?? null,
-        commit: run.commit ?? null,
-        base: run.base ?? null,
-        rounds: run.rounds ?? null,
+        rung: Option.getOrNull(run.rung),
+        node: Option.getOrNull(run.node),
+        ending: Option.getOrNull(run.ending),
+        commit: Option.getOrNull(run.commit),
+        base: Option.getOrNull(run.base),
+        rounds: Option.getOrNull(run.rounds),
         open: run.open,
       })),
     },
@@ -70,14 +71,15 @@ export const detail = (
     `Title:       ${item.title}`,
     `Status:      ${item.status}`,
     `Priority:    ${item.priority}`,
-    ...(item.parent === undefined ? [] : [`Parent:      ${item.parent}`]),
+    ...Option.toArray(Option.map(item.parent, (parent) => `Parent:      ${parent}`)),
     ...(item.labels.length === 0 ? [] : [`Labels:      ${item.labels.join(", ")}`]),
     ...section("Description", item.description === "" ? [] : [item.description]),
     ...section(
       "Definition of Done",
-      item.definitionOfDone === undefined || item.definitionOfDone === ""
-        ? []
-        : [item.definitionOfDone],
+      Option.match(item.definitionOfDone, {
+        onNone: () => [] as ReadonlyArray<string>,
+        onSome: (text) => (text === "" ? [] : [text]),
+      }),
     ),
     ...section(
       "Dependencies",
@@ -100,9 +102,9 @@ const runLine = (run: Run): string =>
   [
     `  #${run.id}`,
     run.role,
-    run.rung ?? "-",
-    run.open ? "open" : (run.ending ?? "-"),
-    run.commit?.slice(0, 8) ?? "",
+    Option.getOrElse(run.rung, () => "-"),
+    run.open ? "open" : Option.getOrElse(run.ending, () => "-"),
+    Option.match(run.commit, { onNone: () => "", onSome: (commit) => commit.slice(0, 8) }),
   ]
     .join(" ")
     .trimEnd();
@@ -119,9 +121,9 @@ const fieldsOf = (item: Item) => ({
   status: item.status,
   priority: item.priority,
   project: item.project,
-  parent: item.parent ?? null,
+  parent: Option.getOrNull(item.parent),
   description: item.description,
-  definition_of_done: item.definitionOfDone ?? null,
+  definition_of_done: Option.getOrNull(item.definitionOfDone),
   labels: item.labels,
   created_at: item.createdAt.toISOString(),
   updated_at: item.updatedAt.toISOString(),

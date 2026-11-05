@@ -2,7 +2,7 @@
 import { CliError, Command, Flag } from "effect/cli";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Cause, Console, Effect, FileSystem, Layer, Logger, Runtime } from "effect";
-import { store } from "tasks";
+import { Runs, store } from "tasks";
 import { settings, Settings } from "./config.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
@@ -129,7 +129,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
   Command.withSubcommands([
     serveCommand,
     quotaCommand,
-    Command.provide(ladderCommand, store),
+    Command.provide(ladderCommand, Runs.layer),
     Command.provide(reviewersCommand, store),
     statsCommand,
     Command.provide(queueCommand, storeServices),

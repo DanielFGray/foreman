@@ -38,7 +38,7 @@ import {
 import { Quota, QuotaError, type Usage, walledSeats } from "./quota.ts";
 import { RegistryError } from "./registry.ts";
 import { seed } from "./scratch-store.ts";
-import { connectionAt } from "tasks";
+import { connectionAt, Runs } from "tasks";
 import { SqlClient } from "effect/sql";
 
 const temps: string[] = [];
@@ -650,7 +650,7 @@ describe("runSuggest I/O boundary", () => {
     const dir = scratchDir();
     const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    const storeLayer = connectionAt(registry);
+    const storeLayer = Runs.layerAt(registry);
 
     const room = (provider: string, used: number): Usage => ({
       provider,
@@ -714,7 +714,7 @@ describe("runSuggest I/O boundary", () => {
     const dir = scratchDir();
     const registry = await seedAdviceRegistry(dir);
     const catalog = writeCatalog(dir);
-    const storeLayer = connectionAt(registry);
+    const storeLayer = Runs.layerAt(registry);
 
     const text = await Effect.runPromise(
       runSuggest({
@@ -827,7 +827,7 @@ describe("runSuggest I/O boundary", () => {
         },
       }),
     );
-    const storeLayer = connectionAt(registry);
+    const storeLayer = Runs.layerAt(registry);
 
     // `--after promo` puts the floor above level 1, so codex-luna is the pick,
     // with room on openai.

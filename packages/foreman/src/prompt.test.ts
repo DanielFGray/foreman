@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import {
   type AgentNode,
   instructionProblems,
@@ -76,11 +76,11 @@ const item: Item = {
   priority: 2,
   labels: ["onboard"],
   description: "",
-  parent: undefined,
+  parent: Option.none(),
   lastActivityAt: new Date(),
   createdAt: new Date(),
   updatedAt: new Date(0),
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   runs: [],
   charges: [],
   parked: undefined,
@@ -94,11 +94,11 @@ const ready = {
   project: "foreman",
   labels: [],
   description: "",
-  parent: undefined,
+  parent: Option.none(),
   createdAt: new Date(),
   updatedAt: new Date(0),
   lastActivityAt: new Date(0),
-  definitionOfDone: undefined,
+  definitionOfDone: Option.none(),
   type: "task",
   status: "open",
   runs: [],
