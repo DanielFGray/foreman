@@ -10,6 +10,3 @@ rule:
     - pattern: "class $CLASS { $PROP: any; $$$ }"
     - pattern: "interface $INTERFACE { $PROP: any; $$$ }"
     - pattern: "($EXPR as any)"
-
-ignores:
-  - src/fibrae.ts

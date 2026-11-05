@@ -8,7 +8,7 @@ import { type Ladder, type LastStarts, leastRecentFirst, type Seat } from "./lad
  * A reviewer is a model with its own thinking level and account, apart from
  * the ladder. The ladder decides who writes; this list decides who reads. One
  * model can be a cheap rung that thinks little and a reviewer that thinks
- * hard. The council skill convenes the same list (`foreman reviewers --json`).
+ * hard. `foreman reviewers --json` prints the same list for other tools.
  *
  * A review run records its reviewer's name where an author run records its
  * rung's, and the run's role says which list the name is in. So a reviewer

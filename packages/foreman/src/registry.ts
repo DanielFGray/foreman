@@ -15,10 +15,11 @@ import type { Reviewer } from "./reviewers.ts";
  * in a config file is a copy that can disagree.
  *
  * Models themselves (harness, pool) are rows the task store's migrations
- * define and the operator seeds. This module edits the ladder, which is the
- * part an operator reorders, enables and disables, and the reviewers, the list
- * a review block takes its reader from: a model may be a rung, a reviewer, both
- * or neither, and each rung and reviewer states its own thinking level.
+ * define and the operator seeds with `foreman models add`. This module edits
+ * the ladder, which is the part an operator reorders, enables and disables,
+ * and the reviewers, the list a review block takes its reader from: a model
+ * may be a rung, a reviewer, both or neither, and each rung and reviewer
+ * states its own thinking level.
  *
  * `Registry` is the service. The free effects below it (`readLadder`,
  * `writeRows`, ...) are `Registry.use` over its members, for callers that
@@ -82,6 +83,21 @@ export interface NewReviewer {
   /** Derived from the model when absent (`providerOf`). */
   readonly provider: Option.Option<string>;
 }
+
+/** A model as `foreman models add` states it. */
+export interface NewModel {
+  readonly model: string;
+  readonly harness: string;
+  readonly provider: string;
+  readonly pool: string;
+  readonly limitScope: "pool" | "model";
+}
+
+/** How an empty ladder tells the operator to seed the registry. */
+export const EMPTY_LADDER =
+  "the ladder table has no rungs; seed one with `foreman models add <model> --harness <kind> --provider <id> --pool <name>`, then `foreman ladder add <rung> <model>`, then `foreman reviewers add <model>`";
+
+const PoolNameRow = Schema.Struct({ pool: Schema.String });
 
 /**
  * Where a rung goes: in a level of its own just above or below a named rung's
@@ -184,7 +200,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
         thinking: Option.getOrUndefined(row.thinking),
       }));
       if (bottom === undefined) {
-        return yield* new RegistryError({ detail: "the ladder table has no rungs" });
+        return yield* new RegistryError({ detail: EMPTY_LADDER });
       }
       return [bottom, ...rest] as Ladder;
     }).pipe(Effect.mapError(registryError("reading the ladder")));
@@ -256,6 +272,38 @@ export class Registry extends Context.Service<Registry>()("Registry", {
           detail: `no reviewer ${name}; reviewers: ${names.map((one) => one.reviewer).join(", ") || "none"}`,
         });
       });
+
+    /**
+     * Adds a model. Creates its pool when missing, and refuses a model id that
+     * is already listed. A cold store needs this before any ladder rung.
+     */
+    const addModel = (entry: NewModel) =>
+      Effect.gen(function* () {
+        const taken = yield* sql`
+          SELECT model FROM models WHERE model = ${entry.model}`.pipe(
+          Effect.flatMap(rowsOf(ModelIdRow)),
+        );
+        if (taken.length > 0) {
+          return yield* new RegistryError({
+            detail: `model ${entry.model} is already listed`,
+          });
+        }
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const pools = yield* sql`
+              SELECT pool FROM pools WHERE pool = ${entry.pool}`.pipe(
+              Effect.flatMap(rowsOf(PoolNameRow)),
+            );
+            if (pools.length === 0) {
+              yield* sql`INSERT INTO pools (pool, harness, provider_default)
+                VALUES (${entry.pool}, ${entry.harness}, ${entry.provider})`;
+            }
+            yield* sql`INSERT INTO models (model, provider, pool, harness, limit_scope)
+              VALUES (${entry.model}, ${entry.provider}, ${entry.pool},
+                      ${entry.harness}, ${entry.limitScope})`;
+          }),
+        );
+      }).pipe(Effect.mapError(registryError("adding a model")));
 
     /** Adds a reviewer. Its model must have a row, and its name must be new. */
     const addReviewer = (reviewer: NewReviewer) =>
@@ -421,6 +469,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
       readStatus,
       knownModels,
       readModels,
+      addModel,
       readReviewers,
       addReviewer,
       setReviewerThinking,
@@ -452,6 +501,10 @@ export const knownModels = Registry.use((registry) => registry.knownModels);
 
 /** Every model the registry knows, by model id. */
 export const readModels = Registry.use((registry) => registry.readModels);
+
+/** Adds a model, creating its pool when missing. */
+export const addModel = (entry: NewModel) =>
+  Registry.use((registry) => registry.addModel(entry));
 
 /** The reviewers, by name; a reviewer whose model is retired is left out. */
 export const readReviewers = Registry.use((registry) => registry.readReviewers);

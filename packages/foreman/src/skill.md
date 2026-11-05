@@ -110,5 +110,5 @@ ready` reads edges, never the text of a description.
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
 - A step set to `ask` stops at its task and waits. `foreman wait --asks` tells
   you when one is waiting; `foreman approve <id>` lets that step run once.
-- Use the herd skill instead for work in a checkout that several agents
-  share. Foreman gives each task its own worktree.
+- Foreman gives each task its own worktree. Shared-checkout multi-agent
+  coordination is outside this skill.

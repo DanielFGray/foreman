@@ -100,21 +100,31 @@ in an `hc` terminal). It also needs `gh` for GitHub.
 ```sh
 bun install
 cd packages/foreman
+# Empty store: add a model, a rung, and a reviewer before serve.
+bun src/main.ts models add opencode/deepseek-v4-pro \
+  --harness opencode --provider opencode --pool 'OpenCode Zen'
+bun src/main.ts ladder add cheap opencode/deepseek-v4-pro --thinking medium
+bun src/main.ts reviewers add opencode/deepseek-v4-pro
 bun src/main.ts status          # one reading of every project, printed
 bun src/main.ts serve           # the dispatcher
 ```
 
-To run the dispatcher at login, install its systemd user unit:
+To run the dispatcher at login, install its systemd user unit from this package
+directory (a drop-in sets `WorkingDirectory` to wherever you cloned):
 
 ```sh
-systemctl --user link ~/build/foreman/packages/foreman/systemd/foreman.service
+cd packages/foreman
+mkdir -p ~/.config/systemd/user/foreman.service.d
+printf '[Service]\nWorkingDirectory=%s\n' "$PWD" > ~/.config/systemd/user/foreman.service.d/cwd.conf
+systemctl --user link "$PWD/systemd/foreman.service"
 systemctl --user enable --now foreman.service
 ```
 
 To add the pane to herdr-app:
 
 ```sh
-ln -s ~/build/foreman/packages/foreman/herdr/foreman ~/.config/herdr-app/mods/foreman
+cd packages/foreman
+ln -s "$PWD/herdr/foreman" ~/.config/herdr-app/mods/foreman
 herdr-app do pane.split '{"direction":"right","mod":"foreman"}'
 ```
 

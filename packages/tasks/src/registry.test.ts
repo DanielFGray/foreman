@@ -17,7 +17,7 @@ const fresh = () => join(dir, `store-${++files}.db`);
 const inStore = <A, E>(file: string, use: Effect.Effect<A, E, SqlClient>) =>
   Effect.runPromise(use.pipe(Effect.provide(connectionAt(file))));
 
-/** A trials database in the herd skill's layout, holding one model, two trials and a defect. */
+/** An older trials database layout, holding one model, two trials and a defect. */
 const herdFile = () => {
   const file = join(dir, `herd-${++files}.db`);
   const db = new Database(file);

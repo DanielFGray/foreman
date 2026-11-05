@@ -84,6 +84,6 @@ describe("settings", () => {
     const empty = join(mkdtempSync(join(tmpdir(), "foreman-registry-")), "empty.db");
     process.env["TASKS_DB"] = empty;
     await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(empty))));
-    await expect(loadLadder(empty)).rejects.toThrow(/the ladder table has no rungs/);
+    await expect(loadLadder(empty)).rejects.toThrow(/foreman models add/);
   });
 });

@@ -40,7 +40,7 @@ const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths | 
     );
 
     // The ladder and the reviewers are the registry's, not the config file's:
-    // one copy of each list, shared with the herd skill and the trial record.
+    // one copy of each list, shared with the trial record.
     const registry = yield* Registry;
     const { ladder, reviewers } = yield* Effect.all({
       ladder: registry.readLadder,

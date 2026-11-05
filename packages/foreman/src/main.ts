@@ -10,6 +10,7 @@ import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
 import { VERSION } from "./telemetry.ts";
 import { ladderCommand } from "./ladder-command.ts";
+import { modelsCommand } from "./models-command.ts";
 import { reviewersCommand } from "./reviewers-command.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
@@ -131,6 +132,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     serveCommand,
     quotaCommand,
     Command.provide(ladderCommand, Registry.layerSql.pipe(Layer.provideMerge(Runs.layer))),
+    Command.provide(modelsCommand, Registry.layer),
     Command.provide(reviewersCommand, Registry.layer),
     statsCommand,
     Command.provide(queueCommand, storeServices),

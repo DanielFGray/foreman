@@ -11,8 +11,7 @@ decisions, or log the open decision and stop.
 
 ## Read
 
-1. `foreman show {{ task }}`, the project's AGENTS.md or CLAUDE.md, and
-   `~/.agents/skills/blast-radius/SKILL.md`.
+1. `foreman show {{ task }}` and the project's AGENTS.md or CLAUDE.md.
 2. The author's work: `git -C {{ worktree }} diff {{ base }} HEAD`, then `git status`.
    Approval means everything worth landing is committed. Commit valid uncommitted
    work; return the task if it is substantive and unfinished. Never approve work that
@@ -21,11 +20,15 @@ decisions, or log the open decision and stop.
 ## Judge
 
 The author's report is a claim, not evidence. Verify each claim against the diff or
-a command; a claim you cannot verify is a finding.
+a command; a claim you cannot verify is a finding. Do not trust a writeup that
+sounds right: find the one or two facts the change's safety depends on, and prove
+them by running real code (a test or a small script that calls what shipped). A
+fact you only asserted, or only pointed at, is unproven.
 
 1. Does it do what the task asked? Prove the behavior through the project's real
    user-facing interface, and trace changed exports, commands and schemas to their
-   most important consumer.
+   most important consumer — including breakage a symbol search will not show
+   (wire formats, DB columns, teardown timing, code a few hops downstream).
 2. Does the verification verify it? Run the definition of done's check and the tests
    for the code the diff touched. Would each new test fail without the new code?
 3. Does it follow the conventions around it, or add a second way to do something the

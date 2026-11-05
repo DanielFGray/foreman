@@ -662,16 +662,15 @@ a high-thinking reviewer. A review run records the reviewer's name in the
 run's `rung` column, and the run's role says which list the name is in
 (`seatOf` in `src/reviewers.ts`), so a reviewer may share a rung's name.
 `foreman reviewers add|remove|thinking` changes the list, and `foreman reviewers --json`
-prints each reviewer with its harness, provider and `launchArguments`; the
-council skill reads its roster from there. `foreman ladder --json` prints the
-rungs, every model and the reviewers in one read, for a front end that draws
-both lists.
+prints each reviewer with its harness, provider and `launchArguments`.
+`foreman ladder --json` prints the rungs, every model and the reviewers in one
+read, for a front end that draws both lists.
 
 **Two correction rounds, counted.** A reviewer sends mechanical findings to the
 live author with `foreman correct`, which refuses a third round and counts each
 round on the lap's author run. The count belongs to one author, not the task, so
-a new author run starts at zero. The council review the prompt
-asks for before approving is not enforced: whether a finding is real is
+a new author run starts at zero. An independent second look before approving is
+asked for in the review prompt and is not enforced: whether a finding is real is
 judgement, so foreman asks for it in prose and records nothing about it.
 
 **A reviewer that stops without naming an exit is the reviewer's failure, not the
@@ -1108,11 +1107,12 @@ not to have been earned.
 - Never patch around a wall. No flags, special cases, conversion shims, or
   parallel paths to make a broken design compile. The bugs above were fixed by
   deleting a concept, not adding one. Report a blocker instead.
-- Use `tasks` for task tracking. The epic is `ep-0e6a7e`.
+- Use `tasks` for task tracking.
 - Bun, not node. Effect-TS throughout.
-- Edit only foreman and `~/build/server-ansible`. When a sweep reaches another project, list those files and file the work with `tasks -p <project> add`.
-- **A gap in hc or herdr-app is a task in `amux`, not a workaround here.**
-  Foreman is their heaviest user, so it finds the missing capabilities first,
-  and the cost of each is a shim here encoding what hc should have told us. File
-  it with `tasks -p amux add` describing the capability rather than the symptom,
-  and say in the foreman task that it is blocked on it.
+- Edit only this repository. When a sweep reaches another project, list those
+  files and file the work with `tasks -p <project> add`.
+- **A gap in hc or herdr-app is a task in that project's tracker, not a
+  workaround here.** Foreman is their heaviest user, so it finds the missing
+  capabilities first, and the cost of each is a shim here encoding what hc
+  should have told us. File the capability rather than the symptom, and say in
+  the foreman task that it is blocked on it.

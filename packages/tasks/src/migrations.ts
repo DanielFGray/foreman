@@ -423,7 +423,7 @@ const TASKS = [
 ];
 
 /**
- * The model registry and the record of runs, moved here from the herd skill's
+ * The model registry and the record of runs, moved here from an older
  * `model-trials.db` so that tasks, the runs on them and the models that ran
  * them live in one file.
  *

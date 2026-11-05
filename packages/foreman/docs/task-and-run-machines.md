@@ -200,7 +200,7 @@ only the fleet, the repository and the clock.
 ## Build order
 
 One branch, in this order. Each step passes the gate (tests, typecheck, lint,
-`ripwire --quality-delta`, place-diff identical) before the next one starts.
+project verify, place-diff identical) before the next one starts.
 
 1. Tracker seam: `Tracker` and `Records` (done, not committed).
 2. Six statuses in the tasks package: the machine, a migration from

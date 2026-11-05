@@ -34,7 +34,7 @@ import { reviewerJson } from "./reviewers-command.ts";
  * `edit` hands it to your editor as a short list of objects, one per rung, and
  * applies what you save in one validated transaction, so reordering is moving a
  * block and a typo changes nothing. These commands touch only the ladder; the
- * models behind it are rows in the herd skill's registry schema.
+ * models behind it are rows from `foreman models add`.
  */
 
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));

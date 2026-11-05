@@ -97,7 +97,8 @@ together.
 1. Link the mod into the app's home, so it stays versioned with the schema:
 
    ```sh
-   ln -s ~/build/foreman/packages/foreman/herdr/foreman ~/.config/herdr-app/mods/foreman
+   # from packages/foreman in your clone
+   ln -s "$PWD/herdr/foreman" ~/.config/herdr-app/mods/foreman
    ```
 
 2. Open it beside the focused pane, and zoom the pane to give it the whole tab:

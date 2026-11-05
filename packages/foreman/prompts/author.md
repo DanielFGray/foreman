@@ -17,9 +17,7 @@ everything.
    author may have left work here.
 2. `foreman show {{ task }}`, then the project's
    AGENTS.md or CLAUDE.md.
-3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
-   or uncertain change, `~/.agents/skills/figure-it-out/SKILL.md`.
-4. Know how you will prove it works. Run the definition of done's check now and see
+3. Know how you will prove it works. Run the definition of done's check now and see
    it fail; if it names none, write one.
 
 ## Rules

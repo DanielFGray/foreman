@@ -3,6 +3,7 @@
  * and first prompt. Pure: the fleet adapter runs what this returns.
  */
 
+import { dirname } from "node:path";
 import { Option } from "effect";
 import { providerOf, type Seat } from "./ladder.ts";
 
@@ -25,6 +26,8 @@ export const harnessLaunch = (options: {
   readonly thinking?: string | undefined;
   readonly prompt: string;
   readonly directory: string;
+  /** The project's main checkout; opencode may not edit siblings under its parent. */
+  readonly repository?: string | undefined;
 }): Launch => {
   const { kind, prompt } = options;
   switch (kind) {
@@ -36,7 +39,7 @@ export const harnessLaunch = (options: {
             opencodeConfig({
               model: options.model,
               workspace: options.directory,
-              checkouts: checkoutRoot(),
+              checkouts: checkoutRoot(options.repository ?? options.directory),
             }),
           ),
         },
@@ -118,9 +121,12 @@ export const opencodeConfig = (options: {
 
 /**
  * Where the operators' project checkouts live, which opencode may not write to.
- * The same `~/build/<name>` the settings derive a project's directory from.
+ *
+ * `$FOREMAN_CHECKOUTS` when set; otherwise the parent of the project's
+ * checkout (sibling projects share that parent wherever the clone lives).
  */
-const checkoutRoot = (): string => `${process.env["HOME"] ?? ""}/build`;
+export const checkoutRoot = (repository: string): string =>
+  process.env["FOREMAN_CHECKOUTS"] ?? dirname(repository);
 
 /**
  * The wall text a screen ends on, or none. Matches literal substrings only,

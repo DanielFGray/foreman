@@ -28,6 +28,3 @@ rule:
     - pattern: "($$$BEFORE, $ARG: $TYPE | undefined, $$$AFTER) => $BODY"
     - pattern: "($$$BEFORE, $ARG: $TYPE | null, $$$AFTER) => $BODY"
     - pattern: "($$$BEFORE, $ARG?: $TYPE, $$$AFTER) => $BODY"
-
-ignores:
-  - src/fibrae.ts

@@ -131,7 +131,7 @@ const reviewerOf = (world: World, id: string) =>
 
 const worker = (task: string, role: "author" | "review", state: WorkerState): Worker => ({
   task,
-  repository: "/home/dan/build/project",
+  repository: "/checkout/project",
   directory: `/worktree/${task}`,
   worktree: `/worktree/${task}`,
   state,

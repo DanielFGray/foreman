@@ -1,11 +1,11 @@
 # foreman serve: the one process that runs the dispatcher.
-# Install: see "Run the dispatcher" in ../README.md.
+# Install: see "Running it" in ../README.md. A drop-in sets WorkingDirectory
+# to your clone's packages/foreman; this unit does not assume one path.
 [Unit]
 Description=foreman dispatcher
 After=default.target
 
 [Service]
-WorkingDirectory=%h/build/foreman/packages/foreman
 # A login shell gives the service the PATH the operator's shell has, so it
 # reaches bun, git, gh, hc and tasks without a second copy of that PATH here.
 ExecStart=/bin/zsh -lc 'exec bun src/main.ts serve'

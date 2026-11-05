@@ -283,7 +283,11 @@ export function hcFleetOver() {
               });
             }
 
-            const launch = harnessLaunch({ ...options, directory: worker.directory });
+            const launch = harnessLaunch({
+              ...options,
+              directory: worker.directory,
+              repository: worker.repository,
+            });
             const place = yield* placement(worker.task, worker.repository ?? worker.directory);
             const started = yield* call(Started, "spawn", "terminal.run", {
               argv: launch.argv,

@@ -405,7 +405,19 @@ pi; opencode and cursor take no flag). A rung with no level passes no flag, so
 the harness's own default applies. Two rungs of one model may think at
 different levels.
 
+An empty store is created and migrated on first open. Seed it before serve:
+
 ```
+foreman models add <model> --harness <kind> --provider <id> --pool <name>
+foreman ladder add <rung> <model> [--thinking L]
+foreman reviewers add <model>
+```
+
+```
+foreman models [--json]        # models the registry knows
+foreman models add <model> --harness <kind> --provider <id> --pool <name>
+                               # [--limit-scope pool|model]
+                               # create the pool when missing; run before ladder add
 foreman ladder list            # print the ladder by level: state, trial record, launch arguments
 foreman ladder size            # landed slices and cost per success, by model and size
 foreman ladder drift           # rungs opencode no longer lists; free models no rung names
@@ -448,8 +460,8 @@ validated (known models, unique names, integer levels, at least one rung on) and
 written in one transaction, so a typo changes nothing. A rung may carry
 `provider`, `unmetered` and `note`.
 
-A rung's `model` must already have a row in `models`; add that row with the herd
-skill's `schema-registry.sql`.
+A rung's `model` must already have a row in `models`; add that row with
+`foreman models add`.
 
 `provider` names the account a rung spends. It is read off the model's
 `<provider>/` prefix wherever there is one, so most rungs never state it; the
@@ -493,7 +505,7 @@ The reviewers are the `reviewers` table of the same registry: each has a name,
 a model with a row in `models`, an optional thinking level (absent passes no
 flag) and, where the model id does not say, a provider. A review block drawn with the rule `reviewers` takes one
 from the whole list; a block drawn with one reviewer's name takes only that
-one. The council skill convenes the same list.
+one. `foreman reviewers --json` prints the same list for other tools.
 
 ```
 foreman reviewers [--json]     # each reviewer with its harness and launch arguments
@@ -602,6 +614,10 @@ close it and the project takes no new work, while what is already running there
 settles and lands. Two checkouts with one folder name are held, named on the
 dashboard, until you close one of their spaces.
 
+Opencode agents may not edit under the parent of a project's checkout (sibling
+projects share that parent wherever you keep them). `$FOREMAN_CHECKOUTS` sets
+that deny root when the default is wrong.
+
 ## The log
 
 Every dispatch, reclaim, return and climb is appended as one JSON object per
@@ -633,12 +649,15 @@ for its life, so a second serve refuses to start. When foreman's own checkout
 gets a new commit, serve exits, and its service starts it on the new code.
 
 A systemd user unit runs serve at login and starts it again when it stops. It
-runs from `~/build/foreman` through a login shell, so its PATH is the one your
-shell has, which must hold every program the dispatcher runs: `tasks`, `hc`,
-`git`, `gh` and each rung's harness. To install it:
+runs through a login shell, so its PATH is the one your shell has, which must
+hold every program the dispatcher runs: `tasks`, `hc`, `git`, `gh` and each
+rung's harness. From this package directory, install it with a drop-in that
+points at the clone:
 
 ```bash
-systemctl --user link ~/build/foreman/packages/foreman/systemd/foreman.service
+mkdir -p ~/.config/systemd/user/foreman.service.d
+printf '[Service]\nWorkingDirectory=%s\n' "$PWD" > ~/.config/systemd/user/foreman.service.d/cwd.conf
+systemctl --user link "$PWD/systemd/foreman.service"
 systemctl --user enable --now foreman.service
 journalctl --user -u foreman -f   # its log
 ```

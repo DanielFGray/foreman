@@ -10,8 +10,8 @@ import type { Reviewer } from "./reviewers.ts";
  * review block takes its reader from.
  *
  * A reviewer is a model with its own thinking level and account, apart from
- * the ladder: a model can be a rung, a reviewer, both or neither. The council
- * skill convenes the same list from `foreman reviewers --json`.
+ * the ladder: a model can be a rung, a reviewer, both or neither.
+ * `foreman reviewers --json` prints the list for other tools.
  */
 export const reviewersCommand = Command.make(
   "reviewers",

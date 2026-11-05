@@ -60,12 +60,35 @@ describe("harnessLaunch", () => {
   });
 
   test("gives opencode its model and write rules through its config, not its flags", () => {
-    const launch = harnessLaunch({ ...base, kind: "opencode" });
+    const launch = harnessLaunch({
+      ...base,
+      kind: "opencode",
+      repository: "/src/foreman",
+    });
     expect(launch.argv).toEqual(["opencode", "--standalone", "--auto", "--prompt", "do the task"]);
     const config = JSON.parse(launch.env["OPENCODE_CONFIG_CONTENT"]!);
     expect(config.model).toBe("m");
-    // Last match wins, so the worktree's own allow must follow the checkouts' deny.
+    // Deny the parent of the project checkout; allow the worktree last (last match wins).
+    expect(config.permission.edit["/src/**"]).toBe("deny");
     expect(Object.entries(config.permission.edit).at(-1)).toEqual(["/w/t1/**", "allow"]);
+  });
+
+  test("opencode deny root follows FOREMAN_CHECKOUTS over the repository parent", () => {
+    const previous = process.env["FOREMAN_CHECKOUTS"];
+    process.env["FOREMAN_CHECKOUTS"] = "/elsewhere";
+    try {
+      const launch = harnessLaunch({
+        ...base,
+        kind: "opencode",
+        repository: "/src/foreman",
+      });
+      const config = JSON.parse(launch.env["OPENCODE_CONFIG_CONTENT"]!);
+      expect(config.permission.edit["/elsewhere/**"]).toBe("deny");
+      expect(config.permission.edit["/src/**"]).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env["FOREMAN_CHECKOUTS"];
+      else process.env["FOREMAN_CHECKOUTS"] = previous;
+    }
   });
 });
 

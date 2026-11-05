@@ -6,8 +6,9 @@ export class ImportError extends S.TaggedError<ImportError>()("ImportError", {
 }) {}
 
 /**
- * Copies the herd skill's `model-trials.db` into the store: every registry
- * table, `trials` as closed `runs`, and `defects`.
+ * Copies an older trials database into the store: every registry table,
+ * `trials` as closed `runs`, and `defects`. Optional migration only — a cold
+ * store is seeded with `foreman models add` instead.
  *
  * Run ids are the trial ids, because each defect names its trial by id. The
  * copy is one transaction, and it refuses a store that already holds any of
@@ -76,10 +77,9 @@ const COPIES: ReadonlyArray<readonly [string, string]> = [
      SELECT model, provider, pool, harness, models_dev, limit_scope, retired, notes FROM old.models`,
   ],
   ["aliases", "INSERT INTO aliases (alias, model) SELECT alias, model FROM old.aliases"],
-  // The herd's ladder has no levels: each rung stands alone in its level, as
-  // `0009_ladder_levels` leaves a store's ladder. The herd keeps the thinking
-  // level on the model, so each rung takes its model's, as `0012_rung_thinking`
-  // does.
+  // An older trials ladder has no levels: each rung stands alone in its level,
+  // as `0009_ladder_levels` leaves a store's ladder. Thinking lived on the
+  // model, so each rung takes its model's, as `0012_rung_thinking` does.
   [
     "ladder",
     `INSERT INTO ladder (rank, level, rung, model, enabled, provider, note, unmetered, thinking)

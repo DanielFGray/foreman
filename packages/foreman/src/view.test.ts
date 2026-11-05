@@ -71,7 +71,7 @@ const ready = (id: string, labels: ReadonlyArray<string> = [], description = "")
 
 const worker = (task: string, state: WorkerState): Worker => ({
   task,
-  repository: "/home/dan/build/amux",
+  repository: "/checkout/amux",
   directory: `/tmp/${task}`,
   worktree: `/tmp/wt-${task}`,
   state,

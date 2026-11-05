@@ -75,7 +75,7 @@ const underReview = (id: string, status: TaskStatus = "in_progress"): Item =>
 const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   task: id,
   directory: "/tmp/worktree",
-  repository: "/home/dan/build/project",
+  repository: "/checkout/project",
   worktree: "/tmp/worktree",
   state,
   since: undefined,
@@ -688,15 +688,15 @@ describe("the policy gate on dispatch", () => {
 });
 
 describe("scoping the roster to this daemon's checkouts", () => {
-  const CHECKOUTS = new Set(["/home/dan/build/foreman"]);
+  const CHECKOUTS = new Set(["/checkout/foreman"]);
   const inRepo = (id: string, repository: string | undefined): Worker => ({
     ...worker("working", id),
     repository,
   });
 
   test("keeps only workspaces whose worktree is in a managed checkout", () => {
-    const own = inRepo("ts-111111", "/home/dan/build/foreman");
-    const foreign = inRepo("ts-222222", "/home/dan/build/elsewhere");
+    const own = inRepo("ts-111111", "/checkout/foreman");
+    const foreign = inRepo("ts-222222", "/checkout/elsewhere");
 
     expect(ours([own, foreign], CHECKOUTS)).toEqual([own]);
   });
@@ -705,7 +705,7 @@ describe("scoping the roster to this daemon's checkouts", () => {
     // Two foremen against different configs are not competing for the same
     // slots, so a foreign workspace must not appear in the roster slots are
     // counted from — at --slots 1 it fills the only one and nothing dispatches.
-    expect(ours([inRepo("ts-222222", "/home/dan/build/elsewhere")], CHECKOUTS)).toEqual([]);
+    expect(ours([inRepo("ts-222222", "/checkout/elsewhere")], CHECKOUTS)).toEqual([]);
   });
 
   test("a workspace with no worktree belongs to nobody", () => {
@@ -717,7 +717,7 @@ describe("scoping the roster to this daemon's checkouts", () => {
   test("scopes before the store is asked, so a deleted task is still classifiable", () => {
     // The task's project would answer this too, right up until the task is
     // deleted — which is exactly when a workspace needs to be told from residue.
-    const own = inRepo("ts-444444", "/home/dan/build/foreman");
+    const own = inRepo("ts-444444", "/checkout/foreman");
     expect(ours([own], CHECKOUTS)).toEqual([own]);
     expect(scopeRoster([own], new Map()).workers).toEqual([]);
   });

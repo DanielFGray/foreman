@@ -1,5 +1,8 @@
 # Proposal: foreman reads the model registry, the CLI replaces skill scripting
 
+> Archaeology: not required to run foreman. Cold start uses `foreman models add`
+> and the task store; this document records an earlier migration plan.
+
 The herd skill currently teaches coordinators model knowledge as prose and
 shell recipes: which pool a model draws on, what launch flags it needs, how to
 record a trial row, how to move a model to proven. Foreman already dispatches
