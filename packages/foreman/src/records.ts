@@ -227,6 +227,12 @@ export class Records extends Context.Service<Records>()("Records", {
         review: runs.lastStarts("review"),
       }).pipe(as("read run starts")),
 
+      /** The history of one task's runs, with their times, oldest first. */
+      history: (task: string) => runs.recordsOf([task]).pipe(as("read run history")),
+
+      /** The runs that closed at or after `since`: see `Runs.closedSince`. */
+      closedSince: (since: Date) => runs.closedSince(since).pipe(as("read closed runs")),
+
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>
         Effect.all([lookup(task), tracker.logs(task)]).pipe(

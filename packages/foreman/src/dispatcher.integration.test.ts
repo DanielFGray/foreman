@@ -468,6 +468,9 @@ class World {
     }),
     children: () => Effect.succeed([]),
     countRound: () => this.write("records.countRound", () => 1),
+    // The fake keeps no run times, so it has no history to read.
+    history: () => Effect.succeed([]),
+    closedSince: () => Effect.succeed([]),
   };
 
   readonly repository = {

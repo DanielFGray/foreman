@@ -1,5 +1,4 @@
 import {
-  Clock,
   Context,
   DateTime,
   Duration,
@@ -148,11 +147,6 @@ import { openAgentOf, type RunEvent, type RunStep, stepOf, stoppedAt } from "./r
 import type { Charge, Run } from "tasks";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
 
-const runDuration = Metric.timer("foreman.run.duration", {
-  description: "Time foreman spends dispatching one run, in milliseconds.",
-  boundaries: Metric.exponentialBoundaries({ start: 1, factor: 2, count: 20 }),
-});
-
 const runOutcomes = Metric.counter("foreman.run.outcomes", {
   description: "Settled agent runs by their closed task phase.",
   incremental: true,
@@ -225,18 +219,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       effect: Effect.Effect<A, E, R>,
     ) => {
       const attributes = runAttributes(task, rung, role);
-      const duration = Metric.withAttributes(runDuration, { rung: rung.name });
-      return Effect.gen(function* () {
-        const started = yield* Clock.currentTimeMillis;
-        return yield* effect.pipe(
-          Effect.tap(() => Effect.annotateCurrentSpan(attributes)),
-          Effect.ensuring(
-            Clock.currentTimeMillis.pipe(
-              Effect.flatMap((ended) => Metric.update(duration, Duration.millis(ended - started))),
-            ),
-          ),
-        );
-      });
+      return effect.pipe(Effect.tap(() => Effect.annotateCurrentSpan(attributes)));
     };
 
     const state = yield* SubscriptionRef.make(EMPTY_FLEET);

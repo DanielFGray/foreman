@@ -104,7 +104,7 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
 );
 
 const statsCommand = Command.make("stats", {}, () => stats).pipe(
-  Command.withDescription("Render collected fleet metrics as a self-contained HTML report"),
+  Command.withDescription("Render the runs table as a self-contained HTML report of fleet metrics"),
 );
 
 /**
@@ -134,7 +134,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(ladderCommand, Registry.layerSql.pipe(Layer.provideMerge(Runs.layer))),
     Command.provide(modelsCommand, Registry.layer),
     Command.provide(reviewersCommand, Registry.layer),
-    statsCommand,
+    Command.provide(statsCommand, storeServices),
     Command.provide(queueCommand, storeServices),
     Command.provide(showCommand, storeServices),
     Command.provide(logCommand, storeServices),

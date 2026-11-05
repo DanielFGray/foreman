@@ -1,21 +1,15 @@
-import { Result, Schema as S } from "effect";
-
-export interface Run {
-  readonly name: string;
-  readonly start: number;
-  readonly end: number | undefined;
-  readonly attributes: Readonly<Record<string, string>>;
-  readonly outcome: string | undefined;
-}
+import { Option } from "effect";
+import { durationOf, roleOf, type RunRecord } from "tasks";
 
 export interface RunMetrics {
+  /** Every run in the group, including runs with no start or no ending. */
   readonly runs: number;
   readonly medianDuration: number | undefined;
   readonly p90Duration: number | undefined;
-  readonly reviewRejectionRate: number;
-  readonly escalationRate: number;
-  readonly landRate: number;
-  readonly verificationBreakRate: number;
+  /** Review runs that ended `returned`, over review runs that ended `approved` or `returned`. */
+  readonly reviewReturnRate: number | undefined;
+  /** Closed author runs whose outcome is `committed` or `answered`, over closed author runs. */
+  readonly landRate: number | undefined;
 }
 
 export interface RunTable {
@@ -23,75 +17,20 @@ export interface RunTable {
   readonly metrics: RunMetrics;
 }
 
-interface OtlpValue {
-  readonly stringValue?: string;
-  readonly intValue?: string;
-  readonly doubleValue?: number;
-  readonly boolValue?: boolean;
-}
-
-interface OtlpSpan {
-  readonly name: string;
-  readonly startTimeUnixNano: string;
-  readonly endTimeUnixNano?: string;
-  readonly attributes?: ReadonlyArray<{ readonly key: string; readonly value: OtlpValue }>;
-}
-
-/** Parses the collector's newline-delimited OTLP file-exporter payloads. */
-export const runsFromOtlp = (payloads: ReadonlyArray<string>): ReadonlyArray<Run> =>
-  payloads.flatMap((payload) =>
-    payload
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .flatMap((line) =>
-        Result.match(S.decodeUnknownResult(S.fromJsonString(S.Unknown))(line), {
-          onFailure: () => [],
-          onSuccess: (decoded) => spansOf(decoded as OtlpExport),
-        }),
-      ),
-  );
-
-/** Four independent views prevent sparse model-by-project cells from reading as signal. */
-export const tablesFor = (runs: ReadonlyArray<Run>) => ({
-  rung: tableFor(runs, (run) => run.attributes.rung),
-  project: tableFor(runs, (run) => run.attributes.project),
-  label: tableFor(runs, (run) => (run.attributes.labels ?? "").split(",").filter(Boolean)),
-  task: tableFor(runs, (run) => run.attributes.task),
+/** Three separate views, so sparse model-by-project cells do not read as signal. */
+export const tablesFor = (runs: ReadonlyArray<RunRecord>) => ({
+  rung: tableFor(runs, (run) => Option.toArray(run.rung)),
+  project: tableFor(runs, (run) => [run.project]),
+  task: tableFor(runs, (run) => [run.task]),
 });
 
-const spansOf = (exported: OtlpExport): ReadonlyArray<Run> =>
-  exported.resourceSpans.flatMap((resource) =>
-    resource.scopeSpans.flatMap((scope) => scope.spans.map(runOf)),
-  );
-
-const runOf = (span: OtlpSpan): Run => {
-  const attributes = Object.fromEntries(
-    (span.attributes ?? []).flatMap(({ key, value }) => {
-      const scalar =
-        value.stringValue ??
-        value.intValue ??
-        value.doubleValue?.toString() ??
-        value.boolValue?.toString();
-      return scalar === undefined ? [] : [[key, scalar]];
-    }),
-  );
-  return {
-    name: span.name,
-    start: Number(span.startTimeUnixNano) / 1_000_000,
-    end: span.endTimeUnixNano === undefined ? undefined : Number(span.endTimeUnixNano) / 1_000_000,
-    attributes,
-    outcome: attributes.outcome,
-  };
-};
-
 const tableFor = (
-  runs: ReadonlyArray<Run>,
-  keys: (run: Run) => string | undefined | ReadonlyArray<string>,
+  runs: ReadonlyArray<RunRecord>,
+  keysOf: (run: RunRecord) => ReadonlyArray<string>,
 ): ReadonlyArray<RunTable> => {
-  const grouped = new Map<string, Array<Run>>();
+  const grouped = new Map<string, Array<RunRecord>>();
   for (const run of runs) {
-    const values = keys(run);
-    for (const key of values === undefined ? [] : typeof values === "string" ? [values] : values) {
+    for (const key of keysOf(run)) {
       grouped.set(key, [...(grouped.get(key) ?? []), run]);
     }
   }
@@ -101,31 +40,39 @@ const tableFor = (
   }));
 };
 
-const metricsFor = (runs: ReadonlyArray<Run>): RunMetrics => {
-  const completed = runs.filter(
-    (run): run is Run & { readonly end: number } => run.end !== undefined,
-  );
-  const durations = completed.map((run) => run.end - run.start).sort((left, right) => left - right);
-  const rate = (predicate: (run: Run) => boolean) =>
-    completed.length === 0 ? 0 : completed.filter(predicate).length / completed.length;
+const metricsFor = (runs: ReadonlyArray<RunRecord>): RunMetrics => {
+  const durations = runs
+    .flatMap((run) => Option.toArray(durationOf(run)))
+    .sort((left, right) => left - right);
+  const verdicts = runs.flatMap((run) => {
+    const ending = Option.getOrUndefined(run.ending);
+    return run.work === "review" && (ending === "approved" || ending === "returned")
+      ? [ending]
+      : [];
+  });
+  const authorRuns = runs.filter((run) => roleOf(run.work) === "author");
+  const closedAuthors = authorRuns.filter((run) => Option.isSome(run.closedAt));
+  const landed = closedAuthors.filter((run) => {
+    const outcome = Option.getOrUndefined(run.outcome);
+    return outcome === "committed" || outcome === "answered";
+  });
   return {
     runs: runs.length,
     medianDuration: percentile(durations, 0.5),
     p90Duration: percentile(durations, 0.9),
-    reviewRejectionRate: rate((run) => run.outcome === "ReviewReturned"),
-    escalationRate: rate((run) => run.attributes.escalation === "true"),
-    landRate: rate((run) => run.outcome === "Landed"),
-    verificationBreakRate: rate((run) => run.attributes.verification === "broken"),
+    reviewReturnRate: ratio(
+      verdicts.filter((verdict) => verdict === "returned").length,
+      verdicts.length,
+    ),
+    landRate: ratio(landed.length, closedAuthors.length),
   };
 };
+
+/** A rate is absent, not zero, when nothing was decided: zero would read as a clean record. */
+const ratio = (part: number, whole: number): number | undefined =>
+  whole === 0 ? undefined : part / whole;
 
 const percentile = (values: ReadonlyArray<number>, at: number): number | undefined => {
   if (values.length === 0) return undefined;
   return values[Math.ceil(values.length * at) - 1];
 };
-
-interface OtlpExport {
-  readonly resourceSpans: ReadonlyArray<{
-    readonly scopeSpans: ReadonlyArray<{ readonly spans: ReadonlyArray<OtlpSpan> }>;
-  }>;
-}

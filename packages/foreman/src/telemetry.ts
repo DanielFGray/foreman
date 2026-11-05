@@ -15,11 +15,9 @@ export const VERSION = "0.1.0";
 /**
  * Spans and metrics to a collector, over OTLP.
  *
- * A run of the ladder — author, review, land — is a span with a start, an end
- * and an outcome. That is what the escalation questions are actually about: how
- * long a rung takes, how often it is sent back, what a climb buys. Pairing log
- * lines back into runs would rebuild tracing badly, so foreman emits spans and
- * the collector keeps the history.
+ * The spans show what this process is doing, for a live viewer. The runs table
+ * in the task store is the record of the fleet's work: `foreman stats` and
+ * `foreman show` read it, and nothing reads history back from the collector.
  *
  * The endpoint is a local collector, never a remote host. Which gateway that
  * collector forwards to, whether it is reachable, and how long its queue holds
@@ -44,8 +42,7 @@ export const telemetry: Layer.Layer<never, never, Settings> = Layer.unwrap(
   Settings.pipe(
     Effect.map((config) => {
       // Identity, not decoration: several dispatchers can report to one gateway,
-      // and a span nobody can attribute to a machine and a run answers none of
-      // the questions the history exists for.
+      // and a span nobody can attribute to a machine answers nothing.
       const resource = {
         serviceName: "foreman",
         serviceVersion: VERSION,

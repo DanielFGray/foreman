@@ -199,6 +199,72 @@ const runOf = (row: typeof RunRow.Type): Run => ({
   ),
 });
 
+/**
+ * One run as a history reader sees it: the whole row with its times, for a
+ * report, a trace or a task's record. Placement reads `Run`, which leaves the
+ * times out.
+ */
+export const RunRecord = S.Struct({
+  id: S.Int,
+  project: S.String,
+  task: S.String,
+  work: Work,
+  rung: S.OptionFromNullOr(S.String),
+  model: S.OptionFromNullOr(S.String),
+  node: S.OptionFromNullOr(S.String),
+  commit: S.OptionFromNullOr(S.String),
+  ending: S.OptionFromNullOr(S.String),
+  outcome: S.OptionFromNullOr(Outcome),
+  rounds: S.OptionFromNullOr(S.Int),
+  /** Absent for a run recorded before starts were kept. */
+  startedAt: S.OptionFromNullOr(S.Date),
+  /** Absent while the run is open. */
+  closedAt: S.OptionFromNullOr(S.Date),
+  costUsd: S.OptionFromNullOr(S.Finite),
+});
+export type RunRecord = typeof RunRecord.Type;
+
+/** How long a closed run took, in milliseconds; absent without both times. */
+export const durationOf = (run: RunRecord): Option.Option<number> =>
+  Option.zipWith(
+    run.startedAt,
+    run.closedAt,
+    (started, closed) => closed.getTime() - started.getTime(),
+  );
+
+/** A `runs` row with the columns a `RunRecord` reads, times as stored. */
+const RecordRow = S.Struct({
+  id: S.Int,
+  project: S.String,
+  task: S.String,
+  work: Work,
+  rung: S.OptionFromNullOr(S.String),
+  model: S.OptionFromNullOr(S.String),
+  node: S.OptionFromNullOr(S.String),
+  commit: S.OptionFromNullOr(S.String),
+  ending: S.OptionFromNullOr(S.String),
+  outcome: S.OptionFromNullOr(Outcome),
+  rounds: S.OptionFromNullOr(S.Int),
+  started_at: S.OptionFromNullOr(S.String),
+  closed_at: S.OptionFromNullOr(S.String),
+  actual_cost_usd: S.OptionFromNullOr(S.Finite),
+});
+
+const recordOf = ({
+  started_at,
+  closed_at,
+  actual_cost_usd,
+  ...row
+}: typeof RecordRow.Type): RunRecord => ({
+  ...row,
+  startedAt: Option.flatMap(started_at, parseStored),
+  closedAt: Option.flatMap(closed_at, parseStored),
+  costUsd: actual_cost_usd,
+});
+
+/** `date` in the layout SQLite's `datetime('now')` writes, which the run times use. */
+const sqliteTime = (date: Date): string => date.toISOString().slice(0, 19).replace("T", " ");
+
 const IdRow = S.Struct({ id: S.Int });
 const OpenRow = S.Struct({ id: S.Int, work: Work });
 const OpenEndingRow = S.Struct({ ending: S.OptionFromNullOr(Ending) });
@@ -390,6 +456,30 @@ export class Runs extends Context.Service<Runs>()("Runs", {
         return grouped as ReadonlyMap<string, ReadonlyArray<Run>>;
       });
 
+    const RECORD_COLUMNS = sql.literal(`id, project, task, work, rung, model, node, "commit",
+      ending, outcome, rounds, started_at, closed_at, actual_cost_usd`);
+
+    /** The history of these tasks' runs, oldest first. */
+    const recordsOf = (ids: ReadonlyArray<string>) =>
+      ids.length === 0
+        ? Effect.succeed<ReadonlyArray<RunRecord>>([])
+        : sql`SELECT ${RECORD_COLUMNS} FROM runs WHERE ${sql.in("task", ids)} ORDER BY id`.pipe(
+            Effect.flatMap(rowsOf(RecordRow)),
+            Effect.map((rows): ReadonlyArray<RunRecord> => rows.map(recordOf)),
+          );
+
+    /**
+     * The runs that closed at or after `since`, oldest close first. Run times
+     * are stored to the second, so a reader that polls passes the last close it
+     * read and skips the ids it already has.
+     */
+    const closedSince = (since: Date) =>
+      sql`SELECT ${RECORD_COLUMNS} FROM runs
+        WHERE closed_at >= ${sqliteTime(since)} ORDER BY closed_at, id`.pipe(
+        Effect.flatMap(rowsOf(RecordRow)),
+        Effect.map((rows): ReadonlyArray<RunRecord> => rows.map(recordOf)),
+      );
+
     /**
      * The latest start of the runs of `role`, keyed by the name they record: a
      * rung for an author, a reviewer for a review. The two are separate lists, so
@@ -504,6 +594,8 @@ export class Runs extends Context.Service<Runs>()("Runs", {
       nameExit,
       landAuthorRun,
       runsOf,
+      recordsOf,
+      closedSince,
       lastStarts,
       closeOpenRuns,
       deleteOpenRunOf,

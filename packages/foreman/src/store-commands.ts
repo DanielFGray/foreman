@@ -1,6 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
-import { Console, Effect, Option, Schema } from "effect";
-import { type Item, prose } from "tasks";
+import { Clock, Console, DateTime, Effect, Option, Schema } from "effect";
+import { durationOf, type Item, prose, RunRecord } from "tasks";
+import { RunSummary, summarizeRuns } from "./run-summary.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { PublishedRow, publishedQueue } from "./published.ts";
@@ -64,10 +65,71 @@ const stepOf = (placement: Placement): string | undefined =>
       ? placement.node
       : undefined;
 
-/** One task whole: its fields, what done means, its step, and its log. */
+const MINUTES = (minutes: number) => minutes.toFixed(1);
+
+/** A run's start in local time, to the minute. */
+const startedLabel = (at: Date) =>
+  DateTime.formatLocal(DateTime.makeUnsafe(at), {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+/** The run's minutes column: an open run says so, even without a start, since that is the state a reader needs. */
+const minutesOf = (run: RunRecord): string => {
+  if (Option.isNone(run.closedAt)) return "open";
+  return Option.match(durationOf(run), {
+    onNone: () => "-",
+    onSome: (ms) => MINUTES(ms / 60_000),
+  });
+};
+
+/** The run table: one row per run, oldest first, columns aligned to the widest cell. */
+const runTable = (runs: ReadonlyArray<RunRecord>): ReadonlyArray<string> => {
+  const rows = runs.map((run) => [
+    String(run.id),
+    run.work,
+    Option.getOrElse(run.rung, () => Option.getOrElse(run.model, () => "-")),
+    Option.getOrElse(run.node, () => "-"),
+    Option.match(run.startedAt, { onNone: () => "-", onSome: startedLabel }),
+    minutesOf(run),
+    Option.getOrElse(run.ending, () => "-"),
+    Option.match(run.rounds, { onNone: () => "-", onSome: String }),
+  ]);
+  const header = ["id", "work", "rung", "node", "started", "minutes", "ending", "rounds"];
+  const widths = header.map((cell, column) =>
+    Math.max(cell.length, ...rows.map((row) => (row[column] ?? "").length)),
+  );
+  return [header, ...rows].map((row) =>
+    row
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join("  ")
+      .trimEnd(),
+  );
+};
+
+/** The summary line under the run table; the elapsed part is left out when no run has a start. */
+const summaryLine = (summary: RunSummary): string => {
+  const parts = [
+    Option.match(summary.elapsedMinutes, {
+      onNone: () => undefined,
+      onSome: (minutes) => `elapsed ${MINUTES(minutes)} min`,
+    }),
+    `agent ${Option.match(summary.agentMinutes, { onNone: () => "-", onSome: (m) => `${MINUTES(m)} min` })}`,
+    `author runs ${summary.authorRuns}`,
+    `returned ${summary.returned}`,
+    `rounds ${Option.match(summary.rounds, { onNone: () => "-", onSome: String })}`,
+  ];
+  return parts.filter((part) => part !== undefined).join(" · ");
+};
+
+/** One task whole: its fields, what done means, its step, its runs and its log. */
 export const showCommand = Command.make("show", { id, json }, (args) =>
   Effect.gen(function* () {
-    const task = yield* (yield* Records).detail(args.id).pipe(
+    const records = yield* Records;
+    const task = yield* records.detail(args.id).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new Refused({ detail: `no task ${args.id}` })),
@@ -78,8 +140,18 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
     const drawings = yield* readPipelines(pipelinesPath());
     const { pipeline } = pipelineFor(drawings.value, task.project);
     const step = stepOf(place(pipeline, factsOf(task, pipeline)));
+    const history = yield* records.history(task.id);
+    const now = new Date(yield* Clock.currentTimeMillis);
+    const summary = summarizeRuns(history, task.status, now);
     if (args.json) {
-      return yield* Console.log(JSON.stringify({ ...plainOptions(task), step }));
+      return yield* Console.log(
+        JSON.stringify({
+          ...plainOptions(task),
+          step,
+          history: yield* Schema.encodeEffect(Schema.Array(RunRecord))(history),
+          summary: yield* Schema.encodeEffect(RunSummary)(summary),
+        }),
+      );
     }
     yield* Console.log(
       `${task.id} [${task.project}] ${task.status}${step === undefined ? "" : ` at ${step}`} p${task.priority} ${task.title}`,
@@ -88,6 +160,11 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
     if (task.description) yield* Console.log(`\n${task.description}`);
     const done = Option.getOrUndefined(task.definitionOfDone);
     if (done) yield* Console.log(`\nDone when: ${done}`);
+    if (history.length > 0) {
+      yield* Console.log("");
+      for (const line of runTable(history)) yield* Console.log(line);
+      yield* Console.log(summaryLine(summary));
+    }
     for (const log of task.logs)
       yield* Console.log(`\n${log.createdAt.toISOString()}  ${log.message}`);
   }),
