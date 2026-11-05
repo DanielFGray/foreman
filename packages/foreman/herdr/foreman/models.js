@@ -10,8 +10,9 @@
 //
 // Each level, Reviewers and Available is a row: its label at the left, its
 // cards wrapping to the pane's width. The rows scroll down together, so the
-// view works in a narrow pane. A click on Available's label folds it, and the
-// pane keeps the fold. A drop zone is a row, or a strip across the space
+// view works in a narrow pane. Available opens on a click on its label, and
+// then shows a head per provider, which opens that provider's cards; the pane
+// keeps what is open. A drop zone is a row, or a strip across the space
 // between two level rows (and above the first and below the last), which puts
 // a rung in a level of its own there.
 //
@@ -25,7 +26,7 @@ import { ROW, columnsOf, dropsOf, rowsOf, thinkingArgs } from "./models-board.js
 import { refusalOf } from "./status.js";
 
 const STRIPE = 3;
-const FOLDED_KEY = "models-folded";
+const OPEN_KEY = "models-open";
 
 const COLORS = { level: (t) => t.working, available: (t) => t.muted, reviewers: (t) => t.accent };
 
@@ -38,8 +39,8 @@ export class Models {
     this.bounds = null;
     // How far the rows are scrolled down.
     this.scroll = 0;
-    // The rows that show their label alone; Available starts folded.
-    this.folded = storedFolded();
+    // What the operator opened: Available, and each provider group in it.
+    this.open = storedOpen();
   }
 
   // Reads the ladder and the models again, and draws them.
@@ -62,9 +63,9 @@ export class Models {
     this.pane.act(first, cx, (done, cx) => (done && rest.length > 0 ? this.run(rest, cx) : this.load(cx)));
   }
 
-  fold(key, cx) {
-    if (!this.folded.delete(key)) this.folded.add(key);
-    try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...this.folded])); } catch {}
+  toggle(key, cx) {
+    if (!this.open.delete(key)) this.open.add(key);
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...this.open])); } catch {}
     cx.notify();
   }
 
@@ -75,10 +76,11 @@ export class Models {
   layout(columns) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
     const height = this.bounds?.height ?? this.pane.size?.height ?? 600;
-    const placed = rowsOf(columns, width, this.folded);
+    const placed = rowsOf(columns, width, this.open);
     const up = (rect) => ({ ...rect, y: rect.y - this.scroll });
     return {
       rows: placed.rows.map((row) => ({ ...row, rect: up(row.rect) })),
+      heads: placed.heads.map((head) => ({ ...head, rect: up(head.rect) })),
       cards: new Map([...placed.cards].map(([key, rect]) => [key, up(rect)])),
       gaps: placed.gaps.map(up),
       reach: Math.max(0, placed.height - height),
@@ -122,7 +124,7 @@ export class Models {
   view(t) {
     if (this.ladder === null) return div().p(12).text_color(t.muted).child("reading the ladder…");
     const columns = this.columns();
-    const { rows, cards } = this.layout(columns);
+    const { rows, heads, cards } = this.layout(columns);
     const drag = this.pane.drag;
     const preview = drag.preview();
     const origin = this.bounds ?? { x: 0, y: 0 };
@@ -132,7 +134,8 @@ export class Models {
       .on_mouse_move((event, _cx) => { this.bounds = this.pane.drawn(event.bounds); })
       .on_scroll_wheel((event, cx) => this.wheel(event, cx))
       .children(rows.map(({ column, rect }) => this.label(column, rect, t)))
-      .children(rows.flatMap(({ column }) => (this.folded.has(column.key) ? [] : column.cards).map((card) =>
+      .children(heads.map((head) => this.groupHead(head, t)))
+      .children(rows.flatMap(({ column }) => column.cards.filter((card) => cards.has(card.key)).map((card) =>
         this.card(card, column, cards.get(card.key), t, card === dragged?.card))))
       .when(dragged !== undefined && preview !== null && preview.run !== null, (el) => el.child(this.previewOf(preview, origin, t)))
       .when(floating !== null, (el) => el.child(
@@ -140,16 +143,26 @@ export class Models {
     return v_flex().flex_1().min_h(0).child(board).child(this.accounts(t));
   }
 
-  // A row's label: its color, its name and how many cards it holds. Available's
-  // folds the row.
+  // A row's label: its color, its name and how many cards it holds. A click on
+  // Available's opens or closes it.
   label(column, rect, t) {
     const color = COLORS[column.kind](t);
-    const foldable = column.kind === "available";
+    const foldable = column.groups !== undefined;
     return h_flex().id(`models-label-${column.key}`).absolute().left(rect.x).top(rect.y).w(ROW.LABEL_W - 8).h(ROW.CARD_H).items_center().gap(6)
       .child(div().size(8).rounded(8).bg(color).flex_none())
-      .child(div().text_size(12).font_semibold().truncate().child(`${foldable ? (this.folded.has(column.key) ? "▸ " : "▾ ") : ""}${column.label}`))
+      .child(div().text_size(12).font_semibold().truncate().child(`${foldable ? (this.open.has(column.key) ? "▾ " : "▸ ") : ""}${column.label}`))
       .child(div().px(5).rounded(4).bg(`${color}26`).text_size(10).text_color(color).flex_none().child(String(column.cards.length)))
-      .when(foldable, (el) => el.cursor_pointer().on_click((_event, cx) => this.fold(column.key, cx)));
+      .when(foldable, (el) => el.cursor_pointer().on_click((_event, cx) => this.toggle(column.key, cx)));
+  }
+
+  // A provider group's head in Available: its name and how many cards it holds.
+  // A click opens or closes it.
+  groupHead({ group, open, rect }, t) {
+    return h_flex().id(`models-group-${group.key}`).absolute().left(rect.x).top(rect.y).w(rect.width).h(rect.height).items_center().gap(6)
+      .px(6).rounded(4).hover((s) => s.bg(t.surface)).cursor_pointer()
+      .child(div().text_size(11).text_color(t.muted).child(`${open ? "▾" : "▸"} ${group.label}`))
+      .child(div().text_size(10).text_color(t.dim).child(String(group.cards.length)))
+      .on_click((_event, cx) => this.toggle(group.key, cx));
   }
 
   // Where the drop would land: a bar across the gap, or the row's outline.
@@ -225,11 +238,10 @@ export class Models {
   }
 }
 
-
-// The folded rows the pane kept, or Available alone the first time.
-const storedFolded = () => {
+// What the pane kept open; nothing, the first time.
+const storedOpen = () => {
   try {
-    const kept = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? '["available"]');
-    return new Set(Array.isArray(kept) ? kept.filter((key) => typeof key === "string") : ["available"]);
-  } catch { return new Set(["available"]); }
+    const kept = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]");
+    return new Set(Array.isArray(kept) ? kept.filter((key) => typeof key === "string") : []);
+  } catch { return new Set(); }
 };

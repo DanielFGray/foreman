@@ -8,11 +8,11 @@ const rung = (name, level, enabled, extra = {}) => ({ rung: name, level, model: 
 const ladder = {
   rungs: [rung("a", 1, true), rung("b", 1, true), rung("off", 2, false), rung("c", 4, true)],
   models: [
-    { model: "m/a", harness: "pi", retired: false },
-    { model: "m/off", harness: "pi", retired: false },
-    { model: "m/rev", harness: "pi", retired: false },
-    { model: "free", harness: "pi", retired: false },
-    { model: "old", harness: "pi", retired: true },
+    { model: "m/a", harness: "pi", provider: "p", retired: false },
+    { model: "m/off", harness: "pi", provider: "p", retired: false },
+    { model: "m/rev", harness: "pi", provider: "q", retired: false },
+    { model: "free", harness: "pi", provider: "q", retired: false },
+    { model: "old", harness: "pi", provider: "q", retired: true },
   ],
   reviewers: [{ name: "rev", model: "m/rev", thinking: "high" }],
 };
@@ -29,8 +29,8 @@ test("a column per level with an enabled rung, then Reviewers, then Available", 
   ]);
 });
 
-test("each column is a row, its cards wrapping to the view's width, and a folded row shows no cards", () => {
-  const { rows, cards, gaps, height } = rowsOf(columns, 560, new Set(["available"]));
+test("each column is a row, its cards wrapping to the view's width, and a closed Available shows no cards", () => {
+  const { rows, cards, gaps, height } = rowsOf(columns, 560, new Set());
   expect(rows.map((row) => [row.column.key, row.rect.y, row.rect.height])).toEqual([
     ["level:1", 12, 40], ["level:4", 66, 40], ["reviewers", 134, 40], ["available", 188, 40],
   ]);
@@ -91,7 +91,7 @@ test("a taken rung name gets the first free number after it", () => {
 });
 
 test("with no enabled rung, the one gap is the bottom", () => {
-  const empty = { rungs: [rung("off", 2, false)], models: [{ model: "free", harness: "pi", retired: false }], reviewers: [] };
+  const empty = { rungs: [rung("off", 2, false)], models: [{ model: "free", harness: "pi", provider: "q", retired: false }], reviewers: [] };
   const bare = columnsOf(empty);
   const model = bare.find((column) => column.key === "available").cards.find((one) => one.kind === "model");
   expect(dropsOf(model, bare, empty).filter((one) => one.zone.kind === "gap")).toEqual([
@@ -115,4 +115,12 @@ test("a click steps the thinking level none, low, medium, high, none", () => {
   expect(thinkingArgs(card("rung:a"))).toEqual(["ladder", "thinking", "a", "medium"]);
   expect(thinkingArgs(card("reviewer:rev"))).toEqual(["reviewers", "thinking", "rev", "none"]);
   expect(thinkingArgs(card("model:free"))).toBeNull();
+});
+
+test("an open Available shows a head per provider, and an open provider's cards under it", () => {
+  const { rows, heads, cards } = rowsOf(columns, 560, new Set(["available", "available:q"]));
+  expect(heads.map((head) => [head.group.label, head.open, head.rect.y])).toEqual([["p", false, 188], ["q", true, 220]]);
+  expect(cards.has("rung:off")).toBe(false);
+  expect(cards.get("model:free")).toEqual({ x: 140, y: 252, width: 200, height: ROW.CARD_H });
+  expect(rows.at(-1).rect.height).toBe(104);
 });
