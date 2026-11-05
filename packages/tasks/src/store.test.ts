@@ -233,4 +233,52 @@ describe("the migrator", () => {
       rmSync(made, { recursive: true, force: true });
     }
   });
+
+  test("drops the learnings a store from prog holds", async () => {
+    const made = mkdtempSync(join(tmpdir(), "tasks-schema-"));
+    try {
+      const path = join(made, "prog.db");
+      const before = new Database(path);
+      before.exec(`
+        CREATE TABLE concepts (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+        CREATE TABLE learnings (id TEXT PRIMARY KEY,
+          task_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+          summary TEXT NOT NULL, detail TEXT);
+        CREATE TABLE learning_concepts (learning_id TEXT REFERENCES learnings(id),
+          concept_id TEXT REFERENCES concepts(id), PRIMARY KEY (learning_id, concept_id));
+        CREATE TABLE learning_sources (id TEXT PRIMARY KEY,
+          learning_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE, path TEXT NOT NULL);
+        CREATE TABLE learning_relations (
+          source_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
+          target_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL, PRIMARY KEY (source_id, target_id, kind));
+        CREATE VIRTUAL TABLE learnings_fts USING fts5(summary, detail,
+          content='learnings', content_rowid='rowid');
+        CREATE TRIGGER learnings_ai AFTER INSERT ON learnings BEGIN
+          INSERT INTO learnings_fts(rowid, summary, detail) VALUES (NEW.rowid, NEW.summary, NEW.detail);
+        END;
+        INSERT INTO concepts VALUES ('c-1', 'store');
+        INSERT INTO learnings VALUES ('l-1', NULL, 'a learning', NULL);
+        INSERT INTO learnings VALUES ('l-2', NULL, 'a later learning', NULL);
+        INSERT INTO learning_concepts VALUES ('l-1', 'c-1');
+        INSERT INTO learning_sources VALUES ('s-1', 'l-1', 'src/a.ts');
+        INSERT INTO learning_relations VALUES ('l-2', 'l-1', 'supersedes');
+      `);
+      before.close();
+      await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(path))));
+      const sqlite = new Database(path, { readonly: true });
+      try {
+        const left = sqlite
+          .query<{ name: string }, []>(
+            `SELECT name FROM sqlite_master WHERE name LIKE '%learning%' OR name LIKE '%concept%'`,
+          )
+          .all();
+        expect(left).toEqual([]);
+      } finally {
+        sqlite.close();
+      }
+    } finally {
+      rmSync(made, { recursive: true, force: true });
+    }
+  });
 });

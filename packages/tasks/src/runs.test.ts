@@ -15,6 +15,15 @@ let files = 0;
 const inRuns = <A, E>(use: Effect.Effect<A, E, Runs | Tasks | SqlClient>) =>
   Effect.runPromise(use.pipe(Effect.provide(Runs.layerAt(join(dir, `store-${++files}.db`)))));
 
+/**
+ * Forgets that the named migration and every later one ran, so the next
+ * connection runs them again. The migrator runs only ids above the latest
+ * recorded row, so a later row left behind would skip the named one.
+ */
+const rewindTo = (name: string) =>
+  `DELETE FROM tasks_migrations
+   WHERE migration_id >= (SELECT migration_id FROM tasks_migrations WHERE name = '${name}')`;
+
 const run = (over: Partial<NewRunInput> = {}): NewRunInput => ({
   project: "p",
   task: "ts-1",
@@ -409,13 +418,7 @@ describe("the exits migration", () => {
         // The models as these migrations found them, with the thinking level
         // the reviewers migration copies.
         yield* sql.unsafe(`ALTER TABLE models ADD COLUMN thinking TEXT NOT NULL DEFAULT 'medium'`);
-        // The migrator only runs ids above the latest recorded row, so later
-        // migrations must go too or exits is skipped and the rename never runs.
-        yield* sql.unsafe(
-          `DELETE FROM tasks_migrations
-           WHERE name IN ('exits', 'ladder_roles', 'six_statuses', 'charges_and_parks', 'council',
-                          'ladder_levels', 'reviewers', 'no_price_class', 'rung_thinking')`,
-        );
+        yield* sql.unsafe(rewindTo("exits"));
         const endings = [
           ["build", "handed-off"],
           ["build", "satisfied"],
@@ -477,10 +480,7 @@ describe("the reviewers migration", () => {
         yield* sql.unsafe(`INSERT INTO ladder (rank, level, rung, model, provider, review) VALUES
           (1, 1, 'cheap', 'm3', NULL, 1), (2, 2, 'dear', 'm1', 'acct', 0), (3, 3, 'dearer', 'm1', NULL, 1)`);
         yield* sql.unsafe(`DROP TABLE reviewers`);
-        yield* sql.unsafe(
-          `DELETE FROM tasks_migrations
-           WHERE name IN ('reviewers', 'no_price_class', 'rung_thinking')`,
-        );
+        yield* sql.unsafe(rewindTo("reviewers"));
       }),
     );
     const after = await at(
@@ -531,9 +531,7 @@ describe("the price class migration", () => {
         yield* sql.unsafe(
           `INSERT INTO reviewers (reviewer, model, thinking) VALUES ('dear', 'm2', 'high')`,
         );
-        yield* sql.unsafe(
-          `DELETE FROM tasks_migrations WHERE name IN ('no_price_class', 'rung_thinking')`,
-        );
+        yield* sql.unsafe(rewindTo("no_price_class"));
       }),
     );
     const after = await at(
@@ -584,7 +582,7 @@ describe("the rung thinking migration", () => {
         yield* sql.unsafe(
           `INSERT INTO reviewers (reviewer, model, thinking) VALUES ('deep', 'm1', 'high')`,
         );
-        yield* sql.unsafe(`DELETE FROM tasks_migrations WHERE name = 'rung_thinking'`);
+        yield* sql.unsafe(rewindTo("rung_thinking"));
       }),
     );
     const after = await at(
@@ -668,10 +666,7 @@ describe("the ladder levels migration", () => {
           author INTEGER NOT NULL DEFAULT 1, review INTEGER NOT NULL DEFAULT 1)`);
         yield* sql.unsafe(`INSERT INTO ladder (rank, rung, model, review) VALUES
           (1, 'cheap', 'm1', 1), (2, 'dear', 'm1', 0)`);
-        yield* sql.unsafe(
-          `DELETE FROM tasks_migrations
-           WHERE name IN ('ladder_levels', 'reviewers', 'no_price_class', 'rung_thinking')`,
-        );
+        yield* sql.unsafe(rewindTo("ladder_levels"));
       }),
     );
     const rows = await at(

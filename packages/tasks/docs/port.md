@@ -16,7 +16,9 @@ store in process, with a typed record of runs in place of those labels.
 - Present: items, dependencies, labels, logs, projects; ready and its ranking;
   the derived status of an epic; the commands foreman and agents use on tasks;
   the `tasks` CLI; the runs, charges and parks tables foreman owns beside it.
-- Not yet: learnings, concepts, context, onboard, tui, web, backup.
+- Not yet: onboard, tui, web, backup.
+- Dropped: learnings, concepts and context. `0013_no_learnings` removes their
+  tables from a store that came from `prog`.
 
 ## Store rules
 

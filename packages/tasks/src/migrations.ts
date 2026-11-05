@@ -6,9 +6,9 @@ import { PROCESS_ENDINGS } from "./endings.ts";
 /**
  * The tables of the store, as Effect migrations.
  *
- * `0001_tasks` creates the task and learning tables in the layout the former
- * Go `prog` left after its last migration, so `tasks` can make a store on its
- * own. Every statement is `IF NOT EXISTS`.
+ * `0001_tasks` creates the task tables in the layout the former Go `prog` left
+ * after its last migration, so `tasks` can make a store on its own. Every
+ * statement is `IF NOT EXISTS`.
  *
  * A store without a `user_version` gets `GO_SCHEMA_VERSION` (the version that
  * layout corresponds to). Migrations record themselves in `tasks_migrations`.
@@ -220,6 +220,21 @@ export const MIGRATIONS = Migrator.fromRecord({
       }
     }),
   ),
+  // A store that came from Go `prog` holds its learnings. `tasks` has no
+  // command that reads or writes them, so the tables go. Each table is dropped
+  // after the tables whose foreign keys name it, and its triggers go with it.
+  "0013_no_learnings": Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    for (const table of [
+      "learnings_fts",
+      "learning_relations",
+      "learning_sources",
+      "learning_concepts",
+      "learnings",
+      "concepts",
+    ])
+      yield* sql.unsafe(`DROP TABLE IF EXISTS ${table}`);
+  }),
 });
 
 /**
@@ -297,9 +312,8 @@ const REVIEWERS_LEVELS = `CREATE TABLE reviewers (
 export const MIGRATIONS_TABLE = "tasks_migrations";
 
 /**
- * Tasks (`items`, `deps`, `logs`, `projects`, `labels`, `item_labels`) and
- * learnings (`concepts`, `learnings`, their full-text index, sources and
- * relations). Names match Go's, because Go reads the same file.
+ * Tasks (`items`, `deps`, `logs`, `projects`, `labels`, `item_labels`), named
+ * as Go's `prog` named them.
  */
 const TASKS = [
   `CREATE TABLE IF NOT EXISTS items (
@@ -346,67 +360,6 @@ const TASKS = [
     label_id TEXT REFERENCES labels(id),
     PRIMARY KEY (item_id, label_id)
   )`,
-  `CREATE TABLE IF NOT EXISTS concepts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    summary TEXT,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`,
-  `CREATE TABLE IF NOT EXISTS learnings (
-    id TEXT PRIMARY KEY,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    task_id TEXT REFERENCES items(id) ON DELETE SET NULL,
-    summary TEXT NOT NULL,
-    detail TEXT,
-    status TEXT DEFAULT 'active'
-  )`,
-  `CREATE TABLE IF NOT EXISTS learning_concepts (
-    learning_id TEXT REFERENCES learnings(id),
-    concept_id TEXT REFERENCES concepts(id),
-    PRIMARY KEY (learning_id, concept_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS learning_sources (
-    id TEXT PRIMARY KEY,
-    learning_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    start_line INTEGER,
-    end_line INTEGER,
-    note TEXT,
-    CHECK (
-      (start_line IS NULL AND end_line IS NULL)
-      OR (start_line IS NOT NULL AND start_line > 0 AND end_line IS NULL)
-      OR (start_line IS NOT NULL AND end_line IS NOT NULL
-        AND start_line > 0 AND end_line >= start_line)
-    )
-  )`,
-  `CREATE TABLE IF NOT EXISTS learning_relations (
-    source_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
-    target_id TEXT NOT NULL REFERENCES learnings(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind = 'supersedes'),
-    CHECK (source_id != target_id),
-    PRIMARY KEY (source_id, target_id, kind)
-  )`,
-  `CREATE VIRTUAL TABLE IF NOT EXISTS learnings_fts USING fts5(
-    summary,
-    detail,
-    content='learnings',
-    content_rowid='rowid'
-  )`,
-  `CREATE TRIGGER IF NOT EXISTS learnings_ai AFTER INSERT ON learnings BEGIN
-    INSERT INTO learnings_fts(rowid, summary, detail)
-    VALUES (NEW.rowid, NEW.summary, NEW.detail);
-  END`,
-  `CREATE TRIGGER IF NOT EXISTS learnings_ad AFTER DELETE ON learnings BEGIN
-    INSERT INTO learnings_fts(learnings_fts, rowid, summary, detail)
-    VALUES ('delete', OLD.rowid, OLD.summary, OLD.detail);
-  END`,
-  `CREATE TRIGGER IF NOT EXISTS learnings_au AFTER UPDATE ON learnings BEGIN
-    INSERT INTO learnings_fts(learnings_fts, rowid, summary, detail)
-    VALUES ('delete', OLD.rowid, OLD.summary, OLD.detail);
-    INSERT INTO learnings_fts(rowid, summary, detail)
-    VALUES (NEW.rowid, NEW.summary, NEW.detail);
-  END`,
   `CREATE INDEX IF NOT EXISTS idx_items_project ON items(project)`,
   `CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)`,
   `CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_id)`,
@@ -414,12 +367,6 @@ const TASKS = [
   `CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project)`,
   `CREATE INDEX IF NOT EXISTS idx_item_labels_item ON item_labels(item_id)`,
   `CREATE INDEX IF NOT EXISTS idx_item_labels_label ON item_labels(label_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_learning_concepts_concept ON learning_concepts(concept_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_learnings_task ON learnings(task_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_sources_unique
-    ON learning_sources(learning_id, path, ifnull(start_line, -1), ifnull(end_line, -1))`,
-  `CREATE INDEX IF NOT EXISTS idx_learning_relations_target ON learning_relations(target_id)`,
 ];
 
 /**
