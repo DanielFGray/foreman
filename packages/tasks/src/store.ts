@@ -1,10 +1,9 @@
 /**
  * The task store, read and written in process.
  *
- * It opens the same SQLite file as the Go `prog` (`PROG_DB`, else
- * `~/.prog/prog.db`), so both front ends see one set of tasks. Go owns the
- * schema of every table it created and `PRAGMA user_version`; this module reads
- * and writes those tables the way Go does. The tables `tasks` adds are in
+ * The file is `TASKS_DB`, else `~/.tasks/tasks.db`. Item, label, log and
+ * dependency tables keep the layout the former Go `prog` wrote; this module
+ * owns that schema through its migrator. Tables `tasks` adds are in
  * `migrations.ts`.
  */
 import { Context, Effect, Layer, Option, Schedule, Schema as S } from "effect";

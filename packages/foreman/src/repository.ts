@@ -913,7 +913,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
        * The branches are the only record that survives everything else. A
        * workspace can be closed, a claim reclaimed, a task marked done or
        * deleted outright, and the commits are still sitting on the branch — so
-       * git, not prog, is what foreman asks to find work it has lost track of.
+       * git, not the task store, is what foreman asks to find work it has lost track of.
        *
        * Each branch is measured against its trunk: the branch it lands on
        * (`landsOn`), read from its upstream, so a task whose record is gone is

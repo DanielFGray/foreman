@@ -95,7 +95,7 @@ operator's stop; `idle` is every step off and no grant; `running` is anything
 else (a step on by default or for any unpaused project, or a grant), so an
 `ask` step runs the fleet: it must read the world to find what to ask about.
 Only a running tick acts: a paused or idle tick reads the world and publishes
-the reading, and writes nothing to prog, git, hc or the policy file — settle,
+the reading, and writes nothing to the task store, git, hc or the policy file — settle,
 tidy, reclaim and recover wait too. Stopping the fleet must hold the world still
 while the operator looks at it. To empty the pipeline without taking on new
 work, turn `author` and `climb` off and leave `review` and `land` on.
@@ -114,7 +114,7 @@ new ask appears, for a coordinator that answers asks while it talks to the opera
 A grant permits a step. It never reorders the queue: the plan takes tasks with
 the fewest work blocks left first, then in queue order, and passes over each task
 that a gate on its route does not permit. Which granted tasks may run
-at once is what `prog ready` returns, so the plan's blockers decide it, and
+at once is what `tasks ready` returns, so the plan's blockers decide it, and
 restating that here would be a second, weaker copy of the dependency graph.
 
 Foreman keeps one thing in process, in a `Ref`: how a dispatch attempt failed,
@@ -143,7 +143,7 @@ belongs in hc, herdr-app or the tracker.
 ### Projects are the open spaces
 
 The config lists no projects. A project is the git checkout an open herdr-app
-space sits in, named by the checkout's folder, which is also its prog project
+space sits in, named by the checkout's folder, which is also its tasks project
 (`src/projects.ts`). Only an open project takes new work; the managed set adds
 every checkout a foreman agent still runs in, so closing a space drains the work
 under way. Two checkouts with one name are held as `ambiguous`, because a task
@@ -644,7 +644,7 @@ the project's `scripts/verify.sh` into the prompt; a project with none has no la
 gate, and there the full run is the reviewer's after all.
 
 **The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
-`models` tables of the task store (`PROG_DB`, else `~/.prog/prog.db`), through
+`models` tables of the task store (`TASKS_DB`, else `~/.tasks/tasks.db`), through
 the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. A
 store with no rungs is a startup error, not a fallback, because a
 fallback is a second ladder that can drift. The model row carries the harness.
@@ -909,7 +909,7 @@ routes each call to the adapter of the project's tracker, chosen with
 built. Nothing above `src/github.ts` runs `gh`, and nothing above
 `src/linear.ts` sends HTTP to Linear. `Records` (`src/records.ts`) holds foreman's
 own records beside it, keyed by task id: the runs, the charges and the parks.
-For a prog project, a records write that goes with a status move shares one
+For a tasks project, a records write that goes with a status move shares one
 transaction with it, which holds only while both run on one store connection;
 `Records.layer` builds them that way. A GitHub or Linear project writes the
 records first, then the move (`docs/issue-trackers.md`, section 1). The writes a pipeline event makes are one
@@ -979,7 +979,7 @@ board at a frame is the fold of the frames up to it. Its `assumes` names every
 fact it does not read from the world. The pane's fleet controls
 (`herdr/foreman/fleet.js`) call it on demand and after each change to
 the draft, and draw the frames on the board up to a time the operator picks. Both act through
-`foreman <action> <id>` and `foreman policy`. Neither runs `prog`. `state.json`
+`foreman <action> <id>` and `foreman policy`. Neither runs `tasks`. `state.json`
 is a view, not a memory: nothing in foreman reads it back.
 
 `src/view.ts` is a total function from a reading (`FleetState`) to rows and the
@@ -1090,12 +1090,12 @@ not to have been earned.
   off, the operator merges on GitHub, and foreman completes the task when it
   reads the merge.
 - **The live stores belong to the running fleet.** The dispatcher reads
-  `~/.prog/prog.db` and `~/.config/foreman/`, so a test or one-shot command
+  `~/.tasks/tasks.db` and `~/.config/foreman/`, so a test or one-shot command
   that writes them changes the live fleet. Write them only through
   `foreman log`, `foreman add` without `--dispatch`, and `foreman exit` for
-  your own task. Otherwise point `PROG_DB`, `FOREMAN_STATE`, `FOREMAN_POLICY`,
+  your own task. Otherwise point `TASKS_DB`, `FOREMAN_STATE`, `FOREMAN_POLICY`,
   `FOREMAN_PIPELINES` and `FOREMAN_CONFIG` at scratch paths. To read real data, copy the store first:
-  `sqlite3 ~/.prog/prog.db ".backup <scratch>/prog.db"`.
+  `sqlite3 ~/.tasks/tasks.db ".backup <scratch>/tasks.db"`.
 - **oxfmt runs from `packages/foreman`.** Its config is
   `packages/foreman/.oxfmtrc.json`.
 - **`CLAUDE.md` is a symlink to `AGENTS.md`.** `sed -i` or `perl -i` on it
@@ -1108,11 +1108,11 @@ not to have been earned.
 - Never patch around a wall. No flags, special cases, conversion shims, or
   parallel paths to make a broken design compile. The bugs above were fixed by
   deleting a concept, not adding one. Report a blocker instead.
-- Use `prog` for task tracking. The epic is `ep-0e6a7e`.
+- Use `tasks` for task tracking. The epic is `ep-0e6a7e`.
 - Bun, not node. Effect-TS throughout.
-- Edit only foreman and `~/build/server-ansible`. When a sweep reaches another project, list those files and file the work with `prog -p <project> add`.
+- Edit only foreman and `~/build/server-ansible`. When a sweep reaches another project, list those files and file the work with `tasks -p <project> add`.
 - **A gap in hc or herdr-app is a task in `amux`, not a workaround here.**
   Foreman is their heaviest user, so it finds the missing capabilities first,
   and the cost of each is a shim here encoding what hc should have told us. File
-  it with `prog -p amux add` describing the capability rather than the symptom,
+  it with `tasks -p amux add` describing the capability rather than the symptom,
   and say in the foreman task that it is blocked on it.

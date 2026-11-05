@@ -6,8 +6,8 @@ import type { Reviewer } from "./reviewers.ts";
 /**
  * The model registry: the ladder, and the facts about each model on it.
  *
- * It is the `ladder` and `models` tables of the task store (`PROG_DB`, else
- * `~/.prog/prog.db`), reached through the `SqlClient` the process shares with
+ * It is the `ladder` and `models` tables of the task store (`TASKS_DB`, else
+ * `~/.tasks/tasks.db`), reached through the `SqlClient` the process shares with
  * the task layer, so the order of the models, their launch settings and the
  * record of how each one fared live in one file. Foreman reads the ladder from
  * it on every start and refuses to run without it: a second copy of the order

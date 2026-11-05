@@ -13,7 +13,7 @@ export const line = (item: Item): string =>
 export const lines = (items: ReadonlyArray<Item>): string =>
   items.length === 0 ? "No items" : items.map(line).join("\n");
 
-/** The items as a JSON array, in the field names the Go `prog` prints with `--json`. */
+/** The items as a JSON array, with stable field names for `--json`. */
 export const json = (items: ReadonlyArray<Item>): string =>
   JSON.stringify(items.map(fieldsOf), null, 2);
 

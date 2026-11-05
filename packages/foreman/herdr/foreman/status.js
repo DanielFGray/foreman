@@ -11,7 +11,7 @@ export const STALE_MS = 120000;
 export const NEXT_MODE = { on: "ask", ask: "off", off: "on" };
 
 // A row's key is a task id, a workspace label that holds one (`foreman/<id>`),
-// or a project or account name, which has no task to show. A prog id is
+// or a project or account name, which has no task to show. A local task id is
 // `ts-` or `ep-` and six hex digits; an issue id is `<project>#<number>` on
 // GitHub and `<project>#<TEAM-number>` on Linear.
 export const TASK_ID = /\b(?:ts|ep)-[0-9a-f]{6}\b|[\w.-]+#(?:[A-Za-z][A-Za-z0-9]*-)?\d+\b/;

@@ -18,7 +18,7 @@ const loadLadder = () =>
 describe("settings", () => {
   const savedCwd = process.cwd();
   const saved = process.env["FOREMAN_CONFIG"];
-  const savedStore = process.env["PROG_DB"];
+  const savedStore = process.env["TASKS_DB"];
 
   /** A scratch store: the migration makes the schema, the e2e rig's own SQL seeds the ladder. */
   const scratchRegistry = async () => {
@@ -27,13 +27,13 @@ describe("settings", () => {
       Effect.provide(connectionAt(path)),
       Effect.runPromise,
     );
-    process.env["PROG_DB"] = path;
+    process.env["TASKS_DB"] = path;
     return path;
   };
 
   afterEach(() => {
-    if (savedStore === undefined) delete process.env["PROG_DB"];
-    else process.env["PROG_DB"] = savedStore;
+    if (savedStore === undefined) delete process.env["TASKS_DB"];
+    else process.env["TASKS_DB"] = savedStore;
     process.chdir(savedCwd);
     if (saved === undefined) delete process.env["FOREMAN_CONFIG"];
     else process.env["FOREMAN_CONFIG"] = saved;
@@ -70,7 +70,7 @@ describe("settings", () => {
   test("refuses to start without a registry", async () => {
     // A store that has never held a ladder is created and migrated empty on open.
     process.env["FOREMAN_CONFIG"] = join(repoRoot, "e2e", "config.jsonc");
-    process.env["PROG_DB"] = join(mkdtempSync(join(tmpdir(), "foreman-registry-")), "empty.db");
+    process.env["TASKS_DB"] = join(mkdtempSync(join(tmpdir(), "foreman-registry-")), "empty.db");
     await expect(loadLadder()).rejects.toThrow(/the ladder table has no rungs/);
   });
 });

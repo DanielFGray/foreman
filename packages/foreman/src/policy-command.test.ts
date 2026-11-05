@@ -77,9 +77,9 @@ describe("foreman policy tracker", () => {
     expect(written().projects).toEqual({ amux: { steps: { author: "on" }, tracker: "github" } });
   });
 
-  test("prog is the default, so choosing it drops the key", async () => {
+  test("tasks is the default, so choosing it drops the key", async () => {
     await run("tracker", "github", "--project", "amux");
-    await run("tracker", "prog", "--project", "amux");
+    await run("tracker", "tasks", "--project", "amux");
     expect(written().projects).toEqual({});
   });
 

@@ -669,7 +669,7 @@ describe("publishedOf", () => {
   test("carries why a dispatcher failed, in a shape its schema reads back", () => {
     const published = publishedOf(
       state,
-      Option.some({ state: "failed", detail: "prog: command not found" }),
+      Option.some({ state: "failed", detail: "tasks: command not found" }),
     );
     expect(S.decodeUnknownSync(Published)(JSON.parse(JSON.stringify(published)))).toEqual(
       published,
@@ -803,8 +803,7 @@ describe("pull requests and projects in the published reading", () => {
         unreachable,
       })),
     ).toEqual([
-      { name: "alpha", tracker: "prog", repo: null, unreachable: null },
-      {
+      { name: "alpha", tracker: "tasks", repo: null, unreachable: null },      {
         name: "beta",
         tracker: "github",
         repo: "o/beta",

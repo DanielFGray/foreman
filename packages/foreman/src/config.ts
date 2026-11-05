@@ -218,7 +218,7 @@ const ConfigFile = Schema.Struct({
   stallGraceMinutes: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(5))),
 
   /**
-   * How far back the dashboard's landed column reaches. prog list has no
+   * How far back the dashboard's landed column reaches. tasks list has no
    * limit, so the dispatcher bounds the column by this window instead.
    */
   landedWindowDays: Positive.pipe(Schema.withDecodingDefault(Effect.succeed(7))),

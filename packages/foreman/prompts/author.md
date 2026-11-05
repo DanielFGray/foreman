@@ -15,7 +15,7 @@ everything.
 
 1. `git status` and the log of your work, as the workspace section says: an earlier
    author may have left work here.
-2. `foreman show {{ task }}`, then `prog context` for its concepts, then the project's
+2. `foreman show {{ task }}`, then the project's
    AGENTS.md or CLAUDE.md.
 3. For a non-trivial design read `~/.agents/skills/architect/SKILL.md`; for a large
    or uncertain change, `~/.agents/skills/figure-it-out/SKILL.md`.
@@ -55,5 +55,5 @@ If you are stuck (the same approach failed three times, the task describes code 
 does not exist, or "done" is unclear), log what you tried and stop without naming an
 exit.
 
-Record what the next agent should know with `prog learn`. Work on nothing other
+Work on nothing other
 than {{ task }}.

@@ -58,10 +58,10 @@ const failing = Tracker.of(
 const world = (policy: Policy, github: Tracker["Service"] | "recording" = "recording") => {
   const calls: Array<string> = [];
   let reads = 0;
-  const progItems = [item("ts-1", "alpha"), item("ts-2", "beta")];
+  const tasksItems = [item("ts-1", "alpha"), item("ts-2", "beta")];
   const tracker = routeByProject(
     {
-      prog: recording("prog", calls, progItems),
+      tasks: recording("tasks", calls, tasksItems),
       github:
         github === "recording" ? recording("github", calls, [item("beta#7", "beta")]) : github,
       linear: recording("linear", calls, []),
@@ -77,11 +77,11 @@ const world = (policy: Policy, github: Tracker["Service"] | "recording" = "recor
 const onGithub = setProjectTracker(DEFAULT_POLICY, "beta", "github");
 
 describe("routeByProject", () => {
-  test("a prog id goes to prog and reads no policy", async () => {
+  test("a local tasks id goes to tasks and reads no policy", async () => {
     const { tracker, calls, reads } = world(onGithub);
     await Effect.runPromise(tracker.claim("ts-1"));
     await Effect.runPromise(tracker.label("ts-1", "size:2"));
-    expect(calls).toEqual(["prog claim ts-1", "prog label ts-1 size:2"]);
+    expect(calls).toEqual(["tasks claim ts-1", "tasks label ts-1 size:2"]);
     expect(reads()).toBe(0);
   });
 
@@ -89,10 +89,10 @@ describe("routeByProject", () => {
     const { tracker, calls } = world(onGithub);
     await Effect.runPromise(tracker.complete("beta#7"));
     await Effect.runPromise(tracker.lookup("alpha#3"));
-    expect(calls).toEqual(["github complete beta#7", "prog lookup alpha#3"]);
+    expect(calls).toEqual(["github complete beta#7", "tasks lookup alpha#3"]);
   });
 
-  test("show, log and url route a prog, a GitHub and a Linear id to its tracker", async () => {
+  test("show, log and url route a tasks, a GitHub and a Linear id to its tracker", async () => {
     const { tracker, calls } = world(setProjectTracker(onGithub, "gamma", "linear"));
     for (const id of ["ts-1", "beta#7", "gamma#ENG-3"]) {
       await Effect.runPromise(tracker.lookup(id));
@@ -101,7 +101,7 @@ describe("routeByProject", () => {
       await Effect.runPromise(tracker.url(id));
     }
     expect(calls).toEqual([
-      ...["lookup", "logs", "log", "url"].map((call) => `prog ${call} ts-1`),
+      ...["lookup", "logs", "log", "url"].map((call) => `tasks ${call} ts-1`),
       ...["lookup", "logs", "log", "url"].map((call) => `github ${call} beta#7`),
       ...["lookup", "logs", "log", "url"].map((call) => `linear ${call} gamma#ENG-3`),
     ]);
@@ -117,13 +117,13 @@ describe("routeByProject", () => {
     await Effect.runPromise(tracker.list({ parent: "beta#1" }));
     expect(calls).toEqual([
       "github ready beta",
-      "prog dependencies alpha",
+      "tasks dependencies alpha",
       "github add beta",
       'github list {"parent":"beta#1"}',
     ]);
   });
 
-  test("ready everywhere joins prog's own projects with each other tracker's", async () => {
+  test("ready everywhere joins tasks projects with each other tracker's", async () => {
     const { tracker } = world(onGithub);
     const ready = await Effect.runPromise(tracker.ready(undefined));
     expect(ready.map((each) => each.id)).toEqual(["ts-1", "beta#7"]);

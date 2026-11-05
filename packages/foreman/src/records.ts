@@ -65,7 +65,7 @@ export interface Endings {
  * tracker carries only task state. A records
  * write that goes with a status move (closing runs as a task is released or
  * completed) runs both in one transaction on that connection. This is atomic
- * only for a prog project, whose `TasksTracker` writes on the same connection,
+ * only for a tasks project, whose `TasksTracker` writes on the same connection,
  * which `layer` guarantees by building the two from one store.
  */
 export class Records extends Context.Service<Records>()("Records", {

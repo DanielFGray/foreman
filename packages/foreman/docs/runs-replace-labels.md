@@ -88,8 +88,8 @@ exit), `satisfied` leaves the task `in_progress` at the review step, and
 the first, so a reviewer that approves and then returns in one turn leaves
 `returned`. There is no open run to write to after settle closes it, so a
 verdict cannot change a closed run. The review and author prompts use this
-command in place of `prog label … approved`, `prog open` and
-`prog label … satisfied`.
+command in place of `tasks label … approved`, `tasks open` and
+`tasks label … satisfied`.
 
 `node` is the pipeline block the run ran at. Until the dispatcher places tasks
 (step 5), foreman writes the standard pipeline's block for the role: `author`

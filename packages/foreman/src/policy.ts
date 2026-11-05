@@ -50,10 +50,10 @@ export const STEP_MODES = ["on", "ask", "off"] as const;
 export type StepMode = (typeof STEP_MODES)[number];
 
 /**
- * The tracker a project takes its tasks from. `prog` is the `tasks` store;
+ * The tracker a project takes its tasks from. `tasks` is the local store;
  * `github` and `linear` are the adapters of docs/issue-trackers.md.
  */
-export const TRACKERS = ["prog", "github", "linear"] as const;
+export const TRACKERS = ["tasks", "github", "linear"] as const;
 export type TrackerName = (typeof TRACKERS)[number];
 
 /**
@@ -110,7 +110,7 @@ export type PullRequestPolicy = typeof PullRequestPolicy.Type;
  */
 export const ProjectPolicy = S.Struct({
   paused: S.optional(S.Boolean),
-  /** Absent means `prog`. */
+  /** Absent means `tasks`. */
   tracker: S.optional(S.Literals(TRACKERS)),
   /** The Linear team key and Linear project name; set with the `linear` tracker. */
   linear: S.optional(LinearPlace),
@@ -451,10 +451,10 @@ export const clearProject = (policy: Policy, project: string): Policy =>
 
 /** The tracker `project` takes its tasks from. */
 export const trackerOf = (policy: Policy, project: string): TrackerName =>
-  policy.projects[project]?.tracker ?? "prog";
+  policy.projects[project]?.tracker ?? "tasks";
 
 /**
- * Chooses one project's tracker. `prog` removes the key rather than storing
+ * Chooses one project's tracker. `tasks` removes the key rather than storing
  * the default. `linear` is the Linear place, stored only with the `linear`
  * tracker, because no other tracker reads it.
  */
@@ -466,7 +466,7 @@ export const setProjectTracker = (
 ): Policy =>
   editProject(policy, project, ({ tracker: _was, linear: _place, ...rest }) => ({
     ...rest,
-    ...(tracker === "prog" ? {} : { tracker }),
+    ...(tracker === "tasks" ? {} : { tracker }),
     ...(tracker === "linear" && linear !== undefined ? { linear } : {}),
   }));
 

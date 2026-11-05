@@ -6,14 +6,12 @@ import { PROCESS_ENDINGS } from "./endings.ts";
 /**
  * The tables of the store, as Effect migrations.
  *
- * `0001_tasks` creates the task and learning tables as Go `prog` leaves them
- * after its last migration, so `tasks` can make a store on its own. Every
- * statement is `IF NOT EXISTS`: on a store `prog` already made, it does nothing.
+ * `0001_tasks` creates the task and learning tables in the layout the former
+ * Go `prog` left after its last migration, so `tasks` can make a store on its
+ * own. Every statement is `IF NOT EXISTS`.
  *
- * A store without a `user_version` gets the one Go leaves after its last
- * migration (`GO_SCHEMA_VERSION`); without it, Go would run its migrations again
- * over these tables. Go owns the number from then on. Migrations record themselves in
- * `tasks_migrations`.
+ * A store without a `user_version` gets `GO_SCHEMA_VERSION` (the version that
+ * layout corresponds to). Migrations record themselves in `tasks_migrations`.
  */
 export const MIGRATIONS = Migrator.fromRecord({
   "0001_tasks": Effect.gen(function* () {
@@ -679,5 +677,5 @@ const CHARGES_AND_PARKS = [
   )`,
 ];
 
-/** `PRAGMA user_version` after Go `prog`'s last migration. */
+/** `PRAGMA user_version` matching the layout `0001_tasks` creates. */
 const GO_SCHEMA_VERSION = 8;

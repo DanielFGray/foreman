@@ -6,10 +6,10 @@ two earlier verification runs claimed real tasks that had to be unwound by
 hand.
 
 ```
-export PROG_DB=/tmp/foreman-e2e.db   # the rig's own task store
-prog init                           # the Go prog's tables
+export TASKS_DB=/tmp/foreman-e2e.db   # the rig's own task store
+# migrations create the schema on first open
 bun src/main.ts ladder list         # opens the store once, which migrates it
-sqlite3 "$PROG_DB" < e2e/registry.sql
+sqlite3 "$TASKS_DB" < e2e/registry.sql
 export FOREMAN_POLICY=/tmp/foreman-e2e-policy.json
 bun src/main.ts policy slots 1
 bun src/main.ts policy set author on   # and review, land: what the run should prove
@@ -22,10 +22,10 @@ beside the rig's state file, so it runs beside the operator's service. Never
 point it at the real state file.
 
 `registry.sql` is a three-rung scratch ladder, so the rig climbs without
-touching the real registry; `PROG_DB` keeps the rig's tasks and runs out of the real store too.
+touching the real registry; `TASKS_DB` keeps the rig's tasks and runs out of the real store too.
 
 The project is `~/build/foreman-e2e-probe`, a git repository with a green
-`bun test`. File a task in the prog project of the same name at priority 2 —
+`bun test`. File a task in the project of the same name at priority 2 —
 below 3, so it needs a review — and watch it go author → review → approved →
 merge → done. The proof is in the probe checkout afterwards: a merge commit,
 the author's file present, no `foreman/*` branch left and a clean tree.

@@ -14,7 +14,7 @@ import { newRunFor } from "./run-record.ts";
 import { NO_WRITES, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { authorRun, authoredOn, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 
-// ProjectTracker reads the policy file; a path with no file is the default, every project on prog.
+// ProjectTracker reads the policy file; a path with no file is the default, every project on tasks.
 process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy.json");
 
 /** The run row a dispatch of `role` on `rung` opens for the task. */
@@ -233,18 +233,18 @@ describe("Records against a scratch store", () => {
   let directory: string;
 
   beforeAll(async () => {
-    directory = await mkdtemp(join(tmpdir(), "foreman-prog-"));
-    process.env.PROG_DB = join(directory, "prog.db");
-    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.PROG_DB))));
+    directory = await mkdtemp(join(tmpdir(), "foreman-tasks-"));
+    process.env.TASKS_DB = join(directory, "tasks.db");
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.TASKS_DB))));
   });
 
   afterAll(async () => {
-    delete process.env.PROG_DB;
+    delete process.env.TASKS_DB;
     await rm(directory, { recursive: true, force: true });
   });
 
   test("a returned review starts its next author without reopening the task", async () => {
-    const id = (await Bun.$`prog add "review cycle" -p foreman`.text()).trim();
+    const id = (await Bun.$`tasks add "review cycle" -p foreman`.text()).trim();
     await run((_, tracker) => tracker.claim(id));
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
@@ -268,7 +268,7 @@ describe("Records against a scratch store", () => {
   // task closes the review run, so no open run outlives the review that
   // opened it and the requeued task is not read as still under review.
   test("release closes the review run and requeues the task", async () => {
-    const id = (await Bun.$`prog add "returned approval" -p foreman`.text()).trim();
+    const id = (await Bun.$`tasks add "returned approval" -p foreman`.text()).trim();
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
     await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "dear", "c1") });
@@ -285,7 +285,7 @@ describe("Records against a scratch store", () => {
 
   // A retried review replaces a reviewer that vanished, so the lap holds one open review run.
   test("assigning a reviewer ends the review run it replaces as released", async () => {
-    const id = (await Bun.$`prog add "vanished reviewer" -p foreman`.text()).trim();
+    const id = (await Bun.$`tasks add "vanished reviewer" -p foreman`.text()).trim();
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
     await run((_, tracker) => tracker.claim(id));
     await record(id, { _tag: "ReviewStarted", run: dispatchOf(id, "review", "cheap", "c1") });
@@ -301,21 +301,21 @@ describe("Records against a scratch store", () => {
 
   // One status the schema does not name fails the decode of the whole list,
   // which drops every epic's progress for that project.
-  test("reads an epic's children whatever status prog filed them at", async () => {
-    const epic = (await Bun.$`prog add "epic" -p foreman -e`.text()).trim().split("\n")[0]!;
-    for (const status of ["proposed", "draft", "blocked"]) {
-      await Bun.$`prog add ${status} -p foreman --parent ${epic} --status ${status}`.quiet();
+  test("reads an epic's children whatever status they were filed at", async () => {
+    const epic = (await Bun.$`tasks add "epic" -p foreman -e`.text()).trim().split("\n")[0]!;
+    for (const status of ["proposed", "draft", "open"]) {
+      await Bun.$`tasks add ${status} -p foreman --parent ${epic} --status ${status}`.quiet();
     }
 
     const children = await run((records) => records.children(epic));
 
-    expect(children.map((child) => child.status).sort()).toEqual(["blocked", "draft", "proposed"]);
+    expect(children.map((child) => child.status).sort()).toEqual(["draft", "open", "proposed"]);
   });
 
   // A correction round counts against the author who received it, so the next
   // author's trial row must not inherit it.
   test("counts correction rounds on the author run, even after its handoff, and a new author starts at none", async () => {
-    const id = (await Bun.$`prog add "round" -p foreman`.text()).trim().split("\n")[0]!;
+    const id = (await Bun.$`tasks add "round" -p foreman`.text()).trim().split("\n")[0]!;
     await record(id, { _tag: "AuthorStarted", run: dispatchOf(id, "author", "cheap") });
 
     expect(await run((records) => records.countRound(id))).toBe(1);
@@ -346,8 +346,8 @@ describe("Records against a scratch store", () => {
   });
 
   test("claims a done task with an unread branch back into the pipeline", async () => {
-    const id = (await Bun.$`prog add "unread branch" -p foreman`.text()).trim();
-    await Bun.$`prog done ${id}`.quiet();
+    const id = (await Bun.$`tasks add "unread branch" -p foreman`.text()).trim();
+    await Bun.$`tasks done ${id}`.quiet();
 
     await run((_, tracker) => tracker.claim(id));
     const after = await run((records) => records.show(id));

@@ -80,7 +80,7 @@ foreman pipeline use worktree --land pull-request     # open a pull request, not
 Tasks come from a tracker that you choose for each project:
 
 ```sh
-foreman policy tracker prog                                   # the local task store (the default)
+foreman policy tracker tasks                                   # the local task store (the default)
 foreman policy tracker github                                 # the issues of the project's GitHub repo
 foreman policy tracker linear --team ENG --linear-project Web # a Linear project
 ```

@@ -6,7 +6,7 @@ import type { Repository } from "./repository.ts";
 /**
  * The projects foreman works in, derived from the world every tick.
  *
- * A project is a git checkout, named for the prog project its tasks live in:
+ * A project is a git checkout, named for the tasks project its tasks live in:
  * the checkout's own folder name. The operator states which projects are in
  * play by keeping a herdr-app space open in them, so there is no list to keep
  * in step with the spaces.

@@ -84,7 +84,7 @@ stop this project's pipeline.
 
 The queue is not in `state.json`: the pane runs `foreman queue --project
 <name> --json` every 5 seconds. A row that newly appears under Landed, in any
-project, posts a notification. The pane never runs `prog`.
+project, posts a notification. The pane never runs `tasks`.
 
 The pane keeps no state but the Tasks mode. It reads the file that
 `src/published.ts` writes, and the schema there is the contract; a row from

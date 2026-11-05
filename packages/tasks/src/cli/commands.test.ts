@@ -14,7 +14,7 @@ import { join } from "node:path";
 const scratch = (() => {
   const directory = mkdtempSync(join(tmpdir(), "tasks-cli-"));
   return {
-    file: join(directory, "prog.db"),
+    file: join(directory, "tasks.db"),
     cleanup: () => rmSync(directory, { recursive: true, force: true }),
   };
 })();
@@ -278,7 +278,7 @@ describe("a store that does not exist yet", () => {
   });
 });
 
-describe("tasks as a drop-in for prog", () => {
+describe("tasks CLI shape", () => {
   test("add prints the bare id, so $(tasks add ...) holds it", async () => {
     const printed = await run(["add", "Scripted", "-p", "j"]);
     expect(printed).toMatch(/^ts-[0-9a-f]{6}$/);
@@ -307,7 +307,7 @@ describe("tasks as a drop-in for prog", () => {
     expect(await run(["show", piped])).toContain("from stdin");
   });
 
-  test("list and ready print JSON with prog's field names", async () => {
+  test("list and ready print JSON with stable field names", async () => {
     const epic = await created("Parent", "-p", "m", "-e");
     const child = await created("Child", "-p", "m", "--parent", epic, "-l", "bug");
     const listed = JSON.parse(await run(["list", "-p", "m", "--parent", epic, "--json"]));

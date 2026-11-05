@@ -5,7 +5,7 @@ multiplexer, and whenever one stops, it claims the next ready task and hands it
 over. You stop being the thing that moves work from the backlog into a pane.
 
 ```
-   prog                  foreman                  herdr
+   tasks                 foreman                  herdr
    task store            dispatcher               workspaces you can watch
    ready / claim  <----  poll, claim, prompt ---> worktree, agent, prompt
                          settle, reclaim          roster, focus, close, notify
@@ -18,7 +18,7 @@ over. You stop being the thing that moves work from the backlog into a pane.
 ## Foreman remembers nothing
 
 What foreman is doing is written in the world, not in the process. Every tick
-reads it back: the workspaces herdr is showing, the statuses and labels prog is
+reads it back: the workspaces herdr is showing, the statuses and labels the task store is
 holding, the branches git has. Nothing important lives only in memory.
 
 That is what makes it survivable. Kill foreman mid-flight and restart it, and it
@@ -85,7 +85,7 @@ three states:
 - **idle**: every step is `off` and no grant exists.
 
 A paused or idle tick reads the world and publishes the reading, and writes
-nothing: no prog change, no git change, no workspace opened, stopped or
+nothing: no task-store change, no git change, no workspace opened, stopped or
 closed, no policy change. Settle, tidy, reclaim and recover wait too, so a
 workspace whose agent stopped stays open until the fleet runs again.
 
@@ -217,7 +217,7 @@ cleaned up the same way.
 Work can end up sitting on a branch with nobody on the way to read it. A task
 gets reclaimed, or climbs a rung and goes back to the queue, or is closed or
 deleted outright — and its commits stay exactly where the author left them.
-Every column in the dashboard reads from prog, which stops mentioning that
+Every column in the dashboard reads from the task store, which stops mentioning that
 branch the moment its task moves on, so the commits go quiet rather than
 missing, which is worse. The worst case is the quietest: a task back in the
 queue with seven commits behind it looks like ordinary unstarted work, and the
@@ -396,7 +396,7 @@ is the next level. The ladder decides only who writes; who reads is the
 reviewers' list (see "Reviewers" below).
 
 The ladder is the `ladder` table of the model registry, which lives in the task
-store (`~/.prog/prog.db`; `$PROG_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
+store (`~/.tasks/tasks.db`; `$TASKS_DB` points elsewhere). Foreman reads it at start and refuses to run without it: a second
 copy of the order in a config file would be a copy that can disagree. Each rung
 is a name, a model, a thinking level, and flags; the model's row in the `models`
 table says which harness runs it. Foreman passes the rung's level at launch
@@ -547,7 +547,7 @@ forgiven.
 
 ## The queue
 
-One global `prog ready`, restricted to the open spaces' projects after prog has
+One global `tasks ready`, restricted to the open spaces' projects after the task store has
 applied dependency gates. Tasks are highest priority first, with ties broken by
 rotating between projects — otherwise one project holding a hundred priority-1
 tasks would own the entire fleet until it ran dry.
@@ -597,7 +597,7 @@ strictly.
 
 The projects are not configured. Foreman works in every herdr-app space you
 have open: each space's folder resolves to the git checkout it sits in, and the
-checkout's folder name is the prog project. Open a space to enroll a project;
+checkout's folder name is the tasks project. Open a space to enroll a project;
 close it and the project takes no new work, while what is already running there
 settles and lands. Two checkouts with one folder name are held, named on the
 dashboard, until you close one of their spaces.
@@ -615,7 +615,7 @@ jq -r 'select(.level == "WARN")' ~/.local/state/foreman/foreman.jsonl
 ```
 
 The jsonl log outlives the session but not the task. So each assignment is also
-appended to the task's own prog history with its role and agent kind, and with
+appended to the task's own task history with its role and agent kind, and with
 the model when the agent integration reports one — the record travels with the
 task, which is what makes attempts comparable once it lands.
 
@@ -634,7 +634,7 @@ gets a new commit, serve exits, and its service starts it on the new code.
 
 A systemd user unit runs serve at login and starts it again when it stops. It
 runs from `~/build/foreman` through a login shell, so its PATH is the one your
-shell has, which must hold every program the dispatcher runs: `prog`, `hc`,
+shell has, which must hold every program the dispatcher runs: `tasks`, `hc`,
 `git`, `gh` and each rung's harness. To install it:
 
 ```bash

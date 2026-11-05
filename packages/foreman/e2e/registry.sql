@@ -4,7 +4,7 @@
 -- the tasks package's migration; this file holds data only, and is run after a
 -- foreman command has opened the store once (see e2e/README.md).
 --
---   sqlite3 "$PROG_DB" < e2e/registry.sql
+--   sqlite3 "$TASKS_DB" < e2e/registry.sql
 INSERT INTO pools(pool, harness, provider_default) VALUES
   ('OpenCode Zen', 'opencode', 'opencode'),
   ('OpenCode Go', 'opencode', 'opencode-go');

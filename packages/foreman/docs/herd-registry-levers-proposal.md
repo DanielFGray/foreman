@@ -45,7 +45,7 @@ default `low`.
 ## C. Walls: no new protocol
 
 Workers already escalate through `needs-you`, which parks the task, and report
-walls to the planner directly in `prog log` — that path stays as-is. No
+walls to the planner directly in `tasks log` — that path stays as-is. No
 `wall:` labels, no re-probe machinery, no `foreman wall` command. The
 reasoning: a wall report is a judgement call in context (per-key throttle vs
 spent window vs unfunded account), and the planner — human or reviewing

@@ -26,7 +26,7 @@ import { type RunEvent, stepOf } from "./run-step.ts";
 import { newRunFor } from "./run-record.ts";
 import { authorRun, authorDone, reviewRun } from "./task-fixture.ts";
 
-// ProjectTracker reads the policy file; a path with no file is the default, every project on prog.
+// ProjectTracker reads the policy file; a path with no file is the default, every project on tasks.
 process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy.json");
 
 /** The block a reviewing task with these runs stands at on the standard pipeline. */
@@ -150,17 +150,17 @@ describe("the readers against a scratch store", () => {
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "foreman-lap-"));
-    process.env.PROG_DB = join(directory, "prog.db");
-    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.PROG_DB))));
+    process.env.TASKS_DB = join(directory, "tasks.db");
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.TASKS_DB))));
   });
 
   afterAll(async () => {
-    delete process.env.PROG_DB;
+    delete process.env.TASKS_DB;
     await rm(directory, { recursive: true, force: true });
   });
 
   test("read the runs a dispatch and a named exit wrote", async () => {
-    const id = (await Bun.$`prog add "lap" -p foreman`.text()).trim();
+    const id = (await Bun.$`tasks add "lap" -p foreman`.text()).trim();
     const dispatch = (role: "author" | "review", rung: string, commit?: string) =>
       newRunFor({
         task: { id, title: id, project: "foreman", labels: [] },

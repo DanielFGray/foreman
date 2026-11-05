@@ -42,7 +42,7 @@
 // The queue is not in state.json: the pane reads `foreman queue --project
 // <name> --json` every 5 seconds, for the Queue cards' actions and epics. A
 // row that newly appears under Landed posts a notification. The pane keeps no
-// state of its own but the Tasks view's mode, and never runs `prog`.
+// state of its own but the Tasks view's mode, and never runs `tasks`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify } from "herdr";

@@ -14,8 +14,7 @@ import { detail, detailJson, json, lines } from "./render.ts";
 import { prose } from "./text.ts";
 
 /**
- * `tasks`: the task commands an agent uses, with the names and flags of the Go
- * `prog` they replace, so a brief that says `prog X` works as `tasks X`.
+ * `tasks`: the task commands an agent uses across sessions.
  *
  * Every status change goes through the task machine in the store, which
  * refuses a move it does not list. Every text argument accepts `-` to read
@@ -27,7 +26,7 @@ const text = (name: string) => Argument.String(name);
 const labels = Flag.String("label").pipe(Flag.withAlias("l"), Flag.atLeast(0));
 const asJson = Flag.Boolean("json").pipe(Flag.withDefault(false));
 
-/** The root command owns `-p`, as the Go `prog` does: `tasks -p foo list` and `tasks list -p foo` both work. */
+/** The root command owns `-p`: `tasks -p foo list` and `tasks list -p foo` both work. */
 const root = Command.make("tasks").pipe(
   Command.withSharedFlags({
     project: Flag.String("project").pipe(Flag.withAlias("p"), Flag.optional),

@@ -81,7 +81,7 @@ export class Tracker extends Context.Service<
     /** Puts the task back among the ready work. */
     readonly reopen: (task: string) => Effect.Effect<void, TrackerError>;
     readonly complete: (task: string) => Effect.Effect<void, TrackerError>;
-    /** Closes the task as not to be done: `canceled` in prog, closed as not planned on GitHub. */
+    /** Closes the task as not to be done: `canceled` in tasks, closed as not planned on GitHub. */
     readonly cancel: (task: string) => Effect.Effect<void, TrackerError>;
     readonly label: (task: string, label: string) => Effect.Effect<void, TrackerError>;
     readonly unlabel: (task: string, label: string) => Effect.Effect<void, TrackerError>;
@@ -173,14 +173,14 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
  * project's tracker, read from the policy file on each call that needs it, so
  * an operator's `foreman policy tracker` applies from the next call on.
  *
- * Built over the prog store's connection, which `Records.layer` shares, so
- * `together` stays atomic for prog projects. A GitHub project's repo is read
+ * Built over the tasks store's connection, which `Records.layer` shares, so
+ * `together` stays atomic for tasks projects. A GitHub project's repo is read
  * from its checkout, found among the open spaces and the running workers.
  */
 export const ProjectTracker = Layer.effect(
   Tracker,
   Effect.gen(function* () {
-    const prog = yield* TasksTracker;
+    const tasks = yield* TasksTracker;
     const fs = yield* FileSystem.FileSystem;
     const github = yield* githubTracker(yield* checkoutRepo(yield* Fleet, yield* Repository));
     const choices = readPolicy(policyPath()).pipe(
@@ -203,7 +203,7 @@ export const ProjectTracker = Layer.effect(
         }),
       ),
     );
-    return routeByProject({ prog, github, linear }, choices);
+    return routeByProject({ tasks, github, linear }, choices);
   }),
 ).pipe(
   Layer.provide([Tasks.layerSql, Linear.layer, HcFleet, Repository.Default]),
@@ -215,15 +215,17 @@ export const ProjectTracker = Layer.effect(
 /**
  * Routes each call to `adapters[tracker of the call's project]`.
  *
- * A prog id carries no project, so an id without `<project>#` is prog's and
- * needs no policy read. An issue id `<project>#<n>` names its project. Calls
- * that take a project route by it; `list` by a parent routes by the parent's
- * id, because an epic's children live in the epic's tracker.
+ * A local tasks id carries no project, so an id without `<project>#` is the
+ * tasks store's and needs no policy read. An issue id `<project>#<n>` names
+ * its project. Calls that take a project route by it; `list` by a parent
+ * routes by the parent's id, because an epic's children live in the epic's
+ * tracker.
  *
  * A read across every project (`ready(undefined)`, `list` with no project or
- * parent) joins prog's rows of prog projects with each other project's own
- * read. A project whose read fails is left out of the join, so one tracker
- * that does not answer takes no step and does not stop the rest of the fleet.
+ * parent) joins the tasks store's rows of tasks projects with each other
+ * project's own read. A project whose read fails is left out of the join, so
+ * one tracker that does not answer takes no step and does not stop the rest
+ * of the fleet.
  */
 export const routeByProject = (
   adapters: Readonly<Record<TrackerName, Tracker["Service"]>>,
@@ -233,7 +235,7 @@ export const routeByProject = (
     choices.pipe(Effect.map((policy) => adapters[trackerOf(policy, project)]));
   const forId = (id: string) => {
     const project = projectOfId(id);
-    return project === undefined ? Effect.succeed(adapters.prog) : forProject(project);
+    return project === undefined ? Effect.succeed(adapters.tasks) : forProject(project);
   };
   const byId =
     <A extends ReadonlyArray<unknown>, R>(
@@ -246,9 +248,9 @@ export const routeByProject = (
     (task: string, ...rest: A) =>
       forId(task).pipe(Effect.flatMap((tracker) => call(tracker, task, ...rest)));
 
-  /** prog's rows of prog projects, joined with each other project's own read. */
+  /** Local store rows of tasks projects, joined with each other project's own read. */
   const everywhere = (
-    fromProg: Effect.Effect<ReadonlyArray<Item>, TrackerError>,
+    fromTasks: Effect.Effect<ReadonlyArray<Item>, TrackerError>,
     fromProject: (
       tracker: Tracker["Service"],
       project: string,
@@ -257,9 +259,9 @@ export const routeByProject = (
     Effect.gen(function* () {
       const policy = yield* choices;
       const elsewhere = Object.keys(policy.projects).filter(
-        (project) => trackerOf(policy, project) !== "prog",
+        (project) => trackerOf(policy, project) !== "tasks",
       );
-      const own = (yield* fromProg).filter((item) => !elsewhere.includes(item.project));
+      const own = (yield* fromTasks).filter((item) => !elsewhere.includes(item.project));
       const others = yield* Effect.forEach(elsewhere, (project) =>
         fromProject(adapters[trackerOf(policy, project)], project).pipe(
           Effect.catch((error) =>
@@ -279,7 +281,7 @@ export const routeByProject = (
         ? forProject(filter.project).pipe(Effect.flatMap((tracker) => tracker.list(filter)))
         : filter.parent !== undefined
           ? forId(filter.parent).pipe(Effect.flatMap((tracker) => tracker.list(filter)))
-          : everywhere(adapters.prog.list(filter), (tracker, project) =>
+          : everywhere(adapters.tasks.list(filter), (tracker, project) =>
               tracker.list({ ...filter, project }),
             ),
     dependencies: (project) =>
@@ -287,7 +289,7 @@ export const routeByProject = (
     ready: (project) =>
       project !== undefined
         ? forProject(project).pipe(Effect.flatMap((tracker) => tracker.ready(project)))
-        : everywhere(adapters.prog.ready(undefined), (tracker, each) => tracker.ready(each)),
+        : everywhere(adapters.tasks.ready(undefined), (tracker, each) => tracker.ready(each)),
     logs: byId((tracker, task) => tracker.logs(task)),
     add: (task) => forProject(task.project).pipe(Effect.flatMap((tracker) => tracker.add(task))),
     claim: byId((tracker, task) => tracker.claim(task)),
@@ -305,7 +307,7 @@ export const routeByProject = (
   });
 };
 
-/** The project an issue id `<project>#<n>` names; prog ids name none. */
+/** The project an issue id `<project>#<n>` names; local tasks ids name none. */
 const projectOfId = (id: string): string | undefined => {
   const hash = id.lastIndexOf("#");
   return hash > 0 ? id.slice(0, hash) : undefined;

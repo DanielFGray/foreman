@@ -1,22 +1,22 @@
-| `lookup(id)` | the snapshot, else `issues` filtered by team key and number; no node answers `None`. |# Issue trackers: prog, GitHub issues and Linear; landing by pull request
+| `lookup(id)` | the snapshot, else `issues` filtered by team key and number; no node answers `None`. |# Issue trackers: tasks, GitHub issues and Linear; landing by pull request
 
 Status: design, not built. The operator answered the open questions on
 2026-11-03; each answer is stated below as `Decision (operator)`. A choice
 the record's author made is marked `Decision (agent)`.
 
-A project keeps its task list in one of three trackers: prog (the default),
+A project keeps its task list in one of three trackers: tasks (the default),
 GitHub issues, or Linear. foreman reads and changes GitHub issues with the
 `gh` CLI and Linear issues with Linear's GraphQL API. It keeps its own records
-(runs, charges, parks) in prog's tables for every tracker. Any project whose
+(runs, charges, parks) in the tasks store's tables for every tracker. Any project whose
 checkout is on GitHub can land a task by opening a pull request and merging it
 on GitHub.
 
 ## Terms
 
-- **Tracker**: where a project's task list lives: `prog`, `github` or
+- **Tracker**: where a project's task list lives: `tasks`, `github` or
   `linear`.
 - **GitHub project**: a project whose tracker is GitHub. A **Linear project**
-  has Linear as its tracker. Every other project is a **prog project**.
+  has Linear as its tracker. Every other project is a **tasks project**.
 - **Repo**: the GitHub repository of a GitHub project, `OWNER/NAME`, read from
   the checkout with `gh repo view --json nameWithOwner` (run in the checkout, it
   resolves the `origin` remote).
@@ -88,7 +88,7 @@ so `kindOf` in `src/records.ts` parses it like every other label.
 | `draft` | open, label `status:draft` |
 | `open` | open, no `status:*` label, no assignee |
 | `in_progress` | open, label `status:in_progress` |
-| `blocked` | derived, as in prog: open with an open `blockedBy` issue |
+| `blocked` | derived, as in the tasks store: open with an open `blockedBy` issue |
 | `done` | closed, `stateReason` `COMPLETED` |
 | `canceled` | closed, `stateReason` `NOT_PLANNED` or `DUPLICATE` |
 
@@ -106,7 +106,7 @@ All reads of one project come from one GraphQL query per tick (section 5).
 | `lookup(id)` | `gh issue view <n> -R <repo> --json number,title,body,state,stateReason,labels,assignees,createdAt,updatedAt,comments` plus a GraphQL read of `parent`, `subIssuesSummary` and `issueType`. A 404 answers `None`; any other failure is a `TrackerError`. |
 | `list(filter)` | the project's GraphQL read, filtered in process by `status`, `parent`, `type`, `label`. |
 | `dependencies(project)` | each issue's `blockedBy` nodes in the same read. An edge to an issue in another repo is kept, with that issue's state, and names it `OWNER/NAME#n`. |
-| `ready(project)` | open issues with no `status:*` label, no assignee, type `task`, and no open `blockedBy`. `ready(undefined)` joins the ready issues of every GitHub project with prog's. |
+| `ready(project)` | open issues with no `status:*` label, no assignee, type `task`, and no open `blockedBy`. `ready(undefined)` joins the ready issues of every GitHub project with the tasks store. |
 | `logs(id)` | the issue's comments, oldest first: author, time, body. |
 | `add(task)` | `gh issue create -R <repo> --title … --body … --label …`; answers `<project>#<number>` from the URL it prints. |
 | `claim(id)` | adds `status:in_progress` and assigns `@me`: `gh issue edit <n> --add-label status:in_progress --add-assignee @me`. On a closed issue, first `gh issue reopen <n>`. |
@@ -116,7 +116,7 @@ All reads of one project come from one GraphQL query per tick (section 5).
 | `label`, `unlabel` | `gh issue edit <n> --add-label` / `--remove-label`. A label the repo lacks is made first with `gh label create <name> --force`. |
 | `relabel(id, change)` | reads the labels, computes `change`, and writes the whole set in one call: `gh api -X PUT repos/<repo>/issues/<n>/labels` with `labels[]`. Answers the labels it read. |
 | `log(id, message)` | `gh issue comment <n> --body-file -`. |
-| `refresh(project)` | the project's GraphQL read (section 5). The dispatcher calls it for each project at the start of a reading; the snapshot holds until the next refresh or a write in that project, and a failure holds the project as `unreachable`. prog's adapter does nothing. |
+| `refresh(project)` | the project's GraphQL read (section 5). The dispatcher calls it for each project at the start of a reading; the snapshot holds until the next refresh or a write in that project, and a failure holds the project as `unreachable`. the tasks adapter does nothing. |
 
 Each move skips an issue that already has the status it leads to, as
 `TasksTracker.move` does. So a move that failed half way is finished by the
@@ -150,13 +150,13 @@ each move is idempotent:
 - **Claim at dispatch** (claim, then open the run): unchanged order; a claim
   with no run is the hand-made claim case.
 
-`Records.layer` then builds `Records` on the prog store's connection and takes
+`Records.layer` then builds `Records` on the tasks store's connection and takes
 `Tracker` from `ProjectTracker`. `together` keeps its transaction for the
 records half only.
 
 ## 2. Records, ids and what the front ends show
 
-Runs, charges and parks stay in prog's tables. They record foreman's work, not
+Runs, charges and parks stay in the tasks store's tables. They record foreman's work, not
 the task list, so they do not move to GitHub.
 
 - `runs.task`, `charges.task` and `parks.task` are `TEXT NOT NULL` with no
@@ -164,7 +164,7 @@ the task list, so they do not move to GitHub.
   id fits as is.
 - The id must be unique across all projects, because `Tracker.lookup` takes
   only an id. `<project>#<number>` is unique: project names are unique among
-  managed checkouts (two with one name are held `ambiguous`), and prog ids
+  managed checkouts (two with one name are held `ambiguous`), and local task ids
   (`ts-…`, `ep-…`) hold no `#`. The prefix before `#` is also how
   `ProjectTracker` routes an id to its project.
 - The branch is `foreman/<project>#<number>`. `git check-ref-format` accepts
@@ -177,7 +177,7 @@ id. Each queued, claimed and reviewing row and placement also carries:
 
 - `url`: the task's page from `Tracker.url`. A GitHub issue is
   `https://github.com/<repo>/issues/<n>`, a Linear issue is the `url` Linear
-  answers, and a prog task has none. `foreman queue --json` reads no tracker
+  answers, and a local task has none. `foreman queue --json` reads no tracker
   snapshot, so its rows carry `url: null`.
 - At a PR landing: `pr` with `number`, `url`, `state` (`open`, `merged`,
   `closed`), `checks` (`pending`, `passing`, `failing`), and `waiting` (what
@@ -186,7 +186,7 @@ id. Each queued, claimed and reviewing row and placement also carries:
   decision (`FleetState.merging`), grants included, so a front end applies no
   policy rule of its own.
 
-Each project in the reading carries `tracker` (`prog`, `github` or `linear`), `repo` when
+Each project in the reading carries `tracker` (`tasks`, `github` or `linear`), `repo` when
 its checkout is on GitHub, whatever its tracker (the same `checkoutRepo` read the
 PR landing makes), and `unreachable` for a GitHub or Linear project
 (sections 5 and 7).
@@ -405,9 +405,9 @@ A failed read is a `TrackerError`. It is not "no such issue": only a 404 from
 ### Where the choice lives
 
 Decision (operator): the tracker choice lives in foreman's policy file,
-`projects.<name>.tracker`, one of `prog`, `github` or `linear`, set by
-`foreman policy tracker <prog|github|linear> --project <name>`. A project with
-no entry uses `prog`. The policy is where per-project operator intention
+`projects.<name>.tracker`, one of `tasks`, `github` or `linear`, set by
+`foreman policy tracker <tasks|github|linear> --project <name>`. A project with
+no entry uses `tasks`. The policy is where per-project operator intention
 lives, and the dispatcher already reads it every pass.
 
 The GitHub repo is always derived from the checkout (`gh repo view`), never
@@ -419,7 +419,7 @@ records them.
 
 Decision (operator): every issue can be worked, and the operator can limit the
 fleet to a selection. Decision (coordinator): this is tracker-neutral and
-already exists, so GitHub and Linear issues use the same mechanism as prog
+already exists, so GitHub and Linear issues use the same mechanism as the tasks store
 tasks, and no filter label is added:
 
 - With the `author` step `on`, every ready task is eligible.
@@ -608,7 +608,7 @@ the tick, with the rules of "When GitHub cannot be reached" in section 5.
 
 ### How a Linear task lands
 
-Linear has no pull requests. The land block decides, as in a prog project:
+Linear has no pull requests. The land block decides, as in a tasks project:
 
 - `how: merge` or `fast-forward`: the task lands locally in the proving ground
   and the operator's checkout, then `complete` moves the issue to `completed`.
@@ -621,7 +621,7 @@ Linear has no pull requests. The land block decides, as in a prog project:
 ## Rules this changes
 
 - `AGENTS.md`, Ports: "A records write that goes with a status move shares one
-  transaction with it": holds for prog projects; a GitHub or Linear project
+  transaction with it": holds for tasks projects; a GitHub or Linear project
   writes the records first (section 1).
 - `AGENTS.md`, Ports: "`TasksTracker` there is the one adapter": there are
   three, routed by `ProjectTracker`.

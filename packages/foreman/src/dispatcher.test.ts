@@ -759,7 +759,7 @@ describe("unread branches", () => {
     // Somebody decided this work should not happen, and the commits outlived
     // the decision. Shown, but never recovered automatically.
     expect(isUnread(branch(false, "canceled"))).toBe(true);
-    // The task was deleted outright, which is why git is asked and not prog.
+    // The task was deleted outright, which is why git is asked and not the task store.
     expect(isUnread(branch(false, undefined))).toBe(true);
   });
 
@@ -888,7 +888,7 @@ describe("the landed column", () => {
   const now = DateTime.fromDateUnsafe(new Date("2026-08-21T12:00:00Z"));
 
   test("orders by when each task landed, newest first", () => {
-    // prog returns done tasks grouped by project in config order; the column
+    // the task store returns done tasks grouped by project in config order; the column
     // is history, so it reads in landing order instead.
     const landed = [
       at(task("ts-old", [], "done", 1, "other"), new Date("2026-08-19T09:00:00Z")),

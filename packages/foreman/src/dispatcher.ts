@@ -676,9 +676,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Every claimed task is `in_progress`. Placement splits working authors
       // from tasks under review once the pipelines and tips are loaded below.
       const inFlight = yield* eachProject(projects, (project) => records.claimed(project.name));
-      // One query, gated by prog: `ready` returns a task only once every task
+      // One query, gated by the task store: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
-      // allowlist is applied afterwards, to prog's answer rather than to the
+      // allowlist is applied afterwards, to the tasks store's answer rather than to the
       // question, so a blocker outside the fleet still holds its dependents.
       const queue = yield* records.ready(Option.none());
       // The queue ranks by the epics over its own tasks; a board groups the
@@ -933,7 +933,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // can be dispatched at all.
       const walled = walledSeats(providers);
 
-      // Work waiting on the operator is ready by every measure prog knows and
+      // Work waiting on the operator is ready by every measure the task store knows and
       // still must not be dispatched: it is waiting on a decision no agent can
       // make. Split here rather than in fill, so a reader can say where it
       // went instead of leaving it to look like a queue that stopped moving.
@@ -1113,11 +1113,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ).pipe(Effect.map((ids) => ids.flat()));
         const resumable = new Set([...committed, ...holdingWork]);
 
-        // Every branch, joined to whatever prog still says about its task. Read
+        // Every branch, joined to whatever the task store still says about its task. Read
         // for all of them rather than for a pre-filtered few, so the one rule
         // that decides which are unread sees the same rows the operator does.
         // A branch whose task was deleted outright resolves to nothing at all,
-        // and it is the reason to read git rather than prog, so it is kept.
+        // and it is the reason to read git rather than the task store, so it is kept.
         //
         // Oldest first, which is the order they are recovered in.
         const unreviewed = yield* Effect.forEach(branches, ({ branch, task, project, merged }) =>
@@ -1191,7 +1191,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ...current,
           resumable,
           unreviewed,
-          // Newest landing first: the column is history, and prog returns it
+          // Newest landing first: the column is history, and the task store returns it
           // grouped by project in config order rather than by when work landed.
           landed: landedColumn(landed, now, settings.landedWindow),
           decisions: [...current.decisions, ...failedDecisions],
@@ -3887,7 +3887,7 @@ export const handoffExpired = (task: Item, cutoff: DateTime.Utc): boolean =>
  * Liveness belongs in the predicate rather than in a check beside it, because
  * the plan and settle must agree about the same task. An agent that has
  * handed its work back still has a turn to finish — a closing message, a last
- * prog call — and landing ends by closing the workspace, which for a worktree
+ * task-store call — and landing ends by closing the workspace, which for a worktree
  * worker runs `worktree remove --force` and deletes the directory out from
  * under a running process. Status and verdict are both durable, so waiting one
  * tick costs nothing and loses nothing.
@@ -4010,7 +4010,7 @@ const REACHABLE: ReadonlySet<string> = new Set(["open", "in_progress"]);
 /**
  * Whether a branch holds commits that nothing is ever going to pick up.
  *
- * Every other column is read from prog, which stops mentioning a branch the
+ * Every other column is read from the task store, which stops mentioning a branch the
  * moment its task is closed, reclaimed or deleted — while the commits stay. So
  * this asks the branches, and two facts answer it.
  *
@@ -4061,9 +4061,9 @@ export const recoverable = (branch: { readonly status: string | undefined }): bo
   branch.status === "done";
 
 /**
- * Shapes the dashboard's landed column out of every done task prog returns.
+ * Shapes the dashboard's landed column out of every done task the task store returns.
  *
- * prog list has no limit and no order foreman can rely on — it comes back
+ * tasks list has no limit and no order foreman can rely on — it comes back
  * grouped by project in config order — so the window is applied here and the
  * survivors are put in landing order. `lastActivityAt` is when a done task
  * was last touched, which for a done task is when it landed.
@@ -4082,7 +4082,7 @@ export const landedColumn = (
 /**
  * Splits work handed back for review by whether there is any work in it.
  *
- * Two proofs are needed, and prog can only give one. The `by-*` label proves
+ * Two proofs are needed, and the task store can only give one. The `by-*` label proves
  * foreman authored the branch; only a commit on that branch proves the author
  * produced something. An agent can hand off having written nothing, and then a
  * reviewer is paid to read an empty diff — or, on a task small enough to skip
@@ -4335,7 +4335,7 @@ export interface FleetState {
  * A branch carrying commits nobody has been sent to read.
  *
  * `title` and `status` are absent when the task itself is gone — the branch
- * prog has stopped tracking, which is why git is asked rather than records. Such
+ * the task store has stopped tracking, which is why git is asked rather than records. Such
  * a branch can be shown but not recovered: every workspace, prompt and merge
  * in foreman is addressed by task id, so there is nothing left to dispatch
  * against.

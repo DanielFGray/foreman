@@ -90,7 +90,7 @@ const tracker = Command.make(
   {
     tracker: Argument.Literals("tracker", TRACKERS).pipe(
       Argument.withDescription(
-        "prog (the tasks store; the default), github (the issues of the project's GitHub repo) or linear (a Linear project of a Linear team)",
+        "tasks (the local store; the default), github (the issues of the project's GitHub repo) or linear (a Linear project of a Linear team)",
       ),
     ),
     project: Flag.String("project"),
@@ -118,7 +118,7 @@ const tracker = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Choose where a project's tasks live: prog (the default), a GitHub repo's issues, or a Linear project of a Linear team, checked against Linear",
+    "Choose where a project's tasks live: tasks (the default), a GitHub repo's issues, or a Linear project of a Linear team, checked against Linear",
   ),
 );
 

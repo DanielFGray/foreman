@@ -17,9 +17,9 @@ import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
  * `commands.ts`, because it can also dispatch the task it files.
  *
  * The herdr-app pane shows the queue and a task's record through these, so
- * it never speaks to the task store itself, and a store other than prog is
- * one `Records` implementation away. They read the store only: no roster, no
- * checkout gates, no `Dispatcher.read`, which takes seconds.
+ * it never speaks to any tracker itself, and a tracker other than the local
+ * tasks store is one `Records` implementation away. They read the store only:
+ * no roster, no checkout gates, no `Dispatcher.read`, which takes seconds.
  */
 
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));

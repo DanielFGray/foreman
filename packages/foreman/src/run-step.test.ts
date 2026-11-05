@@ -12,7 +12,7 @@ import { newRunFor } from "./run-record.ts";
 import { applyRow, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 import { Tracker } from "./tracker.ts";
 
-// ProjectTracker reads the policy file; a path with no file is the default, every project on prog.
+// ProjectTracker reads the policy file; a path with no file is the default, every project on tasks.
 process.env["FOREMAN_POLICY"] = join(tmpdir(), "foreman-test-no-policy", "policy.json");
 
 const rules: StepRules = {
@@ -165,12 +165,12 @@ describe("applyRow agrees with the store", () => {
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "foreman-step-"));
-    process.env.PROG_DB = join(directory, "prog.db");
-    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.PROG_DB))));
+    process.env.TASKS_DB = join(directory, "tasks.db");
+    await Effect.runPromise(Effect.void.pipe(Effect.provide(connectionAt(process.env.TASKS_DB))));
   });
 
   afterAll(async () => {
-    delete process.env.PROG_DB;
+    delete process.env.TASKS_DB;
     await rm(directory, { recursive: true, force: true });
   });
 

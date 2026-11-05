@@ -392,6 +392,6 @@ describe("setProjectTracker", () => {
     expect(setProjectTracker(linear, "alpha", "github").projects).toEqual({
       alpha: { tracker: "github" },
     });
-    expect(setProjectTracker(linear, "alpha", "prog").projects).toEqual({});
+    expect(setProjectTracker(linear, "alpha", "tasks").projects).toEqual({});
   });
 });
