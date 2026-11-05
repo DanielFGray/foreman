@@ -13,9 +13,3 @@ test("a wheel scrolls the column under the pointer, measured from the view's ori
   const layout = { xs: [0, 100], columnW: 90, overflow: 0, reach: [50, 50] };
   expect(scrolledBy({ x: 0, y: [0, 0] }, wheel(420, 30), layout, { x: 300 }).y).toEqual([0, 30]);
 });
-
-test("a wheel over a column drawn on top of another scrolls the one on top", () => {
-  // The second column is pinned over the first, which has scrolled under it.
-  const layout = { xs: [100, 100], columnW: 90, overflow: 0, reach: [0, 500] };
-  expect(scrolledBy({ x: 0, y: [0, 0] }, wheel(120, 30), layout, { x: 0 }).y).toEqual([0, 30]);
-});

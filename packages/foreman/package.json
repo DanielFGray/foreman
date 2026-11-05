@@ -16,7 +16,7 @@
     "test": "run-s format:check lint typecheck test:unit",
     "test:unit": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "lint": "oxlint --type-aware src",
+    "lint": "oxlint --type-aware src && oxlint -c herdr/foreman/.oxlintrc.json herdr/foreman",
     "format": "oxfmt --write src",
     "format:check": "oxfmt --check src"
   },

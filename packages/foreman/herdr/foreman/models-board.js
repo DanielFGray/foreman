@@ -2,16 +2,16 @@
 // `foreman ladder --json`. This module uses no herdr-app globals, so `bun test`
 // runs it; `models.js` draws it and runs the commands.
 //
-// The columns, left to right:
+// The columns, in the order the view stacks them as rows:
 // - one per ladder level that holds an enabled rung, cheapest first, with its
 //   enabled rungs in rank order. A level of disabled rungs only has no column:
 //   most stored levels hold one retired rung each.
+// - Reviewers.
 // - Available: every disabled rung, then every model that no rung and no
 //   reviewer names, to make a rung or a reviewer from.
-// - Reviewers.
 //
-// A drop names a zone, a column or the gap before level column `at` (the gap
-// at the count of level columns is the one after the last), and the foreman
+// A drop names a zone, a column or the gap before level `at` (the gap at the
+// count of levels is the one after the last), and the foreman
 // commands it runs, in order. A drop that enables a rung moves it first and
 // enables it last, so a refusal part way leaves it disabled.
 
@@ -23,17 +23,6 @@ export const THINKING = [null, "low", "medium", "high"];
 // line can set, steps to none.
 export const nextThinking = (level) => THINKING[(THINKING.indexOf(level ?? null) + 1) % THINKING.length];
 
-// Moves Available and Reviewers to the view's right edge, whatever the level
-// columns are scrolled to. A drag lists its targets once, when it starts
-// (`drag.js`), so a column out of view then is no drop for that drag; pinned,
-// both are always in view. `xs` are the x's `columnsAcross` gives; `right` is
-// where the last column ends. The level columns show up to `edge`.
-export const pinnedAcross = (columns, xs, columnW, { right, gap }) => {
-  const first = columns.findIndex((column) => column.kind !== "level");
-  const at = (index) => right - (columns.length - index) * columnW - (columns.length - 1 - index) * gap;
-  return { xs: xs.map((x, index) => (index < first ? x : at(index))), edge: at(first) - gap / 2 };
-};
-
 export const columnsOf = ({ rungs, models, reviewers }) => {
   const levels = [...new Set(rungs.filter((rung) => rung.enabled).map((rung) => rung.level))].sort((a, b) => a - b);
   const seated = new Set([...rungs, ...reviewers].map((seat) => seat.model));
@@ -43,6 +32,12 @@ export const columnsOf = ({ rungs, models, reviewers }) => {
       cards: rungs.filter((rung) => rung.enabled && rung.level === level).map(rungCard),
     })),
     {
+      key: "reviewers", kind: "reviewers", label: "Reviewers",
+      cards: reviewers.map((one) => ({
+        key: `reviewer:${one.name}`, kind: "reviewer", name: one.name, model: one.model, thinking: one.thinking ?? null, reviewer: one,
+      })),
+    },
+    {
       key: "available", kind: "available", label: "Available",
       cards: [
         ...rungs.filter((rung) => !rung.enabled).map(rungCard),
@@ -51,13 +46,43 @@ export const columnsOf = ({ rungs, models, reviewers }) => {
         })),
       ],
     },
-    {
-      key: "reviewers", kind: "reviewers", label: "Reviewers",
-      cards: reviewers.map((one) => ({
-        key: `reviewer:${one.name}`, kind: "reviewer", name: one.name, model: one.model, thinking: one.thinking ?? null, reviewer: one,
-      })),
-    },
   ];
+};
+
+export const ROW = { PAD: 12, LABEL_W: 128, CARD_MIN: 200, CARD_H: 40, GAP: 8, ROW_GAP: 14, SECTION_GAP: 28 };
+
+// Where the view draws each column as a row in a view `width` wide: its label
+// at the left and its cards wrapping to the right, rows stacked top down, and
+// a wider space between the last level and the rest. A folded column (a key
+// in `folded`) shows its label alone. Each level gap is a strip across the
+// space between two level rows, or above the first or below the last.
+// Rectangles are in content coordinates; the view subtracts its scroll.
+// `height` is how tall the content stands.
+export const rowsOf = (columns, width, folded) => {
+  const { PAD, LABEL_W, CARD_MIN, CARD_H, GAP, ROW_GAP, SECTION_GAP } = ROW;
+  const left = PAD + LABEL_W;
+  const room = Math.max(CARD_MIN, width - left - PAD);
+  const perLine = Math.max(1, Math.floor((room + GAP) / (CARD_MIN + GAP)));
+  const cardW = (room - (perLine - 1) * GAP) / perLine;
+  const rows = [];
+  const cards = new Map();
+  let y = PAD;
+  columns.forEach((column, index) => {
+    if (column.kind !== "level" && columns[index - 1]?.kind === "level") y += SECTION_GAP - ROW_GAP;
+    const shown = folded.has(column.key) ? [] : column.cards;
+    const height = Math.max(1, Math.ceil(shown.length / perLine)) * (CARD_H + GAP) - GAP;
+    shown.forEach((card, at) => cards.set(card.key, {
+      x: left + (at % perLine) * (cardW + GAP), y: y + Math.floor(at / perLine) * (CARD_H + GAP), width: cardW, height: CARD_H,
+    }));
+    rows.push({ column, rect: { x: PAD, y, width: left + room - PAD, height } });
+    y += height + ROW_GAP;
+  });
+  const levels = rows.filter((row) => row.column.kind === "level");
+  const strip = (middle) => ({ x: PAD, y: middle - ROW_GAP / 2, width: left + room - PAD, height: ROW_GAP });
+  const gaps = levels.length === 0
+    ? [strip(PAD / 2)]
+    : [...levels.map((row) => strip(row.rect.y - ROW_GAP / 2)), strip(levels.at(-1).rect.y + levels.at(-1).rect.height + ROW_GAP / 2)];
+  return { rows, cards, gaps, height: y - ROW_GAP + PAD };
 };
 
 // Every drop `card` can make on `columns`, each with the commands it runs.
