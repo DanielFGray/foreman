@@ -1,6 +1,12 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Schema as S } from "effect";
-import { type Composites, type Drawing } from "./pipeline.ts";
+import {
+  AgentNode,
+  type Composites,
+  type CompositeDefinition,
+  type Drawing,
+  LANDINGS,
+} from "./pipeline.ts";
 import { applyDefinitionChange, CompositeChange } from "./pipeline-edit.ts";
 import {
   type CompositeDraft,
@@ -12,6 +18,9 @@ import {
 import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
 import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
 import { PipelineError } from "./pipeline-error.ts";
+import { drawingOf, type Flow } from "./pipeline-layout.ts";
+import { INSERTABLE } from "./pipeline-belt.ts";
+import { STEPS } from "./policy.ts";
 
 /**
  * `foreman composite`: edit a composite definition as a draft of its own
@@ -22,8 +31,43 @@ const name = Argument.String("name").pipe(
   Argument.withDescription("The composite definition to edit, save, discard or show"),
 );
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false));
+const flow = Flag.Literals("flow", ["across", "down"]).pipe(
+  Flag.withDefault("across"),
+  Flag.withDescription(
+    "Which way the JSON drawing runs: across (left to right) or down (top to bottom)",
+  ),
+);
 
-const show = Command.make("show", { name, json }, ({ name, json }) =>
+/** What the pane offers while editing a definition: built-in kinds, nested definitions, and the open ends it may wire to. */
+const choicesOf = (composites: Composites, definition: CompositeDefinition) => ({
+  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
+  composites: Object.keys(composites).sort(),
+  outs: definition.exits.map((exit) => ({ id: exit.id, name: exit.name })),
+  steps: STEPS,
+  roles: AgentNode.fields.role.literals,
+  landings: LANDINGS,
+});
+
+/** A definition as the pane draws and edits it: its blocks, open ends, and layout. */
+const shownDefinition = (
+  name: string,
+  definition: CompositeDefinition,
+  composites: Composites,
+  flow: Flow,
+  draft: CompositeDraft | undefined,
+  live: CompositeDefinition | null,
+) => ({
+  name,
+  definition,
+  pipeline: { nodes: definition.blocks },
+  drawing: drawingOf({ nodes: definition.blocks }, flow),
+  choices: choicesOf(composites, definition),
+  entry: definition.entry,
+  draft: draft === undefined ? null : { base: draft.base, definition: draft.definition },
+  live,
+});
+
+const show = Command.make("show", { name, json, flow }, ({ name, json, flow }) =>
   Effect.gen(function* () {
     const { file, draft } = yield* definitionNow(name);
     const live = file.composites[name];
@@ -32,14 +76,14 @@ const show = Command.make("show", { name, json }, ({ name, json }) =>
       return yield* new PipelineError({ detail: `no composite named ${name}` });
     }
     if (json) {
+      const composites = {
+        ...file.composites,
+        ...(draft?.composites ?? {}),
+        [name]: definition,
+      };
       return yield* Console.log(
         JSON.stringify(
-          {
-            name,
-            definition,
-            draft: draft === undefined ? null : { base: draft.base, definition: draft.definition },
-            live: live ?? null,
-          },
+          shownDefinition(name, definition, composites, flow, draft, live ?? null),
           null,
           2,
         ),
@@ -71,8 +115,9 @@ const edit = Command.make(
       ),
     ),
     json,
+    flow,
   },
-  ({ name, change, json }) =>
+  ({ name, change, json, flow }) =>
     Effect.gen(function* () {
       const decoded = yield* S.decodeEffect(S.fromJsonString(CompositeChange))(change).pipe(
         Effect.mapError(
@@ -95,7 +140,28 @@ const edit = Command.make(
       };
       yield* updateCompositeDrafts(draftsPath(), (current) => ({ ...current, [name]: next }));
       if (json) {
-        return yield* Console.log(JSON.stringify({ name, definition: next.definition }, null, 2));
+        const available = {
+          ...file.composites,
+          ...next.composites,
+          [name]: next.definition,
+        };
+        return yield* Console.log(
+          JSON.stringify(
+            {
+              ...shownDefinition(
+                name,
+                next.definition,
+                available,
+                flow,
+                next,
+                file.composites[name] ?? null,
+              ),
+              added: result.added ?? null,
+            },
+            null,
+            2,
+          ),
+        );
       }
       yield* Console.log(
         result.added === undefined

@@ -1,7 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
 import { Dispatcher, newWorkspace } from "./dispatcher.ts";
-import { expand } from "./composite.ts";
+import { coversOf, expand } from "./composite.ts";
 import {
   AgentNode,
   type Composites,
@@ -766,56 +766,82 @@ const runPipeline = (project: string, drawing: Drawing, addedComposites: Composi
   });
 
 /**
- * What `show --json` prints: the expanded pipeline a project runs, its
- * problems and its drawing, and the same for the project's draft when one is
- * open.
+ * What `show --json` prints: the pipeline as the operator drew it (composite
+ * instances still one block), its expansion problems, its drawing, the
+ * definitions the palette lists, and the same for the project's draft when
+ * one is open (`docs/composite-blocks.md`).
  */
 const shownOf = (project: string, flow: Flow) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
+    const { drawing: written, drawn } = yield* drawnPipeline(project);
     const reading = pipelineFor(file, project);
     const draft = (yield* draftsNow)[project];
+    const available = { ...file.composites, ...(draft?.composites ?? {}) };
     const draftJson =
       draft === undefined
         ? null
-        : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites }).pipe(
+        : yield* readingOf(draft.pipeline, available).pipe(
             Effect.map((draftReading) =>
-              draftReading._tag === "Failed"
-                ? { pipeline: null, problems: draftReading.problems, drawing: null }
-                : {
-                    pipeline: draftReading.pipeline,
-                    problems: draftReading.problems,
-                    drawing: drawingOf(draftReading.pipeline, flow),
-                  },
+              viewOf(draft.pipeline, draftReading.problems, available, flow),
             ),
           );
-    if (reading._tag === "Failed") {
-      return {
-        project,
-        drawn: reading.drawn,
-        choices: CHOICES,
-        pipeline: null,
-        problems: reading.problems,
-        drawing: null,
-        draft: draftJson,
-      };
-    }
-    const problems = yield* problemsAgainstLadder(reading.pipeline);
+    const problems =
+      reading._tag === "Failed" ? reading.problems : yield* problemsAgainstLadder(reading.pipeline);
     return {
       project,
-      drawn: reading.drawn,
-      choices: CHOICES,
-      pipeline: reading.pipeline,
-      problems,
-      drawing: drawingOf(reading.pipeline, flow),
+      drawn,
+      choices: choicesOf(available),
+      ...viewOf(written, problems, available, flow),
       draft: draftJson,
     };
   });
 
+/**
+ * The as-written drawing and the expanded ids each instance covers, so a page
+ * that cannot load this module still draws instances as one block and places
+ * tasks that stand inside on them.
+ */
+const viewOf = (
+  drawing: Drawing,
+  problems: ReadonlyArray<string>,
+  composites: Composites,
+  flow: Flow,
+) => {
+  const layout = drawingOf(drawing, flow);
+  const covers = coversOf(drawing, composites);
+  return {
+    pipeline: drawing,
+    problems,
+    drawing: {
+      ...layout,
+      blocks: layout.blocks.map((block) => {
+        const ids = covers.get(block.id);
+        return ids === undefined ? block : { ...block, covers: ids };
+      }),
+      wires: layout.wires.map((wire) => {
+        const from = drawing.nodes.find((node) => node.id === wire.from);
+        if (from?.kind !== "composite") return wire;
+        const exitId =
+          typeof wire.port === "string" && wire.port.startsWith("exit:")
+            ? wire.port.slice("exit:".length)
+            : undefined;
+        const name =
+          exitId === undefined
+            ? undefined
+            : composites[from.of]?.exits.find((exit) => exit.id === exitId)?.name;
+        return name === undefined ? wire : { ...wire, label: name };
+      }),
+    },
+  };
+};
+
 /** What an editor that cannot load foreman's modules offers for a block's settings, from the schemas themselves. */
-const CHOICES = {
-  insertable: INSERTABLE,
+const choicesOf = (composites: Composites) => ({
+  // Definitions sit beside the built-in kinds; InsertOn of a composite names `of`.
+  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
+  composites: Object.keys(composites).sort(),
   steps: STEPS,
   roles: AgentNode.fields.role.literals,
   landings: LANDINGS,
-};
+});

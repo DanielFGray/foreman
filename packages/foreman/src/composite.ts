@@ -96,6 +96,30 @@ const expandList = (
 };
 
 /**
+ * The expanded block ids each composite instance in `drawing` covers, for a
+ * page that draws instances as one block and places tasks that stand inside
+ * on that block (`docs/composite-blocks.md`). An instance that cannot expand
+ * is omitted; expansion problems are reported elsewhere.
+ */
+export const coversOf = (
+  drawing: Drawing,
+  composites: Composites,
+): ReadonlyMap<string, ReadonlyArray<string>> => {
+  const covers = new Map<string, ReadonlyArray<string>>();
+  for (const node of drawing.nodes) {
+    if (node.kind !== "composite") continue;
+    const unpacked = unpackInstance(node, composites, drawing.nodes);
+    if (unpacked._tag === "Unpacked") {
+      covers.set(
+        node.id,
+        unpacked.blocks.map((block) => block.id),
+      );
+    }
+  }
+  return covers;
+};
+
+/**
  * The expanded engine blocks of one instance, and the entry a wire into it
  * reaches. Used by Unpack so the drawing keeps the same ids the expansion
  * would have used (`docs/composite-blocks.md`). The instance's exits are read

@@ -60,6 +60,8 @@ export interface Drawing {
     readonly kind: DrawnNode["kind"];
     readonly icon: string;
     readonly summary: string;
+    /** Expanded block ids inside a composite instance; absent for every other kind. */
+    readonly covers?: ReadonlyArray<string>;
     readonly x: number;
     readonly y: number;
     readonly w: number;
