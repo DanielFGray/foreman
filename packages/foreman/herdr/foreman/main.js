@@ -552,7 +552,10 @@ export default class Foreman extends View {
   // `sameTarget` is false when the reading is of another pipeline or
   // definition than the last: a pick or selection of the last one means nothing here.
   showing(shown, before, sameTarget, cx) {
-    if (!sameTarget) this.selection = new Set();
+    if (!sameTarget) {
+      this.selection = new Set();
+      this.editor.abandon();
+    }
     if (
       this.selected !== null &&
       (!sameTarget || !this.view().drawing.blocks.some((block) => block.id === this.selected))

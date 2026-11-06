@@ -55,13 +55,20 @@ export class Editor {
     this.asked = 0;
   }
 
+  // Drops what the editor waits for on the drawing it showed: a wire or exit
+  // names block ids of that drawing, which mean another block, or none, on
+  // the next one.
+  abandon() {
+    this.inserting = null;
+    this.rejoining = null;
+    this.addingSource = false;
+  }
+
   // Turns editing on or off. Editing reads the selected agent's instructions
   // and its prompt; reading nothing while it is off spares a foreman run per click.
   toggle(cx) {
     this.on = !this.on;
-    this.inserting = null;
-    this.rejoining = null;
-    this.addingSource = false;
+    this.abandon();
     this.instructions = null;
     this.promptProblem = null;
     this.promptText.set_value("");

@@ -233,3 +233,64 @@ describe("editor prompt preview", () => {
     expect((await next(pending, flush)).args.slice(0, 2)).toEqual(["pipeline", "prompt"]);
   });
 });
+
+describe("pending editor actions across navigation", () => {
+  const withEditor = (p) => {
+    const editor = Object.assign(Object.create(Editor.prototype), {
+      pane: p,
+      on: true,
+      inserting: null,
+      rejoining: null,
+      addingSource: false,
+      follow() {},
+      load() {},
+    });
+    p.editor = editor;
+    return editor;
+  };
+  const wire = { from: "review", port: "exit:approved" };
+  const pendings = {
+    rejoining: (e) => (e.rejoining = { ...wire, label: "approved" }),
+    inserting: (e) => (e.inserting = { ...wire, to: "done" }),
+  };
+
+  for (const action of ["rejoining", "inserting"]) {
+    test(`${action} in a pipeline does not survive opening a definition`, async () => {
+      const { p, cx, pending, flush } = await pane();
+      const editor = withEditor(p);
+      pendings[action](editor);
+      p.openDefinition("loop", cx);
+      (await next(pending, flush)).ok(reading("loop"));
+      await flush();
+      expect(editor[action]).toBeNull();
+      expect(editor.clickedBlock({ id: "loop.a" }, cx)).toBe(false);
+      expect(pending).toHaveLength(0);
+    });
+
+    test(`${action} in a definition does not survive going back to the pipeline`, async () => {
+      const { p, cx, pending, flush } = await pane();
+      const editor = withEditor(p);
+      p.openDefinition("loop", cx);
+      (await next(pending, flush)).ok(reading("loop"));
+      await flush();
+      pendings[action](editor);
+      p.closeDefinition(cx);
+      (await next(pending, flush)).ok(reading("pipeline-alpha"));
+      await flush();
+      expect(editor[action]).toBeNull();
+      // A click on `done` must not send a change for the definition's wire to the project's pipeline.
+      expect(editor.clickedBlock({ id: "done" }, cx)).toBe(false);
+      expect(pending).toHaveLength(0);
+    });
+  }
+
+  test("a pending rejoin stays while the same target is read again", async () => {
+    const { p, cx, pending, flush } = await pane();
+    const editor = withEditor(p);
+    pendings.rejoining(editor);
+    p.loadDrawing(cx);
+    (await next(pending, flush)).ok(reading("pipeline-alpha"));
+    await flush();
+    expect(editor.rejoining).not.toBeNull();
+  });
+});
