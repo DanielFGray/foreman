@@ -76,9 +76,12 @@ The pipelines file holds each project's pipeline (`docs/pipeline-engine.md`); it
 sits in the policy file's directory, and both are written through `rewrite` in
 `src/shared-file.ts`. The drafts file (`pipelines.draft.json`, beside it) holds
 the pipeline the operator is still drawing for a project, with the drawn
-pipeline the draft began from. The files are `{ pipelines }` and `{ drafts }`,
-and a pipelines file that does not decode stops every project. A draft may not run yet, so the dispatcher never
-reads it. `foreman pipeline edit` changes it one `PipelineChange`
+pipeline the draft began from. The files are `{ pipelines, composites }` and `{ drafts, composites }`:
+the composite definitions sit beside the pipelines, and definition drafts beside
+the project drafts (`docs/composite-blocks.md`). A pipelines file that does not
+decode stops every project. A definition that decodes but fails expansion or
+validation stops only the projects that use it. A draft may not run yet, so the
+dispatcher never reads it. `foreman pipeline edit` changes it one `PipelineChange`
 (`src/pipeline-edit.ts`) at a time, and `foreman pipeline save` checks it and
 writes it through the same `runPipeline` as `set`, refusing when the drawn
 pipeline changed since the draft began. `foreman pipeline trace` reads the

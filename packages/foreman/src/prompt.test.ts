@@ -11,6 +11,7 @@ import {
   type Workspace,
 } from "./pipeline.ts";
 import { renameExit } from "./pipeline-belt.ts";
+import { pipelineOf } from "./pipeline-fixture.ts";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./records.ts";
 import { authorRun } from "./task-fixture.ts";
@@ -499,11 +500,8 @@ describe("the instructions foreman ships for agent blocks", () => {
   }
 
   test("the claim guidance follows the declared claim, under the name it is drawn with", async () => {
-    const pipeline = renameExit(
-      STANDARD_PIPELINES.worktree,
-      "author",
-      "already-done",
-      "nothing-to-do",
+    const pipeline = pipelineOf(
+      renameExit(STANDARD_PIPELINES.worktree, "author", "already-done", "nothing-to-do"),
     );
     const author = blockOf("author", pipeline);
     const prompt = (block: AgentNode) =>

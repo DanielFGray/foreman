@@ -112,6 +112,7 @@ import {
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import {
+  pipelineFor,
   pipelinesPath,
   projectPipeline,
   readPipelines,
@@ -671,13 +672,23 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
       const offers = offersOf(settings);
+      // One expansion per project: instruction names come from those readings.
+      const projectReadings = projects.map(
+        (project) => [project.name, pipelineFor(drawings.value, project.name)] as const,
+      );
+      const instructionSources = [
+        DEFAULT_PIPELINE,
+        ...projectReadings.flatMap(([, reading]) =>
+          reading._tag === "Expanded" ? [reading.pipeline] : [],
+        ),
+      ];
       const instructions = yield* prompts.instructions(
-        [DEFAULT_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
+        instructionSources.flatMap(instructionNames),
       );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
-        projects.map((project) => [
-          project.name,
-          projectPipeline(drawings, project.name, offers, instructions),
+        projectReadings.map(([name, reading]) => [
+          name,
+          projectPipeline(reading, drawings.error, offers, instructions),
         ]),
       );
       const targetHolds = yield* Effect.forEach(projects, (project) => {
