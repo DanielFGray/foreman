@@ -16,7 +16,12 @@ import type { Repository } from "./repository.ts";
  * - **open** — a space is in the checkout. Only these take new work.
  * - **managed** — open, plus every checkout a foreman agent still runs in.
  *   Settling, review, landing and the sweep read this set, so closing a space
- *   drains the work already under way instead of stranding it.
+ *   drains the work already under way instead of abandoning a live agent.
+ *
+ * A project that leaves both sets with mid-pipeline tasks still in the store
+ * is not finished by foreman: it surfaces as a stranded attention row so the
+ * operator can reopen a space. Authored claims outside the managed set are
+ * that signal (`strandedOf` in `src/dispatcher.ts`).
  */
 export interface Project {
   readonly name: string;

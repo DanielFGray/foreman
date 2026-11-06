@@ -72,6 +72,7 @@ import {
   type HoldReason,
   wrongBranch,
 } from "./repository.ts";
+import { Machine } from "./machine.ts";
 import { Quota, type Usage, walledSeats } from "./quota.ts";
 import {
   authorFor,
@@ -184,6 +185,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const prompts = yield* Prompts;
     const repository = yield* Repository;
     const quota = yield* Quota;
+    const machine = yield* Machine;
     // The GitHub repo of each project, read from its checkout and never stored.
     const repoOf = yield* checkoutRepo(fleet, repository);
     // The pull-request calls run on the `Github` the trackers share.
@@ -656,9 +658,22 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         })),
       ];
 
-      // Every claimed task is `in_progress`. Placement splits working authors
-      // from tasks under review once the pipelines and tips are loaded below.
-      const inFlight = yield* eachProject(projects, (project) => records.claimed(project.name));
+      // Every claimed task across every tracker, then split: managed projects
+      // keep flowing through settle and fill; the rest surface as stranded so
+      // closing a project's last space cannot silence mid-pipeline work. A
+      // per-project claim query never asks for a project that has left the
+      // managed set, which is exactly the silence this reading closes.
+      // Placement later splits working authors from tasks under review.
+      const everywhere = yield* records.claimedEverywhere;
+      // Open-or-running is judged before the unreachable filter: a project whose
+      // tracker failed this reading is held, not stranded. An ambiguous name is
+      // open too, so it is managed here even though no one checkout is picked.
+      const managedNames = new Set(
+        [...resolved.projects, ...resolved.ambiguous].map((entry) => entry.name),
+      );
+      const reachable = new Set(projects.map((project) => project.name));
+      const inFlight = everywhere.filter((task) => reachable.has(task.project));
+      const stranded = strandedOf(everywhere, managedNames);
       // One query, gated by the task store: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
       // allowlist is applied afterwards, to the tasks store's answer rather than to the
@@ -783,6 +798,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         held: [...checkoutHolds, ...targetHolds, ...occupancy],
         claimed,
         reviewing,
+        stranded,
         epics,
         queue: queue.map(withTip),
         policy,
@@ -821,6 +837,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         held,
         claimed,
         reviewing,
+        stranded,
         epics,
         queue,
         policy,
@@ -1025,6 +1042,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         outOfQuota,
         queue: ordered,
         yours,
+        stranded,
         working: claimedActive.filter(isFleetWork),
         ...reviews,
         dispatches: plan.dispatches,
@@ -1179,6 +1197,21 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ).pipe(Effect.map((entries) => entries.flat())),
         );
 
+        // Free RAM and per-worker RSS: a hint for the operator, never a gate.
+        // Each worker's worktree (else its directory) is the attribution root;
+        // children under that cwd count toward the same worker.
+        const roots = current.workers.map((worker) => ({
+          task: worker.task,
+          directory: worker.worktree ?? worker.directory,
+        }));
+        const [availableMemory, byDirectory] = yield* Effect.all([
+          machine.available,
+          machine.residentUnder(roots.map((root) => root.directory)),
+        ]);
+        const workerMemory = new Map(
+          roots.map((root) => [root.task, byDirectory.get(root.directory) ?? 0] as const),
+        );
+
         return {
           ...current,
           resumable,
@@ -1188,6 +1221,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           landed: landedColumn(landed, now, settings.landedWindow),
           decisions: [...current.decisions, ...failedDecisions],
           repos,
+          availableMemory: Option.getOrUndefined(availableMemory),
+          workerMemory,
           observedAt: now,
         } satisfies Interpretation;
       });
@@ -3894,6 +3929,51 @@ export const readyToLand = (pipeline: Pipeline, task: Item, worker: Worker | und
   awaitingLanding(pipeline, task) && (worker === undefined || worker.state !== "working");
 
 /**
+ * Mid-pipeline work in a project that is no longer managed.
+ *
+ * Closing a project's last space (and letting its agents finish) drops it from
+ * the managed set, so settle, fill and landing never see its claimed tasks.
+ * The store still holds them. One row per such project, so the operator can
+ * reopen a space and resume; nothing here dispatches or lands on its own.
+ * Authorship is the filter: a hand claim or never-dispatched backlog of an
+ * unmanaged project is not foreman's to surface.
+ */
+export interface Stranded {
+  readonly project: string;
+  /** Foreman's mid-pipeline tasks in this project, oldest activity first. Never empty. */
+  readonly tasks: readonly [Item, ...Array<Item>];
+}
+
+/**
+ * Group authored mid-pipeline tasks whose project is outside the managed set.
+ *
+ * Managed is open spaces plus checkouts that still run a foreman agent
+ * (`projectSet`): a closed space that still has agents drains rather than
+ * strands. Projects sort by name; tasks inside a project by `lastActivityAt`.
+ */
+export const strandedOf = (
+  claimed: ReadonlyArray<Item>,
+  managed: ReadonlySet<string>,
+): ReadonlyArray<Stranded> => {
+  // A project enters the map only with its first task, so every group is non-empty by construction.
+  const byProject = new Map<string, [Item, ...Array<Item>]>();
+  for (const task of claimed) {
+    if (managed.has(task.project) || authoredBy(task) === undefined) continue;
+    const found = byProject.get(task.project);
+    if (found === undefined) byProject.set(task.project, [task]);
+    else found.push(task);
+  }
+  return [...byProject]
+    .map(([project, tasks]): Stranded => ({
+      project,
+      tasks: tasks.sort(
+        (first, second) => first.lastActivityAt.getTime() - second.lastActivityAt.getTime(),
+      ),
+    }))
+    .sort((first, second) => first.project.localeCompare(second.project));
+};
+
+/**
  * Whether a claimed task is the fleet's: foreman labelled its author, or one of
  * its workers holds it. Any other claim was made by hand or by another session,
  * so the working column leaves it out; `decisionsOf` reports it while no
@@ -4228,6 +4308,15 @@ export interface FleetState {
    * removing the label.
    */
   readonly yours: ReadonlyArray<Item>;
+
+  /**
+   * Projects outside the managed set that still hold foreman's mid-pipeline
+   * tasks. Closing a project's last space drops it from every other column;
+   * these rows are the signal that work is waiting for a space to reopen.
+   * One row per project; no actions — the fix is outside the screen.
+   */
+  readonly stranded: ReadonlyArray<Stranded>;
+
   readonly working: ReadonlyArray<Active>;
   readonly review: ReadonlyArray<Active>;
   readonly landed: ReadonlyArray<Item>;
@@ -4326,6 +4415,19 @@ export interface FleetState {
    * inside something long. `undefined` before the first read completes.
    */
   readonly observedAt: DateTime.Utc | undefined;
+
+  /**
+   * Bytes of RAM the kernel still has for new work (`MemAvailable`), or
+   * `undefined` when `/proc` could not be read. Shown beside the reading's age;
+   * never a dispatch gate — the operator decides whether to open another slot.
+   */
+  readonly availableMemory: number | undefined;
+
+  /**
+   * Resident set attributed to each live worker's worktree, keyed by task id.
+   * Children under the worktree count too. Empty when nothing is attributed.
+   */
+  readonly workerMemory: ReadonlyMap<string, number>;
 }
 
 /**
@@ -4516,6 +4618,7 @@ export const EMPTY_FLEET: FleetState = {
   projects: [],
   queue: [],
   yours: [],
+  stranded: [],
   working: [],
   review: [],
   landed: [],
@@ -4539,6 +4642,8 @@ export const EMPTY_FLEET: FleetState = {
   pullRequests: new Map(),
   merging: new Set(),
   observedAt: undefined,
+  availableMemory: undefined,
+  workerMemory: new Map(),
 };
 
 /**

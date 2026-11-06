@@ -78,11 +78,12 @@ import {
   newlyLanded,
   projectOfCommonDir,
   refusalOf,
+  rowsShownIn,
   touches,
 } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
-const VERSION = 6;
+const VERSION = 7;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 2.5;
 // Fit never shrinks the drawing past this, so its words stay legible; a
@@ -346,12 +347,7 @@ export default class Foreman extends View {
   }
   // A row in no project (an orphaned worker, a spent account, a branch whose
   // task is gone) shows in every project, so no space hides it.
-  rows() {
-    const project = this.project();
-    return (this.published?.rows ?? []).filter(
-      (row) => row.project === null || row.project === project,
-    );
-  }
+  rows() { return rowsShownIn(this.published?.rows ?? [], this.project()); }
   // The epics being driven, by key: each one's title and how many of its tasks are done.
   epics() {
     return new Map((this.published?.epics ?? []).map((epic) => [epic.key, epic]));

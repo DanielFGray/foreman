@@ -41,7 +41,7 @@ import {
  * Bumped whenever a field a reader relies on changes meaning or goes away.
  * The herdr-app Foreman pane (`herdr/foreman/main.js`) checks it.
  */
-export const PUBLISHED_VERSION = 6;
+export const PUBLISHED_VERSION = 7;
 
 /**
  * The views the file carries: foreman's own. The queue is read on demand, not
@@ -155,6 +155,17 @@ export const Published = S.Struct({
   /** ISO instant of the reading, or null before the first one completes. */
   observedAt: S.NullOr(S.String),
   /**
+   * Bytes of free RAM (`MemAvailable`), or null when `/proc` could not be
+   * read. The status line shows it beside the reading's age.
+   */
+  availableMemory: S.NullOr(S.Finite),
+  /**
+   * Resident set attributed to each live worker's worktree, keyed by task id.
+   * The status line sums these; a free figure below the largest one hints that
+   * another worker would not fit.
+   */
+  workerMemory: S.Record(S.String, S.Finite),
+  /**
    * The managed projects and their checkouts, for a reader that offers a
    * choice of project. `grantSteps` are the steps a grant from a board gives a
    * task (`gatedSteps`); a reader takes no drop where they are empty.
@@ -230,6 +241,8 @@ export const publishedOf = (
     policy: state.policy,
     policyError: state.policyError ?? null,
     observedAt: state.observedAt === undefined ? null : DateTime.formatIso(state.observedAt),
+    availableMemory: state.availableMemory ?? null,
+    workerMemory: Object.fromEntries(state.workerMemory),
     projects: state.projects.map(({ name, directory }) => ({
       name,
       directory,
