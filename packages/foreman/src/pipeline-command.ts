@@ -19,6 +19,7 @@ import {
   WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
+import { printPrompt } from "./pipeline-prompt.ts";
 import {
   pipelineFor,
   pipelinesPath,
@@ -266,10 +267,7 @@ const clear = Command.make("clear", { project }, ({ project }) =>
 
 /**
  * The prompt an agent block of the draft, else of the pipeline the project
- * runs, would send. It goes through `Prompts.agent`, as `foreman prompt` does
- * for a real task; only the inputs differ: a pretend task with no labels and
- * no runs, on the workspace its route opens, with example paths and an
- * example verify script where a dispatch reads the world.
+ * runs, would send (see `printPrompt`).
  */
 const prompt = Command.make(
   "prompt",
@@ -282,30 +280,8 @@ const prompt = Command.make(
         draft?.pipeline ?? file.pipelines[project] ?? DEFAULT_PIPELINE,
         { ...file.composites, ...draft?.composites },
       );
-      const node = pipeline.nodes.find((one) => one.id === block);
-      if (node?.kind !== "agent")
-        return yield* new PipelineError({
-          detail: `${project}'s pipeline has no agent block named ${block}`,
-        });
-      const task = {
-        ...pretend({ labels: [], size: undefined, priority: 2, parent: undefined }),
-        project,
-      };
-      const workspace = routeWorkspace(pipeline, factsOf(task, pipeline));
-      const repository = "<repository>";
-      const text = yield* (yield* Prompts).agent(node, {
-        task,
-        worktree:
-          newWorkspace(workspace, { name: project, directory: repository }, task.id) ?? repository,
-        repository,
-        workspace,
-        base: "<base>",
-        trunk: routeTarget(pipeline, factsOf(task, pipeline)) ?? "<trunk>",
-        verify: "./scripts/verify.sh",
-        pipeline,
-      });
-      yield* Console.log(text);
-    }).pipe(Effect.provide(Prompts.Default)),
+      yield* printPrompt(project, pipeline, block, `${project}'s pipeline`);
+    }),
 ).pipe(
   Command.withDescription(
     "Print the prompt an agent block of a project's draft, else of the pipeline it runs, would send a pretend task. Writes nothing",

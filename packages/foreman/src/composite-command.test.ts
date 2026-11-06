@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
@@ -190,6 +190,38 @@ describe("foreman composite", () => {
     expect(refused).toMatch(/review-gate|entry|unknown|missing|reaches/i);
     expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"]).toEqual(reviewLoop);
     expect(JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]).toBeDefined();
+  });
+
+  test("prompt renders a definition's block from its draft by the definition-local id, else from the stored definition", async () => {
+    writeReviewLoopProject();
+    const prompts = join(folder, "foreman", "prompts");
+    mkdirSync(prompts, { recursive: true });
+    writeFileSync(join(prompts, "probe-custom.md"), "COMPOSITE DRAFT MARKER for {{ task }}");
+    try {
+      const stored = await printedComposite("prompt", "review-loop", "review");
+      expect(stored).not.toContain("COMPOSITE DRAFT MARKER");
+      // No change verb sets `instructions`; a draft that reads other instructions
+      // is a draft file the operator or the pane's editor wrote.
+      await runComposite(
+        "edit",
+        "review-loop",
+        change({ _tag: "RenameCompositeExit", id: "exit-landable", name: "ok" }),
+      );
+      const draftFile = JSON.parse(readFileSync(drafts, "utf8"));
+      const blocks = draftFile.composites["review-loop"].definition.blocks;
+      blocks[blocks.findIndex((one: { id: string }) => one.id === "review")].instructions =
+        "probe-custom";
+      writeFileSync(drafts, JSON.stringify(draftFile));
+      const edited = await printedComposite("prompt", "review-loop", "review");
+      expect(edited).toContain("COMPOSITE DRAFT MARKER for trace");
+      expect(edited).toContain("`foreman exit trace approved`");
+      expect(await refuseComposite("prompt", "review-loop", "review-gate")).toBe(
+        "composite review-loop has no agent block named review-gate",
+      );
+      expect(await refuseComposite("prompt", "nobody", "review")).toBe("no composite named nobody");
+    } finally {
+      rmSync(join(folder, "foreman"), { recursive: true, force: true });
+    }
   });
 
   test("a nested instance in an opened definition lists every exit in show and edit, the queued one routable to an outer out", async () => {

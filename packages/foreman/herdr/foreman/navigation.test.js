@@ -183,3 +183,53 @@ describe("pane navigation", () => {
   });
 });
 
+
+const { Editor } = await import("./editor.js");
+
+describe("editor prompt preview", () => {
+  const agent = { id: "review", kind: "agent", instructions: "review" };
+  // An editor with the pane's real foreman command queue; it reads the prompt
+  // of `agent` and records what it shows.
+  const previewing = (p) => {
+    const shown = { text: null };
+    const editor = Object.create(Editor.prototype);
+    Object.assign(editor, {
+      pane: p,
+      on: true,
+      asked: 0,
+      promptProblem: null,
+      promptText: { set_value: (text) => (shown.text = text) },
+    });
+    return { editor, shown };
+  };
+
+  test("asks for the prompt of the pipeline shown", async () => {
+    const { p, cx, pending, flush } = await pane();
+    const { editor } = previewing(p);
+    editor.preview(agent, cx);
+    expect((await next(pending, flush)).args).toEqual(["pipeline", "prompt", "alpha", "review"]);
+  });
+
+  test("asks for the prompt of the definition shown, by the definition-local block id", async () => {
+    const { p, cx, pending, flush } = await pane();
+    p.openDefinition("loop", cx);
+    (await next(pending, flush)).ok(reading("loop"));
+    await flush();
+    const { editor, shown } = previewing(p);
+    editor.preview(agent, cx);
+    const read = await next(pending, flush);
+    expect(read.args).toEqual(["composite", "prompt", "loop", "review"]);
+    read.ok("DEFINITION PROMPT");
+    await flush();
+    expect(shown.text).toContain("DEFINITION PROMPT");
+  });
+
+  test("while a definition is only being opened, the prompt still follows the drawing shown", async () => {
+    const { p, cx, pending, flush } = await pane();
+    p.openDefinition("loop", cx);
+    const { editor } = previewing(p);
+    editor.preview(agent, cx);
+    await next(pending, flush);
+    expect((await next(pending, flush)).args.slice(0, 2)).toEqual(["pipeline", "prompt"]);
+  });
+});

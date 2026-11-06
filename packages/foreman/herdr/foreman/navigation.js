@@ -53,6 +53,17 @@ export class Navigation {
     return true;
   }
 
+  // The foreman command for the prompt of agent block `id` of what the pane
+  // shows: the project's draft, or the definition draft while one is open.
+  // Block ids belong to the drawing shown, so the command follows the reading.
+  promptArgs(id) {
+    const of = this.reading?.target;
+    if (of === undefined) return null;
+    return of.definition === undefined
+      ? ["pipeline", "prompt", of.project, id]
+      : ["composite", "prompt", of.definition, id];
+  }
+
   // Ends a read. A read that failed, or was outdated, leaves the pane aiming
   // at what it shows, so the next command addresses the drawing on screen.
   // Returns whether another read is owed.

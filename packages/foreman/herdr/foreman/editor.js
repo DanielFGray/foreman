@@ -104,12 +104,15 @@ export class Editor {
     });
   }
 
-  // Reads the prompt foreman would send from agent block `node` of the draft.
+  // Reads the prompt foreman would send from agent block `node` of the draft
+  // the pane shows (the project's, or the open definition's).
   preview(node, cx) {
     if (!this.on || instructionsOf(node) === undefined) return;
+    const args = this.pane.nav.promptArgs(node.id);
+    if (args === null) return;
     const asked = ++this.asked;
     cx.spawn(async (cx) => {
-      const result = await this.pane.foreman(["pipeline", "prompt", this.pane.project(), node.id]);
+      const result = await this.pane.foreman(args);
       if (asked !== this.asked) return;
       this.promptProblem = result.code === 0 ? null : (result.stderr || result.stdout).trim();
       this.promptText.set_value(result.code === 0 ? result.stdout : "");

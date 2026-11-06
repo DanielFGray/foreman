@@ -14,6 +14,7 @@ import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeli
 import { PipelineError } from "./pipeline-error.ts";
 import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { choicesOf } from "./pipeline-belt.ts";
+import { printPrompt } from "./pipeline-prompt.ts";
 
 /**
  * `foreman composite`: edit a composite definition as a draft of its own
@@ -220,11 +221,34 @@ const discard = Command.make("discard", { name }, ({ name }) =>
   Command.withDescription("Drop a composite definition's draft, and keep the stored definition"),
 );
 
+/**
+ * The prompt an agent block of the definition (its open draft, else the
+ * stored one) would send, by the block's id inside the definition. It renders
+ * as `pipeline prompt` does, on the definition's own blocks.
+ */
+const promptOf = Command.make(
+  "prompt",
+  { name, block: Argument.String("block") },
+  ({ name, block }) =>
+    Effect.gen(function* () {
+      const { file, draft, inProjectDraft } = yield* definitionNow(name);
+      const definition = draft?.definition ?? file.composites[name];
+      if (definition === undefined) return yield* missingDefinition(name, inProjectDraft);
+      // A nested instance is not a block a prompt reads; its agents are named in its own definition.
+      const nodes = definition.blocks.flatMap((one) => (one.kind === "composite" ? [] : [one]));
+      yield* printPrompt(name, { nodes }, block, `composite ${name}`);
+    }),
+).pipe(
+  Command.withDescription(
+    "Print the prompt an agent block of a composite definition's draft, else of the stored definition, would send a pretend task. Writes nothing",
+  ),
+);
+
 export const compositeCommand = Command.make("composite", {}).pipe(
   Command.withDescription(
     `Edit composite definitions as drafts of their own (${pipelinesPath()}, ${draftsPath()})`,
   ),
-  Command.withSubcommands([show, edit, save, discard]),
+  Command.withSubcommands([show, edit, promptOf, save, discard]),
 );
 
 const draftsFileNow = Effect.gen(function* () {
