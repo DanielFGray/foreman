@@ -9,7 +9,7 @@ import {
   schedulesOf,
   updatePolicy,
   type Policy as PolicyType,
-  type Schedule,
+  Schedule,
 } from "./policy.ts";
 
 /**
@@ -90,13 +90,15 @@ const add = Command.make(
   "add",
   { project: projectArg, name: nameArg, everyLanded, title, template, labels },
   (args) => {
-    const schedule: Schedule = {
+    // Decoding gives the schedule the shape the policy file gives it back, so the
+    // template is the stem whether the operator wrote retro or retro.md.
+    const schedule = Schema.decodeUnknownSync(Schedule)({
       name: args.name,
       every: { landed: args.everyLanded },
       title: args.title,
       template: args.template,
       labels: args.labels,
-    };
+    });
     return write((policy) => addSchedule(policy, args.project, schedule));
   },
 ).pipe(
