@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { isExit } from "tasks";
 import {
-  type Pipeline,
+  type Drawing,
   problemsOf,
   type SeatOffers,
   STANDARD_PIPELINES,
@@ -30,15 +30,15 @@ const OFFERS: SeatOffers = {
   rungs: ["cheap", "strong"].map((name) => ({ name, author: true })),
   reviewers: ["sharp"],
 };
-const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
-const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
-const gateSteps = (pipeline: Pipeline) =>
+const ids = (pipeline: Drawing) => pipeline.nodes.map((node) => node.id);
+const node = (pipeline: Drawing, id: string) => pipeline.nodes.find((n) => n.id === id);
+const gateSteps = (pipeline: Drawing) =>
   pipeline.nodes.flatMap((one) => (one.kind === "gate" ? [one.step] : []));
-const exitsOf = (pipeline: Pipeline, id: string) => {
+const exitsOf = (pipeline: Drawing, id: string) => {
   const found = node(pipeline, id);
   return found?.kind === "agent" || found?.kind === "check" ? found.exits : [];
 };
-const at = (pipeline: Pipeline) =>
+const at = (pipeline: Drawing) =>
   Object.fromEntries(beltOf(pipeline).cells.map((cell) => [cell.node.id, [cell.column, cell.row]]));
 
 describe("the standard pipeline as belts", () => {
@@ -449,7 +449,7 @@ describe("belt edits", () => {
   });
 
   test("a looped file still draws", () => {
-    const looped: Pipeline = {
+    const looped: Drawing = {
       nodes: STANDARD_PIPELINES.worktree.nodes.map((n) =>
         n.id === "land-gate" ? { ...n, next: "author" } : n,
       ),

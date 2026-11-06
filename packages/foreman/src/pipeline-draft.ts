@@ -8,15 +8,15 @@
 // (`docs/composite-blocks.md`).
 import { Effect, FileSystem, Option, Schema as S } from "effect";
 import { draftsPath } from "./paths.ts";
-import { CompositeDefinition, Pipeline } from "./pipeline.ts";
+import { CompositeDefinition, Drawing } from "./pipeline.ts";
 import { type Read, rewrite } from "./shared-file.ts";
 
 /**
- * A project's draft, and the pipeline the operator had drawn when it began:
- * none when the project ran the standard pipeline. Saving compares that with
- * the pipeline drawn now, so a draft never overwrites a change made since.
+ * A project's draft, and the drawing the operator had when it began: none when
+ * the project ran the standard pipeline. Saving compares that with the drawing
+ * now, so a draft never overwrites a change made since.
  */
-export const Draft = S.Struct({ base: S.NullOr(Pipeline), pipeline: Pipeline });
+export const Draft = S.Struct({ base: S.NullOr(Drawing), pipeline: Drawing });
 export type Draft = typeof Draft.Type;
 
 export const Drafts = S.Record(S.String, Draft);
@@ -54,10 +54,10 @@ export const updateDrafts = (path: string, change: (drafts: Drafts) => Drafts) =
     drafts: change(file.drafts),
   }));
 
-/** Whether two pipelines are the same drawing, compared as the file stores them. */
-export const sameDrawing = (one: Pipeline | null, other: Pipeline | null): boolean =>
-  JSON.stringify(one === null ? null : S.encodeSync(Pipeline)(one)) ===
-  JSON.stringify(other === null ? null : S.encodeSync(Pipeline)(other));
+/** Whether two drawings are the same, compared as the file stores them. */
+export const sameDrawing = (one: Drawing | null, other: Drawing | null): boolean =>
+  JSON.stringify(one === null ? null : S.encodeSync(Drawing)(one)) ===
+  JSON.stringify(other === null ? null : S.encodeSync(Drawing)(other));
 
 const NONE: DraftsFile = { drafts: {}, composites: {} };
 

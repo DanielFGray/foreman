@@ -2,7 +2,7 @@
 // what each block shows (`sizeOf`), so the renderer measures nothing: a
 // column is as wide as its widest block, a row as tall as its tallest, and a
 // wire's route is a list of points that the view draws as a path.
-import type { Landing, Pipeline, PipelineNode } from "./pipeline.ts";
+import type { DrawnNode, Drawing as PipelineDrawing, Landing, Pipeline } from "./pipeline.ts";
 import {
   type Belt,
   type BeltWire,
@@ -57,7 +57,7 @@ export interface Drawing {
   readonly height: number;
   readonly blocks: ReadonlyArray<{
     readonly id: string;
-    readonly kind: PipelineNode["kind"];
+    readonly kind: DrawnNode["kind"];
     readonly icon: string;
     readonly summary: string;
     readonly x: number;
@@ -78,7 +78,7 @@ export interface Drawing {
   }>;
 }
 
-export const drawingOf = (pipeline: Pipeline, flow: Flow): Drawing => {
+export const drawingOf = (pipeline: PipelineDrawing, flow: Flow): Drawing => {
   const layout = layoutOf(beltOf(pipeline), flow);
   return {
     flow,
@@ -542,7 +542,7 @@ export const besideOf = (box: Box, width: number, panelWidth: number): Point => 
 };
 
 /** How each kind of block is marked on its card and in the palette. */
-export const KIND_ICON: Record<PipelineNode["kind"], string> = {
+export const KIND_ICON: Record<DrawnNode["kind"], string> = {
   source: "⇥",
   router: "⑂",
   gate: "◧",
@@ -553,6 +553,7 @@ export const KIND_ICON: Record<PipelineNode["kind"], string> = {
   branch: "⎇",
   worktree: "▤",
   done: "✔",
+  // Drawings may still hold instances; the engine pipeline never does.
   composite: "▣",
 };
 
@@ -571,7 +572,7 @@ const LAND_VERB: Record<Landing, string> = {
 };
 
 /** A block's settings in a few words, for its card. */
-export const summaryOf = (node: PipelineNode): string => {
+export const summaryOf = (node: DrawnNode): string => {
   switch (node.kind) {
     case "source":
       return node.filter === "" ? "every task" : node.filter;

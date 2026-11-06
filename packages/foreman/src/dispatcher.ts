@@ -111,8 +111,8 @@ import {
   type Workspace,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
-import { expand } from "./composite.ts";
 import {
+  pipelineFor,
   pipelinesPath,
   projectPipeline,
   readPipelines,
@@ -672,14 +672,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
       const offers = offersOf(settings);
-      // Instruction names come from the expansion: a parameter may set them
-      // inside a composite, and an unexpandable drawing contributes none.
+      // One expansion per project: instruction names come from those readings.
+      const pipelineReadings = new Map(
+        projects.map((project) => [project.name, pipelineFor(drawings.value, project.name)]),
+      );
       const instructionSources = [
         DEFAULT_PIPELINE,
-        ...Object.values(drawings.value.pipelines).flatMap((drawn) => {
-          const result = expand(drawn, drawings.value.composites);
-          return result._tag === "Expanded" ? [result.pipeline] : [];
-        }),
+        ...[...pipelineReadings.values()].flatMap((reading) =>
+          reading._tag === "Expanded" ? [reading.pipeline] : [],
+        ),
       ];
       const instructions = yield* prompts.instructions(
         instructionSources.flatMap(instructionNames),
@@ -687,7 +688,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
         projects.map((project) => [
           project.name,
-          projectPipeline(drawings, project.name, offers, instructions),
+          projectPipeline(
+            pipelineReadings.get(project.name)!,
+            drawings.error,
+            offers,
+            instructions,
+          ),
         ]),
       );
       const targetHolds = yield* Effect.forEach(projects, (project) => {

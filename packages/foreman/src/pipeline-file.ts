@@ -3,8 +3,9 @@ import { expand } from "./composite.ts";
 import {
   Composites,
   DEFAULT_PIPELINE,
+  Drawing,
   instructionProblems,
-  Pipeline,
+  type Pipeline,
   problemsOf,
   type SeatOffers,
 } from "./pipeline.ts";
@@ -12,18 +13,18 @@ import { pipelinesPath } from "./paths.ts";
 import { type Read, rewrite } from "./shared-file.ts";
 
 /**
- * The pipelines the operator drew, one per project, in a file of their own
+ * The drawings the operator made, one per project, in a file of their own
  * beside the policy.
  *
  * A project with no entry runs the default pipeline. The file sits in the
  * policy's directory, so the dispatcher's watch on that directory sees a
  * change to either file.
  */
-export const Pipelines = S.Record(S.String, Pipeline);
+export const Pipelines = S.Record(S.String, Drawing);
 export type Pipelines = typeof Pipelines.Type;
 
 /**
- * The file as written: the pipelines and the composite definitions. A missing
+ * The file as written: the drawings and the composite definitions. A missing
  * `composites` key decodes as none, so older files keep reading.
  */
 export const PipelinesFile = S.Struct({
@@ -50,7 +51,7 @@ export const readPipelines = (path: string) =>
     })),
   );
 
-/** Rewrites the pipelines through `change`, keeping the composites as they are. */
+/** Rewrites the drawings through `change`, keeping the composites as they are. */
 export const updatePipelines = (path: string, change: (pipelines: Pipelines) => Pipelines) =>
   rewrite(path, PipelinesFile, readFile, (file) => ({
     ...file,
@@ -78,26 +79,27 @@ const readFile = (path: string) =>
   });
 
 /**
- * The pipeline `project` runs after expansion, whether the operator drew it,
- * and any expansion problems. Callers that need the drawing as written read
+ * Expansion of a project's drawing: either the engine pipeline, or the
+ * expansion problems. Callers that need the drawing as written read
  * `pipelines[project]` themselves (`standardOf`, draft base).
  */
-export const pipelineFor = (
-  file: PipelinesFile,
-  project: string,
-): {
-  readonly pipeline: Pipeline;
-  readonly drawn: boolean;
-  readonly problems: ReadonlyArray<string>;
-} => {
+export type PipelineReading =
+  | { readonly _tag: "Expanded"; readonly pipeline: Pipeline; readonly drawn: boolean }
+  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<string>; readonly drawn: boolean };
+
+/**
+ * Expand the drawing `project` runs. A tagged result: never an unexpanded
+ * pipeline beside problems.
+ */
+export const pipelineFor = (file: PipelinesFile, project: string): PipelineReading => {
   const drawn = file.pipelines[project];
   if (drawn === undefined) {
-    return { pipeline: DEFAULT_PIPELINE, drawn: false, problems: [] };
+    return { _tag: "Expanded", pipeline: DEFAULT_PIPELINE, drawn: false };
   }
   const result = expand(drawn, file.composites);
   return result._tag === "Failed"
-    ? { pipeline: drawn, drawn: true, problems: result.problems }
-    : { pipeline: result.pipeline, drawn: true, problems: [] };
+    ? { _tag: "Failed", problems: result.problems, drawn: true }
+    : { _tag: "Expanded", pipeline: result.pipeline, drawn: true };
 };
 
 /**
@@ -114,21 +116,22 @@ export type ProjectPipeline =
   | { readonly _tag: "Stopped"; readonly problems: ReadonlyArray<string> };
 
 /**
- * What `project` runs, from one reading of the file, expanded, then checked
- * against these offers and the instructions texts read for its agent blocks.
+ * What `project` runs from one expansion reading, checked against these offers
+ * and the instructions texts for its agent blocks.
  */
 export const projectPipeline = (
-  read: { readonly value: PipelinesFile; readonly error: string | undefined },
-  project: string,
+  reading: PipelineReading,
+  fileError: string | undefined,
   offers: SeatOffers,
   instructions: ReadonlyMap<string, string>,
 ): ProjectPipeline => {
-  if (read.error !== undefined) return { _tag: "Stopped", problems: [read.error] };
-  const { pipeline, drawn, problems: expandProblems } = pipelineFor(read.value, project);
-  if (expandProblems.length > 0) return { _tag: "Stopped", problems: expandProblems };
+  if (fileError !== undefined) return { _tag: "Stopped", problems: [fileError] };
+  if (reading._tag === "Failed") return { _tag: "Stopped", problems: reading.problems };
   const problems = [
-    ...problemsOf(pipeline, offers),
-    ...instructionProblems(pipeline, instructions),
+    ...problemsOf(reading.pipeline, offers),
+    ...instructionProblems(reading.pipeline, instructions),
   ];
-  return problems.length > 0 ? { _tag: "Stopped", problems } : { _tag: "Runs", pipeline, drawn };
+  return problems.length > 0
+    ? { _tag: "Stopped", problems }
+    : { _tag: "Runs", pipeline: reading.pipeline, drawn: reading.drawn };
 };

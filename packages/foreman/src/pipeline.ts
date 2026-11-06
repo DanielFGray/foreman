@@ -166,21 +166,32 @@ export const DoneNode = S.Struct({ kind: S.Literal("done"), id: S.String });
 export const ParkNode = S.Struct({ kind: S.Literal("park"), id: S.String });
 
 /**
- * An instance of a saved composite: kind `composite` in a pipeline. It names
- * its definition (`of`), wires each exit by id, and gives a value to each
- * parameter (`set`). `prefix` is stored on the instance so expanded block ids
- * do not move when the instance is renamed (`docs/composite-blocks.md`).
+ * A parameter value: every settable field is a string, a string literal or an
+ * int (`docs/composite-blocks.md`).
+ */
+export const ParamValue = S.Union([S.String, S.Int]);
+export type ParamValue = typeof ParamValue.Type;
+
+/**
+ * An instance of a saved composite in a drawing. It names its definition
+ * (`of`), wires each exit by id, and gives a value to each parameter (`set`).
+ * `prefix` is stored on the instance so expanded block ids do not move when
+ * the instance is renamed (`docs/composite-blocks.md`).
+ *
+ * Composites live only in drawings. Expansion replaces them before the engine
+ * reads a pipeline, so `PipelineNode` never holds one.
  */
 export const CompositeNode = S.Struct({
   kind: S.Literal("composite"),
   id: S.String,
   of: S.String,
   prefix: S.String,
-  set: S.Record(S.String, S.Unknown),
+  set: S.Record(S.String, ParamValue),
   exits: S.Array(S.Struct({ id: S.String, to: S.String })),
 });
 export type CompositeNode = typeof CompositeNode.Type;
 
+/** Engine blocks only: what runs, validates, places and traces after expansion. */
 export const PipelineNode = S.Union([
   SourceNode,
   RouterNode,
@@ -192,7 +203,6 @@ export const PipelineNode = S.Union([
   LandNode,
   DoneNode,
   ParkNode,
-  CompositeNode,
 ]);
 export type PipelineNode = typeof PipelineNode.Type;
 export type AgentNode = typeof AgentNode.Type;
@@ -201,6 +211,10 @@ export type GateNode = typeof GateNode.Type;
 export type LandNode = typeof LandNode.Type;
 export type DoneNode = typeof DoneNode.Type;
 
+/** A block in a drawing: an engine block or a composite instance. */
+export const DrawnNode = S.Union([PipelineNode, CompositeNode]);
+export type DrawnNode = typeof DrawnNode.Type;
+
 /**
  * A composite definition: name, blocks, entry, exits and parameters. One
  * definition serves every instance, in every project. It lives in the
@@ -208,7 +222,7 @@ export type DoneNode = typeof DoneNode.Type;
  */
 export const CompositeParam = S.Struct({
   name: S.String,
-  default: S.optional(S.Unknown),
+  default: S.optional(ParamValue),
   sets: S.Array(S.Struct({ block: S.String, field: S.String })),
 });
 export type CompositeParam = typeof CompositeParam.Type;
@@ -217,7 +231,7 @@ export const CompositeDefinition = S.Struct({
   entry: S.String,
   exits: S.Array(S.Struct({ id: S.String, name: S.String })),
   params: S.Array(CompositeParam),
-  blocks: S.Array(PipelineNode),
+  blocks: S.Array(DrawnNode),
 });
 export type CompositeDefinition = typeof CompositeDefinition.Type;
 
@@ -234,8 +248,26 @@ export type WorkNode = AgentNode | CheckNode | LandNode | DoneNode;
  */
 export type Workspace = "none" | "branch" | "worktree";
 
+/** The expanded engine graph: no composite instances. */
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
+
+/**
+ * The pipeline as the operator drew it, with composite instances still in
+ * place. The pipelines file, drafts and definition `blocks` hold drawings;
+ * every reader expands to a `Pipeline` before the engine reads it.
+ */
+export const Drawing = S.Struct({ nodes: S.Array(DrawnNode) });
+export type Drawing = typeof Drawing.Type;
+
+/**
+ * Engine blocks of a drawing. Composite instances are dropped. Prefer
+ * `expand` when the drawing must run; this is for edit helpers and tests that
+ * already hold only engine blocks.
+ */
+export const engineOf = (drawing: Drawing): Pipeline => ({
+  nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
+});
 
 /**
  * An exit a task's run named: the block that named it, the exit's id, its
@@ -561,7 +593,8 @@ export const offersOf = (seats: Seats): SeatOffers => ({
  * falls back to the standard pipeline, because running a flow the operator did
  * not draw is worse than stopping.
  */
-export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArray<string> => {
+export const problemsOf = (drawing: Drawing, offers: SeatOffers): ReadonlyArray<string> => {
+  const pipeline = engineOf(drawing);
   const shape = shapeProblems(pipeline, offers);
   if (shape.length > 0) return shape;
 
@@ -986,7 +1019,16 @@ export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
  * land name the only standard it can be, so it is that one when it has the
  * same blocks; the order the blocks are listed in means nothing.
  */
-export const standardOf = (pipeline: Pipeline): Option.Option<Standard> => {
+/**
+ * The standard pipeline `drawing` is, if any. Reads the drawing as written: a
+ * composite instance means it is not standard, even when its expansion would
+ * match (`docs/composite-blocks.md`).
+ */
+export const standardOf = (drawing: Drawing): Option.Option<Standard> => {
+  if (drawing.nodes.some((node) => node.kind === "composite")) return Option.none();
+  const pipeline: Pipeline = {
+    nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
+  };
   const has = (kind: PipelineNode["kind"]) => pipeline.nodes.some((node) => node.kind === kind);
   const land = pipeline.nodes.find((node): node is LandNode => node.kind === "land");
   const workspace = has("worktree") ? "worktree" : has("branch") ? "checkout" : "direct";
@@ -1062,54 +1104,16 @@ function standardRoute(
 
 /**
  * The pipeline as a Mermaid flowchart, one arrow per wire. A return to the
- * queue draws none. Block ids are quoted so a composite prefix's `.` is a
- * valid Mermaid id (`docs/composite-blocks.md`).
+ * queue draws none. Mermaid node ids are graph indices, not block ids, so a
+ * composite prefix's `.` never reaches a Mermaid id.
  */
-export const toMermaid = (pipeline: Pipeline): string => {
-  const lines = ["flowchart LR"];
-  for (const node of pipeline.nodes) {
-    lines.push(`  ${mermaidNode(quoteMermaidId(node.id), describe(node), SHAPES[node.kind])}`);
-  }
-  for (const node of pipeline.nodes) {
-    for (const wire of wiresOf(node)) {
-      const from = quoteMermaidId(node.id);
-      const to = quoteMermaidId(wire.to);
-      lines.push(
-        wire.label === ""
-          ? `  ${from} --> ${to}`
-          : `  ${from} -->|"${escapeMermaidLabel(wire.label)}"| ${to}`,
-      );
-    }
-  }
-  return lines.join("\n");
-};
-
-/** A Mermaid node id, quoted so `.` and other punctuation stay one token. */
-const quoteMermaidId = (id: string): string => `"${escapeMermaidLabel(id)}"`;
-
-const escapeMermaidLabel = (text: string): string => text.replace(/"/g, "#quot;");
-
-const mermaidNode = (id: string, label: string, shape: Graph.MermaidNodeShape): string => {
-  const text = escapeMermaidLabel(label);
-  switch (shape) {
-    case "stadium":
-      return `${id}(["${text}"])`;
-    case "circle":
-      return `${id}(("${text}"))`;
-    case "diamond":
-      return `${id}{"${text}"}`;
-    case "hexagon":
-      return `${id}{{"${text}"}}`;
-    case "cylindrical":
-      return `${id}[("${text}")]`;
-    case "subroutine":
-      return `${id}[["${text}"]]`;
-    case "rounded":
-      return `${id}("${text}")`;
-    case "rectangle":
-      return `${id}["${text}"]`;
-  }
-};
+export const toMermaid = (pipeline: Pipeline): string =>
+  Graph.toMermaid(graphOf(pipeline).graph, {
+    direction: "LR",
+    nodeLabel: describe,
+    edgeLabel: (label) => label,
+    nodeShape: (node) => SHAPES[node.kind],
+  });
 
 /**
  * Whether `facts` match every term of `filter`. An empty filter matches all.
@@ -1392,11 +1396,6 @@ const wiresOf = (
           ? []
           : [{ to: exit.to, label: exit.name, fails: exit.fails !== undefined }],
       );
-    case "composite":
-      // An instance wires exits by id; the definition holds the name.
-      return node.exits.flatMap((exit) =>
-        exit.to === QUEUE ? [] : [{ to: exit.to, label: exit.id }],
-      );
     case "router":
       return [
         ...node.routes.map((route) => ({ to: route.to, label: route.when })),
@@ -1522,14 +1521,7 @@ const walk = (
       case "worktree":
         node = nodes.get(node.next);
         continue;
-      case "composite":
-        // Readers expand first; an unexpanded instance is nowhere to stand.
-        return { node: undefined, gates };
-      case "agent":
-      case "check":
-      case "land":
-      case "done":
-      case "park":
+      default:
         return { node, gates };
     }
   }
@@ -1601,8 +1593,6 @@ const describe = (node: PipelineNode): string => {
       return `${node.id}: runs ${node.command}`;
     case "land":
       return `${node.id}: ${node.how ?? "merge"}${node.onto === undefined ? "" : ` onto ${node.onto}`}`;
-    case "composite":
-      return `${node.id}: ${node.of}`;
     case "branch":
     case "worktree":
     case "done":
@@ -1622,5 +1612,4 @@ const SHAPES: Record<PipelineNode["kind"], Graph.MermaidNodeShape> = {
   land: "subroutine",
   done: "subroutine",
   park: "circle",
-  composite: "rectangle",
 };

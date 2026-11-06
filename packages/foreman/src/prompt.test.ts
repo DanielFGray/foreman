@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Effect, Option } from "effect";
 import {
   type AgentNode,
+  engineOf,
   instructionProblems,
   instructionsOf,
   STANDARD_PIPELINES,
@@ -499,11 +500,8 @@ describe("the instructions foreman ships for agent blocks", () => {
   }
 
   test("the claim guidance follows the declared claim, under the name it is drawn with", async () => {
-    const pipeline = renameExit(
-      STANDARD_PIPELINES.worktree,
-      "author",
-      "already-done",
-      "nothing-to-do",
+    const pipeline = engineOf(
+      renameExit(STANDARD_PIPELINES.worktree, "author", "already-done", "nothing-to-do"),
     );
     const author = blockOf("author", pipeline);
     const prompt = (block: AgentNode) =>

@@ -3,7 +3,7 @@
 // this module names each one, so the pane's editor and `foreman pipeline
 // edit` decode the same changes.
 import { Schema as S } from "effect";
-import { AgentNode, Exit, LandNode, LANDINGS, type Pipeline } from "./pipeline.ts";
+import { AgentNode, Exit, LandNode, LANDINGS, type Drawing } from "./pipeline.ts";
 import {
   addExit,
   addRoute,
@@ -82,12 +82,12 @@ export type PipelineChange = typeof PipelineChange.Type;
  * the pipeline lacks otherwise leaves it as it was.
  */
 export const applyChange = (
-  pipeline: Pipeline,
+  pipeline: Drawing,
   change: PipelineChange,
 ):
-  | { readonly _tag: "Changed"; readonly pipeline: Pipeline; readonly added: string | undefined }
+  | { readonly _tag: "Changed"; readonly pipeline: Drawing; readonly added: string | undefined }
   | { readonly _tag: "Refused"; readonly reason: string } => {
-  const changed = (next: Pipeline, added?: string) =>
+  const changed = (next: Drawing, added?: string) =>
     ({ _tag: "Changed", pipeline: next, added: added === "" ? undefined : added }) as const;
   switch (change._tag) {
     case "InsertOn": {
@@ -157,7 +157,7 @@ export const applyChange = (
  * block `id`: a check's exits are fixed, and two exits of one block may not
  * share a name, since a port names its exit by name.
  */
-const exitRefusal = (pipeline: Pipeline, id: string, name: string | undefined) => {
+const exitRefusal = (pipeline: Drawing, id: string, name: string | undefined) => {
   const node = pipeline.nodes.find((one) => one.id === id);
   if (node?.kind === "check") return `${id} is a check, and a check's exits are passed and failed`;
   if (node?.kind === "agent" && node.exits.some((exit) => exit.name === name)) {

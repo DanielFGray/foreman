@@ -6,14 +6,18 @@
  * (`docs/composite-blocks.md`). An expansion that fails is a validation
  * problem of that project alone.
  */
-import { Schema as S } from "effect";
+import { Result, Schema as S } from "effect";
 import {
   type CompositeDefinition,
   type CompositeNode,
   type CompositeParam,
   type Composites,
-  PipelineNode,
+  type DrawnNode,
+  DrawnNode as DrawnNodeSchema,
+  type Drawing,
+  type ParamValue,
   type Pipeline,
+  type PipelineNode,
   QUEUE,
 } from "./pipeline.ts";
 
@@ -41,47 +45,54 @@ export type ExpandResult =
  * parameter, recursion, a refused parameter value) are problems of the
  * project that holds the instance.
  */
-export const expand = (pipeline: Pipeline, composites: Composites): ExpandResult => {
+export const expand = (drawing: Drawing, composites: Composites): ExpandResult => {
   const problems: Array<string> = [];
-  const nodes = expandNodes(pipeline.nodes, composites, new Set(), problems);
-  return problems.length > 0
-    ? { _tag: "Failed", problems: [...new Set(problems)] }
-    : { _tag: "Expanded", pipeline: { nodes } };
+  const { nodes } = expandNodes(drawing.nodes, composites, new Set(), problems, new Map());
+  if (problems.length > 0) return { _tag: "Failed", problems: [...new Set(problems)] };
+  // Every composite was replaced; what remains is the engine pipeline.
+  const pipeline: Pipeline = {
+    nodes: nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
+  };
+  return { _tag: "Expanded", pipeline };
 };
 
 /**
  * Expand every instance in `nodes`, depth-first. Nested instances inside a
  * definition expand with the prefixes joined when their copy is made.
+ * `rewrites` maps each expanded instance id to the final entry id after any
+ * nested expansion, so a wire into an instance whose entry was itself a
+ * composite still reaches the innermost entry.
  */
 const expandNodes = (
-  nodes: ReadonlyArray<PipelineNode>,
+  nodes: ReadonlyArray<DrawnNode>,
   composites: Composites,
   stack: ReadonlySet<string>,
   problems: Array<string>,
-): ReadonlyArray<PipelineNode> => {
-  let current: ReadonlyArray<PipelineNode> = nodes;
+  rewrites: Map<string, string>,
+): { readonly nodes: ReadonlyArray<DrawnNode> } => {
+  let current: ReadonlyArray<DrawnNode> = nodes;
   for (;;) {
     const instance = current.find((node): node is CompositeNode => node.kind === "composite");
-    if (instance === undefined) return current;
-    const expanded = expandInstance(instance, composites, stack, problems);
+    if (instance === undefined) return { nodes: current };
+    const expanded = expandInstance(instance, composites, stack, problems, rewrites);
     if (expanded === undefined) {
       // Drop the failed instance so a later reader does not loop on it; the
       // problems already stop the project.
       current = current.filter((node) => node.id !== instance.id);
       continue;
     }
-    const entry = instance.prefix + expanded.entry;
+    rewrites.set(instance.id, expanded.entryId);
     current = [
       ...current
         .filter((node) => node.id !== instance.id)
-        .map((node) => retarget(node, instance.id, entry)),
+        .map((node) => retarget(node, instance.id, expanded.entryId)),
       ...expanded.blocks,
     ];
   }
 };
 
 /**
- * One instance's blocks after prefixing, parameter replace and wire rewrite.
+ * One instance's blocks after parameter replace, prefixing and wire rewrite.
  * Nothing when the instance cannot expand; `problems` holds why.
  */
 const expandInstance = (
@@ -89,7 +100,8 @@ const expandInstance = (
   composites: Composites,
   stack: ReadonlySet<string>,
   problems: Array<string>,
-): { readonly entry: string; readonly blocks: ReadonlyArray<PipelineNode> } | undefined => {
+  rewrites: Map<string, string>,
+): { readonly entryId: string; readonly blocks: ReadonlyArray<DrawnNode> } | undefined => {
   if (stack.has(instance.of)) {
     problems.push(
       `${instance.id}: the definition ${instance.of} holds itself, directly or through others`,
@@ -116,19 +128,22 @@ const expandInstance = (
     return undefined;
   }
 
-  const beforeNested: Array<PipelineNode> = [];
+  const beforeNested: Array<DrawnNode> = [];
   for (const block of definition.blocks) {
-    const copied = copyBlock(block, instance.prefix, innerIds, exitWires);
-    const set = applyParams(copied, instance, definition.params, values, problems);
+    // Parameters replace fields on the definition block before prefixing, so
+    // the match is by the definition's own id.
+    const set = applyParams(block, instance, definition.params, values, problems);
     if (set === undefined) return undefined;
-    beforeNested.push(set);
+    beforeNested.push(copyBlock(set, instance.prefix, innerIds, exitWires));
   }
 
   const nestedStack = new Set(stack).add(instance.of);
-  return {
-    entry: definition.entry,
-    blocks: expandNodes(beforeNested, composites, nestedStack, problems),
-  };
+  const { nodes: blocks } = expandNodes(beforeNested, composites, nestedStack, problems, rewrites);
+  // Follow nested rewrites so the entry is the block that remains after
+  // nested composites expand away.
+  let entryId = instance.prefix + definition.entry;
+  while (rewrites.has(entryId)) entryId = rewrites.get(entryId)!;
+  return { entryId, blocks };
 };
 
 /** Each definition exit's wire on the instance, or nothing when one is missing or extra. */
@@ -166,11 +181,11 @@ const valuesOf = (
   instance: CompositeNode,
   definition: CompositeDefinition,
   problems: Array<string>,
-): ReadonlyMap<string, unknown> | undefined => {
-  const values = new Map<string, unknown>();
+): ReadonlyMap<string, ParamValue> | undefined => {
+  const values = new Map<string, ParamValue>();
   for (const param of definition.params) {
     if (Object.prototype.hasOwnProperty.call(instance.set, param.name)) {
-      values.set(param.name, instance.set[param.name]);
+      values.set(param.name, instance.set[param.name]!);
       continue;
     }
     if (param.default !== undefined) {
@@ -193,11 +208,11 @@ const valuesOf = (
 
 /** Copy one definition block with a prefixed id and rewritten wires. Nested instances join prefixes. */
 const copyBlock = (
-  block: PipelineNode,
+  block: DrawnNode,
   prefix: string,
   innerIds: ReadonlySet<string>,
   exitWires: ReadonlyMap<string, string>,
-): PipelineNode => {
+): DrawnNode => {
   const id = prefix + block.id;
   const to = (target: string): string => rewriteTo(target, prefix, innerIds, exitWires);
   switch (block.kind) {
@@ -244,48 +259,44 @@ const rewriteTo = (
 };
 
 /**
- * Replace the fields each parameter sets on this block. A value the block's
- * schema refuses is a problem named on the instance.
+ * Replace the fields each parameter sets on this definition block, before it
+ * is prefixed. A value the block's schema refuses is a problem named on the
+ * instance.
  */
 const applyParams = (
-  block: PipelineNode,
+  block: DrawnNode,
   instance: CompositeNode,
   params: ReadonlyArray<CompositeParam>,
-  values: ReadonlyMap<string, unknown>,
+  values: ReadonlyMap<string, ParamValue>,
   problems: Array<string>,
-): PipelineNode | undefined => {
-  // Ids in the definition are unprefixed; the copy's id has the instance prefix.
-  const bareId = block.id.startsWith(instance.prefix)
-    ? block.id.slice(instance.prefix.length)
-    : block.id;
-  let current: PipelineNode = block;
+): DrawnNode | undefined => {
+  let current: DrawnNode = block;
   for (const param of params) {
     const value = values.get(param.name);
     for (const { block: target, field } of param.sets) {
-      if (target !== bareId) continue;
+      if (target !== block.id) continue;
       const allowed = SETTABLE[current.kind];
       if (allowed === undefined || !allowed.includes(field)) {
         problems.push(
-          `${instance.id}: parameter ${param.name} cannot set ${field} on ${current.kind} ${bareId}`,
+          `${instance.id}: parameter ${param.name} cannot set ${field} on ${current.kind} ${block.id}`,
         );
         return undefined;
       }
-      const next = { ...current, [field]: value } as PipelineNode;
-      try {
-        current = S.decodeUnknownSync(PipelineNode)(next);
-      } catch {
+      const decoded = S.decodeUnknownResult(DrawnNodeSchema)({ ...current, [field]: value });
+      if (Result.isFailure(decoded)) {
         problems.push(
-          `${instance.id}: parameter ${param.name} sets a value ${bareId}.${field} refuses`,
+          `${instance.id}: parameter ${param.name} sets a value ${block.id}.${field} refuses`,
         );
         return undefined;
       }
+      current = decoded.success;
     }
   }
   return current;
 };
 
 /** Retarget every wire of `node` that ran to `from` so it runs to `to`. */
-const retarget = (node: PipelineNode, from: string, to: string): PipelineNode => {
+const retarget = (node: DrawnNode, from: string, to: string): DrawnNode => {
   const swap = (id: string) => (id === from ? to : id);
   switch (node.kind) {
     case "source":

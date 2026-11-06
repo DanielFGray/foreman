@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
-import { STANDARD_PIPELINES } from "./pipeline.ts";
+import { engineOf, STANDARD_PIPELINES } from "./pipeline.ts";
 import { configure } from "./pipeline-belt.ts";
 import { traceReport } from "./pipeline-trace.ts";
 
@@ -27,10 +27,12 @@ describe("traceReport", () => {
   test("traces the draft when the project has one, else the pipeline it runs", () => {
     const sourceId = STANDARD_PIPELINES.worktree.nodes.find((node) => node.kind === "source")!.id;
     // A draft whose source takes only research work leaves this task outside it.
-    const draft = configure(STANDARD_PIPELINES.worktree, sourceId, {
-      kind: "source",
-      filter: "label:research",
-    });
+    const draft = engineOf(
+      configure(STANDARD_PIPELINES.worktree, sourceId, {
+        kind: "source",
+        filter: "label:research",
+      }),
+    );
     const drafted = traceReport("p", REQUEST, { draft, live: SAVED }, RULES);
     expect(drafted.source).toBe("draft");
     expect(drafted.steps[0]!.placement._tag).toBe("Outside");

@@ -132,7 +132,8 @@ expansion. So an instance's ids must not move.
   (`ExitGone`), as removing a block does now.
 
 The `.` in a prefix appears in run rows, in `state.json` and in the drawing's
-keys. The Mermaid writer of `pipeline show` quotes ids.
+keys. Mermaid output is unaffected: `Graph.toMermaid` names each node by its
+graph index, not by its block id.
 
 ## Editing
 

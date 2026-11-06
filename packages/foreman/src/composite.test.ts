@@ -3,11 +3,12 @@ import { expand } from "./composite.ts";
 import {
   type CompositeDefinition,
   type Composites,
-  type Pipeline,
+  type Drawing,
+  type Facts,
+  place,
   problemsOf,
   type SeatOffers,
   STANDARD_PIPELINES,
-  toMermaid,
 } from "./pipeline.ts";
 import { pipelineFor, projectPipeline } from "./pipeline-file.ts";
 
@@ -50,14 +51,19 @@ const reviewLoop: CompositeDefinition = {
 
 const COMPOSITES: Composites = { "review-loop": reviewLoop };
 
+const INSTRUCTIONS = new Map([
+  ["author", "Write the change."],
+  ["review", "Read the diff."],
+]);
+
 /** Standard checkout with the review loop replaced by one or two instances. */
 const withReviewInstances = (
   ...instances: ReadonlyArray<{
     readonly id: string;
     readonly prefix: string;
-    readonly set?: Record<string, unknown>;
+    readonly set?: Record<string, string | number>;
   }>
-): Pipeline => {
+): Drawing => {
   const base = STANDARD_PIPELINES.checkout;
   const without = base.nodes.filter((node) => node.id !== "review-gate" && node.id !== "review");
   const first = instances[0];
@@ -77,7 +83,7 @@ const withReviewInstances = (
   const asInstance = (one: {
     readonly id: string;
     readonly prefix: string;
-    readonly set?: Record<string, unknown>;
+    readonly set?: Record<string, string | number>;
   }) => ({
     kind: "composite" as const,
     id: one.id,
@@ -89,9 +95,8 @@ const withReviewInstances = (
       { id: "exit-rework", to: "climb" },
     ],
   });
-  const nodes: Array<Pipeline["nodes"][number]> = [...wired, asInstance(first)];
+  const nodes: Array<Drawing["nodes"][number]> = [...wired, asInstance(first)];
   if (second !== undefined) {
-    // A second instance sits on a side path from the land gate so both expand.
     nodes.push(
       asInstance(second),
       { kind: "gate", id: "side-gate", step: "review", next: second.id },
@@ -102,16 +107,9 @@ const withReviewInstances = (
         next: "side-gate",
       },
     );
-    // Wire the second instance's landable exit to land; rework to climb.
-    // Reachability: side source → side-gate → second instance → land-gate / climb.
   }
   return { nodes };
 };
-
-const INSTRUCTIONS = new Map([
-  ["author", "Write the change."],
-  ["review", "Read the diff."],
-]);
 
 describe("expand", () => {
   test("a second instance of one definition gets prefixed ids", () => {
@@ -129,6 +127,96 @@ describe("expand", () => {
     expect(ids).toContain("again.review");
     expect(ids).not.toContain("checks");
     expect(ids).not.toContain("again");
+  });
+
+  test("an instance with prefix empty keeps its blocks' original ids", () => {
+    const drawn = withReviewInstances({ id: "checks", prefix: "" });
+    const result = expand(drawn, COMPOSITES);
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    const ids = result.pipeline.nodes.map((node) => node.id);
+    expect(ids).toContain("review-gate");
+    expect(ids).toContain("review");
+    expect(ids).not.toContain("checks");
+  });
+
+  test("a wire into the instance reaches prefix plus entry", () => {
+    const drawn = withReviewInstances({ id: "checks", prefix: "checks." });
+    const result = expand(drawn, COMPOSITES);
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    const author = result.pipeline.nodes.find((node) => node.id === "author");
+    expect(author?.kind).toBe("agent");
+    if (author?.kind !== "agent") return;
+    expect(author.exits.map((exit) => exit.to)).toEqual([
+      "checks.review-gate",
+      "checks.review-gate",
+    ]);
+  });
+
+  test("a nested instance expands with joined prefixes", () => {
+    const inner: CompositeDefinition = {
+      entry: "inner-gate",
+      exits: [{ id: "out", name: "out" }],
+      params: [],
+      blocks: [
+        { kind: "gate", id: "inner-gate", step: "review", next: "inner-agent" },
+        {
+          kind: "agent",
+          id: "inner-agent",
+          role: "review",
+          model: "reviewers",
+          exits: [{ id: "ok", name: "ok", to: "out:out" }],
+        },
+      ],
+    };
+    const outer: CompositeDefinition = {
+      entry: "wrap",
+      exits: [{ id: "out", name: "out" }],
+      params: [],
+      blocks: [
+        {
+          kind: "composite",
+          id: "wrap",
+          of: "inner",
+          prefix: "wrap.",
+          set: {},
+          exits: [{ id: "out", to: "out:out" }],
+        },
+      ],
+    };
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "outer" },
+        {
+          kind: "composite",
+          id: "outer",
+          of: "outer",
+          prefix: "outer.",
+          set: {},
+          exits: [{ id: "out", to: "done" }],
+        },
+        { kind: "done", id: "done" },
+      ],
+    };
+    const result = expand(drawn, { inner, outer });
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    const ids = result.pipeline.nodes.map((node) => node.id);
+    expect(ids).toContain("outer.wrap.inner-gate");
+    expect(ids).toContain("outer.wrap.inner-agent");
+    const source = result.pipeline.nodes.find((node) => node.id === "queue");
+    expect(source).toEqual(
+      expect.objectContaining({ kind: "source", next: "outer.wrap.inner-gate" }),
+    );
+  });
+
+  test("two instances whose expansions share an id give the duplicate-block problem", () => {
+    const drawn = withReviewInstances({ id: "first", prefix: "" }, { id: "second", prefix: "" });
+    const result = expand(drawn, COMPOSITES);
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    expect(problemsOf(result.pipeline, OFFERS)).toContain("two blocks are named review-gate");
   });
 
   test("an instance with wired exits validates", () => {
@@ -185,36 +273,23 @@ describe("expand", () => {
       _tag: "Failed",
       problems: ["checks: the definition review-loop is unknown"],
     });
-    const other = projectPipeline(
+    const fineReading = pipelineFor(
       {
-        value: {
-          pipelines: {
-            broken: drawn,
-            fine: STANDARD_PIPELINES.checkout,
-          },
-          composites: {},
+        pipelines: {
+          broken: drawn,
+          fine: STANDARD_PIPELINES.checkout,
         },
-        error: undefined,
+        composites: {},
       },
       "fine",
-      OFFERS,
-      INSTRUCTIONS,
     );
-    expect(other).toEqual({
+    expect(projectPipeline(fineReading, undefined, OFFERS, INSTRUCTIONS)).toEqual({
       _tag: "Runs",
       pipeline: STANDARD_PIPELINES.checkout,
       drawn: true,
     });
-    const stopped = projectPipeline(
-      {
-        value: { pipelines: { broken: drawn }, composites: {} },
-        error: undefined,
-      },
-      "broken",
-      OFFERS,
-      INSTRUCTIONS,
-    );
-    expect(stopped).toEqual({
+    const brokenReading = pipelineFor({ pipelines: { broken: drawn }, composites: {} }, "broken");
+    expect(projectPipeline(brokenReading, undefined, OFFERS, INSTRUCTIONS)).toEqual({
       _tag: "Stopped",
       problems: ["checks: the definition review-loop is unknown"],
     });
@@ -238,7 +313,7 @@ describe("expand", () => {
         ],
       },
     };
-    const drawn: Pipeline = {
+    const drawn: Drawing = {
       nodes: [
         { kind: "source", id: "queue", filter: "", next: "loop" },
         {
@@ -260,42 +335,67 @@ describe("expand", () => {
     );
     expect(
       projectPipeline(
-        {
-          value: {
+        pipelineFor(
+          {
             pipelines: { broken: drawn, fine: STANDARD_PIPELINES.checkout },
             composites: looped,
           },
-          error: undefined,
-        },
-        "fine",
+          "fine",
+        ),
+        undefined,
         OFFERS,
         INSTRUCTIONS,
       )._tag,
     ).toBe("Runs");
   });
 
-  test("pipelineFor expands before the caller reads the pipeline", () => {
+  test("pipelineFor returns a tagged expansion, never an unexpanded pipeline with problems", () => {
     const drawn = withReviewInstances({
       id: "checks",
       prefix: "checks.",
       set: { reviewer: "opus" },
     });
-    const { pipeline, problems } = pipelineFor(
-      { pipelines: { demo: drawn }, composites: COMPOSITES },
-      "demo",
-    );
-    expect(problems).toEqual([]);
-    expect(pipeline.nodes.some((node) => node.kind === "composite")).toBe(false);
-    expect(pipeline.nodes.some((node) => node.id === "checks.review")).toBe(true);
+    const reading = pipelineFor({ pipelines: { demo: drawn }, composites: COMPOSITES }, "demo");
+    expect(reading._tag).toBe("Expanded");
+    if (reading._tag !== "Expanded") return;
+    expect(reading.pipeline.nodes.map((node) => node.kind)).not.toContain("composite");
+    expect(reading.pipeline.nodes.some((node) => node.id === "checks.review")).toBe(true);
+
+    const failed = pipelineFor({ pipelines: { demo: drawn }, composites: {} }, "demo");
+    expect(failed).toEqual({
+      _tag: "Failed",
+      drawn: true,
+      problems: ["checks: the definition review-loop is unknown"],
+    });
   });
 
-  test("Mermaid quotes ids so a prefix's dot is one token", () => {
+  test("place on an expansion puts a task whose last exit was at an inner block where that exit leads", () => {
     const drawn = withReviewInstances({ id: "checks", prefix: "checks." });
     const result = expand(drawn, COMPOSITES);
     expect(result._tag).toBe("Expanded");
     if (result._tag !== "Expanded") return;
-    const mermaid = toMermaid(result.pipeline);
-    expect(mermaid).toContain('"checks.review"');
-    expect(mermaid).toContain('"checks.review-gate"');
+    const facts: Facts = {
+      status: "in_progress",
+      priority: 2,
+      epic: undefined,
+      size: 1,
+      labels: new Set(),
+      failedBy: new Set(),
+      attempts: 0,
+      tip: "c1",
+      running: undefined,
+      named: [
+        { node: "author", id: "done", name: "done", commit: "c0" },
+        { node: "checks.review", id: "approved", name: "approved", commit: "c1" },
+      ],
+      exit: "approved",
+    };
+    const placement = place(result.pipeline, facts);
+    expect(placement).toEqual(
+      expect.objectContaining({
+        _tag: "At",
+        node: expect.objectContaining({ kind: "land", id: "land" }),
+      }),
+    );
   });
 });
