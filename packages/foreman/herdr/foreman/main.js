@@ -60,7 +60,7 @@ import { chip, wiresLayer } from "./parts.js";
 import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, rowsShownIn, touches } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
-const VERSION = 6;
+const VERSION = 7;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 2.5;
 // Fit never shrinks the drawing past this, so its words stay legible; a

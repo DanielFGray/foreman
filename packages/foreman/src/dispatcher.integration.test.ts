@@ -22,6 +22,7 @@ import { applyRow, NO_WRITES, openAgentOf, type Row } from "./run-step.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
+import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
 import type { Ending, NewRunInput, Role } from "tasks";
@@ -698,6 +699,7 @@ const layerFor = (world: World) =>
       // derivable and the gate has nothing to ask about — which is the point:
       // a ladder foreman cannot read quota for dispatches exactly as before.
       Quota.Default,
+      Machine.Default,
       prompts,
       BunServices.layer,
     ),
@@ -1481,6 +1483,9 @@ describe("a fleet that is not running", () => {
     );
 
     expect(state.observedAt).toBeDefined();
+    // A Linux reading carries MemAvailable; the figure is a hint, never a gate.
+    expect(state.availableMemory).toBeGreaterThan(0);
+    expect(state.workerMemory).toBeInstanceOf(Map);
     expect(state.policy.paused).toBe(true);
   });
 });
@@ -1511,6 +1516,7 @@ describe("quota probing", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         quota,
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -1592,6 +1598,7 @@ describe("a spent account and the reviewers", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         quotaSpending(spent),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -1992,6 +1999,7 @@ describe("a usage wall", () => {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -2714,6 +2722,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -3025,6 +3034,7 @@ describe("a drawn pipeline", () => {
               Layer.succeed(Repository, world.repository),
               world.github,
               Quota.Default,
+              Machine.Default,
               prompts,
               BunServices.layer,
             ),
@@ -3280,6 +3290,7 @@ describe("foreman pipeline trace", () => {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -3880,6 +3891,7 @@ describe("ladder levels", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         Quota.Default,
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),

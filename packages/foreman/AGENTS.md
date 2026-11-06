@@ -1043,7 +1043,11 @@ Every reading carries `observedAt`, when the dispatcher last read the world. A
 running tick publishes its reading and *then* works, so its age tells a reader what the
 fleet is doing: seconds mean a fleet cycling on its poll interval; minutes mean a
 tick is inside something long, usually a landing running a test suite. Without
-it a working fleet and a wedged one look identical.
+it a working fleet and a wedged one look identical. The same reading carries
+`availableMemory` and per-worker RSS (`workerMemory`), from Linux `/proc`, so
+the status line can show what agents hold beside that age. The figure is a hint
+— free below the largest live worker means another would not fit — never a
+dispatch gate; `slots` still meters concurrency.
 
 Each source kind allows only the actions that make sense there, and `perform`
 refuses an action the row cannot take. Decisions are named from the task's
