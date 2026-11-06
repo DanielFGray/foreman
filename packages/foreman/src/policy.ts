@@ -31,7 +31,7 @@
  * Commands the operator gives by hand (`foreman dispatch`, the Foreman pane's launch)
  * are not gated: the operator pressing the key is the permission.
  */
-import { Effect, FileSystem, Option, Schema as S } from "effect";
+import { Effect, FileSystem, Option, Schema as S, SchemaGetter } from "effect";
 import type { Item } from "./records.ts";
 import { policyPath } from "./paths.ts";
 import { rewrite } from "./shared-file.ts";
@@ -126,8 +126,18 @@ export const Schedule = S.Struct({
   title: S.String,
   /** The operator's own labels on the filed task, beside the schedule's. */
   labels: S.optional(S.Array(S.String)).pipe(S.withDecodingDefault(Effect.succeed([]))),
-  /** The instructions file the filed task's author reads. */
-  template: S.String,
+  /**
+   * The instructions file the filed task's author reads, by its name without
+   * `.md`: `retro` and `retro.md` both decode to `retro`, and the policy writes
+   * `retro`. The name is the one `Prompts` reads, so the suffix is stripped here,
+   * where every writer and every reader of the policy file meets it.
+   */
+  template: S.String.pipe(
+    S.decodeTo(S.String, {
+      decode: SchemaGetter.transform((name: string) => name.replace(/\.md$/i, "")),
+      encode: SchemaGetter.passthrough(),
+    }),
+  ),
 });
 export type Schedule = typeof Schedule.Type;
 

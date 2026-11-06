@@ -417,6 +417,15 @@ describe("schedules", () => {
     expect(removeSchedule(replaced, "alpha", "retro").projects).toEqual({});
   });
 
+  test("a template named with .md decodes to its stem, the name Prompts reads", () => {
+    const decoded = S.decodeSync(Policy)({
+      projects: { alpha: { schedules: [{ ...retro, template: "retro.md" }] } },
+    });
+    expect(schedulesOf(decoded, "alpha")).toEqual([retro]);
+    const written = S.encodeSync(Policy)(decoded);
+    expect(written.projects?.["alpha"]?.schedules?.[0]?.template).toBe("retro");
+  });
+
   test("a clear keeps schedules with the tracker and pull-request settings", () => {
     const policy = clearProject(
       setProjectStep(addSchedule(DEFAULT_POLICY, "alpha", retro), "alpha", "author", "on"),
