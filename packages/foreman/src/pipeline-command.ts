@@ -8,13 +8,8 @@ import {
   DEFAULT_PIPELINE,
   describeStandard,
   Drawing,
-  instructionNames,
   LANDINGS,
-  instructionProblems,
-  type Pipeline,
   type Placement,
-  offersOf,
-  problemsOf,
   routeTarget,
   routeWorkspace,
   type Standard,
@@ -27,11 +22,10 @@ import { Prompts } from "./prompt.ts";
 import {
   pipelineFor,
   pipelinesPath,
-  readPipelines,
   updatePipelines,
   updatePipelinesFile,
 } from "./pipeline-file.ts";
-import { readLadder, readReviewers } from "./registry.ts";
+import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { INSERTABLE } from "./pipeline-belt.ts";
@@ -620,17 +614,6 @@ const traceLine = (step: TraceReport["steps"][number]): string =>
     .filter((part) => part !== "")
     .join("  ");
 
-/**
- * The problems that stop `pipeline` running: against the ladder and the
- * reviewers, and in the instructions files its agent blocks read.
- */
-const problemsAgainstLadder = (pipeline: Pipeline) =>
-  Effect.gen(function* () {
-    const seats = { ladder: yield* readLadder, reviewers: yield* readReviewers };
-    const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
-    return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
-  }).pipe(Effect.provide(Prompts.Default));
-
 const refuse = (problems: ReadonlyArray<string>) =>
   new PipelineError({
     detail: `the pipeline cannot run:\n${problems.map((p) => `  ${p}`).join("\n")}`,
@@ -648,13 +631,6 @@ const pipelineFrom = (source: string) =>
       ),
     );
   });
-
-/** The pipelines file as stored: drawings and composite definitions. */
-const pipelinesNow = Effect.gen(function* () {
-  const read = yield* readPipelines(pipelinesPath());
-  if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
-  return read.value;
-});
 
 /** Expansion reading for a project: Expanded with the pipeline, or Failed. */
 const livePipeline = (project: string) =>
@@ -760,8 +736,7 @@ const readingOf = (drawing: Drawing, composites: Composites) =>
 const checkedDrawing = (drawing: Drawing, composites?: Composites) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
-    const expanded = yield* expandedOf(drawing, composites ?? file.composites);
-    const problems = yield* problemsAgainstLadder(expanded);
+    const problems = yield* problemsOfDrawing(drawing, composites ?? file.composites);
     if (problems.length > 0) return yield* refuse(problems);
   });
 

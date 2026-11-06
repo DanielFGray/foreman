@@ -1,15 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Schema as S } from "effect";
-import { expand } from "./composite.ts";
-import {
-  type Composites,
-  type Drawing,
-  instructionNames,
-  instructionProblems,
-  offersOf,
-  problemsOf,
-  type Pipeline,
-} from "./pipeline.ts";
+import { type Composites, type Drawing } from "./pipeline.ts";
 import { applyDefinitionChange, CompositeChange } from "./pipeline-edit.ts";
 import {
   type CompositeDraft,
@@ -18,15 +9,9 @@ import {
   sameDefinition,
   updateCompositeDrafts,
 } from "./pipeline-draft.ts";
-import {
-  pipelinesPath,
-  readPipelines,
-  updatePipelinesFile,
-  type PipelinesFile,
-} from "./pipeline-file.ts";
+import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
+import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
 import { PipelineError } from "./pipeline-error.ts";
-import { Prompts } from "./prompt.ts";
-import { readLadder, readReviewers } from "./registry.ts";
 
 /**
  * `foreman composite`: edit a composite definition as a draft of its own
@@ -192,12 +177,6 @@ export const compositeCommand = Command.make("composite", {}).pipe(
   Command.withSubcommands([show, edit, save, discard]),
 );
 
-const pipelinesNow = Effect.gen(function* () {
-  const read = yield* readPipelines(pipelinesPath());
-  if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
-  return read.value;
-});
-
 const draftsFileNow = Effect.gen(function* () {
   const read = yield* readDraftsFile(draftsPath());
   if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
@@ -223,13 +202,6 @@ const freshCompositeDraft = (name: string, file: PipelinesFile) => {
   });
 };
 
-const problemsAgainstLadder = (pipeline: Pipeline) =>
-  Effect.gen(function* () {
-    const seats = { ladder: yield* readLadder, reviewers: yield* readReviewers };
-    const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
-    return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
-  }).pipe(Effect.provide(Prompts.Default));
-
 /**
  * Projects that use `name` (directly or through another definition) whose
  * expansion or ladder check fails with these definitions. A definition save
@@ -248,13 +220,6 @@ const projectsBrokenBy = (
       if (problems.length > 0) broken.push({ project, problems });
     }
     return broken;
-  });
-
-const problemsOfDrawing = (drawing: Drawing, composites: Composites) =>
-  Effect.gen(function* () {
-    const expanded = expand(drawing, composites);
-    if (expanded._tag === "Failed") return [...expanded.problems];
-    return yield* problemsAgainstLadder(expanded.pipeline);
   });
 
 /** Whether a drawing reaches `name` through an instance, directly or nested. */
