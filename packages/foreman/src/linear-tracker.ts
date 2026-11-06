@@ -324,7 +324,12 @@ export const linearTracker = (
               projectId: read.projectId,
               title: task.title,
               description: task.description,
-              stateId: stateFor(read.states, "unstarted").id,
+              // A task filed as proposed waits for an operator to open it; the
+              // state that reads as proposed is Linear's triage.
+              stateId: stateFor(
+                read.states,
+                (task.status ?? "open") === "proposed" ? PROPOSED_STATE : "unstarted",
+              ).id,
               labelIds,
             },
           }).pipe(Effect.ensuring(forget(task.project)));
@@ -390,13 +395,19 @@ const splitIdentifier = (identifier: string) => {
 const MOVED_TO = ["unstarted", "started", "completed", "canceled"] as const;
 
 /**
+ * The workflow state type a proposed issue sits in before an operator opens
+ * it: Linear's `triage`. `unstarted` is the filing state of open work.
+ */
+const PROPOSED_STATE = "triage";
+
+/**
  * The team's state of `type`, preferring the name the table in section 7
  * names (`Todo`, a name containing `progress`), as lalph's `findState` does.
  * The read checked every type in `MOVED_TO` exists.
  */
 export const stateFor = (
   states: ReadonlyArray<WorkflowState>,
-  type: (typeof MOVED_TO)[number],
+  type: (typeof MOVED_TO)[number] | typeof PROPOSED_STATE,
 ): WorkflowState => {
   const ofType = states.filter((state) => state.type === type);
   const preferred =
@@ -404,7 +415,9 @@ export const stateFor = (
       ? ofType.find((state) => state.name.toLowerCase() === "todo")
       : type === "started"
         ? ofType.find((state) => state.name.toLowerCase().includes("progress"))
-        : undefined;
+        : type === PROPOSED_STATE
+          ? ofType.find((state) => state.name.toLowerCase().includes("triage"))
+          : undefined;
   return preferred ?? ofType[0]!;
 };
 

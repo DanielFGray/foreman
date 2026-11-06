@@ -219,12 +219,20 @@ const dispatchRung = Flag.String("rung").pipe(
   Flag.optional,
 );
 
+const proposed = Flag.Boolean("proposed").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "File the task as proposed, so it is not ready work until the operator opens it",
+  ),
+);
+
 /** What `foreman add` is told. */
 export interface Filing {
   readonly title: string;
   readonly project: string;
   readonly description: string;
   readonly labels: ReadonlyArray<string>;
+  readonly status: "open" | "proposed";
   readonly dispatch: boolean;
   readonly rung: Option.Option<string>;
 }
@@ -255,6 +263,7 @@ export const fileTask = Effect.fn("fileTask")(function* (
     title: filing.title,
     description: yield* prose(filing.description),
     labels: filing.labels,
+    status: filing.status,
   });
   yield* Console.log(id);
   if (!filing.dispatch) return;
@@ -267,14 +276,19 @@ export const fileTask = Effect.fn("fileTask")(function* (
 
 const add = Command.make(
   "add",
-  { title, project, description, labels, dispatch: dispatchNow, rung: dispatchRung },
-  (filing) =>
+  { title, project, description, labels, dispatch: dispatchNow, rung: dispatchRung, proposed },
+  ({ proposed: asProposed, ...filing }) =>
     Effect.gen(function* () {
-      yield* fileTask(filing, yield* Tracker, yield* Dispatcher, yield* Fleet);
+      yield* fileTask(
+        { ...filing, status: asProposed ? "proposed" : "open" },
+        yield* Tracker,
+        yield* Dispatcher,
+        yield* Fleet,
+      );
     }),
 ).pipe(
   Command.withDescription(
-    "File a task in a project's tracker and print its id; --dispatch also starts its author, and a fleet worker may not pass it",
+    "File a task in a project's tracker and print its id; --proposed holds it out of ready work; --dispatch also starts its author, and a fleet worker may not pass it",
   ),
 );
 

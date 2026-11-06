@@ -340,6 +340,12 @@ export const githubTracker = (
         Effect.gen(function* () {
           const repo = yield* repoOf(task.project);
           yield* Effect.forEach(task.labels, (label) => ensureLabel(repo, label));
+          // A task filed as proposed carries its status as a label, the way
+          // an issue's status is its `status:<value>` label: `open` is the
+          // issue's own state, so it needs no label.
+          const status = task.status ?? "open";
+          const statusLabel = status === "open" ? undefined : `status:${status}`;
+          if (statusLabel !== undefined) yield* ensureLabel(repo, statusLabel);
           const out = yield* github
             .run(
               [
@@ -352,6 +358,7 @@ export const githubTracker = (
                 "--body-file",
                 "-",
                 ...task.labels.flatMap((label) => ["--label", label]),
+                ...(statusLabel === undefined ? [] : ["--label", statusLabel]),
               ],
               { input: task.description },
             )

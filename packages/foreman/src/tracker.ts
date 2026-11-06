@@ -8,6 +8,7 @@ import {
   type LogEntry,
   type Status,
   type TaskEvent,
+  type TaskState,
 } from "tasks";
 import { Fleet } from "./fleet.ts";
 import { HcFleet } from "./hc.ts";
@@ -60,6 +61,11 @@ export class Tracker extends Context.Service<
       readonly title: string;
       readonly description: string;
       readonly labels: ReadonlyArray<string>;
+      /**
+       * The status the task is filed in: `open`, or `proposed`, which holds it
+       * out of the queue until the operator opens it. Absent means `open`.
+       */
+      readonly status?: TaskState;
     }) => Effect.Effect<string, TrackerError>;
     /**
      * The status moves. Each skips a task that already has the status it
