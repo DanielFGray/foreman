@@ -473,6 +473,12 @@ const wiresOf = (pipeline: Pipeline): ReadonlyArray<Wire> =>
             ? []
             : [{ from: node.id, port: `exit:${exit.name}`, to: exit.to, label: exit.name }],
         );
+      case "composite":
+        return node.exits.flatMap((exit): ReadonlyArray<Wire> =>
+          exit.to === QUEUE
+            ? []
+            : [{ from: node.id, port: `exit:${exit.id}`, to: exit.to, label: exit.id }],
+        );
       case "router":
         return [
           ...node.routes.map((route, at) => ({
@@ -496,15 +502,23 @@ const targetOf = (pipeline: Pipeline, wire: Pick<Wire, "from" | "port">): string
   )?.to;
 
 const retargeted = (pipeline: Pipeline, wire: Pick<Wire, "from" | "port">, to: string): Pipeline =>
-  mapNode(pipeline, wire.from, (node) => {
+  mapNode(pipeline, wire.from, (node): PipelineNode => {
     if (wire.port === "next" && "next" in node) return { ...node, next: to };
     if (wire.port === "else" && node.kind === "router") return { ...node, else: to };
-    if (typeof wire.port === "string" && wire.port.startsWith("exit:") && "exits" in node) {
+    if (typeof wire.port === "string" && wire.port.startsWith("exit:")) {
       const name = wire.port.slice("exit:".length);
-      return {
-        ...node,
-        exits: node.exits.map((exit) => (exit.name === name ? { ...exit, to } : exit)),
-      };
+      if (node.kind === "agent" || node.kind === "check") {
+        return {
+          ...node,
+          exits: node.exits.map((exit) => (exit.name === name ? { ...exit, to } : exit)),
+        };
+      }
+      if (node.kind === "composite") {
+        return {
+          ...node,
+          exits: node.exits.map((exit) => (exit.id === name ? { ...exit, to } : exit)),
+        };
+      }
     }
     if (typeof wire.port === "number" && node.kind === "router") {
       return {
@@ -526,6 +540,8 @@ const redirect = (node: PipelineNode, from: string, to: string): PipelineNode =>
       return { ...node, next: swap(node.next) };
     case "agent":
     case "check":
+      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: swap(exit.to) })) };
+    case "composite":
       return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: swap(exit.to) })) };
     case "router":
       return {
@@ -629,6 +645,8 @@ const onwardOf = (node: PipelineNode): string | undefined => {
       return node.else;
     case "agent":
     case "check":
+      return node.exits.find((exit) => exit.to !== QUEUE)?.to;
+    case "composite":
       return node.exits.find((exit) => exit.to !== QUEUE)?.to;
     case "land":
     case "done":

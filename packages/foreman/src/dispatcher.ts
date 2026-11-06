@@ -111,6 +111,7 @@ import {
   type Workspace,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
+import { expand } from "./composite.ts";
 import {
   pipelinesPath,
   projectPipeline,
@@ -671,8 +672,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // ladder on every pass: a ladder edit can make a drawing invalid.
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
       const offers = offersOf(settings);
+      // Instruction names come from the expansion: a parameter may set them
+      // inside a composite, and an unexpandable drawing contributes none.
+      const instructionSources = [
+        DEFAULT_PIPELINE,
+        ...Object.values(drawings.value.pipelines).flatMap((drawn) => {
+          const result = expand(drawn, drawings.value.composites);
+          return result._tag === "Expanded" ? [result.pipeline] : [];
+        }),
+      ];
       const instructions = yield* prompts.instructions(
-        [DEFAULT_PIPELINE, ...Object.values(drawings.value)].flatMap(instructionNames),
+        instructionSources.flatMap(instructionNames),
       );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
         projects.map((project) => [

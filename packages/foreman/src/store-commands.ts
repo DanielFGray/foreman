@@ -138,8 +138,10 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
       ),
     );
     const drawings = yield* readPipelines(pipelinesPath());
-    const { pipeline } = pipelineFor(drawings.value, task.project);
-    const step = stepOf(place(pipeline, factsOf(task, pipeline)));
+    const { pipeline, problems } = pipelineFor(drawings.value, task.project);
+    // Placement reads the expansion; an expansion failure stops the project, so
+    // there is no block to name.
+    const step = problems.length > 0 ? undefined : stepOf(place(pipeline, factsOf(task, pipeline)));
     const history = yield* records.history(task.id);
     const now = new Date(yield* Clock.currentTimeMillis);
     const summary = summarizeRuns(history, task.status, now);

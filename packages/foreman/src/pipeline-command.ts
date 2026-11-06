@@ -1,8 +1,11 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
 import { Dispatcher, newWorkspace } from "./dispatcher.ts";
+import { expand } from "./composite.ts";
 import {
   AgentNode,
+  type Composites,
+  DEFAULT_PIPELINE,
   describeStandard,
   instructionNames,
   LANDINGS,
@@ -61,14 +64,18 @@ const flow = Flag.Literals("flow", ["across", "down"]).pipe(
 const show = Command.make("show", { project, json, flow }, ({ project, json, flow }) =>
   Effect.gen(function* () {
     if (json) return yield* Console.log(JSON.stringify(yield* shownOf(project, flow), null, 2));
-    const { pipeline, drawn } = yield* livePipeline(project);
-    const name = Option.match(standardOf(pipeline), {
+    const written = yield* drawnPipeline(project);
+    const { pipeline, problems: expandProblems } = yield* livePipeline(project);
+    // standardOf reads the drawing as written, so an instance is never "standard".
+    const name = Option.match(standardOf(written.pipeline), {
       onNone: () => "its own pipeline",
       onSome: describeStandard,
     });
-    yield* Console.log(`${project} runs ${name}${drawn ? "" : " (the default)"}:`);
-    yield* Console.log(toMermaid(pipeline));
-    for (const problem of yield* problemsAgainstLadder(pipeline))
+    yield* Console.log(`${project} runs ${name}${written.drawn ? "" : " (the default)"}:`);
+    if (expandProblems.length === 0) yield* Console.log(toMermaid(pipeline));
+    for (const problem of expandProblems.length > 0
+      ? expandProblems
+      : yield* problemsAgainstLadder(pipeline))
       yield* Console.error(`problem: ${problem}`);
     if ((yield* draftsNow)[project] !== undefined)
       yield* Console.log(
@@ -134,8 +141,9 @@ const use = Command.make(
               how: Option.getOrElse(land, () => "merge" as const),
               onto: Option.getOrUndefined(onto),
             };
-      const { pipeline, drawn } = yield* livePipeline(project);
+      const { pipeline, drawn } = yield* drawnPipeline(project);
       // Only a standard variant is replaced, so a pipeline the operator drew by hand is never lost.
+      // standardOf reads the drawing as written, so a pipeline with an instance is not standard.
       if (drawn && Option.isNone(standardOf(pipeline)))
         return yield* new PipelineError({
           detail: `${project} runs its own drawn pipeline, so use leaves it as it is: see it with foreman pipeline show ${project}, and drop it with foreman pipeline clear ${project}`,
@@ -198,7 +206,7 @@ const save = Command.make("save", { project }, ({ project }) =>
     const draft = (yield* draftsNow)[project];
     if (draft === undefined)
       return yield* new PipelineError({ detail: `${project} has no draft open` });
-    const live = yield* livePipeline(project);
+    const live = yield* drawnPipeline(project);
     if (!sameDrawing(draft.base, live.drawn ? live.pipeline : null))
       return yield* new PipelineError({
         detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
@@ -239,8 +247,12 @@ const prompt = Command.make(
   { project, block: Argument.String("block") },
   ({ project, block }) =>
     Effect.gen(function* () {
+      const file = yield* pipelinesNow;
       const draft = (yield* draftsNow)[project];
-      const pipeline = draft?.pipeline ?? (yield* livePipeline(project)).pipeline;
+      const pipeline = yield* expandedOf(
+        draft?.pipeline ?? file.pipelines[project] ?? DEFAULT_PIPELINE,
+        file.composites,
+      );
       const node = pipeline.nodes.find((one) => one.id === block);
       if (node?.kind !== "agent")
         return yield* new PipelineError({
@@ -360,8 +372,12 @@ const trace = Command.make(
           (error) => new PipelineError({ detail: `that trace cannot be read: ${error.message}` }),
         ),
       );
+      const file = yield* pipelinesNow;
       const draft = (yield* draftsNow)[project];
-      const live = yield* livePipeline(project);
+      const live = pipelineFor(file, project);
+      if (live.problems.length > 0) return yield* refuse(live.problems);
+      const draftPipeline =
+        draft === undefined ? undefined : yield* expandedOf(draft.pipeline, file.composites);
       const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
       const report = traceReport(
         project,
@@ -374,7 +390,7 @@ const trace = Command.make(
           },
           events,
         },
-        { draft: draft?.pipeline, live },
+        { draft: draftPipeline, live },
         { ladder, reviewers, attemptsPerLevel },
       );
       if (json) return yield* Console.log(JSON.stringify(report, null, 2));
@@ -412,9 +428,14 @@ const simulate = Command.make(
       const epics = yield* records.epicsOver(ready);
       const { policy } = yield* readPolicy(policyPath());
       const rates = ratesOf(yield* readMeasured);
+      const file = yield* pipelinesNow;
       const draft = (yield* draftsNow)[project];
-      const live = yield* livePipeline(project);
+      const live = pipelineFor(file, project);
       const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
+      const liveProblems =
+        live.problems.length > 0 ? live.problems : yield* problemsAgainstLadder(live.pipeline);
+      const draftReading =
+        draft === undefined ? undefined : yield* readingOf(draft.pipeline, file.composites);
       const report = simulateReport(
         {
           project,
@@ -426,14 +447,8 @@ const simulate = Command.make(
           pollSeconds: pollInterval,
         },
         {
-          draft:
-            draft === undefined
-              ? undefined
-              : {
-                  pipeline: draft.pipeline,
-                  problems: yield* problemsAgainstLadder(draft.pipeline),
-                },
-          live: { ...live, problems: yield* problemsAgainstLadder(live.pipeline) },
+          draft: draftReading,
+          live: { pipeline: live.pipeline, drawn: live.drawn, problems: liveProblems },
         },
         rates,
         { ladder, reviewers, attemptsPerLevel },
@@ -591,13 +606,30 @@ const pipelineFrom = (source: string) =>
     );
   });
 
-/** The pipeline a project runs now, and whether the operator drew it. */
+/** The pipelines file as stored: drawings and composite definitions. */
+const pipelinesNow = Effect.gen(function* () {
+  const read = yield* readPipelines(pipelinesPath());
+  if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
+  return read.value;
+});
+
+/**
+ * The pipeline a project runs after expansion. Expansion problems are on the
+ * result; callers that need the drawing as written use `drawnPipeline`.
+ */
 const livePipeline = (project: string) =>
-  Effect.gen(function* () {
-    const read = yield* readPipelines(pipelinesPath());
-    if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
-    return pipelineFor(read.value, project);
-  });
+  pipelinesNow.pipe(Effect.map((file) => pipelineFor(file, project)));
+
+/** The pipeline as the operator drew it, before expansion. */
+const drawnPipeline = (project: string) =>
+  pipelinesNow.pipe(
+    Effect.map((file) => {
+      const drawn = file.pipelines[project];
+      return drawn === undefined
+        ? { pipeline: DEFAULT_PIPELINE, drawn: false as const }
+        : { pipeline: drawn, drawn: true as const };
+    }),
+  );
 
 const draftsNow = Effect.gen(function* () {
   const read = yield* readDrafts(draftsPath());
@@ -605,43 +637,76 @@ const draftsNow = Effect.gen(function* () {
   return read.value;
 });
 
-/** A draft that starts as the pipeline the project runs now. */
+/** A draft that starts as the pipeline the project runs now, as written. */
 const freshDraft = (project: string) =>
-  livePipeline(project).pipe(
+  drawnPipeline(project).pipe(
     Effect.map(({ pipeline, drawn }): Draft => ({ base: drawn ? pipeline : null, pipeline })),
   );
 
-/** Checks a pipeline against the ladder, then makes it the one `project` runs. Both set and save write through here. */
+/**
+ * Expand `pipeline` with these definitions, or refuse with the expansion
+ * problems. Every draft reader goes through here so there is one path.
+ */
+const expandedOf = (pipeline: Pipeline, composites: Composites) => {
+  const result = expand(pipeline, composites);
+  return result._tag === "Failed"
+    ? Effect.fail(refuse(result.problems))
+    : Effect.succeed(result.pipeline);
+};
+
+/** Expansion then ladder check, as simulate needs both the pipeline and its problems. */
+const readingOf = (pipeline: Pipeline, composites: Composites) =>
+  Effect.gen(function* () {
+    const result = expand(pipeline, composites);
+    if (result._tag === "Failed") return { pipeline, problems: result.problems };
+    return {
+      pipeline: result.pipeline,
+      problems: yield* problemsAgainstLadder(result.pipeline),
+    };
+  });
+
+/**
+ * Checks a pipeline's expansion against the ladder, then makes the as-written
+ * drawing the one `project` runs. Both set and save write through here.
+ */
 const runPipeline = (project: string, pipeline: Pipeline) =>
   Effect.gen(function* () {
-    const problems = yield* problemsAgainstLadder(pipeline);
+    const file = yield* pipelinesNow;
+    const expanded = yield* expandedOf(pipeline, file.composites);
+    const problems = yield* problemsAgainstLadder(expanded);
     if (problems.length > 0) return yield* refuse(problems);
     yield* updatePipelines(pipelinesPath(), (pipelines) => ({ ...pipelines, [project]: pipeline }));
   });
 
 /**
- * What `show --json` prints: the pipeline a project runs, its problems and its
- * drawing, and the same for the project's draft when one is open.
+ * What `show --json` prints: the expanded pipeline a project runs, its
+ * problems and its drawing, and the same for the project's draft when one is
+ * open.
  */
 const shownOf = (project: string, flow: Flow) =>
   Effect.gen(function* () {
-    const { pipeline, drawn } = yield* livePipeline(project);
+    const file = yield* pipelinesNow;
+    const { pipeline, drawn, problems: expandProblems } = pipelineFor(file, project);
     const draft = (yield* draftsNow)[project];
+    const problems =
+      expandProblems.length > 0 ? expandProblems : yield* problemsAgainstLadder(pipeline);
     return {
       project,
       drawn,
       choices: CHOICES,
       pipeline,
-      problems: yield* problemsAgainstLadder(pipeline),
+      problems,
       drawing: drawingOf(pipeline, flow),
       draft:
         draft === undefined
           ? null
-          : {
-              pipeline: draft.pipeline,
-              problems: yield* problemsAgainstLadder(draft.pipeline),
-              drawing: drawingOf(draft.pipeline, flow),
-            },
+          : yield* readingOf(draft.pipeline, file.composites).pipe(
+              Effect.map((reading) => ({
+                pipeline: reading.pipeline,
+                problems: reading.problems,
+                drawing: drawingOf(reading.pipeline, flow),
+              })),
+            ),
     };
   });
 

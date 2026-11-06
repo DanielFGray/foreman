@@ -173,6 +173,7 @@ const leastSizeOf = (kind: Cell["node"]["kind"]): { readonly w: number; readonly
     case "agent":
     case "check":
     case "park":
+    case "composite":
       return { w: 114, h: 44 };
     case "land":
     case "done":
@@ -552,6 +553,7 @@ export const KIND_ICON: Record<PipelineNode["kind"], string> = {
   branch: "⎇",
   worktree: "▤",
   done: "✔",
+  composite: "▣",
 };
 
 /** A wire's way out in words: `next`, `else`, or `route n` counted from one. */
@@ -591,5 +593,7 @@ export const summaryOf = (node: PipelineNode): string => {
       return "completes";
     case "park":
       return "waits for you";
+    case "composite":
+      return node.of;
   }
 };

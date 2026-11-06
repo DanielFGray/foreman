@@ -74,10 +74,13 @@ const pinned = {
 describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: { amux: pinned } });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      pipelines: { amux: JSON.parse(JSON.stringify(pinned)) },
+      composites: {},
+    });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: {}, composites: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -111,7 +114,7 @@ describe("foreman pipeline use", () => {
         readPipelines(path).pipe(Effect.provide(BunServices.layer)),
       );
       expect(read.error).toBeUndefined();
-      expect(read.value["amux"]).toEqual(STANDARD_PIPELINES[choice]);
+      expect(read.value.pipelines["amux"]).toEqual(STANDARD_PIPELINES[choice]);
     }
   });
 
@@ -205,7 +208,7 @@ describe("drawing a draft", () => {
     const read = await Effect.runPromise(
       readPipelines(path).pipe(Effect.provide(BunServices.layer)),
     );
-    expect(standardOf(read.value["amux"] ?? { nodes: [] })).toEqual(
+    expect(standardOf(read.value.pipelines["amux"] ?? { nodes: [] })).toEqual(
       Option.some({ workspace: "worktree", how: "pull-request" }),
     );
   });
