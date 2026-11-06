@@ -5,15 +5,17 @@
 import { Schema as S } from "effect";
 import {
   AgentNode,
+  type CompositeDefinition,
   type Composites,
+  type Drawing,
   Exit,
   LandNode,
   LANDINGS,
   ParamValue,
-  type Drawing,
 } from "./pipeline.ts";
 import {
   addExit,
+  addParam,
   addRoute,
   addSource,
   chargeExit,
@@ -24,9 +26,12 @@ import {
   rejoin,
   remove,
   removeExit,
+  removeParam,
   removeRoute,
+  renameCompositeExit,
   renameExit,
   setEmpty,
+  setEntry,
   setParam,
   swapEnd,
   unpack,
@@ -88,12 +93,38 @@ export const PipelineChange = S.Union([
 ]);
 export type PipelineChange = typeof PipelineChange.Type;
 
+/** Definition-only verbs: parameters, exit names and the entry (`docs/composite-blocks.md`). */
+export const DefinitionChange = S.Union([
+  S.TaggedStruct("AddParam", {
+    name: S.String,
+    default: S.optional(ParamValue),
+    sets: S.Array(S.Struct({ block: S.String, field: S.String })),
+  }),
+  S.TaggedStruct("RemoveParam", { name: S.String }),
+  S.TaggedStruct("RenameCompositeExit", { id: S.String, name: S.String }),
+  S.TaggedStruct("SetEntry", { entry: S.String }),
+]);
+export type DefinitionChange = typeof DefinitionChange.Type;
+
+/** A change to a composite definition draft: pipeline verbs on its blocks, or a definition verb. */
+export const CompositeChange = S.Union([PipelineChange, DefinitionChange]);
+export type CompositeChange = typeof CompositeChange.Type;
+
 export type ApplyResult =
   | {
       readonly _tag: "Changed";
       readonly pipeline: Drawing;
       readonly added: string | undefined;
       /** Definitions the change created, for the draft to carry. Empty when it created none. */
+      readonly composites: Composites;
+    }
+  | { readonly _tag: "Refused"; readonly reason: string };
+
+export type ApplyDefinitionResult =
+  | {
+      readonly _tag: "Changed";
+      readonly definition: CompositeDefinition;
+      readonly added: string | undefined;
       readonly composites: Composites;
     }
   | { readonly _tag: "Refused"; readonly reason: string };
@@ -112,11 +143,14 @@ export type ApplyResult =
  * `composites` are the definitions the drawing may use: InsertOn of a
  * composite, Unpack and landing-gate placement read them; MakeComposite
  * refuses a name that is already among them and returns the new definition.
+ *
+ * `outs` are exit ids a definition draft may wire to as `out:<id>`.
  */
 export const applyChange = (
   pipeline: Drawing,
   change: PipelineChange,
   composites: Composites = {},
+  outs: ReadonlySet<string> = new Set(),
 ): ApplyResult => {
   const changed = (next: Drawing, added?: string, created: Composites = {}) =>
     ({
@@ -148,7 +182,7 @@ export const applyChange = (
     case "RemoveRoute":
       return changed(removeRoute(pipeline, change.router, change.index));
     case "Rejoin": {
-      const rejoined = rejoin(pipeline, change.wire, change.to);
+      const rejoined = rejoin(pipeline, change.wire, change.to, outs);
       return rejoined._tag === "Some"
         ? changed(rejoined.value)
         : {
@@ -217,6 +251,57 @@ export const applyChange = (
       return node?.kind !== "composite"
         ? { _tag: "Refused", reason: `${change.id} is not a composite instance` }
         : changed(setParam(pipeline, change.id, change.name, change.value));
+    }
+  }
+};
+
+/**
+ * The definition after `change`. Pipeline verbs act on its blocks, with each
+ * of its exits valid as `out:<id>`. A definition holds no source.
+ */
+export const applyDefinitionChange = (
+  definition: CompositeDefinition,
+  change: CompositeChange,
+  composites: Composites = {},
+): ApplyDefinitionResult => {
+  switch (change._tag) {
+    case "AddParam": {
+      const added = addParam(definition, change);
+      return added._tag === "Refused"
+        ? added
+        : { _tag: "Changed", definition: added.definition, added: undefined, composites: {} };
+    }
+    case "RemoveParam":
+      return {
+        _tag: "Changed",
+        definition: removeParam(definition, change.name),
+        added: undefined,
+        composites: {},
+      };
+    case "RenameCompositeExit": {
+      const renamed = renameCompositeExit(definition, change.id, change.name);
+      return renamed._tag === "Refused"
+        ? renamed
+        : { _tag: "Changed", definition: renamed.definition, added: undefined, composites: {} };
+    }
+    case "SetEntry": {
+      const set = setEntry(definition, change.entry);
+      return set._tag === "Refused"
+        ? set
+        : { _tag: "Changed", definition: set.definition, added: undefined, composites: {} };
+    }
+    case "AddSource":
+      return { _tag: "Refused", reason: "a composite definition holds no source" };
+    default: {
+      const outs = new Set(definition.exits.map((exit) => exit.id));
+      const result = applyChange({ nodes: definition.blocks }, change, composites, outs);
+      if (result._tag === "Refused") return result;
+      return {
+        _tag: "Changed",
+        definition: { ...definition, blocks: result.pipeline.nodes },
+        added: result.added,
+        composites: result.composites,
+      };
     }
   }
 };
