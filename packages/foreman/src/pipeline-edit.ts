@@ -231,16 +231,8 @@ export const applyChange = (
         : changed(setEmpty(pipeline, change.id, change.name, change.empty));
     }
     case "MakeComposite": {
-      if (composites[change.name] !== undefined) {
-        return {
-          _tag: "Refused",
-          reason: `a composite named ${change.name} already exists`,
-        };
-      }
-      const made = makeComposite(pipeline, change.ids, change.name, composites);
-      return made._tag === "Refused"
-        ? made
-        : changed(made.pipeline, made.id, { [change.name]: made.definition });
+      const made = madeComposite(pipeline, change, composites);
+      return made._tag === "Refused" ? made : changed(made.pipeline, made.id, made.composites);
     }
     case "Unpack": {
       const unpacked = unpack(pipeline, change.id, composites);
@@ -265,6 +257,39 @@ export const applyDefinitionChange = (
   composites: Composites = {},
 ): ApplyDefinitionResult => {
   switch (change._tag) {
+    case "MakeComposite": {
+      const made = madeComposite(
+        { nodes: definition.blocks },
+        change,
+        composites,
+        definition.entry,
+      );
+      if (made._tag === "Refused") return made;
+      return {
+        _tag: "Changed",
+        definition: {
+          ...definition,
+          blocks: made.pipeline.nodes,
+          entry: change.ids.includes(definition.entry) ? made.id : definition.entry,
+        },
+        added: made.id,
+        composites: made.composites,
+      };
+    }
+    case "Unpack": {
+      const unpacked = unpack({ nodes: definition.blocks }, change.id, composites);
+      if (unpacked._tag === "Refused") return unpacked;
+      return {
+        _tag: "Changed",
+        definition: {
+          ...definition,
+          blocks: unpacked.pipeline.nodes,
+          entry: definition.entry === change.id ? unpacked.entry : definition.entry,
+        },
+        added: undefined,
+        composites: {},
+      };
+    }
     case "AddParam": {
       const added = addParam(definition, change);
       return added._tag === "Refused"
@@ -304,6 +329,37 @@ export const applyDefinitionChange = (
       };
     }
   }
+};
+
+/**
+ * Packs the selected blocks into a new definition named `change.name`. A
+ * definition draft passes its entry, which no wire in the drawing names.
+ */
+const madeComposite = (
+  pipeline: Drawing,
+  change: { readonly ids: ReadonlyArray<string>; readonly name: string },
+  composites: Composites,
+  definitionEntry?: string,
+):
+  | {
+      readonly _tag: "Changed";
+      readonly pipeline: Drawing;
+      readonly id: string;
+      readonly composites: Composites;
+    }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  if (composites[change.name] !== undefined) {
+    return { _tag: "Refused", reason: `a composite named ${change.name} already exists` };
+  }
+  const made = makeComposite(pipeline, change.ids, change.name, composites, definitionEntry);
+  return made._tag === "Refused"
+    ? made
+    : {
+        _tag: "Changed",
+        pipeline: made.pipeline,
+        id: made.id,
+        composites: { [change.name]: made.definition },
+      };
 };
 
 /**

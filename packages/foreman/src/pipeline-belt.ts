@@ -218,12 +218,17 @@ export const insertOn = (
  *
  * Refused when the selection holds a source, names a missing block, or the
  * wires into it reach more than one block (no single entry).
+ *
+ * `definitionEntry` is the entry of the definition being drawn, when the
+ * drawing is one. Nothing in the drawing wires into that block, so the
+ * selection's entry is counted from it as well.
  */
 export const makeComposite = (
   pipeline: Drawing,
   ids: ReadonlyArray<string>,
   name: string,
   composites: Composites = {},
+  definitionEntry?: string,
 ):
   | {
       readonly _tag: "Made";
@@ -249,11 +254,12 @@ export const makeComposite = (
 
   const wires = wiresOf(pipeline);
   const entries = [
-    ...new Set(
-      wires
+    ...new Set([
+      ...wires
         .filter((wire) => selected.has(wire.to) && !selected.has(wire.from))
         .map((wire) => wire.to),
-    ),
+      ...(definitionEntry !== undefined && selected.has(definitionEntry) ? [definitionEntry] : []),
+    ]),
   ];
   const [entry, ...otherEntries] = entries;
   if (entry === undefined || otherEntries.length > 0) {
@@ -352,7 +358,12 @@ export const unpack = (
   id: string,
   composites: Composites,
 ):
-  | { readonly _tag: "Unpacked"; readonly pipeline: Drawing }
+  | {
+      readonly _tag: "Unpacked";
+      readonly pipeline: Drawing;
+      /** The block that wires into the instance now reach, which a definition's entry must follow. */
+      readonly entry: string;
+    }
   | { readonly _tag: "Refused"; readonly reason: string } => {
   const instance = pipeline.nodes.find((node) => node.id === id);
   if (instance?.kind !== "composite") {
@@ -372,6 +383,7 @@ export const unpack = (
         ...opened.blocks,
       ],
     },
+    entry: opened.entry,
   };
 };
 

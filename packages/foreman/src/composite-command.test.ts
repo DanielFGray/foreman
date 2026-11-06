@@ -92,7 +92,7 @@ const reviewLoop = {
   ],
 };
 
-const pipelineWithReviewLoop = () => {
+const pipelineWithReviewLoop = (of = "review-loop") => {
   const nodes = STANDARD_PIPELINES.checkout.nodes
     .filter((node) => node.id !== "review-gate" && node.id !== "review")
     .map((node) =>
@@ -111,7 +111,7 @@ const pipelineWithReviewLoop = () => {
       {
         kind: "composite",
         id: "checks",
-        of: "review-loop",
+        of,
         prefix: "checks.",
         set: {},
         exits: [
@@ -320,5 +320,52 @@ describe("foreman composite", () => {
       "review-loop"
     ].definition.blocks.find((block: { id: string }) => block.id === "review");
     expect(review.exits[0].to).toBe("out:exit-rework");
+  });
+
+  test("Unpack of a definition's entry instance moves the entry into the expansion", async () => {
+    const outer = {
+      entry: "nested",
+      exits: reviewLoop.exits,
+      params: [],
+      blocks: [
+        {
+          kind: "composite",
+          id: "nested",
+          of: "review-loop",
+          prefix: "nested.",
+          set: {},
+          exits: [
+            { id: "exit-landable", to: "out:exit-landable" },
+            { id: "exit-rework", to: "out:exit-rework" },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pipelines: { amux: pipelineWithReviewLoop("outer") },
+        composites: { "review-loop": reviewLoop, outer },
+      }),
+    );
+    await runComposite("edit", "outer", change({ _tag: "Unpack", id: "nested" }));
+    const definition = JSON.parse(readFileSync(drafts, "utf8")).composites.outer.definition;
+    expect(definition.blocks.map((block: { id: string }) => block.id)).toContain(definition.entry);
+    await runComposite("save", "outer");
+    expect(JSON.parse(readFileSync(path, "utf8")).composites.outer.entry).toBe(definition.entry);
+  });
+
+  test("MakeComposite packs a selection that holds the definition's entry", async () => {
+    writeReviewLoopProject();
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "inner" }),
+    );
+    const definition = JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]
+      .definition;
+    expect(definition.entry).toBe("inner");
+    await runComposite("save", "review-loop");
+    expect(JSON.parse(readFileSync(path, "utf8")).composites.inner.entry).toBe("review-gate");
   });
 });
