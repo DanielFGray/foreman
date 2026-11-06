@@ -71,6 +71,7 @@ import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
 import { byBlock } from "./placements.js";
 import { definitionRefusal } from "./definition.js";
+import { Navigation, same } from "./navigation.js";
 import {
   NEXT_MODE,
   TASK_ID,
@@ -99,7 +100,7 @@ export default class Foreman extends View {
     this.published = null;
     this.problem = null;
     this.busy = false;
-    this.shown = null;
+    this.nav = new Navigation();
     this.queue = null;
     this.queueReading = false;
     // The Landed keys at the last reading, or null before the first.
@@ -116,8 +117,6 @@ export default class Foreman extends View {
     this.selected = null;
     // Blocks picked for MakeComposite (shift-click while editing).
     this.selection = new Set();
-    // The composite definition the pane is editing, or null for the project's pipeline.
-    this.definition = null;
     // The drawing fits the pane until the operator zooms or pans it.
     this.fitted = true;
     this.header = new Header(this);
@@ -150,6 +149,15 @@ export default class Foreman extends View {
       this.watch(cx);
       this.loadQueue(cx);
     });
+  }
+
+  // What foreman last answered, and the definition it answered for (null for the pipeline).
+  get shown() {
+    return this.nav.shown;
+  }
+
+  get definition() {
+    return this.nav.definition;
   }
 
   // The project of the shown space, or null for a space in no checkout.
@@ -189,7 +197,8 @@ export default class Foreman extends View {
     const project = this.project();
     if (project === this.following) return;
     this.following = project;
-    this.shown = null;
+    this.nav.go(project === null ? null : { project });
+    this.selection = new Set();
     this.selected = null;
     this.queue = null;
     this.problem = null;
@@ -390,29 +399,23 @@ export default class Foreman extends View {
     // One read at a time: a burst of changes to the config folder reads once
     // more after the read under way, not once per change. Each read is a
     // foreman process that takes a second of CPU.
-    if (this.drawingReading) {
-      this.drawingStale = true;
-      return;
-    }
-    this.drawingReading = true;
-    this.drawingStale = false;
+    const sent = this.nav.request();
+    if (sent === null) return;
     const args =
-      this.definition === null
-        ? ["pipeline", "show", project, "--json", "--flow", this.flow()]
-        : ["composite", "show", this.definition, "--json", "--flow", this.flow()];
-    // `this.definition` is switched before the read, so a failed read finds it
-    // unequal to the definition the shown drawing was read for, and switches back.
+      sent.definition === undefined
+        ? ["pipeline", "show", sent.project, "--json", "--flow", this.flow()]
+        : ["composite", "show", sent.definition, "--json", "--flow", this.flow()];
+    let answered = false;
     this.ask(
       args,
       cx,
       () => {
-        this.loadedDefinition = this.definition;
+        answered = true;
       },
       (cx) => {
-        this.drawingReading = false;
-        if (this.loadedDefinition !== this.definition) this.definition = this.loadedDefinition;
-        if (this.drawingStale) this.loadDrawing(cx);
+        if (this.nav.settle(sent, answered)) this.loadDrawing(cx);
       },
+      sent,
     );
   }
 
@@ -420,12 +423,13 @@ export default class Foreman extends View {
   // block the change added, which the pane then selects. A definition draft
   // goes through `foreman composite edit`.
   change(change, cx) {
+    const of = this.nav.reading.target;
     const args =
-      this.definition === null
+      of.definition === undefined
         ? [
             "pipeline",
             "edit",
-            this.project(),
+            of.project,
             JSON.stringify(change),
             "--json",
             "--flow",
@@ -434,16 +438,22 @@ export default class Foreman extends View {
         : [
             "composite",
             "edit",
-            this.definition,
+            of.definition,
             JSON.stringify(change),
             "--json",
             "--flow",
             this.flow(),
           ];
-    this.ask(args, cx, (shown, cx) => {
-      if (shown.added !== null && shown.added !== undefined) this.select(shown.added, cx);
-      this.selection = new Set();
-    });
+    this.ask(
+      args,
+      cx,
+      (shown, cx) => {
+        if (shown.added !== null && shown.added !== undefined) this.select(shown.added, cx);
+        this.selection = new Set();
+      },
+      undefined,
+      of,
+    );
   }
 
   // Opens a composite definition for editing through `foreman composite edit`.
@@ -456,19 +466,13 @@ export default class Foreman extends View {
       cx.notify();
       return;
     }
-    this.selected = null;
-    this.selection = new Set();
-    this.definition = name;
+    this.nav.go({ project: this.nav.target.project, definition: name });
     this.loadDrawing(cx);
   }
 
   // Leaves the definition and shows the project's pipeline again.
   closeDefinition(cx) {
-    this.selected = null;
-    this.selection = new Set();
-    this.definition = null;
-    // The definition the shown drawing was read for: a failed read switches `definition` back to it.
-    this.loadedDefinition = null;
+    this.nav.go({ project: this.nav.target.project });
     this.loadDrawing(cx);
   }
 
@@ -496,10 +500,11 @@ export default class Foreman extends View {
   // composite definition draft. A refusal changed nothing, so the draft stays
   // on screen with the refusal above it: a reading would clear the refusal it answers.
   finish(verb, cx) {
+    const of = this.nav.reading.target;
     const args =
-      this.definition === null
-        ? ["pipeline", verb, this.project()]
-        : ["composite", verb, this.definition];
+      of.definition === undefined
+        ? ["pipeline", verb, of.project]
+        : ["composite", verb, of.definition];
     this.act(args, cx, (done, cx) => {
       if (!done) {
         cx.notify();
@@ -513,7 +518,7 @@ export default class Foreman extends View {
   // Runs a foreman command that answers a reading, and takes the reading.
   // `then` takes a reading; `after` runs once the command ends, however it
   // ended, a host call that failed included.
-  ask(args, cx, then = () => {}, after = () => {}) {
+  ask(args, cx, then = () => {}, after = () => {}, of = this.nav.target) {
     this.busy = true;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -525,8 +530,11 @@ export default class Foreman extends View {
         }
         try {
           const shown = JSON.parse(result.stdout);
+          const before = this.nav.shown === null ? undefined : this.selectedNode();
+          const from = this.nav.reading?.target;
+          if (!this.nav.answer(of, shown)) return;
           this.problem = null;
-          this.showing(shown, cx);
+          this.showing(shown, before, same(from ?? null, of), cx);
           then(shown, cx);
         } catch (error) {
           this.problem = String(error.message ?? error);
@@ -545,12 +553,13 @@ export default class Foreman extends View {
   }
 
   // Takes a reading of the pipeline or a definition, and drops a pick that names a block the drawing lacks.
-  showing(shown, cx) {
-    const before = this.shown === null ? undefined : this.selectedNode();
-    this.shown = shown;
+  // `sameTarget` is false when the reading is of another pipeline or
+  // definition than the last: a pick or selection of the last one means nothing here.
+  showing(shown, before, sameTarget, cx) {
+    if (!sameTarget) this.selection = new Set();
     if (
       this.selected !== null &&
-      !this.view().drawing.blocks.some((block) => block.id === this.selected)
+      (!sameTarget || !this.view().drawing.blocks.some((block) => block.id === this.selected))
     )
       this.select(null, cx);
     else this.editor.follow(before, this.selectedNode(), cx);
