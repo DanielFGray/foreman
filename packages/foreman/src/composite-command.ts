@@ -42,10 +42,10 @@ const show = Command.make("show", { name, json }, ({ name, json }) =>
   Effect.gen(function* () {
     const { file, draft } = yield* definitionNow(name);
     const live = file.composites[name];
-    if (live === undefined && draft === undefined) {
+    const definition = draft?.definition ?? live;
+    if (definition === undefined) {
       return yield* new PipelineError({ detail: `no composite named ${name}` });
     }
-    const definition = draft?.definition ?? live!;
     if (json) {
       return yield* Console.log(
         JSON.stringify(
@@ -139,7 +139,7 @@ const save = Command.make("save", { name }, ({ name }) =>
     const taken = Object.keys(draft.composites).filter((one) => file.composites[one] !== undefined);
     if (taken.length > 0) {
       return yield* new PipelineError({
-        detail: `the pipeline cannot run:\n${taken
+        detail: `cannot save composite ${name}:\n${taken
           .map((one) => `  a composite named ${one} now exists: rename it and save again`)
           .join("\n")}`,
       });
