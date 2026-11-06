@@ -125,6 +125,7 @@ import {
   type EpicProgress,
   isOnboarding,
   isResearch,
+  scheduleLabel,
   type Item,
   failuresOf,
   needsYou,
@@ -144,8 +145,9 @@ import {
 import { hitWall, wallAccountOf } from "./harness.ts";
 import { newRunFor } from "./run-record.ts";
 import { openAgentOf, type RunEvent, type RunStep, stepOf, stoppedAt } from "./run-step.ts";
-import type { Charge, Run } from "tasks";
+import { roleOf, type Charge, type Run } from "tasks";
 import { openCheckouts, type Project, projectSet } from "./projects.ts";
+import { schedulesOf, type Schedule } from "./policy.ts";
 
 const runOutcomes = Metric.counter("foreman.run.outcomes", {
   description: "Settled agent runs by their closed task phase.",
@@ -448,6 +450,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         yield* reclaim(current);
         yield* recover(current);
         if (yield* codeMoved) return "moved" as const;
+        // A cadence is read from the world after settle, so the landings it
+        // counts are settled before it counts.
+        yield* fire(current);
         // The second reading is narrow, not stale. The passes above write to the
         // store and to git, so what fill decides from has to be read after them —
         // but a dispatch turns on ten fields, and the columns only a person reads
@@ -2191,6 +2196,81 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         );
         yield* Effect.logInfo(`recovered ${oldest.task} (${oldest.project}) for review`);
       }).pipe(Effect.catch((error) => Effect.logWarning(`recovering a branch failed: ${error}`)));
+
+    /**
+     * Files the task one schedule has fired for, or does nothing when its
+     * cadence has not reached its count.
+     *
+     * The window opens at the creation of the newest task the schedule filed,
+     * or at the start of time, and the count is the landed work since then: the
+     * tasks whose author run closed landed, excluding the schedule's own
+     * filings, which are the cadence's bookkeeping rather than its work. When
+     * the count reaches the cadence's `landed` and no filing is still open, one
+     * task is filed with the rendered title and instructions, and waits for the
+     * author gate like any task.
+     */
+    const fileOne = (project: string, schedule: Schedule) =>
+      Effect.gen(function* () {
+        const tasks = yield* tracker.list({ project });
+        const filed = tasks.filter((task) => task.labels.includes(scheduleLabel(schedule.name)));
+        const since = filed.reduce<Date>(
+          (latest, task) => (task.createdAt.getTime() > latest.getTime() ? task.createdAt : latest),
+          new Date(0),
+        );
+        const closed = yield* records.closedSince(since);
+        const landed = new Set<string>();
+        for (const run of closed) {
+          if (run.project !== project) continue;
+          if (roleOf(run.work) !== "author") continue;
+          const outcome = Option.getOrUndefined(run.outcome);
+          if (outcome !== "committed" && outcome !== "answered") continue;
+          if (filed.some((task) => task.id === run.task)) continue;
+          landed.add(run.task);
+        }
+        const waiting = filed.some(
+          (task) => task.status === "open" || task.status === "in_progress",
+        );
+        if (landed.size < schedule.every.landed || waiting) return;
+        const title = yield* prompts.fill(schedule.title, { project, since: since.toISOString() });
+        const description = yield* prompts.template(schedule.template, {
+          project,
+          since: since.toISOString(),
+        });
+        const id = yield* tracker.add({
+          project,
+          title,
+          description,
+          labels: [...(schedule.labels ?? []), scheduleLabel(schedule.name)],
+        });
+        yield* Effect.logInfo(`schedule ${schedule.name} filed ${id} for ${project}`);
+      });
+
+    /**
+     * Fires every schedule of every open project the reading covers, after
+     * settle. A paused project takes no step, schedules included.
+     *
+     * An intention is not work, and a schedule is the operator's intention to
+     * repeat a pattern: it files, and the filed task then waits for the author
+     * gate like any task. Nothing is held in memory between ticks, so a restart
+     * fires from the same world the last tick did.
+     */
+    const fire = Effect.fn("foreman.fire")(function* (current: Interpretation) {
+      const { policy } = current;
+      yield* Effect.forEach(
+        current.projects.filter((project) => !policy.projects[project.name]?.paused),
+        (project) =>
+          Effect.forEach(schedulesOf(policy, project.name), (schedule) =>
+            fileOne(project.name, schedule).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `the ${schedule.name} schedule of ${project.name} did not file: ${error}`,
+                ),
+              ),
+            ),
+          ),
+        { concurrency: "unbounded" },
+      );
+    });
 
     /**
      * Claims work for every free slot, review first.
