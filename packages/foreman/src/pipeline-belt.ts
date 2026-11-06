@@ -14,11 +14,13 @@ import { Option } from "effect";
 import { expand, PARAM_FIELDS, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
+  AgentNode,
   type CompositeDefinition,
   type Composites,
   type DrawnNode,
   type Drawing,
   type Exit,
+  LANDINGS,
   type ParamValue,
   type Pipeline,
   PULL_REQUEST_STEPS,
@@ -28,7 +30,7 @@ import {
   standardExits,
   strandedPublishGates,
 } from "./pipeline.ts";
-import type { Step } from "./policy.ts";
+import { STEPS, type Step } from "./policy.ts";
 
 export { PARAM_FIELDS };
 
@@ -150,6 +152,19 @@ export const INSERTABLE = [
   "composite",
 ] as const;
 export type Insertable = (typeof INSERTABLE)[number];
+
+/**
+ * What an editor that cannot load foreman's modules offers for a block's
+ * settings, read from the schemas. `composite` is not a bare choice: a
+ * composite is inserted by naming its definition (`composites`).
+ */
+export const choicesOf = (composites: Composites) => ({
+  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
+  composites: Object.keys(composites).sort(),
+  steps: STEPS,
+  roles: AgentNode.fields.role.literals,
+  landings: LANDINGS,
+});
 
 /**
  * Puts a new block on a wire: the wire runs into it, and it runs on to where

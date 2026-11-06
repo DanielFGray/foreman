@@ -28,8 +28,8 @@ import {
 import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
-import { INSERTABLE } from "./pipeline-belt.ts";
-import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
+import { choicesOf } from "./pipeline-belt.ts";
+import { policyPath, readPolicy, scopesOf } from "./policy.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
 import {
@@ -791,7 +791,11 @@ const shownOf = (project: string, flow: Flow) =>
     return {
       project,
       drawn,
-      choices: choicesOf(available),
+      choices: {
+        ...choicesOf(available),
+        // Definitions this project's draft made. `composite show` reads only stored ones, so the pane refuses to open these until the draft is saved.
+        unsaved: Object.keys(draft?.composites ?? {}).sort(),
+      },
       ...viewOf(written, problems, available, flow),
       draft: draftJson,
     };
@@ -835,13 +839,3 @@ const viewOf = (
     },
   };
 };
-
-/** What an editor that cannot load foreman's modules offers for a block's settings, from the schemas themselves. */
-const choicesOf = (composites: Composites) => ({
-  // Definitions sit beside the built-in kinds; InsertOn of a composite names `of`.
-  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
-  composites: Object.keys(composites).sort(),
-  steps: STEPS,
-  roles: AgentNode.fields.role.literals,
-  landings: LANDINGS,
-});

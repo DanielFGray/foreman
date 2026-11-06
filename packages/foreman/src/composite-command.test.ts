@@ -181,6 +181,20 @@ describe("foreman composite", () => {
     expect(JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]).toBeDefined();
   });
 
+  test("a definition a project draft made is not readable until that draft is saved", async () => {
+    await runPipeline("use", "checkout", "--project", "amux");
+    await runPipeline(
+      "edit",
+      "amux",
+      change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "review-loop" }),
+    );
+    const refused = await refuseComposite("show", "review-loop", "--json");
+    expect(refused).toContain("save that project's draft");
+    expect(refused).not.toContain("no composite named");
+    await runPipeline("save", "amux");
+    expect(await runComposite("show", "review-loop", "--json")).toBeUndefined();
+  });
+
   test("save refuses when the definition changed since its draft began", async () => {
     writeReviewLoopProject();
     await runComposite(

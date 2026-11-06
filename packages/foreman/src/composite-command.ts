@@ -1,12 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Schema as S } from "effect";
-import {
-  AgentNode,
-  type Composites,
-  type CompositeDefinition,
-  type Drawing,
-  LANDINGS,
-} from "./pipeline.ts";
+import { type Composites, type CompositeDefinition, type Drawing } from "./pipeline.ts";
 import { applyDefinitionChange, CompositeChange } from "./pipeline-edit.ts";
 import {
   type CompositeDraft,
@@ -19,8 +13,7 @@ import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
 import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
 import { PipelineError } from "./pipeline-error.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
-import { INSERTABLE } from "./pipeline-belt.ts";
-import { STEPS } from "./policy.ts";
+import { choicesOf } from "./pipeline-belt.ts";
 
 /**
  * `foreman composite`: edit a composite definition as a draft of its own
@@ -38,16 +31,6 @@ const flow = Flag.Literals("flow", ["across", "down"]).pipe(
   ),
 );
 
-/** What the pane offers while editing a definition: built-in kinds, nested definitions, and the open ends it may wire to. */
-const choicesOf = (composites: Composites, definition: CompositeDefinition) => ({
-  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
-  composites: Object.keys(composites).sort(),
-  outs: definition.exits.map((exit) => ({ id: exit.id, name: exit.name })),
-  steps: STEPS,
-  roles: AgentNode.fields.role.literals,
-  landings: LANDINGS,
-});
-
 /** A definition as the pane draws and edits it: its blocks, open ends, and layout. */
 const shownDefinition = (
   name: string,
@@ -61,7 +44,10 @@ const shownDefinition = (
   definition,
   pipeline: { nodes: definition.blocks },
   drawing: drawingOf({ nodes: definition.blocks }, flow),
-  choices: choicesOf(composites, definition),
+  choices: {
+    ...choicesOf(composites),
+    outs: definition.exits.map((exit) => ({ id: exit.id, name: exit.name })),
+  },
   entry: definition.entry,
   draft: draft === undefined ? null : { base: draft.base, definition: draft.definition },
   live,
@@ -69,12 +55,10 @@ const shownDefinition = (
 
 const show = Command.make("show", { name, json, flow }, ({ name, json, flow }) =>
   Effect.gen(function* () {
-    const { file, draft } = yield* definitionNow(name);
+    const { file, draft, inProjectDraft } = yield* definitionNow(name);
     const live = file.composites[name];
     const definition = draft?.definition ?? live;
-    if (definition === undefined) {
-      return yield* new PipelineError({ detail: `no composite named ${name}` });
-    }
+    if (definition === undefined) return yield* missingDefinition(name, inProjectDraft);
     if (json) {
       const composites = {
         ...file.composites,
@@ -124,8 +108,8 @@ const edit = Command.make(
           (error) => new PipelineError({ detail: `that change cannot be read: ${error.message}` }),
         ),
       );
-      const { file, draft: open } = yield* definitionNow(name);
-      const draft = open ?? (yield* freshCompositeDraft(name, file));
+      const { file, draft: open, inProjectDraft } = yield* definitionNow(name);
+      const draft = open ?? (yield* freshCompositeDraft(name, file, inProjectDraft));
       const composites = {
         ...file.composites,
         ...draft.composites,
@@ -253,14 +237,23 @@ const definitionNow = (name: string) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
     const drafts = yield* draftsFileNow;
-    return { file, draft: drafts.composites[name] };
+    // A project draft's MakeComposite definitions are stored only when that project's draft is saved.
+    const inProjectDraft = Object.values(drafts.drafts).some(
+      (draft) => draft.composites[name] !== undefined,
+    );
+    return { file, draft: drafts.composites[name], inProjectDraft };
   });
 
-const freshCompositeDraft = (name: string, file: PipelinesFile) => {
+const missingDefinition = (name: string, inProjectDraft: boolean) =>
+  new PipelineError({
+    detail: inProjectDraft
+      ? `composite ${name} is made in a project draft: save that project's draft first`
+      : `no composite named ${name}`,
+  });
+
+const freshCompositeDraft = (name: string, file: PipelinesFile, inProjectDraft: boolean) => {
   const live = file.composites[name];
-  if (live === undefined) {
-    return Effect.fail(new PipelineError({ detail: `no composite named ${name}` }));
-  }
+  if (live === undefined) return Effect.fail(missingDefinition(name, inProjectDraft));
   return Effect.succeed<CompositeDraft>({
     base: live,
     definition: live,
