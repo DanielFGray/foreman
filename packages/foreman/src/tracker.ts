@@ -46,6 +46,11 @@ export class Tracker extends Context.Service<
     /** One task, or nothing when the tracker has no such task. */
     readonly lookup: (task: string) => Effect.Effect<Option.Option<Item>, TrackerError>;
     readonly list: (filter: ListFilterInput) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
+    /** Tasks with a label, including closed tasks the normal project snapshot omits. */
+    readonly labeled: (
+      project: string,
+      label: string,
+    ) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
     /** Every dependency edge from an item of `project`, whatever the status of either end. */
     readonly dependencies: (
       project: string,
@@ -156,6 +161,11 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
       refresh: () => Effect.void,
       lookup: (task) => tasks.get(task).pipe(as(`show ${task}`)),
       list: (filter) => tasks.list(filter).pipe(as(`list ${JSON.stringify(filter)}`)),
+      labeled: (project, label) =>
+        tasks.list({ project }).pipe(
+          Effect.map((items) => items.filter((item) => item.labels.includes(label))),
+          as(`list ${label}`),
+        ),
       dependencies: (project) =>
         tasks.allDependencies(project).pipe(as(`dependencies of ${project}`)),
       ready: (project) => tasks.ready(project).pipe(as("ready")),
@@ -290,6 +300,8 @@ export const routeByProject = (
           : everywhere(adapters.tasks.list(filter), (tracker, project) =>
               tracker.list({ ...filter, project }),
             ),
+    labeled: (project, label) =>
+      forProject(project).pipe(Effect.flatMap((tracker) => tracker.labeled(project, label))),
     dependencies: (project) =>
       forProject(project).pipe(Effect.flatMap((tracker) => tracker.dependencies(project))),
     ready: (project) =>

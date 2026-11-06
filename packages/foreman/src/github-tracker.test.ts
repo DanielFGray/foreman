@@ -47,7 +47,7 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
   let written = false;
   let readsAfterWrite = 0;
   const gh = fakeGh((args) => {
-    if (args[1] === "graphql") {
+    if (args[1] === "graphql")
       return options.failRead
         ? { exitCode: 1, stdout: "", stderr: "error connecting to api.github.com" }
         : snapshot([
@@ -59,7 +59,6 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
               },
             }),
           ]);
-    }
     if (args.includes("user")) return rest({ login: "me" });
     if (args.includes("repos/o/r/issues/1")) {
       if (written) readsAfterWrite += 1;
@@ -77,10 +76,41 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
   return { calls: gh.calls, tracker };
 };
 
+const closedScheduleGithub = () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const gh = fakeGh((args) => {
+    calls.push(args);
+    if (args[1] !== "graphql") return ok("");
+    return snapshot([
+      node(9, {
+        state: "CLOSED",
+        stateReason: "COMPLETED",
+        labels: { nodes: [{ name: "schedule:retro" }] },
+      }),
+    ]);
+  });
+  const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(Effect.provide(gh.layer));
+  return { calls, tracker };
+};
+
 const graphqlCalls = (calls: ReadonlyArray<ReadonlyArray<string>>) =>
   calls.filter((args) => args[1] === "graphql").length;
 
 describe("githubTracker reads", () => {
+  test("labeled reads include closed issues", async () => {
+    const { calls, tracker } = closedScheduleGithub();
+    const found = await Effect.runPromise(
+      Effect.gen(function* () {
+        const t = yield* tracker;
+        return yield* t.labeled("beta", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => [issue.id, issue.status])).toEqual([["beta#9", "done"]]);
+    expect(calls.some((args) => args.some((arg) => arg.includes("states: [OPEN, CLOSED]")))).toBe(
+      true,
+    );
+  });
+
   test("ready answers the open, unassigned, unblocked tasks of one read", async () => {
     const { calls, tracker } = github();
     const { ready, item } = await Effect.runPromise(

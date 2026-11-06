@@ -14,6 +14,10 @@ const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item
     refresh: (project) => note(`refresh ${project}`),
     lookup: (task) => note(`lookup ${task}`).pipe(Effect.as(Option.none())),
     list: (filter) => note(`list ${JSON.stringify(filter)}`).pipe(Effect.as(items)),
+    labeled: (project, label) =>
+      note(`labeled ${project} ${label}`).pipe(
+        Effect.as(items.filter((item) => item.project === project && item.labels.includes(label))),
+      ),
     dependencies: (project) => note(`dependencies ${project}`).pipe(Effect.as([])),
     ready: (project) => note(`ready ${project}`).pipe(Effect.as(items)),
     logs: (task) => note(`logs ${task}`).pipe(Effect.as([])),
@@ -36,6 +40,7 @@ const failing = Tracker.of(
       "refresh",
       "lookup",
       "list",
+      "labeled",
       "dependencies",
       "ready",
       "logs",

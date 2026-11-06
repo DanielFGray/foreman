@@ -96,6 +96,12 @@ const fakeLinear = (
           ),
         },
       };
+    if (document.includes("labels: { some:")) {
+      const matching = [...issues.values(), ...closed.values()].filter((issue) =>
+        issue.labels.nodes.some((label) => label.name === variables["label"]),
+      );
+      return { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: matching } };
+    }
     if (document.includes("after: $after")) return { issues: page(variables["after"]) };
     if (document.includes("number: { eq: $number }")) {
       const issue = find(`${String(variables["team"])}-${String(variables["number"])}`);
@@ -167,6 +173,21 @@ const fakeLinear = (
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
 describe("linearTracker", () => {
+  test("labeled reads include closed issues", async () => {
+    const closed = node(9, {
+      state: { type: "completed" },
+      labels: { nodes: [{ name: "schedule:retro" }] },
+    });
+    const linear = fakeLinear({ closed: [closed] });
+    const found = await run(
+      Effect.gen(function* () {
+        const t = yield* linear.tracker;
+        return yield* t.labeled("foreman", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => [issue.id, issue.status])).toEqual([["foreman#ENG-9", "done"]]);
+  });
+
   test("an issue's page is its Linear url", async () => {
     const linear = fakeLinear({ issues: [node(1)] });
     const result = await run(

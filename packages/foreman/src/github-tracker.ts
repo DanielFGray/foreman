@@ -126,6 +126,21 @@ export const githubTracker = (
         ),
       );
 
+    const labeled = (project: string, label: string) =>
+      Effect.gen(function* () {
+        const repo = yield* repoOf(project);
+        const [owner = "", name = ""] = repo.split("/");
+        const data = yield* github.graphql(labeledIssuesQuery, { owner, name, label });
+        const page = yield* decode(SnapshotData, `list ${label}`)(data);
+        if (page.repository === null)
+          return yield* new TrackerError({
+            command: `list ${label}`,
+            detail: `no repository ${repo}`,
+          });
+        const issues = yield* decode(OpenIssues, `list ${label}`)(page.repository.issues);
+        return issues.nodes.map((issue) => itemOf(project, repo, issue));
+      }).pipe(Effect.mapError(fail(`list ${label}`)));
+
     const issueOf = (task: string) => {
       const parsed = parseId(task);
       return parsed === undefined
@@ -287,6 +302,7 @@ export const githubTracker = (
           : items(filter.project ?? parseId(filter.parent ?? "")?.project ?? "").pipe(
               Effect.map((all) => all.filter(matches(filter))),
             ),
+      labeled,
       dependencies: (project) =>
         snapshot(project).pipe(
           Effect.map(({ repo, issues }) =>
@@ -559,6 +575,18 @@ query($owner: String!, $name: String!, $after: String) {
       nodes { ...issue }
     }
     ${numbers.map((number) => `n${number}: issue(number: ${number}) { ...issue }`).join("\n    ")}
+  }
+  rateLimit { remaining limit resetAt }
+}
+fragment issue on Issue { ${ISSUE_FIELDS} }`;
+
+const labeledIssuesQuery = `
+query($owner: String!, $name: String!, $label: String!) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, states: [OPEN, CLOSED], labels: [$label], orderBy: { field: CREATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...issue }
+    }
   }
   rateLimit { remaining limit resetAt }
 }

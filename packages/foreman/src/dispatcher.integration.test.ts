@@ -144,6 +144,7 @@ const worker = (task: string, role: "author" | "review", state: WorkerState): Wo
 
 class World {
   readonly tasks = new Map<string, Item>();
+  readonly hiddenFromList = new Set<string>();
   readonly workers = new Map<string, Worker>();
   readonly branches = new Map<string, Branch>();
   readonly closed: string[] = [];
@@ -333,7 +334,15 @@ class World {
     list: (filter) =>
       Effect.sync(() =>
         [...this.tasks.values()].filter(
-          (task) => filter.project === undefined || task.project === filter.project,
+          (task) =>
+            !this.hiddenFromList.has(task.id) &&
+            (filter.project === undefined || task.project === filter.project),
+        ),
+      ),
+    labeled: (project, label) =>
+      Effect.sync(() =>
+        [...this.tasks.values()].filter(
+          (task) => task.project === project && task.labels.includes(label),
         ),
       ),
     dependencies: () => Effect.die("unused"),
@@ -4065,6 +4074,22 @@ describe("Dispatcher schedules", () => {
     const world = new World(open, item("ts-a", "done", []), item("ts-b", "done", []));
     world.closedRuns.push(landedRun(1, "ts-a", now), landedRun(2, "ts-b", now));
     await tick(world);
+    expect(filed(world).map((task) => task.id)).toEqual(["ts-prev"]);
+    expect(world.writes).not.toContain("tracker.add");
+  });
+
+  test("closed schedule filings stay in the window when the tracker list omits them", async () => {
+    withSchedule();
+    const previous = {
+      ...item("ts-prev", "done", ["research", scheduleLabel("retro")]),
+      createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    };
+    const world = new World(previous, item("ts-a", "done", []));
+    world.hiddenFromList.add("ts-prev");
+    world.closedRuns.push(landedRun(1, "ts-a", new Date("2026-06-02T00:00:00.000Z")));
+
+    await tick(world);
+
     expect(filed(world).map((task) => task.id)).toEqual(["ts-prev"]);
     expect(world.writes).not.toContain("tracker.add");
   });

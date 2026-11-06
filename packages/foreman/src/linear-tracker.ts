@@ -137,6 +137,17 @@ export const linearTracker = (
         ),
       );
 
+    const labeled = (project: string, label: string) =>
+      Effect.gen(function* () {
+        const read = yield* snapshot(project);
+        const place = yield* placeOf(project);
+        const { value } = yield* query(LabeledData, `list ${label}`, labeledQuery, {
+          ...place,
+          label,
+        });
+        return value.issues.nodes.map((issue) => itemOf(project, read, issue));
+      }).pipe(Effect.mapError(fail(`list ${label}`)));
+
     const issueOf = (task: string) => {
       const parsed = parseId(task);
       return parsed === undefined
@@ -277,6 +288,7 @@ export const linearTracker = (
           : items(filter.project ?? parseId(filter.parent ?? "")?.project ?? "").pipe(
               Effect.map((all) => all.filter(matches(filter))),
             ),
+      labeled,
       dependencies: (project) =>
         snapshot(project).pipe(
           Effect.map((read) =>
@@ -583,6 +595,19 @@ query($team: String!, $project: String!, $after: String!) {
 }
 fragment issue on Issue { ${ISSUE_FIELDS} }`;
 
+const labeledQuery = `
+query($team: String!, $project: String!, $label: String!) {
+  issues(first: 100, includeArchived: true, filter: {
+    team: { key: { eq: $team } }
+    project: { name: { eq: $project } }
+    labels: { some: { name: { eq: $label } } }
+  }) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...issue }
+  }
+}
+fragment issue on Issue { ${ISSUE_FIELDS} }`;
+
 const lookupQuery = `
 query($team: String!, $number: Float!) {
   issues(first: 1, includeArchived: true, filter: { team: { key: { eq: $team } }, number: { eq: $number } }) { nodes { ...issue } }
@@ -674,6 +699,7 @@ const FirstPage = S.Struct({
 });
 
 const NextPage = S.Struct({ issues: Page });
+const LabeledData = S.Struct({ issues: Page });
 
 const HeldData = S.Struct({ held: S.Struct({ nodes: S.Array(IssueNode) }) });
 

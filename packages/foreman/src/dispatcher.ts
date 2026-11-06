@@ -2257,8 +2257,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const fileOne = (project: string, schedule: Schedule) =>
       Effect.gen(function* () {
-        const tasks = yield* tracker.list({ project });
-        const filed = tasks.filter((task) => task.labels.includes(scheduleLabel(schedule.name)));
+        const filed = yield* tracker.labeled(project, scheduleLabel(schedule.name));
         const since = filed.reduce<Date>(
           (latest, task) => (task.createdAt.getTime() > latest.getTime() ? task.createdAt : latest),
           new Date(0),
