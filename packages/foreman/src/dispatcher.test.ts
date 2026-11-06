@@ -15,6 +15,7 @@ import {
   reviewable,
   scopeRoster,
   ours,
+  strandedOf,
   waiting,
   type Owned,
 } from "./dispatcher.ts";
@@ -879,6 +880,40 @@ describe("the quota gate", () => {
 
     expect(dispatchesFor(current)).toEqual([]);
     expect(current.queue).toHaveLength(1);
+  });
+});
+
+describe("strandedOf", () => {
+  const managed = new Set(["foreman"]);
+
+  test("groups authored mid-pipeline tasks outside the managed set, one row per project", () => {
+    const older = {
+      ...authoredOn(task("ts-old", [], "in_progress", 1, "pg-sourcerer"), "opencode"),
+      lastActivityAt: new Date("2026-08-01T00:00:00Z"),
+    };
+    const newer = {
+      ...authoredOn(task("ts-new", [], "in_progress", 1, "pg-sourcerer"), "opencode"),
+      lastActivityAt: new Date("2026-08-20T00:00:00Z"),
+    };
+    const other = authoredOn(task("ts-amux", [], "in_progress", 1, "amux"), "opencode");
+    const stillManaged = authoredOn(task("ts-live", [], "in_progress"), "opencode");
+    const handClaim = task("ts-hand", [], "in_progress", 1, "ghost");
+
+    expect(
+      strandedOf([older, newer, other, stillManaged, handClaim], managed).map((row) => ({
+        project: row.project,
+        tasks: row.tasks.map((task) => task.id),
+      })),
+    ).toEqual([
+      { project: "amux", tasks: ["ts-amux"] },
+      { project: "pg-sourcerer", tasks: ["ts-old", "ts-new"] },
+    ]);
+  });
+
+  test("is empty when every authored claim sits in a managed project", () => {
+    expect(
+      strandedOf([authoredOn(task("ts-live", [], "in_progress"), "opencode")], managed),
+    ).toEqual([]);
   });
 });
 

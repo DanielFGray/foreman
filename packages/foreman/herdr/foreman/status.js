@@ -59,6 +59,11 @@ export const refusalOf = (result) => {
   return [heading, reasons.join("; ")].filter((part) => part !== "").join(" ") || `foreman exited ${result.code}`;
 };
 
+// The published rows the pane shows while `project` is the shown space's. A row
+// with no project is attention for the whole fleet (accounts, and work whose
+// project has no open space), so every pane shows it.
+export const rowsShownIn = (rows, project) => rows.filter((row) => row.project === null || row.project === project);
+
 // Whether a batch from herdr's watchFolder on `folder` may hold a change to
 // `file`. herdr bounds the paths it keeps between reads: a batch that names the
 // watched folder itself stands for any change under it, so busy siblings (the

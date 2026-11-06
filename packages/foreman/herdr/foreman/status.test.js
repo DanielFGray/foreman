@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, STALE_MS, touches } from "./status.js";
+import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, rowsShownIn, STALE_MS, touches } from "./status.js";
+
+// The pane's row selection over published rows, as main.js's rows() makes it.
+describe("rowsShownIn", () => {
+  // The rows a published reading carries: a stranded project's row has no
+  // project (its space is closed, so no pane is scoped to it), and a held row
+  // belongs to its project.
+  const published = [
+    { view: "attention", key: "pg", label: "stranded", project: null },
+    { view: "attention", key: "ts-own", label: "stale", project: "foreman" },
+    { view: "attention", key: "ts-held", label: "held", project: "pg" },
+    { view: "attention", key: "ts-other", label: "stale", project: "test" },
+    { view: "quota", key: "openai", label: "out of quota", project: null },
+  ];
+
+  test("a pane on another open project still shows a stranded row", () => {
+    expect(rowsShownIn(published, "foreman").map((row) => row.key)).toEqual(["pg", "ts-own", "openai"]);
+  });
+
+  test("a pane with no open space shows the stranded row and fleet rows only", () => {
+    expect(rowsShownIn(published, null).map((row) => row.key)).toEqual(["pg", "openai"]);
+  });
+});
 
 describe("dispatcherState", () => {
   const at = "2026-11-03T12:00:00.000Z";
