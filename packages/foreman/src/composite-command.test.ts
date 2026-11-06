@@ -183,8 +183,8 @@ describe("foreman composite", () => {
 
   test("a definition save that would break one project's pipeline is refused and names it", async () => {
     writeReviewLoopProject("amux");
-    // Drop the entry gate so expansion of amux cannot place the instance.
-    await runComposite("edit", "review-loop", change({ _tag: "Remove", id: "review-gate" }));
+    // Drop the review agent the entry gate hands off to, so amux's expansion cannot resolve that wire.
+    await runComposite("edit", "review-loop", change({ _tag: "Remove", id: "review" }));
     const refused = await refuseComposite("save", "review-loop");
     expect(refused).toMatch(/amux/);
     expect(refused).toMatch(/review-gate|entry|unknown|missing|reaches/i);
