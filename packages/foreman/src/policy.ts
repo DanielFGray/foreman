@@ -128,9 +128,9 @@ export const Schedule = S.Struct({
   labels: S.optional(S.Array(S.String)).pipe(S.withDecodingDefault(Effect.succeed([]))),
   /**
    * The instructions file the filed task's author reads, by its name without
-   * `.md`: `retro` and `retro.md` both decode to `retro`, and the policy writes
-   * `retro`. The name is the one `Prompts` reads, so the suffix is stripped here,
-   * where every writer and every reader of the policy file meets it.
+   * `.md`. `retro` and `retro.md` both decode to `retro`, which is the name
+   * `Prompts` reads, so the suffix is stripped on decode. Every reader decodes,
+   * so a file that holds `retro.md` still fires; a rewrite stores `retro`.
    */
   template: S.String.pipe(
     S.decodeTo(S.String, {
