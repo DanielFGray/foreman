@@ -256,6 +256,14 @@ export const applyDefinitionChange = (
   change: CompositeChange,
   composites: Composites = {},
 ): ApplyDefinitionResult => {
+  // Removing the entry would leave the definition naming a block it no longer has,
+  // which no later edit can repair without first naming another entry.
+  if (change._tag === "Remove" && change.id === definition.entry) {
+    return {
+      _tag: "Refused",
+      reason: `${change.id} is the entry: point the entry at another block (SetEntry) before removing it`,
+    };
+  }
   switch (change._tag) {
     case "MakeComposite": {
       const made = madeComposite(
