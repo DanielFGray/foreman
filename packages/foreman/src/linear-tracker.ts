@@ -317,6 +317,14 @@ export const linearTracker = (
       add: (task) =>
         Effect.gen(function* () {
           const read = yield* snapshot(task.project);
+          const proposed = (task.status ?? "open") === "proposed";
+          // A team may have no triage state, which `stateFor` cannot answer for.
+          // Refusing here names the gap before anything is created.
+          if (proposed && !read.states.some((state) => state.type === PROPOSED_STATE))
+            return yield* new TrackerError({
+              command: `add ${task.title}`,
+              detail: "the team has no triage state, so a proposed task has nowhere to wait",
+            });
           const labelIds = yield* Effect.forEach(task.labels, (label) => labelId(read, label));
           const created = yield* mutate(`add ${task.title}`, createMutation, {
             input: {
@@ -326,10 +334,7 @@ export const linearTracker = (
               description: task.description,
               // A task filed as proposed waits for an operator to open it; the
               // state that reads as proposed is Linear's triage.
-              stateId: stateFor(
-                read.states,
-                (task.status ?? "open") === "proposed" ? PROPOSED_STATE : "unstarted",
-              ).id,
+              stateId: stateFor(read.states, proposed ? PROPOSED_STATE : "unstarted").id,
               labelIds,
             },
           }).pipe(Effect.ensuring(forget(task.project)));

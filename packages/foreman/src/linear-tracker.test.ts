@@ -374,6 +374,25 @@ describe("linearTracker", () => {
     expect(create?.variables["input"]).toMatchObject({ stateId: "s-triage" });
   });
 
+  test("add with proposed refuses a team with no triage state, before creating anything", async () => {
+    const linear = fakeLinear({ states: STATES.filter((state) => state.type !== "triage") });
+    const error = await run(
+      Effect.flip(
+        Effect.flatMap(linear.tracker, (tracker) =>
+          tracker.add({
+            project: "foreman",
+            title: "idea",
+            description: "text",
+            labels: [],
+            status: "proposed",
+          }),
+        ),
+      ),
+    );
+    expect(error).toBeInstanceOf(TrackerError);
+    expect(linear.calls.some((call) => call.document.includes("issueCreate"))).toBe(false);
+  });
+
   test("logs come oldest first", async () => {
     const linear = fakeLinear({ issues: [node(1)] });
     const logs = await run(
