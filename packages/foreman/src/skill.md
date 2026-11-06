@@ -47,6 +47,8 @@ Run `foreman <command> --help` for the options.
 | `foreman quota`                                                                                       | Prints what each account has left                                                                                    |
 | `foreman policy <subcommand>`                                                                         | Prints or changes what the dispatcher may do without you                                                             |
 | `foreman ladder [edit\|enable\|disable\|suggest]`                                                     | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder                                     |
+| `foreman pipeline <subcommand>`                                                                       | Reads, checks and edits each project's pipeline and its draft                                                        |
+| `foreman composite edit\|save\|discard\|show <name>`                                                  | Edits a composite definition as a draft of its own; save checks every project that uses it                           |
 
 Each row action is a command that takes the id of a row in `foreman status`:
 

@@ -3,7 +3,8 @@ import { BunServices } from "@effect/platform-bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Console, Effect, Layer, Option, Schedule, SubscriptionRef } from "effect";
+import { Console, Effect, Layer, Option, Schedule, Schema as S, SubscriptionRef } from "effect";
+import { Published, publishedOf } from "./published.ts";
 import { Command } from "effect/cli";
 import { policyPath, updatePolicy } from "./policy.ts";
 import { Dispatcher } from "./dispatcher.ts";
@@ -21,6 +22,7 @@ import { applyRow, NO_WRITES, openAgentOf, type Row } from "./run-step.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
 import type { Run } from "tasks";
 import { type AgentRun, Prompts } from "./prompt.ts";
+import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
 import type { Ending, NewRunInput, Role, RunRecord } from "tasks";
@@ -156,6 +158,8 @@ class World {
   readonly completeFails = new Set<string>();
   /** Projects whose tracker does not answer, as GitHub does when it cannot be reached. */
   readonly unreachable = new Set<string>();
+  /** The checkouts of the operator's open spaces. Two sharing a name are ambiguous. */
+  readonly spaces: string[] = ["/build/test"];
   readonly removed: string[] = [];
   readonly notifications: string[] = [];
   readonly logs: Array<[string, string]> = [];
@@ -289,7 +293,7 @@ class World {
     roster: Effect.sync(() => [...this.workers.values()]),
     // The dispatcher never waits on a turn; only `foreman wait` does.
     awaitTurn: () => Effect.void,
-    spaces: Effect.succeed(["/build/test"]),
+    spaces: Effect.sync(() => [...this.spaces]),
     focus: () => this.write("fleet.focus", () => undefined),
     preview: (target: Worker) => this.write("fleet.preview", () => `preview-${target.task}`),
     say: () => this.write("fleet.say", () => undefined),
@@ -400,6 +404,9 @@ class World {
           (task) => task.project === project && task.status === "in_progress",
         ),
       ),
+    claimedEverywhere: Effect.sync(() =>
+      [...this.tasks.values()].filter((task) => task.status === "in_progress"),
+    ),
     // The rows the dispatcher writes are applied as the tracer applies them;
     // `run-step.test.ts` proves that agrees with the store.
     write: (id: string, row: Row) =>
@@ -728,6 +735,7 @@ const layerFor = (world: World) =>
       // derivable and the gate has nothing to ask about — which is the point:
       // a ladder foreman cannot read quota for dispatches exactly as before.
       Quota.Default,
+      Machine.Default,
       prompts,
       BunServices.layer,
     ),
@@ -1511,6 +1519,9 @@ describe("a fleet that is not running", () => {
     );
 
     expect(state.observedAt).toBeDefined();
+    // A Linux reading carries MemAvailable; the figure is a hint, never a gate.
+    expect(state.availableMemory).toBeGreaterThan(0);
+    expect(state.workerMemory).toBeInstanceOf(Map);
     expect(state.policy.paused).toBe(true);
   });
 });
@@ -1541,6 +1552,7 @@ describe("quota probing", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         quota,
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -1622,6 +1634,7 @@ describe("a spent account and the reviewers", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         quotaSpending(spent),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -2022,6 +2035,7 @@ describe("a usage wall", () => {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -2744,6 +2758,7 @@ describe("a reviewer that stops without naming an exit, and one that names retur
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -3055,6 +3070,7 @@ describe("a drawn pipeline", () => {
               Layer.succeed(Repository, world.repository),
               world.github,
               Quota.Default,
+              Machine.Default,
               prompts,
               BunServices.layer,
             ),
@@ -3310,6 +3326,7 @@ describe("foreman pipeline trace", () => {
           usage: (provider: string) =>
             Effect.succeed({ provider, plan: undefined, allowances: [] }),
         }),
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -3910,6 +3927,7 @@ describe("ladder levels", () => {
         Layer.succeed(Repository, world.repository),
         world.github,
         Quota.Default,
+        Machine.Default,
         prompts,
         BunServices.layer,
       ),
@@ -4105,5 +4123,97 @@ describe("Dispatcher schedules", () => {
     await tick(world);
     expect(filed(world)).toEqual([]);
     expect(world.writes).toEqual([]);
+  });
+});
+
+describe("work outside the managed set", () => {
+  const readState = (world: World) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const dispatcher = yield* Dispatcher;
+        yield* dispatcher.tick;
+        return yield* SubscriptionRef.get(dispatcher.state);
+      }).pipe(Effect.provide(layerFor(world))),
+    );
+
+  // Authored tasks of a project with no open space: at the review handoff, under
+  // review, and approved awaiting its landing. Each is in_progress in the store.
+  const closedProject = () => {
+    const handoff = item("ts-pg-handoff", "in_progress", [], "pg", [authorDone("cheap")]);
+    const review = item("ts-pg-review", "in_progress", [], "pg", [
+      authorDone("cheap"),
+      reviewRun("cheap", { open: true }),
+    ]);
+    const approved = item("ts-pg-approved", "in_progress", [], "pg", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(handoff, review, approved);
+    world.branches.set(`foreman/${approved.id}`, {
+      branch: `foreman/${approved.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    return world;
+  };
+
+  test("closing a project's last space surfaces its mid-pipeline work and dispatches nothing", async () => {
+    const world = closedProject();
+
+    const state = await readState(world);
+
+    expect(
+      state.stranded.map((row) => [row.project, row.tasks.map((task) => task.id).sort()]),
+    ).toEqual([["pg", ["ts-pg-approved", "ts-pg-handoff", "ts-pg-review"]]]);
+    expect(world.writes).toEqual([]);
+    expect(world.closed).toEqual([]);
+    expect(world.tasks.get("ts-pg-approved")?.status).toBe("in_progress");
+  });
+
+  test("the stranded row reaches the published reading and takes no action", async () => {
+    const state = await readState(closedProject());
+
+    const published = S.decodeUnknownSync(Published)(
+      JSON.parse(JSON.stringify(publishedOf(state, Option.none()))),
+    );
+
+    expect(
+      published.rows.filter((row) => row.view === "attention" && row.label === "stranded"),
+    ).toMatchObject([{ key: "pg", project: null, actions: [] }]);
+  });
+
+  test("reopening the space resumes the pipeline: the row clears and the approved task lands", async () => {
+    const world = closedProject();
+    world.spaces.push("/build/pg");
+
+    const state = await readState(world);
+
+    expect(state.stranded).toEqual([]);
+    expect(world.closed).toContain("ts-pg-approved");
+    expect(world.tasks.get("ts-pg-approved")?.status).toBe("done");
+  });
+
+  test("an open project whose tracker does not answer is held, not stranded", async () => {
+    const world = new World(item("ts-probe", "in_progress", [], "test", [authorDone("cheap")]));
+    world.unreachable.add("test");
+
+    const state = await readState(world);
+
+    expect(state.held.map((held) => [held.project, held.reason])).toEqual([
+      ["test", "unreachable"],
+    ]);
+    expect(state.stranded).toEqual([]);
+  });
+
+  test("an open project whose name two checkouts share is held, not stranded", async () => {
+    const world = new World(item("ts-shared", "in_progress", [], "test", [authorDone("cheap")]));
+    world.spaces.push("/other/test");
+
+    const state = await readState(world);
+
+    expect(state.held.map((held) => [held.project, held.reason])).toEqual([["test", "ambiguous"]]);
+    expect(state.stranded).toEqual([]);
   });
 });

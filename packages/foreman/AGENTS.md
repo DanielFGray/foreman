@@ -77,9 +77,12 @@ The pipelines file holds each project's pipeline (`docs/pipeline-engine.md`); it
 sits in the policy file's directory, and both are written through `rewrite` in
 `src/shared-file.ts`. The drafts file (`pipelines.draft.json`, beside it) holds
 the pipeline the operator is still drawing for a project, with the drawn
-pipeline the draft began from. The files are `{ pipelines }` and `{ drafts }`,
-and a pipelines file that does not decode stops every project. A draft may not run yet, so the dispatcher never
-reads it. `foreman pipeline edit` changes it one `PipelineChange`
+pipeline the draft began from. The files are `{ pipelines, composites }` and `{ drafts, composites }`:
+the composite definitions sit beside the pipelines, and definition drafts beside
+the project drafts (`docs/composite-blocks.md`). A pipelines file that does not
+decode stops every project. A definition that decodes but fails expansion or
+validation stops only the projects that use it. A draft may not run yet, so the
+dispatcher never reads it. `foreman pipeline edit` changes it one `PipelineChange`
 (`src/pipeline-edit.ts`) at a time, and `foreman pipeline save` checks it and
 writes it through the same `runPipeline` as `set`, refusing when the drawn
 pipeline changed since the draft began. `foreman pipeline trace` reads the
@@ -147,8 +150,10 @@ The config lists no projects. A project is the git checkout an open herdr-app
 space sits in, named by the checkout's folder, which is also its tasks project
 (`src/projects.ts`). Only an open project takes new work; the managed set adds
 every checkout a foreman agent still runs in, so closing a space drains the work
-under way. Two checkouts with one name are held as `ambiguous`, because a task
-names a project, not a directory. A project's verify command is its own
+under way. When a project leaves both sets while authored tasks are still
+mid-pipeline, attention shows one stranded row for that project — surface,
+don't finish; reopening a space resumes the pipeline. Two checkouts with one
+name are held as `ambiguous`, because a task names a project, not a directory. A project's verify command is its own
 `scripts/verify.sh`, and its preview command is its own `scripts/preview.sh`:
 `foreman preview <task>` runs it in a task's worktree, in the hc terminal
 `preview-<task>`, which carries no fleet label, so the roster never reads it as
@@ -1051,16 +1056,22 @@ read to decide what the queue under it should do next. An epic row takes no
 action: it has no branch and no worker.
 
 Attention combines the exceptional states in urgency order: decisions
-(vanished workers, failed dispatches and lost exits), yours, stale reviews,
+(vanished workers, failed dispatches and lost exits), yours, stranded
+projects (authored mid-pipeline work outside the managed set), stale reviews,
 unreviewed branches, orphaned workers, held projects, and last the spent
 accounts. Each row keeps its source kind, so
-combining their display does not combine their actions.
+combining their display does not combine their actions. A stranded row takes
+no action: the fix is reopening a space for that project.
 
 Every reading carries `observedAt`, when the dispatcher last read the world. A
 running tick publishes its reading and _then_ works, so its age tells a reader what the
 fleet is doing: seconds mean a fleet cycling on its poll interval; minutes mean a
 tick is inside something long, usually a landing running a test suite. Without
-it a working fleet and a wedged one look identical.
+it a working fleet and a wedged one look identical. The same reading carries
+`availableMemory` and per-worker RSS (`workerMemory`), from Linux `/proc`, so
+the status line can show what agents hold beside that age. The figure is a hint
+— free below the largest live worker means another would not fit — never a
+dispatch gate; `slots` still meters concurrency.
 
 Each source kind allows only the actions that make sense there, and `perform`
 refuses an action the row cannot take. Decisions are named from the task's

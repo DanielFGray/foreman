@@ -32,6 +32,32 @@ export const dispatcherState = (published, now) => {
   return { state, age };
 };
 
+// Bytes as a short label for the status line: "7.8G", "700M", "12K".
+export const memoryLabel = (bytes) => {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "")}G`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)}M`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}K`;
+  return `${bytes}B`;
+};
+
+// Free RAM and what the live agents hold, for the status line beside the
+// reading's age. Null when the reading has no MemAvailable. The hint fires
+// when free is below the largest live worker — another one would not fit —
+// and is never a dispatch gate.
+export const memorySummary = (published) => {
+  if (published?.availableMemory == null) return null;
+  const workers = Object.values(published.workerMemory ?? {});
+  const agents = workers.reduce((sum, n) => sum + n, 0);
+  const largest = workers.reduce((max, n) => Math.max(max, n), 0);
+  return {
+    free: published.availableMemory,
+    agents,
+    hint: largest > 0 && published.availableMemory < largest
+      ? "another worker would not fit"
+      : null,
+  };
+};
+
 // The project of a folder, by the rule foreman uses: the folder name of the
 // main checkout, from git's absolute common dir (`<checkout>/.git`), so a
 // worktree reads as its project. Null for a folder in no checkout.
@@ -58,6 +84,11 @@ export const refusalOf = (result) => {
   const [heading = "", ...reasons] = message.split("\n").map((line) => line.trim()).filter((line) => line !== "");
   return [heading, reasons.join("; ")].filter((part) => part !== "").join(" ") || `foreman exited ${result.code}`;
 };
+
+// The published rows the pane shows while `project` is the shown space's. A row
+// with no project is attention for the whole fleet (accounts, and work whose
+// project has no open space), so every pane shows it.
+export const rowsShownIn = (rows, project) => rows.filter((row) => row.project === null || row.project === project);
 
 // Whether a batch from herdr's watchFolder on `folder` may hold a change to
 // `file`. herdr bounds the paths it keeps between reads: a batch that names the

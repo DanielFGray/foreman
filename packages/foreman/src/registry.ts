@@ -71,6 +71,8 @@ export interface RungStatus {
 export interface ModelEntry {
   readonly model: string;
   readonly harness: string;
+  /** The account it bills, as `foreman models add --provider` stored it. */
+  readonly provider: string;
   readonly retired: boolean;
 }
 
@@ -154,6 +156,7 @@ const StatusRow = Schema.Struct({
 const ModelRow = Schema.Struct({
   model: Schema.String,
   harness: Schema.String,
+  provider: Schema.String,
   retired: Schema.BooleanFromBit,
 });
 
@@ -236,9 +239,10 @@ export class Registry extends Context.Service<Registry>()("Registry", {
 
     /** Every model the registry knows, by model id. */
     const readModels = Effect.gen(function* () {
-      const rows = yield* sql`SELECT model, harness, retired FROM models ORDER BY model`.pipe(
-        Effect.flatMap(rowsOf(ModelRow)),
-      );
+      const rows =
+        yield* sql`SELECT model, harness, provider, retired FROM models ORDER BY model`.pipe(
+          Effect.flatMap(rowsOf(ModelRow)),
+        );
       return rows.map((row): ModelEntry => ({ ...row }));
     }).pipe(Effect.mapError(registryError("reading the models")));
 

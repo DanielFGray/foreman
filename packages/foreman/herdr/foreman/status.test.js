@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { dispatcherState, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, STALE_MS, touches } from "./status.js";
+import { dispatcherState, memoryLabel, memorySummary, newlyLanded, projectOfCommonDir, pullRequestLine, refusalOf, rowsShownIn, STALE_MS, touches } from "./status.js";
+
+// The pane's row selection over published rows, as main.js's rows() makes it.
+describe("rowsShownIn", () => {
+  // The rows a published reading carries: a stranded project's row has no
+  // project (its space is closed, so no pane is scoped to it), and a held row
+  // belongs to its project.
+  const published = [
+    { view: "attention", key: "pg", label: "stranded", project: null },
+    { view: "attention", key: "ts-own", label: "stale", project: "foreman" },
+    { view: "attention", key: "ts-held", label: "held", project: "pg" },
+    { view: "attention", key: "ts-other", label: "stale", project: "test" },
+    { view: "quota", key: "openai", label: "out of quota", project: null },
+  ];
+
+  test("a pane on another open project still shows a stranded row", () => {
+    expect(rowsShownIn(published, "foreman").map((row) => row.key)).toEqual(["pg", "ts-own", "openai"]);
+  });
+
+  test("a pane with no open space shows the stranded row and fleet rows only", () => {
+    expect(rowsShownIn(published, null).map((row) => row.key)).toEqual(["pg", "openai"]);
+  });
+});
 
 describe("dispatcherState", () => {
   const at = "2026-11-03T12:00:00.000Z";
@@ -13,6 +35,37 @@ describe("dispatcherState", () => {
     expect(dispatcherState({ observedAt: at, dispatcher: { state: "running" } }, now + STALE_MS).state).toBe("stale"));
   test("a fresh reading names its own state", () =>
     expect(dispatcherState({ observedAt: at, dispatcher: { state: "paused" } }, now)).toEqual({ state: "paused", age: 5000 }));
+});
+
+describe("memorySummary", () => {
+  test("no MemAvailable is null", () =>
+    expect(memorySummary({ availableMemory: null, workerMemory: {} })).toBe(null));
+
+  test("sums agents and leaves the hint off when free fits another", () =>
+    expect(memorySummary({
+      availableMemory: 8 * 1024 ** 3,
+      workerMemory: { "ts-aaaaaa": 700 * 1024 ** 2, "ts-bbbbbb": 900 * 1024 ** 2 },
+    })).toEqual({
+      free: 8 * 1024 ** 3,
+      agents: 1600 * 1024 ** 2,
+      hint: null,
+    }));
+
+  test("hints when free is below the largest live worker", () =>
+    expect(memorySummary({
+      availableMemory: 500 * 1024 ** 2,
+      workerMemory: { "ts-aaaaaa": 700 * 1024 ** 2 },
+    })).toEqual({
+      free: 500 * 1024 ** 2,
+      agents: 700 * 1024 ** 2,
+      hint: "another worker would not fit",
+    }));
+});
+
+describe("memoryLabel", () => {
+  test("formats GiB without a trailing .0", () => expect(memoryLabel(8 * 1024 ** 3)).toBe("8G"));
+  test("formats a fractional GiB", () => expect(memoryLabel(7.8 * 1024 ** 3)).toBe("7.8G"));
+  test("formats MiB", () => expect(memoryLabel(700 * 1024 ** 2)).toBe("700M"));
 });
 
 describe("projectOfCommonDir", () => {

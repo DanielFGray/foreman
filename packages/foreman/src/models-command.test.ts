@@ -41,7 +41,12 @@ describe("foreman models add", () => {
           "OpenCode Zen",
         );
         expect(yield* readModels).toEqual([
-          { model: "opencode/deepseek-v4-pro", harness: "opencode", retired: false },
+          {
+            model: "opencode/deepseek-v4-pro",
+            harness: "opencode",
+            provider: "opencode",
+            retired: false,
+          },
         ]);
 
         yield* ladder("add", "cheap", "opencode/deepseek-v4-pro", "--thinking", "medium");

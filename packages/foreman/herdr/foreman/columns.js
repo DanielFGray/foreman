@@ -1,7 +1,7 @@
-// The column layout the Tasks board and the Models view share. The columns
-// split the view's width but never narrow past a minimum, so a card shows its
-// title rather than a word or two, and a view too narrow for them scrolls
-// across them. Each column scrolls down by itself, under its head.
+// The Tasks board's column layout. The columns split the view's width but
+// never narrow past a minimum, so a card shows its title rather than a word
+// or two, and a view too narrow for them scrolls across them. Each column
+// scrolls down by itself, under its head.
 //
 // A view keeps every card's rectangle in view coordinates, because a drag's
 // targets are those rectangles (`drag.js`). A card is drawn inside its
@@ -32,13 +32,14 @@ export const columnsAcross = (width, count, { min, gap, scroll }) => {
 export const reachOf = (content, height) => Math.max(0, content + PAD - (height - CARDS_TOP));
 
 // The scroll after one wheel event, from the view's layout: `xs`, `columnW`,
-// `overflow` and each column's `reach`. A wheel scrolls the column under the
-// pointer down; a sideways scroll, or a wheel with shift held, scrolls every
-// column across.
-export const scrolledBy = (scroll, event, { xs, columnW, overflow, reach }) => {
+// `overflow` and each column's `reach`. `origin` is the view's bounds in the
+// window, from its last mouse move: a wheel event may carry no bounds. A
+// wheel scrolls the column under the pointer down; a sideways scroll, or a
+// wheel with shift held, scrolls every column across.
+export const scrolledBy = (scroll, event, { xs, columnW, overflow, reach }, origin) => {
   const dx = event.delta?.x ?? 0, dy = event.delta?.y ?? 0;
   const [across, down] = event.modifiers?.shift && dx === 0 ? [dy, 0] : [dx, dy];
-  const left = event.position.x - (event.bounds?.x ?? 0);
+  const left = event.position.x - origin.x;
   const under = xs.findIndex((x) => left >= x && left < x + columnW);
   return {
     x: clamp(scroll.x + across, overflow),

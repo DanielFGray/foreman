@@ -1,0 +1,12 @@
+{
+  "categories": { "correctness": "off" },
+  "globals": {
+    "console": "readonly",
+    "fetch": "readonly",
+    "process": "readonly",
+    "window": "readonly",
+    "localStorage": "readonly",
+    "sessionStorage": "readonly"
+  },
+  "rules": { "no-undef": "error" }
+}

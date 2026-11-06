@@ -45,7 +45,8 @@
 // own state is the Tasks view's mode, and it never runs `tasks`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify } from "herdr";
+import { exec, readTextFile, watchFolder, theme, props, home, spaces, notify, settings } from "herdr";
+import { drawnAt } from "./units.js";
 import { Editor } from "./editor.js";
 import { Simulator } from "./simulate.js";
 import { Fleet } from "./fleet.js";
@@ -56,10 +57,10 @@ import { Header } from "./header.js";
 import { Models } from "./models.js";
 import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
-import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, touches } from "./status.js";
+import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, rowsShownIn, touches } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
-const VERSION = 6;
+const VERSION = 7;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 2.5;
 // Fit never shrinks the drawing past this, so its words stay legible; a
@@ -102,13 +103,14 @@ export default class Foreman extends View {
     this.mode = "tasks";
     this.tasksMode = storedTasksMode();
     this.reload(cx);
+    this.watching = { state: false, config: false };
     this.watch(cx);
     this.resolveCheckouts(cx);
     // Render runs on every change to herdr's live data and starts no work, so
     // the timer notices a switch of space. A watch that failed is tried again:
     // the state folder does not exist until a dispatcher first publishes.
     cx.timer.every(1000, (cx) => { this.resolveCheckouts(cx); this.follow(cx); cx.notify(); });
-    cx.timer.every(5000, (cx) => { if (!this.watching) this.watch(cx); this.loadQueue(cx); });
+    cx.timer.every(5000, (cx) => { this.watch(cx); this.loadQueue(cx); });
   }
 
   // The project of the shown space, or null for a space in no checkout.
@@ -173,25 +175,36 @@ export default class Foreman extends View {
   // changes, and the published file when the dispatcher publishes. Both live
   // in folders herdr can watch. The task graph is read again on both: grants
   // live in the policy file, and a publish follows each change to the tasks.
+  //
+  // Each folder has one loop, and its flag says whether it runs, so the timer
+  // restarts only the loop that failed. Every loop holds one host task while it
+  // waits, and herdr fails every host call once a runtime holds 1024.
   watch(cx) {
     const stateFolder = this.state.slice(0, this.state.lastIndexOf("/"));
-    this.watching = true;
-    cx.spawn(async (cx) => {
-      try {
-        for (;;) {
-          if (!touches(await watchFolder(stateFolder), stateFolder, this.state)) continue;
-          this.reload(cx);
-          if (this.tasks.report !== null) this.tasks.load(cx);
-        }
-      } catch { this.watching = false; this.reload(cx); }
-    });
-    cx.spawn(async (cx) => {
-      for (;;) {
-        try { await watchFolder(`${home()}/.config/foreman`); } catch { return; }
-        if (this.size !== null && this.shown !== null) this.loadDrawing(cx);
-        if (this.tasks.report !== null) this.tasks.load(cx);
-      }
-    });
+    if (!this.watching.state) {
+      this.watching.state = true;
+      cx.spawn(async (cx) => {
+        try {
+          for (;;) {
+            if (!touches(await watchFolder(stateFolder), stateFolder, this.state)) continue;
+            this.reload(cx);
+            if (this.tasks.report !== null) this.tasks.load(cx);
+          }
+        } catch { this.watching.state = false; this.reload(cx); }
+      });
+    }
+    if (!this.watching.config) {
+      this.watching.config = true;
+      cx.spawn(async (cx) => {
+        try {
+          for (;;) {
+            await watchFolder(`${home()}/.config/foreman`);
+            if (this.size !== null && this.shown !== null) this.loadDrawing(cx);
+            if (this.tasks.report !== null) this.tasks.load(cx);
+          }
+        } catch { this.watching.config = false; }
+      });
+    }
   }
 
   reload(cx) {
@@ -237,7 +250,7 @@ export default class Foreman extends View {
   landed() { const project = this.project(); return (this.published?.landed ?? []).filter((one) => one.project === project); }
   // A row in no project (an orphaned worker, a spent account, a branch whose
   // task is gone) shows in every project, so no space hides it.
-  rows() { const project = this.project(); return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === project); }
+  rows() { return rowsShownIn(this.published?.rows ?? [], this.project()); }
   // The epics being driven, by key: each one's title and how many of its tasks are done.
   epics() { return new Map((this.published?.epics ?? []).map((epic) => [epic.key, epic])); }
 
@@ -267,7 +280,16 @@ export default class Foreman extends View {
   loadDrawing(cx) {
     const project = this.project();
     if (project === null) { this.problem = "this space is in no git checkout, so it has no project"; cx.notify(); return; }
-    this.ask(["pipeline", "show", project, "--json", "--flow", this.flow()], cx);
+    // One read at a time: a burst of changes to the config folder reads once
+    // more after the read under way, not once per change. Each read is a
+    // foreman process that takes a second of CPU.
+    if (this.drawingReading) { this.drawingStale = true; return; }
+    this.drawingReading = true;
+    this.drawingStale = false;
+    this.ask(["pipeline", "show", project, "--json", "--flow", this.flow()], cx, () => {}, (cx) => {
+      this.drawingReading = false;
+      if (this.drawingStale) this.loadDrawing(cx);
+    });
   }
 
   // Sends one change to the draft. foreman answers the new reading, and the
@@ -306,19 +328,25 @@ export default class Foreman extends View {
   }
 
   // Runs a foreman command that answers a reading, and takes the reading.
-  ask(args, cx, then = () => {}) {
+  // `then` takes a reading; `after` runs once the command ends, however it
+  // ended, a host call that failed included.
+  ask(args, cx, then = () => {}, after = () => {}) {
     this.busy = true; cx.notify();
     cx.spawn(async (cx) => {
-      const result = await this.foreman(args);
-      this.busy = false;
-      if (result.code !== 0) { this.problem = refusalOf(result); cx.notify(); return; }
       try {
-        const shown = JSON.parse(result.stdout);
-        this.problem = null;
-        this.showing(shown, cx);
-        then(shown, cx);
-      } catch (error) { this.problem = String(error.message ?? error); }
-      cx.notify();
+        const result = await this.foreman(args);
+        if (result.code !== 0) { this.problem = refusalOf(result); return; }
+        try {
+          const shown = JSON.parse(result.stdout);
+          this.problem = null;
+          this.showing(shown, cx);
+          then(shown, cx);
+        } catch (error) { this.problem = String(error.message ?? error); }
+      } finally {
+        this.busy = false;
+        cx.notify();
+        after(cx);
+      }
     });
   }
 
@@ -356,7 +384,7 @@ export default class Foreman extends View {
     // The frame herdr's Files and Changes panels draw, since this pane shares their stack.
     const root = v_flex().id("root").relative().size_full().rounded(10).overflow_hidden().border_1().border_color(t.border).bg(t.background).text_size(12).text_color(t.foreground)
       .on_mouse_down("left", () => this.drag.pressedAnywhere())
-      .on_mouse_move((event, cx) => { this.origin = event.bounds; if (this.drag.moved(event.position)) cx.notify(); })
+      .on_mouse_move((event, cx) => { this.origin = this.drawn(event.bounds); if (this.drag.moved(this.drawn(event.position))) cx.notify(); })
       .on_mouse_up("left", (event, cx) => {
         const target = this.drag.released();
         if (target?.run != null) target.run(cx);
@@ -364,7 +392,7 @@ export default class Foreman extends View {
       })
       .on_size_change((size, cx) => {
         const before = this.size === null ? null : this.flow();
-        this.size = size;
+        this.size = this.drawn(size);
         if (this.mode === "pipeline" && this.flow() !== before) this.loadDrawing(cx);
         else if (this.fitted) this.fit(cx);
         cx.notify();
@@ -424,6 +452,10 @@ export default class Foreman extends View {
       .child(chip(t, "+", "zoom-in", (cx) => this.zoomBy(1.2, cx)))
       .child(chip(t, "fit", "zoom-fit", (cx) => this.fit(cx)));
   }
+
+  // A point, size or bounds herdr-app reported, in the lengths the
+  // pane draws (`units.js`).
+  drawn(measured) { return drawnAt(measured, settings().zoom ?? 1); }
 
   // A window rectangle in pane coordinates, for what the pane draws over itself.
   local(rect) {
@@ -519,7 +551,8 @@ export default class Foreman extends View {
   }
 
   scroll(event, cx) {
-    const [dx, dy] = event.delta ? [event.delta.x ?? 0, event.delta.y ?? 0] : [0, 0];
+    const delta = this.drawn(event.delta);
+    const [dx, dy] = delta ? [delta.x ?? 0, delta.y ?? 0] : [0, 0];
     if (event.modifiers?.control || event.modifiers?.platform) { this.zoomBy(dy > 0 ? 1.1 : 1 / 1.1, cx); return; }
     this.fitted = false;
     this.pan = [this.pan[0] + dx, this.pan[1] + dy];

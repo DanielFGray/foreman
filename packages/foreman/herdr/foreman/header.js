@@ -9,7 +9,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { chip } from "./parts.js";
-import { dispatcherState, NEXT_MODE } from "./status.js";
+import { dispatcherState, memoryLabel, memorySummary, NEXT_MODE } from "./status.js";
 
 const STEPS = ["author", "climb", "review", "publish", "land"];
 const VIEWS = [["pipeline", "Pipeline"], ["tasks", "Tasks"], ["models", "Models"]];
@@ -23,6 +23,7 @@ export class Header {
   view(t) {
     const pane = this.pane, published = pane.published;
     const { state, age } = dispatcherState(published, Date.now());
+    const memory = memorySummary(published);
     const policy = published?.policy;
     const tone = state === "running" ? t.working : state === "stale" || state === "failed" ? t.blocked : t.muted;
     return v_flex().flex_none().bg(t.chrome).border_b(1).border_color(t.border)
@@ -31,6 +32,9 @@ export class Header {
         .child(div().font_semibold().child(pane.project() ?? "no project"))
         .child(div().px(5).rounded(4).border(1).border_color(t.border).text_size(10).text_color(tone).child(state))
         .when(age !== null, (el) => el.child(div().text_size(10).text_color(t.dim).child(`${Math.round(age / 1000)}s ago`)))
+        .when(memory !== null, (el) => el
+          .child(div().text_size(10).text_color(t.dim).child(`${memoryLabel(memory.free)} free · ${memoryLabel(memory.agents)} agents`))
+          .when(memory.hint !== null, (row) => row.child(div().text_size(10).text_color(t.blocked).child(memory.hint))))
         .when(policy !== undefined, (el) => el
           .child(chip(t, policy.paused ? "resume" : "pause", "pause", (cx) => pane.act(["policy", policy.paused ? "resume" : "pause"], cx, notify)))
           .child(h_flex().gap(4).items_center()

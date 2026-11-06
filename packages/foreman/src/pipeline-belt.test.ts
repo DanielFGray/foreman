@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { isExit } from "tasks";
+import { expand } from "./composite.ts";
 import {
-  type Pipeline,
+  type Drawing,
   problemsOf,
   type SeatOffers,
   STANDARD_PIPELINES,
   standardOf,
   standardPipeline,
 } from "./pipeline.ts";
+import { pipelineOf } from "./pipeline-fixture.ts";
 import {
   addExit,
   addRoute,
@@ -17,6 +19,7 @@ import {
   chargeExit,
   configure,
   insertOn,
+  makeComposite,
   rejoin,
   remove,
   removeExit,
@@ -30,15 +33,15 @@ const OFFERS: SeatOffers = {
   rungs: ["cheap", "strong"].map((name) => ({ name, author: true })),
   reviewers: ["sharp"],
 };
-const ids = (pipeline: Pipeline) => pipeline.nodes.map((node) => node.id);
-const node = (pipeline: Pipeline, id: string) => pipeline.nodes.find((n) => n.id === id);
-const gateSteps = (pipeline: Pipeline) =>
+const ids = (pipeline: Drawing) => pipeline.nodes.map((node) => node.id);
+const node = (pipeline: Drawing, id: string) => pipeline.nodes.find((n) => n.id === id);
+const gateSteps = (pipeline: Drawing) =>
   pipeline.nodes.flatMap((one) => (one.kind === "gate" ? [one.step] : []));
-const exitsOf = (pipeline: Pipeline, id: string) => {
+const exitsOf = (pipeline: Drawing, id: string) => {
   const found = node(pipeline, id);
   return found?.kind === "agent" || found?.kind === "check" ? found.exits : [];
 };
-const at = (pipeline: Pipeline) =>
+const at = (pipeline: Drawing) =>
   Object.fromEntries(beltOf(pipeline).cells.map((cell) => [cell.node.id, [cell.column, cell.row]]));
 
 describe("the standard pipeline as belts", () => {
@@ -88,7 +91,7 @@ describe("belt edits", () => {
       ],
     });
     // A second agent between review and land needs its own gate, and a review after it.
-    expect(problemsOf(pipeline, OFFERS)).toEqual([
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([
       `a route from ${id} reaches land with no review after it`,
       `a route from review reaches ${id} through no gate`,
     ]);
@@ -109,7 +112,7 @@ describe("belt edits", () => {
         { id: "failed", name: "failed", to: "queue", fails: "author" },
       ],
     });
-    expect(problemsOf(pipeline, OFFERS)).toEqual([
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([
       `${id}: a check runs a command, and it names none`,
     ]);
     const named = configure(pipeline, id, { kind: "check", command: "bun run lint" });
@@ -120,7 +123,7 @@ describe("belt edits", () => {
         { id: "failed", name: "failed", to: "queue" },
       ],
     });
-    expect(problemsOf(named, OFFERS)).toEqual([
+    expect(problemsOf(pipelineOf(named), OFFERS)).toEqual([
       `a route from author reaches ${id} through no gate`,
     ]);
   });
@@ -136,7 +139,7 @@ describe("belt edits", () => {
     expect(node(pipeline, "worktree")).toMatchObject({ next: "start" });
     // The review's returned exit still reaches climb after the router goes.
     expect(ids(pipeline)).toContain("climb");
-    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
   });
 
   test("an end stays, and turns from land to done to park and back", () => {
@@ -154,7 +157,7 @@ describe("belt edits", () => {
       how: "fast-forward",
     });
     expect(node(pipeline, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
-    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
   });
 
   test("a land is set to land onto a branch, and a setting without onto clears it", () => {
@@ -164,7 +167,7 @@ describe("belt edits", () => {
       onto: "develop",
     });
     expect(node(onto, "land")).toEqual({ kind: "land", id: "land", how: "merge", onto: "develop" });
-    expect(problemsOf(onto, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(onto), OFFERS)).toEqual([]);
     const cleared = configure(onto, "land", { kind: "land", how: "fast-forward" });
     expect(node(cleared, "land")).toEqual({ kind: "land", id: "land", how: "fast-forward" });
   });
@@ -176,7 +179,7 @@ describe("belt edits", () => {
         how: "pull-request",
         onto: "develop",
       });
-      expect(problemsOf(published, OFFERS)).toEqual([]);
+      expect(problemsOf(pipelineOf(published), OFFERS)).toEqual([]);
       expect(standardOf(published)).toEqual(
         Option.some({ workspace, how: "pull-request", onto: "develop" }),
       );
@@ -184,8 +187,31 @@ describe("belt edits", () => {
       expect(standardOf(merged)).toEqual(Option.some({ workspace, how: "merge" }));
       const forwarded = configure(published, "land", { kind: "land", how: "fast-forward" });
       expect(gateSteps(forwarded)).not.toContain("publish");
-      expect(problemsOf(forwarded, OFFERS)).toEqual([]);
+      expect(problemsOf(pipelineOf(forwarded), OFFERS)).toEqual([]);
     }
+  });
+
+  test("a land reached through a composite instance still gets its publish gate", () => {
+    const made = makeComposite(
+      STANDARD_PIPELINES.checkout,
+      ["review-gate", "review"],
+      "review-loop",
+    );
+    expect(made._tag).toBe("Made");
+    if (made._tag !== "Made") return;
+    const composites = { "review-loop": made.definition };
+    // writtenBlocks would miss the route through the instance; expansion sees it.
+    const published = configure(
+      made.pipeline,
+      "land",
+      { kind: "land", how: "pull-request", onto: "develop" },
+      composites,
+    );
+    expect(gateSteps(published)).toContain("publish");
+    const expanded = expand(published, composites);
+    expect(expanded._tag).toBe("Expanded");
+    if (expanded._tag !== "Expanded") return;
+    expect(problemsOf(expanded.pipeline, OFFERS)).toEqual([]);
   });
 
   test("a pull-request land keeps the publish gate it has", () => {
@@ -201,7 +227,7 @@ describe("belt edits", () => {
         one.kind === "land" ? { ...one, how: "merge" as const } : one,
       ),
     };
-    expect(problemsOf(stranded, OFFERS)).toContain(
+    expect(problemsOf(pipelineOf(stranded), OFFERS)).toContain(
       "publish-gate gates publish, but no route from it reaches a pull-request land",
     );
     expect(configure(stranded, "land", { kind: "land", how: "pull-request" })).toEqual(published);
@@ -221,13 +247,13 @@ describe("belt edits", () => {
       "publish",
       "review",
     ]);
-    expect(problemsOf(published, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(published), OFFERS)).toEqual([]);
   });
 
   test("taking the worktree out leaves the task's branch in the operator's checkout", () => {
     const pipeline = remove(STANDARD_PIPELINES.worktree, "worktree");
     expect(node(pipeline, "branch")).toMatchObject({ next: "retry" });
-    expect(problemsOf(pipeline, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
   });
 
   test("a branch and a worktree go on a wire with nothing to set", () => {
@@ -235,14 +261,14 @@ describe("belt edits", () => {
       remove(remove(STANDARD_PIPELINES.worktree, "worktree"), "branch"),
       "land",
     );
-    expect(problemsOf(direct, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(direct), OFFERS)).toEqual([]);
     const branched = insertOn(direct, { from: "queue", port: "next" }, "branch");
     expect(node(branched.pipeline, branched.id)).toEqual({
       kind: "branch",
       id: branched.id,
       next: "retry",
     });
-    expect(problemsOf(branched.pipeline, OFFERS)).toEqual([
+    expect(problemsOf(pipelineOf(branched.pipeline), OFFERS)).toEqual([
       `a route from ${branched.id} ends at land: work on this branch never lands`,
     ]);
   });
@@ -262,17 +288,17 @@ describe("belt edits", () => {
     const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
     const pipeline = removeRoute(inserted.pipeline, "retry", 2);
     expect(ids(pipeline)).toContain(inserted.id);
-    expect(problemsOf(pipeline, OFFERS)).toContain(`no source reaches ${inserted.id}`);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toContain(`no source reaches ${inserted.id}`);
     expect(ids(remove(pipeline, inserted.id))).not.toContain(inserted.id);
   });
 
   test("removing the only source removes that block alone, and a new source joins the rest", () => {
     const pipeline = remove(STANDARD_PIPELINES.worktree, "queue");
     expect(ids(pipeline)).toEqual(ids(STANDARD_PIPELINES.worktree).filter((id) => id !== "queue"));
-    expect(problemsOf(pipeline, OFFERS)).toEqual(["no source supplied"]);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual(["no source supplied"]);
     const { pipeline: supplied, id } = addSource(pipeline, "");
     expect(node(supplied, id)).toMatchObject({ next: "branch" });
-    expect(problemsOf(supplied, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(supplied), OFFERS)).toEqual([]);
   });
 
   test("an end no wire enters can go; one a wire enters stays", () => {
@@ -304,7 +330,7 @@ describe("belt edits", () => {
       back: true,
     });
     // The loop leaves the land unreached, and validation says so.
-    expect(problemsOf(looped, OFFERS)).toContain("no source reaches land");
+    expect(problemsOf(pipelineOf(looped), OFFERS)).toContain("no source reaches land");
     expect(
       rejoin(
         STANDARD_PIPELINES.worktree,
@@ -329,14 +355,14 @@ describe("belt edits", () => {
       Option.getOrThrow,
     );
     // Back to the author's own gate with nothing charged, the loop never ends.
-    expect(problemsOf(back, OFFERS)).toEqual([
+    expect(problemsOf(pipelineOf(back), OFFERS)).toEqual([
       "the wires loop through author, start, and nothing ends the loop: no exit on it fails a rung, and no router leaves it on a count that grows",
     ]);
     const charged = chargeExit(back, "author", "stuck", "self");
     expect(node(charged, "author")).toMatchObject({
       exits: [{}, {}, { id: stuck, name: "stuck", to: "start", fails: "self" }],
     });
-    expect(problemsOf(charged, OFFERS)).toEqual([]);
+    expect(problemsOf(pipelineOf(charged), OFFERS)).toEqual([]);
     const renamed = renameExit(charged, "author", "stuck", "blocked");
     expect(node(renamed, "author")).toMatchObject({
       exits: [{}, {}, { id: stuck, name: "blocked", to: "start", fails: "self" }],
@@ -367,7 +393,9 @@ describe("belt edits", () => {
     expect(node(renamed, "retry")).toMatchObject({
       routes: [{ when: "failed" }, { when: "exits:sent-back>=2" }],
     });
-    expect(problemsOf(renamed, OFFERS)).toEqual(problemsOf(counted, OFFERS));
+    expect(problemsOf(pipelineOf(renamed), OFFERS)).toEqual(
+      problemsOf(pipelineOf(counted), OFFERS),
+    );
     // While another exit still has the old name, the filter keeps counting it.
     const twice = renameExit(
       addExit(counted, "author", "returned"),
@@ -449,7 +477,7 @@ describe("belt edits", () => {
   });
 
   test("a looped file still draws", () => {
-    const looped: Pipeline = {
+    const looped: Drawing = {
       nodes: STANDARD_PIPELINES.worktree.nodes.map((n) =>
         n.id === "land-gate" ? { ...n, next: "author" } : n,
       ),

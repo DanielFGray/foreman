@@ -132,11 +132,11 @@ export class Board {
     const columns = this.columns();
     const rect = this.layout(columns).rects.get(slot(columnOf(card), card.key));
     const origin = this.bounds ?? { x: 0, y: 0 };
-    this.pane.drag.press(card.key, event.position, { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
+    this.pane.drag.press(card.key, this.pane.drawn(event.position), { ...rect, x: rect.x + origin.x, y: rect.y + origin.y }, () => this.targets(card, columns));
   }
 
   scrolled(event, cx) {
-    this.scroll = scrolledBy(this.scroll, event, this.layout(this.columns()));
+    this.scroll = scrolledBy(this.scroll, { delta: this.pane.drawn(event.delta), position: this.pane.drawn(event.position), modifiers: event.modifiers }, this.layout(this.columns()), this.bounds ?? { x: 0 });
     cx.notify();
   }
 
@@ -150,7 +150,7 @@ export class Board {
     const dragged = columns.flat().find((card) => drag.dragging(card.key));
     const floating = dragged === undefined ? null : drag.floating();
     const board = div().id("task-board").relative().flex_1().w_full().min_h(0).overflow_hidden().bg(t.canvas)
-      .on_mouse_move((event, _cx) => { this.bounds = event.bounds; })
+      .on_mouse_move((event, _cx) => { this.bounds = this.pane.drawn(event.bounds); })
       .on_scroll_wheel((event, cx) => this.scrolled(event, cx))
       .children(COLUMNS.map((column, index) => columnHead(column, xs[index], columnW, columns[index].length, t)))
       .children(entries.map((column, index) => columnBody(`board-column-${COLUMNS[index].key}`, xs[index], columnW)

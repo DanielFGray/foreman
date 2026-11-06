@@ -74,10 +74,13 @@ const pinned = {
 describe("foreman pipeline", () => {
   test("set writes a pipeline that can run, and clear drops it", async () => {
     await run("set", "amux", fileWith(pinned));
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: { amux: pinned } });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      pipelines: { amux: JSON.parse(JSON.stringify(pinned)) },
+      composites: {},
+    });
 
     await run("clear", "amux");
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: {} });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ pipelines: {}, composites: {} });
   });
 
   test("set refuses a pipeline the ladder cannot run, and writes nothing", async () => {
@@ -111,7 +114,7 @@ describe("foreman pipeline use", () => {
         readPipelines(path).pipe(Effect.provide(BunServices.layer)),
       );
       expect(read.error).toBeUndefined();
-      expect(read.value["amux"]).toEqual(STANDARD_PIPELINES[choice]);
+      expect(read.value.pipelines["amux"]).toEqual(STANDARD_PIPELINES[choice]);
     }
   });
 
@@ -194,6 +197,44 @@ describe("drawing a draft", () => {
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
   });
 
+  test("MakeComposite carries the definition on the draft, and save writes both", async () => {
+    await run("use", "checkout", "--project", "amux");
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "review-loop" }),
+    );
+    const draft = draftOf();
+    expect(draft.composites["review-loop"]).toBeDefined();
+    expect(draft.pipeline.nodes.some((node: { kind: string }) => node.kind === "composite")).toBe(
+      true,
+    );
+    expect(JSON.parse(readFileSync(path, "utf8")).composites).toEqual({});
+    await run("save", "amux");
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    expect(file.composites["review-loop"]).toBeDefined();
+    expect(
+      file.pipelines.amux.nodes.some((node: { kind: string }) => node.kind === "composite"),
+    ).toBe(true);
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
+  });
+
+  test("a save refuses a definition another project's save already created, and keeps the first", async () => {
+    await run("use", "checkout", "--project", "amux");
+    await run("use", "checkout", "--project", "fibrae");
+    const make = change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "shared" });
+    await run("edit", "amux", make);
+    await run("edit", "fibrae", make);
+    await run("save", "amux");
+    const first = JSON.parse(readFileSync(path, "utf8")).composites.shared;
+    expect(first).toBeDefined();
+    const refused = await refusal("save", "fibrae");
+    expect(refused).toContain("shared");
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    expect(file.composites.shared).toEqual(first);
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts.fibrae).toBeDefined();
+  });
+
   test("one change of a land to pull-request leaves a draft that saves", async () => {
     await run("use", "worktree", "--project", "amux");
     await run(
@@ -205,7 +246,7 @@ describe("drawing a draft", () => {
     const read = await Effect.runPromise(
       readPipelines(path).pipe(Effect.provide(BunServices.layer)),
     );
-    expect(standardOf(read.value["amux"] ?? { nodes: [] })).toEqual(
+    expect(standardOf(read.value.pipelines["amux"] ?? { nodes: [] })).toEqual(
       Option.some({ workspace: "worktree", how: "pull-request" }),
     );
   });
@@ -417,5 +458,75 @@ describe("foreman pipeline prompt and instructions", () => {
     );
     expect(existsSync(join(folder, "foreman"))).toBe(false);
     expect(await refusal("instructions", "nobody")).toBe("no instructions file is named nobody.md");
+  });
+});
+
+describe("foreman pipeline check", () => {
+  test("refuses an instance whose definition the file lacks, and names the definition", async () => {
+    const drawn = {
+      nodes: [
+        ...STANDARD_PIPELINES.checkout.nodes,
+        { kind: "composite", id: "unknown", of: "absent", prefix: "unknown.", set: {}, exits: [] },
+      ],
+    };
+    expect(await refusal("check", fileWith(drawn))).toMatch(/absent is unknown/);
+  });
+
+  test("an instance that replaces the review loop checks as the pipeline it expands to", async () => {
+    const reviewLoop = {
+      entry: "review-gate",
+      exits: [
+        { id: "exit-landable", name: "landable" },
+        { id: "exit-rework", name: "rework" },
+      ],
+      params: [],
+      blocks: [
+        { kind: "gate", id: "review-gate", step: "review", next: "review" },
+        {
+          kind: "agent",
+          id: "review",
+          role: "review",
+          model: "reviewers",
+          exits: [
+            { id: "approved", name: "approved", to: "out:exit-landable" },
+            { id: "returned", name: "returned", to: "out:exit-rework", fails: "author" },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({ pipelines: {}, composites: { "review-loop": reviewLoop } }),
+    );
+    const nodes = STANDARD_PIPELINES.checkout.nodes
+      .filter((node) => node.id !== "review-gate" && node.id !== "review")
+      .map((node) =>
+        node.kind === "agent" && node.id === "author"
+          ? {
+              ...node,
+              exits: node.exits.map((exit) =>
+                exit.to === "review-gate" ? { ...exit, to: "checks" } : exit,
+              ),
+            }
+          : node,
+      );
+    const drawn = {
+      nodes: [
+        ...nodes,
+        {
+          kind: "composite",
+          id: "checks",
+          of: "review-loop",
+          prefix: "checks.",
+          set: {},
+          exits: [
+            { id: "exit-landable", to: "land-gate" },
+            { id: "exit-rework", to: "climb" },
+          ],
+        },
+      ],
+    };
+    // A missing block would refuse here; the instance's blocks must be found.
+    await expect(run("check", fileWith(drawn))).resolves.toBeUndefined();
   });
 });

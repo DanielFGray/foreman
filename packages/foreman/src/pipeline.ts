@@ -165,6 +165,33 @@ export const DoneNode = S.Struct({ kind: S.Literal("done"), id: S.String });
 /** Parks the task for the operator. */
 export const ParkNode = S.Struct({ kind: S.Literal("park"), id: S.String });
 
+/**
+ * A parameter value: every settable field is a string, a string literal or an
+ * int (`docs/composite-blocks.md`).
+ */
+export const ParamValue = S.Union([S.String, S.Int]);
+export type ParamValue = typeof ParamValue.Type;
+
+/**
+ * An instance of a saved composite in a drawing. It names its definition
+ * (`of`), wires each exit by id, and gives a value to each parameter (`set`).
+ * `prefix` is stored on the instance so expanded block ids do not move when
+ * the instance is renamed (`docs/composite-blocks.md`).
+ *
+ * Composites live only in drawings. Expansion replaces them before the engine
+ * reads a pipeline, so `PipelineNode` never holds one.
+ */
+export const CompositeNode = S.Struct({
+  kind: S.Literal("composite"),
+  id: S.String,
+  of: S.String,
+  prefix: S.String,
+  set: S.Record(S.String, ParamValue),
+  exits: S.Array(S.Struct({ id: S.String, to: S.String })),
+});
+export type CompositeNode = typeof CompositeNode.Type;
+
+/** Engine blocks only: what runs, validates, places and traces after expansion. */
 export const PipelineNode = S.Union([
   SourceNode,
   RouterNode,
@@ -184,6 +211,33 @@ export type GateNode = typeof GateNode.Type;
 export type LandNode = typeof LandNode.Type;
 export type DoneNode = typeof DoneNode.Type;
 
+/** A block in a drawing: an engine block or a composite instance. */
+export const DrawnNode = S.Union([PipelineNode, CompositeNode]);
+export type DrawnNode = typeof DrawnNode.Type;
+
+/**
+ * A composite definition: name, blocks, entry, exits and parameters. One
+ * definition serves every instance, in every project. It lives in the
+ * pipelines file under `composites` (`docs/composite-blocks.md`).
+ */
+export const CompositeParam = S.Struct({
+  name: S.String,
+  default: S.optional(ParamValue),
+  sets: S.Array(S.Struct({ block: S.String, field: S.String })),
+});
+export type CompositeParam = typeof CompositeParam.Type;
+
+export const CompositeDefinition = S.Struct({
+  entry: S.String,
+  exits: S.Array(S.Struct({ id: S.String, name: S.String })),
+  params: S.Array(CompositeParam),
+  blocks: S.Array(DrawnNode),
+});
+export type CompositeDefinition = typeof CompositeDefinition.Type;
+
+export const Composites = S.Record(S.String, CompositeDefinition);
+export type Composites = typeof Composites.Type;
+
 /** A block a task stops at: it runs something, or ends the task. The others decide at once. */
 export type WorkNode = AgentNode | CheckNode | LandNode | DoneNode;
 
@@ -194,8 +248,17 @@ export type WorkNode = AgentNode | CheckNode | LandNode | DoneNode;
  */
 export type Workspace = "none" | "branch" | "worktree";
 
+/** The expanded engine graph: no composite instances. */
 export const Pipeline = S.Struct({ nodes: S.Array(PipelineNode) });
 export type Pipeline = typeof Pipeline.Type;
+
+/**
+ * The pipeline as the operator drew it, with composite instances still in
+ * place. The pipelines file, drafts and definition `blocks` hold drawings;
+ * every reader expands to a `Pipeline` before the engine reads it.
+ */
+export const Drawing = S.Struct({ nodes: S.Array(DrawnNode) });
+export type Drawing = typeof Drawing.Type;
 
 /**
  * An exit a task's run named: the block that named it, the exit's id, its
@@ -946,7 +1009,18 @@ export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
  * land name the only standard it can be, so it is that one when it has the
  * same blocks; the order the blocks are listed in means nothing.
  */
-export const standardOf = (pipeline: Pipeline): Option.Option<Standard> => {
+/**
+ * The standard pipeline `drawing` is, if any. Reads the drawing as written: a
+ * composite instance means it is not standard, even when its expansion would
+ * match (`docs/composite-blocks.md`).
+ */
+export const standardOf = (drawing: Drawing): Option.Option<Standard> => {
+  const nodes: Array<PipelineNode> = [];
+  for (const node of drawing.nodes) {
+    if (node.kind === "composite") return Option.none();
+    nodes.push(node);
+  }
+  const pipeline: Pipeline = { nodes };
   const has = (kind: PipelineNode["kind"]) => pipeline.nodes.some((node) => node.kind === kind);
   const land = pipeline.nodes.find((node): node is LandNode => node.kind === "land");
   const workspace = has("worktree") ? "worktree" : has("branch") ? "checkout" : "direct";
@@ -1020,7 +1094,11 @@ function standardRoute(
   };
 }
 
-/** The pipeline as a Mermaid flowchart, one arrow per wire. A return to the queue draws none. */
+/**
+ * The pipeline as a Mermaid flowchart, one arrow per wire. A return to the
+ * queue draws none. Mermaid node ids are graph indices, not block ids, so a
+ * composite prefix's `.` never reaches a Mermaid id.
+ */
 export const toMermaid = (pipeline: Pipeline): string =>
   Graph.toMermaid(graphOf(pipeline).graph, {
     direction: "LR",
