@@ -434,7 +434,7 @@ export const addParam = (
         ...definition.params,
         {
           name: param.name,
-          ...(param.default !== undefined ? { default: param.default } : {}),
+          default: param.default,
           sets: [...param.sets],
         },
       ],

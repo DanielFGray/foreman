@@ -368,4 +368,31 @@ describe("foreman composite", () => {
     await runComposite("save", "review-loop");
     expect(JSON.parse(readFileSync(path, "utf8")).composites.inner.entry).toBe("review-gate");
   });
+
+  test("AddParam without a default saves, and the parameter holds no default key", async () => {
+    // The project's instance must set a parameter that has no default, or save refuses it.
+    const pipeline = pipelineWithReviewLoop();
+    const setting = {
+      nodes: pipeline.nodes.map((node) =>
+        node.id === "checks" ? { ...node, set: { reviewer: "reviewers" } } : node,
+      ),
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({ pipelines: { amux: setting }, composites: { "review-loop": reviewLoop } }),
+    );
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({
+        _tag: "AddParam",
+        name: "reviewer",
+        sets: [{ block: "review", field: "model" }],
+      }),
+    );
+    await runComposite("save", "review-loop");
+    const stored = JSON.parse(readFileSync(path, "utf8")).composites["review-loop"].params;
+    expect(stored).toEqual([{ name: "reviewer", sets: [{ block: "review", field: "model" }] }]);
+    expect(Object.hasOwn(stored[0], "default")).toBe(false);
+  });
 });
