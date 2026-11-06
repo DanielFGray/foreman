@@ -73,6 +73,21 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
 
     return {
       read,
+      /**
+       * The operator's text rendered with the values a schedule gives it: the
+       * title's template, or the instructions file the schedule names. Both take
+       * the pattern's own placeholders, such as `{{ project }}` and `{{ since }}`.
+       * A placeholder with no value fails the render, so a pattern with a hole in
+       * it is not a pattern.
+       */
+      fill: (text: string, values: Values) => fill("title", text, values),
+
+      /**
+       * The instructions file the schedule names, rendered with the values the
+       * schedule gives it: the pattern's own placeholders, such as `{{ project }}`
+       * and `{{ since }}`. A name with no file fails, as `read` does.
+       */
+      template: (name: string, values: Values) => render(name, values),
 
       /**
        * Writes `text` as instructions `name` in the operator's `prompts/`
@@ -202,14 +217,14 @@ const misnamed = (name: string) =>
   new PromptError({ template: name, detail: `${name} is no file name: use a-z, 0-9 and -` });
 
 /**
- * Replaces each `{{ name }}` in `body` with its value. A name with no entry
+ * Replaces each `{{ name }}` in `text` with its value. A name with no entry
  * in `values` fails the render: substituting nothing would hand an agent a
  * prompt with a hole in it, a degraded worker that still looks like it is
  * running.
  */
-const fill = (name: string, body: string, values: Values) =>
+const fill = (name: string, text: string, values: Values): Effect.Effect<string, PromptError> =>
   Effect.gen(function* () {
-    for (const placeholder of placeholdersIn(body)) {
+    for (const placeholder of placeholdersIn(text)) {
       if (!(placeholder in values)) {
         return yield* new PromptError({
           template: name,
@@ -217,7 +232,7 @@ const fill = (name: string, body: string, values: Values) =>
         });
       }
     }
-    return body.replace(/\{\{\s*(.*?)\s*\}\}/g, (_, key: string) => values[key] ?? "").trim();
+    return text.replace(/\{\{\s*(.*?)\s*\}\}/g, (_, key: string) => values[key] ?? "").trim();
   });
 
 /**

@@ -105,6 +105,33 @@ export const PullRequestPolicy = S.Struct({
 export type PullRequestPolicy = typeof PullRequestPolicy.Type;
 
 /**
+ * The cadence a schedule fires on. A tagged union keyed by the kind's field
+ * (`{ landed: N }` now; `{ days: N }` later), because the kinds are the same
+ * question asked differently and a later kind is one more case, not a new field.
+ */
+const Landed = S.Struct({
+  landed: S.Int.check(S.isGreaterThan(0)),
+});
+export const Every = S.Union([Landed]);
+export type Every = typeof Every.Type;
+
+/**
+ * One operator pattern: a cadence, the task it files, and the instructions
+ * that shape the work the task means.
+ */
+export const Schedule = S.Struct({
+  name: S.String,
+  every: Every,
+  /** The task's title, as a template: `{{ project }}` and `{{ since }}`. */
+  title: S.String,
+  /** The operator's own labels on the filed task, beside the schedule's. */
+  labels: S.optional(S.Array(S.String)).pipe(S.withDecodingDefault(Effect.succeed([]))),
+  /** The instructions file the filed task's author reads. */
+  template: S.String,
+});
+export type Schedule = typeof Schedule.Type;
+
+/**
  * One project's own settings. A step set here replaces the fleet default for
  * that project's tasks; a paused project takes no step, grants included;
  * `tracker` names where the project's tasks live.
@@ -126,6 +153,8 @@ export const ProjectPolicy = S.Struct({
       land: S.optional(S.Literals(STEP_MODES)),
     }),
   ),
+  /** The recurring patterns this project keeps, filed from a template on a cadence. */
+  schedules: S.optional(S.Array(Schedule)),
 });
 export type ProjectPolicy = typeof ProjectPolicy.Type;
 
@@ -417,7 +446,8 @@ const editProject = (
     next.paused === undefined &&
     next.tracker === undefined &&
     next.pullRequest === undefined &&
-    Object.keys(next.steps ?? {}).length === 0;
+    Object.keys(next.steps ?? {}).length === 0 &&
+    (next.schedules ?? []).length === 0;
   return { ...policy, projects: empty ? others : { ...others, [project]: next } };
 };
 
@@ -442,10 +472,13 @@ export const setProjectStep = (
  * live and how they land, not settings with a fleet default.
  */
 export const clearProject = (policy: Policy, project: string): Policy =>
-  editProject(policy, project, ({ tracker, linear, pullRequest }) => ({
+  editProject(policy, project, ({ tracker, linear, pullRequest, schedules }) => ({
     ...(tracker === undefined ? {} : { tracker }),
     ...(linear === undefined ? {} : { linear }),
     ...(pullRequest === undefined ? {} : { pullRequest }),
+    // A schedule is the operator's intention for the project, like its tracker:
+    // clearing the step overrides must not drop it.
+    ...((schedules ?? []).length === 0 ? {} : { schedules }),
   }));
 
 /** The tracker `project` takes its tasks from. */
@@ -495,4 +528,22 @@ export const setPullRequest = (
   editProject(policy, project, (entry) => ({
     ...entry,
     pullRequest: { ...entry.pullRequest, ...change },
+  }));
+
+/** The schedules one project keeps, in the order the operator gave them. */
+export const schedulesOf = (policy: Policy, project: string): ReadonlyArray<Schedule> =>
+  policy.projects[project]?.schedules ?? [];
+
+/** Adds one schedule to one project, replacing one of the same name. */
+export const addSchedule = (policy: Policy, project: string, schedule: Schedule): Policy =>
+  editProject(policy, project, (entry) => ({
+    ...entry,
+    schedules: [...(entry.schedules ?? []).filter((one) => one.name !== schedule.name), schedule],
+  }));
+
+/** Removes one schedule of one project, dropping the entry when none is left. */
+export const removeSchedule = (policy: Policy, project: string, name: string): Policy =>
+  editProject(policy, project, (entry) => ({
+    ...entry,
+    schedules: (entry.schedules ?? []).filter((one) => one.name !== name),
   }));
