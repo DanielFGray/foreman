@@ -221,6 +221,63 @@ describe("foreman composite", () => {
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts.amux).toBeDefined();
   });
 
+  test("a project draft save refuses when a nested definition it reaches changed", async () => {
+    // review-loop nests inner-step; the project only instances review-loop.
+    const inner = {
+      entry: "review-gate",
+      exits: [
+        { id: "exit-landable", name: "landable" },
+        { id: "exit-rework", name: "rework" },
+      ],
+      params: [],
+      blocks: reviewLoop.blocks,
+    };
+    const outer = {
+      entry: "nested",
+      exits: [
+        { id: "exit-landable", name: "landable" },
+        { id: "exit-rework", name: "rework" },
+      ],
+      params: [],
+      blocks: [
+        {
+          kind: "composite",
+          id: "nested",
+          of: "inner-step",
+          prefix: "",
+          set: {},
+          exits: [
+            { id: "exit-landable", to: "out:exit-landable" },
+            { id: "exit-rework", to: "out:exit-rework" },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pipelines: { amux: pipelineWithReviewLoop() },
+        composites: { "inner-step": inner, "review-loop": outer },
+      }),
+    );
+    await runPipeline(
+      "edit",
+      "amux",
+      change({ _tag: "Configure", id: "land", setting: { kind: "land", how: "fast-forward" } }),
+    );
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts.amux.bases["inner-step"]).toBeDefined();
+
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    file.composites["inner-step"] = {
+      ...inner,
+      exits: inner.exits.map((exit) =>
+        exit.id === "exit-landable" ? { ...exit, name: "ship" } : exit,
+      ),
+    };
+    writeFileSync(path, JSON.stringify(file));
+    expect(await refusePipeline("save", "amux")).toMatch(/inner-step/);
+  });
+
   test("AddParam and SetEntry edit the definition draft", async () => {
     writeReviewLoopProject();
     await runComposite(

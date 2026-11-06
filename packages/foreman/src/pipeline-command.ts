@@ -235,7 +235,8 @@ const save = Command.make("save", { project }, ({ project }) =>
         detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
       });
     const file = yield* pipelinesNow;
-    const drifted = usedDefinitions(draft.pipeline).filter((name) => {
+    const available = { ...file.composites, ...draft.composites };
+    const drifted = usedDefinitions(draft.pipeline, available).filter((name) => {
       if (draft.composites[name] !== undefined) return false;
       if (!(name in draft.bases)) return false;
       return !sameDefinition(draft.bases[name] ?? null, file.composites[name] ?? null);
@@ -700,10 +701,28 @@ const freshDraft = (project: string) =>
     } satisfies Draft;
   });
 
-/** Composite definition names a drawing's instances name. */
-const usedDefinitions = (drawing: Drawing): ReadonlyArray<string> => [
-  ...new Set(drawing.nodes.flatMap((node) => (node.kind === "composite" ? [node.of] : []))),
-];
+/**
+ * Composite definition names a drawing reaches, directly or through nested
+ * instances inside other definitions (`docs/composite-blocks.md`).
+ */
+const usedDefinitions = (
+  drawing: Drawing,
+  composites: Composites,
+  seen: ReadonlySet<string> = new Set(),
+): ReadonlyArray<string> => {
+  const names: string[] = [];
+  for (const node of drawing.nodes) {
+    if (node.kind !== "composite") continue;
+    if (seen.has(node.of)) continue;
+    names.push(node.of);
+    const nested = composites[node.of];
+    if (nested === undefined) continue;
+    names.push(
+      ...usedDefinitions({ nodes: nested.blocks }, composites, new Set(seen).add(node.of)),
+    );
+  }
+  return [...new Set(names)];
+};
 
 /**
  * Expand `drawing` with these definitions, or refuse with the expansion
