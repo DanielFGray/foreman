@@ -296,7 +296,9 @@ const prompt = Command.make("prompt", { role, id }, (args) =>
   }),
 ).pipe(Command.withDescription("Print the prompt foreman would send an author or reviewer"));
 
-const text = Argument.String("text").pipe(Argument.withDescription("What the agent is told"));
+const text = Argument.String("text").pipe(
+  Argument.withDescription("What the agent is told; - reads it from stdin"),
+);
 
 const sayRole = Flag.Literals("role", ["author", "review"] as const).pipe(
   Flag.withDescription("Which of the task's agents to tell"),
@@ -313,7 +315,7 @@ const workerOf = (task: string) =>
 
 const say = Command.make("say", { id, role: sayRole, text }, (args) =>
   Effect.gen(function* () {
-    yield* (yield* Fleet).say(yield* workerOf(args.id), args.role, args.text);
+    yield* (yield* Fleet).say(yield* workerOf(args.id), args.role, yield* prose(args.text));
     yield* Console.log(`${args.id}: ${args.role} is working on it`);
   }),
 ).pipe(
@@ -340,7 +342,7 @@ const correct = Command.make("correct", { id, text }, (args) =>
         detail: `${args.id} already had ${MAX_ROUNDS} correction rounds; return the task with foreman exit ${args.id} returned instead`,
       });
     }
-    yield* (yield* Fleet).say(yield* workerOf(args.id), "author", args.text);
+    yield* (yield* Fleet).say(yield* workerOf(args.id), "author", yield* prose(args.text));
     yield* records.countRound(args.id);
     yield* Console.log(`${args.id}: round sent; run foreman wait ${args.id} --role author`);
   }),
