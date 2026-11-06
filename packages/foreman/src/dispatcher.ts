@@ -663,8 +663,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // managed set, which is exactly the silence this reading closes.
       // Placement later splits working authors from tasks under review.
       const everywhere = yield* records.claimedEverywhere;
-      const managedNames = new Set(projects.map((project) => project.name));
-      const inFlight = everywhere.filter((task) => managedNames.has(task.project));
+      // Open-or-running is judged before the unreachable filter: a project whose
+      // tracker failed this reading is held, not stranded. An ambiguous name is
+      // open too, so it is managed here even though no one checkout is picked.
+      const managedNames = new Set(
+        [...resolved.projects, ...resolved.ambiguous].map((entry) => entry.name),
+      );
+      const reachable = new Set(projects.map((project) => project.name));
+      const inFlight = everywhere.filter((task) => reachable.has(task.project));
       const stranded = strandedOf(everywhere, managedNames);
       // One query, gated by the task store: `ready` returns a task only once every task
       // blocking it is done, whichever project that blocker lives in. The
@@ -3915,8 +3921,8 @@ export const readyToLand = (pipeline: Pipeline, task: Item, worker: Worker | und
  */
 export interface Stranded {
   readonly project: string;
-  /** Foreman's mid-pipeline tasks in this project, oldest activity first. */
-  readonly tasks: ReadonlyArray<Item>;
+  /** Foreman's mid-pipeline tasks in this project, oldest activity first. Never empty. */
+  readonly tasks: readonly [Item, ...Array<Item>];
 }
 
 /**
@@ -3930,17 +3936,18 @@ export const strandedOf = (
   claimed: ReadonlyArray<Item>,
   managed: ReadonlySet<string>,
 ): ReadonlyArray<Stranded> => {
-  const byProject = new Map<string, Array<Item>>();
+  // A project enters the map only with its first task, so every group is non-empty by construction.
+  const byProject = new Map<string, [Item, ...Array<Item>]>();
   for (const task of claimed) {
     if (managed.has(task.project) || authoredBy(task) === undefined) continue;
-    const tasks = byProject.get(task.project) ?? [];
-    tasks.push(task);
-    byProject.set(task.project, tasks);
+    const found = byProject.get(task.project);
+    if (found === undefined) byProject.set(task.project, [task]);
+    else found.push(task);
   }
   return [...byProject]
-    .map(([project, tasks]) => ({
+    .map(([project, tasks]): Stranded => ({
       project,
-      tasks: [...tasks].sort(
+      tasks: tasks.sort(
         (first, second) => first.lastActivityAt.getTime() - second.lastActivityAt.getTime(),
       ),
     }))

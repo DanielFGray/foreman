@@ -618,11 +618,12 @@ const strandedRow = (stranded: Stranded): ColumnRow => ({
   committed: false,
 });
 
-const strandedDetail = ({ tasks }: Stranded): string => {
+const strandedDetail = ({ tasks: [first, ...rest] }: Stranded): string => {
+  const ids = [first, ...rest].map((task) => task.id);
   const what =
-    tasks.length === 1
-      ? `${tasks[0]!.id} mid-pipeline`
-      : `${tasks.length} mid-pipeline tasks (${tasks.map((task) => task.id).join(", ")})`;
+    rest.length === 0
+      ? `${first.id} mid-pipeline`
+      : `${ids.length} mid-pipeline tasks (${ids.join(", ")})`;
   return `${what}; reopen a space to resume`;
 };
 
