@@ -90,11 +90,14 @@ const add = Command.make(
   "add",
   { project: projectArg, name: nameArg, everyLanded, title, template, labels },
   (args) => {
+    // The operator may name the file with or without .md; prompts/ stores the
+    // stem, and Prompts.template adds the suffix when it reads.
+    const template = args.template.replace(/\.md$/i, "");
     const schedule: Schedule = {
       name: args.name,
       every: { landed: args.everyLanded },
       title: args.title,
-      template: args.template,
+      template,
       labels: args.labels,
     };
     return write((policy) => addSchedule(policy, args.project, schedule));
