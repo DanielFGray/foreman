@@ -37,7 +37,7 @@ export const problemsAgainstLadder = (pipeline: Pipeline) =>
     return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
   }).pipe(Effect.provide(Prompts.Default));
 
-/** The problems that stop `drawing` running with these definitions: its expansion, else the ladder check. */
+/** The problems that stop `drawing` running with these definitions: the expansion's, else the ladder's. */
 export const problemsOfDrawing = (drawing: Drawing, composites: Composites) =>
   Effect.gen(function* () {
     const expanded = expand(drawing, composites);
