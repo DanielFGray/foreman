@@ -42,3 +42,21 @@ export const emptyChange = (node, name, choice) => ({
   name,
   ...(choice === "claim" ? { empty: "claim" } : {}),
 });
+
+// Each exit of a composite instance's block, by the definition's name for it.
+// The drawing has no wire for an exit that returns to the queue, so these rows
+// come from the block's own exits. `port` is the one a `Rejoin` names.
+export const instanceExitRows = (block) =>
+  (block?.exits ?? []).map((exit) => ({
+    name: exit.name,
+    to: exit.to,
+    returns: exit.to === QUEUE,
+    port: `exit:${exit.id}`,
+  }));
+
+// The `Rejoin` change that returns an instance's exit to the queue.
+export const returnChange = (node, port) => ({
+  _tag: "Rejoin",
+  wire: { from: node.id, port },
+  to: QUEUE,
+});

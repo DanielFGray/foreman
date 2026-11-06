@@ -19,6 +19,7 @@ import {
   WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
+import { printPrompt } from "./pipeline-prompt.ts";
 import {
   pipelineFor,
   pipelinesPath,
@@ -26,10 +27,10 @@ import {
   updatePipelinesFile,
 } from "./pipeline-file.ts";
 import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
-import { drawingOf, type Flow } from "./pipeline-layout.ts";
+import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
-import { INSERTABLE } from "./pipeline-belt.ts";
-import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
+import { choicesOf } from "./pipeline-belt.ts";
+import { policyPath, readPolicy, scopesOf } from "./policy.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
 import {
@@ -266,10 +267,7 @@ const clear = Command.make("clear", { project }, ({ project }) =>
 
 /**
  * The prompt an agent block of the draft, else of the pipeline the project
- * runs, would send. It goes through `Prompts.agent`, as `foreman prompt` does
- * for a real task; only the inputs differ: a pretend task with no labels and
- * no runs, on the workspace its route opens, with example paths and an
- * example verify script where a dispatch reads the world.
+ * runs, would send (see `printPrompt`).
  */
 const prompt = Command.make(
   "prompt",
@@ -282,30 +280,8 @@ const prompt = Command.make(
         draft?.pipeline ?? file.pipelines[project] ?? DEFAULT_PIPELINE,
         { ...file.composites, ...draft?.composites },
       );
-      const node = pipeline.nodes.find((one) => one.id === block);
-      if (node?.kind !== "agent")
-        return yield* new PipelineError({
-          detail: `${project}'s pipeline has no agent block named ${block}`,
-        });
-      const task = {
-        ...pretend({ labels: [], size: undefined, priority: 2, parent: undefined }),
-        project,
-      };
-      const workspace = routeWorkspace(pipeline, factsOf(task, pipeline));
-      const repository = "<repository>";
-      const text = yield* (yield* Prompts).agent(node, {
-        task,
-        worktree:
-          newWorkspace(workspace, { name: project, directory: repository }, task.id) ?? repository,
-        repository,
-        workspace,
-        base: "<base>",
-        trunk: routeTarget(pipeline, factsOf(task, pipeline)) ?? "<trunk>",
-        verify: "./scripts/verify.sh",
-        pipeline,
-      });
-      yield* Console.log(text);
-    }).pipe(Effect.provide(Prompts.Default)),
+      yield* printPrompt(project, pipeline, block, `${project}'s pipeline`);
+    }),
 ).pipe(
   Command.withDescription(
     "Print the prompt an agent block of a project's draft, else of the pipeline it runs, would send a pretend task. Writes nothing",
@@ -766,56 +742,51 @@ const runPipeline = (project: string, drawing: Drawing, addedComposites: Composi
   });
 
 /**
- * What `show --json` prints: the expanded pipeline a project runs, its
- * problems and its drawing, and the same for the project's draft when one is
- * open.
+ * What `show --json` prints: the pipeline as the operator drew it (composite
+ * instances still one block), its expansion problems, its drawing, the
+ * definitions the palette lists, and the same for the project's draft when
+ * one is open (`docs/composite-blocks.md`).
  */
 const shownOf = (project: string, flow: Flow) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
+    const { drawing: written, drawn } = yield* drawnPipeline(project);
     const reading = pipelineFor(file, project);
     const draft = (yield* draftsNow)[project];
+    const available = { ...file.composites, ...(draft?.composites ?? {}) };
     const draftJson =
       draft === undefined
         ? null
-        : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites }).pipe(
+        : yield* readingOf(draft.pipeline, available).pipe(
             Effect.map((draftReading) =>
-              draftReading._tag === "Failed"
-                ? { pipeline: null, problems: draftReading.problems, drawing: null }
-                : {
-                    pipeline: draftReading.pipeline,
-                    problems: draftReading.problems,
-                    drawing: drawingOf(draftReading.pipeline, flow),
-                  },
+              viewOf(draft.pipeline, draftReading.problems, available, flow),
             ),
           );
-    if (reading._tag === "Failed") {
-      return {
-        project,
-        drawn: reading.drawn,
-        choices: CHOICES,
-        pipeline: null,
-        problems: reading.problems,
-        drawing: null,
-        draft: draftJson,
-      };
-    }
-    const problems = yield* problemsAgainstLadder(reading.pipeline);
+    const problems =
+      reading._tag === "Failed" ? reading.problems : yield* problemsAgainstLadder(reading.pipeline);
     return {
       project,
-      drawn: reading.drawn,
-      choices: CHOICES,
-      pipeline: reading.pipeline,
-      problems,
-      drawing: drawingOf(reading.pipeline, flow),
+      drawn,
+      choices: {
+        ...choicesOf(available),
+        // Definitions this project's draft made. `composite show` reads only stored ones, so the pane refuses to open these until the draft is saved.
+        unsaved: Object.keys(draft?.composites ?? {}).sort(),
+      },
+      ...viewOf(written, problems, available, flow),
       draft: draftJson,
     };
   });
 
-/** What an editor that cannot load foreman's modules offers for a block's settings, from the schemas themselves. */
-const CHOICES = {
-  insertable: INSERTABLE,
-  steps: STEPS,
-  roles: AgentNode.fields.role.literals,
-  landings: LANDINGS,
+/**
+ * The as-written drawing and the expanded ids each instance covers, so a page
+ * that cannot load this module still draws instances as one block and places
+ * tasks that stand inside on them.
+ */
+const viewOf = (
+  drawing: Drawing,
+  problems: ReadonlyArray<string>,
+  composites: Composites,
+  flow: Flow,
+) => {
+  return { pipeline: drawing, problems, drawing: writtenDrawingOf(drawing, composites, flow) };
 };

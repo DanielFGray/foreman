@@ -50,11 +50,15 @@ export class Simulator {
   back(count, cx) { this.events = this.events.slice(0, count); this.run(cx); }
 
   // How the board marks a block: where the task stands now, a block it passed, or neither.
+  // A stand inside a composite instance marks that instance (`covers` on its card).
   mark(blockId) {
     const last = this.trace?.steps.at(-1);
     if (!this.on || last === undefined) return null;
-    if (standsAt(last.placement) === blockId) return "here";
-    return last.route.includes(blockId) ? "passed" : null;
+    const covers = this.pane.view().drawing.blocks.find((block) => block.id === blockId)?.covers ?? [];
+    const here = standsAt(last.placement);
+    if (here === blockId || covers.includes(here)) return "here";
+    if (last.route.includes(blockId) || covers.some((id) => last.route.includes(id))) return "passed";
+    return null;
   }
 
   // The pretend task, the events offered where it stands, and the steps so far.

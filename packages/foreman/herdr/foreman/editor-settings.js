@@ -15,6 +15,8 @@ export const FIELDS = {
   newSource: { label: "filter", placeholder: "a tasks filter; empty takes every task", of: () => "" },
   exitName: { label: "name", placeholder: "lower-case words and hyphens, then Enter", of: () => "" },
   newExit: { label: "new exit", placeholder: "a name for the agent to end its run with, then Enter", of: () => "" },
+  // The name a MakeComposite selection is saved under.
+  compositeName: { label: "name", placeholder: "a name for the new kind, then Enter", of: () => "" },
 };
 
 // What each input shows for a block, or for no block.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { expand } from "./composite.ts";
+import { coversOf, expand } from "./composite.ts";
 import {
   type CompositeDefinition,
   type Composites,
@@ -520,5 +520,33 @@ describe("expand: ids and entries", () => {
     expect(result._tag).toBe("Expanded");
     if (result._tag !== "Expanded") return;
     expect(problemsOf(result.pipeline, OFFERS)).toContain("two blocks are named end");
+  });
+
+  test("coversOf names the expanded ids each instance draws as one block", () => {
+    const drawn = withReviewInstances({ id: "checks", prefix: "checks." });
+    const covers = coversOf(drawn, COMPOSITES);
+    expect([...covers.keys()]).toEqual(["checks"]);
+    expect(covers.get("checks")).toEqual(["checks.review-gate", "checks.review"]);
+  });
+
+  test("coversOf with an empty prefix keeps the definition's own block ids", () => {
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "loop" },
+        {
+          kind: "composite",
+          id: "loop",
+          of: "review-loop",
+          prefix: "",
+          set: {},
+          exits: [
+            { id: "exit-landable", to: "done" },
+            { id: "exit-rework", to: "queue" },
+          ],
+        },
+        { kind: "done", id: "done" },
+      ],
+    };
+    expect(coversOf(drawn, COMPOSITES).get("loop")).toEqual(["review-gate", "review"]);
   });
 });

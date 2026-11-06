@@ -167,7 +167,9 @@ when a definition it uses changed since that draft began.
 
 The Pipeline view draws an instance as one block with its exits. A task that
 stands at a block inside it is drawn on the instance. Opening the instance
-shows its definition, which the operator edits as above. The palette lists
+shows its definition, which the operator edits as above. A definition that a
+project draft made opens once that draft is saved: until then it is not stored,
+and `composite show` cannot read it. The palette lists
 each definition beside the built-in kinds.
 
 ## What it replaces, and conflicts
