@@ -595,8 +595,9 @@ const heldRow = (held: Held): ColumnRow => ({
  * One project whose last space closed while foreman's tasks were mid-pipeline.
  *
  * The project name is the key: reopening any space there resumes every listed
- * task, so one row per project is the whole answer. The second line names the
- * work and the fix, because neither belongs on a key.
+ * task, so one row per project is the whole answer. The row carries no project
+ * of its own: the pane shows a project-scoped row only for the open space, and
+ * this project has none, so a scoped row would be seen by no pane at all.
  */
 const strandedRow = (stranded: Stranded): ColumnRow => ({
   column: "stranded",
@@ -606,7 +607,7 @@ const strandedRow = (stranded: Stranded): ColumnRow => ({
   task: undefined,
   ready: undefined,
   worker: undefined,
-  project: stranded.project,
+  project: undefined,
   reason: undefined,
   unreviewed: undefined,
   stale: undefined,
@@ -618,13 +619,14 @@ const strandedRow = (stranded: Stranded): ColumnRow => ({
   committed: false,
 });
 
-const strandedDetail = ({ tasks: [first, ...rest] }: Stranded): string => {
+// Names the project, since the row carries none to point a reader at it.
+const strandedDetail = ({ project, tasks: [first, ...rest] }: Stranded): string => {
   const ids = [first, ...rest].map((task) => task.id);
   const what =
     rest.length === 0
       ? `${first.id} mid-pipeline`
       : `${ids.length} mid-pipeline tasks (${ids.join(", ")})`;
-  return `${what}; reopen a space to resume`;
+  return `${project}: ${what}; reopen a ${project} space to resume`;
 };
 
 /**

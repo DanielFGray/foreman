@@ -57,7 +57,7 @@ import { Header } from "./header.js";
 import { Models } from "./models.js";
 import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
-import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, touches } from "./status.js";
+import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, rowsShownIn, touches } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
 const VERSION = 6;
@@ -250,7 +250,7 @@ export default class Foreman extends View {
   landed() { const project = this.project(); return (this.published?.landed ?? []).filter((one) => one.project === project); }
   // A row in no project (an orphaned worker, a spent account, a branch whose
   // task is gone) shows in every project, so no space hides it.
-  rows() { const project = this.project(); return (this.published?.rows ?? []).filter((row) => row.project === null || row.project === project); }
+  rows() { return rowsShownIn(this.published?.rows ?? [], this.project()); }
   // The epics being driven, by key: each one's title and how many of its tasks are done.
   epics() { return new Map((this.published?.epics ?? []).map((epic) => [epic.key, epic])); }
 

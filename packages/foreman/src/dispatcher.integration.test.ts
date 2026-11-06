@@ -3990,7 +3990,7 @@ describe("work outside the managed set", () => {
 
     expect(
       published.rows.filter((row) => row.view === "attention" && row.label === "stranded"),
-    ).toMatchObject([{ key: "pg", actions: [] }]);
+    ).toMatchObject([{ key: "pg", project: null, actions: [] }]);
   });
 
   test("reopening the space resumes the pipeline: the row clears and the approved task lands", async () => {

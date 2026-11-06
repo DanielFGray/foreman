@@ -234,11 +234,13 @@ describe("views", () => {
 
   // Closing a project's last space drops its mid-pipeline tasks out of every
   // managed reading; the stranded row is the signal, and the fix is outside
-  // the screen — reopening a space — so it takes no action key.
+  // the screen — reopening a space — so it takes no action key. It carries no
+  // project, so every pane shows it, and its detail names the project.
   test("a stranded project names the mid-pipeline work and takes no action", () => {
     expect(row("attention", "pg-sourcerer").label).toBe("stranded");
+    expect(row("attention", "pg-sourcerer").project).toBeUndefined();
     expect(row("attention", "pg-sourcerer").detail).toBe(
-      "ts-a773d6 mid-pipeline; reopen a space to resume",
+      "pg-sourcerer: ts-a773d6 mid-pipeline; reopen a pg-sourcerer space to resume",
     );
     expect(actionsFor("stranded", row("attention", "pg-sourcerer"))).toEqual([]);
   });
