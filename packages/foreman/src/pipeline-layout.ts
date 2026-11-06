@@ -3,6 +3,8 @@
 // column is as wide as its widest block, a row as tall as its tallest, and a
 // wire's route is a list of points that the view draws as a path.
 import type { DrawnNode, Drawing as PipelineDrawing, Landing, Pipeline } from "./pipeline.ts";
+import { coversOf } from "./composite.ts";
+import type { Composites } from "./pipeline.ts";
 import {
   type Belt,
   type BeltWire,
@@ -605,4 +607,49 @@ export const summaryOf = (node: DrawnNode): string => {
     case "composite":
       return node.of;
   }
+};
+
+/**
+ * A drawing as written: each composite instance one block, with the expanded
+ * ids it covers and every exit by the definition's name (a return to the queue
+ * has no wire to read it from), and each of its wires labelled by that name. A
+ * page that cannot load foreman's modules draws instances, and edits their
+ * exits, from this alone. It serves a pipeline and a definition's blocks alike.
+ */
+export const writtenDrawingOf = (
+  pipeline: PipelineDrawing,
+  composites: Composites,
+  flow: Flow,
+): Drawing => {
+  const layout = drawingOf(pipeline, flow);
+  const covers = coversOf(pipeline, composites);
+  return {
+    ...layout,
+    blocks: layout.blocks.map((block) => {
+      const ids = covers.get(block.id);
+      const instance = pipeline.nodes.find((node) => node.id === block.id);
+      if (instance?.kind !== "composite")
+        return ids === undefined ? block : { ...block, covers: ids };
+      const named = composites[instance.of]?.exits ?? [];
+      const exits = instance.exits.map((exit) => ({
+        id: exit.id,
+        name: named.find((one) => one.id === exit.id)?.name ?? exit.id,
+        to: exit.to,
+      }));
+      return { ...block, ...(ids === undefined ? {} : { covers: ids }), exits };
+    }),
+    wires: layout.wires.map((wire) => {
+      const from = pipeline.nodes.find((node) => node.id === wire.from);
+      if (from?.kind !== "composite") return wire;
+      const exitId =
+        typeof wire.port === "string" && wire.port.startsWith("exit:")
+          ? wire.port.slice("exit:".length)
+          : undefined;
+      const name =
+        exitId === undefined
+          ? undefined
+          : composites[from.of]?.exits.find((exit) => exit.id === exitId)?.name;
+      return name === undefined ? wire : { ...wire, label: name };
+    }),
+  };
 };

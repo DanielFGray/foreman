@@ -12,7 +12,7 @@ import {
 import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
 import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
 import { PipelineError } from "./pipeline-error.ts";
-import { drawingOf, type Flow } from "./pipeline-layout.ts";
+import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { choicesOf } from "./pipeline-belt.ts";
 
 /**
@@ -43,7 +43,7 @@ const shownDefinition = (
   name,
   definition,
   pipeline: { nodes: definition.blocks },
-  drawing: drawingOf({ nodes: definition.blocks }, flow),
+  drawing: writtenDrawingOf({ nodes: definition.blocks }, composites, flow),
   choices: {
     ...choicesOf(composites),
     outs: definition.exits.map((exit) => ({ id: exit.id, name: exit.name })),

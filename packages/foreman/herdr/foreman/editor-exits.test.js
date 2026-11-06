@@ -135,3 +135,28 @@ describe("instanceExitRows", () => {
   });
   test("a block with no exits lists none", () => expect(instanceExitRows(undefined)).toEqual([]));
 });
+
+describe("instanceExitRows in an opened definition", () => {
+  // A nested instance as `composite show` draws it: one exit leaves the definition by an out, the other returns to the queue.
+  const nested = {
+    id: "nested",
+    kind: "composite",
+    exits: [
+      { id: "exit-landable", name: "landable", to: "out:exit-done" },
+      { id: "exit-rework", name: "rework", to: "queue" },
+    ],
+  };
+  test("lists the exit that leaves by an out and the queued one", () =>
+    expect(instanceExitRows(nested).map((row) => [row.name, row.to, row.returns])).toEqual([
+      ["landable", "out:exit-done", false],
+      ["rework", "queue", true],
+    ]));
+  test("the queued exit's port is the one a Rejoin to an outer out names", () =>
+    expect({
+      wire: { from: nested.id, port: instanceExitRows(nested)[1].port },
+      to: "out:exit-done",
+    }).toEqual({
+      wire: { from: "nested", port: "exit:exit-rework" },
+      to: "out:exit-done",
+    }));
+});

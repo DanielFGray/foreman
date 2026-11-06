@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
@@ -69,6 +69,17 @@ const refusePipeline = (...args: ReadonlyArray<string>) =>
   );
 
 const change = (value: unknown) => JSON.stringify(value);
+
+/** What a run of the composite command prints. */
+const printedComposite = async (...args: ReadonlyArray<string>) => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    await runComposite(...args);
+    return log.mock.calls.map((call) => call.join(" ")).join("\n");
+  } finally {
+    log.mockRestore();
+  }
+};
 
 const reviewLoop = {
   entry: "review-gate",
@@ -179,6 +190,61 @@ describe("foreman composite", () => {
     expect(refused).toMatch(/review-gate|entry|unknown|missing|reaches/i);
     expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"]).toEqual(reviewLoop);
     expect(JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]).toBeDefined();
+  });
+
+  test("a nested instance in an opened definition lists every exit in show and edit, the queued one routable to an outer out", async () => {
+    // `outer` holds one instance of review-loop whose second exit returns to the queue,
+    // which the drawing has no wire for.
+    const outer = {
+      entry: "nested",
+      exits: [{ id: "exit-done", name: "done" }],
+      params: [],
+      blocks: [
+        {
+          kind: "composite",
+          id: "nested",
+          of: "review-loop",
+          prefix: "nested.",
+          set: {},
+          exits: [
+            { id: "exit-landable", to: "out:exit-done" },
+            { id: "exit-rework", to: "queue" },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pipelines: { amux: pipelineWithReviewLoop() },
+        composites: { "review-loop": reviewLoop, outer },
+      }),
+    );
+    const exitsOf = (shown: {
+      drawing: { blocks: ReadonlyArray<{ id: string; exits?: unknown }> };
+    }) => shown.drawing.blocks.find((block) => block.id === "nested")?.exits;
+    const queued = [
+      { id: "exit-landable", name: "landable", to: "out:exit-done" },
+      { id: "exit-rework", name: "rework", to: "queue" },
+    ];
+
+    expect(exitsOf(JSON.parse(await printedComposite("show", "outer", "--json")))).toEqual(queued);
+    const rerouted = JSON.parse(
+      await printedComposite(
+        "edit",
+        "outer",
+        change({
+          _tag: "Rejoin",
+          wire: { from: "nested", port: "exit:exit-rework" },
+          to: "out:exit-done",
+        }),
+        "--json",
+      ),
+    );
+    expect(exitsOf(rerouted)).toEqual([
+      queued[0],
+      { id: "exit-rework", name: "rework", to: "out:exit-done" },
+    ]);
   });
 
   test("a definition a project draft made is not readable until that draft is saved", async () => {

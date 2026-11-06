@@ -1,7 +1,7 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
 import { Dispatcher, newWorkspace } from "./dispatcher.ts";
-import { coversOf, expand } from "./composite.ts";
+import { expand } from "./composite.ts";
 import {
   AgentNode,
   type Composites,
@@ -26,7 +26,7 @@ import {
   updatePipelinesFile,
 } from "./pipeline-file.ts";
 import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
-import { drawingOf, type Flow } from "./pipeline-layout.ts";
+import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { choicesOf } from "./pipeline-belt.ts";
 import { policyPath, readPolicy, scopesOf } from "./policy.ts";
@@ -812,40 +812,5 @@ const viewOf = (
   composites: Composites,
   flow: Flow,
 ) => {
-  const layout = drawingOf(drawing, flow);
-  const covers = coversOf(drawing, composites);
-  return {
-    pipeline: drawing,
-    problems,
-    drawing: {
-      ...layout,
-      blocks: layout.blocks.map((block) => {
-        const ids = covers.get(block.id);
-        const instance = drawing.nodes.find((node) => node.id === block.id);
-        if (instance?.kind !== "composite")
-          return ids === undefined ? block : { ...block, covers: ids };
-        // Every exit, a return to the queue too, which has no wire to read it from.
-        const named = composites[instance.of]?.exits ?? [];
-        const exits = instance.exits.map((exit) => ({
-          id: exit.id,
-          name: named.find((one) => one.id === exit.id)?.name ?? exit.id,
-          to: exit.to,
-        }));
-        return { ...block, ...(ids === undefined ? {} : { covers: ids }), exits };
-      }),
-      wires: layout.wires.map((wire) => {
-        const from = drawing.nodes.find((node) => node.id === wire.from);
-        if (from?.kind !== "composite") return wire;
-        const exitId =
-          typeof wire.port === "string" && wire.port.startsWith("exit:")
-            ? wire.port.slice("exit:".length)
-            : undefined;
-        const name =
-          exitId === undefined
-            ? undefined
-            : composites[from.of]?.exits.find((exit) => exit.id === exitId)?.name;
-        return name === undefined ? wire : { ...wire, label: name };
-      }),
-    },
-  };
+  return { pipeline: drawing, problems, drawing: writtenDrawingOf(drawing, composites, flow) };
 };
