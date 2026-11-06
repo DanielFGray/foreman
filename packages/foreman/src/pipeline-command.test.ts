@@ -219,6 +219,22 @@ describe("drawing a draft", () => {
     expect(JSON.parse(readFileSync(drafts, "utf8")).drafts).toEqual({});
   });
 
+  test("a save refuses a definition another project's save already created, and keeps the first", async () => {
+    await run("use", "checkout", "--project", "amux");
+    await run("use", "checkout", "--project", "fibrae");
+    const make = change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "shared" });
+    await run("edit", "amux", make);
+    await run("edit", "fibrae", make);
+    await run("save", "amux");
+    const first = JSON.parse(readFileSync(path, "utf8")).composites.shared;
+    expect(first).toBeDefined();
+    const refused = await refusal("save", "fibrae");
+    expect(refused).toContain("shared");
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    expect(file.composites.shared).toEqual(first);
+    expect(JSON.parse(readFileSync(drafts, "utf8")).drafts.fibrae).toBeDefined();
+  });
+
   test("one change of a land to pull-request leaves a draft that saves", async () => {
     await run("use", "worktree", "--project", "amux");
     await run(
