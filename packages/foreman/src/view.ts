@@ -8,6 +8,7 @@ import type {
   Held,
   Provider,
   StaleRow,
+  Stranded,
   Unreviewed,
 } from "./dispatcher.ts";
 import { reviewedBy } from "./lap.ts";
@@ -34,6 +35,7 @@ const COLUMNS = [
   "decisions",
   "asks",
   "yours",
+  "stranded",
   "held",
   "unreviewed",
   "stale",
@@ -188,6 +190,10 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
   // column the work is in, where they already apply.
   asks: ["approve"],
   yours: ["intervene", "descend", "unassign"],
+  // The fix is reopening a space for the project — an edit outside the
+  // screen. Restoring resumes the pipeline as-is because everything is
+  // derived from the world.
+  stranded: [],
   held: ["onboard"],
   unreviewed: ["adopt"],
   stale: ["intervene", "descend", "release"],
@@ -289,6 +295,7 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
     Match.when("decisions", () => state.decisions.map((active) => decisionRow(active, state))),
     Match.when("asks", () => state.asks.map(askRow)),
     Match.when("yours", () => state.yours.map((task) => yoursRow(task, state))),
+    Match.when("stranded", () => state.stranded.map(strandedRow)),
     Match.when("held", () => state.held.map(heldRow)),
     Match.when("unreviewed", () => state.unreviewed.map(unreviewedRow)),
     Match.when("stale", () => state.stale.map(staleRow)),
@@ -305,9 +312,11 @@ const rowsFor = (column: ColumnName, state: FleetState): ReadonlyArray<ColumnRow
  * keeps the column it came from, so combining their display never combines
  * their actions.
  *
- * Stale sits above unreviewed: an overtaken branch under review is about to
- * cost a review that could never land, while an unreviewed one costs nothing
- * until the operator adopts it.
+ * Stranded sits after yours: a closed project's mid-pipeline work is waiting
+ * on the operator the same way parked tasks are, and outranks an overtaken
+ * branch that still sits in a managed project. Stale sits above unreviewed:
+ * an overtaken branch under review is about to cost a review that could never
+ * land, while an unreviewed one costs nothing until the operator adopts it.
  */
 export const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<ColumnRow> => {
   // The quota view is every account behind the ladder; the quota column inside
@@ -318,6 +327,7 @@ export const rowsForView = (view: ViewName, state: FleetState): ReadonlyArray<Co
     ...rowsFor("decisions", state),
     ...rowsFor("asks", state),
     ...rowsFor("yours", state).map(attentionRow("needs you")),
+    ...rowsFor("stranded", state),
     ...rowsFor("stale", state),
     ...rowsFor("unreviewed", state),
     ...rowsFor("orphans", state),
@@ -580,6 +590,41 @@ const heldRow = (held: Held): ColumnRow => ({
   hasWork: false,
   committed: false,
 });
+
+/**
+ * One project whose last space closed while foreman's tasks were mid-pipeline.
+ *
+ * The project name is the key: reopening any space there resumes every listed
+ * task, so one row per project is the whole answer. The second line names the
+ * work and the fix, because neither belongs on a key.
+ */
+const strandedRow = (stranded: Stranded): ColumnRow => ({
+  column: "stranded",
+  key: stranded.project,
+  label: "stranded",
+  detail: strandedDetail(stranded),
+  task: undefined,
+  ready: undefined,
+  worker: undefined,
+  project: stranded.project,
+  reason: undefined,
+  unreviewed: undefined,
+  stale: undefined,
+  ask: undefined,
+  cause: undefined,
+  provider: undefined,
+  preview: undefined,
+  hasWork: true,
+  committed: false,
+});
+
+const strandedDetail = ({ tasks }: Stranded): string => {
+  const what =
+    tasks.length === 1
+      ? `${tasks[0]!.id} mid-pipeline`
+      : `${tasks.length} mid-pipeline tasks (${tasks.map((task) => task.id).join(", ")})`;
+  return `${what}; reopen a space to resume`;
+};
 
 /**
  * One account and what it has left, spent or healthy or unreadable.

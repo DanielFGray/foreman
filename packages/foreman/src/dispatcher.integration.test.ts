@@ -378,6 +378,9 @@ class World {
           (task) => task.project === project && task.status === "in_progress",
         ),
       ),
+    claimedEverywhere: Effect.sync(() =>
+      [...this.tasks.values()].filter((task) => task.status === "in_progress"),
+    ),
     // The rows the dispatcher writes are applied as the tracer applies them;
     // `run-step.test.ts` proves that agrees with the store.
     write: (id: string, row: Row) =>

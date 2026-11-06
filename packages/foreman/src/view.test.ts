@@ -117,6 +117,14 @@ const state: FleetState = {
   orphans: [],
   queue: [ready("ts-q1", [], LONG_DESCRIPTION), { ...ready("ts-q2"), charges: [charged("pro")] }],
   yours: [{ ...ready("ts-y1"), parked: "needs a decision" }],
+  stranded: [
+    {
+      project: "pg-sourcerer",
+      tasks: [
+        authoredOn({ ...task("ts-a773d6", "in_progress", []), project: "pg-sourcerer" }, "flash"),
+      ],
+    },
+  ],
   working: [
     active(
       authoredOn({ ...task("ts-w1", "in_progress", []), charges: [charged("flash")] }, "flash"),
@@ -217,10 +225,22 @@ describe("views", () => {
     expect(rows.map((each) => each.column)).toEqual([
       "decisions",
       "yours",
+      "stranded",
       "stale",
       "unreviewed",
       "held",
     ]);
+  });
+
+  // Closing a project's last space drops its mid-pipeline tasks out of every
+  // managed reading; the stranded row is the signal, and the fix is outside
+  // the screen — reopening a space — so it takes no action key.
+  test("a stranded project names the mid-pipeline work and takes no action", () => {
+    expect(row("attention", "pg-sourcerer").label).toBe("stranded");
+    expect(row("attention", "pg-sourcerer").detail).toBe(
+      "ts-a773d6 mid-pipeline; reopen a space to resume",
+    );
+    expect(actionsFor("stranded", row("attention", "pg-sourcerer"))).toEqual([]);
   });
 
   // An overtaken branch under review is about to cost a review that could
@@ -474,6 +494,7 @@ describe("orphaned workspaces", () => {
     expect(rowsForView("attention", orphaned).map((each) => each.column)).toEqual([
       "decisions",
       "yours",
+      "stranded",
       "stale",
       "unreviewed",
       "orphans",
