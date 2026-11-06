@@ -176,6 +176,8 @@ const state: FleetState = {
   scopes: new Map(),
   asks: [],
   observedAt: undefined,
+  availableMemory: undefined,
+  workerMemory: new Map(),
 };
 
 const row = (view: Parameters<typeof rowsForView>[0], key: string) => {

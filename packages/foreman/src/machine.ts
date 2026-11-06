@@ -19,12 +19,10 @@ export class Machine extends Context.Service<Machine>()("Machine", {
      * Bytes the kernel still has for new work (`MemAvailable`), or none when
      * `/proc/meminfo` is unreadable or names no such field.
      */
-    const available: Effect.Effect<Option.Option<number>> = fs
-      .readFileString("/proc/meminfo")
-      .pipe(
-        Effect.map(memAvailableOf),
-        Effect.orElseSucceed(() => Option.none<number>()),
-      );
+    const available: Effect.Effect<Option.Option<number>> = fs.readFileString("/proc/meminfo").pipe(
+      Effect.map(memAvailableOf),
+      Effect.orElseSucceed(() => Option.none<number>()),
+    );
 
     /**
      * Resident set attributed to each of `directories`, keyed by the directory
@@ -97,10 +95,7 @@ export const rssPagesOf = (text: string): Option.Option<number> => {
  * Equality counts as containment, so a process whose cwd is the worktree root
  * is attributed to it.
  */
-export const ownerOf = (
-  cwd: string,
-  directories: ReadonlyArray<string>,
-): string | undefined => {
+export const ownerOf = (cwd: string, directories: ReadonlyArray<string>): string | undefined => {
   const path = stripTrailingSlash(cwd);
   let best: string | undefined;
   for (const directory of directories) {

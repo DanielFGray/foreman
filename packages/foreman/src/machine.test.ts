@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, FileSystem, Option } from "effect";
-import {
-  Machine,
-  PAGE_SIZE,
-  memAvailableOf,
-  ownerOf,
-  rssPagesOf,
-} from "./machine.ts";
+import { Machine, PAGE_SIZE, memAvailableOf, ownerOf, rssPagesOf } from "./machine.ts";
 
 describe("memAvailableOf", () => {
   test("reads MemAvailable as bytes", () => {
@@ -76,7 +70,8 @@ describe("Machine over a pretend /proc", () => {
       pathOrDescriptor: path,
     } as never);
   const fs = FileSystem.makeNoop({
-    readFileString: (path) => (path in files ? Effect.succeed(files[path]!) : notFound("readFileString", path)),
+    readFileString: (path) =>
+      path in files ? Effect.succeed(files[path]!) : notFound("readFileString", path),
     readLink: (path) => (path in links ? Effect.succeed(links[path]!) : notFound("readLink", path)),
     readDirectory: (path) =>
       path === "/proc"
@@ -84,7 +79,9 @@ describe("Machine over a pretend /proc", () => {
         : notFound("readDirectory", path),
   });
 
-  const withMachine = <A, E>(use: (m: Machine) => Effect.Effect<A, E>) =>
+  const withMachine = <A, E>(
+    use: (m: Effect.Success<typeof Machine.make>) => Effect.Effect<A, E>,
+  ) =>
     Effect.runPromise(
       Effect.gen(function* () {
         const m = yield* Machine.make;

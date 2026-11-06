@@ -232,6 +232,17 @@ describe("the task board", () => {
     expect(board([], { landed }).landed).toEqual([]);
   });
 
+  test("publishes free RAM and per-worker RSS for the status line", () => {
+    const published = board([], {
+      availableMemory: 8 * 1024 ** 3,
+      workerMemory: new Map([["ts-aaaaaa", 700 * 1024 ** 2]]),
+    });
+    expect(published.availableMemory).toBe(8 * 1024 ** 3);
+    expect(published.workerMemory).toEqual({ "ts-aaaaaa": 700 * 1024 ** 2 });
+    expect(board([]).availableMemory).toBe(null);
+    expect(board([]).workerMemory).toEqual({});
+  });
+
   test("names each task's epic, and how far the epic has come", () => {
     const epic: Item = { ...task("ep-1", "in_progress"), type: "epic" };
     const under = { ...task("ts-under", "open"), parent: Option.some("ep-1") };
