@@ -19,6 +19,7 @@ import {
 } from "./lap.ts";
 import { place, STANDARD_PIPELINES } from "./pipeline.ts";
 import { renameExit, setEmpty } from "./pipeline-belt.ts";
+import { pipelineOf } from "./pipeline-fixture.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
@@ -147,10 +148,10 @@ describe("a task's lap", () => {
 
   test("a renamed claim exit keeps its meaning, and a claim exit by name alone has none", () => {
     const pipeline = STANDARD_PIPELINES.worktree;
-    const renamed = renameExit(pipeline, "author", "already-done", "nothing-to-do");
+    const renamed = pipelineOf(renameExit(pipeline, "author", "already-done", "nothing-to-do"));
     const claimed = { runs: [authorRun("low", { open: false, ending: "already-done" })] };
     expect(authorClaim(claimed, renamed)?.name).toBe("nothing-to-do");
-    const unmarked = setEmpty(renamed, "author", "nothing-to-do", undefined);
+    const unmarked = pipelineOf(setEmpty(renamed, "author", "nothing-to-do", undefined));
     expect(authorClaim(claimed, unmarked)).toBeUndefined();
   });
 });

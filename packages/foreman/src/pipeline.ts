@@ -261,15 +261,6 @@ export const Drawing = S.Struct({ nodes: S.Array(DrawnNode) });
 export type Drawing = typeof Drawing.Type;
 
 /**
- * Engine blocks of a drawing. Composite instances are dropped. Prefer
- * `expand` when the drawing must run; this is for edit helpers and tests that
- * already hold only engine blocks.
- */
-export const engineOf = (drawing: Drawing): Pipeline => ({
-  nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
-});
-
-/**
  * An exit a task's run named: the block that named it, the exit's id, its
  * name as the drawing stands now (absent when the drawing lacks it),
  * and the commit it was named on.
@@ -593,8 +584,7 @@ export const offersOf = (seats: Seats): SeatOffers => ({
  * falls back to the standard pipeline, because running a flow the operator did
  * not draw is worse than stopping.
  */
-export const problemsOf = (drawing: Drawing, offers: SeatOffers): ReadonlyArray<string> => {
-  const pipeline = engineOf(drawing);
+export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArray<string> => {
   const shape = shapeProblems(pipeline, offers);
   if (shape.length > 0) return shape;
 
@@ -1025,10 +1015,12 @@ export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
  * match (`docs/composite-blocks.md`).
  */
 export const standardOf = (drawing: Drawing): Option.Option<Standard> => {
-  if (drawing.nodes.some((node) => node.kind === "composite")) return Option.none();
-  const pipeline: Pipeline = {
-    nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
-  };
+  const nodes: Array<PipelineNode> = [];
+  for (const node of drawing.nodes) {
+    if (node.kind === "composite") return Option.none();
+    nodes.push(node);
+  }
+  const pipeline: Pipeline = { nodes };
   const has = (kind: PipelineNode["kind"]) => pipeline.nodes.some((node) => node.kind === kind);
   const land = pipeline.nodes.find((node): node is LandNode => node.kind === "land");
   const workspace = has("worktree") ? "worktree" : has("branch") ? "checkout" : "direct";

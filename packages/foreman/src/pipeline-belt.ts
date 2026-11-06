@@ -15,8 +15,9 @@ import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   type DrawnNode,
   type Drawing,
-  engineOf,
   type Exit,
+  type Pipeline,
+  type PipelineNode,
   PULL_REQUEST_STEPS,
   pullRequestLands,
   QUEUE,
@@ -343,15 +344,24 @@ export const configure = (pipeline: Drawing, id: string, setting: BlockSetting):
  * is taken out, since it holds a step that never comes.
  */
 const landingGated = (before: Drawing, after: Drawing, id: string): Drawing => {
-  const stranded = new Set(strandedPublishGates(engineOf(before)).map((gate) => gate.id));
-  const kept = strandedPublishGates(engineOf(after))
+  const stranded = new Set(strandedPublishGates(writtenBlocks(before)).map((gate) => gate.id));
+  const kept = strandedPublishGates(writtenBlocks(after))
     .filter((gate) => !stranded.has(gate.id))
     .reduce((pipeline, gate) => remove(pipeline, gate.id), after);
-  const land = pullRequestLands(engineOf(kept)).filter((node) => node.id === id);
+  const land = pullRequestLands(writtenBlocks(kept)).filter((node) => node.id === id);
   return PULL_REQUEST_STEPS.filter(
-    (step) => routesWithoutGate(engineOf(kept), step, land).length > 0,
+    (step) => routesWithoutGate(writtenBlocks(kept), step, land).length > 0,
   ).reduce((pipeline, step) => gatedBefore(pipeline, id, step), kept);
 };
+
+/**
+ * The engine blocks of a drawing as written, composite instances dropped. Only
+ * the publish-gate and pull-request checks above read it: landing edits are
+ * a later slice, which will read the expansion instead.
+ */
+const writtenBlocks = (drawing: Drawing): Pipeline => ({
+  nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
+});
 
 /**
  * Puts a gate of `step` directly before block `id`: every wire into the block

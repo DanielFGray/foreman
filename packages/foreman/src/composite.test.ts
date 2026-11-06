@@ -399,3 +399,126 @@ describe("expand", () => {
     );
   });
 });
+
+describe("expand: ids and entries", () => {
+  // The reviewer's reproducer: with empty prefixes the instance id `wrap`
+  // equals the id of the entry block it expands to.
+  test("an instance whose entry block shares its id, through nested empty prefixes, terminates", () => {
+    const inner: CompositeDefinition = {
+      entry: "wrap",
+      exits: [],
+      params: [],
+      blocks: [{ kind: "done", id: "wrap" }],
+    };
+    const outer: CompositeDefinition = {
+      entry: "wrap",
+      exits: [],
+      params: [],
+      blocks: [{ kind: "composite", id: "wrap", of: "inner", prefix: "", set: {}, exits: [] }],
+    };
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "top" },
+        { kind: "composite", id: "top", of: "outer", prefix: "", set: {}, exits: [] },
+      ],
+    };
+    const result = expand(drawn, { inner, outer });
+    expect(result).toEqual({
+      _tag: "Expanded",
+      pipeline: {
+        nodes: [
+          { kind: "source", id: "queue", filter: "", next: "wrap" },
+          { kind: "done", id: "wrap" },
+        ],
+      },
+    });
+  });
+
+  // An exit wired to the parent's `foo` must stay there, even though the
+  // definition holds an instance whose id is `foo` with prefix "".
+  test("an exit wire to a parent block named like a nested instance is not rewritten", () => {
+    const leaf: CompositeDefinition = {
+      entry: "end",
+      exits: [{ id: "x", name: "x" }],
+      params: [],
+      blocks: [{ kind: "gate", id: "end", step: "review", next: "out:x" }],
+    };
+    const wrapper: CompositeDefinition = {
+      entry: "foo",
+      exits: [{ id: "e", name: "e" }],
+      params: [],
+      blocks: [
+        {
+          kind: "composite",
+          id: "foo",
+          of: "leaf",
+          prefix: "",
+          set: {},
+          exits: [{ id: "x", to: "out:e" }],
+        },
+      ],
+    };
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "wrapper" },
+        {
+          kind: "composite",
+          id: "wrapper",
+          of: "wrapper",
+          prefix: "",
+          set: {},
+          exits: [{ id: "e", to: "foo" }],
+        },
+        { kind: "done", id: "foo" },
+      ],
+    };
+    const result = expand(drawn, { leaf, wrapper });
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    expect(result.pipeline.nodes).toEqual([
+      { kind: "source", id: "queue", filter: "", next: "end" },
+      { kind: "gate", id: "end", step: "review", next: "foo" },
+      { kind: "done", id: "foo" },
+    ]);
+  });
+
+  test("two drawn nodes named alike are a failure naming the id, not a silent choice", () => {
+    const definition: CompositeDefinition = {
+      entry: "end",
+      exits: [],
+      params: [],
+      blocks: [{ kind: "done", id: "end" }],
+    };
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "x" },
+        { kind: "composite", id: "x", of: "done-only", prefix: "a.", set: {}, exits: [] },
+        { kind: "composite", id: "x", of: "done-only", prefix: "b.", set: {}, exits: [] },
+      ],
+    };
+    expect(expand(drawn, { "done-only": definition })).toEqual({
+      _tag: "Failed",
+      problems: ["two blocks are named x"],
+    });
+  });
+
+  test("two instances with prefix empty of one definition give the duplicate-block problem", () => {
+    const definition: CompositeDefinition = {
+      entry: "end",
+      exits: [],
+      params: [],
+      blocks: [{ kind: "done", id: "end" }],
+    };
+    const drawn: Drawing = {
+      nodes: [
+        { kind: "source", id: "queue", filter: "", next: "a" },
+        { kind: "composite", id: "a", of: "done-only", prefix: "", set: {}, exits: [] },
+        { kind: "composite", id: "b", of: "done-only", prefix: "", set: {}, exits: [] },
+      ],
+    };
+    const result = expand(drawn, { "done-only": definition });
+    expect(result._tag).toBe("Expanded");
+    if (result._tag !== "Expanded") return;
+    expect(problemsOf(result.pipeline, OFFERS)).toContain("two blocks are named end");
+  });
+});

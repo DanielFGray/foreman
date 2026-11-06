@@ -8,7 +8,6 @@ import {
   DEFAULT_PIPELINE,
   describeStandard,
   Drawing,
-  engineOf,
   instructionNames,
   LANDINGS,
   instructionProblems,
@@ -94,9 +93,7 @@ const show = Command.make("show", { project, json, flow }, ({ project, json, flo
 
 const check = Command.make("check", { source }, ({ source }) =>
   Effect.gen(function* () {
-    const drawing = yield* pipelineFrom(source);
-    const problems = yield* problemsAgainstLadder(engineOf(drawing));
-    if (problems.length > 0) return yield* refuse(problems);
+    yield* checkedDrawing(yield* pipelineFrom(source));
     yield* Console.log("the pipeline can run");
   }),
 ).pipe(Command.withDescription("Check a pipeline against the ladder without writing it"));
@@ -698,15 +695,25 @@ const readingOf = (drawing: Drawing, composites: Composites) =>
   });
 
 /**
- * Checks a drawing's expansion against the ladder, then makes the as-written
- * drawing the one `project` runs. Both set and save write through here.
+ * Refuses a drawing whose expansion, read with the pipelines file's
+ * definitions, fails or does not run against the ladder. `check` and `set`
+ * both stop here, so they agree on what runs.
  */
-const runPipeline = (project: string, drawing: Drawing) =>
+const checkedDrawing = (drawing: Drawing) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
     const expanded = yield* expandedOf(drawing, file.composites);
     const problems = yield* problemsAgainstLadder(expanded);
     if (problems.length > 0) return yield* refuse(problems);
+  });
+
+/**
+ * Checks a drawing, then makes the as-written drawing the one `project` runs.
+ * Both set and save write through here.
+ */
+const runPipeline = (project: string, drawing: Drawing) =>
+  Effect.gen(function* () {
+    yield* checkedDrawing(drawing);
     yield* updatePipelines(pipelinesPath(), (pipelines) => ({ ...pipelines, [project]: drawing }));
   });
 

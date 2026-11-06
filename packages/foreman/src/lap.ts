@@ -1,6 +1,6 @@
 import { Option } from "effect";
 import { isExit, type Run } from "tasks";
-import { type Drawing, type Exit, engineOf, exitAt } from "./pipeline.ts";
+import { type Exit, exitAt, type Pipeline } from "./pipeline.ts";
 
 /**
  * What foreman reads off a task's runs.
@@ -111,10 +111,10 @@ export const directBase = (task: Runs): string | undefined =>
  * task would say to escape it, so a reviewer confirms it against the trunk
  * like any other diff, and only the reviewer's approval closes the task.
  */
-export const authorClaim = (task: Runs, drawing: Drawing): Exit | undefined => {
+export const authorClaim = (task: Runs, pipeline: Pipeline): Exit | undefined => {
   const author = lapOf(task).find((run) => run.role === "author");
   const exit = exitAt(
-    engineOf(drawing),
+    pipeline,
     Option.getOrUndefined(author?.node ?? Option.none()),
     Option.getOrUndefined(author?.ending ?? Option.none()),
   );

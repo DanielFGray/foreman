@@ -673,12 +673,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
       const offers = offersOf(settings);
       // One expansion per project: instruction names come from those readings.
-      const pipelineReadings = new Map(
-        projects.map((project) => [project.name, pipelineFor(drawings.value, project.name)]),
+      const projectReadings = projects.map(
+        (project) => [project.name, pipelineFor(drawings.value, project.name)] as const,
       );
       const instructionSources = [
         DEFAULT_PIPELINE,
-        ...[...pipelineReadings.values()].flatMap((reading) =>
+        ...projectReadings.flatMap(([, reading]) =>
           reading._tag === "Expanded" ? [reading.pipeline] : [],
         ),
       ];
@@ -686,14 +686,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         instructionSources.flatMap(instructionNames),
       );
       const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
-        projects.map((project) => [
-          project.name,
-          projectPipeline(
-            pipelineReadings.get(project.name)!,
-            drawings.error,
-            offers,
-            instructions,
-          ),
+        projectReadings.map(([name, reading]) => [
+          name,
+          projectPipeline(reading, drawings.error, offers, instructions),
         ]),
       );
       const targetHolds = yield* Effect.forEach(projects, (project) => {
