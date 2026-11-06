@@ -38,7 +38,15 @@ import { INSERTABLE } from "./pipeline-belt.ts";
 import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
-import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
+import {
+  type Draft,
+  draftsPath,
+  readDrafts,
+  sameDefinition,
+  sameDrawing,
+  updateDrafts,
+} from "./pipeline-draft.ts";
+import { PipelineError } from "./pipeline-error.ts";
 import { Settings, settings } from "./config.ts";
 import { pretend, type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { factsOf } from "./pipeline-facts.ts";
@@ -46,6 +54,8 @@ import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
+
+export { PipelineError };
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -224,6 +234,17 @@ const save = Command.make("save", { project }, ({ project }) =>
       return yield* new PipelineError({
         detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
       });
+    const file = yield* pipelinesNow;
+    const drifted = usedDefinitions(draft.pipeline).filter((name) => {
+      if (draft.composites[name] !== undefined) return false;
+      if (!(name in draft.bases)) return false;
+      return !sameDefinition(draft.bases[name] ?? null, file.composites[name] ?? null);
+    });
+    if (drifted.length > 0) {
+      return yield* new PipelineError({
+        detail: `a composite this draft uses changed since the draft began: ${drifted.join(", ")}. Discard the draft and draw it again`,
+      });
+    }
     yield* runPipeline(project, draft.pipeline, draft.composites);
     yield* updateDrafts(draftsPath(), ({ [project]: _saved, ...others }) => others);
     yield* Console.log(`${project} now runs its draft`);
@@ -598,14 +619,6 @@ const traceLine = (step: TraceReport["steps"][number]): string =>
     .filter((part) => part !== "")
     .join("  ");
 
-export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
-
 /**
  * The problems that stop `pipeline` running: against the ladder and the
  * reviewers, and in the instructions files its agent blocks read.
@@ -675,13 +688,22 @@ const draftsNow = Effect.gen(function* () {
 
 /** A draft that starts as the drawing the project runs now, as written. */
 const freshDraft = (project: string) =>
-  drawnPipeline(project).pipe(
-    Effect.map(({ drawing, drawn }): Draft => ({
-      base: drawn ? drawing : null,
+  Effect.gen(function* () {
+    const file = yield* pipelinesNow;
+    const drawn = file.pipelines[project];
+    const drawing = drawn ?? (DEFAULT_PIPELINE as Drawing);
+    return {
+      base: drawn === undefined ? null : drawing,
       pipeline: drawing,
       composites: {},
-    })),
-  );
+      bases: { ...file.composites },
+    } satisfies Draft;
+  });
+
+/** Composite definition names a drawing's instances name. */
+const usedDefinitions = (drawing: Drawing): ReadonlyArray<string> => [
+  ...new Set(drawing.nodes.flatMap((node) => (node.kind === "composite" ? [node.of] : []))),
+];
 
 /**
  * Expand `drawing` with these definitions, or refuse with the expansion

@@ -18,11 +18,15 @@ import { type Read, rewrite } from "./shared-file.ts";
  *
  * `composites` holds definitions MakeComposite added with this draft, so a
  * save writes both the drawing and those definitions (`docs/composite-blocks.md`).
+ *
+ * `bases` is the composite definitions as the file held them when the draft
+ * began. A save refuses when a definition the draft uses has changed since.
  */
 export const Draft = S.Struct({
   base: S.NullOr(Drawing),
   pipeline: Drawing,
   composites: Composites.pipe(S.withDecodingDefault(Effect.succeed({}))),
+  bases: Composites.pipe(S.withDecodingDefault(Effect.succeed({}))),
 });
 export type Draft = typeof Draft.Type;
 
@@ -32,10 +36,14 @@ export type Drafts = typeof Drafts.Type;
 /**
  * A composite definition draft: the definition under edit, and the one it
  * began from (`base`), none when it is new.
+ *
+ * `composites` holds nested definitions MakeComposite added while editing this
+ * one, written beside it on save (`docs/composite-blocks.md`).
  */
 export const CompositeDraft = S.Struct({
   base: S.NullOr(CompositeDefinition),
   definition: CompositeDefinition,
+  composites: Composites.pipe(S.withDecodingDefault(Effect.succeed({}))),
 });
 export type CompositeDraft = typeof CompositeDraft.Type;
 
@@ -54,6 +62,8 @@ export { draftsPath };
 export const readDrafts = (path: string) =>
   readFile(path).pipe(Effect.map((read): Read<Drafts> => ({ ...read, value: read.value.drafts })));
 
+export const readDraftsFile = (path: string) => readFile(path);
+
 /** Rewrites the project drafts through `change`, keeping composite drafts as they are. */
 export const updateDrafts = (path: string, change: (drafts: Drafts) => Drafts) =>
   rewrite(path, DraftsFile, readFile, (file) => ({
@@ -61,10 +71,28 @@ export const updateDrafts = (path: string, change: (drafts: Drafts) => Drafts) =
     drafts: change(file.drafts),
   }));
 
+/** Rewrites the composite definition drafts, keeping project drafts as they are. */
+export const updateCompositeDrafts = (
+  path: string,
+  change: (composites: CompositeDrafts) => CompositeDrafts,
+) =>
+  rewrite(path, DraftsFile, readFile, (file) => ({
+    ...file,
+    composites: change(file.composites),
+  }));
+
 /** Whether two drawings are the same, compared as the file stores them. */
 export const sameDrawing = (one: Drawing | null, other: Drawing | null): boolean =>
   JSON.stringify(one === null ? null : S.encodeSync(Drawing)(one)) ===
   JSON.stringify(other === null ? null : S.encodeSync(Drawing)(other));
+
+/** Whether two composite definitions are the same, compared as the file stores them. */
+export const sameDefinition = (
+  one: CompositeDefinition | null,
+  other: CompositeDefinition | null,
+): boolean =>
+  JSON.stringify(one === null ? null : S.encodeSync(CompositeDefinition)(one)) ===
+  JSON.stringify(other === null ? null : S.encodeSync(CompositeDefinition)(other));
 
 const NONE: DraftsFile = { drafts: {}, composites: {} };
 
