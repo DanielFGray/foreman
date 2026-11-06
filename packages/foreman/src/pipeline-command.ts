@@ -821,7 +821,17 @@ const viewOf = (
       ...layout,
       blocks: layout.blocks.map((block) => {
         const ids = covers.get(block.id);
-        return ids === undefined ? block : { ...block, covers: ids };
+        const instance = drawing.nodes.find((node) => node.id === block.id);
+        if (instance?.kind !== "composite")
+          return ids === undefined ? block : { ...block, covers: ids };
+        // Every exit, a return to the queue too, which has no wire to read it from.
+        const named = composites[instance.of]?.exits ?? [];
+        const exits = instance.exits.map((exit) => ({
+          id: exit.id,
+          name: named.find((one) => one.id === exit.id)?.name ?? exit.id,
+          to: exit.to,
+        }));
+        return { ...block, ...(ids === undefined ? {} : { covers: ids }), exits };
       }),
       wires: layout.wires.map((wire) => {
         const from = drawing.nodes.find((node) => node.id === wire.from);

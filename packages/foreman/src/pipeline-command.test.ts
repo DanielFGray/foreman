@@ -184,6 +184,43 @@ describe("drawing a draft", () => {
     );
   });
 
+  test("an instance inserted from the palette draws every exit by the definition's name, the queue ones too", async () => {
+    await run("use", "checkout", "--project", "amux");
+    await run(
+      "edit",
+      "amux",
+      change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "review-loop" }),
+    );
+    await run(
+      "edit",
+      "amux",
+      change({
+        _tag: "InsertOn",
+        wire: { from: "queue", port: "next" },
+        kind: "composite",
+        of: "review-loop",
+      }),
+    );
+    const shown = JSON.parse(await printed("show", "amux", "--json"));
+    const blocks = shown.draft.drawing.blocks.filter(
+      (one: { kind: string }) => one.kind === "composite",
+    );
+    const inserted = blocks.find((one: { exits: ReadonlyArray<{ to: string }> }) =>
+      one.exits.some((exit) => exit.to === "queue"),
+    );
+    // The first exit leads on; every later one returns to the queue, where the drawing has no wire.
+    expect(inserted.exits.map((exit: { to: string }) => exit.to === "queue")).toEqual(
+      inserted.exits.map((_: unknown, at: number) => at > 0),
+    );
+    const names = draftOf().composites["review-loop"].exits.map(
+      (exit: { name: string }) => exit.name,
+    );
+    expect(inserted.exits.map((exit: { name: string }) => exit.name)).toEqual(names);
+    expect(
+      shown.draft.drawing.wires.filter((wire: { from: string }) => wire.from === inserted.id),
+    ).toHaveLength(1);
+  });
+
   test("save checks the draft, then writes it as the pipeline the project runs", async () => {
     await run("set", "amux", fileWith(pinned));
     await run(
