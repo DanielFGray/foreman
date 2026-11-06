@@ -58,6 +58,10 @@ export const updatePipelines = (path: string, change: (pipelines: Pipelines) => 
     pipelines: change(file.pipelines),
   }));
 
+/** Rewrites the whole pipelines file (drawings and composite definitions). */
+export const updatePipelinesFile = (path: string, change: (file: PipelinesFile) => PipelinesFile) =>
+  rewrite(path, PipelinesFile, readFile, change);
+
 const NONE: PipelinesFile = { pipelines: {}, composites: {} };
 
 /** The file as stored. */

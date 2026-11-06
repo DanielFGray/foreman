@@ -94,6 +94,34 @@ const expandList = (
 };
 
 /**
+ * The expanded engine blocks of one instance, and the entry a wire into it
+ * reaches. Used by Unpack so the drawing keeps the same ids the expansion
+ * would have used (`docs/composite-blocks.md`).
+ */
+export const unpackInstance = (
+  instance: CompositeNode,
+  composites: Composites,
+):
+  | {
+      readonly _tag: "Unpacked";
+      readonly blocks: ReadonlyArray<PipelineNode>;
+      readonly entry: string;
+    }
+  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<string> } => {
+  const problems: Array<string> = [];
+  const blocks = expandInstance(instance, composites, new Set(), problems);
+  if (problems.length > 0) return { _tag: "Failed", problems: [...new Set(problems)] };
+  const entry = entryOf(instance, composites, new Set());
+  if (entry === undefined) {
+    return {
+      _tag: "Failed",
+      problems: [`${instance.id}: the definition ${instance.of} has no entry`],
+    };
+  }
+  return { _tag: "Unpacked", blocks, entry };
+};
+
+/**
  * The blocks of one instance after parameter replace, prefixing and wire
  * rewrite. Empty when the instance cannot expand; `problems` holds why.
  * `stack` names the definitions this instance sits inside, so a definition
