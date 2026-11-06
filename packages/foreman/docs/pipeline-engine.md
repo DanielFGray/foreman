@@ -71,9 +71,11 @@ the claim and the workspace. See "The standard pipeline, drawn with exits" in
 | done | — | (ends) | A work block. Completes a task that has no branch: its commits are already on the operator's branch. |
 | park | — | (ends) | Parks the task for the operator (a row in `parks`). |
 | check | `command` | `exits`: `passed`, `failed` | A work block. Runs `command` on the task's branch tip, in the project's proving ground. Takes no slot. |
+| composite | `of`, `prefix`, `set`, `exits: [{id, to}]` | `exits` by id | An instance of a saved composite definition. Expansion replaces it with the definition's blocks before every reader runs, validates, places or traces (`docs/composite-blocks.md`). |
 
 A **work block** runs something and takes time: agent, check, land, done.
-Sources, routers, gates, branches and worktrees decide at once.
+Sources, routers, gates, branches and worktrees decide at once. A composite is
+not a work block: readers see only its expansion.
 
 ### How each work block ends a run
 
@@ -301,7 +303,9 @@ A pipeline that fails validation is not run. The reading says why, and the
 project takes no step. It never falls back to the standard pipeline, because
 running a flow the operator did not draw is worse than stopping.
 
-- Block kinds and props as above. Pinned rungs are on the ladder.
+- Block kinds and props as above, including `composite`. Pinned rungs are on the
+  ladder. Validation runs on the expansion: an unknown definition, an unwired
+  exit, a missing parameter or a recursion is a problem of that project only.
 - At least one source. Every wire and every exit ends at a block or `queue`.
   Every block is reachable from a source. From every block, some route reaches
   a land, a done or a park.
@@ -374,8 +378,10 @@ gate(author), gate(climb) → agent(author, ladder)
 ```
 
 A pipeline is standard when it holds the same blocks as the standard pipeline of
-its own workspace blocks and land, in any order (`standardOf`). `pipeline show`
-names it. `pipeline use` rewrites only a standard pipeline.
+its own workspace blocks and land, in any order (`standardOf`). `standardOf`
+reads the pipeline as written, so a pipeline with a composite instance is not
+standard, and `pipeline use` does not rewrite it. `pipeline show` names a
+standard drawing. `pipeline use` rewrites only a standard pipeline.
 
 The router is `authorStep` in `src/policy.ts`, drawn as a block. A conflict
 returns with no evidence. So the router reads the same labels as before, and the
