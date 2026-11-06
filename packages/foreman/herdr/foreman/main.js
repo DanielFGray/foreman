@@ -36,8 +36,10 @@
 //
 // Editing (`editor.js`) changes the project's draft, never the pipeline it
 // runs: each change is one `foreman pipeline edit`, and `foreman pipeline
-// save` checks the draft and makes it the pipeline. foreman owns the draft, so
-// it outlives this pane.
+// save` checks the draft and makes it the pipeline. A composite instance is
+// one block on that drawing; opening it edits its definition through
+// `foreman composite edit`. Shift-click while editing picks blocks for
+// MakeComposite. foreman owns the drafts, so they outlive this pane.
 //
 // The pane reads the queue with `foreman queue --project <name> --json` every
 // 5 seconds, not from state.json, for the Queue cards' actions and epics. A
@@ -57,6 +59,7 @@ import { Header } from "./header.js";
 import { Models } from "./models.js";
 import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
+import { byBlock } from "./placements.js";
 import { NEXT_MODE, TASK_ID, newlyLanded, projectOfCommonDir, refusalOf, touches } from "./status.js";
 
 // The state.json version this pane reads; bumped with PUBLISHED_VERSION.
@@ -86,6 +89,10 @@ export default class Foreman extends View {
     // Undefined before the first read, which a space in no project also needs.
     this.following = undefined;
     this.zoom = 1; this.pan = [0, 0]; this.size = null; this.selected = null;
+    // Blocks picked for MakeComposite (shift-click while editing).
+    this.selection = new Set();
+    // The composite definition the pane is editing, or null for the project's pipeline.
+    this.definition = null;
     // The drawing fits the pane until the operator zooms or pans it.
     this.fitted = true;
     this.header = new Header(this);
@@ -286,18 +293,44 @@ export default class Foreman extends View {
     if (this.drawingReading) { this.drawingStale = true; return; }
     this.drawingReading = true;
     this.drawingStale = false;
-    this.ask(["pipeline", "show", project, "--json", "--flow", this.flow()], cx, () => {}, (cx) => {
+    const args = this.definition === null
+      ? ["pipeline", "show", project, "--json", "--flow", this.flow()]
+      : ["composite", "show", this.definition, "--json", "--flow", this.flow()];
+    this.ask(args, cx, () => {}, (cx) => {
       this.drawingReading = false;
       if (this.drawingStale) this.loadDrawing(cx);
     });
   }
 
   // Sends one change to the draft. foreman answers the new reading, and the
-  // block the change added, which the pane then selects.
+  // block the change added, which the pane then selects. A definition draft
+  // goes through `foreman composite edit`.
   change(change, cx) {
-    this.ask(["pipeline", "edit", this.project(), JSON.stringify(change), "--json", "--flow", this.flow()], cx, (shown, cx) => {
-      if (shown.added !== null) this.select(shown.added, cx);
+    const args = this.definition === null
+      ? ["pipeline", "edit", this.project(), JSON.stringify(change), "--json", "--flow", this.flow()]
+      : ["composite", "edit", this.definition, JSON.stringify(change), "--json", "--flow", this.flow()];
+    this.ask(args, cx, (shown, cx) => {
+      if (shown.added !== null && shown.added !== undefined) this.select(shown.added, cx);
+      this.selection = new Set();
     });
+  }
+
+  // Opens a composite definition for editing through `foreman composite edit`.
+  openDefinition(name, cx) {
+    this.definition = name;
+    this.selected = null;
+    this.selection = new Set();
+    this.shown = null;
+    this.loadDrawing(cx);
+  }
+
+  // Leaves the definition and shows the project's pipeline again.
+  closeDefinition(cx) {
+    this.definition = null;
+    this.selected = null;
+    this.selection = new Set();
+    this.shown = null;
+    this.loadDrawing(cx);
   }
 
   // Runs a foreman command that changes something, shows its refusal if it
@@ -316,11 +349,14 @@ export default class Foreman extends View {
   // tick and publishes, and the watch reads the file again then.
   approve(key, cx) { this.act(["approve", key], cx, (_done, cx) => cx.notify()); }
 
-  // Runs `foreman pipeline save` or `discard`, then reads the pipeline again.
-  // A refusal changed nothing, so the draft stays on screen with the refusal
-  // above it: a reading would clear the refusal it answers.
+  // Runs save or discard on the project's pipeline draft, or on the open
+  // composite definition draft. A refusal changed nothing, so the draft stays
+  // on screen with the refusal above it: a reading would clear the refusal it answers.
   finish(verb, cx) {
-    this.act(["pipeline", verb, this.project()], cx, (done, cx) => {
+    const args = this.definition === null
+      ? ["pipeline", verb, this.project()]
+      : ["composite", verb, this.definition];
+    this.act(args, cx, (done, cx) => {
       if (!done) { cx.notify(); return; }
       if (verb === "save" && this.editor.on) this.editor.toggle(cx);
       this.loadDrawing(cx);
@@ -355,7 +391,7 @@ export default class Foreman extends View {
     return exec(cmd, [...rest, ...args]);
   }
 
-  // Takes a reading of the pipeline, and drops a pick that names a block the drawing lacks.
+  // Takes a reading of the pipeline or a definition, and drops a pick that names a block the drawing lacks.
   showing(shown, cx) {
     const before = this.shown === null ? undefined : this.selectedNode();
     this.shown = shown;
@@ -363,17 +399,35 @@ export default class Foreman extends View {
     else this.editor.follow(before, this.selectedNode(), cx);
     if (this.fitted) this.fit(cx);
     // A change to the draft can change every step after it.
-    if (this.sim.on) this.sim.run(cx);
-    if (this.fleet.on) this.fleet.run(cx);
+    if (this.definition === null) {
+      if (this.sim.on) this.sim.run(cx);
+      if (this.fleet.on) this.fleet.run(cx);
+    }
   }
 
-  // What the drawing shows: the draft while one is open, else the pipeline the project runs.
-  view() { return this.shown.draft ?? this.shown; }
+  // What the drawing shows: a definition while one is open, else the draft
+  // while one is open, else the pipeline the project runs.
+  view() {
+    if (this.definition !== null) return this.shown;
+    return this.shown.draft ?? this.shown;
+  }
 
   // The way the drawing should run in this pane: down a column, across a row.
   flow() { return this.size !== null && this.size.height > this.size.width ? "down" : "across"; }
 
-  select(id, cx) { this.selected = id; this.editor.load(this.selectedNode(), cx); }
+  select(id, cx) {
+    this.selected = id;
+    if (id === null) this.selection = new Set();
+    this.editor.load(this.selectedNode(), cx);
+  }
+
+  // Shift-click while editing adds or drops a block in the MakeComposite selection.
+  selectToggle(id, cx) {
+    if (this.selection.has(id)) this.selection.delete(id);
+    else this.selection.add(id);
+    this.selected = id;
+    this.editor.load(this.selectedNode(), cx);
+  }
 
   selectedNode() {
     return this.selected === null ? undefined : this.view().pipeline.nodes.find((node) => node.id === this.selected);
@@ -403,14 +457,15 @@ export default class Foreman extends View {
     if (this.shown === null) return root.child(div().p(12).text_color(t.muted).child(this.problem === null ? "reading the pipeline…" : ""));
     const { drawing } = this.view();
     const draft = this.shown.draft;
-    const at = byBlock(this.fleet.placements() ?? this.placements());
+    const at = byBlock(this.fleet.placements() ?? this.placements(), drawing.blocks);
     const editing = this.editor.on;
+    const draftProblems = this.definition === null ? (draft?.problems ?? []) : [];
     return root
       .child(this.toolbar(t, at))
       .when(editing, (el) => el.child(this.editor.toolbar(t)))
-      .when(this.sim.on, (el) => el.child(this.sim.toolbar(t)))
-      .when(this.fleet.on, (el) => el.child(this.fleet.toolbar(t)))
-      .when(draft !== null && draft.problems.length > 0, (el) => el.child(problemsView(t, draft.problems)))
+      .when(this.definition === null && this.sim.on, (el) => el.child(this.sim.toolbar(t)))
+      .when(this.definition === null && this.fleet.on, (el) => el.child(this.fleet.toolbar(t)))
+      .when(draftProblems.length > 0, (el) => el.child(problemsView(t, draftProblems)))
       .child(div().id("drawing").relative().flex_1().w_full().min_h(0).overflow_hidden()
         .on_scroll_wheel((event, cx) => this.scroll(event, cx))
         .child(div().absolute().left(this.pan[0]).top(this.pan[1]).w(drawing.width * this.zoom).h(drawing.height * this.zoom)
@@ -431,15 +486,31 @@ export default class Foreman extends View {
           .child(label)));
   }
 
-  // The bar over the drawing: which pipeline it is, and its tools.
+  // The bar over the drawing: which pipeline or definition it is, and its tools.
   toolbar(t, at) {
     const problems = this.shown.problems ?? [];
     const placed = [...at.values()].reduce((sum, tasks) => sum + tasks.length, 0);
+    const draftOpen = this.shown.draft !== null;
+    if (this.definition !== null) {
+      return h_flex().flex_wrap().px(10).py(6).gap_x(10).gap_y(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+        .child(div().text_color(t.accent).child(`definition ${this.definition}`))
+        .child(chip(t, "back to pipeline", "close-definition", (cx) => this.closeDefinition(cx)))
+        .when(draftOpen, (el) => el
+          .child(div().text_color(t.accent).child("showing the draft"))
+          .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
+          .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
+        .child(chip(t, this.editor.on ? "stop editing" : "edit", "edit", (cx) => { this.editor.toggle(cx); cx.notify(); }))
+        .child(div().flex_1())
+        .child(chip(t, "−", "zoom-out", (cx) => this.zoomBy(1 / 1.2, cx)))
+        .child(div().text_color(t.muted).child(`${Math.round(this.zoom * 100)}%`))
+        .child(chip(t, "+", "zoom-in", (cx) => this.zoomBy(1.2, cx)))
+        .child(chip(t, "fit", "zoom-fit", (cx) => this.fit(cx)));
+    }
     return h_flex().flex_wrap().px(10).py(6).gap_x(10).gap_y(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().text_color(t.muted).child(this.shown.drawn ? "its own pipeline" : "the standard pipeline"))
       .child(div().text_color(t.muted).child(`${placed} task${placed === 1 ? "" : "s"} ${this.fleet.on ? "simulated" : "placed"}`))
       .when(problems.length > 0, (el) => el.child(div().text_color(t.blocked).child(`${problems.length} problem${problems.length === 1 ? "" : "s"}`)))
-      .when(this.shown.draft !== null, (el) => el
+      .when(draftOpen, (el) => el
         .child(div().text_color(t.accent).child("showing the draft"))
         .child(chip(t, "save", "save", (cx) => this.finish("save", cx)))
         .child(chip(t, "discard", "discard", (cx) => this.finish("discard", cx))))
@@ -485,19 +556,27 @@ export default class Foreman extends View {
     const asks = this.shownAsks();
     const asking = tasks.filter((task) => asks.has(task.key)).length;
     const card = block.h >= 40;
-    const mark = this.sim.mark(block.id);
-    const gate = this.gateMode(block, t);
+    const mark = this.definition === null ? this.sim.mark(block.id) : null;
+    const gate = this.definition === null ? this.gateMode(block, t) : null;
+    const picked = this.selection.has(block.id);
     const border = this.editor.rejoining !== null ? t.accent
+      : picked ? t.accent
       : mark === "here" ? t.working : mark === "passed" ? t.done
       : running > 0 ? t.working : tasks.length > 0 ? t.accent : t.border;
     return div().id(`block-${block.id}`).absolute()
       .left(block.x * z).top(block.y * z).w(block.w * z).h(block.h * z)
-      .bg(this.selected === block.id ? t.selected : t.surface)
-      .border(mark === "here" ? 2 : 1).border_color(border)
+      .bg(this.selected === block.id || picked ? t.selected : t.surface)
+      .border(mark === "here" || picked ? 2 : 1).border_color(border)
       .rounded(card ? 6 : 14).px(6 * z).overflow_hidden()
       .hover((s) => s.bg(t.hover))
-      .on_click((_event, cx) => {
+      .on_click((event, cx) => {
         if (this.editor.clickedBlock(block, cx)) return;
+        if (this.editor.on && event.modifiers?.shift === true) {
+          this.selectToggle(block.id, cx);
+          cx.notify();
+          return;
+        }
+        this.selection = new Set();
         this.select(this.selected === block.id ? null : block.id, cx);
         cx.notify();
       })
@@ -584,16 +663,6 @@ const problemsView = (t, problems) =>
   v_flex().id("problems").max_h(90).overflow_y_scrollbar().px(10).py(4).gap(2).bg(t.surface).border_b(1).border_color(t.border)
     .child(div().text_color(t.blocked).child("the draft cannot run yet:"))
     .children(problems.map((problem) => div().text_color(t.muted).child(problem)));
-
-// Each block's tasks, by the block foreman says a board draws them on
-// (`stands`): a task not yet started at its source, a waiting one at the gate
-// in front of its block. Running first, then by key.
-const byBlock = (placements) => {
-  const at = new Map();
-  for (const placement of placements) at.set(placement.stands, [...(at.get(placement.stands) ?? []), placement]);
-  for (const tasks of at.values()) tasks.sort((a, b) => (a.state === "running") === (b.state === "running") ? a.key.localeCompare(b.key) : a.state === "running" ? -1 : 1);
-  return at;
-};
 
 // A task's runs in a line, newest last: the block (or the role, for a run that
 // names none), the rung, and how it ended.

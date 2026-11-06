@@ -111,6 +111,13 @@ export class Editor {
   submit(key, value, cx) {
     const change = (one) => this.pane.change(one, cx);
     if (key === "newSource") { this.addingSource = false; this.inputs.newSource.set_value(""); change({ _tag: "AddSource", filter: value }); return; }
+    if (key === "compositeName") {
+      const ids = [...this.pane.selection];
+      this.inputs.compositeName.set_value("");
+      this.pane.selection = new Set();
+      if (ids.length > 0 && value !== "") change({ _tag: "MakeComposite", ids, name: value });
+      return;
+    }
     const node = this.pane.selectedNode();
     if (node === undefined) return;
     const configure = (setting) => change({ _tag: "Configure", id: node.id, setting: { kind: node.kind, ...setting } });
@@ -148,28 +155,54 @@ export class Editor {
   }
 
   // What editing asks for now: a kind for the wire a "+" was clicked on, the
-  // block a rewired exit leads to, or a new source's filter.
+  // block a rewired exit leads to, a MakeComposite name, or a new source's filter.
   toolbar(t) {
     const bar = h_flex().flex_wrap().px(10).py(5).gap_x(8).gap_y(4).items_center().bg(t.surface).border_b(1).border_color(t.border);
     if (this.inserting !== null) {
       const { from, port, to } = this.inserting;
+      const { insertable = [], composites = [] } = this.pane.shown.choices;
       return bar.child(div().text_color(t.muted).child(`put on ${from} → ${to}:`))
-        .children(this.pane.shown.choices.insertable.map((kind) => chip(t, kind, `insert-${kind}`, (cx) => {
+        .children(insertable.map((kind) => chip(t, kind, `insert-${kind}`, (cx) => {
           this.inserting = null;
           this.pane.change({ _tag: "InsertOn", wire: { from, port }, kind }, cx);
+        })))
+        .children(composites.map((name) => chip(t, name, `insert-composite-${name}`, (cx) => {
+          this.inserting = null;
+          this.pane.change({ _tag: "InsertOn", wire: { from, port }, kind: "composite", of: name }, cx);
         })))
         .child(chip(t, "cancel", "insert-cancel", (cx) => { this.inserting = null; cx.notify(); }));
     }
     if (this.rejoining !== null) {
+      const outs = this.pane.shown.choices?.outs ?? [];
       return bar.child(div().text_color(t.muted).child(`click the block ${this.rejoining.from}'s ${portName(this.rejoining)} should lead to`))
+        .children(outs.map((exit) => chip(t, `out:${exit.name}`, `rejoin-out-${exit.id}`, (cx) => {
+          const wire = this.rejoining;
+          this.rejoining = null;
+          this.pane.change({ _tag: "Rejoin", wire: { from: wire.from, port: wire.port }, to: `out:${exit.id}` }, cx);
+        })))
         .child(chip(t, "cancel", "rejoin-cancel", (cx) => { this.rejoining = null; cx.notify(); }));
     }
     if (this.addingSource) {
       return bar.child(div().flex_1().child(this.field(t, "newSource")))
         .child(chip(t, "cancel", "source-cancel", (cx) => { this.addingSource = false; cx.notify(); }));
     }
-    return bar.child(div().text_color(t.muted).child("click + on a wire to put a block there, or a block to change it"))
-      .child(chip(t, "+ source", "add-source", (cx) => { this.addingSource = true; this.inputs.newSource.focus(); cx.notify(); }));
+    if (this.pane.selection.size > 0 && this.pane.definition === null) {
+      return bar.child(div().text_color(t.muted).child(`make a composite of ${[...this.pane.selection].join(", ")}:`))
+        .child(div().flex_1().child(this.field(t, "compositeName")))
+        .child(chip(t, "cancel", "composite-cancel", (cx) => {
+          this.pane.selection = new Set();
+          this.inputs.compositeName.set_value("");
+          cx.notify();
+        }));
+    }
+    return bar.child(div().text_color(t.muted).child(
+      this.pane.definition === null
+        ? "click + on a wire to put a block there, shift-click blocks to make a composite, or a block to change it"
+        : "click + on a wire to put a block there, or a block to change it",
+    ))
+      .when(this.pane.definition === null, (el) => el.child(chip(t, "+ source", "add-source", (cx) => {
+        this.addingSource = true; this.inputs.newSource.focus(); cx.notify();
+      })));
   }
 
   // The "+" that puts a block on a wire, where foreman's drawing places it.
@@ -231,6 +264,17 @@ export class Editor {
           .child(picker(t, "how", choices.landings, node.how ?? "merge", (how, cx) => configure({ how, onto: node.onto }, cx)))
           .child(this.field(t, "onto"))
           .child(actions);
+      case "composite":
+        return box
+          .child(div().text_color(t.muted).child(`of ${node.of}`))
+          .child(h_flex().flex_wrap().gap(6)
+            .child(chip(t, "open definition", "open-definition", (cx) => this.pane.openDefinition(node.of, cx)))
+            .child(chip(t, "unpack", "unpack", (cx) => change({ _tag: "Unpack", id: node.id }, cx)))
+            .child(chip(t, "remove block", "remove", (cx) => change({ _tag: "Remove", id: node.id }, cx))))
+          .children(Object.entries(node.set ?? {}).map(([name, value]) =>
+            h_flex().gap(6).items_center()
+              .child(div().w(64).text_color(t.muted).child(name))
+              .child(div().flex_1().truncate().child(String(value)))));
       default:
         return box.child(actions);
     }
