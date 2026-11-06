@@ -161,3 +161,102 @@ describe("SetParam and InsertOn composite through applyChange", () => {
     expect(result.pipeline.nodes.some((node) => node.kind === "composite")).toBe(true);
   });
 });
+
+describe("Unpack keeps the expansion when an exit targets a block of the drawing", () => {
+  const loop: Composites = {
+    loop: {
+      entry: "g",
+      exits: [{ id: "again", name: "again" }],
+      params: [],
+      blocks: [{ kind: "gate", id: "g", step: "review", next: "out:again" }],
+    },
+  };
+
+  const unpackSame = (drawing: Drawing, id: string, composites: Composites) => {
+    const unpacked = unpack(drawing, id, composites);
+    expect(unpacked._tag).toBe("Unpacked");
+    if (unpacked._tag !== "Unpacked") return;
+    const sorted = (pipeline: { readonly nodes: ReadonlyArray<{ readonly id: string }> }) =>
+      JSON.stringify(pipeline.nodes.toSorted((a, b) => a.id.localeCompare(b.id)));
+    expect(sorted(expansionOf(unpacked.pipeline, composites))).toEqual(
+      sorted(expansionOf(drawing, composites)),
+    );
+  };
+
+  test("an exit that returns to its own instance points at the instance's entry", () => {
+    const drawing = {
+      nodes: [
+        { kind: "source", id: "s", filter: "", next: "i" },
+        {
+          kind: "composite",
+          id: "i",
+          of: "loop",
+          prefix: "i.",
+          set: {},
+          exits: [{ id: "again", to: "i" }],
+        },
+      ],
+    } satisfies Drawing;
+    unpackSame(drawing, "i", loop);
+  });
+
+  test("an exit that leads to a sibling instance points at the sibling's entry", () => {
+    const drawing = {
+      nodes: [
+        { kind: "source", id: "s", filter: "", next: "a" },
+        {
+          kind: "composite",
+          id: "a",
+          of: "loop",
+          prefix: "a.",
+          set: {},
+          exits: [{ id: "again", to: "b" }],
+        },
+        {
+          kind: "composite",
+          id: "b",
+          of: "loop",
+          prefix: "b.",
+          set: {},
+          exits: [{ id: "again", to: "a" }],
+        },
+      ],
+    } satisfies Drawing;
+    unpackSame(drawing, "a", loop);
+  });
+
+  test("a self-return through a nested instance keeps the outer entry", () => {
+    const composites: Composites = {
+      ...loop,
+      outer: {
+        entry: "n",
+        exits: [{ id: "back", name: "back" }],
+        params: [],
+        blocks: [
+          {
+            kind: "composite",
+            id: "n",
+            of: "loop",
+            prefix: "",
+            set: {},
+            exits: [{ id: "again", to: "out:back" }],
+          },
+        ],
+      },
+    };
+    const drawing = {
+      nodes: [
+        { kind: "source", id: "s", filter: "", next: "i" },
+        {
+          kind: "composite",
+          id: "i",
+          of: "outer",
+          prefix: "i.",
+          set: {},
+          exits: [{ id: "back", to: "i" }],
+        },
+      ],
+    } satisfies Drawing;
+    unpackSame(drawing, "i", composites);
+  });
+});

@@ -96,11 +96,14 @@ const expandList = (
 /**
  * The expanded engine blocks of one instance, and the entry a wire into it
  * reaches. Used by Unpack so the drawing keeps the same ids the expansion
- * would have used (`docs/composite-blocks.md`).
+ * would have used (`docs/composite-blocks.md`). The instance's exits are read
+ * in the scope of `scope`, the drawing it sits in, as `expand` reads them, so
+ * an exit that leads back to the instance itself reaches its entry.
  */
 export const unpackInstance = (
   instance: CompositeNode,
   composites: Composites,
+  scope: ReadonlyArray<DrawnNode>,
 ):
   | {
       readonly _tag: "Unpacked";
@@ -108,10 +111,15 @@ export const unpackInstance = (
       readonly entry: string;
     }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<string> } => {
+  const resolve = entryResolver(scope, composites);
+  const resolved: CompositeNode = {
+    ...instance,
+    exits: instance.exits.map((exit) => ({ ...exit, to: resolve(exit.to) })),
+  };
   const problems: Array<string> = [];
-  const blocks = expandInstance(instance, composites, new Set(), problems);
+  const blocks = expandInstance(resolved, composites, new Set(), problems);
   if (problems.length > 0) return { _tag: "Failed", problems: [...new Set(problems)] };
-  const entry = entryOf(instance, composites, new Set());
+  const entry = entryOf(resolved, composites, new Set());
   if (entry === undefined) {
     return {
       _tag: "Failed",

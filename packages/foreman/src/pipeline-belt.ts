@@ -334,7 +334,7 @@ export const unpack = (
   if (instance?.kind !== "composite") {
     return { _tag: "Refused", reason: `${id} is not a composite instance` };
   }
-  const opened = unpackInstance(instance, composites);
+  const opened = unpackInstance(instance, composites, pipeline.nodes);
   if (opened._tag === "Failed") {
     return { _tag: "Refused", reason: opened.problems.join("; ") };
   }
