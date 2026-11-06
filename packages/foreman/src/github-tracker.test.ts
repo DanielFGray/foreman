@@ -127,6 +127,75 @@ describe("githubTracker reads", () => {
   });
 });
 
+describe("githubTracker.add", () => {
+  test("files an open issue with its labels", async () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(
+      Effect.provide(
+        fakeGh((args) => {
+          calls.push(args);
+          if (args[0] === "issue" && args[1] === "create") {
+            return ok("https://github.com/o/r/issues/9\n");
+          }
+          return ok("");
+        }).layer,
+      ),
+    );
+    const id = await Effect.runPromise(
+      Effect.flatMap(tracker, (t) =>
+        t.add({
+          project: "beta",
+          title: "new",
+          description: "body",
+          labels: ["size:2"],
+        }),
+      ),
+    );
+    expect(id).toBe("beta#9");
+    const create = calls.find((args) => args[0] === "issue" && args[1] === "create");
+    expect(create).toEqual([
+      "issue",
+      "create",
+      "-R",
+      "o/r",
+      "--title",
+      "new",
+      "--body-file",
+      "-",
+      "--label",
+      "size:2",
+    ]);
+  });
+
+  test("files a proposed issue with a status:proposed label", async () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(
+      Effect.provide(
+        fakeGh((args) => {
+          calls.push(args);
+          if (args[0] === "issue" && args[1] === "create") {
+            return ok("https://github.com/o/r/issues/10\n");
+          }
+          return ok("");
+        }).layer,
+      ),
+    );
+    await Effect.runPromise(
+      Effect.flatMap(tracker, (t) =>
+        t.add({
+          project: "beta",
+          title: "idea",
+          description: "body",
+          labels: [],
+          status: "proposed",
+        }),
+      ),
+    );
+    const create = calls.find((args) => args[0] === "issue" && args[1] === "create");
+    expect(create).toContain("status:proposed");
+  });
+});
+
 describe("githubTracker.claim", () => {
   test("re-reads until the claim shows", async () => {
     const { calls, tracker } = github({ lag: 2 });

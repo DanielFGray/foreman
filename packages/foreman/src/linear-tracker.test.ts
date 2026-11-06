@@ -5,6 +5,7 @@ import { checkPlace, linearTracker, type IssueNode, type WorkflowState } from ".
 import { TrackerError } from "./tracker.ts";
 
 const STATES: ReadonlyArray<WorkflowState> = [
+  { id: "s-triage", name: "Triage", type: "triage" },
   { id: "s-backlog", name: "Backlog", type: "backlog" },
   { id: "s-ready", name: "Ready", type: "unstarted" },
   { id: "s-todo", name: "Todo", type: "unstarted" },
@@ -354,6 +355,23 @@ describe("linearTracker", () => {
       stateId: "s-todo",
       labelIds: ["l-size", "l-new"],
     });
+  });
+
+  test("add with proposed files in Triage", async () => {
+    const linear = fakeLinear();
+    await run(
+      Effect.flatMap(linear.tracker, (tracker) =>
+        tracker.add({
+          project: "foreman",
+          title: "idea",
+          description: "text",
+          labels: [],
+          status: "proposed",
+        }),
+      ),
+    );
+    const create = linear.calls.find((call) => call.document.includes("issueCreate"));
+    expect(create?.variables["input"]).toMatchObject({ stateId: "s-triage" });
   });
 
   test("logs come oldest first", async () => {

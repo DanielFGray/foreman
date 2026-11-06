@@ -5,6 +5,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  addSchedule,
   admit,
   clearProject,
   DEFAULT_POLICY,
@@ -15,10 +16,13 @@ import {
   permit,
   Policy,
   readPolicy,
+  removeSchedule,
+  schedulesOf,
   setProjectStep,
   setProjectTracker,
   updatePolicy,
   pullRequestOf,
+  type Schedule,
 } from "./policy.ts";
 
 const withGrants = (...grants: Policy["grants"]): Policy => ({ ...DEFAULT_POLICY, grants });
@@ -393,5 +397,67 @@ describe("setProjectTracker", () => {
       alpha: { tracker: "github" },
     });
     expect(setProjectTracker(linear, "alpha", "tasks").projects).toEqual({});
+  });
+});
+
+describe("schedules", () => {
+  const retro: Schedule = {
+    name: "retro",
+    every: { landed: 5 },
+    title: "Retro: {{ project }} since {{ since }}",
+    template: "retro",
+    labels: ["research"],
+  };
+
+  test("add replaces one of the same name and remove drops an empty project entry", () => {
+    const first = addSchedule(DEFAULT_POLICY, "alpha", retro);
+    expect(schedulesOf(first, "alpha")).toEqual([retro]);
+    const replaced = addSchedule(first, "alpha", { ...retro, every: { landed: 3 } });
+    expect(schedulesOf(replaced, "alpha")).toEqual([{ ...retro, every: { landed: 3 } }]);
+    expect(removeSchedule(replaced, "alpha", "retro").projects).toEqual({});
+  });
+
+  test("a clear keeps schedules with the tracker and pull-request settings", () => {
+    const policy = clearProject(
+      setProjectStep(addSchedule(DEFAULT_POLICY, "alpha", retro), "alpha", "author", "on"),
+      "alpha",
+    );
+    expect(policy.projects).toEqual({ alpha: { schedules: [retro] } });
+  });
+
+  test("a schedule survives a write and a read when unknown fields are dropped", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "foreman-schedule-"));
+    const path = join(folder, "policy.json");
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          slots: 2,
+          default: { author: "on", climb: "on", review: "on", land: "on" },
+          projects: {
+            alpha: {
+              schedules: [{ ...retro, mystery: true }],
+              leftover: "gone",
+            },
+          },
+        }),
+      );
+      const read = await Effect.runPromise(
+        readPolicy(path).pipe(Effect.provide(BunServices.layer)),
+      );
+      expect(schedulesOf(read.policy, "alpha")).toEqual([retro]);
+      await Effect.runPromise(
+        updatePolicy(path, (policy) =>
+          addSchedule(policy, "alpha", { ...retro, every: { landed: 7 } }),
+        ).pipe(Effect.provide(BunServices.layer)),
+      );
+      const again = await Effect.runPromise(
+        readPolicy(path).pipe(Effect.provide(BunServices.layer)),
+      );
+      expect(schedulesOf(again.policy, "alpha")).toEqual([{ ...retro, every: { landed: 7 } }]);
+      expect(JSON.parse(readFileSync(path, "utf8")).projects.alpha.leftover).toBeUndefined();
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
