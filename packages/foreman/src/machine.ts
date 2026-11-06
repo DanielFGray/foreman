@@ -29,12 +29,12 @@ export class Machine extends Context.Service<Machine>()("Machine", {
      * itself. A process whose cwd equals a directory or sits under it counts
      * toward the longest matching directory; processes that match none are
      * ignored. Unreadable `/proc` entries are skipped, so a denied pid never
-     * fails the reading.
+     * fails the reading. Given no directories it reads nothing.
      */
     const residentUnder = (
       directories: ReadonlyArray<string>,
     ): Effect.Effect<ReadonlyMap<string, number>> => {
-      if (directories.length === 0) return Effect.succeed(new Map());
+      if (directories.length === 0) return Effect.succeed(new Map<string, number>());
       const normalized = directories.map(stripTrailingSlash);
       return fs.readDirectory("/proc").pipe(
         Effect.flatMap((entries) =>
@@ -45,12 +45,12 @@ export class Machine extends Context.Service<Machine>()("Machine", {
                 const cwd = yield* fs.readLink(`/proc/${pid}/cwd`).pipe(Effect.option);
                 if (Option.isNone(cwd)) return Option.none<readonly [string, number]>();
                 const owner = ownerOf(cwd.value, normalized);
-                if (owner === undefined) return Option.none<readonly [string, number]>();
+                if (Option.isNone(owner)) return Option.none<readonly [string, number]>();
                 const statm = yield* fs.readFileString(`/proc/${pid}/statm`).pipe(Effect.option);
                 if (Option.isNone(statm)) return Option.none<readonly [string, number]>();
                 const pages = rssPagesOf(statm.value);
                 if (Option.isNone(pages)) return Option.none<readonly [string, number]>();
-                return Option.some([owner, pages.value * PAGE_SIZE] as const);
+                return Option.some([owner.value, pages.value * PAGE_SIZE] as const);
               }),
             { concurrency: "unbounded" },
           ),
@@ -62,9 +62,9 @@ export class Machine extends Context.Service<Machine>()("Machine", {
             const [directory, bytes] = row.value;
             totals.set(directory, (totals.get(directory) ?? 0) + bytes);
           }
-          return totals as ReadonlyMap<string, number>;
+          return totals;
         }),
-        Effect.orElseSucceed(() => new Map() as ReadonlyMap<string, number>),
+        Effect.orElseSucceed(() => new Map<string, number>()),
       );
     };
 
@@ -74,33 +74,39 @@ export class Machine extends Context.Service<Machine>()("Machine", {
   static readonly Default = Layer.effect(this, this.make).pipe(Layer.provide(BunServices.layer));
 }
 
-/** Linux page size in bytes; x86_64 and aarch64 Linux both use 4096. */
-export const PAGE_SIZE = 4096;
+/**
+ * Bytes per resident page in `/proc/[pid]/statm`. Linux reports those counts in
+ * the kernel's page size, which is 4096 on x86_64 and on most aarch64 builds,
+ * but aarch64 kernels may be built with 16K or 64K pages. A reading on such a
+ * host undercounts RSS by the same factor; the free-memory figure is unaffected.
+ */
+const PAGE_SIZE = 4096;
 
 /** Bytes of `MemAvailable` from a `/proc/meminfo` body, or none when absent. */
-export const memAvailableOf = (text: string): Option.Option<number> => {
+const memAvailableOf = (text: string): Option.Option<number> => {
   const match = /^MemAvailable:\s+(\d+)\s+kB\s*$/m.exec(text);
   return match === null ? Option.none() : Option.some(Number(match[1]) * 1024);
 };
 
 /** Resident pages from a `/proc/[pid]/statm` body, or none when malformed. */
-export const rssPagesOf = (text: string): Option.Option<number> => {
+const rssPagesOf = (text: string): Option.Option<number> => {
   const field = text.trim().split(/\s+/)[1];
   if (field === undefined || !/^\d+$/.test(field)) return Option.none();
   return Option.some(Number(field));
 };
 
 /**
- * The longest of `directories` that contains `cwd`, or undefined when none do.
+ * The longest of `directories` that contains `cwd`, or none when none do.
  * Equality counts as containment, so a process whose cwd is the worktree root
  * is attributed to it.
  */
-export const ownerOf = (cwd: string, directories: ReadonlyArray<string>): string | undefined => {
+const ownerOf = (cwd: string, directories: ReadonlyArray<string>): Option.Option<string> => {
   const path = stripTrailingSlash(cwd);
-  let best: string | undefined;
+  let best: Option.Option<string> = Option.none();
   for (const directory of directories) {
     if (path === directory || path.startsWith(`${directory}/`)) {
-      if (best === undefined || directory.length > best.length) best = directory;
+      if (Option.isNone(best) || directory.length > best.value.length)
+        best = Option.some(directory);
     }
   }
   return best;
