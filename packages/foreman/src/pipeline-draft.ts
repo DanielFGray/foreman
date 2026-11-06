@@ -8,15 +8,22 @@
 // (`docs/composite-blocks.md`).
 import { Effect, FileSystem, Option, Schema as S } from "effect";
 import { draftsPath } from "./paths.ts";
-import { CompositeDefinition, Drawing } from "./pipeline.ts";
+import { CompositeDefinition, Composites, Drawing } from "./pipeline.ts";
 import { type Read, rewrite } from "./shared-file.ts";
 
 /**
  * A project's draft, and the drawing the operator had when it began: none when
  * the project ran the standard pipeline. Saving compares that with the drawing
  * now, so a draft never overwrites a change made since.
+ *
+ * `composites` holds definitions MakeComposite added with this draft, so a
+ * save writes both the drawing and those definitions (`docs/composite-blocks.md`).
  */
-export const Draft = S.Struct({ base: S.NullOr(Drawing), pipeline: Drawing });
+export const Draft = S.Struct({
+  base: S.NullOr(Drawing),
+  pipeline: Drawing,
+  composites: Composites.pipe(S.withDecodingDefault(Effect.succeed({}))),
+});
 export type Draft = typeof Draft.Type;
 
 export const Drafts = S.Record(S.String, Draft);

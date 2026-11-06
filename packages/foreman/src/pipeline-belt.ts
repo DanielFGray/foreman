@@ -11,13 +11,16 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
+import { expand, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
+  type CompositeDefinition,
+  type Composites,
   type DrawnNode,
   type Drawing,
   type Exit,
+  type ParamValue,
   type Pipeline,
-  type PipelineNode,
   PULL_REQUEST_STEPS,
   pullRequestLands,
   QUEUE,
@@ -26,6 +29,9 @@ import {
   strandedPublishGates,
 } from "./pipeline.ts";
 import type { Step } from "./policy.ts";
+
+/** A wire inside a definition that leaves by an exit. */
+const OUT = "out:";
 
 /** Where a block sits on the drawing: its column from the left and its row from the top. */
 export interface Cell {
@@ -132,7 +138,15 @@ export const beltOf = (pipeline: Drawing): Belt => {
 };
 
 /** The kinds of block an operator puts on a wire. */
-export const INSERTABLE = ["branch", "worktree", "gate", "agent", "check", "router"] as const;
+export const INSERTABLE = [
+  "branch",
+  "worktree",
+  "gate",
+  "agent",
+  "check",
+  "router",
+  "composite",
+] as const;
 export type Insertable = (typeof INSERTABLE)[number];
 
 /**
@@ -142,15 +156,38 @@ export type Insertable = (typeof INSERTABLE)[number];
  * A new router sends everything to `else` until a route is added; a new agent
  * authors from the ladder; a new gate holds for `author`; a new check names no
  * command, which validation reports until the operator names one. A branch
- * or a worktree has nothing to set. The operator sets each one after.
+ * or a worktree has nothing to set. A composite instance names its definition
+ * (`of`); its first exit takes the wire's old target and its prefix is
+ * `<id>.` (`docs/composite-blocks.md`). The operator sets each one after.
  */
 export const insertOn = (
   pipeline: Drawing,
   wire: Pick<Wire, "from" | "port">,
   kind: Insertable,
+  of?: string,
+  composites: Composites = {},
 ): { readonly pipeline: Drawing; readonly id: string } => {
   const target = targetOf(pipeline, wire);
   if (target === undefined) return { pipeline, id: "" };
+  if (kind === "composite") {
+    if (of === undefined) return { pipeline, id: "" };
+    const definition = composites[of];
+    if (definition === undefined) return { pipeline, id: "" };
+    const id = freshId(pipeline, of);
+    const block: DrawnNode = {
+      kind: "composite",
+      id,
+      of,
+      prefix: `${id}.`,
+      set: {},
+      exits: definition.exits.map((exit, at) => ({
+        id: exit.id,
+        to: at === 0 ? target : QUEUE,
+      })),
+    };
+    const rewired = retargeted(pipeline, wire, id);
+    return { pipeline: { nodes: [...rewired.nodes, block] }, id };
+  }
   const id = freshId(pipeline, kind);
   const block: DrawnNode =
     kind === "gate"
@@ -170,6 +207,202 @@ export const insertOn = (
             : { kind, id, next: target };
   const rewired = retargeted(pipeline, wire, id);
   return { pipeline: { nodes: [...rewired.nodes, block] }, id };
+};
+
+/**
+ * Saves the selected blocks as a new composite definition and replaces them
+ * with one instance whose prefix is `""`, so the blocks keep their ids
+ * (`docs/composite-blocks.md`).
+ *
+ * Refused when the selection holds a source, names a missing block, or the
+ * wires into it reach more than one block (no single entry).
+ */
+export const makeComposite = (
+  pipeline: Drawing,
+  ids: ReadonlyArray<string>,
+  name: string,
+  composites: Composites = {},
+):
+  | {
+      readonly _tag: "Made";
+      readonly pipeline: Drawing;
+      readonly definition: CompositeDefinition;
+      readonly id: string;
+    }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  if (ids.length === 0)
+    return { _tag: "Refused", reason: "MakeComposite needs at least one block" };
+  const selected = new Set(ids);
+  if (selected.size !== ids.length) {
+    return { _tag: "Refused", reason: "MakeComposite names a block more than once" };
+  }
+  const selectedNodes = pipeline.nodes.filter((node) => selected.has(node.id));
+  if (selectedNodes.length !== selected.size) {
+    const missing = ids.find((id) => !pipeline.nodes.some((node) => node.id === id));
+    return { _tag: "Refused", reason: `${missing} is not in the pipeline` };
+  }
+  if (selectedNodes.some((node) => node.kind === "source")) {
+    return { _tag: "Refused", reason: "a composite definition holds no source" };
+  }
+
+  const wires = wiresOf(pipeline);
+  const entries = [
+    ...new Set(
+      wires
+        .filter((wire) => selected.has(wire.to) && !selected.has(wire.from))
+        .map((wire) => wire.to),
+    ),
+  ];
+  const [entry, ...otherEntries] = entries;
+  if (entry === undefined || otherEntries.length > 0) {
+    return {
+      _tag: "Refused",
+      reason:
+        entries.length === 0
+          ? "no wire enters the selection"
+          : `wires into the selection reach ${entries.join(" and ")}`,
+    };
+  }
+
+  // The first wire out to each outside block names its exit, in drawing order.
+  const exits: Array<{ id: string; name: string; to: string }> = [];
+  const takenExitIds = new Set<string>();
+  for (const wire of wires) {
+    if (!selected.has(wire.from) || selected.has(wire.to)) continue;
+    if (exits.some((exit) => exit.to === wire.to)) continue;
+    const source = selectedNodes.find((node) => node.id === wire.from);
+    const exitName = exitNameOf(source, wire.to, composites) ?? wire.to;
+    let exitId = `exit-${exitName}`;
+    if (takenExitIds.has(exitId)) {
+      exitId = freshExitId(pipeline, [...takenExitIds]);
+    }
+    takenExitIds.add(exitId);
+    exits.push({ id: exitId, name: exitName, to: wire.to });
+  }
+  const outOf = new Map(exits.map((exit) => [exit.to, exit.id]));
+
+  const rewrite = (target: string): string => {
+    if (target === QUEUE || selected.has(target)) return target;
+    const exitId = outOf.get(target);
+    return exitId !== undefined ? `${OUT}${exitId}` : target;
+  };
+
+  const definition: CompositeDefinition = {
+    entry,
+    exits: exits.map(({ id, name }) => ({ id, name })),
+    params: [],
+    blocks: selectedNodes.map((node) => rewriteTargets(node, rewrite)),
+  };
+
+  const remaining = pipeline.nodes.filter((node) => !selected.has(node.id));
+  const id = remaining.some((node) => node.id === name)
+    ? freshId({ nodes: remaining }, name)
+    : name;
+  const instance: DrawnNode = {
+    kind: "composite",
+    id,
+    of: name,
+    prefix: "",
+    set: {},
+    exits: exits.map((exit) => ({ id: exit.id, to: exit.to })),
+  };
+  return {
+    _tag: "Made",
+    pipeline: {
+      nodes: [...remaining.map((node) => redirect(node, entry, id)), instance],
+    },
+    definition,
+    id,
+  };
+};
+
+/**
+ * The name a wire out of `source` takes as an exit: the exit's name on an
+ * agent or check, or on a composite instance the definition's name of the
+ * exit. Undefined for a router, gate, branch or worktree, whose wires have
+ * no exit name.
+ */
+const exitNameOf = (
+  source: DrawnNode | undefined,
+  to: string,
+  composites: Composites,
+): string | undefined => {
+  if (source === undefined) return undefined;
+  switch (source.kind) {
+    case "agent":
+    case "check":
+      return source.exits.find((exit) => exit.to === to)?.name;
+    case "composite": {
+      const exit = source.exits.find((one) => one.to === to);
+      return composites[source.of]?.exits.find((named) => named.id === exit?.id)?.name;
+    }
+    default:
+      return undefined;
+  }
+};
+
+/**
+ * Replaces a composite instance with its expanded blocks, keeping the
+ * expanded ids so a task standing at one of them stays there.
+ */
+export const unpack = (
+  pipeline: Drawing,
+  id: string,
+  composites: Composites,
+):
+  | { readonly _tag: "Unpacked"; readonly pipeline: Drawing }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  const instance = pipeline.nodes.find((node) => node.id === id);
+  if (instance?.kind !== "composite") {
+    return { _tag: "Refused", reason: `${id} is not a composite instance` };
+  }
+  const opened = unpackInstance(instance, composites, pipeline.nodes);
+  if (opened._tag === "Failed") {
+    return { _tag: "Refused", reason: opened.problems.join("; ") };
+  }
+  return {
+    _tag: "Unpacked",
+    pipeline: {
+      nodes: [
+        ...pipeline.nodes
+          .filter((node) => node.id !== id)
+          .map((node) => redirect(node, id, opened.entry)),
+        ...opened.blocks,
+      ],
+    },
+  };
+};
+
+/** Sets a parameter value on a composite instance. */
+export const setParam = (pipeline: Drawing, id: string, name: string, value: ParamValue): Drawing =>
+  mapNode(pipeline, id, (node) =>
+    node.kind === "composite" ? { ...node, set: { ...node.set, [name]: value } } : node,
+  );
+
+/** `node` with `f` applied to each wire target it holds. */
+const rewriteTargets = (node: DrawnNode, f: (target: string) => string): DrawnNode => {
+  switch (node.kind) {
+    case "source":
+    case "gate":
+    case "branch":
+    case "worktree":
+      return { ...node, next: f(node.next) };
+    case "agent":
+    case "check":
+      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: f(exit.to) })) };
+    case "composite":
+      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: f(exit.to) })) };
+    case "router":
+      return {
+        ...node,
+        routes: node.routes.map((route) => ({ ...route, to: f(route.to) })),
+        else: f(node.else),
+      };
+    case "land":
+    case "done":
+    case "park":
+      return node;
+  }
 };
 
 /**
@@ -331,9 +564,14 @@ export const chargeExit = (
  * facts name. It rewires nothing, except that a land's `how` brings the gates
  * that landing needs (`landingGated`).
  */
-export const configure = (pipeline: Drawing, id: string, setting: BlockSetting): Drawing => {
+export const configure = (
+  pipeline: Drawing,
+  id: string,
+  setting: BlockSetting,
+  composites: Composites = {},
+): Drawing => {
   const configured = mapNode(pipeline, id, (node) => settled(node, setting));
-  return setting.kind === "land" ? landingGated(pipeline, configured, id) : configured;
+  return setting.kind === "land" ? landingGated(pipeline, configured, id, composites) : configured;
 };
 
 /**
@@ -342,26 +580,36 @@ export const configure = (pipeline: Drawing, id: string, setting: BlockSetting):
  * so each one a route lacks is put directly before the land. A publish gate
  * that reached a pull-request land before the change and reaches none after it
  * is taken out, since it holds a step that never comes.
+ *
+ * Routes are read from the expansion, so a land reached through a composite
+ * instance still gets its gates (`docs/composite-blocks.md`).
  */
-const landingGated = (before: Drawing, after: Drawing, id: string): Drawing => {
-  const stranded = new Set(strandedPublishGates(writtenBlocks(before)).map((gate) => gate.id));
-  const kept = strandedPublishGates(writtenBlocks(after))
+const landingGated = (
+  before: Drawing,
+  after: Drawing,
+  id: string,
+  composites: Composites,
+): Drawing => {
+  const stranded = new Set(
+    strandedPublishGates(expandedOf(before, composites)).map((gate) => gate.id),
+  );
+  const kept = strandedPublishGates(expandedOf(after, composites))
     .filter((gate) => !stranded.has(gate.id))
     .reduce((pipeline, gate) => remove(pipeline, gate.id), after);
-  const land = pullRequestLands(writtenBlocks(kept)).filter((node) => node.id === id);
+  const land = pullRequestLands(expandedOf(kept, composites)).filter((node) => node.id === id);
   return PULL_REQUEST_STEPS.filter(
-    (step) => routesWithoutGate(writtenBlocks(kept), step, land).length > 0,
+    (step) => routesWithoutGate(expandedOf(kept, composites), step, land).length > 0,
   ).reduce((pipeline, step) => gatedBefore(pipeline, id, step), kept);
 };
 
 /**
- * The engine blocks of a drawing as written, composite instances dropped. Only
- * the publish-gate and pull-request checks above read it: landing edits are
- * a later slice, which will read the expansion instead.
+ * The expansion of a drawing for landing-gate placement. An expansion that
+ * fails yields no engine blocks, so a broken composite does not invent gates.
  */
-const writtenBlocks = (drawing: Drawing): Pipeline => ({
-  nodes: drawing.nodes.filter((node): node is PipelineNode => node.kind !== "composite"),
-});
+const expandedOf = (drawing: Drawing, composites: Composites): Pipeline => {
+  const result = expand(drawing, composites);
+  return result._tag === "Expanded" ? result.pipeline : { nodes: [] };
+};
 
 /**
  * Puts a gate of `step` directly before block `id`: every wire into the block

@@ -177,7 +177,8 @@ Each exit shows where it leads and the rung it charges.
 The operator adds, renames and removes an agent's exits. The operator charges an
 exit, and leads an exit to any block, an earlier one included, or to the queue.
 Each action is a `PipelineChange` (`AddExit`, `RenameExit`, `RemoveExit`,
-`ChargeExit`, `Rejoin`), sent through `foreman pipeline edit`.
+`ChargeExit`, `Rejoin`, `MakeComposite`, `Unpack`, `SetParam`, and `InsertOn`
+for kind `composite`), sent through `foreman pipeline edit`.
 
 - A rename keeps the exit's id and its wire. Router filters and runs that name
   the former name are left unchanged. Validation names a filter that counts a

@@ -24,7 +24,13 @@ import {
   WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
-import { pipelineFor, pipelinesPath, readPipelines, updatePipelines } from "./pipeline-file.ts";
+import {
+  pipelineFor,
+  pipelinesPath,
+  readPipelines,
+  updatePipelines,
+  updatePipelinesFile,
+} from "./pipeline-file.ts";
 import { readLadder, readReviewers } from "./registry.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
@@ -177,12 +183,18 @@ const edit = Command.make(
           (error) => new PipelineError({ detail: `that change cannot be read: ${error.message}` }),
         ),
       );
+      const file = yield* pipelinesNow;
       const draft = (yield* draftsNow)[project] ?? (yield* freshDraft(project));
-      const result = applyChange(draft.pipeline, decoded);
+      const composites = { ...file.composites, ...draft.composites };
+      const result = applyChange(draft.pipeline, decoded, composites);
       if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
       yield* updateDrafts(draftsPath(), (drafts) => ({
         ...drafts,
-        [project]: { ...draft, pipeline: result.pipeline },
+        [project]: {
+          ...draft,
+          pipeline: result.pipeline,
+          composites: { ...draft.composites, ...result.composites },
+        },
       }));
       if (json) {
         const shown = yield* shownOf(project, flow);
@@ -212,7 +224,7 @@ const save = Command.make("save", { project }, ({ project }) =>
       return yield* new PipelineError({
         detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
       });
-    yield* runPipeline(project, draft.pipeline);
+    yield* runPipeline(project, draft.pipeline, draft.composites);
     yield* updateDrafts(draftsPath(), ({ [project]: _saved, ...others }) => others);
     yield* Console.log(`${project} now runs its draft`);
   }),
@@ -252,7 +264,7 @@ const prompt = Command.make(
       const draft = (yield* draftsNow)[project];
       const pipeline = yield* expandedOf(
         draft?.pipeline ?? file.pipelines[project] ?? DEFAULT_PIPELINE,
-        file.composites,
+        { ...file.composites, ...draft?.composites },
       );
       const node = pipeline.nodes.find((one) => one.id === block);
       if (node?.kind !== "agent")
@@ -378,7 +390,9 @@ const trace = Command.make(
       const live = pipelineFor(file, project);
       if (live._tag === "Failed") return yield* refuse(live.problems);
       const draftPipeline =
-        draft === undefined ? undefined : yield* expandedOf(draft.pipeline, file.composites);
+        draft === undefined
+          ? undefined
+          : yield* expandedOf(draft.pipeline, { ...file.composites, ...draft.composites });
       const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
       const report = traceReport(
         project,
@@ -442,7 +456,9 @@ const simulate = Command.make(
               problems: yield* problemsAgainstLadder(live.pipeline),
             };
       const draftExpanded =
-        draft === undefined ? undefined : yield* readingOf(draft.pipeline, file.composites);
+        draft === undefined
+          ? undefined
+          : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites });
       const draftForSim =
         draftExpanded === undefined
           ? undefined
@@ -663,6 +679,7 @@ const freshDraft = (project: string) =>
     Effect.map(({ drawing, drawn }): Draft => ({
       base: drawn ? drawing : null,
       pipeline: drawing,
+      composites: {},
     })),
   );
 
@@ -695,26 +712,41 @@ const readingOf = (drawing: Drawing, composites: Composites) =>
   });
 
 /**
- * Refuses a drawing whose expansion, read with the pipelines file's
- * definitions, fails or does not run against the ladder. `check` and `set`
- * both stop here, so they agree on what runs.
+ * Refuses a drawing whose expansion, read with these definitions (else the
+ * pipelines file's), fails or does not run against the ladder. `check` and
+ * `set` both stop here, so they agree on what runs.
  */
-const checkedDrawing = (drawing: Drawing) =>
+const checkedDrawing = (drawing: Drawing, composites?: Composites) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
-    const expanded = yield* expandedOf(drawing, file.composites);
+    const expanded = yield* expandedOf(drawing, composites ?? file.composites);
     const problems = yield* problemsAgainstLadder(expanded);
     if (problems.length > 0) return yield* refuse(problems);
   });
 
 /**
  * Checks a drawing, then makes the as-written drawing the one `project` runs.
- * Both set and save write through here.
+ * Both set and save write through here. `addedComposites` are definitions the
+ * draft carried (from MakeComposite); a save writes them beside the drawing.
  */
-const runPipeline = (project: string, drawing: Drawing) =>
+const runPipeline = (project: string, drawing: Drawing, addedComposites: Composites = {}) =>
   Effect.gen(function* () {
-    yield* checkedDrawing(drawing);
-    yield* updatePipelines(pipelinesPath(), (pipelines) => ({ ...pipelines, [project]: drawing }));
+    const file = yield* pipelinesNow;
+    // A draft's new name was free when the draft began; another project's save may have taken it since.
+    const taken = Object.keys(addedComposites).filter(
+      (name) => file.composites[name] !== undefined,
+    );
+    if (taken.length > 0) {
+      return yield* refuse(
+        taken.map((name) => `a composite named ${name} now exists: rename it and save again`),
+      );
+    }
+    const composites = { ...file.composites, ...addedComposites };
+    yield* checkedDrawing(drawing, composites);
+    yield* updatePipelinesFile(pipelinesPath(), (current) => ({
+      pipelines: { ...current.pipelines, [project]: drawing },
+      composites: { ...current.composites, ...addedComposites },
+    }));
   });
 
 /**
@@ -730,7 +762,7 @@ const shownOf = (project: string, flow: Flow) =>
     const draftJson =
       draft === undefined
         ? null
-        : yield* readingOf(draft.pipeline, file.composites).pipe(
+        : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites }).pipe(
             Effect.map((draftReading) =>
               draftReading._tag === "Failed"
                 ? { pipeline: null, problems: draftReading.problems, drawing: null }

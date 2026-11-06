@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { isExit } from "tasks";
+import { expand } from "./composite.ts";
 import {
   type Drawing,
   problemsOf,
@@ -18,6 +19,7 @@ import {
   chargeExit,
   configure,
   insertOn,
+  makeComposite,
   rejoin,
   remove,
   removeExit,
@@ -187,6 +189,29 @@ describe("belt edits", () => {
       expect(gateSteps(forwarded)).not.toContain("publish");
       expect(problemsOf(pipelineOf(forwarded), OFFERS)).toEqual([]);
     }
+  });
+
+  test("a land reached through a composite instance still gets its publish gate", () => {
+    const made = makeComposite(
+      STANDARD_PIPELINES.checkout,
+      ["review-gate", "review"],
+      "review-loop",
+    );
+    expect(made._tag).toBe("Made");
+    if (made._tag !== "Made") return;
+    const composites = { "review-loop": made.definition };
+    // writtenBlocks would miss the route through the instance; expansion sees it.
+    const published = configure(
+      made.pipeline,
+      "land",
+      { kind: "land", how: "pull-request", onto: "develop" },
+      composites,
+    );
+    expect(gateSteps(published)).toContain("publish");
+    const expanded = expand(published, composites);
+    expect(expanded._tag).toBe("Expanded");
+    if (expanded._tag !== "Expanded") return;
+    expect(problemsOf(expanded.pipeline, OFFERS)).toEqual([]);
   });
 
   test("a pull-request land keeps the publish gate it has", () => {
