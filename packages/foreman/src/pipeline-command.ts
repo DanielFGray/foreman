@@ -733,7 +733,9 @@ const runPipeline = (project: string, drawing: Drawing, addedComposites: Composi
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
     // A draft's new name was free when the draft began; another project's save may have taken it since.
-    const taken = Object.keys(addedComposites).filter((name) => file.composites[name] !== undefined);
+    const taken = Object.keys(addedComposites).filter(
+      (name) => file.composites[name] !== undefined,
+    );
     if (taken.length > 0) {
       return yield* refuse(
         taken.map((name) => `a composite named ${name} now exists: rename it and save again`),

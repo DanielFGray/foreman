@@ -260,3 +260,54 @@ describe("Unpack keeps the expansion when an exit targets a block of the drawing
     unpackSame(drawing, "i", composites);
   });
 });
+
+describe("MakeComposite names an exit as the exit of its source block", () => {
+  test("a router's wires take the target's id as the exit name, not the filter", () => {
+    const drawing = {
+      nodes: [
+        { kind: "source", id: "s", filter: "", next: "r" },
+        {
+          kind: "router",
+          id: "r",
+          routes: [{ when: "size:1", to: "a" }],
+          else: "b",
+        },
+        { kind: "done", id: "a" },
+        { kind: "done", id: "b" },
+      ],
+    } satisfies Drawing;
+    const made = makeComposite(drawing, ["r"], "route", {});
+    expect(made._tag).toBe("Made");
+    if (made._tag !== "Made") return;
+    expect(made.definition.exits.map((exit) => exit.name)).toEqual(["a", "b"]);
+  });
+
+  test("a nested instance's wire takes its definition's exit name, not the exit id", () => {
+    const composites: Composites = {
+      inner: {
+        entry: "g",
+        exits: [{ id: "e1", name: "ok" }],
+        params: [],
+        blocks: [{ kind: "gate", id: "g", step: "review", next: "out:e1" }],
+      },
+    };
+    const drawing = {
+      nodes: [
+        { kind: "source", id: "s", filter: "", next: "box" },
+        {
+          kind: "composite",
+          id: "box",
+          of: "inner",
+          prefix: "box.",
+          set: {},
+          exits: [{ id: "e1", to: "d" }],
+        },
+        { kind: "done", id: "d" },
+      ],
+    } satisfies Drawing;
+    const made = makeComposite(drawing, ["box"], "outer", composites);
+    expect(made._tag).toBe("Made");
+    if (made._tag !== "Made") return;
+    expect(made.definition.exits).toEqual([{ id: "exit-ok", name: "ok" }]);
+  });
+});

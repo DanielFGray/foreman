@@ -221,6 +221,7 @@ export const makeComposite = (
   pipeline: Drawing,
   ids: ReadonlyArray<string>,
   name: string,
+  composites: Composites = {},
 ):
   | {
       readonly _tag: "Made";
@@ -252,7 +253,8 @@ export const makeComposite = (
         .map((wire) => wire.to),
     ),
   ];
-  if (entries.length !== 1) {
+  const [entry, ...otherEntries] = entries;
+  if (entry === undefined || otherEntries.length > 0) {
     return {
       _tag: "Refused",
       reason:
@@ -261,26 +263,21 @@ export const makeComposite = (
           : `wires into the selection reach ${entries.join(" and ")}`,
     };
   }
-  const entry = entries[0]!;
 
-  const openByTarget = new Map<string, ReadonlyArray<Wire>>();
-  for (const wire of wires) {
-    if (!selected.has(wire.from) || selected.has(wire.to)) continue;
-    const given = openByTarget.get(wire.to) ?? [];
-    openByTarget.set(wire.to, [...given, wire]);
-  }
-
+  // The first wire out to each outside block names its exit, in drawing order.
   const exits: Array<{ id: string; name: string; to: string }> = [];
   const takenExitIds = new Set<string>();
-  for (const [to, open] of openByTarget) {
-    const first = open[0]!;
-    const exitName = first.label !== "" ? first.label : to;
+  for (const wire of wires) {
+    if (!selected.has(wire.from) || selected.has(wire.to)) continue;
+    if (exits.some((exit) => exit.to === wire.to)) continue;
+    const source = selectedNodes.find((node) => node.id === wire.from);
+    const exitName = exitNameOf(source, wire.to, composites) ?? wire.to;
     let exitId = `exit-${exitName}`;
     if (takenExitIds.has(exitId)) {
       exitId = freshExitId(pipeline, [...takenExitIds]);
     }
     takenExitIds.add(exitId);
-    exits.push({ id: exitId, name: exitName, to });
+    exits.push({ id: exitId, name: exitName, to: wire.to });
   }
   const outOf = new Map(exits.map((exit) => [exit.to, exit.id]));
 
@@ -317,6 +314,31 @@ export const makeComposite = (
     definition,
     id,
   };
+};
+
+/**
+ * The name a wire out of `source` takes as an exit: the exit's name on an
+ * agent or check, or on a composite instance the definition's name of the
+ * exit. Undefined for a router, gate, branch or worktree, whose wires have
+ * no exit name.
+ */
+const exitNameOf = (
+  source: DrawnNode | undefined,
+  to: string,
+  composites: Composites,
+): string | undefined => {
+  if (source === undefined) return undefined;
+  switch (source.kind) {
+    case "agent":
+    case "check":
+      return source.exits.find((exit) => exit.to === to)?.name;
+    case "composite": {
+      const exit = source.exits.find((one) => one.to === to);
+      return composites[source.of]?.exits.find((named) => named.id === exit?.id)?.name;
+    }
+    default:
+      return undefined;
+  }
 };
 
 /**

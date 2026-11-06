@@ -93,7 +93,8 @@ export type ApplyResult =
       readonly _tag: "Changed";
       readonly pipeline: Drawing;
       readonly added: string | undefined;
-      readonly composites?: Composites;
+      /** Definitions the change created, for the draft to carry. Empty when it created none. */
+      readonly composites: Composites;
     }
   | { readonly _tag: "Refused"; readonly reason: string };
 
@@ -117,12 +118,12 @@ export const applyChange = (
   change: PipelineChange,
   composites: Composites = {},
 ): ApplyResult => {
-  const changed = (next: Drawing, added?: string, nextComposites?: Composites) =>
+  const changed = (next: Drawing, added?: string, created: Composites = {}) =>
     ({
       _tag: "Changed",
       pipeline: next,
       added: added === "" ? undefined : added,
-      ...(nextComposites === undefined ? {} : { composites: nextComposites }),
+      composites: created,
     }) as const;
   switch (change._tag) {
     case "InsertOn": {
@@ -202,7 +203,7 @@ export const applyChange = (
           reason: `a composite named ${change.name} already exists`,
         };
       }
-      const made = makeComposite(pipeline, change.ids, change.name);
+      const made = makeComposite(pipeline, change.ids, change.name, composites);
       return made._tag === "Refused"
         ? made
         : changed(made.pipeline, made.id, { [change.name]: made.definition });
