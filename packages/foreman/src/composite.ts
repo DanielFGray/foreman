@@ -26,14 +26,16 @@ const OUT = "out:";
 
 /**
  * Fields a parameter may set on a block inside a definition. The node schema
- * of each block checks the value after the replace.
+ * of each block checks the value after the replace. AddParam reads the same
+ * list (`docs/composite-blocks.md`).
  */
-const SETTABLE: Readonly<Record<string, ReadonlyArray<string>>> = {
+export const PARAM_FIELDS: Readonly<Record<string, ReadonlyArray<string>>> = {
   agent: ["model", "instructions", "slots", "stopped"],
   check: ["command"],
   gate: ["step"],
   land: ["how", "onto"],
 };
+const SETTABLE = PARAM_FIELDS;
 
 export type ExpandResult =
   | { readonly _tag: "Expanded"; readonly pipeline: Pipeline }

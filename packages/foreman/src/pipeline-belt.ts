@@ -11,7 +11,7 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
-import { expand, unpackInstance } from "./composite.ts";
+import { expand, PARAM_FIELDS, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   type CompositeDefinition,
@@ -29,6 +29,8 @@ import {
   strandedPublishGates,
 } from "./pipeline.ts";
 import type { Step } from "./policy.ts";
+
+export { PARAM_FIELDS };
 
 /** A wire inside a definition that leaves by an exit. */
 const OUT = "out:";
@@ -216,12 +218,17 @@ export const insertOn = (
  *
  * Refused when the selection holds a source, names a missing block, or the
  * wires into it reach more than one block (no single entry).
+ *
+ * `definitionEntry` is the entry of the definition being drawn, when the
+ * drawing is one. Nothing in the drawing wires into that block, so the
+ * selection's entry is counted from it as well.
  */
 export const makeComposite = (
   pipeline: Drawing,
   ids: ReadonlyArray<string>,
   name: string,
   composites: Composites = {},
+  definitionEntry?: string,
 ):
   | {
       readonly _tag: "Made";
@@ -247,11 +254,12 @@ export const makeComposite = (
 
   const wires = wiresOf(pipeline);
   const entries = [
-    ...new Set(
-      wires
+    ...new Set([
+      ...wires
         .filter((wire) => selected.has(wire.to) && !selected.has(wire.from))
         .map((wire) => wire.to),
-    ),
+      ...(definitionEntry !== undefined && selected.has(definitionEntry) ? [definitionEntry] : []),
+    ]),
   ];
   const [entry, ...otherEntries] = entries;
   if (entry === undefined || otherEntries.length > 0) {
@@ -350,7 +358,12 @@ export const unpack = (
   id: string,
   composites: Composites,
 ):
-  | { readonly _tag: "Unpacked"; readonly pipeline: Drawing }
+  | {
+      readonly _tag: "Unpacked";
+      readonly pipeline: Drawing;
+      /** The block that wires into the instance now reach, which a definition's entry must follow. */
+      readonly entry: string;
+    }
   | { readonly _tag: "Refused"; readonly reason: string } => {
   const instance = pipeline.nodes.find((node) => node.id === id);
   if (instance?.kind !== "composite") {
@@ -370,6 +383,7 @@ export const unpack = (
         ...opened.blocks,
       ],
     },
+    entry: opened.entry,
   };
 };
 
@@ -378,6 +392,100 @@ export const setParam = (pipeline: Drawing, id: string, name: string, value: Par
   mapNode(pipeline, id, (node) =>
     node.kind === "composite" ? { ...node, set: { ...node.set, [name]: value } } : node,
   );
+
+/** Adds a parameter to a definition, or refuses a duplicate name or a field it cannot set. */
+export const addParam = (
+  definition: CompositeDefinition,
+  param: {
+    readonly name: string;
+    readonly default?: ParamValue;
+    readonly sets: ReadonlyArray<{ readonly block: string; readonly field: string }>;
+  },
+):
+  | { readonly _tag: "Changed"; readonly definition: CompositeDefinition }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  if (definition.params.some((one) => one.name === param.name)) {
+    return {
+      _tag: "Refused",
+      reason: `the definition already has a parameter named ${param.name}`,
+    };
+  }
+  if (param.sets.length === 0) {
+    return { _tag: "Refused", reason: `parameter ${param.name} must set at least one field` };
+  }
+  for (const { block, field } of param.sets) {
+    const node = definition.blocks.find((one) => one.id === block);
+    if (node === undefined) {
+      return { _tag: "Refused", reason: `${block} is not in the definition` };
+    }
+    const allowed = PARAM_FIELDS[node.kind];
+    if (allowed === undefined || !allowed.includes(field)) {
+      return {
+        _tag: "Refused",
+        reason: `parameter ${param.name} cannot set ${field} on ${node.kind} ${block}`,
+      };
+    }
+  }
+  return {
+    _tag: "Changed",
+    definition: {
+      ...definition,
+      params: [
+        ...definition.params,
+        {
+          name: param.name,
+          default: param.default,
+          sets: [...param.sets],
+        },
+      ],
+    },
+  };
+};
+
+/** Drops a parameter from a definition. */
+export const removeParam = (
+  definition: CompositeDefinition,
+  name: string,
+): CompositeDefinition => ({
+  ...definition,
+  params: definition.params.filter((param) => param.name !== name),
+});
+
+/** Renames a composite exit by id, leaving every instance wired. */
+export const renameCompositeExit = (
+  definition: CompositeDefinition,
+  id: string,
+  name: string,
+):
+  | { readonly _tag: "Changed"; readonly definition: CompositeDefinition }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  if (!definition.exits.some((exit) => exit.id === id)) {
+    return { _tag: "Refused", reason: `the definition has no exit ${id}` };
+  }
+  if (definition.exits.some((exit) => exit.id !== id && exit.name === name)) {
+    return { _tag: "Refused", reason: `the definition already has an exit named ${name}` };
+  }
+  return {
+    _tag: "Changed",
+    definition: {
+      ...definition,
+      exits: definition.exits.map((exit) => (exit.id === id ? { ...exit, name } : exit)),
+    },
+  };
+};
+
+/** Sets which block a wire into an instance reaches. */
+export const setEntry = (
+  definition: CompositeDefinition,
+  entry: string,
+):
+  | { readonly _tag: "Changed"; readonly definition: CompositeDefinition }
+  | { readonly _tag: "Refused"; readonly reason: string } => {
+  if (!definition.blocks.some((block) => block.id === entry)) {
+    return { _tag: "Refused", reason: `${entry} is not in the definition` };
+  }
+  return { _tag: "Changed", definition: { ...definition, entry } };
+};
 
 /** `node` with `f` applied to each wire target it holds. */
 const rewriteTargets = (node: DrawnNode, f: (target: string) => string): DrawnNode => {
@@ -438,19 +546,25 @@ export const removeRoute = (pipeline: Drawing, router: string, index: number): D
 /**
  * Points a wire at another block, which may stand before it: a wire that
  * closes a loop is drawn as a back wire, and `problemsOf` reports a loop that
- * nothing ends. An exit may also lead to `queue`, a return. Refused (none)
- * when either block is not in the pipeline.
+ * nothing ends. An exit may also lead to `queue`, a return. Inside a
+ * definition draft, `out:<exit id>` is a valid end when `outs` holds that id
+ * (`docs/composite-blocks.md`). Refused (none) when either end is not allowed.
  */
 export const rejoin = (
   pipeline: Drawing,
   wire: Pick<Wire, "from" | "port">,
   to: string,
-): Option.Option<Drawing> =>
-  pipeline.nodes.some((node) => node.id === wire.from) &&
-  (pipeline.nodes.some((node) => node.id === to) ||
-    (to === QUEUE && typeof wire.port === "string" && wire.port.startsWith("exit:")))
+  outs: ReadonlySet<string> = new Set(),
+): Option.Option<Drawing> => {
+  const outId = to.startsWith(OUT) ? to.slice(OUT.length) : undefined;
+  const allowed =
+    pipeline.nodes.some((node) => node.id === to) ||
+    (to === QUEUE && typeof wire.port === "string" && wire.port.startsWith("exit:")) ||
+    (outId !== undefined && outs.has(outId));
+  return pipeline.nodes.some((node) => node.id === wire.from) && allowed
     ? Option.some(retargeted(pipeline, wire, to))
     : Option.none();
+};
 
 /** Starts a new belt: a source with this filter that joins the first source's belt. */
 export const addSource = (

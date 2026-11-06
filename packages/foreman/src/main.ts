@@ -15,6 +15,7 @@ import { reviewersCommand } from "./reviewers-command.ts";
 import { stats } from "./stats.ts";
 import { subcommands } from "./commands.ts";
 import { pipelineCommand } from "./pipeline-command.ts";
+import { compositeCommand } from "./composite-command.ts";
 import { policyCommand } from "./policy-command.ts";
 import { linearCommand } from "./linear-auth.ts";
 import { listCommand, logCommand, queueCommand, showCommand } from "./store-commands.ts";
@@ -142,6 +143,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     policyCommand,
     linearCommand,
     Command.provide(pipelineCommand(services), Registry.layer),
+    Command.provide(compositeCommand, Registry.layer),
     ...subcommands(services),
   ]),
 );

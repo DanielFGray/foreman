@@ -8,13 +8,8 @@ import {
   DEFAULT_PIPELINE,
   describeStandard,
   Drawing,
-  instructionNames,
   LANDINGS,
-  instructionProblems,
-  type Pipeline,
   type Placement,
-  offersOf,
-  problemsOf,
   routeTarget,
   routeWorkspace,
   type Standard,
@@ -27,18 +22,25 @@ import { Prompts } from "./prompt.ts";
 import {
   pipelineFor,
   pipelinesPath,
-  readPipelines,
   updatePipelines,
   updatePipelinesFile,
 } from "./pipeline-file.ts";
-import { readLadder, readReviewers } from "./registry.ts";
+import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
 import { drawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { INSERTABLE } from "./pipeline-belt.ts";
 import { policyPath, readPolicy, scopesOf, STEPS } from "./policy.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
-import { type Draft, draftsPath, readDrafts, sameDrawing, updateDrafts } from "./pipeline-draft.ts";
+import {
+  type Draft,
+  draftsPath,
+  readDrafts,
+  sameDefinition,
+  sameDrawing,
+  updateDrafts,
+} from "./pipeline-draft.ts";
+import { PipelineError } from "./pipeline-error.ts";
 import { Settings, settings } from "./config.ts";
 import { pretend, type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { factsOf } from "./pipeline-facts.ts";
@@ -46,6 +48,8 @@ import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
+
+export { PipelineError };
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -224,6 +228,18 @@ const save = Command.make("save", { project }, ({ project }) =>
       return yield* new PipelineError({
         detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
       });
+    const file = yield* pipelinesNow;
+    const available = { ...file.composites, ...draft.composites };
+    const drifted = usedDefinitions(draft.pipeline, available).filter((name) => {
+      if (draft.composites[name] !== undefined) return false;
+      if (!(name in draft.bases)) return false;
+      return !sameDefinition(draft.bases[name] ?? null, file.composites[name] ?? null);
+    });
+    if (drifted.length > 0) {
+      return yield* new PipelineError({
+        detail: `a composite this draft uses changed since the draft began: ${drifted.join(", ")}. Discard the draft and draw it again`,
+      });
+    }
     yield* runPipeline(project, draft.pipeline, draft.composites);
     yield* updateDrafts(draftsPath(), ({ [project]: _saved, ...others }) => others);
     yield* Console.log(`${project} now runs its draft`);
@@ -598,25 +614,6 @@ const traceLine = (step: TraceReport["steps"][number]): string =>
     .filter((part) => part !== "")
     .join("  ");
 
-export class PipelineError extends S.TaggedError<PipelineError>()("PipelineError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
-
-/**
- * The problems that stop `pipeline` running: against the ladder and the
- * reviewers, and in the instructions files its agent blocks read.
- */
-const problemsAgainstLadder = (pipeline: Pipeline) =>
-  Effect.gen(function* () {
-    const seats = { ladder: yield* readLadder, reviewers: yield* readReviewers };
-    const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
-    return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
-  }).pipe(Effect.provide(Prompts.Default));
-
 const refuse = (problems: ReadonlyArray<string>) =>
   new PipelineError({
     detail: `the pipeline cannot run:\n${problems.map((p) => `  ${p}`).join("\n")}`,
@@ -634,13 +631,6 @@ const pipelineFrom = (source: string) =>
       ),
     );
   });
-
-/** The pipelines file as stored: drawings and composite definitions. */
-const pipelinesNow = Effect.gen(function* () {
-  const read = yield* readPipelines(pipelinesPath());
-  if (read.error !== undefined) return yield* new PipelineError({ detail: read.error });
-  return read.value;
-});
 
 /** Expansion reading for a project: Expanded with the pipeline, or Failed. */
 const livePipeline = (project: string) =>
@@ -675,13 +665,40 @@ const draftsNow = Effect.gen(function* () {
 
 /** A draft that starts as the drawing the project runs now, as written. */
 const freshDraft = (project: string) =>
-  drawnPipeline(project).pipe(
-    Effect.map(({ drawing, drawn }): Draft => ({
-      base: drawn ? drawing : null,
+  Effect.gen(function* () {
+    const file = yield* pipelinesNow;
+    const drawn = file.pipelines[project];
+    const drawing = drawn ?? (DEFAULT_PIPELINE as Drawing);
+    return {
+      base: drawn === undefined ? null : drawing,
       pipeline: drawing,
       composites: {},
-    })),
-  );
+      bases: { ...file.composites },
+    } satisfies Draft;
+  });
+
+/**
+ * Composite definition names a drawing reaches, directly or through nested
+ * instances inside other definitions (`docs/composite-blocks.md`).
+ */
+const usedDefinitions = (
+  drawing: Drawing,
+  composites: Composites,
+  seen: ReadonlySet<string> = new Set(),
+): ReadonlyArray<string> => {
+  const names: string[] = [];
+  for (const node of drawing.nodes) {
+    if (node.kind !== "composite") continue;
+    if (seen.has(node.of)) continue;
+    names.push(node.of);
+    const nested = composites[node.of];
+    if (nested === undefined) continue;
+    names.push(
+      ...usedDefinitions({ nodes: nested.blocks }, composites, new Set(seen).add(node.of)),
+    );
+  }
+  return [...new Set(names)];
+};
 
 /**
  * Expand `drawing` with these definitions, or refuse with the expansion
@@ -719,8 +736,7 @@ const readingOf = (drawing: Drawing, composites: Composites) =>
 const checkedDrawing = (drawing: Drawing, composites?: Composites) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
-    const expanded = yield* expandedOf(drawing, composites ?? file.composites);
-    const problems = yield* problemsAgainstLadder(expanded);
+    const problems = yield* problemsOfDrawing(drawing, composites ?? file.composites);
     if (problems.length > 0) return yield* refuse(problems);
   });
 
