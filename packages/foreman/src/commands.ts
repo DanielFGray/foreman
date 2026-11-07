@@ -1,6 +1,13 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
-import { ACTION_HELP, INTERVENTIONS, perform, rowFor, type Request } from "./actions.ts";
+import {
+  ACTION_HELP,
+  INTERVENTIONS,
+  perform,
+  rowFor,
+  type Intervention,
+  type Request,
+} from "./actions.ts";
 import { Dispatcher, notAuthored } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
 import { roundsOf } from "./lap.ts";
@@ -21,6 +28,9 @@ import { prose } from "tasks";
  * coordinating: whatever one changes, the other reads back on its next look.
  * Pausing is `foreman policy`, because the pause lives in the policy file,
  * which every process reads.
+ *
+ * Dispatch and each row action in `ACTIONS_LIST` are exported Effects the CLI
+ * and the coming UI contract both call; handlers only parse, call and print.
  */
 
 const id = Argument.String("id").pipe(
@@ -50,10 +60,10 @@ const status = Command.make("status", { json }, ({ json }) =>
 );
 
 /**
- * Runs one request against the row an id names, or says why it cannot. A
- * preview prints the terminal its server runs in; every other action says done.
+ * Runs one request against the row an id names, or refuses with why it cannot.
+ * Returns the dispatcher's result so the CLI and the UI contract each print.
  */
-const act = (action: Action, key: string, request: Request) =>
+const runAction = (action: Action, key: string, request: Request) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
@@ -75,11 +85,79 @@ const act = (action: Action, key: string, request: Request) =>
           (offered.length === 0 ? ": no row has that key" : ` (it takes ${offered.join("; ")})`),
       });
     }
-    const result = yield* command;
-    yield* Console.log(
-      `${commandName(action)} ${key}: ${action === "preview" ? `running in hc terminal ${String(result)}` : "done"}`,
-    );
+    return yield* command;
   });
+
+/** Prints what a row action did: a preview names its terminal; every other action says done. */
+const printAction = (action: Action, key: string, result: unknown) =>
+  Console.log(
+    `${commandName(action)} ${key}: ${action === "preview" ? `running in hc terminal ${String(result)}` : "done"}`,
+  );
+
+/** Close a queued task by hand. */
+export const taskComplete = (input: { readonly id: string; readonly reason: string }) =>
+  runAction("complete", input.id, { action: "complete", reason: input.reason });
+
+/** Start a fresh agent where a worker vanished or a dispatch failed. */
+export const taskRetry = (input: { readonly id: string }) =>
+  runAction("retry", input.id, { action: "retry" });
+
+/** Hand a claimed task back to the queue and take its workspace down. */
+export const taskRelease = (input: { readonly id: string }) =>
+  runAction("release", input.id, { action: "release" });
+
+/** Take down a workspace whose task nothing owns. */
+export const taskClose = (input: { readonly id: string }) =>
+  runAction("close", input.id, { action: "close" });
+
+/** Focus a vanished worker's pane so you can continue by hand. */
+export const taskTakeOver = (input: { readonly id: string }) =>
+  runAction("takeOver", input.id, { action: "takeOver" });
+
+/** Focus the pane of a task's live agent. */
+export const taskFocus = (input: { readonly id: string }) =>
+  runAction("focus", input.id, { action: "focus" });
+
+/** Stop a live attempt, log why, and requeue the task on the same rung. */
+export const taskKill = (input: { readonly id: string; readonly reason: Option.Option<string> }) =>
+  runAction("kill", input.id, { action: "kill", reason: input.reason });
+
+/** Resume a task at a rung, or send an agent to diagnose or review its last attempt. */
+export const taskIntervene = (input: {
+  readonly id: string;
+  readonly how: Intervention;
+  readonly rung: Option.Option<string>;
+}) =>
+  runAction("intervene", input.id, {
+    action: "intervene",
+    how: input.how,
+    // Request / perform take undefined at the dashboard boundary.
+    rung: Option.getOrUndefined(input.rung),
+  });
+
+/** Take back the last recorded failure, moving the task one rung down. */
+export const taskDescend = (input: { readonly id: string }) =>
+  runAction("descend", input.id, { action: "descend" });
+
+/** End an open review run that no reviewer is behind. */
+export const taskUnassign = (input: { readonly id: string }) =>
+  runAction("unassign", input.id, { action: "unassign" });
+
+/** Send an agent to salvage the uncommitted work holding a project. */
+export const taskOnboard = (input: { readonly id: string }) =>
+  runAction("onboard", input.id, { action: "onboard" });
+
+/** Put an unread branch in front of a reviewer. */
+export const taskAdopt = (input: { readonly id: string }) =>
+  runAction("adopt", input.id, { action: "adopt" });
+
+/** Allow the step a task is waiting on, once, for that task alone. */
+export const taskApprove = (input: { readonly id: string }) =>
+  runAction("approve", input.id, { action: "approve" });
+
+/** Run the project's preview script in a task's worktree. */
+export const taskPreview = (input: { readonly id: string }) =>
+  runAction("preview", input.id, { action: "preview" });
 
 const reason = Flag.String("reason").pipe(Flag.withDescription("What the task log says"));
 
@@ -88,6 +166,24 @@ const how = Flag.Literals("how", INTERVENTIONS).pipe(
 );
 
 const rung = Flag.String("rung").pipe(Flag.withDescription("A ladder rung by name"), Flag.optional);
+
+/** Row actions whose only input is the row key. */
+const SIMPLE_ACTIONS = {
+  retry: taskRetry,
+  release: taskRelease,
+  close: taskClose,
+  takeOver: taskTakeOver,
+  focus: taskFocus,
+  descend: taskDescend,
+  unassign: taskUnassign,
+  onboard: taskOnboard,
+  adopt: taskAdopt,
+  approve: taskApprove,
+  preview: taskPreview,
+} as const satisfies Record<
+  Exclude<Action, "complete" | "kill" | "intervene">,
+  (input: { readonly id: string }) => ReturnType<typeof runAction>
+>;
 
 /**
  * One subcommand per dashboard action. The three that ask a question in the
@@ -101,31 +197,54 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
     case "complete":
       return finish(
         Command.make(commandName(action), { id, reason }, (args) =>
-          act(action, args.id, { action, reason: args.reason }),
+          Effect.gen(function* () {
+            const result = yield* taskComplete({ id: args.id, reason: args.reason });
+            yield* printAction(action, args.id, result);
+          }),
         ),
       );
     case "kill":
       return finish(
         Command.make(commandName(action), { id, reason: Flag.optional(reason) }, (args) =>
-          act(action, args.id, { action, reason: args.reason }),
+          Effect.gen(function* () {
+            const result = yield* taskKill({ id: args.id, reason: args.reason });
+            yield* printAction(action, args.id, result);
+          }),
         ),
       );
     case "intervene":
       return finish(
         Command.make(commandName(action), { id, how, rung }, (args) =>
-          act(action, args.id, { action, how: args.how, rung: Option.getOrUndefined(args.rung) }),
+          Effect.gen(function* () {
+            const result = yield* taskIntervene({
+              id: args.id,
+              how: args.how,
+              rung: args.rung,
+            });
+            yield* printAction(action, args.id, result);
+          }),
         ),
       );
-    default:
+    default: {
+      const verb = SIMPLE_ACTIONS[action];
       return finish(
-        Command.make(commandName(action), { id }, (args) => act(action, args.id, { action })),
+        Command.make(commandName(action), { id }, (args) =>
+          Effect.gen(function* () {
+            const result = yield* verb({ id: args.id });
+            yield* printAction(action, args.id, result);
+          }),
+        ),
       );
+    }
   }
 };
 
 const dispatch = Command.make("dispatch", { id, rung }, (args) =>
   Effect.gen(function* () {
-    yield* dispatchQueued(yield* Dispatcher, yield* Fleet, args.id, args.rung);
+    const started = yield* dispatchQueued(yield* Dispatcher, yield* Fleet, args.id, args.rung);
+    yield* Console.log(
+      `${args.id}: dispatched on ${started.rung}; see foreman status, or foreman wait ${args.id}`,
+    );
   }),
 ).pipe(
   Command.withDescription(
@@ -151,7 +270,7 @@ export const dispatchQueued = Effect.fn("dispatchQueued")(function* (
   rung: Option.Option<string>,
 ) {
   yield* operatorOnly(caller);
-  yield* startAuthor(dispatcher, id, rung);
+  return yield* startAuthor(dispatcher, id, rung);
 });
 
 /** Refuses a caller that runs inside a fleet worker's terminal. */
@@ -169,8 +288,8 @@ const operatorOnly = (caller: Caller) =>
 
 /**
  * Starts a queued task's author after one reading of the world, on the rung a
- * tick would choose or on the one named, and says which rung it started on.
- * When the dispatcher starts nothing, it refuses with the dispatcher's reason.
+ * tick would choose or on the one named. When the dispatcher starts nothing, it
+ * refuses with the dispatcher's reason.
  */
 const startAuthor = Effect.fn("startAuthor")(function* (
   dispatcher: Dispatching,
@@ -184,9 +303,7 @@ const startAuthor = Effect.fn("startAuthor")(function* (
   if (!task) return yield* new Refused({ detail: `${id} is not in the queue; see foreman queue` });
   const authored = yield* dispatcher.author(task, rung);
   if (authored._tag !== "Started") return yield* new Refused({ detail: notAuthored(authored) });
-  yield* Console.log(
-    `${id}: dispatched on ${authored.rung}; see foreman status, or foreman wait ${id}`,
-  );
+  return { id, rung: authored.rung };
 });
 
 const title = Argument.String("title").pipe(Argument.withDescription("The new task's title"));
@@ -268,10 +385,13 @@ export const fileTask = Effect.fn("fileTask")(function* (
   });
   yield* Console.log(id);
   if (!filing.dispatch) return;
-  yield* startAuthor(dispatcher, id, filing.rung).pipe(
+  const started = yield* startAuthor(dispatcher, id, filing.rung).pipe(
     Effect.catchTag("Refused", (refused) =>
       Effect.fail(new Refused({ detail: `${id} is filed but not dispatched: ${refused.detail}` })),
     ),
+  );
+  yield* Console.log(
+    `${id}: dispatched on ${started.rung}; see foreman status, or foreman wait ${id}`,
   );
 });
 
