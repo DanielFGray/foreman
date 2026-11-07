@@ -37,17 +37,16 @@ describe("layoutOf", () => {
     ["looped", looped(), "across"],
     ["looped", looped(), "down"],
   ] as const) {
-    it(`${name}, ${flow}: no wire runs through a block other than its two ends`, () => {
+    it(`${name}, ${flow}: no wire runs through a block`, () => {
       const layout = layoutOf(beltOf(pipeline), flow);
       for (const { wire, points } of layout.wires) {
         for (const [id, box] of layout.boxes) {
-          if (id === wire.from || id === wire.to) continue;
           points
             .slice(1)
             .forEach((point, index) =>
               expect(
                 crosses(points[index]!, point, box),
-                `${wire.from}→${wire.to} crosses ${id}`,
+                `${wire.from}→${wire.to} runs through ${id}`,
               ).toBe(false),
             );
         }
