@@ -16,7 +16,7 @@ import {
 } from "./pipeline-preview.ts";
 
 const LADDER_OFFERS: SeatOffers = { rungs: [{ name: "cheap", author: true }], reviewers: [] };
-const NO_COMPOSITES: CheckInputs = { composites: {}, offers: LADDER_OFFERS };
+const CHECKS: CheckInputs = { composites: {}, offers: LADDER_OFFERS };
 const BRANCH_NEXT = { from: "branch", port: "next" } as const;
 
 /** The block `branch.next` leads to in the drawing as written: the candidate that changes nothing. */
@@ -30,7 +30,7 @@ const currentTarget = (drawing: Drawing): string => {
 
 describe("rejoinFrames", () => {
   it("marks rejoining branch.next to start with one unreachable problem", () => {
-    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, NO_COMPOSITES, "across");
+    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
     const toStart = frames.find(
       (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "start",
     );
@@ -40,8 +40,8 @@ describe("rejoinFrames", () => {
   });
 
   it("keeps the committed block positions so closest can hit the visible target", () => {
-    const committed = frameOf(DEFAULT_PIPELINE, [], NO_COMPOSITES, "across");
-    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, NO_COMPOSITES, "across");
+    const committed = frameOf(DEFAULT_PIPELINE, [], CHECKS, "across");
+    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
     const toStart = frames.find(
       (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "start",
     );
@@ -66,7 +66,7 @@ describe("rejoinFrames", () => {
         node.kind === "agent" && node.role === "author" ? { ...node, model: "cheap" } : node,
       ),
     };
-    const frames = rejoinFrames(configured, BRANCH_NEXT, NO_COMPOSITES, "across");
+    const frames = rejoinFrames(configured, BRANCH_NEXT, CHECKS, "across");
     const unchanged = frames.find(
       (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === currentTarget(configured),
     );
