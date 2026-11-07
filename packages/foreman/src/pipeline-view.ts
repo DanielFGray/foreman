@@ -6,7 +6,7 @@
  * Browser-safe: this module imports pure schema modules only, never I/O.
  */
 import { Schema as S } from "effect";
-import { CompositeDefinition, LANDINGS, Drawing } from "./pipeline.ts";
+import { CompositeDefinition, Composites, LANDINGS, Drawing } from "./pipeline.ts";
 import { STEPS } from "./policy.ts";
 import { WirePort } from "./pipeline-edit.ts";
 
@@ -95,7 +95,18 @@ export const ViewOf = S.Struct({
 });
 export type ViewOf = typeof ViewOf.Type;
 
-/** A project's pipeline as `pipeline show` prints it, and the view every edit returns. */
+/** What an agent block may name: the rungs, each with whether it may author, and the reviewers. */
+export const SeatOffersView = S.Struct({
+  rungs: S.Array(S.Struct({ name: S.String, author: S.Boolean })),
+  reviewers: S.Array(S.String),
+});
+export type SeatOffersView = typeof SeatOffersView.Type;
+
+/**
+ * A project's pipeline as `pipeline show` prints it, and the view every edit returns.
+ * `composites` and `offers` are the inputs the server checks the pipeline with, so a
+ * page checks a candidate drawing with the same `problemsOf` inputs.
+ */
 export const ShownPipeline = S.Struct({
   project: S.String,
   drawn: S.Boolean,
@@ -103,6 +114,8 @@ export const ShownPipeline = S.Struct({
     ...ChoicesView.fields,
     unsaved: S.Array(S.String),
   }),
+  composites: Composites,
+  offers: SeatOffersView,
   ...ViewOf.fields,
   draft: S.NullOr(ViewOf),
 });

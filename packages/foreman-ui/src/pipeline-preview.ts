@@ -3,21 +3,26 @@
  * PipelineChange, checked with problemsOf on the expansion (docs/web-ui.md).
  */
 import { expand } from "foreman/composite";
-import { problemsOf, type Composites, type Drawing, type SeatOffers } from "foreman/pipeline";
+import { problemsOf, type Drawing } from "foreman/pipeline";
 import { applyChange, type PipelineChange, type WireRef } from "foreman/pipeline-edit";
 import { writtenDrawingOf } from "foreman/pipeline-layout";
-import type { DrawingView, Flow } from "foreman/pipeline-view";
+import type { DrawingView, Flow, ShownPipeline } from "foreman/pipeline-view";
 
 type WirePort = WireRef["port"];
 
-/** Offers that accept the standard `ladder` / `reviewers` models with no seats listed. */
-export const BROWSER_OFFERS: SeatOffers = { rungs: [], reviewers: [] };
+/** The definitions and offers the server checks a pipeline with, as the Pipeline stream sends them. */
+export type CheckInputs = Pick<ShownPipeline, "composites" | "offers">;
 
-/** One frame the editor draws: pipeline, its layout, and problems of the expansion. */
+/**
+ * One frame the editor draws: pipeline, its layout, and problems of the expansion.
+ * `checks` are the inputs those problems were checked with, so a drag from this
+ * frame checks its candidates the same way.
+ */
 export type EditorFrame = {
   readonly pipeline: Drawing;
   readonly problems: ReadonlyArray<string>;
   readonly drawing: DrawingView;
+  readonly checks: CheckInputs;
   /** The change that produced this frame from the committed draft, if any. */
   readonly pending: PipelineChange | null;
 };
@@ -32,25 +37,25 @@ export const samePort = (a: WirePort, b: WirePort): boolean => a === b;
 /** Problems of a drawing after expand, as the page checks a drag candidate. */
 export const problemsOfExpansion = (
   pipeline: Drawing,
-  composites: Composites = {},
-  offers: SeatOffers = BROWSER_OFFERS,
+  checks: CheckInputs,
 ): ReadonlyArray<string> => {
-  const expanded = expand(pipeline, composites);
+  const expanded = expand(pipeline, checks.composites);
   if (expanded._tag === "Failed") return expanded.problems;
-  return problemsOf(expanded.pipeline, offers);
+  return problemsOf(expanded.pipeline, checks.offers);
 };
 
 /** Frame for a drawing the stream (or an optimistic drop) already holds. */
 export const frameOf = (
   pipeline: Drawing,
   problems: ReadonlyArray<string>,
-  composites: Composites,
+  checks: CheckInputs,
   flow: Flow,
   pending: PipelineChange | null = null,
 ): EditorFrame => ({
   pipeline,
   problems,
-  drawing: writtenDrawingOf(pipeline, composites, flow),
+  drawing: writtenDrawingOf(pipeline, checks.composites, flow),
+  checks,
   pending,
 });
 
@@ -85,10 +90,10 @@ export const drawingWithRejoin = (drawing: DrawingView, wire: WireRef, to: strin
 export const rejoinFrames = (
   pipeline: Drawing,
   wire: WireRef,
-  composites: Composites,
+  checks: CheckInputs,
   flow: Flow,
 ): ReadonlyArray<EditorFrame> => {
-  const base = writtenDrawingOf(pipeline, composites, flow);
+  const base = writtenDrawingOf(pipeline, checks.composites, flow);
   const targets: Array<string> = pipeline.nodes
     .map((node) => node.id)
     .filter((id) => id !== wire.from);
@@ -98,12 +103,13 @@ export const rejoinFrames = (
   const frames: Array<EditorFrame> = [];
   for (const to of targets) {
     const change: PipelineChange = { _tag: "Rejoin", wire, to };
-    const result = applyChange(pipeline, change, composites);
+    const result = applyChange(pipeline, change, checks.composites);
     if (result._tag === "Refused") continue;
     frames.push({
       pipeline: result.pipeline,
-      problems: problemsOfExpansion(result.pipeline, composites),
+      problems: problemsOfExpansion(result.pipeline, checks),
       drawing: drawingWithRejoin(base, wire, to),
+      checks,
       pending: change,
     });
   }

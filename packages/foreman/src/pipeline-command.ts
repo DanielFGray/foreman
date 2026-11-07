@@ -23,7 +23,12 @@ import {
   updatePipelines,
   updatePipelinesFile,
 } from "./pipeline-file.ts";
-import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
+import {
+  offersNow,
+  pipelinesNow,
+  problemsAgainstLadder,
+  problemsOfDrawing,
+} from "./pipeline-check.ts";
 import { writtenDrawingOf } from "./pipeline-layout.ts";
 import type { Flow } from "./pipeline-view.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
@@ -851,6 +856,8 @@ const shownOf = (project: string, flow: Flow) =>
         // Definitions this project's draft made. `composite show` reads only stored ones, so the pane refuses to open these until the draft is saved.
         unsaved: Object.keys(draft?.composites ?? {}).sort(),
       },
+      composites: available,
+      offers: yield* offersNow,
       ...viewOf(written, problems, available, flow),
       draft: draftJson,
     };

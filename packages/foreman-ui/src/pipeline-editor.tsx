@@ -8,7 +8,7 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { type Draggable, DraggableRenderer, translate } from "dragology";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
-import type { Composites, Drawing } from "foreman/pipeline";
+import type { Drawing } from "foreman/pipeline";
 import type { WireRef } from "foreman/pipeline-edit";
 import type { ShownPipeline, ViewOf } from "foreman/pipeline-view";
 import { useEffect, useMemo, useState } from "react";
@@ -24,7 +24,6 @@ import {
 import { pageInputsAtom, pipelineAtom, UiRpc } from "./rpc.ts";
 
 const FLOW = "across" as const;
-const COMPOSITES: Composites = {};
 
 const viewFrom = (shown: ShownPipeline): ViewOf =>
   shown.draft !== null
@@ -107,9 +106,10 @@ const EditorSvg: Draggable<EditorFrame> = ({ state, d, draggedId }) => {
                 pipeline: state.pipeline,
                 problems: state.problems,
                 drawing: state.drawing,
+                checks: state.checks,
                 pending: null,
               };
-              const frames = rejoinFrames(committed.pipeline, ref, COMPOSITES, FLOW);
+              const frames = rejoinFrames(committed.pipeline, ref, state.checks, FLOW);
               const options = frames.length === 0 ? [committed] : frames;
               return d.closest(options).whenFar(committed, { gap: 160 }).withFloating();
             }}
@@ -206,13 +206,14 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    if (remoteView === null || dragging) return;
-    if (optimistic !== null && sameDrawing(remoteView.pipeline, optimistic.pipeline)) {
+    if (remote === null || dragging) return;
+    const view = viewFrom(remote);
+    if (optimistic !== null && sameDrawing(view.pipeline, optimistic.pipeline)) {
       setOptimistic(null);
     }
     if (optimistic !== null) return;
-    setFrame(frameOf(remoteView.pipeline, remoteView.problems, COMPOSITES, FLOW));
-  }, [remoteView, dragging, optimistic]);
+    setFrame(frameOf(view.pipeline, view.problems, remote, FLOW));
+  }, [remote, dragging, optimistic]);
 
   const display = optimistic ?? frame;
 
@@ -225,7 +226,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
     }
     const baseline = optimistic?.pipeline ?? remoteView?.pipeline;
     if (baseline !== undefined && sameDrawing(next.pipeline, baseline)) {
-      setFrame(frameOf(baseline, remoteView?.problems ?? next.problems, COMPOSITES, FLOW));
+      setFrame(frameOf(baseline, remoteView?.problems ?? next.problems, next.checks, FLOW));
       return;
     }
     inputs.onPipelineEdit?.(change);
@@ -235,6 +236,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
       pipeline: next.pipeline,
       problems: next.problems,
       drawing: next.drawing,
+      checks: next.checks,
       pending: null,
     };
     setOptimistic(dropped);

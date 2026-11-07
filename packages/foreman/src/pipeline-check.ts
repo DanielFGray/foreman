@@ -32,10 +32,15 @@ export const pipelinesNow = Effect.gen(function* () {
  */
 export const problemsAgainstLadder = (pipeline: Pipeline) =>
   Effect.gen(function* () {
-    const seats = { ladder: yield* readLadder, reviewers: yield* readReviewers };
+    const offers = yield* offersNow;
     const texts = yield* (yield* Prompts).instructions(instructionNames(pipeline));
-    return [...problemsOf(pipeline, offersOf(seats)), ...instructionProblems(pipeline, texts)];
+    return [...problemsOf(pipeline, offers), ...instructionProblems(pipeline, texts)];
   }).pipe(Effect.provide(Prompts.Default));
+
+/** What the ladder and the reviewers offer an agent block to name, as the registry holds them now. */
+export const offersNow = Effect.gen(function* () {
+  return offersOf({ ladder: yield* readLadder, reviewers: yield* readReviewers });
+});
 
 /** The problems that stop `drawing` running with these definitions: the expansion's, else the ladder's. */
 export const problemsOfDrawing = (drawing: Drawing, composites: Composites) =>
