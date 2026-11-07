@@ -43,6 +43,14 @@ import { queueFrom } from "./queue.ts";
 import type { EpicProgress, Item } from "./records.ts";
 import { type AgentRate, drawMinutes, medianOf, type Rates } from "./run-rates.ts";
 import { openAgentOf, type StepRules } from "./run-step.ts";
+import type {
+  Frame,
+  FrameState,
+  SimulatedRun,
+  SimulatedTask,
+  SimulateReportView,
+  Standing,
+} from "./pipeline-simulate-view.ts";
 
 /** What a simulation assumes, which the dispatcher reads from the world instead. */
 export const SIMULATE_ASSUMES = {
@@ -82,53 +90,10 @@ export interface SimulateWorld {
   readonly pollSeconds: number;
 }
 
-/** Where a task stands in a frame: a block's run state, or out of the pipeline for good or for now. */
-export type FrameState = RunState | "landed" | "parked" | "gone" | "outside";
-
-export interface Standing {
-  readonly task: string;
-  /** The block a board draws the task on (a placement's `stands`), or null outside the pipeline. */
-  readonly node: string | null;
-  readonly state: FrameState;
-}
-
-/**
- * The tasks that moved at one time. The first frame holds every task; each
- * later one holds only the tasks whose block or state changed since the frame
- * before it, and a time when none moved has no frame, so the board at a frame
- * is the fold of the frames up to it.
- */
-export interface Frame {
-  /** Hours since the start. */
-  readonly at: number;
-  readonly moves: ReadonlyArray<Standing>;
-}
-
 /** Where every task stands at a time: a frame before the moves are taken out. */
 interface Board {
   readonly at: number;
   readonly standings: ReadonlyArray<Standing>;
-}
-
-export interface SimulatedTask {
-  readonly id: string;
-  readonly title: string;
-  readonly landedAt: number | null;
-  readonly parkedAt: number | null;
-  /** The block a task still in flight stands at when the run ends. */
-  readonly at: string | null;
-}
-
-/** One pipeline's run: where each task stood over time, and how each ended. */
-export interface SimulatedRun {
-  readonly frames: ReadonlyArray<Frame>;
-  readonly tasks: ReadonlyArray<SimulatedTask>;
-  /** The agent runs each seat opened, per role: a reviewer may share a rung's name. */
-  readonly runsBySeat: PerRole<Readonly<Record<string, number>>>;
-  readonly landed: number;
-  readonly parked: number;
-  readonly inFlight: number;
-  readonly outside: number;
 }
 
 /**
@@ -192,7 +157,7 @@ export const simulateReport = (
   rates: Rates,
   rules: Omit<StepRules, "pipeline">,
   request: { readonly seed: number; readonly hours: number },
-) => {
+): SimulateReportView => {
   const played = (pipeline: Pipeline, drawn: boolean) =>
     simulate({ world, pipeline, drawn, rates, rules, ...request });
   const { draft, live } = sources;
@@ -224,10 +189,10 @@ export const simulateReport = (
   };
 };
 
-export type SimulateReport = ReturnType<typeof simulateReport>;
-
 /** One run in a line: how many tasks landed, parked and are still in flight, and the runs per seat. */
-export const runSummary = (run: SimulateReport["saved"]): string => {
+export const runSummary = (
+  run: NonNullable<SimulateReportView["draft"]> | SimulateReportView["saved"],
+): string => {
   const landings = run.tasks.flatMap((task) => (task.landedAt === null ? [] : [task.landedAt]));
   const median = medianOf(landings);
   const counted = (runs: Readonly<Record<string, number>>) =>

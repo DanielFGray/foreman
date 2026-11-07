@@ -19,6 +19,7 @@ import {
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
 import { GraphView } from "./pipeline-graph-view.ts";
 import { TraceReportView } from "./pipeline-trace-view.ts";
+import { SimulateReportView } from "./pipeline-simulate-view.ts";
 import {
   CompositeEditView,
   CompositeView,
@@ -32,9 +33,6 @@ import { TraceRequest } from "./trace-request.ts";
 import { Published, PublishedRow } from "./published-schema.ts";
 
 const flowField = Flow.pipe(S.withDecodingDefault(Effect.succeed("across" as const)));
-
-/** Temporary: trace, simulate and graph views until their Schemas land. */
-const JsonView = S.Any;
 
 /** Streams that push a value at once and again at each change. */
 export const Readings = Rpc.make("Readings", {
@@ -108,7 +106,7 @@ export const PipelineSimulate = Rpc.make("PipelineSimulate", {
     seed: S.Int.pipe(S.withDecodingDefault(Effect.succeed(1))),
     hours: S.Finite.pipe(S.withDecodingDefault(Effect.succeed(72))),
   },
-  success: JsonView,
+  success: SimulateReportView,
   error: S.Union([PathsError, PipelineError, RecordsError, RegistryError, TrackerError]),
 });
 

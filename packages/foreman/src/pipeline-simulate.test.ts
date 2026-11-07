@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import type { Ladder } from "./ladder.ts";
 import { type Pipeline, STANDARD_PIPELINES, standardExits } from "./pipeline.ts";
-import { simulate, simulateReport, type Frame, type SimulateWorld } from "./pipeline-simulate.ts";
+import { simulate, simulateReport, type SimulateWorld } from "./pipeline-simulate.ts";
+import type { Frame } from "./pipeline-simulate-view.ts";
 import type { Item } from "./records.ts";
 import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
 
