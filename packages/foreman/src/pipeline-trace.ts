@@ -20,6 +20,7 @@ import {
   routeWorkspace,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
+import type { TraceReportView, TraceStepView } from "./pipeline-trace-view.ts";
 import type { Item } from "./records.ts";
 import { seatOf } from "./reviewers.ts";
 import { newRunFor } from "./run-record.ts";
@@ -38,16 +39,11 @@ export type TraceEvent = string;
 
 /** Where the task stands after the start or after one event, and what it may do next. */
 export interface TraceStep {
-  /** The event this step follows; none for the start. */
   readonly event: TraceEvent | undefined;
   readonly placement: Placement;
-  /** The rung an agent block chose for its run; none away from an agent block. */
   readonly rung: BlockSeat | undefined;
-  /** Why the task is parked for the operator, which ends the trace. */
   readonly parked: string | undefined;
-  /** The task's tip, made up: `c0` where its branch starts, then one more for each author handoff. */
   readonly tip: string;
-  /** The gates and blocks the task stood at so far, in order. */
   readonly route: ReadonlyArray<string>;
   readonly offers: ReadonlyArray<TraceEvent>;
 }
@@ -125,7 +121,7 @@ export const traceReport = (
   request: TraceRequest,
   sources: TraceSources,
   rules: Omit<StepRules, "pipeline">,
-) => {
+): TraceReportView => {
   const pipeline = sources.draft ?? sources.live.pipeline;
   const traced = traceOf(request.task, request.events, { ...rules, pipeline });
   return {
@@ -139,10 +135,8 @@ export const traceReport = (
   };
 };
 
-export type TraceReport = ReturnType<typeof traceReport>;
-
 /** A trace step as JSON: an absent value is `null`, and a rung is named. */
-const stepJson = (step: TraceStep) => ({
+const stepJson = (step: TraceStep): TraceStepView => ({
   event: step.event ?? null,
   placement: step.placement,
   rung:

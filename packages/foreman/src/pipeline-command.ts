@@ -42,7 +42,8 @@ import {
 } from "./pipeline-draft.ts";
 import { PipelineError } from "./errors.ts";
 import { Settings, settings } from "./config.ts";
-import { type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { traceReport } from "./pipeline-trace.ts";
+import type { TraceStepView } from "./pipeline-trace-view.ts";
 import { TraceRequest } from "./trace-request.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
@@ -653,7 +654,7 @@ const whereIs = (placement: Placement): string =>
         : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
 
 /** A trace step in words: the event, where the task stands, and what comes next. */
-const traceLine = (step: TraceReport["steps"][number]): string =>
+const traceLine = (step: TraceStepView): string =>
   [
     step.event ?? "start",
     whereIs(step.placement),

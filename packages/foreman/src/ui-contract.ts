@@ -18,6 +18,7 @@ import {
 } from "./errors.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
 import { GraphView } from "./pipeline-graph-view.ts";
+import { TraceReportView } from "./pipeline-trace-view.ts";
 import {
   CompositeEditView,
   CompositeView,
@@ -97,7 +98,7 @@ export const PipelinePrompt = Rpc.make("PipelinePrompt", {
 
 export const PipelineTrace = Rpc.make("PipelineTrace", {
   payload: { project: S.String, request: TraceRequest },
-  success: JsonView,
+  success: TraceReportView,
   error: S.Union([PipelineError]),
 });
 

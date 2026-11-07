@@ -325,47 +325,51 @@ export interface Facts {
 }
 
 /** How far a task's run at the block it stands at has gone. */
-export type RunState =
+export const RunState = S.Literals([
   /** Nothing runs yet. The gates on the way decide when it may start. */
-  | "waiting"
+  "waiting",
   /** The block's run is under way. */
-  | "running"
+  "running",
   /** The run's agent named its exit, and settle has not yet recorded it. */
-  | "ended";
+  "ended",
+]);
+export type RunState = typeof RunState.Type;
 
 /** Where a task stands in a pipeline. */
-export type Placement =
+export const Placement = S.Union([
   /** No source takes the task, or its status puts it outside any flow. */
-  | { readonly _tag: "Outside" }
-  | { readonly _tag: "Parked"; readonly node: string }
+  S.Struct({ _tag: S.Literal("Outside") }),
+  S.Struct({ _tag: S.Literal("Parked"), node: S.String }),
   /**
    * The task's last exit is one the drawing lacks, or was named at a block
    * the drawing lacks. Absence is an unknown, not evidence, so the task
    * waits for the operator rather than starting at its source again.
    */
-  | {
-      readonly _tag: "ExitGone";
-      readonly node: string;
-      readonly exit: string;
-      readonly reason: string;
-    }
-  | {
-      readonly _tag: "At";
-      readonly node: WorkNode;
-      readonly state: RunState;
-      /** The gates between the last block it passed and this one. */
-      readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
-      /** Work blocks after this one, on the route its facts take now. */
-      readonly ahead: number;
-      /**
-       * The block a board draws the task on. A waiting task that has not
-       * started (no exit placed it, no attempt, no failure) stands at the
-       * source that took it; any other waiting task stands at the gate in
-       * front of its block, else at the block. A running task stands at its
-       * block.
-       */
-      readonly stands: string;
-    };
+  S.Struct({
+    _tag: S.Literal("ExitGone"),
+    node: S.String,
+    exit: S.String,
+    reason: S.String,
+  }),
+  S.Struct({
+    _tag: S.Literal("At"),
+    node: S.Union([AgentNode, CheckNode, LandNode, DoneNode]),
+    state: RunState,
+    /** The gates between the last block it passed and this one. */
+    gates: S.Array(S.Struct({ id: S.String, step: S.Literals(STEPS) })),
+    /** Work blocks after this one, on the route its facts take now. */
+    ahead: S.Int,
+    /**
+     * The block a board draws the task on. A waiting task that has not
+     * started (no exit placed it, no attempt, no failure) stands at the
+     * source that took it; any other waiting task stands at the gate in
+     * front of its block, else at the block. A running task stands at its
+     * block.
+     */
+    stands: S.String,
+  }),
+]);
+export type Placement = typeof Placement.Type;
 
 /**
  * Where a task with these facts stands in `pipeline`.
