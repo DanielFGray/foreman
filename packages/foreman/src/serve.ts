@@ -37,7 +37,7 @@ import { buildHost, publishedFailure, uiServices } from "./host.ts";
 import { publishedOf, statusOf, writePublished } from "./published.ts";
 import { type Published } from "./published-schema.ts";
 import { publishedPath } from "./paths.ts";
-import { ReadingsRef, uiServerLayer, type UiServerOptions } from "./ui-server.ts";
+import { ReadingsRef, uiServerLayer } from "./ui-server.ts";
 
 export const serveCommand = Command.make("serve", {}, () =>
   Effect.scoped(
@@ -68,16 +68,14 @@ export const serveCommand = Command.make("serve", {}, () =>
 /**
  * Launches the UI server Layer against `readings`. A failure — including a
  * page that does not Bun.build — is logged and ends only this Effect; the
- * caller (supervise) is unaffected. Tests build the same shape with
- * {@link uiServerOn} and {@link isolateUiServer}.
+ * caller (supervise) is unaffected.
  */
 export const runUiServer = (
   readings: SubscriptionRef.SubscriptionRef<Published>,
-  options?: UiServerOptions,
 ): Effect.Effect<void> =>
   isolateUiServer(
     Layer.launch(
-      uiServerLayer(options).pipe(
+      uiServerLayer.pipe(
         Layer.provide(Layer.mergeAll(Layer.succeed(ReadingsRef, readings), uiServices)),
       ),
     ),

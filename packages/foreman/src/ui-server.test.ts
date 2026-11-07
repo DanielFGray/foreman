@@ -303,7 +303,7 @@ describe("page assets", () => {
     process.chdir(tmpdir());
     try {
       expect(resolvePageEntrypoint()).toMatch(/foreman-ui\/src\/main\.tsx$/);
-      const assets = await Effect.runPromise(buildPageAssets());
+      const assets = await Effect.runPromise(buildPageAssets);
       expect(assets.has("/")).toBe(true);
     } finally {
       process.chdir(before);

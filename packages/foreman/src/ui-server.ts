@@ -212,11 +212,6 @@ export type UiServerOptions = {
   readonly trustedOrigins?: ReadonlyArray<string>;
   /** When false, skip the page build (contract-only tests). Default true. */
   readonly page?: boolean;
-  /**
-   * Bun.build entry. Defaults to {@link resolvePageEntrypoint}. Tests pass a
-   * path that does not build to prove a failed build stops only the UI server.
-   */
-  readonly entrypoint?: string;
 };
 
 /** Built page files keyed by URL path (`/`, `/main.js`, …). */
@@ -250,35 +245,32 @@ const contentTypeOf = (path: string): string => {
  * Runs `Bun.build` on the page entry for the browser target. A failed build
  * fails this Effect so the UI server Layer stops; the dispatcher is separate.
  */
-export const buildPageAssets = (
-  entrypoint: string = resolvePageEntrypoint(),
-): Effect.Effect<PageAssets, PageBuildError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const result = await Bun.build({
-        entrypoints: [entrypoint],
-        target: "browser",
-        format: "esm",
-        minify: false,
-        sourcemap: "none",
-      });
-      if (!result.success) {
-        const messages = result.logs.map((log) => log.message ?? String(log)).join("\n");
-        throw new PageBuildError({ detail: `foreman-ui Bun.build failed:\n${messages}` });
-      }
-      const assets = new Map<string, { readonly body: Uint8Array; readonly contentType: string }>();
-      let mainJs = "/main.js";
-      let mainCss: string | undefined;
-      for (const output of result.outputs) {
-        const bytes = new Uint8Array(await output.arrayBuffer());
-        const base = output.path.split(/[/\\]/).at(-1) ?? "main.js";
-        const urlPath = `/${base}`;
-        assets.set(urlPath, { body: bytes, contentType: contentTypeOf(urlPath) });
-        if (base.endsWith(".js") && !base.endsWith(".js.map")) mainJs = urlPath;
-        if (base.endsWith(".css")) mainCss = urlPath;
-      }
-      const cssLink = mainCss === undefined ? "" : `<link rel="stylesheet" href="${mainCss}"/>`;
-      const html = `<!DOCTYPE html>
+export const buildPageAssets: Effect.Effect<PageAssets, PageBuildError> = Effect.tryPromise({
+  try: async () => {
+    const result = await Bun.build({
+      entrypoints: [resolvePageEntrypoint()],
+      target: "browser",
+      format: "esm",
+      minify: false,
+      sourcemap: "none",
+    });
+    if (!result.success) {
+      const messages = result.logs.map((log) => log.message ?? String(log)).join("\n");
+      throw new PageBuildError({ detail: `foreman-ui Bun.build failed:\n${messages}` });
+    }
+    const assets = new Map<string, { readonly body: Uint8Array; readonly contentType: string }>();
+    let mainJs = "/main.js";
+    let mainCss: string | undefined;
+    for (const output of result.outputs) {
+      const bytes = new Uint8Array(await output.arrayBuffer());
+      const base = output.path.split(/[/\\]/).at(-1) ?? "main.js";
+      const urlPath = `/${base}`;
+      assets.set(urlPath, { body: bytes, contentType: contentTypeOf(urlPath) });
+      if (base.endsWith(".js") && !base.endsWith(".js.map")) mainJs = urlPath;
+      if (base.endsWith(".css")) mainCss = urlPath;
+    }
+    const cssLink = mainCss === undefined ? "" : `<link rel="stylesheet" href="${mainCss}"/>`;
+    const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
@@ -292,16 +284,16 @@ ${cssLink}
 </body>
 </html>
 `;
-      const htmlBytes = new TextEncoder().encode(html);
-      assets.set("/", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
-      assets.set("/index.html", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
-      return assets;
-    },
-    catch: (cause) =>
-      cause instanceof PageBuildError
-        ? cause
-        : new PageBuildError({ detail: cause instanceof Error ? cause.message : String(cause) }),
-  });
+    const htmlBytes = new TextEncoder().encode(html);
+    assets.set("/", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
+    assets.set("/index.html", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
+    return assets;
+  },
+  catch: (cause) =>
+    cause instanceof PageBuildError
+      ? cause
+      : new PageBuildError({ detail: cause instanceof Error ? cause.message : String(cause) }),
+});
 
 /** Serves built page assets; unknown paths fall through to the SPA shell at `/`. */
 export const pageRoutesLayer = (assets: PageAssets) =>
@@ -342,13 +334,12 @@ export const uiRoutesLayer = (
  * page's Bun.build outputs. Requires `ReadingsRef`, handler services, and the
  * services the verbs need. `foreman serve` provides this beside supervise.
  */
-export const uiServerLayer = (options?: UiServerOptions) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const port = yield* uiPort;
-      return uiServerOn(port, options);
-    }),
-  );
+export const uiServerLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const port = yield* uiPort;
+    return uiServerOn(port);
+  }),
+);
 
 /**
  * Builds the UI server Layer for an already-known port (tests pick a free one
@@ -367,7 +358,7 @@ export const uiServerOn = (port: number, options?: UiServerOptions) => {
       const routes = withPage
         ? Layer.mergeAll(
             uiRoutesLayer(port, trustedOrigins),
-            pageRoutesLayer(yield* buildPageAssets(options?.entrypoint)),
+            pageRoutesLayer(yield* buildPageAssets),
           )
         : uiRoutesLayer(port, trustedOrigins);
       return HttpRouter.serve(routes.pipe(Layer.provide(uiHandlersLayer)), {

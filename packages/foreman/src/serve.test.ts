@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import {
+  Cause,
   DateTime,
   Deferred,
   Duration,
@@ -11,6 +12,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
   Stream,
@@ -20,7 +22,7 @@ import { TestClock } from "effect/testing";
 import { Settings } from "./config.ts";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 import { Fleet, type Worker } from "./fleet.ts";
-import { FleetError } from "./errors.ts";
+import { FleetError, PageBuildError } from "./errors.ts";
 import type { Ladder } from "./ladder.ts";
 import { publishedOf } from "./published.ts";
 import { type Published } from "./published-schema.ts";
@@ -197,10 +199,30 @@ describe("UI server beside supervise", () => {
   test("a page that does not build stops only the UI server; the dispatcher side still runs", async () => {
     const dir = scratch();
     const path = join(dir, "state.json");
-    const broken = join(dir, "broken-page.tsx");
-    writeFileSync(broken, "this is not a module {{{");
     const store = scratchStore();
     process.env["XDG_CONFIG_HOME"] = dir;
+    // The page build is the external boundary that fails: Bun.build reports a
+    // broken page. The dispatcher waits for that failure, so a reading that
+    // reaches state.json proves the dispatcher ran after the UI server stopped.
+    const order: Array<string> = [];
+    const pageFailed = Promise.withResolvers<void>();
+    const build = spyOn(Bun, "build").mockImplementation(async () => {
+      order.push("page build failed");
+      pageFailed.resolve();
+      return {
+        success: false,
+        logs: [{ message: "Unexpected token" }],
+        outputs: [],
+      } as unknown as Awaited<ReturnType<typeof Bun.build>>;
+    });
+    const stopped: Array<unknown> = [];
+    // A log call with a message and extra values carries an array as its message.
+    const capture = Logger.make((options) => {
+      const message = Array.isArray(options.message) ? options.message[0] : options.message;
+      if (message === "foreman's UI server stopped") {
+        stopped.push(Cause.squash(options.cause));
+      }
+    });
     try {
       await Effect.runPromise(
         seed(`
@@ -258,30 +280,50 @@ describe("UI server beside supervise", () => {
         ),
       ).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store.registry));
 
-      const builds = await Effect.runPromise(
+      const uiExit = await Effect.runPromise(
         Effect.gen(function* () {
-          const builds = yield* Ref.make(0);
           const readings = yield* emptyReadings();
-          // Same composition serve uses: UI fiber beside supervise, wrapped in
-          // isolateUiServer. Broken entry makes Bun.build fail; the dispatcher
-          // fiber still completes and writes state.json.
-          yield* Effect.forkChild(
+          // Same composition serve uses: the UI Layer forked beside supervise,
+          // wrapped in isolateUiServer.
+          const ui = yield* Effect.forkChild(
             isolateUiServer(
               Layer.launch(
-                uiServerOn(17345, { entrypoint: broken }).pipe(
+                uiServerOn(17345).pipe(
                   Layer.provide(Layer.mergeAll(Layer.succeed(ReadingsRef, readings), handlers)),
                 ),
               ),
             ),
           );
-          yield* supervise(fakeHost(0, builds), path, readings);
-          return yield* Ref.get(builds);
-        }).pipe(Effect.provide(BunServices.layer)),
+          const dispatcher = Effect.gen(function* () {
+            const state = yield* SubscriptionRef.make<FleetState>(EMPTY_FLEET);
+            return {
+              state,
+              run: Effect.promise(() => pageFailed.promise).pipe(
+                Effect.andThen(Effect.sync(() => order.push("dispatcher ran"))),
+                Effect.andThen(SubscriptionRef.set(state, reading)),
+              ),
+            };
+          });
+          yield* supervise(dispatcher, path, readings);
+          return yield* Fiber.await(ui);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              BunServices.layer,
+              Logger.layer([capture], { mergeWithExisting: false }),
+            ),
+          ),
+        ),
       );
-      expect(builds).toBe(1);
+      expect(Exit.isSuccess(uiExit)).toBe(true);
+      expect(build).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(["page build failed", "dispatcher ran"]);
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toBeInstanceOf(PageBuildError);
       const published = JSON.parse(readFileSync(path, "utf8"));
       expect(published.dispatcher).toEqual({ state: "idle" });
     } finally {
+      build.mockRestore();
       store.cleanup();
       rmSync(dir, { recursive: true, force: true });
     }
