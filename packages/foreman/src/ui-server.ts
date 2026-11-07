@@ -108,16 +108,12 @@ export const localOnlyMiddleware = (port: number) =>
     { global: true },
   );
 
-/**
- * Failures no page can answer: a file the OS would not open, a store that
- * would not answer, a stored file that no longer decodes. They end the call as
- * a defect. The refusals a verb names stay in the contract as their tagged
- * errors, the ones the CLI prints.
- */
 /** The tags of failures no page can answer (see infraAsDefects). */
 const INFRA_TAGS: ReadonlyArray<string> = ["PlatformError", "SchemaError", "SqlError"];
 
-const isInfra = <E>(error: E): error is Extract<E, { readonly _tag: string }> =>
+const isInfra = <E>(
+  error: E,
+): error is Extract<E, { readonly _tag: "PlatformError" | "SchemaError" | "SqlError" }> =>
   typeof error === "object" &&
   error !== null &&
   "_tag" in error &&
