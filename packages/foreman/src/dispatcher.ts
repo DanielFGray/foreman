@@ -436,12 +436,15 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * permanent tail of almost-done tasks.
      *
      * The tick answers `moved`, and acts no further, when `codeMoved` says the
-     * checkout this process loaded its code from has a new commit: the prompts
-     * and store migrations on disk then belong to code this process does not
-     * run. It asks before the reading and again before fill, because a
-     * landing in settle can move that checkout and fill renders prompts.
+     * checkout this process loaded its code from has a new commit ready to
+     * run: the prompts and store migrations on disk then belong to code this
+     * process does not run. The host's check installs that checkout first and
+     * fails rather than answering true when setup fails, so serve does not
+     * restart onto a tree whose install failed. It asks before the reading and
+     * again before fill, because a landing in settle can move that checkout
+     * and fill renders prompts.
      */
-    const tick = (codeMoved: Effect.Effect<boolean>) =>
+    const tick = <E, R>(codeMoved: Effect.Effect<boolean, E, R>) =>
       Effect.gen(function* () {
         if (yield* codeMoved) return "moved" as const;
         const { current, providers } = yield* read;
@@ -3142,10 +3145,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       /**
        * Runs until interrupted, or until `codeMoved` answers true. A host
        * whose code comes from a checkout foreman lands into passes a check of
-       * that checkout, and starts a new process on the new code when `run`
-       * returns.
+       * that checkout (including its setup), and starts a new process on the
+       * new code when `run` returns. A failing `codeMoved` fails the run so
+       * the host can publish the failure and keep the loaded code.
        */
-      run: (codeMoved: Effect.Effect<boolean> = Effect.succeed(false)) =>
+      run: <E = never, R = never>(
+        codeMoved: Effect.Effect<boolean, E, R> = Effect.succeed(false),
+      ) =>
         Effect.gen(function* () {
           yield* Effect.logInfo(
             `foreman up: over the open spaces' projects, polling every ${settings.pollInterval}s, policy in ${policyPath()}`,

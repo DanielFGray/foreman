@@ -587,6 +587,8 @@ describe("Repository", () => {
 // A branch can declare what the tree needs installed, such as a new package
 // and its dependencies. Verification judges the merged tree, so the setup
 // script has to run on that tree, not only on the base it was proved against.
+// The operator's checkout takes the same files after apply, and serve restarts
+// from it, so setup must run there too before the landing succeeds.
 describe("Repository landing a branch that changes what setup installs", () => {
   test("verifies the merged tree with the merged tree's setup", async () => {
     const here = await mkdtemp(join(tmpdir(), "foreman-merged-setup-"));
@@ -616,6 +618,86 @@ describe("Repository landing a branch that changes what setup installs", () => {
         _tag: "Merged",
         verified: true,
       });
+    } finally {
+      await rm(here, { recursive: true, force: true });
+      await rm(`${here}.grounds`, { recursive: true, force: true });
+    }
+  });
+
+  test("installs the operator's checkout after the merge is applied", async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-checkout-setup-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    try {
+      await sh("init", "-q", "-b", "trunk");
+      await sh("config", "branch.autoSetupMerge", "always");
+      await mkdir(join(here, "scripts"), { recursive: true });
+      // Records that setup ran in this directory. The proving ground is a
+      // sibling path, so a run only there leaves the checkout without the file.
+      await writeFile(
+        join(here, "scripts", "worktree-setup.sh"),
+        "#!/bin/sh\ntouch setup-ran.txt\n",
+        { mode: 0o755 },
+      );
+      await sh("add", "scripts");
+      await sh("commit", "-qm", "initial");
+
+      await sh("checkout", "-qb", "changes-deps");
+      await writeFile(join(here, "dep.txt"), "new\n");
+      await sh("add", "dep.txt");
+      await sh("commit", "-qm", "changes dependencies");
+      await sh("checkout", "-q", "trunk");
+
+      expect(await merge(here, "changes-deps")).toEqual({ _tag: "Merged", verified: false });
+      expect(await Bun.file(join(here, "setup-ran.txt")).exists()).toBe(true);
+    } finally {
+      await rm(here, { recursive: true, force: true });
+      await rm(`${here}.grounds`, { recursive: true, force: true });
+    }
+  });
+
+  test("holds when the checkout's setup fails after apply, with the commits in", async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-checkout-setup-fail-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    try {
+      await sh("init", "-q", "-b", "trunk");
+      await sh("config", "branch.autoSetupMerge", "always");
+      await mkdir(join(here, "scripts"), { recursive: true });
+      // Fails only once the branch's marker is present, so prove's setup on
+      // the merged ground can be made to pass while the checkout's fails —
+      // or, with no verify, prove skips the merged-tree setup path's gate.
+      await writeFile(
+        join(here, "scripts", "worktree-setup.sh"),
+        "#!/bin/sh\nif [ -f break.txt ]; then echo 'install broke' >&2; exit 1; fi\n",
+        { mode: 0o755 },
+      );
+      await sh("add", "scripts");
+      await sh("commit", "-qm", "initial");
+
+      await sh("checkout", "-qb", "breaks-install");
+      await writeFile(join(here, "break.txt"), "x\n");
+      await sh("add", "break.txt");
+      await sh("commit", "-qm", "breaks install");
+      await sh("checkout", "-q", "trunk");
+
+      const result = await merge(here, "breaks-install");
+      expect(result._tag).toBe("Held");
+      if (result._tag !== "Held") return;
+      expect(result.detail).toContain("checkout setup failed");
+      expect(result.detail).toContain("install broke");
+      // The apply already happened; a later tick's Present path retries setup.
+      expect(
+        (await Bun.$`git -C ${here} merge-base --is-ancestor breaks-install trunk`.nothrow())
+          .exitCode,
+      ).toBe(0);
+
+      // Repair the install the way an operator or a fixed script would, then
+      // the already-present path completes without merging again.
+      await writeFile(join(here, "scripts", "worktree-setup.sh"), "#!/bin/sh\n", {
+        mode: 0o755,
+      });
+      expect(await merge(here, "breaks-install")).toEqual({ _tag: "Present" });
     } finally {
       await rm(here, { recursive: true, force: true });
       await rm(`${here}.grounds`, { recursive: true, force: true });

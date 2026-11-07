@@ -423,23 +423,25 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       fs.makeDirectory(path.dirname(proving), { recursive: true }).pipe(Effect.ignore);
 
     /**
-     * Installs a proving ground's dependencies, the same way a task worktree
-     * gets them.
+     * Installs a directory's dependencies via the project's setup script, the
+     * same way a task worktree gets them.
      *
      * A checkout of source alone cannot run a test suite, and a verification
      * that could not run must never read as green — that is the one gate the
-     * whole landing rests on. So a failed setup holds the project: it is the
-     * machine's fault or the project's, never the branch's.
+     * whole landing rests on. The operator's checkout after a landing is the
+     * same fact: serve and the next agent both load from it. So a failed
+     * setup holds the project: it is the machine's fault or the project's,
+     * never the branch's. `label` names which directory failed in the hold.
      */
-    const prepare = (proving: string) =>
+    const prepare = (directory: string, label: string) =>
       Effect.gen(function* () {
-        const script = `${proving}/${SETUP_SCRIPT}`;
+        const script = `${directory}/${SETUP_SCRIPT}`;
         const present = yield* fs.exists(script).pipe(Effect.orElseSucceed(() => false));
         if (!present) return undefined;
-        const result = yield* check(proving, `./${SETUP_SCRIPT}`);
+        const result = yield* check(directory, `./${SETUP_SCRIPT}`);
         return result.passed
           ? undefined
-          : ({ _tag: "Held", detail: `proving ground setup failed:\n${result.output}` } as const);
+          : ({ _tag: "Held", detail: `${label} setup failed:\n${result.output}` } as const);
       });
 
     /**
@@ -479,7 +481,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
             } as const;
           }
         }
-        return yield* prepare(proving);
+        return yield* prepare(proving, "proving ground");
       });
 
     /**
@@ -548,7 +550,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         // The ground was installed for `base`. The branch can add a package,
         // a dependency or a patch, so the merged tree gets its own install
         // before verify judges it.
-        const installed = yield* prepare(proving);
+        const installed = yield* prepare(proving, "proving ground");
         if (installed) return installed;
 
         const judged = yield* judge(proving, verify, gitGround(proving, directory, base));
@@ -689,6 +691,17 @@ export class Repository extends Context.Service<Repository>()("Repository", {
                 applied.stdout.trim() ||
                 `git ${where === undefined ? "update-ref" : "merge"} exited ${applied.exitCode}`,
             } as const;
+          }
+          // The proving ground was installed for the merge; the operator's
+          // checkout was not. A landing that changes the lockfile or a
+          // package's dependencies leaves that checkout on the older install
+          // until something runs the project's setup there — and serve, which
+          // exits on the new commit, would restart onto it. So the checkout
+          // that took the files is set up before the landing succeeds; a
+          // failure holds, as in the proving ground.
+          if (where !== undefined) {
+            const installed = yield* prepare(where, "checkout");
+            if (installed) return installed;
           }
           return { _tag: "Merged", verified: proof.verified } as const;
         }),
@@ -1218,7 +1231,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         proving: string,
         message: string,
         how: How,
-      ) =>
+      ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           // A branch-mode task has its branch out in this checkout. Landing it
           // starts by checking the operator's branch out again, so every step
@@ -1247,7 +1260,20 @@ export class Repository extends Context.Service<Repository>()("Repository", {
           // the commits is not going to be written to and the checkout's
           // cleanliness is beside the point. Holding here would strand the
           // task exactly as long as the operator kept editing.
-          if (yield* contains(directory, commit, ref)) return { _tag: "Present" } as const;
+          //
+          // An earlier tick may have applied the merge and then held on the
+          // checkout's setup. The commits are in, so this path is taken, and
+          // the setup still has to succeed before the landing finishes —
+          // otherwise serve would restart onto an uninstalled tree the moment
+          // the task completed.
+          if (yield* contains(directory, commit, ref)) {
+            const where = (yield* worktreeWith(directory, target))?.path;
+            if (where !== undefined) {
+              const installed = yield* prepare(where, "checkout");
+              if (installed) return installed;
+            }
+            return { _tag: "Present" } as const;
+          }
 
           const gate = yield* isFree(directory);
           if (gate._tag !== "Clean") return gate;

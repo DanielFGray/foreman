@@ -22,7 +22,7 @@ import { policyPath, readPolicy } from "./policy-file.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
-import { Repository } from "./repository.ts";
+import { Repository, RepositoryError } from "./repository.ts";
 import { telemetry } from "./telemetry.ts";
 
 /**
@@ -117,23 +117,38 @@ export const buildHost = Effect.gen(function* () {
   const headOfCode = repository.head(import.meta.dir).pipe(Effect.option);
   loadedCommit ??= Option.getOrUndefined(yield* headOfCode);
   const loaded = loadedCommit;
+  /**
+   * True only when the checkout this process loaded has a new commit and that
+   * checkout's setup has succeeded on it. A landing can move HEAD and still
+   * leave dependencies on the older lockfile; exiting before setup would make
+   * the service restart onto a tree that cannot run. A setup failure fails
+   * this effect so supervise logs and publishes it, and the process stays on
+   * the code it already loaded until a later tick's setup passes.
+   */
+  const codeMoved = Effect.gen(function* () {
+    const head = yield* headOfCode;
+    if (loaded === undefined || Option.isNone(head) || head.value === loaded) return false;
+    const checkout = yield* repository.checkoutOf(import.meta.dir);
+    if (checkout === undefined) return true;
+    const setup = yield* repository.setup(checkout);
+    if (setup !== undefined && !setup.passed) {
+      return yield* new RepositoryError({
+        directory: checkout,
+        detail: `checkout setup failed:\n${setup.output}`,
+      });
+    }
+    return true;
+  });
   return {
     /** Each reading of the world, replaced whole. */
     state: dispatcher.state,
     /**
      * Ticks until interrupted, until a tick fails, or until the checkout this
-     * process loaded foreman from has a new commit. It returns only in the
-     * last case, and the host then starts a new process on the new code.
+     * process loaded foreman from has a new commit whose setup succeeded. It
+     * returns only in the last case, and the host then starts a new process
+     * on the new code.
      */
-    run: dispatcher
-      .run(
-        headOfCode.pipe(
-          Effect.map(
-            (head) => loaded !== undefined && Option.isSome(head) && head.value !== loaded,
-          ),
-        ),
-      )
-      .pipe(Effect.provideContext(context)),
+    run: dispatcher.run(codeMoved).pipe(Effect.provideContext(context)),
     /** Asks for a reading now, after a command changed the world. */
     wake: dispatcher.wake,
     /** The ranked queue for one project or every open one, as published rows. */
