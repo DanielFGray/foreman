@@ -36,6 +36,7 @@ export const factsOf = (
     ),
     named: sinceSource(exits, pipeline),
     exit: exits.at(-1)?.name,
+    exitNode: exits.at(-1)?.node,
   };
 };
 
