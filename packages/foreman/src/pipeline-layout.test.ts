@@ -37,17 +37,21 @@ describe("layoutOf", () => {
     ["looped", looped(), "across"],
     ["looped", looped(), "down"],
   ] as const) {
-    it(`${name}, ${flow}: no wire runs through a block other than its two ends`, () => {
+    it(`${name}, ${flow}: no wire runs through a block`, () => {
       const layout = layoutOf(beltOf(pipeline), flow);
       for (const { wire, points } of layout.wires) {
         for (const [id, box] of layout.boxes) {
-          if (id === wire.from || id === wire.to) continue;
+          // A wire may touch its own ends on the edge; an inset ignores that
+          // contact so a stretch through the block itself still fails — the
+          // old skip of from/to missed review→climb running through climb.
+          const body = { x: box.x + 1, y: box.y + 1, w: box.w - 2, h: box.h - 2 };
+          if (body.w <= 0 || body.h <= 0) continue;
           points
             .slice(1)
             .forEach((point, index) =>
               expect(
-                crosses(points[index]!, point, box),
-                `${wire.from}→${wire.to} crosses ${id}`,
+                crosses(points[index]!, point, body),
+                `${wire.from}→${wire.to} runs through ${id}`,
               ).toBe(false),
             );
         }
