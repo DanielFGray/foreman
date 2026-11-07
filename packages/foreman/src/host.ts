@@ -109,32 +109,44 @@ export const queueRowsOf = (project: Option.Option<string>) =>
  *
  * `run` and `queue` carry the built services with them, so the logger and
  * tracer foreman sets apply to them and to nothing else in the host.
+ *
+ * `buildHostOver` is the same host over the given services, with the code
+ * checkout at `codeDirectory`. A test passes fakes and a checkout it controls,
+ * so the restart gate runs through the wiring production uses.
  */
-export const buildHost = Effect.gen(function* () {
-  const context = yield* Layer.build(services);
-  const dispatcher = Context.get(context, Dispatcher);
-  const repository = Context.get(context, Repository);
-  const headOfCode = repository.head(import.meta.dir).pipe(Effect.option);
-  loadedCommit ??= Option.getOrUndefined(yield* headOfCode);
-  const loaded = loadedCommit;
-  const codeMoved = codeMovedFrom(repository, loaded, import.meta.dir);
-  return {
-    /** Each reading of the world, replaced whole. */
-    state: dispatcher.state,
-    /**
-     * Ticks until interrupted, until a tick fails, or until the checkout this
-     * process loaded foreman from has a new commit whose setup succeeded. It
-     * returns only in the last case, and the host then starts a new process
-     * on the new code.
-     */
-    run: dispatcher.run(codeMoved).pipe(Effect.provideContext(context)),
-    /** Asks for a reading now, after a command changed the world. */
-    wake: dispatcher.wake,
-    /** The ranked queue for one project or every open one, as published rows. */
-    queue: (project: Option.Option<string>) =>
-      queueRowsOf(project).pipe(Effect.provideContext(context)),
-  };
-});
+export const buildHostOver = <E, R>(options: {
+  readonly layer: Layer.Layer<Dispatcher | Repository, E, R>;
+  readonly codeDirectory: string;
+}) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(options.layer);
+    const dispatcher = Context.get(context, Dispatcher);
+    const repository = Context.get(context, Repository);
+    const { codeDirectory } = options;
+    if (!loadedCommits.has(codeDirectory)) {
+      const head = yield* repository.head(codeDirectory).pipe(Effect.option);
+      if (Option.isSome(head)) loadedCommits.set(codeDirectory, head.value);
+    }
+    const codeMoved = codeMovedFrom(repository, loadedCommits.get(codeDirectory), codeDirectory);
+    return {
+      /** Each reading of the world, replaced whole. */
+      state: dispatcher.state,
+      /**
+       * Ticks until interrupted, until a tick fails, or until the checkout this
+       * process loaded foreman from has a new commit whose setup succeeded. It
+       * returns only in the last case, and the host then starts a new process
+       * on the new code.
+       */
+      run: dispatcher.run(codeMoved).pipe(Effect.provideContext(context)),
+      /** Asks for a reading now, after a command changed the world. */
+      wake: dispatcher.wake,
+      /** The ranked queue for one project or every open one, as published rows. */
+      queue: (project: Option.Option<string>) =>
+        queueRowsOf(project).pipe(Effect.provideContext(context)),
+    };
+  });
+
+export const buildHost = buildHostOver({ layer: services, codeDirectory: import.meta.dir });
 
 export type Host = Effect.Success<typeof buildHost>;
 
@@ -167,11 +179,11 @@ export const codeMovedFrom = (
   });
 
 /**
- * The commit of foreman's own checkout when this process first built a host:
- * the code it runs. Kept per process, not per host, because a host built
- * again after a failure still runs the code the process loaded.
+ * The commit each code checkout was at when this process first built a host
+ * over it: the code the process runs. Kept per process, not per host, because a
+ * host built again after a failure still runs the code the process loaded.
  */
-let loadedCommit: string | undefined;
+const loadedCommits = new Map<string, string>();
 
 /**
  * What a host publishes while the dispatcher is down: its last reading if it

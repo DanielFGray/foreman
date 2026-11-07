@@ -240,10 +240,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     // safe in the queue either way.
     const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
 
-    // The setup failures the last settle's landings hit. A landing whose setup
-    // fails keeps its approval and is retried each tick, so the failure is
-    // re-recorded for as long as it holds. Settle replaces the list whole, so a
-    // hold clears on the tick whose landing no longer fails setup.
+    // The setup failures the last settle's landings hit. The failing task's own
+    // landing stays in the plan, so each settle re-runs setup and re-records the
+    // failure until it passes. Settle replaces the list whole: a failure is kept
+    // only while its landing still runs, and clears once that landing completes
+    // or the task leaves the landing step.
     const landingHolds = yield* Ref.make<ReadonlyArray<Held>>([]);
 
     // Whether the accounts have been read at all yet. A fleet that has just
@@ -1977,12 +1978,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           if (result.reason !== "dirty" && result.reason !== "busy" && result.detail) {
             yield* Effect.logWarning(`landing ${task.id} (${project.name}) held: ${result.detail}`);
           }
-          // A setup failure is the project's state, not the task's: the landing
-          // retries each tick, so it is published as a project hold until one passes.
+          // The project's checkout cannot take this landing, so the project is
+          // held. The hold names this task's branch, which keeps this task's
+          // landing in the plan: that retry is what re-runs setup each tick.
           if (result.reason === "setup") {
             yield* Ref.update(landingHolds, (holds): ReadonlyArray<Held> => [
               ...holds,
-              { project: project.name, reason: "setup", detail: result.detail ?? "" },
+              {
+                project: project.name,
+                reason: "setup",
+                branch: labelFor(task.id),
+                detail: result.detail ?? "",
+              },
             ]);
           }
           return yield* stopAgents(worker);
