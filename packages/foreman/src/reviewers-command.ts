@@ -11,7 +11,9 @@ import type { Reviewer } from "./reviewers.ts";
  *
  * A reviewer is a model with its own thinking level and account, apart from
  * the ladder: a model can be a rung, a reviewer, both or neither.
- * `foreman reviewers --json` prints the list for other tools.
+ * `foreman reviewers --json` prints the list for other tools. The pane's
+ * verbs (add, remove, thinking) are exported Effects the CLI and the coming
+ * UI contract both call.
  */
 export const reviewersCommand = Command.make(
   "reviewers",
@@ -49,6 +51,39 @@ export const reviewerJson = (reviewer: Reviewer) => ({
   }),
 });
 
+/** Add a reviewer. `name` defaults to the model id at the CLI. */
+export const reviewersAdd = (input: {
+  readonly name: string;
+  readonly model: string;
+  readonly thinking: Option.Option<string>;
+  readonly provider: Option.Option<string>;
+}) =>
+  addReviewer({
+    name: input.name,
+    model: input.model,
+    thinking: input.thinking,
+    provider: input.provider,
+  }).pipe(Effect.as(input.name));
+
+/** Remove the reviewer named `name`. */
+export const reviewersRemove = (input: { readonly name: string }) =>
+  removeReviewer(input.name).pipe(Effect.as(input.name));
+
+/**
+ * Set a reviewer's thinking level. `Option.none` clears it so the harness's
+ * own default applies.
+ */
+export const reviewersThinking = (input: {
+  readonly name: string;
+  readonly thinking: Option.Option<string>;
+}) =>
+  setReviewerThinking(input.name, input.thinking).pipe(
+    Effect.as({
+      name: input.name,
+      thinking: Option.getOrElse(input.thinking, () => "none"),
+    }),
+  );
+
 function add() {
   return Command.make(
     "add",
@@ -75,7 +110,7 @@ function add() {
     ({ model, name, thinking, provider }) =>
       Effect.gen(function* () {
         const named = Option.getOrElse(name, () => model);
-        yield* addReviewer({ name: named, model, thinking, provider });
+        yield* reviewersAdd({ name: named, model, thinking, provider });
         yield* Console.log(`${named}: added to the reviewers`);
       }),
   ).pipe(Command.withDescription("Add a reviewer"));
@@ -87,7 +122,7 @@ function remove() {
     { name: Argument.String("name").pipe(Argument.withDescription("A reviewer's name")) },
     ({ name }) =>
       Effect.gen(function* () {
-        yield* removeReviewer(name);
+        yield* reviewersRemove({ name });
         yield* Console.log(`${name}: removed from the reviewers`);
       }),
   ).pipe(Command.withDescription("Remove a reviewer"));
@@ -108,8 +143,8 @@ function thinking() {
     ({ name, thinking }) =>
       Effect.gen(function* () {
         const level = thinking === "none" ? Option.none() : Option.some(thinking);
-        yield* setReviewerThinking(name, level);
-        yield* Console.log(`${name}: thinking ${thinking}`);
+        const result = yield* reviewersThinking({ name, thinking: level });
+        yield* Console.log(`${result.name}: thinking ${result.thinking}`);
       }),
   ).pipe(
     Command.withDescription(

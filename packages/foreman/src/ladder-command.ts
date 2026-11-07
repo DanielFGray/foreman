@@ -34,14 +34,98 @@ import { reviewerJson } from "./reviewers-command.ts";
  * `edit` hands it to your editor as a short list of objects, one per rung, and
  * applies what you save in one validated transaction, so reordering is moving a
  * block and a typo changes nothing. These commands touch only the ladder; the
- * models behind it are rows from `foreman models add`.
+ * models behind it are rows from `foreman models add`. The pane's verbs (list,
+ * the root --json document, add, move, level, enable, disable, thinking) are
+ * exported Effects the CLI and the coming UI contract both call.
  */
 
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));
 
+/** The ladder by level: state, roles, trial record and launch arguments. */
+export const ladderList = () => readStatus;
+
+/**
+ * Every rung in (level, rank) order with its level, every model, and the
+ * reviewers as `foreman reviewers --json` prints them — one read for a front
+ * end that draws both lists.
+ */
+export const ladderDocument = () =>
+  Effect.gen(function* () {
+    return {
+      rungs: yield* readStatus,
+      models: yield* readModels,
+      reviewers: (yield* readReviewers).map(reviewerJson),
+    };
+  });
+
+/** Add a rung at `place`. */
+export const ladderAdd = (input: {
+  readonly rung: string;
+  readonly model: string;
+  readonly thinking: Option.Option<string>;
+  readonly enabled: boolean;
+  readonly note: Option.Option<string>;
+  readonly place: RungPlace;
+}) =>
+  Effect.gen(function* () {
+    yield* addRow(
+      {
+        rung: input.rung,
+        model: input.model,
+        // The row stores `null` for no value; converted at the storage boundary.
+        thinking: Option.getOrNull(input.thinking),
+        enabled: input.enabled,
+        author: true,
+        provider: null,
+        unmetered: false,
+        note: Option.getOrNull(input.note),
+      },
+      input.place,
+    );
+    return { rung: input.rung, place: input.place };
+  });
+
+/** Move a rung to a level of its own at `place`. */
+export const ladderMove = (input: { readonly rung: string; readonly place: RungPlace }) =>
+  Effect.gen(function* () {
+    yield* moveRow(input.rung, input.place);
+    return { rung: input.rung, place: input.place };
+  });
+
+/** Put a rung in a numbered level beside the rungs already there. */
+export const ladderLevel = (input: { readonly rung: string; readonly level: number }) =>
+  Effect.gen(function* () {
+    yield* changeRow(input.rung, (row) => ({ ...row, level: input.level }));
+    return { rung: input.rung, level: input.level };
+  });
+
+/** Let foreman dispatch a rung again. */
+export const ladderEnable = (input: { readonly rung: string }) =>
+  changeRow(input.rung, (row) => ({ ...row, enabled: true })).pipe(Effect.as(input.rung));
+
+/** Stop dispatching a rung; it keeps its place so old failures still position. */
+export const ladderDisable = (input: { readonly rung: string }) =>
+  changeRow(input.rung, (row) => ({ ...row, enabled: false })).pipe(Effect.as(input.rung));
+
+/**
+ * Set the thinking level a rung starts at. `Option.none` clears it so the
+ * harness's own default applies.
+ */
+export const ladderThinking = (input: {
+  readonly rung: string;
+  readonly thinking: Option.Option<string>;
+}) =>
+  Effect.gen(function* () {
+    yield* changeRow(input.rung, (row) => ({
+      ...row,
+      thinking: Option.getOrNull(input.thinking),
+    }));
+    return { rung: input.rung, thinking: input.thinking };
+  });
+
 const list = Command.make("list", { json }, ({ json }) =>
   Effect.gen(function* () {
-    const rows = yield* readStatus;
+    const rows = yield* ladderList();
     if (json) return yield* Console.log(JSON.stringify(rows, null, 2));
     for (const row of rows) {
       const record =
@@ -180,20 +264,15 @@ const add = Command.make(
   (args) =>
     Effect.gen(function* () {
       const place = yield* placeOf(args);
-      yield* addRow(
-        {
-          rung: args.rung,
-          model: args.model,
-          thinking: Option.getOrNull(args.thinking),
-          enabled: !args.disabled,
-          author: true,
-          provider: null,
-          unmetered: false,
-          note: Option.getOrNull(args.note),
-        },
+      const result = yield* ladderAdd({
+        rung: args.rung,
+        model: args.model,
+        thinking: args.thinking,
+        enabled: !args.disabled,
+        note: args.note,
         place,
-      );
-      yield* Console.log(`${args.rung}: added ${whereOf(place)}`);
+      });
+      yield* Console.log(`${result.rung}: added ${whereOf(result.place)}`);
     }),
 ).pipe(
   Command.withDescription(
@@ -204,8 +283,8 @@ const add = Command.make(
 const move = Command.make("move", { rung, above, below }, (args) =>
   Effect.gen(function* () {
     const place = yield* placeOf({ ...args, level: Option.none() });
-    yield* moveRow(args.rung, place);
-    yield* Console.log(`${args.rung}: moved ${whereOf(place)}`);
+    const result = yield* ladderMove({ rung: args.rung, place });
+    yield* Console.log(`${result.rung}: moved ${whereOf(result.place)}`);
   }),
 ).pipe(
   Command.withDescription(
@@ -225,8 +304,8 @@ const levelNumber = Argument.Int("level").pipe(
  */
 const level = Command.make("level", { rung, level: levelNumber }, (args) =>
   Effect.gen(function* () {
-    yield* changeRow(args.rung, (row) => ({ ...row, level: args.level }));
-    yield* Console.log(`${args.rung}: level ${args.level}`);
+    const result = yield* ladderLevel({ rung: args.rung, level: args.level });
+    yield* Console.log(`${result.rung}: level ${result.level}`);
   }),
 ).pipe(
   Command.withDescription("Put a rung in a level; the rungs of one level share the author work"),
@@ -245,9 +324,9 @@ const levelName = Argument.String("thinking").pipe(
  */
 const thinking = Command.make("thinking", { rung, thinking: levelName }, (args) =>
   Effect.gen(function* () {
-    const level = args.thinking === "none" ? null : args.thinking;
-    yield* changeRow(args.rung, (row) => ({ ...row, thinking: level }));
-    yield* Console.log(`${args.rung}: thinking ${level ?? "none"}`);
+    const level = args.thinking === "none" ? Option.none() : Option.some(args.thinking);
+    const result = yield* ladderThinking({ rung: args.rung, thinking: level });
+    yield* Console.log(`${result.rung}: thinking ${Option.getOrElse(level, () => "none")}`);
   }),
 ).pipe(
   Command.withDescription(
@@ -282,8 +361,9 @@ const whereOf = (place: RungPlace) =>
 const toggle = (name: "enable" | "disable") =>
   Command.make(name, { rung }, (args) =>
     Effect.gen(function* () {
-      yield* changeRow(args.rung, (row) => ({ ...row, enabled: name === "enable" }));
-      yield* Console.log(`${args.rung}: ${name}d`);
+      const verb = name === "enable" ? ladderEnable : ladderDisable;
+      const rung = yield* verb({ rung: args.rung });
+      yield* Console.log(`${rung}: ${name}d`);
     }),
   ).pipe(
     Command.withDescription(
@@ -398,12 +478,7 @@ const suggest = Command.make(
 export const ladderCommand = Command.make("ladder", { json }, ({ json }) =>
   Effect.gen(function* () {
     if (!json) return yield* new CliError.ShowHelp({ commandPath: ["ladder"], errors: [] });
-    const document = {
-      rungs: yield* readStatus,
-      models: yield* readModels,
-      reviewers: (yield* readReviewers).map(reviewerJson),
-    };
-    yield* Console.log(JSON.stringify(document, null, 2));
+    yield* Console.log(JSON.stringify(yield* ladderDocument(), null, 2));
   }),
 ).pipe(
   Command.withDescription("Read and edit the model ladder in the registry"),
