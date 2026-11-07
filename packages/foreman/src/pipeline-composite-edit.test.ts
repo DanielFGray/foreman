@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { expand } from "./composite.ts";
-import { applyChange } from "./pipeline-edit.ts";
+import { applyChange, applyDefinitionChange, type CompositeChange } from "./pipeline-edit.ts";
 import {
   type Composites,
   type Drawing,
@@ -9,6 +9,7 @@ import {
   STANDARD_PIPELINES,
 } from "./pipeline.ts";
 import { makeComposite, setParam, unpack } from "./pipeline-belt.ts";
+import { writtenDrawingOf } from "./pipeline-layout.ts";
 
 const OFFERS: SeatOffers = {
   rungs: [
@@ -63,13 +64,83 @@ describe("MakeComposite round-trips on the standard pipeline", () => {
     sameExpansion(before, made.pipeline, { "land-tail": made.definition });
   });
 
-  test("start + climb + author is refused: two entries", () => {
+  test("start + climb + author makes two entries, keeps ids and validation, and leaves a task at the author in place", () => {
+    const before = STANDARD_PIPELINES.checkout;
+    const made = makeComposite(before, ["start", "climb", "author"], "authors");
+    expect(made._tag).toBe("Made");
+    if (made._tag !== "Made") return;
+    expect(made.definition.entries.map((entry) => entry.block)).toEqual(["climb", "start"]);
+    sameExpansion(before, made.pipeline, { authors: made.definition });
+    // A run stores the block it stood at; placement looks that id up in the expansion.
+    const expanded = expansionOf(made.pipeline, { authors: made.definition });
+    expect(expanded.nodes.some((node) => node.id === "author")).toBe(true);
+  });
+
+  test("a second instance with both entries wired validates", () => {
     const made = makeComposite(
       STANDARD_PIPELINES.checkout,
       ["start", "climb", "author"],
       "authors",
     );
-    expect(made).toMatchObject({ _tag: "Refused" });
+    if (made._tag !== "Made") throw new Error("expected Made");
+    const [climb, start] = made.definition.entries;
+    const second = {
+      kind: "composite" as const,
+      id: "again",
+      of: "authors",
+      prefix: "again.",
+      set: {},
+      exits: [{ id: "exit-done", to: "review-gate" }],
+    };
+    const nodes = made.pipeline.nodes.map((node) =>
+      node.kind === "router"
+        ? {
+            ...node,
+            routes: [
+              ...node.routes,
+              { when: "attempts>=2", to: `again/${climb!.id}` },
+              { when: "attempts>=3", to: `again/${start!.id}` },
+            ],
+          }
+        : node,
+    );
+    const drawing: Drawing = { nodes: [...nodes, second] };
+    const expanded = expansionOf(drawing, { authors: made.definition });
+    expect(expanded.nodes.map((node) => node.id)).toContain("again.author");
+    expect(problemsOf(expanded, OFFERS)).toEqual([]);
+  });
+
+  test("a block id holding a slash is a validation problem", () => {
+    const pipeline = expansionOf(STANDARD_PIPELINES.checkout, {});
+    const renamed = {
+      nodes: pipeline.nodes.map((node) =>
+        node.id === "review" ? { ...node, id: "re/view" } : node,
+      ),
+    };
+    expect(problemsOf(renamed, OFFERS).join("\n")).toContain('a block id holds no "/"');
+  });
+
+  test("Rejoin to <instance>/<entry id> is allowed, and to an unknown entry is not", () => {
+    const made = makeComposite(
+      STANDARD_PIPELINES.checkout,
+      ["start", "climb", "author"],
+      "authors",
+    );
+    if (made._tag !== "Made") throw new Error("expected Made");
+    const composites = { authors: made.definition };
+    const wire = { from: "review", port: "exit:returned" } as const;
+    const ok = applyChange(
+      made.pipeline,
+      { _tag: "Rejoin", wire, to: "authors/entry-start" },
+      composites,
+    );
+    expect(ok._tag).toBe("Changed");
+    const bad = applyChange(
+      made.pipeline,
+      { _tag: "Rejoin", wire, to: "authors/entry-nowhere" },
+      composites,
+    );
+    expect(bad._tag).toBe("Refused");
   });
 
   test("Unpack of a made instance restores the same expansion", () => {
@@ -165,7 +236,7 @@ describe("SetParam and InsertOn composite through applyChange", () => {
 describe("Unpack keeps the expansion when an exit targets a block of the drawing", () => {
   const loop: Composites = {
     loop: {
-      entry: "g",
+      entries: [{ id: "entry-g", name: "g", block: "g" }],
       exits: [{ id: "again", name: "again" }],
       params: [],
       blocks: [{ kind: "gate", id: "g", step: "review", next: "out:again" }],
@@ -229,7 +300,7 @@ describe("Unpack keeps the expansion when an exit targets a block of the drawing
     const composites: Composites = {
       ...loop,
       outer: {
-        entry: "n",
+        entries: [{ id: "entry-n", name: "n", block: "n" }],
         exits: [{ id: "back", name: "back" }],
         params: [],
         blocks: [
@@ -285,7 +356,7 @@ describe("MakeComposite names an exit as the exit of its source block", () => {
   test("a nested instance's wire takes its definition's exit name, not the exit id", () => {
     const composites: Composites = {
       inner: {
-        entry: "g",
+        entries: [{ id: "entry-g", name: "g", block: "g" }],
         exits: [{ id: "e1", name: "ok" }],
         params: [],
         blocks: [{ kind: "gate", id: "g", step: "review", next: "out:e1" }],
@@ -309,5 +380,113 @@ describe("MakeComposite names an exit as the exit of its source block", () => {
     expect(made._tag).toBe("Made");
     if (made._tag !== "Made") return;
     expect(made.definition.exits).toEqual([{ id: "exit-ok", name: "ok" }]);
+  });
+});
+
+describe("the entry verbs on a definition", () => {
+  const authors = () => {
+    const made = makeComposite(
+      STANDARD_PIPELINES.checkout,
+      ["start", "climb", "author"],
+      "authors",
+    );
+    if (made._tag !== "Made") throw new Error("expected Made");
+    return made.definition;
+  };
+  const apply = (definition: ReturnType<typeof authors>, change: CompositeChange) =>
+    applyDefinitionChange(definition, change);
+
+  test("AddEntry, RenameEntry and SetEntry change one entry; wires name entries by id", () => {
+    const added = apply(authors(), { _tag: "AddEntry", block: "author", name: "direct" });
+    if (added._tag !== "Changed") throw new Error("expected Changed");
+    expect(added.definition.entries.map((entry) => entry.id)).toEqual([
+      "entry-climb",
+      "entry-start",
+      "entry-direct",
+    ]);
+    const renamed = apply(added.definition, {
+      _tag: "RenameEntry",
+      id: "entry-direct",
+      name: "straight",
+    });
+    if (renamed._tag !== "Changed") throw new Error("expected Changed");
+    expect(renamed.definition.entries[2]).toEqual({
+      id: "entry-direct",
+      name: "straight",
+      block: "author",
+    });
+    const pointed = apply(renamed.definition, {
+      _tag: "SetEntry",
+      id: "entry-direct",
+      block: "start",
+    });
+    if (pointed._tag !== "Changed") throw new Error("expected Changed");
+    expect(pointed.definition.entries[2]?.block).toBe("start");
+    expect(
+      apply(renamed.definition, { _tag: "SetEntry", id: "entry-direct", block: "nowhere" })._tag,
+    ).toBe("Refused");
+    expect(
+      apply(renamed.definition, { _tag: "RenameEntry", id: "entry-direct", name: "start" })._tag,
+    ).toBe("Refused");
+  });
+
+  test("removing the block of an entry, and the last entry, are refused", () => {
+    const refused = apply(authors(), { _tag: "Remove", id: "start" });
+    expect(refused).toMatchObject({ _tag: "Refused" });
+    const one = apply(authors(), { _tag: "RemoveEntry", id: "entry-start" });
+    if (one._tag !== "Changed") throw new Error("expected Changed");
+    expect(one.definition.entries.map((entry) => entry.id)).toEqual(["entry-climb"]);
+    expect(apply(one.definition, { _tag: "RemoveEntry", id: "entry-climb" })).toMatchObject({
+      _tag: "Refused",
+      reason: expect.stringContaining("last entry"),
+    });
+  });
+
+  test("Unpack of an instance an entry names moves each entry to the expanded block", () => {
+    const inner = authors();
+    const outer = {
+      entries: [
+        { id: "entry-a", name: "a", block: "nested" },
+        { id: "entry-b", name: "b", block: "nested/entry-start" },
+      ],
+      exits: inner.exits,
+      params: [],
+      blocks: [
+        {
+          kind: "composite" as const,
+          id: "nested",
+          of: "authors",
+          prefix: "n.",
+          set: {},
+          exits: [{ id: "exit-done", to: "out:exit-done" }],
+        },
+      ],
+    };
+    const unpacked = applyDefinitionChange(
+      outer,
+      { _tag: "Unpack", id: "nested" },
+      { authors: inner },
+    );
+    if (unpacked._tag !== "Changed") throw new Error("expected Changed");
+    expect(unpacked.definition.entries.map((entry) => entry.block)).toEqual(["n.climb", "n.start"]);
+  });
+});
+
+describe("the written drawing of a multi-entry instance", () => {
+  test("lists one way in per entry, and a wire into a later entry ends on the instance and names it", () => {
+    const made = makeComposite(
+      STANDARD_PIPELINES.checkout,
+      ["start", "climb", "author"],
+      "authors",
+    );
+    if (made._tag !== "Made") throw new Error("expected Made");
+    const drawing = writtenDrawingOf(made.pipeline, { authors: made.definition }, "across");
+    const block = drawing.blocks.find((one) => one.id === "authors");
+    expect(block?.entries).toEqual([
+      { id: "entry-climb", name: "climb", target: "authors" },
+      { id: "entry-start", name: "start", target: "authors/entry-start" },
+    ]);
+    const into = drawing.wires.filter((wire) => wire.to === "authors");
+    expect(into.map((wire) => wire.entry)).toEqual([undefined, undefined, "entry-start"]);
   });
 });

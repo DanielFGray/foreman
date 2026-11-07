@@ -60,3 +60,24 @@ export const returnChange = (node, port) => ({
   wire: { from: node.id, port },
   to: QUEUE,
 });
+
+// Each way into a composite instance's block: the entry's name, the wire
+// target that reaches it, and the blocks whose wires enter by it. A wire into
+// the default (first) entry may name no entry.
+export const entryRows = (block, wires) => {
+  const entries = block?.entries ?? [];
+  return entries.map((entry) => ({
+    name: entry.name,
+    target: entry.target,
+    from: wires
+      .filter((wire) => wire.to === block.id && (wire.entry ?? entries[0].id) === entry.id)
+      .map((wire) => wire.from),
+  }));
+};
+
+// A block's summary line. An instance with several ways in names each, since
+// the drawing ends every wire into it on the one box.
+export const entrySummary = (block) =>
+  (block.entries?.length ?? 0) > 1
+    ? `${block.summary} · in: ${block.entries.map((entry) => entry.name).join(", ")}`
+    : block.summary;

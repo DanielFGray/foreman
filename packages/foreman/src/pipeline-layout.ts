@@ -64,6 +64,12 @@ export interface Drawing {
     readonly summary: string;
     /** Expanded block ids inside a composite instance; absent for every other kind. */
     readonly covers?: ReadonlyArray<string>;
+    /** A composite instance's ways in: each entry's name, and the wire target that reaches it (the instance's id for the first, `<id>/<entry id>` for the others). */
+    readonly entries?: ReadonlyArray<{
+      readonly id: string;
+      readonly name: string;
+      readonly target: string;
+    }>;
     /** A composite instance's exits by the definition's names, including those that return to the queue and so have no wire. */
     readonly exits?: ReadonlyArray<{
       readonly id: string;
@@ -80,6 +86,8 @@ export interface Drawing {
     readonly port: Port;
     readonly to: string;
     readonly label: string;
+    /** The entry id the wire enters a composite instance by, when it names one. */
+    readonly entry?: string;
     /** Whether the wire runs against the flow, back along a return lane past the last lane. */
     readonly back: boolean;
     readonly points: ReadonlyArray<Point>;
@@ -113,6 +121,7 @@ export const drawingOf = (pipeline: PipelineDrawing, flow: Flow): Drawing => {
       port: wire.port,
       to: wire.to,
       label: wire.label,
+      ...(wire.entry === undefined ? {} : { entry: wire.entry }),
       back: wire.back,
       points,
       anchor,
@@ -636,7 +645,12 @@ export const writtenDrawingOf = (
         name: named.find((one) => one.id === exit.id)?.name ?? exit.id,
         to: exit.to,
       }));
-      return { ...block, ...(ids === undefined ? {} : { covers: ids }), exits };
+      const entries = (composites[instance.of]?.entries ?? []).map((entry, at) => ({
+        id: entry.id,
+        name: entry.name,
+        target: at === 0 ? instance.id : `${instance.id}/${entry.id}`,
+      }));
+      return { ...block, ...(ids === undefined ? {} : { covers: ids }), exits, entries };
     }),
     wires: layout.wires.map((wire) => {
       const from = pipeline.nodes.find((node) => node.id === wire.from);
