@@ -92,10 +92,8 @@ export const beltOf = (pipeline: Drawing): Belt => {
   const nodes = new Map(pipeline.nodes.map((node) => [node.id, node]));
   // A wire to `<instance>/<entry id>` ends at the instance's block; `entry` keeps which way in.
   const wires = wiresOf(pipeline).map((wire): Wire => {
-    const block = blockOf(wire.to);
-    return block === wire.to
-      ? wire
-      : { ...wire, to: block, entry: wire.to.slice(block.length + 1) };
+    const [block, port] = splitTarget(wire.to);
+    return port === undefined ? wire : { ...wire, to: block, entry: port };
   });
   const backs = backWiresOf(pipeline, wires);
 
