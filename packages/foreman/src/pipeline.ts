@@ -306,6 +306,8 @@ export interface Facts {
   readonly named: ReadonlyArray<NamedExit>;
   /** The name, as drawn now, of the last exit the task named, a return included. */
   readonly exit: string | undefined;
+  /** The block that named that last exit. */
+  readonly exitNode: string | undefined;
 }
 
 /** How far a task's run at the block it stands at has gone. */
@@ -802,7 +804,9 @@ const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
     const ids = new Set(blocks.map((node) => node.id));
     const named = new Set(
       blocks.flatMap((node) =>
-        node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
+        node.kind === "agent" || node.kind === "check"
+          ? node.exits.flatMap((exit) => [exit.name, `${node.id}/${exit.name}`])
+          : [],
       ),
     );
     const counts = (node: PipelineNode) =>
@@ -838,15 +842,17 @@ const loopsOf = (
 
 /**
  * Whether a filter holds a count that grows on each lap of a cycle, such as
- * `exits:returned>=3`. An `exits:` count grows only when a block on the cycle,
- * one of `named`, declares that exit.
+ * `exits:returned>=3`. An `exits:` count grows only when a block on the cycle
+ * declares that exit. `named` holds each exit name that a block on the cycle
+ * declares, and `<block>/<name>` for each of them, so a count that names a
+ * block grows only when that block is on the cycle.
  */
 const growsEachLap = (filter: string, named: ReadonlySet<string>): boolean =>
   filter
     .trim()
     .split(/\s+/)
     .some((term) => {
-      const count = /^(?:exits:([a-z-]+)|attempts)>=\d+$/.exec(term);
+      const count = new RegExp(`^(?:exits:(${EXIT_REF})|attempts)>=\\d+$`).exec(term);
       return count !== null && (count[1] === undefined || named.has(count[1]));
     });
 
@@ -1154,7 +1160,9 @@ type Term = { readonly negated: boolean; readonly test: (facts: Facts) => boolea
 
 const termTest = (term: string): Term["test"] | undefined => {
   if (term === "failed") return (facts) => facts.failedBy.size > 0;
-  const compared = /^(size|priority|attempts|exits:[a-z-]+)(<=|>=|=)(\d+)$/.exec(term);
+  const compared = new RegExp(`^(size|priority|attempts|exits:${EXIT_REF})(<=|>=|=)(\\d+)$`).exec(
+    term,
+  );
   if (compared !== null) {
     const [, field, op, raw] = compared;
     const bound = Number(raw);
@@ -1165,7 +1173,7 @@ const termTest = (term: string): Term["test"] | undefined => {
           ? facts.priority
           : field === "attempts"
             ? facts.attempts
-            : facts.named.filter((exit) => `exits:${exit.name}` === field).length;
+            : facts.named.filter(isExitRef((field ?? "").slice("exits:".length))).length;
     return (facts) => {
       const n = read(facts);
       return op === "<=" ? n <= bound : op === ">=" ? n >= bound : n === bound;
@@ -1181,10 +1189,40 @@ const termTest = (term: string): Term["test"] | undefined => {
       return (facts) => facts.epic === value;
     case "failed":
       return (facts) => facts.failedBy.has(value);
-    case "exit":
-      return (facts) => facts.exit === value;
+    case "exit": {
+      const ref = parseExitRef(value);
+      if (ref === undefined) return undefined;
+      return (facts) =>
+        facts.exit === ref.name && (ref.block === undefined || facts.exitNode === ref.block);
+    }
   }
   return undefined;
+};
+
+/**
+ * An exit named in a filter: `<name>` for any block, or `<block>/<name>` for
+ * the exits named at one block. A block id holds no `/`, so the split is
+ * unambiguous.
+ */
+const EXIT_REF = "(?:[^\\s/]+/)?[a-z-]+";
+
+interface ExitRef {
+  readonly block: string | undefined;
+  readonly name: string;
+}
+
+const parseExitRef = (text: string): ExitRef | undefined => {
+  const match = new RegExp(`^(?:([^\\s/]+)/)?([a-z-]+)$`).exec(text);
+  return match === null ? undefined : { block: match[1], name: match[2] ?? "" };
+};
+
+/** Whether a named exit is the one `text` (an exit reference) refers to. */
+const isExitRef = (text: string) => {
+  const ref = parseExitRef(text);
+  return (exit: NamedExit): boolean =>
+    ref !== undefined &&
+    exit.name === ref.name &&
+    (ref.block === undefined || exit.node === ref.block);
 };
 
 /** The checks that need no walk: names, wires, exits, filters and models. */
@@ -1204,6 +1242,7 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
       node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
     ),
   );
+  const byId = indexOf(pipeline);
   for (const node of pipeline.nodes) {
     for (const { to } of wiresOf(node)) {
       if (!ids.has(to)) problems.push(`${node.id} is wired to ${to}, which is no block`);
@@ -1211,9 +1250,27 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
     for (const filter of filtersOf(node)) {
       const parsed = parseFilter(filter);
       if (parsed._tag === "Invalid") problems.push(`${node.id}: ${parsed.reason}`);
-      for (const name of exitsNamedBy(filter)) {
-        if (!declared.has(name)) {
-          problems.push(`${node.id}: the filter counts the exit ${name}, and no block declares it`);
+      for (const { block, name } of exitsNamedBy(filter)) {
+        if (block === undefined) {
+          if (!declared.has(name)) {
+            problems.push(
+              `${node.id}: the filter counts the exit ${name}, and no block declares it`,
+            );
+          }
+          continue;
+        }
+        const target = byId.get(block);
+        if (target === undefined) {
+          problems.push(
+            `${node.id}: the filter counts the exit ${name} at ${block}, which is no block`,
+          );
+        } else if (
+          (target.kind !== "agent" && target.kind !== "check") ||
+          !target.exits.some((exit) => exit.name === name)
+        ) {
+          problems.push(
+            `${node.id}: the filter counts the exit ${name} at ${block}, which declares no such exit`,
+          );
         }
       }
     }
@@ -1414,16 +1471,27 @@ const wiresOf = (
  * run that named none. A renamed or removed exit leaves such a term matching
  * nothing.
  */
-const exitsNamedBy = (filter: string): ReadonlyArray<string> =>
+const exitsNamedBy = (filter: string): ReadonlyArray<ExitRef> =>
   filter
     .trim()
     .split(/\s+/)
     .flatMap((word) => {
-      const name = /^-?exits?:([a-z-]+)/.exec(word)?.[1];
-      return name === undefined || (PROCESS_ENDINGS as ReadonlyArray<string>).includes(name)
+      const ref = parseExitRef(new RegExp(`^-?exits?:(${EXIT_REF})`).exec(word)?.[1] ?? "");
+      return ref === undefined ||
+        (ref.block === undefined && (PROCESS_ENDINGS as ReadonlyArray<string>).includes(ref.name))
         ? []
-        : [name];
+        : [ref];
     });
+
+/**
+ * `filter` with `f` applied to the block of each term that names one
+ * (`exit:<block>/<name>`, `exits:<block>/<name>`).
+ */
+export const mapFilterBlocks = (filter: string, f: (block: string) => string): string =>
+  filter.replace(
+    /(^|\s)(-?exits?:)([^\s/]+)\/(?=[a-z-]+(?:\s|$|[<>=]))/g,
+    (_, lead: string, head: string, block: string) => `${lead}${head}${f(block)}/`,
+  );
 
 const filtersOf = (node: PipelineNode): ReadonlyArray<string> =>
   node.kind === "source"

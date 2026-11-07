@@ -43,6 +43,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
   named: [],
   // The last exit named, as `factsOf` reads it, unless the test states it.
   exit: over.named?.at(-1)?.name,
+  exitNode: over.named?.at(-1)?.node,
   ...over,
 });
 

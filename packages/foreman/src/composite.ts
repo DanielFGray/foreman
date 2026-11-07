@@ -15,6 +15,7 @@ import {
   type DrawnNode,
   DrawnNode as DrawnNodeSchema,
   type Drawing,
+  mapFilterBlocks,
   type ParamValue,
   type Pipeline,
   type PipelineNode,
@@ -263,7 +264,8 @@ const expandInstance = (
     // the match is by the definition's own id.
     const set = applyParams(block, instance, values, problems);
     if (set === undefined) return [];
-    copies.push(prefixed(mapTargets(set, wireIn), instance.prefix));
+    const wired = mapFilters(mapTargets(set, wireIn), (name) => instance.prefix + name);
+    copies.push(prefixed(wired, instance.prefix));
   }
   return expandList(copies, composites, new Set(stack).add(instance.of), problems);
 };
@@ -437,6 +439,21 @@ const prefixed = (node: DrawnNode, prefix: string): DrawnNode => {
   return node.kind === "composite"
     ? { ...node, id, prefix: prefix + node.prefix }
     : { ...node, id };
+};
+
+/** `node` with `f` applied to the block of each filter term that names one. */
+const mapFilters = (node: DrawnNode, f: (block: string) => string): DrawnNode => {
+  switch (node.kind) {
+    case "source":
+      return { ...node, filter: mapFilterBlocks(node.filter, f) };
+    case "router":
+      return {
+        ...node,
+        routes: node.routes.map((route) => ({ ...route, when: mapFilterBlocks(route.when, f) })),
+      };
+    default:
+      return node;
+  }
 };
 
 /** `node` with `f` applied to each wire target it holds. */
