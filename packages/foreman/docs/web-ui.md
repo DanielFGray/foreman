@@ -1,0 +1,199 @@
+# The web UI
+
+The **web UI** is the operator's page for foreman in a web browser.
+`foreman serve` serves it, on this machine only. It shows the queue, the fleet,
+the ladder and each project's pipeline, and it edits pipelines, drafts,
+composites, the policy and the ladder. herdr-web is a separate project, and this
+record does not change it.
+
+The herdr-app Foreman pane (`herdr/foreman/`) is frozen while the operator
+decides which features stay in the pane and which move to the page. Until then
+the pane gets no new features and no fixes, and it reads `state.json` as it does
+now.
+
+## Terms
+
+- **page**: the browser program in `packages/foreman-ui`.
+- **UI server**: the HTTP and WebSocket server inside `foreman serve` that
+  serves the page and answers its calls.
+- **contract**: the `RpcGroup` that the page and the UI server share. Each
+  procedure has Schemas for its payload, its success and its failure, so the
+  contract is both the list of routes and the definition of every message.
+- **verb**: one thing the operator can do, such as `PipelineEdit`,
+  `PolicyGrant` or `Approve`. Each verb is one plain Effect function in foreman.
+  The CLI command and the contract's handler both call it.
+- **readings**: the dispatcher's published state, the `Published` value that
+  `state.json` holds (`src/published.ts`).
+
+## Libraries
+
+- **The page is React 19 with dragology.** dragology
+  (https://declarative-dragging.github.io/) does declarative dragging on SVG.
+  For a drag, the page lists the states the drop can give, and dragology
+  previews the closest, snaps to it, and animates the move. dragology needs
+  React. Every drag view of the pane (the Tasks board, the Models board, the
+  pipeline editor) uses declarative dragging, so React is the page's one view
+  library. foldkit was the first choice, and herdr-web uses it. foldkit could
+  hold dragology only through its `Mount` seam, which would put the pipeline
+  editor, the main part of the page, in a second framework with its own state.
+- **dragology is pinned to 0.2.0 exactly.** It has no documentation besides
+  its demos and `docs/AGENTS.md` in its package, and its API can change in any
+  release. An upgrade is its own task.
+- **Effect runs on both sides.** The page uses Effect 4's `Atom` with
+  `@effect/atom-react` for state, `AtomRpc` for the contract's client, and
+  `@effect/platform-browser` for the WebSocket. `@effect/atom-react` 4.1.2 needs
+  `effect ^4.1.2`, so the whole workspace moves from Effect 4.1.0 to 4.1.2 in
+  the first change, before any page code.
+
+## The contract
+
+`src/ui-contract.ts` in foreman holds the `RpcGroup`. foreman owns it because
+its Schemas are foreman's: `Published`, `PipelineChange`, `Drawing`,
+`Composites`, the policy and the ladder.
+
+The procedures are of two kinds:
+
+- **Streams**, which send a value at once and again at each change:
+  - `Readings`: each new `Published` value.
+  - `Pipeline { project }`: what `foreman pipeline show --json` prints for the
+    project, sent again when the pipelines file, the drafts file or the
+    instructions folder changes.
+  - `Queue { project }`: what `foreman queue --json` prints, sent again with
+    each reading.
+- **Verbs**, which reply once. The first set is what the pane runs today
+  (`rg 'foreman\(' herdr/foreman`):
+  - pipeline: show, edit, save, discard, instructions, prompt, trace,
+    simulate, graph;
+  - composite: show, edit, save, discard, prompt;
+  - policy: set, grant, revoke, slots, pause and resume;
+  - ladder: list, add, move, level, enable, disable, thinking;
+  - reviewers: add, remove, thinking;
+  - tasks: show, dispatch, approve and the other row actions in `ACTIONS_LIST`
+    (`src/view.ts`).
+
+A verb's failure is its tagged error, the same one the CLI prints. A refused
+`PipelineEdit` therefore replies with the problems that `problemsOf` names.
+
+## One code path per verb
+
+Today the work of each CLI command is inside its `Command.make` handler, with
+private helpers (for example `freshDraft` and `runPipeline` in
+`src/pipeline-command.ts`). Each verb moves out into an exported Effect function
+that takes the decoded payload and returns the decoded result. The command
+parses its arguments, calls the function and prints the result. The contract's
+handler calls the same function. A handler holds no logic of its own.
+
+The move is one change per command module, with that module's tests unchanged,
+and it lands before the handlers for that module.
+
+## The UI server
+
+`src/ui-server.ts` gives one Layer: the HTTP router, the contract's handlers on
+a WebSocket route (`RpcServer.layerProtocolWebsocket`, JSON serialization), and
+the page's files. `foreman serve` provides it beside `supervise`.
+
+- **Readings that live as long as serve.** `supervise` builds a new dispatcher
+  after each failure, and each dispatcher has its own `state`. So serve makes a
+  `SubscriptionRef<Published>` that lives as long as the process. `supervise`
+  writes each reading and each published failure to it. The `state.json`
+  writer and the `Readings` stream both read from that ref. A dispatcher
+  failure leaves the page connected and shows the failure as the reading's
+  state.
+- **The page is built when serve starts.** The Layer runs `Bun.build` on
+  `packages/foreman-ui/src/main.tsx` (a path relative to foreman's own
+  checkout) for the browser target, and serves the outputs from memory. serve
+  exits after each new commit on foreman's checkout, and its service starts it
+  again, so the page always matches the code that serves it. No built files are
+  committed. A build that fails is logged and stops the UI server only: the
+  dispatcher runs on.
+- **This machine only.** The server listens on `127.0.0.1`. The port is
+  `FOREMAN_UI_PORT`, read through `Config`, with a default of `7341`.
+- **Origin and Host checks.** Any web page open in the operator's browser can
+  open a WebSocket to `localhost`. DNS rebinding lets a page on another domain
+  reach `127.0.0.1` with that domain's name. This server dispatches agents,
+  changes the policy and lands code. So the server refuses each request and
+  each WebSocket upgrade whose `Host` is not `127.0.0.1:<port>` or
+  `localhost:<port>`, or whose `Origin` is present and is not
+  `http://127.0.0.1:<port>` or `http://localhost:<port>`. The refusal is 403
+  with no body.
+- **Reconnect.** When the WebSocket closes, the page shows that it is
+  disconnected, tries again each second, and reloads itself when a new
+  connection succeeds, so it runs the code of the new serve.
+
+## The page
+
+- **One project per URL**: `/p/<project>`. `/` lists the projects in the
+  readings. The page has no other state of its own besides what the operator is
+  in the middle of (a drag, an open inspector).
+- **Pipeline editor first.** The page begins with the pipeline editor, the
+  reason for the move. It follows the prototype's wires view (branch
+  `prototype/stack-or-wires`, and the free-form drawing task, which stores block
+  positions in the pipelines file). Each drag lists the drawings its drop can
+  give, as `PipelineChange` values. The page checks each one with `problemsOf`
+  on the expansion, in the browser, and colours the preview green when it has no
+  problem and amber with the count when it has some. On drop the page sends
+  that change through `PipelineEdit`, and the `Pipeline` stream sends the new
+  draft. Until it arrives, the page draws the dropped state.
+- **The other views** follow as the operator decides which features move:
+  Tasks board, Models board, simulate, fleet, task detail.
+- **Shared code.** The page imports the contract and foreman's pure modules
+  (`problemsOf`, `expand`, `beltOf`, `layoutOf`, `PipelineChange`) directly, in
+  place of the copies a mod needs. Today `src/policy.ts` and `src/fleet.ts`
+  import `src/paths.ts` and `src/shared-file.ts`, which pull Bun's file system
+  into a browser build. Their Schemas and pure rules move into modules that do
+  no I/O, and the I/O stays where it is. The page's build fails on any `node:`
+  or `bun:` import, or on a browser polyfill warning.
+- **Notifications.** A row that newly appears under Landed posts a browser
+  notification, as the pane does. The page asks for the permission once.
+- **Theme.** The page follows the browser's light or dark setting, with colour
+  tokens in CSS.
+
+## Tests
+
+No test runs `foreman serve`, so the trap in `AGENTS.md` ("Do not run `foreman
+serve` to check that it starts") stays as it is.
+
+- **Verbs**: the existing command tests, run on the moved functions.
+- **Contract**: the handlers run with `RpcTest` against a temporary
+  `XDG_CONFIG_HOME` and a temporary store, as `src/composite-command.test.ts`
+  does. A fake `Fleet` answers dispatch, intervene and approve. A test fills the
+  readings ref with fixed readings.
+- **Origin**: a WebSocket upgrade with a foreign `Origin`, and a request with a
+  foreign `Host`, each get 403.
+- **Page**: Playwright with headless Chromium starts the UI server Layer on a
+  free port with the fixtures above, then drives the page with real pointer
+  events: a drag from an exit to a block gives the expected `PipelineEdit`, and
+  an amber preview shows the problem count. These tests run in the gate. A
+  missing Chromium fails the gate. It does not skip the tests.
+- **A look by an agent**: `bun run dev` in `packages/foreman-ui` starts the
+  same Layer with the same fixtures and prints its URL. An agent opens it with
+  its browser tool. The operator is not needed to test the page.
+
+`packages/foreman-ui/package.json` has its own `format:check`, `lint`,
+`typecheck` and `test` scripts, so the root `bun run test` runs them.
+
+## What it replaces, and conflicts
+
+Each rule below is changed by this record. The record wins in each case.
+
+| Rule | Where it stands | Change |
+| --- | --- | --- |
+| The pipeline editor moves to a herdr-app mod pane; herdr-web's pipeline page becomes read-only (Nov 2) | the pane-editor epic's description | The editor is built in the page. A note on that epic says so; the old text stays above it. |
+| "UI library: foldkit" | the web UI epic's description | React 19 with dragology. |
+| The pane is the front end. It reads `state.json` and runs `foreman` commands, "because a mod cannot load foreman's modules" | `AGENTS.md`, Front ends | The page imports foreman's modules and calls verbs through the contract. The section is rewritten when the page's first view lands. Until then it describes the frozen pane, which is still true. |
+| Each reading is written to `state.json`, which the pane reads | `src/serve.ts`, its doc comment | Still true. Readings also reach the page through the `Readings` stream. |
+| Do not run `foreman serve` to check that it starts | `AGENTS.md`, Traps | No change: the tests start the UI server Layer, never serve. |
+| Durable state beyond the policy, pipelines, drafts and instructions files is a wall | `AGENTS.md`, "The world holds the work" | No conflict: the port is an environment setting, and the page stores nothing. |
+| `effect` and `@effect/platform-bun` are pinned to 4.1.0 | `packages/foreman/package.json` | 4.1.2, for `@effect/atom-react`. |
+
+## Checks
+
+- With serve's dispatcher failing on purpose in a test, the readings ref
+  receives the failure, and a connected `Readings` client receives it without
+  a reconnect.
+- A `PipelineEdit` sent through the contract and the same change sent through
+  `foreman pipeline edit` leave the same drafts file.
+- A bundle of the page has no `node:` or `bun:` import.
+- An upgrade from `Origin: http://example.com` is refused.
+- A drag in the editor that would leave a block unreachable shows an amber
+  preview with one problem, and a drop sends exactly one `PipelineEdit`.
