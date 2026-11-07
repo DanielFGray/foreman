@@ -1,7 +1,7 @@
-declare module "vitest" {
-  export interface ProvidedContext {
-    uiPort: number;
-    uiUrl: string;
+declare module "vitest/browser" {
+  interface BrowserCommands {
+    startUiServer: (origin: string) => Promise<number>;
+    stopUiServer: () => Promise<void>;
   }
 }
 

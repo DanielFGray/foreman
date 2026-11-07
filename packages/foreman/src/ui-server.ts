@@ -70,7 +70,7 @@ export const allowedHosts = (port: number): ReadonlySet<string> =>
 
 /**
  * Origins serve trusts by default: its own listen address under both names.
- * Page tests pass vitest's browser-page origin instead (or beside) these.
+ * Page tests pass the origin of vitest's browser page instead.
  */
 export const serveOrigins = (port: number): ReadonlyArray<string> => [
   `http://127.0.0.1:${port}`,
@@ -78,28 +78,9 @@ export const serveOrigins = (port: number): ReadonlyArray<string> => [
 ];
 
 /**
- * Sentinel trusted-origin entry: any `http://127.0.0.1` or `http://localhost`
- * Origin. Page tests use this because vitest Browser Mode may bind a free port
- * for the tester page rather than the configured Vite port.
- */
-export const LOOPBACK_HTTP = "loopback-http" as const;
-
-/** Whether `origin` is an http page on this machine's loopback names. */
-export const isLoopbackHttpOrigin = (origin: string): boolean => {
-  try {
-    const url = new URL(origin);
-    return (
-      url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost")
-    );
-  } catch {
-    return false;
-  }
-};
-
-/**
  * Whether a request's Host and Origin are allowed for this listen port.
  * Missing Origin is allowed (non-browser clients); a foreign Origin or Host is not.
- * `trustedOrigins` is the trusted page origin set the Layer was given.
+ * `trustedOrigins` is the exact trusted page origin set the Layer was given.
  */
 export const localRequest = (
   port: number,
@@ -109,9 +90,7 @@ export const localRequest = (
   const host = headers.host;
   if (host === undefined || !allowedHosts(port).has(host)) return false;
   const origin = headers.origin;
-  if (origin === undefined) return true;
-  if (trustedOrigins.includes(origin)) return true;
-  return trustedOrigins.includes(LOOPBACK_HTTP) && isLoopbackHttpOrigin(origin);
+  return origin === undefined || trustedOrigins.includes(origin);
 };
 
 /** 403 with no body for a foreign Host or Origin. */

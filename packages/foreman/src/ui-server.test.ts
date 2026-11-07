@@ -22,7 +22,6 @@ import { UiContract } from "./ui-contract.ts";
 import { resolve } from "./paths.ts";
 import {
   buildPageAssets,
-  LOOPBACK_HTTP,
   localRequest,
   ReadingsRef,
   resolvePageEntrypoint,
@@ -175,14 +174,11 @@ describe("localRequest", () => {
     ).toBe(false);
   });
 
-  test("accepts any loopback http Origin when LOOPBACK_HTTP is trusted", () => {
+  test("refuses another loopback port when only one page origin is trusted", () => {
     expect(
       localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:23315" }, [
-        LOOPBACK_HTTP,
+        "http://127.0.0.1:17342",
       ]),
-    ).toBe(true);
-    expect(
-      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://example.com" }, [LOOPBACK_HTTP]),
     ).toBe(false);
   });
 });
@@ -384,6 +380,41 @@ describe("Origin and Host checks", () => {
       );
       expect(foreignOrigin.status).toBe(403);
       expect(await foreignOrigin.text()).toBe("");
+    } finally {
+      await dispose();
+    }
+  });
+
+  test("with one trusted page origin, another loopback port gets 403 on a request and an upgrade", async () => {
+    const port = 7344;
+    const trusted = "http://127.0.0.1:17342";
+    const { handler, dispose } = HttpRouter.toWebHandler(
+      uiRoutesLayer(port, [trusted]).pipe(
+        Layer.provide(handlers),
+        Layer.provide(HttpServer.layerServices),
+      ),
+      { disableLogger: true },
+    );
+    const host = `127.0.0.1:${port}`;
+    const plain = (origin: string) =>
+      new Request(`http://${host}/rpc`, { headers: { host, origin } });
+    const upgrade = (origin: string) =>
+      new Request(`http://${host}/rpc`, {
+        headers: {
+          host,
+          origin,
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-key": Buffer.from("foreman-ui-test").toString("base64"),
+          "sec-websocket-version": "13",
+        },
+      });
+    const foreign = "http://127.0.0.1:23315";
+    try {
+      expect((await handler(upgrade(trusted))).status).not.toBe(403);
+      expect((await handler(upgrade(foreign))).status).toBe(403);
+      expect((await handler(plain(trusted))).status).not.toBe(403);
+      expect((await handler(plain(foreign))).status).toBe(403);
     } finally {
       await dispose();
     }

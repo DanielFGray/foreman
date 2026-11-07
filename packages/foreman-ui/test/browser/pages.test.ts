@@ -5,8 +5,8 @@
  * A missing Chromium fails this gate.
  */
 import { RegistryProvider } from "@effect/atom-react";
-import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
-import { page } from "vitest/browser";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { commands, page } from "vitest/browser";
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
 import { App } from "../../src/App.tsx";
@@ -15,8 +15,15 @@ import "../../src/styles.css";
 
 let root: Root | undefined;
 
+beforeAll(async () => {
+  window.__FOREMAN_UI_PORT__ = await commands.startUiServer(location.origin);
+});
+
+afterAll(async () => {
+  await commands.stopUiServer();
+});
+
 const mountPage = (pathname: string) => {
-  window.__FOREMAN_UI_PORT__ = inject("uiPort");
   installSocketTracking();
   history.replaceState(null, "", pathname);
   const host = document.createElement("div");

@@ -1,15 +1,8 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
-
-/** Fixed Vite port so the UI server can trust this page origin in browser tests. */
-export const VITEST_PAGE_PORT = 17341;
+import { startUiServer, stopUiServer } from "./test/browser/commands.ts";
 
 export default defineConfig({
-  server: {
-    port: VITEST_PAGE_PORT,
-    strictPort: true,
-    host: "127.0.0.1",
-  },
   test: {
     projects: [
       {
@@ -20,21 +13,16 @@ export default defineConfig({
         },
       },
       {
-        server: {
-          port: VITEST_PAGE_PORT,
-          strictPort: true,
-          host: "127.0.0.1",
-        },
         test: {
           name: "browser",
           include: ["test/browser/**/*.test.ts"],
-          globalSetup: ["./test/browser/globalSetup.ts"],
           browser: {
             enabled: true,
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium", headless: true }],
-            // Give Chromium time after globalSetup's UI server build.
+            commands: { startUiServer, stopUiServer },
+            // Give Chromium time to start before the first test.
             connectTimeout: 120_000,
           },
         },

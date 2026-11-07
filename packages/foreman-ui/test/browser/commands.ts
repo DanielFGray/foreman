@@ -1,10 +1,9 @@
 /**
- * Starts the UI server Layer on a free port with fixtures, trusting vitest's
- * browser-page origin (any loopback http Origin — vitest may pick a free
- * tester port), and provides the port to the browser tests. The React page
- * under test is served by vitest; the Layer answers the contract over WebSocket.
+ * Node-side browser commands for the page tests. A test calls
+ * `commands.startUiServer(location.origin)`, so the UI server trusts the exact
+ * origin of the page vitest opened, whatever port vitest chose for it.
  */
-import { LOOPBACK_HTTP, serveOrigins } from "foreman/ui-server";
+import type { BrowserCommand } from "vitest/node";
 import { freePort, startFixtureServer, type FixtureServer } from "../../src/fixtures.ts";
 
 let server: FixtureServer | undefined;
@@ -24,19 +23,15 @@ const waitForRpc = async (url: string): Promise<void> => {
   throw new Error(`UI server at ${url} did not become ready`);
 };
 
-export async function setup({ provide }: { provide: (key: string, value: unknown) => void }) {
+/** Starts the UI server Layer with fixtures on a free port and returns the port. */
+export const startUiServer: BrowserCommand<[origin: string], number> = async (_context, origin) => {
   const port = await freePort();
-  server = await startFixtureServer({
-    port,
-    page: true,
-    trustedOrigins: [...serveOrigins(port), LOOPBACK_HTTP],
-  });
+  server = await startFixtureServer({ port, page: true, trustedOrigins: [origin] });
   await waitForRpc(server.url);
-  provide("uiPort", server.port);
-  provide("uiUrl", server.url);
-}
+  return server.port;
+};
 
-export async function teardown() {
+export const stopUiServer: BrowserCommand<[], void> = async () => {
   await server?.interrupt();
   server = undefined;
-}
+};
