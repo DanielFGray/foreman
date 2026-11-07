@@ -1,0 +1,26 @@
+diff --git a/dist/BunHttpServer.js b/dist/BunHttpServer.js
+index cdbb075d260b93cb62958a306ef12eb4dab0f7ad..1dcceb9e3ffafa67443e39dffcdfa24f0611fac0 100644
+--- a/dist/BunHttpServer.js
++++ b/dist/BunHttpServer.js
+@@ -117,7 +117,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (options) {
+       }
+     }
+   });
+-  const shutdown = yield* Effect.promise(() => server.stop()).pipe(Effect.cached);
++  const shutdown = yield* Effect.promise(() => server.stop(true)).pipe(Effect.cached);
+   const preemptiveShutdown = options.disablePreemptiveShutdown ? Effect.void : Effect.timeoutOrElse(shutdown, {
+     duration: options.gracefulShutdownTimeout ?? Duration.seconds(20),
+     orElse: () => Effect.void
+diff --git a/src/BunHttpServer.ts b/src/BunHttpServer.ts
+index e2bb618b296527d400df9bdda5d7f3fa004f75c6..cfff400397c3044c1ada41742d6b75c228d3d9bc 100644
+--- a/src/BunHttpServer.ts
++++ b/src/BunHttpServer.ts
+@@ -189,7 +189,7 @@ export const make = Effect.fnUntraced(
+       }
+     })
+ 
+-    const shutdown = yield* Effect.promise(() => server.stop()).pipe(
++    const shutdown = yield* Effect.promise(() => server.stop(true)).pipe(
+       Effect.cached
+     )
+     const preemptiveShutdown = options.disablePreemptiveShutdown ? Effect.void : Effect.timeoutOrElse(shutdown, {

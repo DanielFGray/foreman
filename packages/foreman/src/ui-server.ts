@@ -221,6 +221,9 @@ export const uiServerLayer = Layer.unwrap(
 /**
  * Builds the UI server Layer for an already-known port (tests pick a free one
  * so they do not collide with a live serve on 7341).
+ *
+ * Stop uses `@effect/platform-bun`'s patched `server.stop(true)` so an open
+ * page WebSocket does not hold the Layer open (see patches/ and web-ui.md).
  */
 export const uiServerOn = (port: number) =>
   HttpRouter.serve(uiRoutesLayer(port).pipe(Layer.provide(uiHandlersLayer)), {

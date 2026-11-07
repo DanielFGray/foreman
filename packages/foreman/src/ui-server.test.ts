@@ -223,6 +223,52 @@ describe("UiContract over a WebSocket", () => {
       await Effect.runPromise(Fiber.interrupt(server));
     }
   });
+
+  test("stopping the server with a connected page completes and closes the socket", async () => {
+    const port = 7343;
+    const server = Effect.runFork(
+      Layer.launch(uiServerOn(port).pipe(Layer.provide(Layer.mergeAll(handlers, services)))),
+    );
+    // A page that keeps Readings open — the hang Bun's graceful stop had.
+    const page = Effect.runFork(
+      Effect.gen(function* () {
+        const client = yield* RpcClient.make(UiContract);
+        yield* client.Readings().pipe(Stream.runDrain);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          RpcClient.layerProtocolSocket().pipe(
+            Layer.provide(BunSocket.layerWebSocket(`ws://127.0.0.1:${port}/rpc`)),
+            Layer.provide(RpcSerialization.layerJson),
+          ),
+        ),
+      ),
+    );
+    try {
+      await Effect.runPromise(Effect.sleep("500 millis"));
+      const probe = new WebSocket(`ws://127.0.0.1:${port}/rpc`);
+      await new Promise<void>((resolve, reject) => {
+        probe.addEventListener("open", () => resolve(), { once: true });
+        probe.addEventListener("error", () => reject(new Error("probe failed to open")), {
+          once: true,
+        });
+      });
+      const closed = new Promise<number>((resolve) => {
+        probe.addEventListener("close", () => resolve(probe.readyState), { once: true });
+      });
+      const finished = await Promise.race([
+        Effect.runPromise(Fiber.interrupt(server)).then(() => "stopped" as const),
+        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3000)),
+      ]);
+      expect(finished).toBe("stopped");
+      expect(
+        await Promise.race([closed, new Promise<number>((r) => setTimeout(() => r(-1), 1000))]),
+      ).toBe(WebSocket.CLOSED);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(page).pipe(Effect.ignore));
+      await Effect.runPromise(Fiber.interrupt(server).pipe(Effect.ignore));
+    }
+  });
 });
 
 describe("Origin and Host checks", () => {
