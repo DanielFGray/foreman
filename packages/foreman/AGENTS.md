@@ -856,8 +856,11 @@ finished work handed back as empty.
 
 The sweep is not a step inside landing. Every tick, in every project, the
 dispatcher deletes refs that are `merged` **and** whose task is absent from
-the queue, the claims or the review list — so a branch merged by hand disappears
-the same way a landed one does. Both halves are required: sweeping on `merged`
+the queue, the claims or the review list **and** whose task the store, asked
+again at delete time, reports closed or gone — so a branch merged by hand disappears
+the same way a landed one does. The re-ask is needed because the lists are
+read at different moments: a dispatch landing between them leaves a fresh,
+empty (so "merged") branch in none of them. All halves are required: sweeping on `merged`
 alone deletes the branch of a task still under review, which is the evidence the
 next tick needs to tell work from nothing. `--delete` without `--force` is the
 backstop, since git refuses to drop commits the checkout does not have. A clean
