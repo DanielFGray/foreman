@@ -2,7 +2,8 @@ import { Clock, Effect, Exit, Option, Ref, Schema as S } from "effect";
 import { type Dependency, Item, type ListFilterInput, type Status } from "tasks";
 import { confirm, splitBody } from "./github-tracker.ts";
 import { Linear, LinearError, type LinearRate } from "./linear.ts";
-import { Tracker, TrackerError } from "./tracker.ts";
+import { Tracker } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 import { allTrackerPages } from "./tracker-pages.ts";
 
 import type { LinearPlace } from "./policy.ts";

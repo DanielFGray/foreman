@@ -18,7 +18,7 @@ import {
 import { policyPath, readPolicy, updatePolicy } from "./policy-file.ts";
 import { Linear } from "./linear.ts";
 import { checkPlace } from "./linear-tracker.ts";
-import { TrackerError } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 
 /**
  * `foreman policy`: read and change what the fleet may do by itself.

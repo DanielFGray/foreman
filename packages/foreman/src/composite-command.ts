@@ -11,7 +11,7 @@ import {
 } from "./pipeline-draft.ts";
 import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
 import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { blockOf, choicesOf } from "./pipeline-belt.ts";
 import { agentPrompt } from "./pipeline-prompt.ts";

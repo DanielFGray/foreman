@@ -1,8 +1,10 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
-import { Paths, PathsError } from "./paths.ts";
-import { Registry, RegistryError } from "./registry.ts";
+import { Paths } from "./paths.ts";
+import { PathsError } from "./errors.ts";
+import { Registry } from "./registry.ts";
+import { RegistryError } from "./errors.ts";
 import type { Reviewer } from "./reviewers.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */

@@ -9,7 +9,6 @@ import { sinceLanded, type Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
 import { BOARD_COLUMNS, type BoardColumn } from "./board-columns.ts";
 
-
 /** How long a landed task stays on the board. */
 export const LANDED_HOURS = 24;
 

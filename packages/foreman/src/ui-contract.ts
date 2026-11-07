@@ -6,7 +6,16 @@
  */
 import { Effect, Schema as S } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import { PipelineError } from "./pipeline-error.ts";
+import {
+  FleetError,
+  PathsError,
+  PipelineError,
+  PromptError,
+  RecordsError,
+  RegistryError,
+  RewriteError,
+  TrackerError,
+} from "./errors.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
 import { TraceRequest } from "./trace-request.ts";
 import { Published, PublishedRow } from "./published-schema.ts";
@@ -33,14 +42,14 @@ export const Readings = Rpc.make("Readings", {
 export const Pipeline = Rpc.make("Pipeline", {
   payload: { project: S.String, flow: flowField },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RegistryError]),
   stream: true,
 });
 
 export const Queue = Rpc.make("Queue", {
   payload: { project: S.String },
   success: S.Array(PublishedRow),
-  error: PipelineError,
+  error: S.Union([FleetError, RecordsError, TrackerError]),
   stream: true,
 });
 
@@ -48,25 +57,25 @@ export const Queue = Rpc.make("Queue", {
 export const PipelineShow = Rpc.make("PipelineShow", {
   payload: { project: S.String, flow: flowField },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RegistryError]),
 });
 
 export const PipelineEdit = Rpc.make("PipelineEdit", {
   payload: { project: S.String, change: PipelineChange, flow: flowField },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RegistryError, RewriteError]),
 });
 
 export const PipelineSave = Rpc.make("PipelineSave", {
   payload: { project: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RegistryError, RewriteError]),
 });
 
 export const PipelineDiscard = Rpc.make("PipelineDiscard", {
   payload: { project: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([RewriteError]),
 });
 
 export const PipelineInstructions = Rpc.make("PipelineInstructions", {
@@ -75,19 +84,19 @@ export const PipelineInstructions = Rpc.make("PipelineInstructions", {
     text: S.optional(S.String),
   },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, PromptError]),
 });
 
 export const PipelinePrompt = Rpc.make("PipelinePrompt", {
   payload: { project: S.String, block: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, PromptError]),
 });
 
 export const PipelineTrace = Rpc.make("PipelineTrace", {
   payload: { project: S.String, request: TraceRequest },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PipelineError]),
 });
 
 export const PipelineSimulate = Rpc.make("PipelineSimulate", {
@@ -97,44 +106,44 @@ export const PipelineSimulate = Rpc.make("PipelineSimulate", {
     hours: S.Finite.pipe(S.withDecodingDefault(Effect.succeed(72))),
   },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RecordsError, RegistryError, TrackerError]),
 });
 
 export const PipelineGraph = Rpc.make("PipelineGraph", {
   payload: { project: S.String },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PipelineError, RecordsError, TrackerError]),
 });
 
 /** Composite verbs: one Rpc per exported Effect in `composite-command.ts`. */
 export const CompositeShow = Rpc.make("CompositeShow", {
   payload: { name: S.String, flow: flowField },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PipelineError]),
 });
 
 export const CompositeEdit = Rpc.make("CompositeEdit", {
   payload: { name: S.String, change: CompositeChange, flow: flowField },
   success: JsonView,
-  error: PipelineError,
+  error: S.Union([PipelineError, RewriteError]),
 });
 
 export const CompositeSave = Rpc.make("CompositeSave", {
   payload: { name: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, RegistryError, RewriteError]),
 });
 
 export const CompositeDiscard = Rpc.make("CompositeDiscard", {
   payload: { name: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([RewriteError]),
 });
 
 export const CompositePrompt = Rpc.make("CompositePrompt", {
   payload: { name: S.String, block: S.String },
   success: S.String,
-  error: PipelineError,
+  error: S.Union([PathsError, PipelineError, PromptError]),
 });
 
 /** The contract the page and the UI server share. */

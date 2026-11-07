@@ -18,6 +18,7 @@ import { linearTracker } from "./linear-tracker.ts";
 import { Repository } from "./repository.ts";
 import { trackerOf, type Policy, type TrackerName } from "./policy.ts";
 import { policyPath, readPolicy } from "./policy-file.ts";
+import { TrackerError } from "./errors.ts";
 
 export const TaskAddStatus = S.Literals(["open", "proposed"]);
 export type TaskAddStatus = typeof TaskAddStatus.Type;
@@ -110,15 +111,6 @@ export class Tracker extends Context.Service<
     readonly url: (task: string) => Effect.Effect<Option.Option<string>, TrackerError>;
   }
 >()("Tracker") {}
-
-export class TrackerError extends S.TaggedError<TrackerError>()("TrackerError", {
-  command: S.String,
-  detail: S.String,
-}) {
-  override get message() {
-    return `${this.command}: ${this.detail}`;
-  }
-}
 
 /**
  * The `tasks` package's store as the tracker.

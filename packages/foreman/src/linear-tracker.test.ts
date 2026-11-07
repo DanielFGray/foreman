@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option } from "effect";
 import { Linear, LinearError, type LinearRate } from "./linear.ts";
 import { checkPlace, linearTracker, type IssueNode, type WorkflowState } from "./linear-tracker.ts";
-import { TrackerError } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 
 const STATES: ReadonlyArray<WorkflowState> = [
   { id: "s-triage", name: "Triage", type: "triage" },

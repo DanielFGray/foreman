@@ -15,7 +15,7 @@ import {
   problemsOf,
 } from "./pipeline.ts";
 import { pipelinesPath, readPipelines } from "./pipeline-file.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { Prompts } from "./prompt.ts";
 import { readLadder, readReviewers } from "./registry.ts";
 

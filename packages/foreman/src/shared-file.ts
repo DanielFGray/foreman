@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Option, Path, Schema as S } from "effect";
+import { RewriteError } from "./errors.ts";
 
 /** A file as read: its value, why it could not be read when it could not, and its text. */
 export interface Read<A> {
@@ -52,13 +53,5 @@ export const rewrite = <A, I, E, R>(
     }
     return yield* new RewriteError({ detail: `${path} kept changing under the write` });
   });
-
-export class RewriteError extends S.TaggedError<RewriteError>()("RewriteError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
 
 export { configDirectory } from "./paths.ts";

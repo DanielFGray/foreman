@@ -39,7 +39,7 @@ import {
   pipelineSimulate,
   pipelineTrace,
 } from "./pipeline-command.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
 import { publishedQueue } from "./published.ts";
 import { type Published } from "./published-schema.ts";
@@ -109,18 +109,29 @@ export const localOnlyMiddleware = (port: number) =>
   );
 
 /**
- * A verb's failure on the wire is PipelineError, the same tagged error the CLI
- * prints for a refused pipeline or composite command. Other failures become
- * that tag with their message as the detail.
+ * Failures no page can answer: a file the OS would not open, a store that
+ * would not answer, a stored file that no longer decodes. They end the call as
+ * a defect. The refusals a verb names stay in the contract as their tagged
+ * errors, the ones the CLI prints.
  */
-const asPipelineError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
-    Effect.mapError((error) =>
-      error instanceof PipelineError
-        ? error
-        : new PipelineError({ detail: error instanceof Error ? error.message : String(error) }),
-    ),
-  );
+/** The tags of failures no page can answer (see infraAsDefects). */
+const INFRA_TAGS: ReadonlyArray<string> = ["PlatformError", "SchemaError", "SqlError"];
+
+const isInfra = <E>(error: E): error is Extract<E, { readonly _tag: string }> =>
+  typeof error === "object" &&
+  error !== null &&
+  "_tag" in error &&
+  typeof error._tag === "string" &&
+  INFRA_TAGS.includes(error._tag);
+
+/**
+ * Failures no page can answer: a file the OS would not open, a store that
+ * would not answer, a stored file that no longer decodes. They end the call as
+ * a defect. The refusals a verb names stay in the contract as their tagged
+ * errors, the ones the CLI prints.
+ */
+const infraAsDefects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.catchIf(isInfra<E>, (error) => Effect.die(error)));
 
 /**
  * Handlers for the contract: streams and verbs. Each verb handler only calls
@@ -131,59 +142,46 @@ export const uiHandlersLayer = UiContract.toLayer(
     const readings = yield* ReadingsRef;
     return UiContract.of({
       Readings: () => SubscriptionRef.changes(readings),
-      Pipeline: (payload) =>
-        pipelineChanges(payload.project, payload.flow).pipe(
-          Stream.mapError((error) =>
-            error instanceof PipelineError
-              ? error
-              : new PipelineError({
-                  detail: error instanceof Error ? error.message : String(error),
-                }),
-          ),
-        ),
+      Pipeline: (payload) => pipelineChanges(payload.project, payload.flow),
       Queue: (payload) =>
         SubscriptionRef.changes(readings).pipe(
           Stream.mapEffect(() =>
-            queueOf(Option.some(payload.project)).pipe(
-              Effect.map(({ queue, epics }) => publishedQueue(queue, epics)),
+            infraAsDefects(
+              queueOf(Option.some(payload.project)).pipe(
+                Effect.map(({ queue, epics }) => publishedQueue(queue, epics)),
+              ),
             ),
           ),
-          Stream.mapError((error) =>
-            error instanceof PipelineError
-              ? error
-              : new PipelineError({
-                  detail: error instanceof Error ? error.message : String(error),
-                }),
-          ),
         ),
-      PipelineShow: (payload) => asPipelineError(pipelineShow(payload)),
-      PipelineEdit: (payload) => asPipelineError(pipelineEdit(payload)),
-      PipelineSave: (payload) => asPipelineError(pipelineSave(payload)),
-      PipelineDiscard: (payload) => asPipelineError(pipelineDiscard(payload)),
+      PipelineShow: (payload) => infraAsDefects(pipelineShow(payload)),
+      PipelineEdit: (payload) => infraAsDefects(pipelineEdit(payload)),
+      PipelineSave: (payload) => infraAsDefects(pipelineSave(payload)),
+      PipelineDiscard: (payload) => infraAsDefects(pipelineDiscard(payload)),
       PipelineInstructions: (payload) =>
-        asPipelineError(pipelineInstructions({ name: payload.name, text: payload.text })),
-      PipelinePrompt: (payload) => asPipelineError(pipelinePrompt(payload)),
-      PipelineTrace: (payload) => asPipelineError(pipelineTrace(payload)),
-      PipelineSimulate: (payload) => asPipelineError(pipelineSimulate(payload)),
-      PipelineGraph: (payload) => asPipelineError(pipelineGraph(payload)),
-      CompositeShow: (payload) => asPipelineError(compositeShow(payload)),
-      CompositeEdit: (payload) => asPipelineError(compositeEdit(payload)),
-      CompositeSave: (payload) => asPipelineError(compositeSave(payload)),
-      CompositeDiscard: (payload) => asPipelineError(compositeDiscard(payload)),
-      CompositePrompt: (payload) => asPipelineError(compositePrompt(payload)),
+        infraAsDefects(pipelineInstructions({ name: payload.name, text: payload.text })),
+      PipelinePrompt: (payload) => infraAsDefects(pipelinePrompt(payload)),
+      PipelineTrace: (payload) => infraAsDefects(pipelineTrace(payload)),
+      PipelineSimulate: (payload) => infraAsDefects(pipelineSimulate(payload)),
+      PipelineGraph: (payload) => infraAsDefects(pipelineGraph(payload)),
+      CompositeShow: (payload) => infraAsDefects(compositeShow(payload)),
+      CompositeEdit: (payload) => infraAsDefects(compositeEdit(payload)),
+      CompositeSave: (payload) => infraAsDefects(compositeSave(payload)),
+      CompositeDiscard: (payload) => infraAsDefects(compositeDiscard(payload)),
+      CompositePrompt: (payload) => infraAsDefects(compositePrompt(payload)),
     });
   }),
 );
 
 /**
  * The Pipeline stream: one show at once, then again when the pipelines file,
- * drafts file or instructions folder changes.
+ * drafts file or instructions folder changes. The watches are attached before
+ * the first show is sent, so a write made while the show runs is still seen.
  */
 const pipelineChanges = (project: string, flow: "across" | "down") =>
   Stream.unwrap(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const show = asPipelineError(pipelineShow({ project, flow }));
+      const show = infraAsDefects(pipelineShow({ project, flow }));
       // Pipelines file, drafts file and prompts folder: create each directory
       // so the watch can attach, then merge their events into one pulse stream.
       const dirs = [
@@ -196,11 +194,11 @@ const pipelineChanges = (project: string, flow: "across" | "down") =>
       for (const dir of dirs) {
         yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore);
       }
-      const watched = Stream.mergeAll(
-        dirs.map((dir) => fs.watch(dir)),
+      const changes = Stream.mergeAll(
+        dirs.map((dir) => fs.watch(dir).pipe(Stream.orDie)),
         { concurrency: "unbounded" },
-      ).pipe(Stream.drain);
-      return Stream.concat(Stream.fromEffect(show), watched.pipe(Stream.mapEffect(() => show)));
+      ).pipe(Stream.mapEffect(() => show));
+      return Stream.merge(Stream.fromEffect(show), changes);
     }),
   );
 

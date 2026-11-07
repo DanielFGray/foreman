@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import { Fleet, type FleetError } from "./fleet.ts";
+import { Fleet } from "./fleet.ts";
+import type { FleetError } from "./errors.ts";
 import { hcFleetOver } from "./hc.ts";
 import { Repository } from "./repository.ts";
 

@@ -131,7 +131,8 @@ import {
   ONBOARD,
   Records,
 } from "./records.ts";
-import { Tracker, TrackerError } from "./tracker.ts";
+import { Tracker } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 import {
   authoredBy,
   directBase,

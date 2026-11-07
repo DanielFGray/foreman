@@ -39,7 +39,7 @@ import {
   sameDrawing,
   updateDrafts,
 } from "./pipeline-draft.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { Settings, settings } from "./config.ts";
 import { type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { TraceRequest } from "./trace-request.ts";
@@ -49,7 +49,6 @@ import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
 
 export { PipelineError };
-
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.

@@ -4,7 +4,7 @@ import { TestClock } from "effect/testing";
 import type { GhResult } from "./github.ts";
 import { fakeGh } from "./github-fixture.ts";
 import { githubTracker, splitBody, type IssueNode } from "./github-tracker.ts";
-import { TrackerError } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 
 const node = (number: number, change: Partial<IssueNode> = {}): IssueNode => ({
   number,

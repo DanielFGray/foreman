@@ -178,7 +178,6 @@ export const publishedQueue = (
 export const commandName = (action: Action): string =>
   action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
-
 /**
  * Replaces the published file whole.
  *

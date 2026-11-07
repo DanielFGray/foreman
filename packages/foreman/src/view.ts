@@ -45,7 +45,6 @@ const COLUMNS = [
 ] as const;
 export type ColumnName = (typeof COLUMNS)[number];
 
-
 export type DecisionKind =
   | "author vanished"
   | "reviewer vanished"
