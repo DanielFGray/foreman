@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
@@ -183,13 +183,43 @@ describe("foreman composite", () => {
 
   test("a definition save that would break one project's pipeline is refused and names it", async () => {
     writeReviewLoopProject("amux");
-    // Drop the entry gate so expansion of amux cannot place the instance.
-    await runComposite("edit", "review-loop", change({ _tag: "Remove", id: "review-gate" }));
+    // Drop the review agent the entry gate hands off to, so amux's expansion cannot resolve that wire.
+    await runComposite("edit", "review-loop", change({ _tag: "Remove", id: "review" }));
     const refused = await refuseComposite("save", "review-loop");
     expect(refused).toMatch(/amux/);
     expect(refused).toMatch(/review-gate|entry|unknown|missing|reaches/i);
     expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"]).toEqual(reviewLoop);
     expect(JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]).toBeDefined();
+  });
+
+  test("removing a definition's entry block is refused, and the draft keeps the entry", async () => {
+    writeReviewLoopProject();
+    const refused = await refuseComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "Remove", id: "review-gate" }),
+    );
+    expect(refused).toMatch(/review-gate/);
+    expect(refused).toMatch(/entry/);
+    expect(existsSync(drafts)).toBe(false);
+  });
+
+  test("a save with a dangling entry is refused when no project uses the definition", async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ pipelines: {}, composites: { "review-loop": reviewLoop } }),
+    );
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "RenameCompositeExit", id: "exit-landable", name: "ok" }),
+    );
+    const draftFile = JSON.parse(readFileSync(drafts, "utf8"));
+    draftFile.composites["review-loop"].definition.entry = "nowhere";
+    writeFileSync(drafts, JSON.stringify(draftFile));
+    const refused = await refuseComposite("save", "review-loop");
+    expect(refused).toMatch(/nowhere/);
+    expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"]).toEqual(reviewLoop);
   });
 
   test("prompt renders a definition's block from its draft by the definition-local id, else from the stored definition", async () => {

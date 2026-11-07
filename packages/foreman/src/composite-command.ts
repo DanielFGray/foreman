@@ -180,10 +180,18 @@ const save = Command.make("save", { name }, ({ name }) =>
           .join("\n")}`,
       });
     }
+    const written = { ...draft.composites, [name]: draft.definition };
+    const dangling = Object.entries(written).flatMap(([one, definition]) =>
+      entryProblems(one, definition),
+    );
+    if (dangling.length > 0) {
+      return yield* new PipelineError({
+        detail: `cannot save composite ${name}:\n${dangling.map((problem) => `  ${problem}`).join("\n")}`,
+      });
+    }
     const composites: Composites = {
       ...file.composites,
-      ...draft.composites,
-      [name]: draft.definition,
+      ...written,
     };
     const broken = yield* projectsBrokenBy(file.pipelines, composites, name);
     if (broken.length > 0) {
@@ -284,6 +292,16 @@ const freshCompositeDraft = (name: string, file: PipelinesFile, inProjectDraft: 
     composites: {},
   });
 };
+
+/**
+ * A definition whose entry names no block of its own. Checked on every save,
+ * because a project that does not use the definition would otherwise store it
+ * unnoticed.
+ */
+const entryProblems = (name: string, definition: CompositeDefinition) =>
+  definition.blocks.some((block) => block.id === definition.entry)
+    ? []
+    : [`${name}: the entry ${definition.entry} is no block of the definition`];
 
 /**
  * Projects that use `name` (directly or through another definition) whose

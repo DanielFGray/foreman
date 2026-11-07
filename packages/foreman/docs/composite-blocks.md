@@ -157,6 +157,10 @@ A definition is edited as a draft of its own: `foreman composite edit <name>
 blocks, with `out:<exit id>` as a valid wire end. The definition verbs are
 `AddParam`, `RemoveParam`, `RenameCompositeExit` and `SetEntry`.
 
+Removing the entry block is refused: point the entry at another block with
+`SetEntry` first. Save refuses a definition whose entry names no block, whether
+or not a project uses it.
+
 `foreman composite save <name>` validates the expansion of every pipeline that
 uses the definition, with the new definition. It refuses when any of them has a
 problem, and it names the projects and the problems. It also refuses when the
