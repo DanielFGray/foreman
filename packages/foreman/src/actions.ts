@@ -3,27 +3,6 @@ import type { Dispatcher, FleetState } from "./dispatcher.ts";
 import { actionsFor, rowsForView, type Action, type ColumnRow } from "./view.ts";
 import { VIEWS } from "./view-names.ts";
 
-/**
- * An operator's action on one row, with every answer it needs already given.
- *
- * Two front ends issue these: the dashboard, which asks its questions in a
- * prompt before building one, and the command line, which takes them as
- * flags. Both turn it into a dispatcher command through `perform`, so a key
- * and a subcommand can never mean different things.
- */
-export type Request =
-  | { readonly action: Exclude<Action, "complete" | "kill" | "intervene"> }
-  /** The reason is what the log says instead of a review's verdict. */
-  | { readonly action: "complete"; readonly reason: string }
-  /** Absent when the operator gave no reason, which writes the bare kill line. */
-  | { readonly action: "kill"; readonly reason: Option.Option<string> }
-  | {
-      readonly action: "intervene";
-      readonly how: Intervention;
-      /** Absent only for a review of a committed attempt, which has its own verdict pipeline. */
-      readonly rung: string | undefined;
-    };
-
 /** The ways an intervention can resume a task, in the order they are offered. */
 export const INTERVENTIONS = ["continue", "diagnose", "review"] as const;
 export type Intervention = (typeof INTERVENTIONS)[number];
@@ -107,47 +86,6 @@ export const performApprove = (dispatcher: Dispatcher["Service"], row: ColumnRow
 
 export const performPreview = (dispatcher: Dispatcher["Service"], row: ColumnRow) =>
   row.worker && row.preview ? dispatcher.preview(row.worker, row.preview) : undefined;
-
-/**
- * The dispatcher command a request means on this row, or `undefined` when the
- * row cannot take it. The dashboard's entry point: each arm calls one of the
- * `perform*` functions above, so a key and a subcommand share one path.
- *
- * `undefined` covers both an action the row's column does not offer and a row
- * missing the part the action works on, so a caller has one refusal to report.
- */
-export const perform = (dispatcher: Dispatcher["Service"], row: ColumnRow, request: Request) => {
-  if (!actionsFor(row.column, row).includes(request.action)) return undefined;
-  switch (request.action) {
-    case "complete":
-      return performComplete(dispatcher, row, request.reason);
-    case "kill":
-      return performKill(dispatcher, row, request.reason);
-    case "intervene":
-      return performIntervene(dispatcher, row, request.how, request.rung);
-    case "retry":
-      return performRetry(dispatcher, row);
-    case "release":
-      return performRelease(dispatcher, row);
-    case "close":
-      return performClose(dispatcher, row);
-    case "takeOver":
-    case "focus":
-      return performFocus(dispatcher, row);
-    case "descend":
-      return performDescend(dispatcher, row);
-    case "unassign":
-      return performUnassign(dispatcher, row);
-    case "onboard":
-      return performOnboard(dispatcher, row);
-    case "adopt":
-      return performAdopt(dispatcher, row);
-    case "approve":
-      return performApprove(dispatcher, row);
-    case "preview":
-      return performPreview(dispatcher, row);
-  }
-};
 
 /**
  * The row an id names that can take this action, across every view.
