@@ -169,7 +169,7 @@ queue never starts one on its own.
 
 Where else an agent works is the project's pipeline: in your checkout on the
 task's branch (the default), in a worktree of its own under
-`$XDG_STATE_HOME/foreman/worktrees/`, or directly on your branch (`foreman
+`$XDG_DATA_HOME/foreman/worktrees/`, or directly on your branch (`foreman
 pipeline use`). A task branch starts at the tip of the branch it lands on. In a
 worktree, the author prompt forbids touching the main checkout or switching
 branches.
@@ -326,7 +326,7 @@ merge is returned to the queue. The reviewer needs neither merge nor completion
 rights.
 
 Proving happens somewhere disposable: a scratch checkout of the project under
-`$XDG_STATE_HOME/foreman/verify/`, reset to your current tip. The merge is made
+`$XDG_DATA_HOME/foreman/verify/`, reset to your current tip. The merge is made
 there and the project's `verify` command runs there, so no test suite ever runs
 in a directory you are working in, and nothing has to be undone in yours when
 one fails. What then lands in your checkout is that same commit, fast-forwarded
@@ -632,7 +632,7 @@ appended to the task's own task history with its role and agent kind, and with
 the model when the agent integration reports one — the record travels with the
 task, which is what makes attempts comparable once it lands.
 
-Worktrees live under `$XDG_STATE_HOME/foreman/worktrees/<project>/<task>`, out of
+Worktrees live under `$XDG_DATA_HOME/foreman/worktrees/<project>/<task>`, out of
 the repository — an in-tree worktree would mean editing `.gitignore` in every
 project foreman touches.
 

@@ -1,4 +1,5 @@
 import { Context, Effect, Option, Schema } from "effect";
+import { checkoutsDirectory } from "./paths.ts";
 
 /**
  * The multiplexer, as foreman needs it.
@@ -310,13 +311,13 @@ export const taskOf = (label: string): string | undefined =>
   label.startsWith("foreman/") ? label.slice("foreman/".length) : undefined;
 
 /**
- * Where a task's worktree lives. Under the state directory rather than inside
+ * Where a task's worktree lives. In foreman's checkouts folder rather than inside
  * the repository: an in-tree worktree would mean editing .gitignore in every
  * project foreman touches, and a stray checkout is far more confusing inside a
  * repo than outside it.
  */
 export const directoryFor = (project: string, task: string): string =>
-  `${stateDirectory()}/worktrees/${project}/${task}`;
+  `${checkoutsDirectory()}/worktrees/${project}/${task}`;
 
 /**
  * Where a project's landings are proved before they are applied.
@@ -327,10 +328,7 @@ export const directoryFor = (project: string, task: string): string =>
  * between a verification run and a full cold install every time.
  */
 export const verifyDirectoryFor = (project: string): string =>
-  `${stateDirectory()}/verify/${project}`;
-
-const stateDirectory = () =>
-  `${process.env["XDG_STATE_HOME"] ?? `${process.env["HOME"]}/.local/state`}/foreman`;
+  `${checkoutsDirectory()}/verify/${project}`;
 
 /**
  * Runs `awaitTurn` until `working` reads false. The reading is taken after

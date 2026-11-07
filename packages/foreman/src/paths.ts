@@ -27,6 +27,13 @@ export class Paths extends Context.Service<
     readonly drafts: string;
     /** Published reading (`FOREMAN_STATE`, else under `$XDG_STATE_HOME/foreman`). */
     readonly published: string;
+    /**
+     * Task worktrees and verify checkouts: `$XDG_DATA_HOME/foreman`, else
+     * `~/.local/share/foreman`. Apart from the published file, because a reader
+     * watches that file's folder, and a checkout's dependency folders and the
+     * links in them would fill the watch.
+     */
+    readonly checkouts: string;
     readonly linearToken: string;
   }
 >()("foreman/Paths") {
@@ -44,6 +51,10 @@ export class Paths extends Context.Service<
     );
     const stateDirectory = path.join(
       process.env["XDG_STATE_HOME"] ?? path.join(home, ".local", "state"),
+      "foreman",
+    );
+    const checkouts = path.join(
+      process.env["XDG_DATA_HOME"] ?? path.join(home, ".local", "share"),
       "foreman",
     );
 
@@ -70,6 +81,7 @@ export class Paths extends Context.Service<
       pipelines,
       drafts,
       published: override("FOREMAN_STATE", path.join(stateDirectory, "state.json")),
+      checkouts,
       linearToken: path.join(configDirectory, "linear-token.json"),
     });
   });
@@ -88,6 +100,7 @@ export const resolve = (): {
   readonly pipelines: string;
   readonly drafts: string;
   readonly published: string;
+  readonly checkouts: string;
   readonly linearToken: string;
 } => Effect.runSync(Paths.make.pipe(Effect.provide(BunServices.layer)));
 
@@ -102,6 +115,9 @@ export const draftsPath = (): string => resolve().drafts;
 
 /** `$FOREMAN_STATE`, else under `$XDG_STATE_HOME/foreman`. */
 export const publishedPath = (): string => resolve().published;
+
+/** Where task worktrees and verify checkouts live. */
+export const checkoutsDirectory = (): string => resolve().checkouts;
 
 /** Linear OAuth token beside the config. */
 export const tokenPath = (): string => resolve().linearToken;

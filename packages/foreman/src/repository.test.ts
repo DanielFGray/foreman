@@ -22,7 +22,7 @@ const holdsWork = (directory: string, branch: string) =>
   run((repository) => repository.holdsWork(directory, branch));
 
 // Nested under a directory that does not exist, because the real ground lives
-// at $XDG_STATE_HOME/foreman/verify/<project> and nothing makes that first.
+// at $XDG_DATA_HOME/foreman/verify/<project> and nothing makes that first.
 const groundFor = (directory: string) => `${directory}.grounds/verify`;
 
 const merge = (directory: string, branch: string, verify?: string, message = `Merge ${branch}`) =>
@@ -629,7 +629,7 @@ afterAll(() =>
 describe("Repository worktrees", () => {
   const branch = "foreman/ts-1";
   // Nested under a directory that does not exist, like the real
-  // $XDG_STATE_HOME/foreman/worktrees/<project>/<task>.
+  // $XDG_DATA_HOME/foreman/worktrees/<project>/<task>.
   const path = `${project}.tasks/proj/ts-1`;
   const worktrees = () => run((repository) => repository.worktrees(project));
 
