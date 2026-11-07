@@ -122,6 +122,12 @@ the page's files. `foreman serve` provides it beside `supervise`.
 - **Reconnect.** When the WebSocket closes, the page shows that it is
   disconnected, tries again each second, and reloads itself when a new
   connection succeeds, so it runs the code of the new serve.
+- **Stop closes open page sockets.** Bun's graceful `server.stop()` waits for
+  open WebSockets forever, so Effect's BunHttpServer finalizer never finished
+  with a page connected. The workspace patches `@effect/platform-bun@4.1.2` so
+  that finalizer calls `server.stop(true)`. Then `foreman serve` (SIGTERM, or
+  exit after a new commit on foreman's checkout) finishes with a page still
+  open, and that page's reconnect sees the new serve.
 
 ## The page
 
