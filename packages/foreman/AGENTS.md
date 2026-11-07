@@ -407,10 +407,7 @@ gets charged to the task rather than to the setup.
 `scripts/worktree-setup.sh` is that split made concrete. A worktree does not
 share the checkout's installed dependencies, so `workspaceFor` runs the script
 before every dispatch and refuses to hand over a worktree whose setup failed —
-that failure is the project's or the machine's, never the task's. The operator's
-checkout can also move while serve runs. Before serve exits to restart on a new
-commit, the host's code-moved check runs the setup script there. A failure is
-published by serve, which keeps running the code it loaded and checks again.
+that failure is the project's or the machine's, never the task's.
 
 - **The project records the command, not the config.** A checked-in script is a
   fact about the project foreman reads back like every other, and a project that
@@ -420,8 +417,6 @@ published by serve, which keeps running the code it loaded and checks again.
   foreman does not remember it. So the script must be safe to re-run — which a
   package manager's install already is, and which a clone needs a guard to
   become. Re-running is also what repairs a half-written worktree.
-- **It runs on the operator's checkout before serve restarts onto a new commit.**
-  The world does not record that the checkout matches its lockfile.
 - **The prompts close the loop.** An agent that repairs a worktree by hand is
   told to add the missing step to the script and commit it. That is the ratchet:
   every hand repair converts one non-deterministic step into a deterministic one,
@@ -769,8 +764,7 @@ The ground is per project, not per task — landings are serialised by the tick,
 and reusing it is what lets `scripts/worktree-setup.sh` keep its installed
 dependencies between landings instead of paying for a cold install every time. A
 ground whose setup fails holds the project: a verification that could not run
-must never read as green. A landing does not install the operator's checkout;
-serve runs its setup before it restarts onto a new commit.
+must never read as green.
 
 The tip is read again after the proof and before the apply. A merge proved
 against a commit the operator has since moved past is not the merge that would go
