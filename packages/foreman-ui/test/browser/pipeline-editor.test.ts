@@ -118,19 +118,64 @@ const releaseOver = (blockId: string) => {
   );
 };
 
-/** Holds a drag from `from`'s next exit over a block, and waits for the preview. */
-const dragNextExitOver = async (from: string, blockId: string) => {
+/** The target a named exit of a drafted node leads to. */
+const exitTarget = (drawing: Drawing | null, id: string, name: string): unknown => {
+  const node = drawing?.nodes.find((one) => one.id === id);
+  if (node === undefined || !("exits" in node)) return undefined;
+  return node.exits.find((exit) => exit.name === name)?.to;
+};
+
+/** Holds a drag from the exit handle `handleId` over a block, and waits for the preview. */
+const dragHandleOver = async (handleId: string, blockId: string) => {
   await expect.element(page.getByTestId("pipeline-editor")).toBeInTheDocument();
-  await expect.element(page.getByTestId(`exit-${from}-next`)).toBeInTheDocument();
+  await expect.element(page.getByTestId(handleId)).toBeInTheDocument();
   await expect.element(page.getByTestId(`block-${blockId}`)).toBeInTheDocument();
   await userEvent.pointer([
-    { keys: "[MouseLeft>]", target: page.getByTestId(`exit-${from}-next`) },
+    { keys: "[MouseLeft>]", target: page.getByTestId(handleId) },
     { target: page.getByTestId(`block-${blockId}`) },
   ]);
   await expect.element(page.getByTestId("drag-preview")).toBeInTheDocument();
 };
 
+const dragNextExitOver = (from: string, blockId: string) =>
+  dragHandleOver(`exit-${from}-next`, blockId);
+
 describe("pipeline editor wire drag", () => {
+  it("draws a queue exit with a handle, and rejoins it onto a block", async () => {
+    mountProject();
+
+    // author's done exit leads to review-gate; returning it to the queue is a valid rejoin.
+    await dragHandleOver("exit-author-exit-done", "queue");
+    releaseOver("queue");
+
+    await expect.poll(() => editRequests().length).toBe(1);
+    expect(editRequests()[0]?.payload).toEqual({
+      project: PROJECT,
+      change: { _tag: "Rejoin", wire: { from: "author", port: "exit:done" }, to: "queue" },
+      flow: "across",
+    });
+    await expect
+      .poll(async () => exitTarget(await commands.draftPipeline(PROJECT), "author", "done"))
+      .toBe("queue");
+
+    // The stream's drawing keeps the queue exit: its handle is on the page and its wire is drawn.
+    await expect.element(page.getByTestId("exit-author-exit-done")).toBeInTheDocument();
+    expect(document.getElementById("wire-author-exit-done")).not.toBeNull();
+
+    await dragHandleOver("exit-author-exit-done", "review-gate");
+    releaseOver("review-gate");
+
+    await expect.poll(() => editRequests().length).toBe(2);
+    expect(editRequests()[1]?.payload).toEqual({
+      project: PROJECT,
+      change: { _tag: "Rejoin", wire: { from: "author", port: "exit:done" }, to: "review-gate" },
+      flow: "across",
+    });
+    await expect
+      .poll(async () => exitTarget(await commands.draftPipeline(PROJECT), "author", "done"))
+      .toBe("review-gate");
+  });
+
   it("shows an amber one-problem preview for an unreachable rejoin, and drops one PipelineEdit", async () => {
     mountProject();
 

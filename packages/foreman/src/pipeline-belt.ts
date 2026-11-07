@@ -72,9 +72,21 @@ export interface BeltWire extends Wire {
   readonly back: boolean;
 }
 
+/**
+ * An exit that returns to the queue. It is not a wire: the queue is a source
+ * block, and a wire into it would draw a loop, so layout draws a short stub off
+ * the exit instead.
+ */
+export interface BeltReturn {
+  readonly from: string;
+  readonly port: Port;
+  readonly label: string;
+}
+
 export interface Belt {
   readonly cells: ReadonlyArray<Cell>;
   readonly wires: ReadonlyArray<BeltWire>;
+  readonly returns: ReadonlyArray<BeltReturn>;
   readonly columns: number;
   readonly rows: number;
 }
@@ -145,6 +157,7 @@ export const beltOf = (pipeline: Drawing): Belt => {
       ...wire,
       back: backs.has(wire),
     })),
+    returns: returnsOf(pipeline),
     columns: Math.max(0, ...cells.map((cell) => cell.column + 1)),
     rows: nextRow,
   };
@@ -969,6 +982,24 @@ const depthsOf = (pipeline: Drawing, wires: ReadonlyArray<Wire>): ReadonlyMap<st
   for (const node of pipeline.nodes) spread([node.id]);
   return depth;
 };
+
+/** The exits that return to the queue, in the order `wiresOf` lists the other exits. */
+const returnsOf = (pipeline: Drawing): ReadonlyArray<BeltReturn> =>
+  pipeline.nodes.flatMap((node): ReadonlyArray<BeltReturn> => {
+    switch (node.kind) {
+      case "agent":
+      case "check":
+        return node.exits.flatMap((exit): ReadonlyArray<BeltReturn> =>
+          exit.to === QUEUE ? [{ from: node.id, port: `exit:${exit.name}`, label: exit.name }] : [],
+        );
+      case "composite":
+        return node.exits.flatMap((exit): ReadonlyArray<BeltReturn> =>
+          exit.to === QUEUE ? [{ from: node.id, port: `exit:${exit.id}`, label: exit.id }] : [],
+        );
+      default:
+        return [];
+    }
+  });
 
 const wiresOf = (pipeline: Drawing): ReadonlyArray<Wire> =>
   pipeline.nodes.flatMap((node): ReadonlyArray<Wire> => {

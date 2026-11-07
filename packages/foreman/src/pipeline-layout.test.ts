@@ -1,4 +1,4 @@
-import { STANDARD_PIPELINES } from "./pipeline.ts";
+import { QUEUE, STANDARD_PIPELINES } from "./pipeline.ts";
 import { Option } from "effect";
 import { addRoute, beltOf, insertOn, rejoin } from "./pipeline-belt.ts";
 import { describe, expect, it } from "bun:test";
@@ -158,6 +158,22 @@ describe("drawingOf", () => {
       expect({ x, y, w, h }).toEqual(layout.boxes.get(block.id)!);
     }
     expect(JSON.parse(JSON.stringify(drawing))).toEqual(drawing);
+  });
+
+  it("draws a return to the queue as a stub that starts on its exit's edge", () => {
+    const pipeline = Option.getOrThrow(
+      rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, QUEUE),
+    );
+    const drawing = drawingOf(pipeline, "across");
+    const block = drawing.blocks.find((one) => one.id === "review")!;
+    const stub = drawing.wires.find(
+      (wire) => wire.from === "review" && wire.port === "exit:approved",
+    );
+    expect(stub?.to).toBe(QUEUE);
+    expect(stub?.points).toHaveLength(2);
+    expect(stub?.points[0]).toEqual([block.x + block.w, stub!.points[0]![1]]);
+    expect(stub!.points[0]![1]).toBeGreaterThanOrEqual(block.y);
+    expect(stub!.points[0]![1]).toBeLessThanOrEqual(block.y + block.h);
   });
 });
 
