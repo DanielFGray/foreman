@@ -545,6 +545,12 @@ export class Repository extends Context.Service<Repository>()("Repository", {
 
         if (!verify) return { _tag: "Proven", commit, verified: false } as const;
 
+        // The ground was installed for `base`. The branch can add a package,
+        // a dependency or a patch, so the merged tree gets its own install
+        // before verify judges it.
+        const installed = yield* prepare(proving);
+        if (installed) return installed;
+
         const judged = yield* judge(proving, verify, gitGround(proving, directory, base));
         switch (judged._tag) {
           case "Passed":

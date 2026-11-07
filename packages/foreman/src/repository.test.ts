@@ -584,6 +584,45 @@ describe("Repository", () => {
   });
 });
 
+// A branch can declare what the tree needs installed, such as a new package
+// and its dependencies. Verification judges the merged tree, so the setup
+// script has to run on that tree, not only on the base it was proved against.
+describe("Repository landing a branch that changes what setup installs", () => {
+  test("verifies the merged tree with the merged tree's setup", async () => {
+    const here = await mkdtemp(join(tmpdir(), "foreman-merged-setup-"));
+    const sh = (...args: Array<string>) =>
+      Bun.$`git -C ${here} -c user.email=f@t -c user.name=f ${args}`.quiet().nothrow();
+    try {
+      await sh("init", "-q", "-b", "trunk");
+      await sh("config", "branch.autoSetupMerge", "always");
+      await mkdir(join(here, "scripts"), { recursive: true });
+      // Stands in for `bun install`: it installs what the tree declares.
+      await writeFile(
+        join(here, "scripts", "worktree-setup.sh"),
+        "#!/bin/sh\nif [ -f needs.txt ]; then cp needs.txt installed.txt; fi\n",
+        { mode: 0o755 },
+      );
+      await sh("add", "scripts");
+      await sh("commit", "-qm", "initial");
+
+      await sh("checkout", "-qb", "adds-a-package");
+      await writeFile(join(here, "needs.txt"), "package\n");
+      await sh("add", "needs.txt");
+      await sh("commit", "-qm", "adds a package");
+      await sh("checkout", "-q", "trunk");
+
+      const verify = "test ! -f needs.txt || cmp -s needs.txt installed.txt";
+      expect(await merge(here, "adds-a-package", verify)).toEqual({
+        _tag: "Merged",
+        verified: true,
+      });
+    } finally {
+      await rm(here, { recursive: true, force: true });
+      await rm(`${here}.grounds`, { recursive: true, force: true });
+    }
+  });
+});
+
 // The setup script is how a project says what a bare worktree is missing.
 // Foreman runs it and reports; it never guesses the command, because the
 // project is what knows how to build itself.
