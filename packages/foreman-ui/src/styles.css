@@ -112,25 +112,8 @@ a:hover {
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
-.pipeline-canvas .wire {
-  stroke: var(--muted);
-  stroke-width: 2;
-}
-
-.pipeline-canvas .wire.back {
-  stroke-dasharray: 6 4;
-}
-
-.pipeline-canvas .wire.preview.good {
-  stroke: #1a7f37;
-  stroke-width: 3;
-}
-
-.pipeline-canvas .wire.preview.warn {
-  stroke: #9a6700;
-  stroke-width: 3;
-}
-
+/* Wire stroke, width and dash come from the path's SVG attributes. A CSS rule
+   here would override them, so the preview colours would never show. */
 .pipeline-canvas .exit-dot {
   fill: var(--accent);
   stroke: var(--panel);
@@ -169,14 +152,6 @@ a:hover {
 }
 
 @media (prefers-color-scheme: dark) {
-  .pipeline-canvas .wire.preview.good {
-    stroke: #3fb950;
-  }
-
-  .pipeline-canvas .wire.preview.warn {
-    stroke: #d29922;
-  }
-
   .drag-preview.tone-green {
     color: #3fb950;
   }
