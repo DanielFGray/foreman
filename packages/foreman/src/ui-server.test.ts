@@ -1,8 +1,8 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { BunServices, BunSocket } from "@effect/platform-bun";
 import { Effect, Fiber, Layer, Option, Queue, Stream, SubscriptionRef } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
-import { RpcTest } from "effect/rpc";
+import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc";
 import { Command } from "effect/cli";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +20,13 @@ import { scratchStore, seed } from "./scratch-store.ts";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { UiContract } from "./ui-contract.ts";
 import { resolve } from "./paths.ts";
-import { localRequest, ReadingsRef, uiHandlersLayer, uiRoutesLayer } from "./ui-server.ts";
+import {
+  localRequest,
+  ReadingsRef,
+  uiHandlersLayer,
+  uiRoutesLayer,
+  uiServerOn,
+} from "./ui-server.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-ui-server-"));
 const path = join(folder, "pipelines.json");
@@ -183,6 +189,38 @@ describe("UiContract handlers", () => {
     if (Option.isSome(first)) {
       expect(first.value.version).toBeDefined();
       expect(first.value.dispatcher).toBeNull();
+    }
+  });
+});
+
+describe("UiContract over a WebSocket", () => {
+  test("PipelineEdit and Readings answer the page's client through the real server", async () => {
+    const port = 7342;
+    writeFileSync(path, JSON.stringify({ pipelines: { amux: pinned }, composites: {} }));
+    await runPipeline("edit", "amux", JSON.stringify(change));
+    const fromCli = readFileSync(drafts, "utf8");
+    rmSync(drafts, { force: true });
+
+    const server = Effect.runFork(
+      Layer.launch(uiServerOn(port).pipe(Layer.provide(Layer.mergeAll(handlers, services)))),
+    );
+    try {
+      await new Promise((ready) => setTimeout(ready, 300));
+      const clientLayer = RpcClient.layerProtocolSocket().pipe(
+        Layer.provide(BunSocket.layerWebSocket(`ws://127.0.0.1:${port}/rpc`)),
+        Layer.provide(RpcSerialization.layerJson),
+      );
+      const first = await Effect.runPromise(
+        Effect.gen(function* () {
+          const client = yield* RpcClient.make(UiContract);
+          yield* client.PipelineEdit({ project: "amux", change, flow: "across" });
+          return yield* client.Readings().pipe(Stream.take(1), Stream.runHead);
+        }).pipe(Effect.scoped, Effect.provide(clientLayer), Effect.timeout("10 seconds")),
+      );
+      expect(JSON.parse(readFileSync(drafts, "utf8"))).toEqual(JSON.parse(fromCli));
+      expect(Option.isSome(first)).toBe(true);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(server));
     }
   });
 });
