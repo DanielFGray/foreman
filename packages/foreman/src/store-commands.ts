@@ -22,6 +22,9 @@ import { runTitles } from "./run-titles.ts";
  * it never speaks to any tracker itself, and a tracker other than the local
  * tasks store is one `Records` implementation away. They read the store only:
  * no roster, no checkout gates, no `Dispatcher.read`, which takes seconds.
+ *
+ * The pane's verbs (show, queue) are exported Effects the CLI and the coming
+ * UI contract both call.
  */
 
 /** An item as JSON readers know it: `parent` and `definitionOfDone` are strings, absent when none. */
@@ -38,6 +41,10 @@ const project = Flag.String("project").pipe(
   Flag.optional,
 );
 
+/** The ready queue in the order the fleet would dispatch it, with the epics it sits under. */
+export const taskQueue = (input: { readonly project: Option.Option<string> }) =>
+  queueOf(input.project);
+
 /** The queue in the order the fleet would dispatch it. */
 export const queueCommand = Command.make("queue", { json, project }, (args) =>
   Effect.gen(function* () {
@@ -47,7 +54,7 @@ export const queueCommand = Command.make("queue", { json, project }, (args) =>
         JSON.stringify(yield* Schema.encodeEffect(Schema.Array(PublishedRow))(rows)),
       );
     }
-    const { queue } = yield* queueOf(args.project);
+    const { queue } = yield* taskQueue({ project: args.project });
     if (queue.length === 0) return yield* Console.log("queue empty");
     for (const task of queue) {
       yield* Console.log(`${task.id} [${task.project}] p${task.priority} ${task.title}`);
@@ -125,14 +132,17 @@ const summaryLine = (summary: RunSummary): string => {
   return parts.filter((part) => part !== undefined).join(" · ");
 };
 
-/** One task whole: its fields, what done means, its step, its runs and its log. */
-export const showCommand = Command.make("show", { id, json }, (args) =>
+/**
+ * One task whole: its fields, the block it stands at, its runs and their
+ * summary. The CLI and the UI contract both call this; each prints.
+ */
+export const taskShow = (input: { readonly id: string }) =>
   Effect.gen(function* () {
     const records = yield* Records;
-    const task = yield* records.detail(args.id).pipe(
+    const task = yield* records.detail(input.id).pipe(
       Effect.flatMap(
         Option.match({
-          onNone: () => Effect.fail(new Refused({ detail: `no task ${args.id}` })),
+          onNone: () => Effect.fail(new Refused({ detail: `no task ${input.id}` })),
           onSome: Effect.succeed,
         }),
       ),
@@ -148,6 +158,13 @@ export const showCommand = Command.make("show", { id, json }, (args) =>
     const history = yield* records.history(task.id);
     const now = new Date(yield* Clock.currentTimeMillis);
     const summary = summarizeRuns(history, task.status, now);
+    return { task, step, history, summary };
+  });
+
+/** One task whole: its fields, what done means, its step, its runs and its log. */
+export const showCommand = Command.make("show", { id, json }, (args) =>
+  Effect.gen(function* () {
+    const { task, step, history, summary } = yield* taskShow({ id: args.id });
     if (args.json) {
       return yield* Console.log(
         JSON.stringify({

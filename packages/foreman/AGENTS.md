@@ -1016,10 +1016,12 @@ is a view, not a memory: nothing in foreman reads it back.
 
 `src/view.ts` is a total function from a reading (`FleetState`) to rows and the
 actions each row takes, with no renderer, which is why its test is plain
-assertions. `src/actions.ts` turns an action on a row into a dispatcher command
-through `perform`, and `src/commands.ts` exposes each action as a subcommand. A
+assertions. `src/actions.ts` holds one `perform<Action>` function per action,
+which turns that action on a row into a dispatcher command, and
+`src/commands.ts` exposes each action as an exported verb and a subcommand. A
 new action is an entry in `ACTIONS_LIST` and the column tables in
-`src/view.ts`, a case in `perform`, and a line in `ACTION_HELP`.
+`src/view.ts`, a `perform<Action>` function in `src/actions.ts`, an exported
+verb in `src/commands.ts`, and a line in `ACTION_HELP`.
 
 A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
 nothing — then finds the row its id keys. It does not talk to the dispatcher:
@@ -1076,8 +1078,8 @@ the status line can show what agents hold beside that age. The figure is a hint
 — free below the largest live worker means another would not fit — never a
 dispatch gate; `slots` still meters concurrency.
 
-Each source kind allows only the actions that make sense there, and `perform`
-refuses an action the row cannot take. Decisions are named from the task's
+Each source kind allows only the actions that make sense there, and `rowFor`
+finds no row for an action the row cannot take, so `runAction` refuses it. Decisions are named from the task's
 status: only the status — neither claimed nor under review — marks a worker as
 residue.
 
