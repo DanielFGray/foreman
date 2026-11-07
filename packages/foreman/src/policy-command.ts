@@ -36,28 +36,31 @@ import { TrackerError } from "./tracker.ts";
 export const policySet = (input: {
   readonly step: Step;
   readonly setting: StepMode;
-  readonly project: string | undefined;
+  readonly project: Option.Option<string>;
 }) =>
   updatePolicy(policyPath(), (policy) =>
-    input.project === undefined
-      ? { ...policy, default: { ...policy.default, [input.step]: input.setting } }
-      : setProjectStep(policy, input.project, input.step, input.setting),
+    Option.match(input.project, {
+      onNone: () => ({ ...policy, default: { ...policy.default, [input.step]: input.setting } }),
+      onSome: (project) => setProjectStep(policy, project, input.step, input.setting),
+    }),
   );
 
 /** Stop every step until resumed; with `project`, stop that project only. */
-export const policyPause = (input: { readonly project: string | undefined }) =>
+export const policyPause = (input: { readonly project: Option.Option<string> }) =>
   updatePolicy(policyPath(), (policy) =>
-    input.project === undefined
-      ? { ...policy, paused: true }
-      : pauseProject(policy, input.project, true),
+    Option.match(input.project, {
+      onNone: () => ({ ...policy, paused: true }),
+      onSome: (project) => pauseProject(policy, project, true),
+    }),
   );
 
 /** Undo pause; with `project`, resume that project only. */
-export const policyResume = (input: { readonly project: string | undefined }) =>
+export const policyResume = (input: { readonly project: Option.Option<string> }) =>
   updatePolicy(policyPath(), (policy) =>
-    input.project === undefined
-      ? { ...policy, paused: false }
-      : pauseProject(policy, input.project, false),
+    Option.match(input.project, {
+      onNone: () => ({ ...policy, paused: false }),
+      onSome: (project) => pauseProject(policy, project, false),
+    }),
   );
 
 /** Set how many agents may work at once. */
@@ -68,9 +71,12 @@ export const policySlots = (input: { readonly count: number }) =>
 export const policyGrant = (input: {
   readonly scope: string;
   readonly steps: ReadonlyArray<Step>;
-  readonly remaining: number | undefined;
+  readonly remaining: Option.Option<number>;
 }) =>
-  updatePolicy(policyPath(), (policy) => grant(policy, input.scope, input.steps, input.remaining));
+  updatePolicy(policyPath(), (policy) =>
+    // grant() in policy.ts takes `undefined` for "no limit"; converted here, at the file boundary.
+    grant(policy, input.scope, input.steps, Option.getOrUndefined(input.remaining)),
+  );
 
 /** Remove the grant on a task or epic. */
 export const policyRevoke = (input: { readonly scope: string }) =>
@@ -92,12 +98,10 @@ const projectFlag = Flag.String("project").pipe(
   Flag.optional,
 );
 
-const projectOf = (flag: Option.Option<string>): string | undefined => Option.getOrUndefined(flag);
-
 const pauseOrResume = (name: "pause" | "resume") => {
   const verb = name === "pause" ? policyPause : policyResume;
   return Command.make(name, { project: projectFlag }, ({ project }) =>
-    verb({ project: projectOf(project) }).pipe(Effect.flatMap(print)),
+    verb({ project }).pipe(Effect.flatMap(print)),
   ).pipe(
     Command.withDescription(
       name === "pause"
@@ -114,7 +118,7 @@ const set = Command.make("set", { step, setting, project: projectFlag }, (args) 
   policySet({
     step: args.step,
     setting: args.setting,
-    project: projectOf(args.project),
+    project: args.project,
   }).pipe(Effect.flatMap(print)),
 ).pipe(
   Command.withDescription(
@@ -230,7 +234,7 @@ const grantCommand = Command.make(
     policyGrant({
       scope: args.scope,
       steps: args.steps,
-      remaining: Option.getOrUndefined(args.remaining),
+      remaining: args.remaining,
     }).pipe(Effect.flatMap(print)),
 ).pipe(
   Command.withDescription(

@@ -62,9 +62,9 @@ export const ladderDocument = () =>
 export const ladderAdd = (input: {
   readonly rung: string;
   readonly model: string;
-  readonly thinking: string | null;
+  readonly thinking: Option.Option<string>;
   readonly enabled: boolean;
-  readonly note: string | null;
+  readonly note: Option.Option<string>;
   readonly place: RungPlace;
 }) =>
   Effect.gen(function* () {
@@ -72,12 +72,13 @@ export const ladderAdd = (input: {
       {
         rung: input.rung,
         model: input.model,
-        thinking: input.thinking,
+        // The row stores `null` for no value; converted at the storage boundary.
+        thinking: Option.getOrNull(input.thinking),
         enabled: input.enabled,
         author: true,
         provider: null,
         unmetered: false,
-        note: input.note,
+        note: Option.getOrNull(input.note),
       },
       input.place,
     );
@@ -107,15 +108,18 @@ export const ladderDisable = (input: { readonly rung: string }) =>
   changeRow(input.rung, (row) => ({ ...row, enabled: false })).pipe(Effect.as(input.rung));
 
 /**
- * Set the thinking level a rung starts at. `null` clears it so the harness's
- * own default applies.
+ * Set the thinking level a rung starts at. `Option.none` clears it so the
+ * harness's own default applies.
  */
 export const ladderThinking = (input: {
   readonly rung: string;
-  readonly thinking: string | null;
+  readonly thinking: Option.Option<string>;
 }) =>
   Effect.gen(function* () {
-    yield* changeRow(input.rung, (row) => ({ ...row, thinking: input.thinking }));
+    yield* changeRow(input.rung, (row) => ({
+      ...row,
+      thinking: Option.getOrNull(input.thinking),
+    }));
     return { rung: input.rung, thinking: input.thinking };
   });
 
@@ -263,9 +267,9 @@ const add = Command.make(
       const result = yield* ladderAdd({
         rung: args.rung,
         model: args.model,
-        thinking: Option.getOrNull(args.thinking),
+        thinking: args.thinking,
         enabled: !args.disabled,
-        note: Option.getOrNull(args.note),
+        note: args.note,
         place,
       });
       yield* Console.log(`${result.rung}: added ${whereOf(result.place)}`);
@@ -320,9 +324,9 @@ const levelName = Argument.String("thinking").pipe(
  */
 const thinking = Command.make("thinking", { rung, thinking: levelName }, (args) =>
   Effect.gen(function* () {
-    const level = args.thinking === "none" ? null : args.thinking;
+    const level = args.thinking === "none" ? Option.none() : Option.some(args.thinking);
     const result = yield* ladderThinking({ rung: args.rung, thinking: level });
-    yield* Console.log(`${result.rung}: thinking ${result.thinking ?? "none"}`);
+    yield* Console.log(`${result.rung}: thinking ${Option.getOrElse(level, () => "none")}`);
   }),
 ).pipe(
   Command.withDescription(
