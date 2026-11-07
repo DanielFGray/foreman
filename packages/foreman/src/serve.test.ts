@@ -200,6 +200,7 @@ describe("UI server beside supervise", () => {
     const dir = scratch();
     const path = join(dir, "state.json");
     const store = scratchStore();
+    const priorConfig = process.env["XDG_CONFIG_HOME"];
     process.env["XDG_CONFIG_HOME"] = dir;
     // The page build is the external boundary that fails: Bun.build reports a
     // broken page. The dispatcher waits for that failure, so a reading that
@@ -324,6 +325,8 @@ describe("UI server beside supervise", () => {
       expect(published.dispatcher).toEqual({ state: "idle" });
     } finally {
       build.mockRestore();
+      if (priorConfig === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = priorConfig;
       store.cleanup();
       rmSync(dir, { recursive: true, force: true });
     }
