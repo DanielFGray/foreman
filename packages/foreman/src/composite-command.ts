@@ -14,7 +14,7 @@ import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeli
 import { PipelineError } from "./pipeline-error.ts";
 import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { blockOf, choicesOf } from "./pipeline-belt.ts";
-import { printPrompt } from "./pipeline-prompt.ts";
+import { agentPrompt } from "./pipeline-prompt.ts";
 
 /**
  * `foreman composite`: edit a composite definition as a draft of its own
@@ -54,33 +54,35 @@ const shownDefinition = (
   live,
 });
 
+/**
+ * What `foreman composite show --json` prints: the definition (its open draft
+ * when one is open), layout, choices, entries, and the live stored definition.
+ */
+export const compositeShow = (input: { readonly name: string; readonly flow: Flow }) =>
+  Effect.gen(function* () {
+    const { file, draft, inProjectDraft } = yield* definitionNow(input.name);
+    const live = file.composites[input.name];
+    const definition = draft?.definition ?? live;
+    if (definition === undefined) return yield* missingDefinition(input.name, inProjectDraft);
+    const composites = {
+      ...file.composites,
+      ...(draft?.composites ?? {}),
+      [input.name]: definition,
+    };
+    return shownDefinition(input.name, definition, composites, input.flow, draft, live ?? null);
+  });
+
 const show = Command.make("show", { name, json, flow }, ({ name, json, flow }) =>
   Effect.gen(function* () {
-    const { file, draft, inProjectDraft } = yield* definitionNow(name);
-    const live = file.composites[name];
-    const definition = draft?.definition ?? live;
-    if (definition === undefined) return yield* missingDefinition(name, inProjectDraft);
-    if (json) {
-      const composites = {
-        ...file.composites,
-        ...(draft?.composites ?? {}),
-        [name]: definition,
-      };
-      return yield* Console.log(
-        JSON.stringify(
-          shownDefinition(name, definition, composites, flow, draft, live ?? null),
-          null,
-          2,
-        ),
-      );
-    }
+    const shown = yield* compositeShow({ name, flow });
+    if (json) return yield* Console.log(JSON.stringify(shown, null, 2));
     yield* Console.log(
-      draft === undefined
-        ? `${name} (${definition.blocks.length} blocks, ${entriesText(definition)}):`
-        : `${name} has a draft open (${definition.blocks.length} blocks, ${entriesText(definition)}):`,
+      shown.draft === null
+        ? `${name} (${shown.definition.blocks.length} blocks, ${entriesText(shown.definition)}):`
+        : `${name} has a draft open (${shown.definition.blocks.length} blocks, ${entriesText(shown.definition)}):`,
     );
-    yield* Console.log(JSON.stringify(definition, null, 2));
-    if (draft !== undefined) {
+    yield* Console.log(JSON.stringify(shown.definition, null, 2));
+    if (shown.draft !== null) {
       yield* Console.log(`save with foreman composite save ${name}, or discard it`);
     }
   }),
@@ -89,6 +91,50 @@ const show = Command.make("show", { name, json, flow }, ({ name, json, flow }) =
     "Print a composite definition, or its open draft when one is open, as JSON with --json",
   ),
 );
+
+/**
+ * Apply one change to a composite definition's draft (starting one from the
+ * stored definition when none is open). Returns the draft view `show --json`
+ * would print, with `added` naming a block the change inserted.
+ */
+export const compositeEdit = (input: {
+  readonly name: string;
+  readonly change: CompositeChange;
+  readonly flow: Flow;
+}) =>
+  Effect.gen(function* () {
+    const { file, draft: open, inProjectDraft } = yield* definitionNow(input.name);
+    const draft = open ?? (yield* freshCompositeDraft(input.name, file, inProjectDraft));
+    const composites = {
+      ...file.composites,
+      ...draft.composites,
+      [input.name]: draft.definition,
+    };
+    const result = applyDefinitionChange(draft.definition, input.change, composites);
+    if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
+    const next: CompositeDraft = {
+      ...draft,
+      definition: result.definition,
+      composites: { ...draft.composites, ...result.composites },
+    };
+    yield* updateCompositeDrafts(draftsPath(), (current) => ({ ...current, [input.name]: next }));
+    const available = {
+      ...file.composites,
+      ...next.composites,
+      [input.name]: next.definition,
+    };
+    return {
+      ...shownDefinition(
+        input.name,
+        next.definition,
+        available,
+        input.flow,
+        next,
+        file.composites[input.name] ?? null,
+      ),
+      added: result.added ?? null,
+    };
+  });
 
 const edit = Command.make(
   "edit",
@@ -109,47 +155,10 @@ const edit = Command.make(
           (error) => new PipelineError({ detail: `that change cannot be read: ${error.message}` }),
         ),
       );
-      const { file, draft: open, inProjectDraft } = yield* definitionNow(name);
-      const draft = open ?? (yield* freshCompositeDraft(name, file, inProjectDraft));
-      const composites = {
-        ...file.composites,
-        ...draft.composites,
-        [name]: draft.definition,
-      };
-      const result = applyDefinitionChange(draft.definition, decoded, composites);
-      if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
-      const next: CompositeDraft = {
-        ...draft,
-        definition: result.definition,
-        composites: { ...draft.composites, ...result.composites },
-      };
-      yield* updateCompositeDrafts(draftsPath(), (current) => ({ ...current, [name]: next }));
-      if (json) {
-        const available = {
-          ...file.composites,
-          ...next.composites,
-          [name]: next.definition,
-        };
-        return yield* Console.log(
-          JSON.stringify(
-            {
-              ...shownDefinition(
-                name,
-                next.definition,
-                available,
-                flow,
-                next,
-                file.composites[name] ?? null,
-              ),
-              added: result.added ?? null,
-            },
-            null,
-            2,
-          ),
-        );
-      }
+      const result = yield* compositeEdit({ name, change: decoded, flow });
+      if (json) return yield* Console.log(JSON.stringify(result, null, 2));
       yield* Console.log(
-        result.added === undefined
+        result.added === null
           ? `changed ${name}'s draft`
           : `added ${result.added} to ${name}'s draft`,
       );
@@ -160,43 +169,47 @@ const edit = Command.make(
   ),
 );
 
-const save = Command.make("save", { name }, ({ name }) =>
+/**
+ * Check every project that uses a composite definition's draft, then write the
+ * draft as the stored definition.
+ */
+export const compositeSave = (input: { readonly name: string }) =>
   Effect.gen(function* () {
-    const { file, draft } = yield* definitionNow(name);
+    const { file, draft } = yield* definitionNow(input.name);
     if (draft === undefined) {
-      return yield* new PipelineError({ detail: `${name} has no draft open` });
+      return yield* new PipelineError({ detail: `${input.name} has no draft open` });
     }
-    const live = file.composites[name] ?? null;
+    const live = file.composites[input.name] ?? null;
     if (!sameDefinition(draft.base, live)) {
       return yield* new PipelineError({
-        detail: `${name} changed since this draft began: discard the draft and edit it again`,
+        detail: `${input.name} changed since this draft began: discard the draft and edit it again`,
       });
     }
     const taken = Object.keys(draft.composites).filter((one) => file.composites[one] !== undefined);
     if (taken.length > 0) {
       return yield* new PipelineError({
-        detail: `cannot save composite ${name}:\n${taken
+        detail: `cannot save composite ${input.name}:\n${taken
           .map((one) => `  a composite named ${one} now exists: rename it and save again`)
           .join("\n")}`,
       });
     }
-    const written = { ...draft.composites, [name]: draft.definition };
+    const written = { ...draft.composites, [input.name]: draft.definition };
     const dangling = Object.entries(written).flatMap(([one, definition]) =>
       entryProblems(one, definition),
     );
     if (dangling.length > 0) {
       return yield* new PipelineError({
-        detail: `cannot save composite ${name}:\n${dangling.map((problem) => `  ${problem}`).join("\n")}`,
+        detail: `cannot save composite ${input.name}:\n${dangling.map((problem) => `  ${problem}`).join("\n")}`,
       });
     }
     const composites: Composites = {
       ...file.composites,
       ...written,
     };
-    const broken = yield* projectsBrokenBy(file.pipelines, composites, name);
+    const broken = yield* projectsBrokenBy(file.pipelines, composites, input.name);
     if (broken.length > 0) {
       return yield* new PipelineError({
-        detail: `saving ${name} would break:\n${broken
+        detail: `saving ${input.name} would break:\n${broken
           .map(({ project, problems }) =>
             [`  ${project}:`, ...problems.map((problem) => `    ${problem}`)].join("\n"),
           )
@@ -208,10 +221,16 @@ const save = Command.make("save", { name }, ({ name }) =>
       composites: {
         ...current.composites,
         ...draft.composites,
-        [name]: draft.definition,
+        [input.name]: draft.definition,
       },
     }));
-    yield* updateCompositeDrafts(draftsPath(), ({ [name]: _saved, ...others }) => others);
+    yield* updateCompositeDrafts(draftsPath(), ({ [input.name]: _saved, ...others }) => others);
+    return input.name;
+  });
+
+const save = Command.make("save", { name }, ({ name }) =>
+  Effect.gen(function* () {
+    yield* compositeSave({ name });
     yield* Console.log(`${name} now uses its draft`);
   }),
 ).pipe(
@@ -220,9 +239,15 @@ const save = Command.make("save", { name }, ({ name }) =>
   ),
 );
 
+/** Drop a composite definition's draft; the stored definition stays as it is. */
+export const compositeDiscard = (input: { readonly name: string }) =>
+  updateCompositeDrafts(draftsPath(), ({ [input.name]: _dropped, ...others }) => others).pipe(
+    Effect.as(input.name),
+  );
+
 const discard = Command.make("discard", { name }, ({ name }) =>
   Effect.gen(function* () {
-    yield* updateCompositeDrafts(draftsPath(), ({ [name]: _dropped, ...others }) => others);
+    yield* compositeDiscard({ name });
     yield* Console.log(`${name} has no draft open`);
   }),
 ).pipe(
@@ -234,18 +259,21 @@ const discard = Command.make("discard", { name }, ({ name }) =>
  * stored one) would send, by the block's id inside the definition. It renders
  * as `pipeline prompt` does, on the definition's own blocks.
  */
+export const compositePrompt = (input: { readonly name: string; readonly block: string }) =>
+  Effect.gen(function* () {
+    const { file, draft, inProjectDraft } = yield* definitionNow(input.name);
+    const definition = draft?.definition ?? file.composites[input.name];
+    if (definition === undefined) return yield* missingDefinition(input.name, inProjectDraft);
+    // A nested instance is not a block a prompt reads; its agents are named in its own definition.
+    const nodes = definition.blocks.flatMap((one) => (one.kind === "composite" ? [] : [one]));
+    return yield* agentPrompt(input.name, { nodes }, input.block, `composite ${input.name}`);
+  });
+
 const promptOf = Command.make(
   "prompt",
   { name, block: Argument.String("block") },
   ({ name, block }) =>
-    Effect.gen(function* () {
-      const { file, draft, inProjectDraft } = yield* definitionNow(name);
-      const definition = draft?.definition ?? file.composites[name];
-      if (definition === undefined) return yield* missingDefinition(name, inProjectDraft);
-      // A nested instance is not a block a prompt reads; its agents are named in its own definition.
-      const nodes = definition.blocks.flatMap((one) => (one.kind === "composite" ? [] : [one]));
-      yield* printPrompt(name, { nodes }, block, `composite ${name}`);
-    }),
+    compositePrompt({ name, block }).pipe(Effect.flatMap((text) => Console.log(text))),
 ).pipe(
   Command.withDescription(
     "Print the prompt an agent block of a composite definition's draft, else of the stored definition, would send a pretend task. Writes nothing",
