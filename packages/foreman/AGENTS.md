@@ -1019,7 +1019,8 @@ actions each row takes, with no renderer, which is why its test is plain
 assertions. `src/actions.ts` turns an action on a row into a dispatcher command
 through `perform`, and `src/commands.ts` exposes each action as a subcommand. A
 new action is an entry in `ACTIONS_LIST` and the column tables in
-`src/view.ts`, a case in `perform`, and a line in `ACTION_HELP`.
+`src/view.ts`, a `perform<Action>` function in `src/actions.ts` with its case in
+`perform`, an exported verb in `src/commands.ts`, and a line in `ACTION_HELP`.
 
 A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
 nothing — then finds the row its id keys. It does not talk to the dispatcher:

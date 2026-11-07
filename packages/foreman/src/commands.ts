@@ -3,16 +3,27 @@ import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef 
 import {
   ACTION_HELP,
   INTERVENTIONS,
-  perform,
+  performAdopt,
+  performApprove,
+  performClose,
+  performComplete,
+  performDescend,
+  performFocus,
+  performIntervene,
+  performKill,
+  performOnboard,
+  performPreview,
+  performRelease,
+  performRetry,
+  performUnassign,
   rowFor,
   type Intervention,
-  type Request,
 } from "./actions.ts";
 import { Dispatcher, notAuthored } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
 import { roundsOf } from "./lap.ts";
 import { Records } from "./records.ts";
-import { ACTIONS_LIST, actionsFor, rowsForView, type Action } from "./view.ts";
+import { ACTIONS_LIST, actionsFor, rowsForView, type Action, type ColumnRow } from "./view.ts";
 import { VIEWS } from "./view-names.ts";
 import { commandName, publishedOf } from "./published.ts";
 import { Settings } from "./config.ts";
@@ -60,16 +71,20 @@ const status = Command.make("status", { json }, ({ json }) =>
 );
 
 /**
- * Runs one request against the row an id names, or refuses with why it cannot.
- * Returns the dispatcher's result so the CLI and the UI contract each print.
+ * Runs one action's dispatcher call on the row an id names, or refuses with why
+ * it cannot. Returns the call's own result, so each verb keeps its types.
  */
-const runAction = (action: Action, key: string, request: Request) =>
+const runAction = <A, E>(
+  action: Action,
+  key: string,
+  run: (dispatcher: Dispatcher["Service"], row: ColumnRow) => Effect.Effect<A, E> | undefined,
+) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
     const state = yield* SubscriptionRef.get(dispatcher.state);
     const row = rowFor(state, key, action);
-    const command = row && perform(dispatcher, row, request);
+    const command = row && run(dispatcher, row);
     if (!command) {
       const offered = VIEWS.flatMap((view) =>
         rowsForView(view, state)
@@ -88,76 +103,77 @@ const runAction = (action: Action, key: string, request: Request) =>
     return yield* command;
   });
 
-/** Prints what a row action did: a preview names its terminal; every other action says done. */
-const printAction = (action: Action, key: string, result: unknown) =>
-  Console.log(
-    `${commandName(action)} ${key}: ${action === "preview" ? `running in hc terminal ${String(result)}` : "done"}`,
-  );
+/** The line a row action leaves when it has nothing to report. */
+const printDone = (action: Action, key: string) =>
+  Console.log(`${commandName(action)} ${key}: done`);
 
 /** Close a queued task by hand. */
 export const taskComplete = (input: { readonly id: string; readonly reason: string }) =>
-  runAction("complete", input.id, { action: "complete", reason: input.reason });
+  runAction("complete", input.id, (dispatcher, row) =>
+    performComplete(dispatcher, row, input.reason),
+  );
 
 /** Start a fresh agent where a worker vanished or a dispatch failed. */
 export const taskRetry = (input: { readonly id: string }) =>
-  runAction("retry", input.id, { action: "retry" });
+  runAction("retry", input.id, performRetry);
 
 /** Hand a claimed task back to the queue and take its workspace down. */
 export const taskRelease = (input: { readonly id: string }) =>
-  runAction("release", input.id, { action: "release" });
+  runAction("release", input.id, performRelease);
 
 /** Take down a workspace whose task nothing owns. */
 export const taskClose = (input: { readonly id: string }) =>
-  runAction("close", input.id, { action: "close" });
+  runAction("close", input.id, performClose);
 
 /** Focus a vanished worker's pane so you can continue by hand. */
 export const taskTakeOver = (input: { readonly id: string }) =>
-  runAction("takeOver", input.id, { action: "takeOver" });
+  runAction("takeOver", input.id, performFocus);
 
 /** Focus the pane of a task's live agent. */
 export const taskFocus = (input: { readonly id: string }) =>
-  runAction("focus", input.id, { action: "focus" });
+  runAction("focus", input.id, performFocus);
 
 /** Stop a live attempt, log why, and requeue the task on the same rung. */
 export const taskKill = (input: { readonly id: string; readonly reason: Option.Option<string> }) =>
-  runAction("kill", input.id, { action: "kill", reason: input.reason });
+  runAction("kill", input.id, (dispatcher, row) => performKill(dispatcher, row, input.reason));
 
-/** Resume a task at a rung, or send an agent to diagnose or review its last attempt. */
+/**
+ * Resume a task at a rung, or send an agent to diagnose or review its last
+ * attempt. The rung is absent for a review of a committed attempt, which takes
+ * no rung, so the dispatcher gets undefined there.
+ */
 export const taskIntervene = (input: {
   readonly id: string;
   readonly how: Intervention;
   readonly rung: Option.Option<string>;
 }) =>
-  runAction("intervene", input.id, {
-    action: "intervene",
-    how: input.how,
-    // Request / perform take undefined at the dashboard boundary.
-    rung: Option.getOrUndefined(input.rung),
-  });
+  runAction("intervene", input.id, (dispatcher, row) =>
+    performIntervene(dispatcher, row, input.how, Option.getOrUndefined(input.rung)),
+  );
 
 /** Take back the last recorded failure, moving the task one rung down. */
 export const taskDescend = (input: { readonly id: string }) =>
-  runAction("descend", input.id, { action: "descend" });
+  runAction("descend", input.id, performDescend);
 
 /** End an open review run that no reviewer is behind. */
 export const taskUnassign = (input: { readonly id: string }) =>
-  runAction("unassign", input.id, { action: "unassign" });
+  runAction("unassign", input.id, performUnassign);
 
 /** Send an agent to salvage the uncommitted work holding a project. */
 export const taskOnboard = (input: { readonly id: string }) =>
-  runAction("onboard", input.id, { action: "onboard" });
+  runAction("onboard", input.id, performOnboard);
 
 /** Put an unread branch in front of a reviewer. */
 export const taskAdopt = (input: { readonly id: string }) =>
-  runAction("adopt", input.id, { action: "adopt" });
+  runAction("adopt", input.id, performAdopt);
 
 /** Allow the step a task is waiting on, once, for that task alone. */
 export const taskApprove = (input: { readonly id: string }) =>
-  runAction("approve", input.id, { action: "approve" });
+  runAction("approve", input.id, performApprove);
 
-/** Run the project's preview script in a task's worktree. */
+/** Run the project's preview script in a task's worktree; returns the terminal it runs in. */
 export const taskPreview = (input: { readonly id: string }) =>
-  runAction("preview", input.id, { action: "preview" });
+  runAction("preview", input.id, performPreview);
 
 const reason = Flag.String("reason").pipe(Flag.withDescription("What the task log says"));
 
@@ -167,24 +183,6 @@ const how = Flag.Literals("how", INTERVENTIONS).pipe(
 
 const rung = Flag.String("rung").pipe(Flag.withDescription("A ladder rung by name"), Flag.optional);
 
-/** Row actions whose only input is the row key. */
-const SIMPLE_ACTIONS = {
-  retry: taskRetry,
-  release: taskRelease,
-  close: taskClose,
-  takeOver: taskTakeOver,
-  focus: taskFocus,
-  descend: taskDescend,
-  unassign: taskUnassign,
-  onboard: taskOnboard,
-  adopt: taskAdopt,
-  approve: taskApprove,
-  preview: taskPreview,
-} as const satisfies Record<
-  Exclude<Action, "complete" | "kill" | "intervene">,
-  (input: { readonly id: string }) => ReturnType<typeof runAction>
->;
-
 /**
  * One subcommand per dashboard action. The three that ask a question in the
  * dashboard take its answer as an option instead.
@@ -193,49 +191,62 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
   const finish = <Input, ContextInput, CommandError, R>(
     command: Command.Command<string, Input, ContextInput, CommandError, R>,
   ) => Command.provide(Command.withDescription(command, ACTION_HELP[action]), services);
+  /** A row action whose only input is the row key. */
+  const keyOnly = <A, EV, RV>(verb: (input: { readonly id: string }) => Effect.Effect<A, EV, RV>) =>
+    finish(
+      Command.make(commandName(action), { id }, (args) =>
+        verb({ id: args.id }).pipe(Effect.andThen(printDone(action, args.id))),
+      ),
+    );
   switch (action) {
     case "complete":
       return finish(
         Command.make(commandName(action), { id, reason }, (args) =>
-          Effect.gen(function* () {
-            const result = yield* taskComplete({ id: args.id, reason: args.reason });
-            yield* printAction(action, args.id, result);
-          }),
+          taskComplete(args).pipe(Effect.andThen(printDone(action, args.id))),
         ),
       );
     case "kill":
       return finish(
         Command.make(commandName(action), { id, reason: Flag.optional(reason) }, (args) =>
-          Effect.gen(function* () {
-            const result = yield* taskKill({ id: args.id, reason: args.reason });
-            yield* printAction(action, args.id, result);
-          }),
+          taskKill(args).pipe(Effect.andThen(printDone(action, args.id))),
         ),
       );
     case "intervene":
       return finish(
         Command.make(commandName(action), { id, how, rung }, (args) =>
-          Effect.gen(function* () {
-            const result = yield* taskIntervene({
-              id: args.id,
-              how: args.how,
-              rung: args.rung,
-            });
-            yield* printAction(action, args.id, result);
-          }),
+          taskIntervene(args).pipe(Effect.andThen(printDone(action, args.id))),
         ),
       );
-    default: {
-      const verb = SIMPLE_ACTIONS[action];
+    case "preview":
       return finish(
         Command.make(commandName(action), { id }, (args) =>
-          Effect.gen(function* () {
-            const result = yield* verb({ id: args.id });
-            yield* printAction(action, args.id, result);
-          }),
+          taskPreview(args).pipe(
+            Effect.flatMap((terminal) =>
+              Console.log(`${commandName(action)} ${args.id}: running in hc terminal ${terminal}`),
+            ),
+          ),
         ),
       );
-    }
+    case "retry":
+      return keyOnly(taskRetry);
+    case "release":
+      return keyOnly(taskRelease);
+    case "close":
+      return keyOnly(taskClose);
+    case "takeOver":
+      return keyOnly(taskTakeOver);
+    case "focus":
+      return keyOnly(taskFocus);
+    case "descend":
+      return keyOnly(taskDescend);
+    case "unassign":
+      return keyOnly(taskUnassign);
+    case "onboard":
+      return keyOnly(taskOnboard);
+    case "adopt":
+      return keyOnly(taskAdopt);
+    case "approve":
+      return keyOnly(taskApprove);
   }
 };
 
