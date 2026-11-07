@@ -21,8 +21,8 @@
     "format:check": "oxfmt --check src"
   },
   "dependencies": {
-    "@effect/platform-bun": "4.1.0",
-    "effect": "4.1.0",
+    "@effect/platform-bun": "4.1.2",
+    "effect": "4.1.2",
     "npm-run-all": "^4.1.5",
     "tasks": "workspace:*"
   },
