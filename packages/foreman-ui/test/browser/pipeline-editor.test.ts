@@ -122,7 +122,8 @@ const releaseOver = (blockId: string) => {
 const exitTarget = (drawing: Drawing | null, id: string, name: string): unknown => {
   const node = drawing?.nodes.find((one) => one.id === id);
   if (node === undefined || !("exits" in node)) return undefined;
-  return node.exits.find((exit) => exit.name === name)?.to;
+  const exits: ReadonlyArray<{ readonly name?: string; readonly to: string }> = node.exits;
+  return exits.find((exit) => exit.name === name)?.to;
 };
 
 /** Holds a drag from the exit handle `handleId` over a block, and waits for the preview. */
@@ -141,6 +142,29 @@ const dragNextExitOver = (from: string, blockId: string) =>
   dragHandleOver(`exit-${from}-next`, blockId);
 
 describe("pipeline editor wire drag", () => {
+  it("shows the server's reason and redraws its drawing when it refuses an edit", async () => {
+    mountProject();
+    await dragNextExitOver("branch", "start");
+
+    // The page keeps its frame while a drag is held. The operator's draft loses
+    // branch meanwhile, so the drop names a block the server no longer has.
+    await commands.removeDraftBlock(PROJECT, "branch");
+    releaseOver("start");
+
+    await expect.poll(() => editRequests().length).toBe(1);
+    await expect
+      .poll(() => document.querySelector('[data-testid="pipeline-toolbar-message"]')?.textContent)
+      .toBe("Edit not saved: branch cannot lead to start: one of them is not in the pipeline");
+    // The server's drawing has no branch, so the page drops its own frame for the server's.
+    await expect.poll(() => document.querySelector('[data-testid="block-branch"]')).toBeNull();
+    expect(document.getElementById("wire-branch-next")).toBeNull();
+    await expect.element(page.getByTestId("drag-preview")).not.toBeInTheDocument();
+    expect(nextOf(await commands.draftPipeline(PROJECT), "start")).toBe("author");
+
+    await userEvent.click(page.getByTestId("pipeline-discard"));
+    await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
+  });
+
   it("draws a queue exit with a handle, and rejoins it onto a block", async () => {
     mountProject();
 

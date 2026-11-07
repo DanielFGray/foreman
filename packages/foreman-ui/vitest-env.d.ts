@@ -6,6 +6,7 @@ declare module "vitest/browser" {
     stopUiServer: () => Promise<void>;
     savedPipeline: (project: string) => Promise<Drawing | null>;
     draftPipeline: (project: string) => Promise<Drawing | null>;
+    removeDraftBlock: (project: string, block: string) => Promise<void>;
   }
 }
 

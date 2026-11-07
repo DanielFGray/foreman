@@ -4,11 +4,15 @@
  * origin of the page vitest opened, whatever port vitest chose for it. Passing
  * the port again restarts the server where it was, for the reconnect test.
  */
+import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import type { BrowserCommand } from "vitest/node";
-import type { Drawing } from "foreman/pipeline";
+import { type Drawing, DEFAULT_PIPELINE } from "foreman/pipeline";
 import { freePort } from "../../src/fixtures.ts";
+
+/** The drafts file as these commands read it: each draft's pipeline, and its other fields as written. */
+type DraftsFixture = { drafts: Record<string, { pipeline: Drawing } & Record<string, unknown>> };
 
 const serverScript = fileURLToPath(new URL("./ui-server-process.ts", import.meta.url));
 
@@ -63,6 +67,35 @@ export const stopUiServer: BrowserCommand<[], void> = async () => {
   await child.exited;
   child = undefined;
   fixtureFolder = undefined;
+};
+
+/**
+ * Removes a block from a project's open draft in the drafts file, as another
+ * process writing the file would. The UI server then holds no such block, and
+ * an edit that names it is refused.
+ */
+export const removeDraftBlock: BrowserCommand<[project: string, block: string], void> = async (
+  _context,
+  project,
+  block,
+) => {
+  if (fixtureFolder === undefined) throw new Error("UI server is not running");
+  const path = join(fixtureFolder, "pipelines.draft.json");
+  const file = ((await fixtureJson("pipelines.draft.json")) as DraftsFixture | null) ?? {
+    drafts: {},
+  };
+  // With no draft open, the page shows the default pipeline, and so does the server's fresh draft.
+  const draft = file.drafts[project] ?? {
+    base: null,
+    pipeline: DEFAULT_PIPELINE as Drawing,
+    composites: {},
+    bases: {},
+  };
+  file.drafts[project] = {
+    ...draft,
+    pipeline: { nodes: draft.pipeline.nodes.filter((node) => node.id !== block) },
+  };
+  await writeFile(path, `${JSON.stringify(file, null, 2)}\n`);
 };
 
 /** A fixture file's JSON, or null when the server has not written it yet. */

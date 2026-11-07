@@ -120,33 +120,40 @@ const EditorSvg: Draggable<EditorFrame> = ({ state, d, draggedId }) => {
   );
 };
 
+/** The reason an RPC call failed, as the operator reads it. */
+const reasonOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 const Toolbar = ({
   project,
   hasDraft,
   problems,
+  message,
+  onMessage,
 }: {
   readonly project: string;
   readonly hasDraft: boolean;
   readonly problems: ReadonlyArray<string>;
+  readonly message: string | null;
+  readonly onMessage: (text: string | null) => void;
 }) => {
   const save = useAtomSet(UiRpc.mutation("PipelineSave"), { mode: "promise" });
   const discard = useAtomSet(UiRpc.mutation("PipelineDiscard"), { mode: "promise" });
   const [busy, setBusy] = useState<"save" | "discard" | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   const run = async (kind: "save" | "discard") => {
     setBusy(kind);
-    setMessage(null);
+    onMessage(null);
     try {
       if (kind === "save") {
         await save({ payload: { project } });
-        setMessage("Saved.");
+        onMessage("Saved.");
       } else {
         await discard({ payload: { project } });
-        setMessage("Discarded.");
+        onMessage("Discarded.");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      onMessage(reasonOf(error));
     } finally {
       setBusy(null);
     }
@@ -203,6 +210,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
   const [optimistic, setOptimistic] = useState<EditorFrame | null>(null);
   const [frame, setFrame] = useState<EditorFrame | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (remote === null || dragging) return;
@@ -239,8 +247,12 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
     };
     setOptimistic(dropped);
     setFrame(dropped);
-    void edit({ payload: { project, change, flow: FLOW } }).catch(() => {
+    setMessage(null);
+    // A refused or failed edit clears the optimistic drawing, so the effect above
+    // shows the server's drawing again, and the reason takes the message slot.
+    void edit({ payload: { project, change, flow: FLOW } }).catch((error: unknown) => {
       setOptimistic(null);
+      setMessage(`Edit not saved: ${reasonOf(error)}`);
     });
   };
 
@@ -288,6 +300,8 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
         problems={
           display.pending === null ? display.problems : (remoteView?.problems ?? display.problems)
         }
+        message={message}
+        onMessage={setMessage}
       />
       {hint !== null ? (
         <div
