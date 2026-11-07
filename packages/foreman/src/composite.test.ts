@@ -555,12 +555,7 @@ describe("expand: ids and entries", () => {
 });
 
 describe("filters that name a block", () => {
-  const returnedAt = (node: string) => ({
-    node,
-    id: "returned",
-    name: "returned",
-    commit: "c1",
-  });
+  const returnedAt = (node: string) => ({ node, id: "returned", name: "returned", commit: "c1" });
   const factsNamed = (named: Facts["named"]): Facts => ({
     status: "in_progress",
     priority: 2,
@@ -576,50 +571,76 @@ describe("filters that name a block", () => {
     exitNode: named.at(-1)?.node,
   });
 
-  /** The review loop with a router that gives up once its own reviewer has returned twice. */
-  const capped: CompositeDefinition = {
+  /**
+   * The review loop, its reviewer named `reviewId`, with a router that gives up
+   * once that reviewer has returned twice.
+   */
+  const cappedAround = (reviewId: string): CompositeDefinition => ({
     ...reviewLoop,
     blocks: [
-      ...reviewLoop.blocks.map((block) =>
-        block.kind === "agent"
-          ? {
-              ...block,
-              exits: block.exits.map((exit) =>
-                exit.id === "returned" ? { id: exit.id, name: exit.name, to: "cap" } : exit,
-              ),
-            }
-          : block,
-      ),
+      ...reviewLoop.blocks.map((block) => {
+        if (block.kind === "gate") return { ...block, next: reviewId };
+        if (block.kind !== "agent") return block;
+        return {
+          ...block,
+          id: reviewId,
+          exits: block.exits.map((exit) =>
+            exit.id === "returned" ? { id: exit.id, name: exit.name, to: "cap" } : exit,
+          ),
+        };
+      }),
       {
         kind: "router",
         id: "cap",
-        routes: [{ when: "exits:review/returned>=2", to: "out:exit-landable" }],
+        routes: [{ when: `exits:${reviewId}/returned>=2`, to: "out:exit-landable" }],
         else: "review-gate",
       },
     ],
-  };
+  });
 
-  const twoInstances = (): Pipeline => {
+  const expandTwo = (reviewId: string): Pipeline => {
     const result = expand(
       withReviewInstances({ id: "checks", prefix: "checks." }, { id: "again", prefix: "again." }),
-      { "review-loop": capped },
+      { "review-loop": cappedAround(reviewId) },
     );
-    if (result._tag !== "Expanded") throw new Error(result.problems.join("; "));
-    return result.pipeline;
+    expect(result._tag).toBe("Expanded");
+    return result._tag === "Expanded" ? result.pipeline : { nodes: [] };
   };
 
-  test("a filter written in the definition counts each instance's own block", () => {
-    const pipeline = twoInstances();
-    const whenOf = (id: string) => {
-      const node = pipeline.nodes.find((one) => one.id === id);
-      return node?.kind === "router" ? node.routes[0]?.when : undefined;
-    };
-    expect(whenOf("checks.cap")).toBe("exits:checks.review/returned>=2");
-    expect(whenOf("again.cap")).toBe("exits:again.review/returned>=2");
-    const facts = factsNamed([returnedAt("checks.review"), returnedAt("checks.review")]);
-    expect(matches(facts, whenOf("checks.cap") ?? "")).toBe(true);
-    expect(matches(facts, whenOf("again.cap") ?? "")).toBe(false);
+  const whenOf = (pipeline: Pipeline, id: string): string => {
+    const node = pipeline.nodes.find((one) => one.id === id);
+    return node?.kind === "router" ? (node.routes[0]?.when ?? "") : "";
+  };
+
+  const withWhen = (pipeline: Pipeline, id: string, when: string): Pipeline => ({
+    nodes: pipeline.nodes.map((node) =>
+      node.id === id && node.kind === "router"
+        ? {
+            ...node,
+            routes: node.routes.map((route, at) => (at === 0 ? { ...route, when } : route)),
+          }
+        : node,
+    ),
   });
+
+  const filterOrLoopProblems = (pipeline: Pipeline) =>
+    problemsOf(pipeline, OFFERS).filter((problem) => /filter|loop/.test(problem));
+
+  test.each(["review", "review:one"])(
+    "a filter written in the definition counts each instance's own block (%s)",
+    (reviewId) => {
+      const pipeline = expandTwo(reviewId);
+      expect(whenOf(pipeline, "checks.cap")).toBe(`exits:checks.${reviewId}/returned>=2`);
+      expect(whenOf(pipeline, "again.cap")).toBe(`exits:again.${reviewId}/returned>=2`);
+      const facts = factsNamed([
+        returnedAt(`checks.${reviewId}`),
+        returnedAt(`checks.${reviewId}`),
+      ]);
+      expect(matches(facts, whenOf(pipeline, "checks.cap"))).toBe(true);
+      expect(matches(facts, whenOf(pipeline, "again.cap"))).toBe(false);
+      expect(filterOrLoopProblems(pipeline)).toEqual([]);
+    },
+  );
 
   test("a filter naming a block counts only the exits named there", () => {
     const facts = factsNamed([returnedAt("checks.review"), returnedAt("again.review")]);
@@ -630,36 +651,31 @@ describe("filters that name a block", () => {
     expect(matches(facts, "exits:returned>=2")).toBe(true);
   });
 
+  test("a block id with a colon is matched whole", () => {
+    const facts = factsNamed([returnedAt("checks:review")]);
+    expect(matches(facts, "exit:checks:review/returned")).toBe(true);
+    expect(matches(facts, "exits:checks:review/returned>=1")).toBe(true);
+    expect(matches(facts, "exits:checks/returned>=1")).toBe(false);
+  });
+
   test("validation refuses a block that is absent or does not declare the exit", () => {
-    const base = twoInstances();
-    const withWhen = (when: string): Pipeline => ({
-      nodes: base.nodes.map((node) =>
-        node.id === "checks.cap" && node.kind === "router"
-          ? { ...node, routes: [{ ...node.routes[0]!, when }] }
-          : node,
-      ),
-    });
-    expect(problemsOf(base, OFFERS).filter((problem) => /filter|loop/.test(problem))).toEqual([]);
-    expect(problemsOf(withWhen("exits:nowhere/returned>=2"), OFFERS)).toContain(
-      "checks.cap: the filter counts the exit returned at nowhere, which is no block",
-    );
-    expect(problemsOf(withWhen("exit:checks.review/landed"), OFFERS)).toContain(
-      "checks.cap: the filter counts the exit landed at checks.review, which declares no such exit",
+    const pipeline = expandTwo("review:one");
+    expect(filterOrLoopProblems(pipeline)).toEqual([]);
+    expect(
+      problemsOf(withWhen(pipeline, "checks.cap", "exits:nowhere/returned>=2"), OFFERS),
+    ).toContain("checks.cap: the filter counts the exit returned at nowhere, which is no block");
+    expect(
+      problemsOf(withWhen(pipeline, "checks.cap", "exit:checks.review:one/landed"), OFFERS),
+    ).toContain(
+      "checks.cap: the filter counts the exit landed at checks.review:one, which declares no such exit",
     );
   });
 
   test("a qualified count grows each lap only when its block is on the cycle", () => {
-    const base = twoInstances();
-    const withWhen = (when: string): Pipeline => ({
-      nodes: base.nodes.map((node) =>
-        node.id === "checks.cap" && node.kind === "router"
-          ? { ...node, routes: [{ ...node.routes[0]!, when }] }
-          : node,
-      ),
-    });
-    // The loop is checks.review-gate, checks.review, checks.cap. Counting the
-    // other instance's reviewer never grows on this loop.
-    const problems = problemsOf(withWhen("exits:again.review/returned>=2"), OFFERS);
-    expect(problems.some((problem) => problem.includes("nothing ends the loop"))).toBe(true);
+    const pipeline = expandTwo("review");
+    const other = withWhen(pipeline, "checks.cap", "exits:again.review/returned>=2");
+    expect(
+      filterOrLoopProblems(other).some((problem) => problem.includes("nothing ends the loop")),
+    ).toBe(true);
   });
 });

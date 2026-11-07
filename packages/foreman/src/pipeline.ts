@@ -1204,7 +1204,7 @@ const termTest = (term: string): Term["test"] | undefined => {
  * the exits named at one block. A block id holds no `/`, so the split is
  * unambiguous.
  */
-const EXIT_REF = "(?:[^\\s/<>=:]+/)?[a-z-]+";
+const EXIT_REF = "(?:[^\\s/<>=]+/)?[a-z-]+";
 
 interface ExitRef {
   readonly block: string | undefined;
@@ -1212,7 +1212,7 @@ interface ExitRef {
 }
 
 const parseExitRef = (text: string): ExitRef | undefined => {
-  const match = new RegExp(`^(?:([^\\s/<>=:]+)/)?([a-z-]+)$`).exec(text);
+  const match = new RegExp(`^(?:([^\\s/<>=]+)/)?([a-z-]+)$`).exec(text);
   return match === null ? undefined : { block: match[1], name: match[2] ?? "" };
 };
 
@@ -1489,7 +1489,7 @@ const exitsNamedBy = (filter: string): ReadonlyArray<ExitRef> =>
  */
 export const mapFilterBlocks = (filter: string, f: (block: string) => string): string =>
   filter.replace(
-    /(^|\s)(-?exits?:)([^\s/<>=:]+)\/(?=[a-z-]+(?:\s|$|[<>=]))/g,
+    /(^|\s)(-?exits?:)([^\s/<>=]+)\/(?=[a-z-]+(?:\s|$|[<>=]))/g,
     (_, lead: string, head: string, block: string) => `${lead}${head}${f(block)}/`,
   );
 
