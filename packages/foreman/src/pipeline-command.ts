@@ -1,17 +1,14 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, FileSystem, Layer, Option, Schema as S, SubscriptionRef } from "effect";
-import { Dispatcher, newWorkspace } from "./dispatcher.ts";
+import { Dispatcher } from "./dispatcher.ts";
 import { expand } from "./composite.ts";
 import {
-  AgentNode,
   type Composites,
   DEFAULT_PIPELINE,
   describeStandard,
   Drawing,
   LANDINGS,
   type Placement,
-  routeTarget,
-  routeWorkspace,
   type Standard,
   standardOf,
   standardPipeline,
@@ -19,7 +16,7 @@ import {
   WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { Prompts } from "./prompt.ts";
-import { printPrompt } from "./pipeline-prompt.ts";
+import { agentPrompt } from "./pipeline-prompt.ts";
 import {
   pipelineFor,
   pipelinesPath,
@@ -44,14 +41,25 @@ import {
 } from "./pipeline-draft.ts";
 import { PipelineError } from "./pipeline-error.ts";
 import { Settings, settings } from "./config.ts";
-import { pretend, type TraceReport, traceReport } from "./pipeline-trace.ts";
-import { factsOf } from "./pipeline-facts.ts";
+import { type TraceReport, traceReport } from "./pipeline-trace.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
 
 export { PipelineError };
+
+/** What `trace` reads: the pretend task, and the events chosen so far. */
+export const TraceRequest = S.Struct({
+  task: S.Struct({
+    labels: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+    size: S.optional(S.Int),
+    priority: S.Int.pipe(S.withDecodingDefault(Effect.succeed(2))),
+    parent: S.optional(S.String),
+  }),
+  events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+});
+export type TraceRequest = S.Schema.Type<typeof TraceRequest>;
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -74,25 +82,39 @@ const flow = Flag.Literals("flow", ["across", "down"]).pipe(
   ),
 );
 
-const show = Command.make("show", { project, json, flow }, ({ project, json, flow }) =>
+/**
+ * What `foreman pipeline show --json` prints, and what the Pipeline stream will
+ * send: the as-written drawing, its problems, its layout, choices, and the
+ * draft when one is open. `mermaid` is the expanded flowchart when expansion
+ * succeeds, else null (prose printing uses it; JSON callers may ignore it).
+ */
+export const pipelineShow = (input: { readonly project: string; readonly flow: Flow }) =>
   Effect.gen(function* () {
-    if (json) return yield* Console.log(JSON.stringify(yield* shownOf(project, flow), null, 2));
-    const written = yield* drawnPipeline(project);
-    const reading = yield* livePipeline(project);
+    const shown = yield* shownOf(input.project, input.flow);
+    const reading = yield* livePipeline(input.project);
     // standardOf reads the drawing as written, so an instance is never "standard".
-    const name = Option.match(standardOf(written.drawing), {
+    const label = Option.match(standardOf(shown.pipeline), {
       onNone: () => "its own pipeline",
       onSome: describeStandard,
     });
-    yield* Console.log(`${project} runs ${name}${written.drawn ? "" : " (the default)"}:`);
-    if (reading._tag === "Expanded") {
-      yield* Console.log(toMermaid(reading.pipeline));
-      for (const problem of yield* problemsAgainstLadder(reading.pipeline))
-        yield* Console.error(`problem: ${problem}`);
-    } else {
-      for (const problem of reading.problems) yield* Console.error(`problem: ${problem}`);
+    return {
+      ...shown,
+      label,
+      mermaid: reading._tag === "Expanded" ? toMermaid(reading.pipeline) : null,
+    };
+  });
+
+const show = Command.make("show", { project, json, flow }, ({ project, json, flow }) =>
+  Effect.gen(function* () {
+    const shown = yield* pipelineShow({ project, flow });
+    if (json) {
+      const { mermaid: _m, label: _l, ...body } = shown;
+      return yield* Console.log(JSON.stringify(body, null, 2));
     }
-    if ((yield* draftsNow)[project] !== undefined)
+    yield* Console.log(`${project} runs ${shown.label}${shown.drawn ? "" : " (the default)"}:`);
+    if (shown.mermaid !== null) yield* Console.log(shown.mermaid);
+    for (const problem of shown.problems) yield* Console.error(`problem: ${problem}`);
+    if (shown.draft !== null)
       yield* Console.log(
         `a draft is open: foreman pipeline show ${project} --json, then save or discard it`,
       );
@@ -170,6 +192,34 @@ const use = Command.make(
   ),
 );
 
+/**
+ * Apply one change to a project's draft (starting one from the live pipeline
+ * when none is open). Returns the draft view `show --json` would print, with
+ * `added` naming a block the change inserted.
+ */
+export const pipelineEdit = (input: {
+  readonly project: string;
+  readonly change: PipelineChange;
+  readonly flow: Flow;
+}) =>
+  Effect.gen(function* () {
+    const file = yield* pipelinesNow;
+    const draft = (yield* draftsNow)[input.project] ?? (yield* freshDraft(input.project));
+    const composites = { ...file.composites, ...draft.composites };
+    const result = applyChange(draft.pipeline, input.change, composites);
+    if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
+    yield* updateDrafts(draftsPath(), (drafts) => ({
+      ...drafts,
+      [input.project]: {
+        ...draft,
+        pipeline: result.pipeline,
+        composites: { ...draft.composites, ...result.composites },
+      },
+    }));
+    const shown = yield* shownOf(input.project, input.flow);
+    return { ...shown, added: result.added ?? null };
+  });
+
 const edit = Command.make(
   "edit",
   {
@@ -189,27 +239,10 @@ const edit = Command.make(
           (error) => new PipelineError({ detail: `that change cannot be read: ${error.message}` }),
         ),
       );
-      const file = yield* pipelinesNow;
-      const draft = (yield* draftsNow)[project] ?? (yield* freshDraft(project));
-      const composites = { ...file.composites, ...draft.composites };
-      const result = applyChange(draft.pipeline, decoded, composites);
-      if (result._tag === "Refused") return yield* new PipelineError({ detail: result.reason });
-      yield* updateDrafts(draftsPath(), (drafts) => ({
-        ...drafts,
-        [project]: {
-          ...draft,
-          pipeline: result.pipeline,
-          composites: { ...draft.composites, ...result.composites },
-        },
-      }));
-      if (json) {
-        const shown = yield* shownOf(project, flow);
-        return yield* Console.log(
-          JSON.stringify({ ...shown, added: result.added ?? null }, null, 2),
-        );
-      }
+      const result = yield* pipelineEdit({ project, change: decoded, flow });
+      if (json) return yield* Console.log(JSON.stringify(result, null, 2));
       yield* Console.log(
-        result.added === undefined
+        result.added === null
           ? `changed ${project}'s draft`
           : `added ${result.added} to ${project}'s draft`,
       );
@@ -220,15 +253,16 @@ const edit = Command.make(
   ),
 );
 
-const save = Command.make("save", { project }, ({ project }) =>
+/** Check a project's draft and make it the pipeline the project runs. */
+export const pipelineSave = (input: { readonly project: string }) =>
   Effect.gen(function* () {
-    const draft = (yield* draftsNow)[project];
+    const draft = (yield* draftsNow)[input.project];
     if (draft === undefined)
-      return yield* new PipelineError({ detail: `${project} has no draft open` });
-    const live = yield* drawnPipeline(project);
+      return yield* new PipelineError({ detail: `${input.project} has no draft open` });
+    const live = yield* drawnPipeline(input.project);
     if (!sameDrawing(draft.base, live.drawn ? live.drawing : null))
       return yield* new PipelineError({
-        detail: `${project}'s pipeline changed since this draft began: discard the draft and draw it again`,
+        detail: `${input.project}'s pipeline changed since this draft began: discard the draft and draw it again`,
       });
     const file = yield* pipelinesNow;
     const available = { ...file.composites, ...draft.composites };
@@ -242,8 +276,14 @@ const save = Command.make("save", { project }, ({ project }) =>
         detail: `a composite this draft uses changed since the draft began: ${drifted.join(", ")}. Discard the draft and draw it again`,
       });
     }
-    yield* runPipeline(project, draft.pipeline, draft.composites);
-    yield* updateDrafts(draftsPath(), ({ [project]: _saved, ...others }) => others);
+    yield* runPipeline(input.project, draft.pipeline, draft.composites);
+    yield* updateDrafts(draftsPath(), ({ [input.project]: _saved, ...others }) => others);
+    return input.project;
+  });
+
+const save = Command.make("save", { project }, ({ project }) =>
+  Effect.gen(function* () {
+    yield* pipelineSave({ project });
     yield* Console.log(`${project} now runs its draft`);
   }),
 ).pipe(
@@ -252,9 +292,15 @@ const save = Command.make("save", { project }, ({ project }) =>
   ),
 );
 
+/** Drop a project's draft; the pipeline it runs stays as it is. */
+export const pipelineDiscard = (input: { readonly project: string }) =>
+  updateDrafts(draftsPath(), ({ [input.project]: _dropped, ...others }) => others).pipe(
+    Effect.as(input.project),
+  );
+
 const discard = Command.make("discard", { project }, ({ project }) =>
   Effect.gen(function* () {
-    yield* updateDrafts(draftsPath(), ({ [project]: _dropped, ...others }) => others);
+    yield* pipelineDiscard({ project });
     yield* Console.log(`${project} has no draft open`);
   }),
 ).pipe(Command.withDescription("Drop a project's draft, and keep the pipeline it runs"));
@@ -268,21 +314,24 @@ const clear = Command.make("clear", { project }, ({ project }) =>
 
 /**
  * The prompt an agent block of the draft, else of the pipeline the project
- * runs, would send (see `printPrompt`).
+ * runs, would send a pretend task.
  */
+export const pipelinePrompt = (input: { readonly project: string; readonly block: string }) =>
+  Effect.gen(function* () {
+    const file = yield* pipelinesNow;
+    const draft = (yield* draftsNow)[input.project];
+    const pipeline = yield* expandedOf(
+      draft?.pipeline ?? file.pipelines[input.project] ?? DEFAULT_PIPELINE,
+      { ...file.composites, ...draft?.composites },
+    );
+    return yield* agentPrompt(input.project, pipeline, input.block, `${input.project}'s pipeline`);
+  });
+
 const prompt = Command.make(
   "prompt",
   { project, block: Argument.String("block") },
   ({ project, block }) =>
-    Effect.gen(function* () {
-      const file = yield* pipelinesNow;
-      const draft = (yield* draftsNow)[project];
-      const pipeline = yield* expandedOf(
-        draft?.pipeline ?? file.pipelines[project] ?? DEFAULT_PIPELINE,
-        { ...file.composites, ...draft?.composites },
-      );
-      yield* printPrompt(project, pipeline, block, `${project}'s pipeline`);
-    }),
+    pipelinePrompt({ project, block }).pipe(Effect.flatMap((text) => Console.log(text))),
 ).pipe(
   Command.withDescription(
     "Print the prompt an agent block of a project's draft, else of the pipeline it runs, would send a pretend task. Writes nothing",
@@ -290,9 +339,27 @@ const prompt = Command.make(
 );
 
 /**
- * The text of instructions `name`, or, with `text`, a write of it to the
- * operator's own `prompts/` directory, which the next dispatch reads.
+ * Read instructions `name`, or write `text` to the operator's own `prompts/`
+ * directory, which the next dispatch reads.
  */
+export const pipelineInstructions = (input: {
+  readonly name: string;
+  readonly text: string | undefined;
+}) =>
+  Effect.gen(function* () {
+    const prompts = yield* Prompts;
+    if (input.text === undefined) {
+      const found = yield* prompts.read(input.name);
+      if (found === undefined)
+        return yield* new PipelineError({
+          detail: `no instructions file is named ${input.name}.md`,
+        });
+      return { _tag: "Read" as const, text: found };
+    }
+    const file = yield* prompts.write(input.name, input.text);
+    return { _tag: "Wrote" as const, file };
+  }).pipe(Effect.provide(Prompts.Default));
+
 const instructions = Command.make(
   "instructions",
   {
@@ -310,16 +377,13 @@ const instructions = Command.make(
   },
   ({ name, text }) =>
     Effect.gen(function* () {
-      const prompts = yield* Prompts;
-      if (Option.isNone(text)) {
-        const found = yield* prompts.read(name);
-        if (found === undefined)
-          return yield* new PipelineError({ detail: `no instructions file is named ${name}.md` });
-        return yield* Console.log(found);
-      }
-      const file = yield* prompts.write(name, yield* prose(text.value));
-      yield* Console.log(`wrote ${file}`);
-    }).pipe(Effect.provide(Prompts.Default)),
+      const result = yield* pipelineInstructions({
+        name,
+        text: Option.isNone(text) ? undefined : yield* prose(text.value),
+      });
+      if (result._tag === "Read") return yield* Console.log(result.text);
+      yield* Console.log(`wrote ${result.file}`);
+    }),
 ).pipe(
   Command.withDescription(
     "Print the instructions an agent block reads, or write new text for them to the operator's prompts directory, which wins over the text foreman ships",
@@ -358,6 +422,40 @@ const place = Command.make(
   ),
 );
 
+/**
+ * Walk a pretend task through a project's draft, else the pipeline it runs,
+ * with the given events.
+ */
+export const pipelineTrace = (input: {
+  readonly project: string;
+  readonly request: TraceRequest;
+}) =>
+  Effect.gen(function* () {
+    const file = yield* pipelinesNow;
+    const draft = (yield* draftsNow)[input.project];
+    const live = pipelineFor(file, input.project);
+    if (live._tag === "Failed") return yield* refuse(live.problems);
+    const draftPipeline =
+      draft === undefined
+        ? undefined
+        : yield* expandedOf(draft.pipeline, { ...file.composites, ...draft.composites });
+    const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
+    return traceReport(
+      input.project,
+      {
+        task: {
+          labels: input.request.task.labels,
+          size: input.request.task.size,
+          priority: input.request.task.priority,
+          parent: input.request.task.parent,
+        },
+        events: input.request.events,
+      },
+      { draft: draftPipeline, live },
+      { ladder, reviewers, attemptsPerLevel },
+    );
+  });
+
 const trace = Command.make(
   "trace",
   {
@@ -373,34 +471,12 @@ const trace = Command.make(
   ({ project, request, json }) =>
     Effect.gen(function* () {
       const text = yield* prose(request);
-      const { task, events } = yield* S.decodeEffect(S.fromJsonString(TraceRequest))(text).pipe(
+      const decoded = yield* S.decodeEffect(S.fromJsonString(TraceRequest))(text).pipe(
         Effect.mapError(
           (error) => new PipelineError({ detail: `that trace cannot be read: ${error.message}` }),
         ),
       );
-      const file = yield* pipelinesNow;
-      const draft = (yield* draftsNow)[project];
-      const live = pipelineFor(file, project);
-      if (live._tag === "Failed") return yield* refuse(live.problems);
-      const draftPipeline =
-        draft === undefined
-          ? undefined
-          : yield* expandedOf(draft.pipeline, { ...file.composites, ...draft.composites });
-      const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
-      const report = traceReport(
-        project,
-        {
-          task: {
-            labels: task.labels,
-            size: task.size,
-            priority: task.priority,
-            parent: task.parent,
-          },
-          events,
-        },
-        { draft: draftPipeline, live },
-        { ladder, reviewers, attemptsPerLevel },
-      );
+      const report = yield* pipelineTrace({ project, request: decoded });
       if (json) return yield* Console.log(JSON.stringify(report, null, 2));
       for (const step of report.steps) yield* Console.log(traceLine(step));
       if (report.refused !== null)
@@ -413,6 +489,64 @@ const trace = Command.make(
     "Walk a pretend task through a project's draft, else the pipeline it runs, with the events you choose, and print where it stands after each and what its block offers next. Writes nothing",
   ),
 );
+
+/**
+ * Play a project's ready and claimed tasks through its draft and through the
+ * pipeline it runs, on one seed.
+ */
+export const pipelineSimulate = (input: {
+  readonly project: string;
+  readonly seed: number;
+  readonly hours: number;
+}) =>
+  Effect.gen(function* () {
+    const records = yield* Records;
+    const ready = yield* records.ready(Option.some(input.project));
+    const claimed = yield* records.claimed(input.project);
+    const epics = yield* records.epicsOver(ready);
+    const { policy } = yield* readPolicy(policyPath());
+    const rates = ratesOf(yield* readMeasured);
+    const file = yield* pipelinesNow;
+    const draft = (yield* draftsNow)[input.project];
+    const live = pipelineFor(file, input.project);
+    const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
+    const liveForSim =
+      live._tag === "Failed"
+        ? { pipeline: DEFAULT_PIPELINE, drawn: live.drawn, problems: live.problems }
+        : {
+            pipeline: live.pipeline,
+            drawn: live.drawn,
+            problems: yield* problemsAgainstLadder(live.pipeline),
+          };
+    const draftExpanded =
+      draft === undefined
+        ? undefined
+        : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites });
+    const draftForSim =
+      draftExpanded === undefined
+        ? undefined
+        : draftExpanded._tag === "Failed"
+          ? { pipeline: DEFAULT_PIPELINE, problems: draftExpanded.problems }
+          : { pipeline: draftExpanded.pipeline, problems: draftExpanded.problems };
+    return simulateReport(
+      {
+        project: input.project,
+        ready,
+        claimed,
+        epics,
+        now: new Date(),
+        slots: policy.slots,
+        pollSeconds: pollInterval,
+      },
+      {
+        draft: draftForSim,
+        live: liveForSim,
+      },
+      rates,
+      { ladder, reviewers, attemptsPerLevel },
+      { seed: input.seed, hours: input.hours },
+    );
+  });
 
 const simulate = Command.make(
   "simulate",
@@ -430,52 +564,7 @@ const simulate = Command.make(
   },
   ({ project, seed, hours, json }) =>
     Effect.gen(function* () {
-      const records = yield* Records;
-      const ready = yield* records.ready(Option.some(project));
-      const claimed = yield* records.claimed(project);
-      const epics = yield* records.epicsOver(ready);
-      const { policy } = yield* readPolicy(policyPath());
-      const rates = ratesOf(yield* readMeasured);
-      const file = yield* pipelinesNow;
-      const draft = (yield* draftsNow)[project];
-      const live = pipelineFor(file, project);
-      const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
-      const liveForSim =
-        live._tag === "Failed"
-          ? { pipeline: DEFAULT_PIPELINE, drawn: live.drawn, problems: live.problems }
-          : {
-              pipeline: live.pipeline,
-              drawn: live.drawn,
-              problems: yield* problemsAgainstLadder(live.pipeline),
-            };
-      const draftExpanded =
-        draft === undefined
-          ? undefined
-          : yield* readingOf(draft.pipeline, { ...file.composites, ...draft.composites });
-      const draftForSim =
-        draftExpanded === undefined
-          ? undefined
-          : draftExpanded._tag === "Failed"
-            ? { pipeline: DEFAULT_PIPELINE, problems: draftExpanded.problems }
-            : { pipeline: draftExpanded.pipeline, problems: draftExpanded.problems };
-      const report = simulateReport(
-        {
-          project,
-          ready,
-          claimed,
-          epics,
-          now: new Date(),
-          slots: policy.slots,
-          pollSeconds: pollInterval,
-        },
-        {
-          draft: draftForSim,
-          live: liveForSim,
-        },
-        rates,
-        { ladder, reviewers, attemptsPerLevel },
-        { seed, hours },
-      );
+      const report = yield* pipelineSimulate({ project, seed, hours });
       if (json) return yield* Console.log(JSON.stringify(report));
       if (report.draft !== null) yield* Console.log(runSummary(report.draft));
       yield* Console.log(runSummary(report.saved));
@@ -486,14 +575,18 @@ const simulate = Command.make(
   ),
 );
 
-const graph = Command.make("graph", { project, json }, ({ project, json }) =>
+/**
+ * A project's open and claimed tasks and epics in columns by what they wait
+ * for, with the grant that covers each.
+ */
+export const pipelineGraph = (input: { readonly project: string }) =>
   Effect.gen(function* () {
     const tracker = yield* Tracker;
     const records = yield* Records;
     const items = (yield* Effect.forEach(["open", "in_progress"] as const, (status) =>
-      tracker.list({ project, status }),
+      tracker.list({ project: input.project, status }),
     )).flat();
-    const dependencies = yield* tracker.dependencies(project);
+    const dependencies = yield* tracker.dependencies(input.project);
     const known = new Map(items.map((item) => [item.id, item.status]));
     for (const id of new Set(dependencies.map((edge) => edge.dependsOn))) {
       if (known.has(id)) continue;
@@ -501,15 +594,20 @@ const graph = Command.make("graph", { project, json }, ({ project, json }) =>
       if (Option.isSome(found)) known.set(id, found.value.status);
     }
     const { policy } = yield* readPolicy(policyPath());
-    const report = graphReport({
-      project,
+    return graphReport({
+      project: input.project,
       items,
       dependencies,
       statusOf: (id) => known.get(id),
       policy,
       scopes: yield* scopesOf(policy.grants, records.lookup, records.children),
-      pipeline: yield* expandedLive(project),
+      pipeline: yield* expandedLive(input.project),
     });
+  });
+
+const graph = Command.make("graph", { project, json }, ({ project, json }) =>
+  Effect.gen(function* () {
+    const report = yield* pipelineGraph({ project });
     if (json) return yield* Console.log(JSON.stringify(report));
     for (const item of report.items) {
       const waits = item.waitsFor.length === 0 ? "" : `  waits for ${item.waitsFor.join(", ")}`;
@@ -563,17 +661,6 @@ const whereIs = (placement: Placement): string =>
       : placement._tag === "ExitGone"
         ? `waiting for the operator: ${placement.reason}`
         : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
-
-/** What `trace` reads: the pretend task, and the events chosen so far. */
-const TraceRequest = S.Struct({
-  task: S.Struct({
-    labels: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-    size: S.optional(S.Int),
-    priority: S.Int.pipe(S.withDecodingDefault(Effect.succeed(2))),
-    parent: S.optional(S.String),
-  }),
-  events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-});
 
 /** A trace step in words: the event, where the task stands, and what comes next. */
 const traceLine = (step: TraceReport["steps"][number]): string =>
