@@ -117,28 +117,7 @@ export const buildHost = Effect.gen(function* () {
   const headOfCode = repository.head(import.meta.dir).pipe(Effect.option);
   loadedCommit ??= Option.getOrUndefined(yield* headOfCode);
   const loaded = loadedCommit;
-  /**
-   * True only when the checkout this process loaded has a new commit and that
-   * checkout's setup has succeeded on it. A landing can move HEAD and still
-   * leave dependencies on the older lockfile; exiting before setup would make
-   * the service restart onto a tree that cannot run. A setup failure fails
-   * this effect so supervise logs and publishes it, and the process stays on
-   * the code it already loaded until a later tick's setup passes.
-   */
-  const codeMoved = Effect.gen(function* () {
-    const head = yield* headOfCode;
-    if (loaded === undefined || Option.isNone(head) || head.value === loaded) return false;
-    const checkout = yield* repository.checkoutOf(import.meta.dir);
-    if (checkout === undefined) return true;
-    const setup = yield* repository.setup(checkout);
-    if (setup !== undefined && !setup.passed) {
-      return yield* new RepositoryError({
-        directory: checkout,
-        detail: `checkout setup failed:\n${setup.output}`,
-      });
-    }
-    return true;
-  });
+  const codeMoved = codeMovedFrom(repository, loaded, import.meta.dir);
   return {
     /** Each reading of the world, replaced whole. */
     state: dispatcher.state,
@@ -158,6 +137,34 @@ export const buildHost = Effect.gen(function* () {
 });
 
 export type Host = Effect.Success<typeof buildHost>;
+
+/**
+ * True only when the checkout at `directory` has moved past `loaded` and that
+ * checkout's setup has succeeded on the new commit. A landing can move HEAD and
+ * still leave dependencies on the older lockfile; exiting before setup would
+ * make the service restart onto a tree that cannot run. A setup failure fails
+ * the effect so supervise logs and publishes it, and the process stays on the
+ * code it already loaded until a later tick's setup passes.
+ */
+export const codeMovedFrom = (
+  repository: Repository["Service"],
+  loaded: string | undefined,
+  directory: string,
+): Effect.Effect<boolean, RepositoryError> =>
+  Effect.gen(function* () {
+    const head = yield* repository.head(directory).pipe(Effect.option);
+    if (loaded === undefined || Option.isNone(head) || head.value === loaded) return false;
+    const checkout = yield* repository.checkoutOf(directory);
+    if (checkout === undefined) return true;
+    const setup = yield* repository.setup(checkout);
+    if (setup !== undefined && !setup.passed) {
+      return yield* new RepositoryError({
+        directory: checkout,
+        detail: `checkout setup failed:\n${setup.output}`,
+      });
+    }
+    return true;
+  });
 
 /**
  * The commit of foreman's own checkout when this process first built a host:
