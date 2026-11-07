@@ -22,6 +22,7 @@ import { policyPath, readPolicy } from "./policy-file.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
+import { Registry } from "./registry.ts";
 import { Repository, RepositoryError } from "./repository.ts";
 import { telemetry } from "./telemetry.ts";
 
@@ -65,6 +66,23 @@ export const storeServices = Layer.mergeAll(
   HcFleet,
   Repository.Default,
 ).pipe(Layer.provideMerge(BunServices.layer), Layer.provide(store));
+
+/**
+ * Services the UI server's handlers need for the life of serve. No Dispatcher:
+ * the page talks to the world through verbs and the readings ref, and a second
+ * dispatcher would race the supervised one. Lives as long as the process, so a
+ * dispatcher restart does not tear the page's sockets down. `store` is
+ * provideMerged so SqlClient and Registry stay visible to verb Effects that
+ * yield them (the page tests build the same shape).
+ */
+export const uiServices = Layer.mergeAll(
+  Records.layer,
+  settings,
+  HcFleet,
+  Repository.Default,
+  Prompts.Default,
+  Registry.layerSql,
+).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store));
 
 /**
  * The queue in the order the fleet would dispatch it, for one project or for

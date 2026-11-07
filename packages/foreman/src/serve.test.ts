@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
@@ -17,10 +17,18 @@ import {
   SubscriptionRef,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { Settings } from "./config.ts";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
+import { Fleet, type Worker } from "./fleet.ts";
+import { FleetError } from "./errors.ts";
+import type { Ladder } from "./ladder.ts";
 import { publishedOf } from "./published.ts";
 import { type Published } from "./published-schema.ts";
-import { holdLock, ServeRunning, supervise } from "./serve.ts";
+import { Records } from "./records.ts";
+import { Repository } from "./repository.ts";
+import { scratchStore, seed } from "./scratch-store.ts";
+import { holdLock, isolateUiServer, ServeRunning, supervise } from "./serve.ts";
+import { ReadingsRef, uiServerOn } from "./ui-server.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "foreman-serve-"));
 
@@ -180,6 +188,101 @@ describe("holdLock", () => {
       const after = await Effect.runPromise(Effect.scoped(holdLock(lock)).pipe(Effect.option));
       expect(Option.isSome(after)).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("UI server beside supervise", () => {
+  test("a page that does not build stops only the UI server; the dispatcher side still runs", async () => {
+    const dir = scratch();
+    const path = join(dir, "state.json");
+    const broken = join(dir, "broken-page.tsx");
+    writeFileSync(broken, "this is not a module {{{");
+    const store = scratchStore();
+    process.env["XDG_CONFIG_HOME"] = dir;
+    try {
+      await Effect.runPromise(
+        seed(`
+          INSERT INTO pools (pool, harness, provider_default) VALUES ('Pool', 'pi', 'prov');
+          INSERT INTO models (model, provider, pool, harness, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'pool');
+          INSERT INTO ladder (rank, level, rung, model) VALUES (1, 1, 'cheap', 'm1');
+        `).pipe(Effect.provide(store.layer)),
+      );
+      const handlers = Layer.mergeAll(
+        Records.layer,
+        Layer.succeed(
+          Settings,
+          Settings.of({
+            ladder: [
+              {
+                name: "cheap",
+                harness: "test",
+                level: 0,
+                model: undefined,
+                provider: undefined,
+                enabled: true,
+                author: true,
+                unmetered: false,
+              },
+            ] satisfies Ladder,
+            reviewers: [],
+            otlpEndpoint: "http://localhost:4318",
+            pollInterval: 60,
+            staleAfter: 24,
+            coachWindow: 60,
+            stallGrace: 5,
+            landedWindow: 7,
+            attemptsPerLevel: 2,
+          }),
+        ),
+        Repository.Default,
+        Layer.succeed(
+          Fleet,
+          Fleet.of({
+            open: () => Effect.fail(new FleetError({ operation: "open", detail: "unused" })),
+            attach: () => Effect.fail(new FleetError({ operation: "attach", detail: "unused" })),
+            spawn: () => Effect.fail(new FleetError({ operation: "spawn", detail: "unused" })),
+            roster: Effect.succeed([] as ReadonlyArray<Worker>),
+            awaitTurn: () => Effect.void,
+            spaces: Effect.succeed([] as ReadonlyArray<string>),
+            say: () => Effect.void,
+            screen: () => Effect.succeedNone,
+            preview: () => Effect.succeed("preview"),
+            focus: () => Effect.void,
+            stop: () => Effect.void,
+            close: () => Effect.void,
+            notify: () => Effect.void,
+            inWorker: Effect.succeed(false),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store.registry));
+
+      const builds = await Effect.runPromise(
+        Effect.gen(function* () {
+          const builds = yield* Ref.make(0);
+          const readings = yield* emptyReadings();
+          // Same composition serve uses: UI fiber beside supervise, wrapped in
+          // isolateUiServer. Broken entry makes Bun.build fail; the dispatcher
+          // fiber still completes and writes state.json.
+          yield* Effect.forkChild(
+            isolateUiServer(
+              Layer.launch(
+                uiServerOn(17345, { entrypoint: broken }).pipe(
+                  Layer.provide(Layer.mergeAll(Layer.succeed(ReadingsRef, readings), handlers)),
+                ),
+              ),
+            ),
+          );
+          yield* supervise(fakeHost(0, builds), path, readings);
+          return yield* Ref.get(builds);
+        }).pipe(Effect.provide(BunServices.layer)),
+      );
+      expect(builds).toBe(1);
+      const published = JSON.parse(readFileSync(path, "utf8"));
+      expect(published.dispatcher).toEqual({ state: "idle" });
+    } finally {
+      store.cleanup();
       rmSync(dir, { recursive: true, force: true });
     }
   });
