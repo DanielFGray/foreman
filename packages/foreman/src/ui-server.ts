@@ -20,7 +20,7 @@ import {
 } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
-import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   compositeDiscard,
@@ -242,20 +242,12 @@ export type PageAssets = ReadonlyMap<
 >;
 
 /**
- * Page bundle entry. Resolved from cwd so Vite's module evaluator (browser
- * globalSetup) does not need `import.meta.dir`, which it does not provide.
+ * Page bundle entry, located from this module's own file so the result does
+ * not depend on the caller's cwd. `import.meta.url` is used because Vite's
+ * module evaluator (the browser globalSetup) does not provide `import.meta.dir`.
  */
-export const resolvePageEntrypoint = (): string => {
-  const candidates = [
-    join(process.cwd(), "packages/foreman-ui/src/main.tsx"),
-    join(process.cwd(), "../foreman-ui/src/main.tsx"),
-    join(process.cwd(), "src/main.tsx"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(`foreman-ui entry not found; tried:\n${candidates.join("\n")}`);
-};
+export const resolvePageEntrypoint = (): string =>
+  fileURLToPath(new URL("../../foreman-ui/src/main.tsx", import.meta.url));
 
 const CONTENT_TYPES: Record<string, string> = {
   ".js": "text/javascript; charset=utf-8",

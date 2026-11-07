@@ -21,9 +21,11 @@ import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { UiContract } from "./ui-contract.ts";
 import { resolve } from "./paths.ts";
 import {
+  buildPageAssets,
   LOOPBACK_HTTP,
   localRequest,
   ReadingsRef,
+  resolvePageEntrypoint,
   serveOrigins,
   uiHandlersLayer,
   uiRoutesLayer,
@@ -300,6 +302,18 @@ describe("UiContract over a WebSocket", () => {
 });
 
 describe("page assets", () => {
+  test("the page entry is found and built from a cwd outside the checkout", async () => {
+    const before = process.cwd();
+    process.chdir(tmpdir());
+    try {
+      expect(resolvePageEntrypoint()).toMatch(/foreman-ui\/src\/main\.tsx$/);
+      const assets = await Effect.runPromise(buildPageAssets);
+      expect(assets.has("/")).toBe(true);
+    } finally {
+      process.chdir(before);
+    }
+  });
+
   test("Bun.build page is served at / and /p/<project>", async () => {
     const port = 7343;
     const server = Effect.runFork(
