@@ -599,3 +599,45 @@ describe("a schedule's template read through the real reader", () => {
     expect(text).toContain("foreman runs -p alpha --since 2026-01-01T00:00:00.000Z");
   });
 });
+
+describe("vars", () => {
+  const withVars: AgentNode = {
+    ...blockOf("review"),
+    instructions: "focused",
+    vars: { focus: "security" },
+  };
+
+  test("instructions may use the block's vars, and not another block's", () => {
+    const texts = new Map([["focused", "Look at {{ focus }}."]]);
+    expect(instructionProblems({ nodes: [withVars] }, texts)).toEqual([]);
+    const without: AgentNode = { ...withVars, vars: undefined };
+    expect(instructionProblems({ nodes: [without] }, texts)).toEqual([
+      "review: focused.md uses {{ focus }}, which is no placeholder: use task, branch, base, worktree",
+    ]);
+  });
+
+  test("a var's value reaches the rendered prompt", async () => {
+    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
+    writeFileSync(join(config, "foreman", "prompts", "focused.md"), "Look at {{ focus }}.");
+    const previous = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = config;
+    try {
+      const prompt = await run((prompts) =>
+        prompts.agent(withVars, {
+          task: ready,
+          worktree: "/tmp/worktree",
+          repository: "/tmp/repository",
+          workspace: "worktree",
+          base: "abc1234",
+          trunk: "develop",
+          pipeline: undefined,
+        }),
+      );
+      expect(prompt).toContain("Look at security.");
+    } finally {
+      if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = previous;
+    }
+  });
+});

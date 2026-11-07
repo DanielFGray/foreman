@@ -425,6 +425,23 @@ describe("drawing a draft", () => {
     ).toBe(2);
   });
 
+  test("an agent setting sets vars, keeps them when absent, and an empty record clears them", async () => {
+    const setting = (extra: object) =>
+      change({
+        _tag: "Configure",
+        id: "author",
+        setting: { kind: "agent", role: "author", model: "ladder", ...extra },
+      });
+    const authorVars = () =>
+      draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "author").vars;
+    await run("edit", "amux", setting({ vars: { focus: "speed" } }));
+    expect(authorVars()).toEqual({ focus: "speed" });
+    await run("edit", "amux", setting({}));
+    expect(authorVars()).toEqual({ focus: "speed" });
+    await run("edit", "amux", setting({ vars: {} }));
+    expect(authorVars()).toBeUndefined();
+  });
+
   test("a setting for another kind of block is refused by name", async () => {
     const refused = await refusal(
       "edit",

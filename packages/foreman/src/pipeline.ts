@@ -91,7 +91,9 @@ export const GateNode = S.Struct({
  * agent may end its run with. `stopped` is what follows a run that named none:
  * `retry` (the default) keeps the task at the block, and the model rule picks
  * the next rung or reviewer; `park` parks it. `instructions` names the operator's text for
- * the agent, a file `<name>.md`; it defaults to the role.
+ * the agent, a file `<name>.md`; it defaults to the role. `vars` maps names to
+ * text: the instructions may use `{{ <name> }}` for each one
+ * (`docs/composite-blocks.md`).
  */
 export const AgentNode = S.Struct({
   kind: S.Literal("agent"),
@@ -102,6 +104,7 @@ export const AgentNode = S.Struct({
   slots: S.optional(S.Int.check(S.isGreaterThan(0))),
   exits: S.Array(Exit),
   stopped: S.optional(S.Literals(["retry", "park"])),
+  vars: S.optional(S.Record(S.String, S.String)),
 });
 
 /**
@@ -882,6 +885,15 @@ const skipping = (
  */
 export const PLACEHOLDERS = ["task", "branch", "base", "worktree"] as const;
 
+/** Whether `name` can be a var: it must stay readable as a `{{ name }}` placeholder. */
+export const isVarName = (name: string): boolean => /^[A-Za-z][A-Za-z0-9_-]*$/.test(name);
+
+/** The placeholders an agent block's instructions may use: the built-in ones, then its vars. */
+export const placeholdersOf = (node: AgentNode): ReadonlyArray<string> => [
+  ...PLACEHOLDERS,
+  ...Object.keys(node.vars ?? {}),
+];
+
 /** The instructions file an agent block reads: its own, or its role's. */
 export const instructionsOf = (node: AgentNode): string => node.instructions ?? node.role;
 
@@ -915,12 +927,12 @@ export const instructionProblems = (
     const text = texts.get(name);
     if (text === undefined)
       return [`${node.id}: no readable instructions file is named ${name}.md`];
-    const allowed: ReadonlyArray<string> = PLACEHOLDERS;
+    const allowed = placeholdersOf(node);
     return placeholdersIn(text)
       .filter((placeholder) => !allowed.includes(placeholder))
       .map(
         (placeholder) =>
-          `${node.id}: ${name}.md uses {{ ${placeholder} }}, which is no placeholder: use ${PLACEHOLDERS.join(", ")}`,
+          `${node.id}: ${name}.md uses {{ ${placeholder} }}, which is no placeholder: use ${allowed.join(", ")}`,
       );
   });
 
@@ -1275,13 +1287,25 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
       }
     }
     if (node.kind === "agent" || node.kind === "check") problems.push(...exitProblems(node));
-    if (node.kind === "agent") problems.push(...modelProblems(node, offers));
+    if (node.kind === "agent") problems.push(...modelProblems(node, offers), ...varProblems(node));
     if (node.kind === "check" && node.command.trim() === "") {
       problems.push(`${node.id}: a check runs a command, and it names none`);
     }
   }
   return problems;
 };
+
+const varProblems = (node: AgentNode): ReadonlyArray<string> =>
+  Object.keys(node.vars ?? {}).flatMap((name) => {
+    if (!isVarName(name)) {
+      return [
+        `${node.id}: var ${name} is no name: use letters, digits, - and _, starting with a letter`,
+      ];
+    }
+    return (PLACEHOLDERS as ReadonlyArray<string>).includes(name)
+      ? [`${node.id}: var ${name} is a built-in placeholder: name it otherwise`]
+      : [];
+  });
 
 const exitProblems = (node: AgentNode | CheckNode): ReadonlyArray<string> => {
   const problems: Array<string> = [];

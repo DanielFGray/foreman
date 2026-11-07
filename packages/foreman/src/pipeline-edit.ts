@@ -66,6 +66,7 @@ export const BlockSetting = S.Union([
     role: AgentNode.fields.role,
     model: S.String,
     slots: AgentNode.fields.slots,
+    vars: AgentNode.fields.vars,
   }),
   S.Struct({ kind: S.Literal("router"), route: S.Int, when: S.String }),
   S.Struct({ kind: S.Literal("check"), command: S.String }),
