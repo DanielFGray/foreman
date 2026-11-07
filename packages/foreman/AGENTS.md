@@ -3,6 +3,9 @@
 The README says what foreman does. This says why it is shaped the way it is, and
 which walls are already known so you do not walk into them again.
 
+This file holds rules for agents. A description of what foreman does goes in
+README.md or a design record under docs/.
+
 Keep it that way. This file is loaded into every session and read by every agent
 the fleet dispatches, so its length is a cost paid on every turn. Record the
 constraint and the reason it exists — never the incident that revealed it. No
