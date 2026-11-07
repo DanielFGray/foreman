@@ -1,13 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
-import { startUiServer, stopUiServer } from "./test/browser/commands.ts";
+import {
+  draftPipeline,
+  savedPipeline,
+  startUiServer,
+  stopUiServer,
+} from "./test/browser/commands.ts";
 
 const react = fileURLToPath(new URL("./node_modules/react", import.meta.url));
 const reactDom = fileURLToPath(new URL("./node_modules/react-dom", import.meta.url));
-const jsxRuntime = fileURLToPath(
-  new URL("./node_modules/react/jsx-runtime", import.meta.url),
-);
+const jsxRuntime = fileURLToPath(new URL("./node_modules/react/jsx-runtime", import.meta.url));
 
 export default defineConfig({
   resolve: {
@@ -53,7 +56,7 @@ export default defineConfig({
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium", headless: true }],
-            commands: { startUiServer, stopUiServer },
+            commands: { startUiServer, stopUiServer, savedPipeline, draftPipeline },
             // Give Chromium time to start before the first test.
             connectTimeout: 120_000,
           },

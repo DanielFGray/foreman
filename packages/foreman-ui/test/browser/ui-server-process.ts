@@ -18,5 +18,5 @@ const server = await startFixtureServer({
 // SIGTERM must end the process through `exit`, so the fixture folder is removed.
 process.on("SIGTERM", () => process.exit(0));
 process.on("exit", server.cleanup);
-console.log(`ui-server ready ${server.port}`);
+console.log(`ui-server ready ${server.port} ${server.folder}`);
 await new Promise(() => {});

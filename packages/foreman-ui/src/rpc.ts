@@ -25,11 +25,6 @@ export const connectionAtom: Atom.Writable<ConnectionState> = Atom.make<Connecti
 export interface PageInputs {
   readonly rpcUrl: string;
   readonly reload: () => void;
-  /**
-   * Optional observer for PipelineEdit verbs the page sends. Production leaves
-   * it unset; browser tests count drops through the registry's initialValues.
-   */
-  readonly onPipelineEdit?: (change: PipelineChange) => void;
 }
 
 /**

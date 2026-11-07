@@ -21,7 +21,7 @@ import {
   samePort,
   type EditorFrame,
 } from "./pipeline-preview.ts";
-import { pageInputsAtom, pipelineAtom, UiRpc } from "./rpc.ts";
+import { pipelineAtom, UiRpc } from "./rpc.ts";
 
 const FLOW = "across" as const;
 
@@ -195,7 +195,6 @@ const sameDrawing = (a: Drawing, b: Drawing): boolean => JSON.stringify(a) === J
 /** The editor for one project's pipeline on `/p/<project>`. */
 export const PipelineEditor = ({ project }: { readonly project: string }) => {
   const shownResult = useAtomValue(pipelineAtom(project));
-  const inputs = useAtomValue(pageInputsAtom);
   const edit = useAtomSet(UiRpc.mutation("PipelineEdit"), { mode: "promise" });
 
   const remote = AsyncResult.isSuccess(shownResult) ? shownResult.value : null;
@@ -229,7 +228,6 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
       setFrame(frameOf(baseline, remoteView?.problems ?? next.problems, next.checks, FLOW));
       return;
     }
-    inputs.onPipelineEdit?.(change);
     // Keep the dropped drawing (committed layout + moved wire). A full layoutOf
     // here flips wire.back flags and breaks dragology's drop spring.
     const dropped: EditorFrame = {
