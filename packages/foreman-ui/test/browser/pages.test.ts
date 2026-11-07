@@ -5,43 +5,46 @@
  * A missing Chromium fails this gate.
  */
 import { RegistryProvider } from "@effect/atom-react";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { commands, page } from "vitest/browser";
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
 import { App } from "../../src/App.tsx";
-import { installSocketTracking } from "../../src/sockets.ts";
+import { pageInputsAtom } from "../../src/rpc.ts";
 import "../../src/styles.css";
 
 let root: Root | undefined;
+let uiPort = 0;
 
 beforeAll(async () => {
-  window.__FOREMAN_UI_PORT__ = await commands.startUiServer(location.origin);
+  uiPort = await commands.startUiServer(location.origin);
 });
 
 afterAll(async () => {
   await commands.stopUiServer();
 });
 
-const mountPage = (pathname: string) => {
-  installSocketTracking();
+/** Mounts the page at `pathname`, connected to the fixture UI server. */
+const mountPage = (pathname: string, reload: () => void = () => {}) => {
   history.replaceState(null, "", pathname);
   const host = document.createElement("div");
   host.id = "root";
   document.body.replaceChildren(host);
   root = createRoot(host);
-  root.render(createElement(RegistryProvider, null, createElement(App)));
+  const inputs = { rpcUrl: `ws://127.0.0.1:${uiPort}/rpc`, reload };
+  root.render(
+    createElement(
+      RegistryProvider,
+      { initialValues: [[pageInputsAtom, inputs]] },
+      createElement(App),
+    ),
+  );
 };
 
 afterEach(() => {
   root?.unmount();
   root = undefined;
-  delete window.__FOREMAN_RELOAD__;
   document.body.replaceChildren();
-});
-
-beforeEach(() => {
-  delete window.__FOREMAN_RELOAD__;
 });
 
 describe("foreman-ui pages", () => {
@@ -63,21 +66,23 @@ describe("foreman-ui pages", () => {
       .toBeInTheDocument();
   });
 
-  it("shows disconnected when the socket drops, then reloads on reconnect", async () => {
+  it("shows disconnected while the server is down, then reloads once it is back", async () => {
     let reloads = 0;
-    window.__FOREMAN_RELOAD__ = () => {
+    mountPage("/", () => {
       reloads += 1;
-    };
-
-    mountPage("/");
+    });
     await expect.element(page.getByTestId("project-list")).toBeInTheDocument();
 
-    const sockets = window.__FOREMAN_SOCKETS__;
-    if (sockets === undefined) throw new Error("no socket set");
-    for (const socket of sockets) socket.close();
-
+    await commands.stopUiServer();
     await expect.element(page.getByTestId("disconnected")).toBeInTheDocument();
 
+    // Several one-second retries fail while the server is down: the banner
+    // stays and no reload happens.
+    await new Promise((ready) => setTimeout(ready, 2_500));
+    await expect.element(page.getByTestId("disconnected")).toBeInTheDocument();
+    expect(reloads).toBe(0);
+
+    await commands.startUiServer(location.origin, uiPort);
     await expect.poll(() => reloads, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
   });
 });

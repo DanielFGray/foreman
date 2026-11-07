@@ -11,7 +11,6 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { Published } from "foreman/published-schema";
 import { UiContract } from "foreman/ui-contract";
 import * as Stream from "effect/Stream";
-import { reloadPage } from "./sockets.ts";
 
 /** Connection to the UI server as the page shows it. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
@@ -21,22 +20,27 @@ export const connectionAtom: Atom.Writable<ConnectionState> = Atom.make<Connecti
   "connecting",
 ).pipe(Atom.keepAlive);
 
-declare global {
-  interface Window {
-    /** When the page is served by vitest, the UI server listen port. */
-    __FOREMAN_UI_PORT__?: number;
-  }
+/** Where the page connects, and what it does when a reconnect succeeds. */
+export interface PageInputs {
+  readonly rpcUrl: string;
+  readonly reload: () => void;
 }
 
-/** WebSocket URL for the contract: same origin, or an injected UI server port. */
-export const rpcWebSocketUrl = (): string => {
-  const port = globalThis.window?.__FOREMAN_UI_PORT__;
-  if (typeof port === "number") {
-    return `ws://127.0.0.1:${port}/rpc`;
-  }
+/**
+ * The page's inputs. The default is the page's own origin and a reload of the
+ * page. A test replaces it through the registry's `initialValues`, so no
+ * production code reads a test-only global.
+ */
+export const pageInputsAtom: Atom.Writable<PageInputs> = Atom.make<PageInputs>({
+  rpcUrl: sameOriginRpcUrl(),
+  reload: () => globalThis.location.reload(),
+});
+
+/** The contract's WebSocket path on the page's own host. */
+function sameOriginRpcUrl(): string {
   const { protocol, host } = globalThis.location;
   return `${protocol === "https:" ? "wss:" : "ws:"}//${host}/rpc`;
-};
+}
 
 /**
  * AtomRpc over the UI contract. Retries each second after a socket error.
@@ -47,10 +51,11 @@ export class UiRpc extends AtomRpc.Service<UiRpc>()("foreman-ui/UiRpc", {
   group: UiContract,
   protocol: (get) => {
     const registry = get.registry;
+    const inputs = get(pageInputsAtom);
     const hooks = Layer.succeed(RpcClient.ConnectionHooks, {
       onConnect: Effect.sync(() => {
         if (registry.get(connectionAtom) === "disconnected") {
-          reloadPage();
+          inputs.reload();
           return;
         }
         registry.set(connectionAtom, "connected");
@@ -66,11 +71,7 @@ export class UiRpc extends AtomRpc.Service<UiRpc>()("foreman-ui/UiRpc", {
       retryPolicy: Schedule.spaced("1 second"),
     }).pipe(
       Layer.provide(hooks),
-      // Resolve the URL when the Layer builds so browser tests can inject the
-      // fixture port before the first subscribe.
-      Layer.provide(
-        Layer.unwrap(Effect.sync(() => BrowserSocket.layerWebSocket(rpcWebSocketUrl()))),
-      ),
+      Layer.provide(BrowserSocket.layerWebSocket(inputs.rpcUrl)),
       Layer.provide(RpcSerialization.layerJson),
     );
   },

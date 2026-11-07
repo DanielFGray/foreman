@@ -222,8 +222,8 @@ export type PageAssets = ReadonlyMap<
 
 /**
  * Page bundle entry, located from this module's own file so the result does
- * not depend on the caller's cwd. `import.meta.url` is used because Vite's
- * module evaluator (the browser globalSetup) does not provide `import.meta.dir`.
+ * not depend on the caller's cwd. The page tests load this module through
+ * vitest, whose cwd is the test package, not the foreman checkout.
  */
 export const resolvePageEntrypoint = (): string =>
   fileURLToPath(new URL("../../foreman-ui/src/main.tsx", import.meta.url));

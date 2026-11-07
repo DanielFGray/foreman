@@ -1,6 +1,6 @@
 declare module "vitest/browser" {
   interface BrowserCommands {
-    startUiServer: (origin: string) => Promise<number>;
+    startUiServer: (origin: string, port?: number) => Promise<number>;
     stopUiServer: () => Promise<void>;
   }
 }

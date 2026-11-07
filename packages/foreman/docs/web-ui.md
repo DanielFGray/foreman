@@ -171,10 +171,11 @@ serve` to check that it starts") stays as it is.
 - **Page**: vitest Browser Mode with the Playwright provider
   (`@vitest/browser-playwright`) and headless Chromium. The package's vitest
   config has two projects: `unit`, which runs on Bun, and `browser`, which
-  renders the page's React views in Chromium. The browser project's
-  `globalSetup` runs on Bun. It starts the UI server Layer on a free port with
-  the fixtures above, with vitest's browser page as the trusted page origin,
-  and gives the port to the tests with `provide`. The tests drive the views
+  renders the page's React views in Chromium. A browser command runs on Bun
+  and the page calls it with its own `location.origin`. It starts the UI server
+  with the fixtures above in a child process on a free port, trusting that one
+  origin, and returns the port. The child process is stopped the way serve
+  stops, so a disconnect test drops the page's real socket. The tests drive the views
   with real pointer events: a drag from an exit to a block gives the expected
   `PipelineEdit`, and an amber preview shows the problem count. These tests
   run in the gate. A missing Chromium fails the gate. It does not skip the
