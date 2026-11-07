@@ -72,3 +72,12 @@ export class FleetError extends S.TaggedError<FleetError>()("FleetError", {
     return `${this.operation}: ${this.detail}`;
   }
 }
+
+/** Bun.build of the page failed; the UI server Layer stops, the dispatcher does not. */
+export class PageBuildError extends S.TaggedError<PageBuildError>()("PageBuildError", {
+  detail: S.String,
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
