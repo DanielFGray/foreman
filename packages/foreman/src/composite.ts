@@ -21,6 +21,7 @@ import {
   type Pipeline,
   type PipelineNode,
   QUEUE,
+  splitTarget,
 } from "./pipeline.ts";
 
 /** A wire inside a definition that leaves by an exit. */
@@ -286,12 +287,6 @@ const expandInstance = (
     copies.push(prefixed(wired, instance.prefix));
   }
   return expandList(copies, composites, new Set(stack).add(instance.of), problems);
-};
-
-/** A wire target split into the block and the entry it names (`<block>/<entry id>`). */
-const splitTarget = (target: string): readonly [string, string | undefined] => {
-  const at = target.indexOf("/");
-  return at < 0 ? [target, undefined] : [target.slice(0, at), target.slice(at + 1)];
 };
 
 /**
