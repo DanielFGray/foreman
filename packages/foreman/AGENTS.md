@@ -35,21 +35,21 @@ dispatcher whose memory is authoritative loses the fleet on every restart: tasks
 stay claimed, agents keep running, and nothing can tell foreman's own work from
 a claim made by hand.
 
-| Question | Answered by |
-| --- | --- |
-| What am I working on? | the worktree git has registered for `foreman/<task-id>` |
-| Who authored this branch? | the rung of the task's latest author run |
-| Is a reviewer assigned? | an open review run in the task's current lap |
-| Where is this task? | where the exit its last run named leads in the drawing, looked up by the exit's id, while the tip is the commit that exit was named on; a decision for the operator when the drawing lacks that exit |
-| Has a reviewer accepted it? | its last exit is `approved`, and the tip is the commit it was named on |
-| Which rung comes next? | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed |
-| Which reviewer reads it? | from the reviewers its review block draws, the one that started a review least recently, off a spent account and off every reviewer that stopped this lap with no verdict, preferring a model other than the author's |
-| How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge |
-| Is this one waiting on a person? | every configured rung has failed it, or it has a park |
-| Is this task mine to review? | it has an author run |
-| Is this worker mine? | the checkout in its terminals' `fm.repo` label |
-| Which projects are in play? | the git checkouts of the operator's open herdr-app spaces |
-| Is this project free to work in? | `git` in its checkout |
+| Question                          | Answered by                                                                                                                                                                                                                            |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What am I working on?             | the worktree git has registered for `foreman/<task-id>`                                                                                                                                                                                |
+| Who authored this branch?         | the rung of the task's latest author run                                                                                                                                                                                               |
+| Is a reviewer assigned?           | an open review run in the task's current lap                                                                                                                                                                                           |
+| Where is this task?               | where the exit its last run named leads in the drawing, looked up by the exit's id, while the tip is the commit that exit was named on; a decision for the operator when the drawing lacks that exit                                   |
+| Has a reviewer accepted it?       | its last exit is `approved`, and the tip is the commit it was named on                                                                                                                                                                 |
+| Which rung comes next?            | from the lowest level above every level with a rung charged with failing the task, the configured, enabled, author-on, funded rung that started a run least recently, off the accounts its runs ended `walled` on since it last landed |
+| Which reviewer reads it?          | from the reviewers its review block draws, the one that started a review least recently, off a spent account and off every reviewer that stopped this lap with no verdict, preferring a model other than the author's                  |
+| How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge                                                                                                                                            |
+| Is this one waiting on a person?  | every configured rung has failed it, or it has a park                                                                                                                                                                                  |
+| Is this task mine to review?      | it has an author run                                                                                                                                                                                                                   |
+| Is this worker mine?              | the checkout in its terminals' `fm.repo` label                                                                                                                                                                                         |
+| Which projects are in play?       | the git checkouts of the operator's open herdr-app spaces                                                                                                                                                                              |
+| Is this project free to work in?  | `git` in its checkout                                                                                                                                                                                                                  |
 
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
@@ -63,9 +63,10 @@ the operator's intention. The policy holds `paused`,
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
 project's own `paused`, its own mode for any step, which replace the
-default for that project's tasks only. A paused project takes no step, grants included; slots stay
+default for that project's tasks only, and its `schedules` (recurring
+patterns filed from a template on a cadence). A paused project takes no step, grants included; slots stay
 fleet-wide, and an agent block's `slots` caps that block's running tasks inside
-them. `foreman policy` and the Foreman pane write it
+them. `foreman policy`, `foreman schedule` and the Foreman pane write it
 through `updatePolicy`. The dispatcher reads it every pass, and
 writes only which tasks each grant admitted and which grants expired, so a
 grant's count survives a restart. It is a file, not process state, because a
@@ -363,7 +364,7 @@ records whether they are passed, so tasks in flight place as before.
   rebase makes a commit the reviewer did not read. `pull-request` needs a
   publish gate besides its land gate, so a change of `how` brings or takes out
   the publish gate in the same edit, and `foreman pipeline use --land
-  pull-request` draws it.
+pull-request` draws it.
 
 ### Onboarding salvages the operator's checkout
 
@@ -424,12 +425,35 @@ that failure is the project's or the machine's, never the task's.
 
 ### Order inside a tick
 
-Settle (it lands, then runs checks), tidy, reclaim, recover, then fill — and **the work nearest the end is filled first**: the fewest
+Settle (it lands, then runs checks), tidy, reclaim, recover, fire schedules,
+then fill — and **the work nearest the end is filled first**: the fewest
 work blocks left, then queue order. In the standard pipeline that is landings,
 then reviews, then new work. A task
 awaiting review is nearly finished and is blocking whatever depends on it,
 whereas an unclaimed task has not started costing anything. Filling slots with
 new work while reviews pile up grows a permanent tail of almost-done tasks.
+
+### Schedules
+
+A schedule is the operator's intention to repeat a pattern: it lives in the
+policy file under `projects.<project>.schedules` as
+`{ name, every, title, labels, template }`, and files a task from a template
+on a cadence. Foreman holds no code for any one pattern — a pattern such as a
+retro is a schedule plus a template. `every` is a tagged union; the one kind
+now is `{ landed: N }`. Both `title` and `template` render `{{ project }}` and
+`{{ since }}`; the template is an instructions file in `prompts/`, read through
+`src/prompt.ts` so the operator's copy wins.
+
+Firing reads the world each running tick, after settle: for each managed
+project and each of its schedules, `since` is the creation time of the newest
+task labeled `schedule:<name>`, else the start of time. The count is the
+distinct tasks whose author run closed `committed` or `answered` at or after
+`since`, leaving out the schedule's own filings. When the count reaches N and
+no task labeled `schedule:<name>` is open or in progress, one task is filed
+with the rendered title, description and labels (plus `schedule:<name>`).
+Filing spends nothing; the filed task waits for the author gate like any task.
+A paused or idle tick files nothing. Nothing is held in memory between ticks,
+so a restart changes nothing.
 
 ### The queue is one score, not a sort key per rule
 
@@ -869,7 +893,7 @@ reads (`placementOf`).
 
 **Only work in progress refuses a dispatch.** A role that is `working` or
 `blocked` rejects a second agent, because two agents in one worktree edit over
-each other. A *settled* one does not: it has stopped, it is editing nothing, and
+each other. A _settled_ one does not: it has stopped, it is editing nothing, and
 nothing will ever end it. Reading settled as live turns every worker foreman
 deliberately keeps into a permanent stall — the dispatch is refused, the caller
 hands the claim back, the queue offers the task again, and the refusal repeats
@@ -935,15 +959,15 @@ Nothing above that file knows which endpoint or which client says so.
 
 To change how foreman works, edit one of these.
 
-| To change | Edit |
-|---|---|
-| where tasks come from | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example |
-| where agents run | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example |
-| the steps a task goes through | `standardPipeline` in `src/pipeline.ts` (`foreman pipeline use` draws one, with `--land` and `--onto`), or draw one on the page |
-| what an agent is told | the files in `~/.config/foreman/prompts/` |
-| which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`) |
-| which models review | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`) |
-| what runs without asking | the policy file (author, climb, review, publish, land) |
+| To change                           | Edit                                                                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| where tasks come from               | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example                                                             |
+| where agents run                    | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example                                                       |
+| the steps a task goes through       | `standardPipeline` in `src/pipeline.ts` (`foreman pipeline use` draws one, with `--land` and `--onto`), or draw one on the page |
+| what an agent is told               | the files in `~/.config/foreman/prompts/`                                                                                       |
+| which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`)                                                                      |
+| which models review                 | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`)                                                    |
+| what runs without asking            | the policy file (author, climb, review, publish, land)                                                                          |
 
 Keep `Records` and `Repository` as they are: the runs and git are how foreman
 knows what happened, whatever the workflow.
@@ -1040,7 +1064,7 @@ combining their display does not combine their actions. A stranded row takes
 no action: the fix is reopening a space for that project.
 
 Every reading carries `observedAt`, when the dispatcher last read the world. A
-running tick publishes its reading and *then* works, so its age tells a reader what the
+running tick publishes its reading and _then_ works, so its age tells a reader what the
 fleet is doing: seconds mean a fleet cycling on its poll interval; minutes mean a
 tick is inside something long, usually a landing running a test suite. Without
 it a working fleet and a wedged one look identical. The same reading carries

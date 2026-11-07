@@ -10,6 +10,7 @@ import { Refused } from "./commands.ts";
 import { place, type Placement } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
+import { runTitles } from "./run-titles.ts";
 
 /**
  * Reads of the task store that a client makes every few seconds, and the
@@ -200,6 +201,21 @@ const inProject = Flag.String("project").pipe(
   Flag.withDescription("The project, which picks its tracker"),
 );
 
+const since = Flag.String("since").pipe(
+  Flag.withDescription("Only the runs that closed at or after this ISO instant"),
+  Flag.optional,
+);
+
+const work = Flag.String("work").pipe(
+  Flag.withDescription("Only the runs of this work: author, review or research"),
+  Flag.optional,
+);
+
+const notes = Flag.Boolean("notes").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Keep only the runs that carry notes"),
+);
+
 /**
  * Every task of one project in its tracker, any status: the backlog an agent
  * searches before it files a new task.
@@ -214,3 +230,42 @@ export const listCommand = Command.make("list", { project: inProject, json }, (a
     }
   }),
 ).pipe(Command.withDescription("Print every task of a project from its tracker"));
+
+/**
+ * The closed runs of one project, oldest first, with the notes an agent left.
+ * A run is a fact the world recorded, not a memory: the store holds it, so a
+ * read spends nothing and writes nothing.
+ */
+export const runsCommand = Command.make(
+  "runs",
+  { project: inProject, since, work, notes, json },
+  (args) =>
+    Effect.gen(function* () {
+      const records = yield* Records;
+      const after = Option.getOrElse(args.since, () => "1970-01-01T00:00:00.000Z");
+      const onlyWork = Option.getOrUndefined(args.work);
+      const closed = (yield* records.closedSince(new Date(after)))
+        .filter((run) => run.project === args.project)
+        .filter((run) => onlyWork === undefined || run.work === onlyWork)
+        .filter((run) => !args.notes || Option.isSome(run.notes));
+      const tracker = yield* Tracker;
+      const titles = yield* runTitles(tracker, args.project, closed);
+      if (args.json) {
+        return yield* Console.log(
+          JSON.stringify(yield* Schema.encodeEffect(Schema.Array(RunRecord))(closed)),
+        );
+      }
+      for (const run of closed) {
+        const lines = [
+          `${run.id}  ${run.task} ${titles.get(run.task) ?? run.task}  ${run.work}  rung ${Option.getOrElse(run.rung, () => "-")}  ending ${Option.getOrElse(run.ending, () => "-")}  closed ${Option.match(run.closedAt, { onNone: () => "open", onSome: (at) => at.toISOString() })}`,
+        ];
+        const noteLines = Option.match(run.notes, {
+          onNone: (): ReadonlyArray<string> => [],
+          onSome: (text) => text.split("\n"),
+        });
+        const rows =
+          noteLines.length === 0 ? lines : [...lines, ...noteLines.map((note) => `  ${note}`)];
+        for (const line of rows) yield* Console.log(line);
+      }
+    }),
+).pipe(Command.withDescription("Print a project's closed runs, oldest first"));

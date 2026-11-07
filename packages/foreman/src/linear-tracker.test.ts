@@ -5,6 +5,7 @@ import { checkPlace, linearTracker, type IssueNode, type WorkflowState } from ".
 import { TrackerError } from "./tracker.ts";
 
 const STATES: ReadonlyArray<WorkflowState> = [
+  { id: "s-triage", name: "Triage", type: "triage" },
   { id: "s-backlog", name: "Backlog", type: "backlog" },
   { id: "s-ready", name: "Ready", type: "unstarted" },
   { id: "s-todo", name: "Todo", type: "unstarted" },
@@ -95,6 +96,20 @@ const fakeLinear = (
           ),
         },
       };
+    if (document.includes("labels: { some:")) {
+      const matching = [...issues.values(), ...closed.values()].filter((issue) =>
+        issue.labels.nodes.some((label) => label.name === variables["label"]),
+      );
+      const start = variables["after"] === undefined ? 0 : Number(variables["after"]);
+      const nodes = matching.slice(start, start + 100);
+      const end = start + nodes.length;
+      return {
+        issues: {
+          pageInfo: { hasNextPage: end < matching.length, endCursor: String(end) },
+          nodes,
+        },
+      };
+    }
     if (document.includes("after: $after")) return { issues: page(variables["after"]) };
     if (document.includes("number: { eq: $number }")) {
       const issue = find(`${String(variables["team"])}-${String(variables["number"])}`);
@@ -166,6 +181,43 @@ const fakeLinear = (
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
 describe("linearTracker", () => {
+  test("labeled reads include closed issues", async () => {
+    const closed = node(9, {
+      state: { type: "completed" },
+      labels: { nodes: [{ name: "schedule:retro" }] },
+    });
+    const linear = fakeLinear({ closed: [closed] });
+    const found = await run(
+      Effect.gen(function* () {
+        const t = yield* linear.tracker;
+        return yield* t.labeled("foreman", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => [issue.id, issue.status])).toEqual([["foreman#ENG-9", "done"]]);
+  });
+
+  test("labeled reads every page so the latest creation remains the window anchor", async () => {
+    const closed = Array.from({ length: 101 }, (_, index) =>
+      node(index + 1, {
+        state: { type: "completed" },
+        createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        labels: { nodes: [{ name: "schedule:retro" }] },
+      }),
+    );
+    const linear = fakeLinear({ closed });
+    const found = await run(
+      Effect.gen(function* () {
+        const t = yield* linear.tracker;
+        return yield* t.labeled("foreman", "schedule:retro");
+      }),
+    );
+    expect(found).toHaveLength(101);
+    expect(found.toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]?.id).toBe(
+      "foreman#ENG-101",
+    );
+    expect(linear.calls.filter((call) => call.document.includes("labels: { some:")).length).toBe(2);
+  });
+
   test("an issue's page is its Linear url", async () => {
     const linear = fakeLinear({ issues: [node(1)] });
     const result = await run(
@@ -354,6 +406,42 @@ describe("linearTracker", () => {
       stateId: "s-todo",
       labelIds: ["l-size", "l-new"],
     });
+  });
+
+  test("add with proposed files in Triage", async () => {
+    const linear = fakeLinear();
+    await run(
+      Effect.flatMap(linear.tracker, (tracker) =>
+        tracker.add({
+          project: "foreman",
+          title: "idea",
+          description: "text",
+          labels: [],
+          status: "proposed",
+        }),
+      ),
+    );
+    const create = linear.calls.find((call) => call.document.includes("issueCreate"));
+    expect(create?.variables["input"]).toMatchObject({ stateId: "s-triage" });
+  });
+
+  test("add with proposed refuses a team with no triage state, before creating anything", async () => {
+    const linear = fakeLinear({ states: STATES.filter((state) => state.type !== "triage") });
+    const error = await run(
+      Effect.flip(
+        Effect.flatMap(linear.tracker, (tracker) =>
+          tracker.add({
+            project: "foreman",
+            title: "idea",
+            description: "text",
+            labels: [],
+            status: "proposed",
+          }),
+        ),
+      ),
+    );
+    expect(error).toBeInstanceOf(TrackerError);
+    expect(linear.calls.some((call) => call.document.includes("issueCreate"))).toBe(false);
   });
 
   test("logs come oldest first", async () => {

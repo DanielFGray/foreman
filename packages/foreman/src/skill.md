@@ -24,27 +24,31 @@ stopped, paused or idle, nothing reviews or lands the task for you.
 
 Run `foreman <command> --help` for the options.
 
-| Command                                                                               | Does                                                                                                             |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `foreman queue [--project P] [--json]`                                                | Prints ready tasks in dispatch order, from the task store only                                                   |
-| `foreman show <id> [--json]`                                                          | Prints one task with its definition of done and its log                                                          |
-| `foreman log <id> <message\|->`                                                       | Appends to the task's log in its project's tracker; `-` reads stdin                                              |
-| `foreman list -p <project> [--json]`                                                  | Prints every task of a project from its tracker, any status                                                      |
-| `foreman add "<title>" -p <project> [-l L]... [-d <text>\|-] [--dispatch [--rung R]]` | Files a task in the project's tracker and prints its id; `-d -` reads stdin; `--dispatch` also starts its author |
-| `foreman status [--json]`                                                             | Prints every row and the commands each takes; `--json` is the shape written to `state.json`                      |
-| `foreman exit <id> <exit> [notes\|-]`                                                 | Names the exit that ends the agent's run, with the notes the next agent reads in `foreman show`; `-` reads stdin |
-| `foreman dispatch <id> [--rung R]`                                                    | Starts a queued task's author now                                                                                |
-| `foreman wait <id> [--role R]`                                                        | Blocks until the task's agents (or one role) stop working, then prints its status                                |
-| `foreman wait --asks`                                                                 | Blocks until a new step waits for your approval, then prints its task and the approve command                    |
-| `foreman approve <id>`                                                                | Lets the step that task waits on run once, for that task alone                                                   |
-| `foreman say <id> [--role R] <text>`                                                  | Sends a message to a task's live agent                                                                           |
-| `foreman correct <id> <findings>`                                                     | Sends the author a correction round (two at most), and counts it                                                 |
-| `foreman prompt author\|review <id>`                                                  | Prints the prompt foreman sends that role                                                                        |
-| `foreman quota`                                                                       | Prints what each account has left                                                                                |
-| `foreman policy <subcommand>`                                                         | Prints or changes what the dispatcher may do without you                                                         |
-| `foreman ladder [edit\|enable\|disable\|suggest]`                                     | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder                                 |
-| `foreman pipeline <subcommand>`                                                       | Reads, checks and edits each project's pipeline and its draft                                                    |
-| `foreman composite edit\|save\|discard\|show <name>`                                  | Edits a composite definition as a draft of its own; save checks every project that uses it                       |
+| Command                                                                                               | Does                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `foreman queue [--project P] [--json]`                                                                | Prints ready tasks in dispatch order, from the task store only                                                       |
+| `foreman show <id> [--json]`                                                                          | Prints one task with its definition of done and its log                                                              |
+| `foreman log <id> <message\|->`                                                                       | Appends to the task's log in its project's tracker; `-` reads stdin                                                  |
+| `foreman list -p <project> [--json]`                                                                  | Prints every task of a project from its tracker, any status                                                          |
+| `foreman runs -p <project> [--since <iso>] [--work <work>] [--notes] [--json]`                        | Prints closed runs oldest first, with notes indented; `--notes` keeps only runs that carry notes                     |
+| `foreman add "<title>" -p <project> [-l L]... [-d <text>\|-] [--proposed] [--dispatch [--rung R]]`    | Files a task and prints its id; `--proposed` holds it out of ready work until opened; `--dispatch` starts its author |
+| `foreman schedule list [project] [--json]`                                                            | Prints the schedules in the policy file                                                                              |
+| `foreman schedule add <project> <name> --every-landed N --title <t> --template <file> [--label L]...` | Adds or replaces a schedule that files a task from a template after N landings                                       |
+| `foreman schedule remove <project> <name>`                                                            | Removes one schedule of a project                                                                                    |
+| `foreman status [--json]`                                                                             | Prints every row and the commands each takes; `--json` is the shape written to `state.json`                          |
+| `foreman exit <id> <exit> [notes\|-]`                                                                 | Names the exit that ends the agent's run, with the notes the next agent reads in `foreman show`; `-` reads stdin     |
+| `foreman dispatch <id> [--rung R]`                                                                    | Starts a queued task's author now                                                                                    |
+| `foreman wait <id> [--role R]`                                                                        | Blocks until the task's agents (or one role) stop working, then prints its status                                    |
+| `foreman wait --asks`                                                                                 | Blocks until a new step waits for your approval, then prints its task and the approve command                        |
+| `foreman approve <id>`                                                                                | Lets the step that task waits on run once, for that task alone                                                       |
+| `foreman say <id> [--role R] <text>`                                                                  | Sends a message to a task's live agent                                                                               |
+| `foreman correct <id> <findings>`                                                                     | Sends the author a correction round (two at most), and counts it                                                     |
+| `foreman prompt author\|review <id>`                                                                  | Prints the prompt foreman sends that role                                                                            |
+| `foreman quota`                                                                                       | Prints what each account has left                                                                                    |
+| `foreman policy <subcommand>`                                                                         | Prints or changes what the dispatcher may do without you                                                             |
+| `foreman ladder [edit\|enable\|disable\|suggest]`                                                     | Prints, checks (`drift`, `size`), advises (`suggest`), or edits the model ladder                                     |
+| `foreman pipeline <subcommand>`                                                                       | Reads, checks and edits each project's pipeline and its draft                                                        |
+| `foreman composite edit\|save\|discard\|show <name>`                                                  | Edits a composite definition as a draft of its own; save checks every project that uses it                           |
 
 Each row action is a command that takes the id of a row in `foreman status`:
 
@@ -109,6 +113,12 @@ ready` reads edges, never the text of a description.
   `foreman add --dispatch` are not gated by the policy: each starts the author
   you asked for.
   They refuse a caller in a fleet worker's terminal: workers file, you dispatch.
+- A schedule files a task from a template on a cadence. Enable the shipped
+  retro with
+  `foreman schedule add <project> retro --every-landed 5 --title "Retro: {{ project }} since {{ since }}" --template retro.md --label research`.
+  The filed task waits for the author gate; the retro agent reads
+  `foreman runs -p <project> --since <iso> --work review --notes` and files
+  proposed edits with `foreman add -p <project> --proposed`.
 - Sending a reviewer to a finished task, and landing an approved branch, both
   wait for the policy. `foreman policy grant <id> land --count 1` lands one.
 - A step set to `ask` stops at its task and waits. `foreman wait --asks` tells

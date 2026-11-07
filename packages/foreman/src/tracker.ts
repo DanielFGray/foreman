@@ -18,6 +18,9 @@ import { linearTracker } from "./linear-tracker.ts";
 import { Repository } from "./repository.ts";
 import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
 
+export const TaskAddStatus = S.Literals(["open", "proposed"]);
+export type TaskAddStatus = typeof TaskAddStatus.Type;
+
 /**
  * The task tracker foreman takes its work from, in tracker terms: which tasks
  * exist and in what status, their labels, their logs, and the status moves
@@ -45,6 +48,11 @@ export class Tracker extends Context.Service<
     /** One task, or nothing when the tracker has no such task. */
     readonly lookup: (task: string) => Effect.Effect<Option.Option<Item>, TrackerError>;
     readonly list: (filter: ListFilterInput) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
+    /** Tasks with a label, including closed tasks the normal project snapshot omits. */
+    readonly labeled: (
+      project: string,
+      label: string,
+    ) => Effect.Effect<ReadonlyArray<Item>, TrackerError>;
     /** Every dependency edge from an item of `project`, whatever the status of either end. */
     readonly dependencies: (
       project: string,
@@ -60,6 +68,11 @@ export class Tracker extends Context.Service<
       readonly title: string;
       readonly description: string;
       readonly labels: ReadonlyArray<string>;
+      /**
+       * The status the task is filed in: `open`, or `proposed`, which holds it
+       * out of the queue until the operator opens it. Absent means `open`.
+       */
+      readonly status?: TaskAddStatus;
     }) => Effect.Effect<string, TrackerError>;
     /**
      * The status moves. Each skips a task that already has the status it
@@ -150,6 +163,11 @@ export const TasksTracker: Effect.Effect<Tracker["Service"], never, Tasks> = Eff
       refresh: () => Effect.void,
       lookup: (task) => tasks.get(task).pipe(as(`show ${task}`)),
       list: (filter) => tasks.list(filter).pipe(as(`list ${JSON.stringify(filter)}`)),
+      labeled: (project, label) =>
+        tasks.list({ project }).pipe(
+          Effect.map((items) => items.filter((item) => item.labels.includes(label))),
+          as(`list ${label}`),
+        ),
       dependencies: (project) =>
         tasks.allDependencies(project).pipe(as(`dependencies of ${project}`)),
       ready: (project) => tasks.ready(project).pipe(as("ready")),
@@ -284,6 +302,8 @@ export const routeByProject = (
           : everywhere(adapters.tasks.list(filter), (tracker, project) =>
               tracker.list({ ...filter, project }),
             ),
+    labeled: (project, label) =>
+      forProject(project).pipe(Effect.flatMap((tracker) => tracker.labeled(project, label))),
     dependencies: (project) =>
       forProject(project).pipe(Effect.flatMap((tracker) => tracker.dependencies(project))),
     ready: (project) =>

@@ -26,11 +26,17 @@ const node = (number: number, change: Partial<IssueNode> = {}): IssueNode => ({
 
 const ok = (stdout: string): GhResult => ({ exitCode: 0, stdout, stderr: "" });
 
-const snapshot = (nodes: ReadonlyArray<IssueNode>) =>
+const snapshot = (
+  nodes: ReadonlyArray<IssueNode>,
+  pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null } = {
+    hasNextPage: false,
+    endCursor: null,
+  },
+) =>
   ok(
     JSON.stringify({
       data: {
-        repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } },
+        repository: { issues: { pageInfo, nodes } },
         rateLimit: { remaining: 4000, limit: 5000, resetAt: "2026-11-03T00:00:00Z" },
       },
     }),
@@ -47,7 +53,7 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
   let written = false;
   let readsAfterWrite = 0;
   const gh = fakeGh((args) => {
-    if (args[1] === "graphql") {
+    if (args[1] === "graphql")
       return options.failRead
         ? { exitCode: 1, stdout: "", stderr: "error connecting to api.github.com" }
         : snapshot([
@@ -59,7 +65,6 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
               },
             }),
           ]);
-    }
     if (args.includes("user")) return rest({ login: "me" });
     if (args.includes("repos/o/r/issues/1")) {
       if (written) readsAfterWrite += 1;
@@ -77,10 +82,67 @@ const github = (options: { readonly lag?: number; readonly failRead?: boolean } 
   return { calls: gh.calls, tracker };
 };
 
+const closedScheduleGithub = () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const gh = fakeGh((args) => {
+    calls.push(args);
+    if (args[1] !== "graphql") return ok("");
+    return snapshot([
+      node(9, {
+        state: "CLOSED",
+        stateReason: "COMPLETED",
+        labels: { nodes: [{ name: "schedule:retro" }] },
+      }),
+    ]);
+  });
+  const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(Effect.provide(gh.layer));
+  return { calls, tracker };
+};
+
+const paginatedScheduleGithub = () => {
+  const gh = fakeGh((args) => {
+    if (args[1] !== "graphql") return ok("");
+    return args.includes("after=next")
+      ? snapshot([node(10, { state: "CLOSED", labels: { nodes: [{ name: "schedule:retro" }] } })])
+      : snapshot([node(9, { labels: { nodes: [{ name: "schedule:retro" }] } })], {
+          hasNextPage: true,
+          endCursor: "next",
+        });
+  });
+  const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(Effect.provide(gh.layer));
+  return { calls: gh.calls, tracker };
+};
+
 const graphqlCalls = (calls: ReadonlyArray<ReadonlyArray<string>>) =>
   calls.filter((args) => args[1] === "graphql").length;
 
 describe("githubTracker reads", () => {
+  test("labeled reads include closed issues", async () => {
+    const { calls, tracker } = closedScheduleGithub();
+    const found = await Effect.runPromise(
+      Effect.gen(function* () {
+        const t = yield* tracker;
+        return yield* t.labeled("beta", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => [issue.id, issue.status])).toEqual([["beta#9", "done"]]);
+    expect(calls.some((args) => args.some((arg) => arg.includes("states: [OPEN, CLOSED]")))).toBe(
+      true,
+    );
+  });
+
+  test("labeled reads every page", async () => {
+    const { calls, tracker } = paginatedScheduleGithub();
+    const found = await Effect.runPromise(
+      Effect.gen(function* () {
+        const t = yield* tracker;
+        return yield* t.labeled("beta", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => issue.id)).toEqual(["beta#9", "beta#10"]);
+    expect(graphqlCalls(calls)).toBe(2);
+  });
+
   test("ready answers the open, unassigned, unblocked tasks of one read", async () => {
     const { calls, tracker } = github();
     const { ready, item } = await Effect.runPromise(
@@ -124,6 +186,75 @@ describe("githubTracker reads", () => {
     );
     expect(exits).toEqual(["Failure", "Failure"]);
     expect(graphqlCalls(calls)).toBe(1);
+  });
+});
+
+describe("githubTracker.add", () => {
+  test("files an open issue with its labels", async () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(
+      Effect.provide(
+        fakeGh((args) => {
+          calls.push(args);
+          if (args[0] === "issue" && args[1] === "create") {
+            return ok("https://github.com/o/r/issues/9\n");
+          }
+          return ok("");
+        }).layer,
+      ),
+    );
+    const id = await Effect.runPromise(
+      Effect.flatMap(tracker, (t) =>
+        t.add({
+          project: "beta",
+          title: "new",
+          description: "body",
+          labels: ["size:2"],
+        }),
+      ),
+    );
+    expect(id).toBe("beta#9");
+    const create = calls.find((args) => args[0] === "issue" && args[1] === "create");
+    expect(create).toEqual([
+      "issue",
+      "create",
+      "-R",
+      "o/r",
+      "--title",
+      "new",
+      "--body-file",
+      "-",
+      "--label",
+      "size:2",
+    ]);
+  });
+
+  test("files a proposed issue with a status:proposed label", async () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(
+      Effect.provide(
+        fakeGh((args) => {
+          calls.push(args);
+          if (args[0] === "issue" && args[1] === "create") {
+            return ok("https://github.com/o/r/issues/10\n");
+          }
+          return ok("");
+        }).layer,
+      ),
+    );
+    await Effect.runPromise(
+      Effect.flatMap(tracker, (t) =>
+        t.add({
+          project: "beta",
+          title: "idea",
+          description: "body",
+          labels: [],
+          status: "proposed",
+        }),
+      ),
+    );
+    const create = calls.find((args) => args[0] === "issue" && args[1] === "create");
+    expect(create).toContain("status:proposed");
   });
 });
 

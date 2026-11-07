@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { Effect, Option } from "effect";
-import type { Item } from "tasks";
+import { Tasks, type Item } from "tasks";
 import { DEFAULT_POLICY, setProjectTracker, type Policy } from "./policy.ts";
-import { routeByProject, Tracker, TrackerError } from "./tracker.ts";
+import { scratchStore } from "./scratch-store.ts";
+import { routeByProject, TasksTracker, Tracker, TrackerError } from "./tracker.ts";
 
 const item = (id: string, project: string) => ({ id, project }) as unknown as Item;
 
@@ -13,6 +14,10 @@ const recording = (name: string, calls: Array<string>, items: ReadonlyArray<Item
     refresh: (project) => note(`refresh ${project}`),
     lookup: (task) => note(`lookup ${task}`).pipe(Effect.as(Option.none())),
     list: (filter) => note(`list ${JSON.stringify(filter)}`).pipe(Effect.as(items)),
+    labeled: (project, label) =>
+      note(`labeled ${project} ${label}`).pipe(
+        Effect.as(items.filter((item) => item.project === project && item.labels.includes(label))),
+      ),
     dependencies: (project) => note(`dependencies ${project}`).pipe(Effect.as([])),
     ready: (project) => note(`ready ${project}`).pipe(Effect.as(items)),
     logs: (task) => note(`logs ${task}`).pipe(Effect.as([])),
@@ -35,6 +40,7 @@ const failing = Tracker.of(
       "refresh",
       "lookup",
       "list",
+      "labeled",
       "dependencies",
       "ready",
       "logs",
@@ -139,5 +145,34 @@ describe("routeByProject", () => {
     const { tracker } = world(onGithub, failing);
     const exit = await Effect.runPromiseExit(tracker.claim("beta#7"));
     expect(exit._tag).toBe("Failure");
+  });
+});
+
+describe("TasksTracker.add proposed", () => {
+  const store = scratchStore();
+  afterAll(store.cleanup);
+
+  test("files a proposed task that ready does not return", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const tracker = yield* TasksTracker;
+        const id = yield* tracker.add({
+          project: "demo",
+          title: "idea",
+          description: "body",
+          labels: [],
+          status: "proposed",
+        });
+        const ready = yield* tracker.ready("demo");
+        const listed = yield* tracker.list({ project: "demo" });
+        return {
+          id,
+          ready: ready.map((item) => item.id),
+          status: listed.find((item) => item.id === id)?.status,
+        };
+      }).pipe(Effect.provide(Tasks.layerAt(store.file))),
+    );
+    expect(result.status).toBe("proposed");
+    expect(result.ready).not.toContain(result.id);
   });
 });

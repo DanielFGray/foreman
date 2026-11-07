@@ -18,7 +18,14 @@ import { pipelineCommand } from "./pipeline-command.ts";
 import { compositeCommand } from "./composite-command.ts";
 import { policyCommand } from "./policy-command.ts";
 import { linearCommand } from "./linear-auth.ts";
-import { listCommand, logCommand, queueCommand, showCommand } from "./store-commands.ts";
+import {
+  listCommand,
+  logCommand,
+  queueCommand,
+  runsCommand,
+  showCommand,
+} from "./store-commands.ts";
+import { scheduleCommand } from "./schedule-command.ts";
 import { services, storeServices } from "./host.ts";
 import { serveCommand } from "./serve.ts";
 
@@ -140,7 +147,9 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
     Command.provide(showCommand, storeServices),
     Command.provide(logCommand, storeServices),
     Command.provide(listCommand, storeServices),
+    Command.provide(runsCommand, storeServices),
     policyCommand,
+    scheduleCommand,
     linearCommand,
     Command.provide(pipelineCommand(services), Registry.layer),
     Command.provide(compositeCommand, Registry.layer),

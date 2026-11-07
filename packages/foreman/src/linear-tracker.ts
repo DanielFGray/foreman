@@ -3,6 +3,7 @@ import { type Dependency, Item, type ListFilterInput, type Status } from "tasks"
 import { confirm, splitBody } from "./github-tracker.ts";
 import { Linear, LinearError, type LinearRate } from "./linear.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
+import { allTrackerPages } from "./tracker-pages.ts";
 
 import type { LinearPlace } from "./policy.ts";
 
@@ -136,6 +137,32 @@ export const linearTracker = (
           [...read.issues.values()].map((issue) => itemOf(project, read, issue)),
         ),
       );
+
+    const labeled = (project: string, label: string) =>
+      Effect.gen(function* () {
+        const read = yield* snapshot(project);
+        const place = yield* placeOf(project);
+        const found = yield* allTrackerPages(
+          (after) =>
+            query(LabeledData, `list ${label}`, labeledQuery, {
+              ...place,
+              label,
+              ...(after === undefined ? {} : { after }),
+            }).pipe(
+              Effect.map(({ value }) => ({
+                nodes: value.issues.nodes,
+                hasNextPage: value.issues.pageInfo.hasNextPage,
+                endCursor: value.issues.pageInfo.endCursor,
+              })),
+            ),
+          () =>
+            new TrackerError({
+              command: `list ${label}`,
+              detail: "Linear omitted the cursor for another page",
+            }),
+        );
+        return found.map((issue) => itemOf(project, read, issue));
+      }).pipe(Effect.mapError(fail(`list ${label}`)));
 
     const issueOf = (task: string) => {
       const parsed = parseId(task);
@@ -277,6 +304,7 @@ export const linearTracker = (
           : items(filter.project ?? parseId(filter.parent ?? "")?.project ?? "").pipe(
               Effect.map((all) => all.filter(matches(filter))),
             ),
+      labeled,
       dependencies: (project) =>
         snapshot(project).pipe(
           Effect.map((read) =>
@@ -317,6 +345,14 @@ export const linearTracker = (
       add: (task) =>
         Effect.gen(function* () {
           const read = yield* snapshot(task.project);
+          const proposed = (task.status ?? "open") === "proposed";
+          // A team may have no triage state, which `stateFor` cannot answer for.
+          // Refusing here names the gap before anything is created.
+          if (proposed && !read.states.some((state) => state.type === PROPOSED_STATE))
+            return yield* new TrackerError({
+              command: `add ${task.title}`,
+              detail: "the team has no triage state, so a proposed task has nowhere to wait",
+            });
           const labelIds = yield* Effect.forEach(task.labels, (label) => labelId(read, label));
           const created = yield* mutate(`add ${task.title}`, createMutation, {
             input: {
@@ -324,7 +360,9 @@ export const linearTracker = (
               projectId: read.projectId,
               title: task.title,
               description: task.description,
-              stateId: stateFor(read.states, "unstarted").id,
+              // A task filed as proposed waits for an operator to open it; the
+              // state that reads as proposed is Linear's triage.
+              stateId: stateFor(read.states, proposed ? PROPOSED_STATE : "unstarted").id,
               labelIds,
             },
           }).pipe(Effect.ensuring(forget(task.project)));
@@ -390,13 +428,19 @@ const splitIdentifier = (identifier: string) => {
 const MOVED_TO = ["unstarted", "started", "completed", "canceled"] as const;
 
 /**
+ * The workflow state type a proposed issue sits in before an operator opens
+ * it: Linear's `triage`. `unstarted` is the filing state of open work.
+ */
+const PROPOSED_STATE = "triage";
+
+/**
  * The team's state of `type`, preferring the name the table in section 7
  * names (`Todo`, a name containing `progress`), as lalph's `findState` does.
  * The read checked every type in `MOVED_TO` exists.
  */
 export const stateFor = (
   states: ReadonlyArray<WorkflowState>,
-  type: (typeof MOVED_TO)[number],
+  type: (typeof MOVED_TO)[number] | typeof PROPOSED_STATE,
 ): WorkflowState => {
   const ofType = states.filter((state) => state.type === type);
   const preferred =
@@ -404,7 +448,9 @@ export const stateFor = (
       ? ofType.find((state) => state.name.toLowerCase() === "todo")
       : type === "started"
         ? ofType.find((state) => state.name.toLowerCase().includes("progress"))
-        : undefined;
+        : type === PROPOSED_STATE
+          ? ofType.find((state) => state.name.toLowerCase().includes("triage"))
+          : undefined;
   return preferred ?? ofType[0]!;
 };
 
@@ -565,6 +611,19 @@ query($team: String!, $project: String!, $after: String!) {
 }
 fragment issue on Issue { ${ISSUE_FIELDS} }`;
 
+const labeledQuery = `
+query($team: String!, $project: String!, $label: String!, $after: String) {
+  issues(first: 100, after: $after, includeArchived: true, filter: {
+    team: { key: { eq: $team } }
+    project: { name: { eq: $project } }
+    labels: { some: { name: { eq: $label } } }
+  }) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...issue }
+  }
+}
+fragment issue on Issue { ${ISSUE_FIELDS} }`;
+
 const lookupQuery = `
 query($team: String!, $number: Float!) {
   issues(first: 1, includeArchived: true, filter: { team: { key: { eq: $team } }, number: { eq: $number } }) { nodes { ...issue } }
@@ -656,6 +715,7 @@ const FirstPage = S.Struct({
 });
 
 const NextPage = S.Struct({ issues: Page });
+const LabeledData = S.Struct({ issues: Page });
 
 const HeldData = S.Struct({ held: S.Struct({ nodes: S.Array(IssueNode) }) });
 

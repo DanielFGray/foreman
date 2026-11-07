@@ -25,7 +25,7 @@ import { type AgentRun, Prompts } from "./prompt.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { Repository, type Branch, type Checked, type Hold, type Landing } from "./repository.ts";
-import type { Ending, NewRunInput, Role } from "tasks";
+import type { Ending, NewRunInput, Role, RunRecord } from "tasks";
 import { authoredBy, reviewFailedBy } from "./lap.ts";
 import { authorRun, authorDone, charged, reviewRun, stoppedRun, withRuns } from "./task-fixture.ts";
 import type { Ladder } from "./ladder.ts";
@@ -43,6 +43,7 @@ import { traceOf, type TraceEvent } from "./pipeline-trace.ts";
 import { scratchStore } from "./scratch-store.ts";
 import { fakeGh } from "./github-fixture.ts";
 import type { GhOptions, GhResult } from "./github.ts";
+import { scheduleLabel } from "./records.ts";
 
 const now = new Date();
 
@@ -143,6 +144,7 @@ const worker = (task: string, role: "author" | "review", state: WorkerState): Wo
 
 class World {
   readonly tasks = new Map<string, Item>();
+  readonly hiddenFromList = new Set<string>();
   readonly workers = new Map<string, Worker>();
   readonly branches = new Map<string, Branch>();
   readonly closed: string[] = [];
@@ -176,6 +178,10 @@ class World {
   readonly writes: string[] = [];
   /** The rows `records.write` received, oldest first. */
   readonly rows: Row[] = [];
+  /** Closed runs `closedSince` answers, oldest first. */
+  readonly closedRuns: RunRecord[] = [];
+  /** How many tasks `tracker.add` has filed in this world. */
+  private filed = 0;
   clean: "clean" | "held" = "clean";
   /** The task branch the project's checkout has out (branch mode), if any. */
   checkedOut: string | undefined = undefined;
@@ -325,7 +331,20 @@ class World {
           )
         : Effect.void,
     lookup: () => Effect.die("unused"),
-    list: () => Effect.die("unused"),
+    list: (filter) =>
+      Effect.sync(() =>
+        [...this.tasks.values()].filter(
+          (task) =>
+            !this.hiddenFromList.has(task.id) &&
+            (filter.project === undefined || task.project === filter.project),
+        ),
+      ),
+    labeled: (project, label) =>
+      Effect.sync(() =>
+        [...this.tasks.values()].filter(
+          (task) => task.project === project && task.labels.includes(label),
+        ),
+      ),
     dependencies: () => Effect.die("unused"),
     ready: () => Effect.die("unused"),
     url: () => Effect.succeedNone,
@@ -335,7 +354,19 @@ class World {
           .filter(([task]) => task === id)
           .map(([, message]) => ({ message, createdAt: now })),
       ),
-    add: () => Effect.die("unused"),
+    add: (filed) =>
+      this.write("tracker.add", () => {
+        this.filed += 1;
+        const id = `ts-filed-${this.filed}`;
+        this.tasks.set(id, item(id, filed.status ?? "open", filed.labels, filed.project));
+        const created = this.tasks.get(id)!;
+        this.tasks.set(id, {
+          ...created,
+          title: filed.title,
+          description: filed.description,
+        });
+        return id;
+      }),
     reopen: () => Effect.die("unused"),
     complete: () => Effect.die("unused"),
     cancel: (id) =>
@@ -477,7 +508,15 @@ class World {
     countRound: () => this.write("records.countRound", () => 1),
     // The fake keeps no run times, so it has no history to read.
     history: () => Effect.succeed([]),
-    closedSince: () => Effect.succeed([]),
+    closedSince: (since: Date) =>
+      Effect.sync(() =>
+        this.closedRuns.filter((run) =>
+          Option.match(run.closedAt, {
+            onNone: () => false,
+            onSome: (closed) => closed.getTime() >= since.getTime(),
+          }),
+        ),
+      ),
   };
 
   readonly repository = {
@@ -636,6 +675,12 @@ class World {
 
 const prompts = Layer.succeed(Prompts, {
   read: () => Effect.succeed(""),
+  fill: (text: string, values: Record<string, string>) =>
+    Effect.succeed(
+      text.replace(/\{\{\s*(.*?)\s*\}\}/g, (_, key: string) => values[key] ?? "").trim(),
+    ),
+  template: (name: string, values: Record<string, string>) =>
+    Effect.succeed(`template:${name}:${values["project"] ?? ""}:${values["since"] ?? ""}`),
   write: (name: string) => Effect.succeed(name),
   instructions: (names: ReadonlyArray<string>) =>
     Effect.succeed(new Map(names.map((name) => [name, ""]))),
@@ -3944,6 +3989,165 @@ describe("ladder levels", () => {
     );
 
     expect([...world.tasks.values()].map(failuresOf)).toEqual([["low"]]);
+  });
+});
+
+/** A closed author run that counts as landed for a schedule. */
+const landedRun = (
+  id: number,
+  task: string,
+  closedAt: Date,
+  project = "test",
+  outcome: "committed" | "answered" = "committed",
+): RunRecord => ({
+  id,
+  project,
+  task,
+  work: "build",
+  rung: Option.some("cheap"),
+  model: Option.none(),
+  node: Option.some("author"),
+  commit: Option.some("c1"),
+  ending: Option.some("done"),
+  outcome: Option.some(outcome),
+  rounds: Option.none(),
+  notes: Option.none(),
+  startedAt: Option.some(closedAt),
+  closedAt: Option.some(closedAt),
+  costUsd: Option.none(),
+});
+
+describe("Dispatcher schedules", () => {
+  const schedule = {
+    name: "retro",
+    every: { landed: 2 },
+    title: "Retro: {{ project }} since {{ since }}",
+    template: "retro",
+    labels: ["research"],
+  };
+
+  const withSchedule = (extra: object = {}) =>
+    usePolicy({
+      ...ALLOWED,
+      projects: { test: { schedules: [schedule], ...extra } },
+    });
+
+  const filed = (world: World) =>
+    [...world.tasks.values()].filter((task) => task.labels.includes(scheduleLabel("retro")));
+
+  test("files nothing below the landed count", async () => {
+    withSchedule();
+    const world = new World(item("ts-a", "done", []));
+    world.closedRuns.push(landedRun(1, "ts-a", now));
+    await tick(world);
+    expect(filed(world)).toEqual([]);
+    expect(world.writes).not.toContain("tracker.add");
+  });
+
+  test("files one task when the landed count is reached", async () => {
+    // Author off so fill does not claim the filing in the same tick: the
+    // assertion is about what the schedule filed, not what the author gate did.
+    usePolicy({
+      slots: 1,
+      default: { author: "off", climb: "on", review: "on", land: "on" },
+      projects: { test: { schedules: [schedule] } },
+    });
+    const world = new World(item("ts-a", "done", []), item("ts-b", "done", []));
+    world.closedRuns.push(landedRun(1, "ts-a", now), landedRun(2, "ts-b", now));
+    await tick(world);
+    const made = filed(world);
+    expect(made).toHaveLength(1);
+    expect(made[0]).toMatchObject({
+      status: "open",
+      labels: ["research", "schedule:retro"],
+      title: `Retro: test since ${new Date(0).toISOString()}`,
+      description: `template:retro:test:${new Date(0).toISOString()}`,
+    });
+  });
+
+  test("files nothing while a schedule task is still open", async () => {
+    withSchedule();
+    const open = {
+      ...item("ts-prev", "open", ["research", scheduleLabel("retro")]),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const world = new World(open, item("ts-a", "done", []), item("ts-b", "done", []));
+    world.closedRuns.push(landedRun(1, "ts-a", now), landedRun(2, "ts-b", now));
+    await tick(world);
+    expect(filed(world).map((task) => task.id)).toEqual(["ts-prev"]);
+    expect(world.writes).not.toContain("tracker.add");
+  });
+
+  test("closed schedule filings stay in the window when the tracker list omits them", async () => {
+    withSchedule();
+    const previous = {
+      ...item("ts-prev", "done", ["research", scheduleLabel("retro")]),
+      createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    };
+    const world = new World(previous, item("ts-a", "done", []));
+    world.hiddenFromList.add("ts-prev");
+    world.closedRuns.push(landedRun(1, "ts-a", new Date("2026-06-02T00:00:00.000Z")));
+
+    await tick(world);
+
+    expect(filed(world).map((task) => task.id)).toEqual(["ts-prev"]);
+    expect(world.writes).not.toContain("tracker.add");
+  });
+
+  test("the next window starts at the newest scheduled task's creation", async () => {
+    withSchedule();
+    const previous = {
+      ...item("ts-prev", "done", ["research", scheduleLabel("retro")]),
+      createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    };
+    const world = new World(previous, item("ts-old", "done", []), item("ts-new", "done", []));
+    // An old landing before the previous filing must not count.
+    world.closedRuns.push(
+      landedRun(1, "ts-old", new Date("2026-05-01T00:00:00.000Z")),
+      landedRun(2, "ts-new", new Date("2026-07-01T00:00:00.000Z")),
+    );
+    await tick(world);
+    expect(filed(world).map((task) => task.id)).toEqual(["ts-prev"]);
+    expect(world.writes).not.toContain("tracker.add");
+
+    world.closedRuns.push(landedRun(3, "ts-newer", new Date("2026-08-01T00:00:00.000Z")));
+    world.tasks.set("ts-newer", item("ts-newer", "done", []));
+    await tick(world);
+    expect(filed(world)).toHaveLength(2);
+    expect(
+      filed(world)
+        .map((task) => task.id)
+        .toSorted(),
+    ).toEqual(["ts-filed-1", "ts-prev"]);
+  });
+
+  test("the schedule's own tasks are not counted as landed work", async () => {
+    withSchedule();
+    const own = {
+      ...item("ts-own", "done", [scheduleLabel("retro")]),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const world = new World(own, item("ts-a", "done", []));
+    world.closedRuns.push(
+      landedRun(1, "ts-own", new Date("2026-02-01T00:00:00.000Z")),
+      landedRun(2, "ts-a", new Date("2026-03-01T00:00:00.000Z")),
+    );
+    await tick(world);
+    // Only one non-schedule landing after the own filing's creation — below N=2.
+    expect(world.writes).not.toContain("tracker.add");
+  });
+
+  test("a paused tick files nothing", async () => {
+    usePolicy({
+      ...ALLOWED,
+      paused: true,
+      projects: { test: { schedules: [schedule] } },
+    });
+    const world = new World(item("ts-a", "done", []), item("ts-b", "done", []));
+    world.closedRuns.push(landedRun(1, "ts-a", now), landedRun(2, "ts-b", now));
+    await tick(world);
+    expect(filed(world)).toEqual([]);
+    expect(world.writes).toEqual([]);
   });
 });
 

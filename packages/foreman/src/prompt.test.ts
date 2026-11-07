@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema as S } from "effect";
+import { Policy, schedulesOf } from "./policy.ts";
 import {
   type AgentNode,
   instructionProblems,
@@ -545,5 +546,56 @@ describe("the instructions foreman ships for agent blocks", () => {
     expect(review).toContain(
       "ended its run `nothing-to-do`: it claims trunk (`develop`) already does",
     );
+  });
+});
+
+describe("a schedule's template read through the real reader", () => {
+  const withConfigDirectory = async <A>(files: Record<string, string>, f: () => Promise<A>) => {
+    const root = mkdtempSync(join(tmpdir(), "foreman-config-"));
+    mkdirSync(join(root, "foreman", "prompts"), { recursive: true });
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(root, "foreman", "prompts", `${name}.md`), text);
+    }
+    const before = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = root;
+    try {
+      return await f();
+    } finally {
+      if (before === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = before;
+    }
+  };
+
+  // The template a policy file names, as the dispatcher reads it from the policy.
+  const templateOf = (template: string) => {
+    const policy = S.decodeSync(Policy)({
+      projects: {
+        alpha: { schedules: [{ name: "retro", every: { landed: 5 }, title: "t", template }] },
+      },
+    });
+    const [schedule] = schedulesOf(policy, "alpha");
+    if (schedule === undefined) throw new Error("the policy has no schedule");
+    return schedule.template;
+  };
+
+  const render = (template: string) =>
+    Effect.runPromise(
+      Prompts.use((prompts) =>
+        prompts.template(template, { project: "alpha", since: "2026-01-01T00:00:00.000Z" }),
+      ).pipe(Effect.provide(Prompts.Default)),
+    );
+
+  test("the operator's copy named by a policy entry's .md wins over the shipped file", async () => {
+    const text = await withConfigDirectory(
+      { retro: "Operator retro: {{ project }} since {{ since }}." },
+      () => render(templateOf("retro.md")),
+    );
+    expect(text).toBe("Operator retro: alpha since 2026-01-01T00:00:00.000Z.");
+  });
+
+  test("the shipped retro template renders with the values a schedule gives it", async () => {
+    const text = await withConfigDirectory({}, () => render(templateOf("retro.md")));
+    expect(text).not.toContain("{{");
+    expect(text).toContain("foreman runs -p alpha --since 2026-01-01T00:00:00.000Z");
   });
 });

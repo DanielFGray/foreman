@@ -104,6 +104,7 @@ const file = (filing: Partial<Filing>, setup: Setup) =>
         labels: [],
         dispatch: false,
         rung: Option.none(),
+        status: "open",
         ...filing,
       },
       tracker,
@@ -134,6 +135,21 @@ describe("foreman add", () => {
         title: "a task",
         description: "what to do\nand when it is done",
         labels: ["size:2"],
+        status: "open",
+      },
+    ]);
+  });
+
+  test("--proposed files the task as proposed", async () => {
+    const { refused, added } = await file({ status: "proposed" }, {});
+    expect(refused).toEqual(Option.none());
+    expect(added).toEqual([
+      {
+        project: "fibrae",
+        title: "a task",
+        description: "",
+        labels: [],
+        status: "proposed",
       },
     ]);
   });

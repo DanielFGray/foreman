@@ -538,6 +538,14 @@ export const countOf = (
 /** The label that marks a task as a defect in shipped code rather than new work. */
 export const BUG = "bug";
 
+/**
+ * The label kind marking a task a schedule filed, by schedule name:
+ * `schedule:<name>`. The schedule's own tasks are how the cadence finds the
+ * window it counts landed work from, and they are not work the pattern repeats.
+ */
+export const SCHEDULE = "schedule";
+export const scheduleLabel = (name: string): string => `${SCHEDULE}:${name}`;
+
 export const DIAGNOSING = "diagnosing";
 export const ONBOARD = "onboard";
 

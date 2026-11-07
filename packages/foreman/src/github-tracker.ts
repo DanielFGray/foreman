@@ -5,6 +5,7 @@ import { Github, GithubError } from "./github.ts";
 import { openCheckouts, projectSet } from "./projects.ts";
 import type { Repository } from "./repository.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
+import { allTrackerPages } from "./tracker-pages.ts";
 
 /**
  * GitHub issues as foreman's tasks, over `gh` (docs/issue-trackers.md,
@@ -125,6 +126,41 @@ export const githubTracker = (
           [...issues.values()].map((issue) => itemOf(project, repo, issue)),
         ),
       );
+
+    const labeled = (project: string, label: string) =>
+      Effect.gen(function* () {
+        const repo = yield* repoOf(project);
+        const [owner = "", name = ""] = repo.split("/");
+        const found = yield* allTrackerPages(
+          (after) =>
+            Effect.gen(function* () {
+              const data = yield* github.graphql(labeledIssuesQuery, {
+                owner,
+                name,
+                label,
+                ...(after === undefined ? {} : { after }),
+              });
+              const page = yield* decode(SnapshotData, `list ${label}`)(data);
+              if (page.repository === null)
+                return yield* new TrackerError({
+                  command: `list ${label}`,
+                  detail: `no repository ${repo}`,
+                });
+              const issues = yield* decode(OpenIssues, `list ${label}`)(page.repository.issues);
+              return {
+                nodes: issues.nodes,
+                hasNextPage: issues.pageInfo.hasNextPage,
+                endCursor: issues.pageInfo.endCursor,
+              };
+            }),
+          () =>
+            new TrackerError({
+              command: `list ${label}`,
+              detail: "GitHub omitted the cursor for another page",
+            }),
+        );
+        return found.map((issue) => itemOf(project, repo, issue));
+      }).pipe(Effect.mapError(fail(`list ${label}`)));
 
     const issueOf = (task: string) => {
       const parsed = parseId(task);
@@ -287,6 +323,7 @@ export const githubTracker = (
           : items(filter.project ?? parseId(filter.parent ?? "")?.project ?? "").pipe(
               Effect.map((all) => all.filter(matches(filter))),
             ),
+      labeled,
       dependencies: (project) =>
         snapshot(project).pipe(
           Effect.map(({ repo, issues }) =>
@@ -340,6 +377,12 @@ export const githubTracker = (
         Effect.gen(function* () {
           const repo = yield* repoOf(task.project);
           yield* Effect.forEach(task.labels, (label) => ensureLabel(repo, label));
+          // A task filed as proposed carries its status as a label, the way
+          // an issue's status is its `status:<value>` label: `open` is the
+          // issue's own state, so it needs no label.
+          const status = task.status ?? "open";
+          const statusLabel = status === "open" ? undefined : `status:${status}`;
+          if (statusLabel !== undefined) yield* ensureLabel(repo, statusLabel);
           const out = yield* github
             .run(
               [
@@ -352,6 +395,7 @@ export const githubTracker = (
                 "--body-file",
                 "-",
                 ...task.labels.flatMap((label) => ["--label", label]),
+                ...(statusLabel === undefined ? [] : ["--label", statusLabel]),
               ],
               { input: task.description },
             )
@@ -552,6 +596,18 @@ query($owner: String!, $name: String!, $after: String) {
       nodes { ...issue }
     }
     ${numbers.map((number) => `n${number}: issue(number: ${number}) { ...issue }`).join("\n    ")}
+  }
+  rateLimit { remaining limit resetAt }
+}
+fragment issue on Issue { ${ISSUE_FIELDS} }`;
+
+const labeledIssuesQuery = `
+query($owner: String!, $name: String!, $label: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, states: [OPEN, CLOSED], labels: [$label], orderBy: { field: CREATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...issue }
+    }
   }
   rateLimit { remaining limit resetAt }
 }
