@@ -15,6 +15,7 @@ import {
 } from "./pipeline.ts";
 import { Paths } from "./paths.ts";
 import type { DiagnosticIntent, Item } from "./records.ts";
+import { PromptError } from "./errors.ts";
 
 /**
  * The messages workers receive.
@@ -368,12 +369,3 @@ const whereTo = (exit: Exit): string => {
     ? `the task returns to the queue${charge}.`
     : `the task goes to ${exit.to}${charge}.`;
 };
-
-export class PromptError extends Schema.TaggedError<PromptError>()("PromptError", {
-  template: Schema.String,
-  detail: Schema.String,
-}) {
-  override get message() {
-    return `${this.template}: ${this.detail}`;
-  }
-}

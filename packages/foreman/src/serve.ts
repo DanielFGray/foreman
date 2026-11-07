@@ -29,13 +29,9 @@ import {
 import { Command } from "effect/cli";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 import { buildHost, publishedFailure } from "./host.ts";
-import {
-  type Published,
-  publishedOf,
-  publishedPath,
-  statusOf,
-  writePublished,
-} from "./published.ts";
+import { publishedOf, statusOf, writePublished } from "./published.ts";
+import { type Published } from "./published-schema.ts";
+import { publishedPath } from "./paths.ts";
 
 export const serveCommand = Command.make("serve", {}, () =>
   Effect.scoped(

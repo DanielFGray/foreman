@@ -21,10 +21,10 @@ import {
   sizeSummary,
   type RungStatus,
   renderRows,
-  RegistryError,
   type RungPlace,
   writeRows,
 } from "./registry.ts";
+import { RegistryError } from "./errors.ts";
 import { reviewerJson } from "./reviewers-command.ts";
 
 /**

@@ -3,7 +3,8 @@ import { Effect, Option } from "effect";
 import { Tasks, type Item } from "tasks";
 import { DEFAULT_POLICY, setProjectTracker, type Policy } from "./policy.ts";
 import { scratchStore } from "./scratch-store.ts";
-import { routeByProject, TasksTracker, Tracker, TrackerError } from "./tracker.ts";
+import { routeByProject, TasksTracker, Tracker } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 
 const item = (id: string, project: string) => ({ id, project }) as unknown as Item;
 

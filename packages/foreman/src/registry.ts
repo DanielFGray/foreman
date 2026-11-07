@@ -3,6 +3,7 @@ import { SqlClient } from "effect/sql";
 import { store } from "tasks";
 import type { Ladder, Rung } from "./ladder.ts";
 import type { Reviewer } from "./reviewers.ts";
+import { RegistryError } from "./errors.ts";
 
 /**
  * The model registry: the ladder, and the facts about each model on it.
@@ -25,14 +26,6 @@ import type { Reviewer } from "./reviewers.ts";
  * `writeRows`, ...) are `Registry.use` over its members, for callers that
  * want one read without naming the service.
  */
-
-export class RegistryError extends Schema.TaggedError<RegistryError>()("RegistryError", {
-  detail: Schema.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
 
 /**
  * One ladder row as an operator edits it. The list is sorted by (level, rank),

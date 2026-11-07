@@ -1,4 +1,5 @@
 import { Match, Option } from "effect";
+import { VIEWS, type ViewName } from "./view-names.ts";
 import type {
   Active,
   Ask,
@@ -43,9 +44,6 @@ const COLUMNS = [
   "quota",
 ] as const;
 export type ColumnName = (typeof COLUMNS)[number];
-
-export const VIEWS = ["queue", "working", "review", "landed", "quota", "attention"] as const;
-export type ViewName = (typeof VIEWS)[number];
 
 export type DecisionKind =
   | "author vanished"

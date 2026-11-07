@@ -26,7 +26,7 @@ import {
 import { loadCatalog, lookupRates, type LoadedCatalog } from "./model-advice-catalog.ts";
 import { Quota, type Usage } from "./quota.ts";
 import { readLadder, registryError } from "./registry.ts";
-import type { RegistryError } from "./registry.ts";
+import { RegistryError } from "./errors.ts";
 
 /** Non-negative integers for token/context CLI flags (rejects negatives). */
 export const NonNegativeTokenCount = S.Number.check(

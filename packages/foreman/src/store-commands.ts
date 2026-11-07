@@ -4,8 +4,8 @@ import { durationOf, type Item, prose, RunRecord } from "tasks";
 import { notesLines, RunSummary, summarizeRuns } from "./run-summary.ts";
 import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
-import { PublishedRow, publishedQueue } from "./published.ts";
-import { queueOf } from "./host.ts";
+import { PublishedRow } from "./published-schema.ts";
+import { queueOf, queueRowsOf } from "./host.ts";
 import { Refused } from "./commands.ts";
 import { place, type Placement } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
@@ -41,14 +41,13 @@ const project = Flag.String("project").pipe(
 /** The queue in the order the fleet would dispatch it. */
 export const queueCommand = Command.make("queue", { json, project }, (args) =>
   Effect.gen(function* () {
-    const { queue, epics } = yield* queueOf(args.project);
     if (args.json) {
+      const rows = yield* queueRowsOf(args.project);
       return yield* Console.log(
-        JSON.stringify(
-          yield* Schema.encodeEffect(Schema.Array(PublishedRow))(publishedQueue(queue, epics)),
-        ),
+        JSON.stringify(yield* Schema.encodeEffect(Schema.Array(PublishedRow))(rows)),
       );
     }
+    const { queue } = yield* queueOf(args.project);
     if (queue.length === 0) return yield* Console.log("queue empty");
     for (const task of queue) {
       yield* Console.log(`${task.id} [${task.project}] p${task.priority} ${task.title}`);

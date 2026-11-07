@@ -1,6 +1,7 @@
 import { Effect, Option } from "effect";
 import type { Dispatcher, FleetState } from "./dispatcher.ts";
-import { actionsFor, rowsForView, VIEWS, type Action, type ColumnRow } from "./view.ts";
+import { actionsFor, rowsForView, type Action, type ColumnRow } from "./view.ts";
+import { VIEWS } from "./view-names.ts";
 
 /**
  * An operator's action on one row, with every answer it needs already given.

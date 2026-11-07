@@ -6,14 +6,7 @@
  */
 import { BunServices } from "@effect/platform-bun";
 import { Config, Context, Effect, Layer, Path, Schema as S } from "effect";
-
-export class PathsError extends S.TaggedError<PathsError>()("PathsError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
+import { PathsError } from "./errors.ts";
 
 export class Paths extends Context.Service<
   Paths,

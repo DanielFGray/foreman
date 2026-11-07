@@ -1,4 +1,5 @@
 import { Context, Effect, Option, Schema } from "effect";
+import { FleetError } from "./errors.ts";
 
 /**
  * The multiplexer, as foreman needs it.
@@ -296,15 +297,6 @@ export interface Pane {
  * or by a human deciding to intervene, which are indistinguishable from here.
  */
 export type WorkerState = "working" | "settled" | "blocked" | "gone";
-
-export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
-  operation: Schema.String,
-  detail: Schema.String,
-}) {
-  override get message() {
-    return `${this.operation}: ${this.detail}`;
-  }
-}
 
 /** Namespaced so foreman's workspaces and branches are obvious at a glance. */
 export const labelFor = (task: string): string => `foreman/${task}`;

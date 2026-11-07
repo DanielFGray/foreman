@@ -7,16 +7,7 @@ import { DateTime, Option } from "effect";
 import { PROCESS_ENDINGS, type Ending } from "tasks";
 import { sinceLanded, type Item } from "./records.ts";
 import type { Placement } from "./pipeline.ts";
-
-export const BOARD_COLUMNS = [
-  "queue",
-  "needs-you",
-  "authoring",
-  "review",
-  "fixing",
-  "landed",
-] as const;
-export type BoardColumn = (typeof BOARD_COLUMNS)[number];
+import { BOARD_COLUMNS, type BoardColumn } from "./board-columns.ts";
 
 /** How long a landed task stays on the board. */
 export const LANDED_HOURS = 24;

@@ -14,7 +14,9 @@ import type { AgentIdentity, AgentRole } from "./fleet.ts";
 import { providerOf, type Seat } from "./ladder.ts";
 import { seatOf, type Seats } from "./reviewers.ts";
 import type { Row } from "./run-step.ts";
-import { ProjectTracker, Tracker, TrackerError } from "./tracker.ts";
+import { ProjectTracker, Tracker } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
+import { RecordsError } from "./errors.ts";
 
 export type { Status as TaskStatus } from "tasks";
 
@@ -599,12 +601,3 @@ export const diagnosticIntent = (item: {
   const intent = valuesOfKind(item.labels, DIAGNOSING)[0];
   return intent === "diagnose" || intent === "review" ? intent : undefined;
 };
-
-export class RecordsError extends S.TaggedError<RecordsError>()("RecordsError", {
-  command: S.String,
-  detail: S.String,
-}) {
-  override get message() {
-    return `${this.command}: ${this.detail}`;
-  }
-}

@@ -1,7 +1,7 @@
 import { Console, Effect } from "effect";
 import { newWorkspace } from "./dispatcher.ts";
 import { routeTarget, routeWorkspace, type Pipeline } from "./pipeline.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { pretend } from "./pipeline-trace.ts";
 import { Prompts } from "./prompt.ts";

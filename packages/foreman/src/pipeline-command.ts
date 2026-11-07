@@ -24,7 +24,8 @@ import {
   updatePipelinesFile,
 } from "./pipeline-file.ts";
 import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
-import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
+import { writtenDrawingOf } from "./pipeline-layout.ts";
+import type { Flow } from "./pipeline-view.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { choicesOf } from "./pipeline-belt.ts";
 import { scopesOf } from "./policy.ts";
@@ -39,27 +40,17 @@ import {
   sameDrawing,
   updateDrafts,
 } from "./pipeline-draft.ts";
-import { PipelineError } from "./pipeline-error.ts";
+import { PipelineError } from "./errors.ts";
 import { Settings, settings } from "./config.ts";
-import { type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { traceReport } from "./pipeline-trace.ts";
+import type { TraceStepView } from "./pipeline-trace-view.ts";
+import { TraceRequest } from "./trace-request.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
 import { readMeasured, ratesOf } from "./run-rates.ts";
 
 export { PipelineError };
-
-/** What `trace` reads: the pretend task, and the events chosen so far. */
-export const TraceRequest = S.Struct({
-  task: S.Struct({
-    labels: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-    size: S.optional(S.Int),
-    priority: S.Int.pipe(S.withDecodingDefault(Effect.succeed(2))),
-    parent: S.optional(S.String),
-  }),
-  events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-});
-export type TraceRequest = S.Schema.Type<typeof TraceRequest>;
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.
@@ -663,7 +654,7 @@ const whereIs = (placement: Placement): string =>
         : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
 
 /** A trace step in words: the event, where the task stands, and what comes next. */
-const traceLine = (step: TraceReport["steps"][number]): string =>
+const traceLine = (step: TraceStepView): string =>
   [
     step.event ?? "start",
     whereIs(step.placement),

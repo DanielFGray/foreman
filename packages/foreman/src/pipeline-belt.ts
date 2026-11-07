@@ -13,6 +13,7 @@
 import { Option } from "effect";
 import { expand, isSettable, PARAM_FIELDS, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
+import type { ChoicesView } from "./pipeline-view.ts";
 import {
   AgentNode,
   type CompositeDefinition,
@@ -166,8 +167,10 @@ export type Insertable = (typeof INSERTABLE)[number];
  * settings, read from the schemas. `composite` is not a bare choice: a
  * composite is inserted by naming its definition (`composites`).
  */
-export const choicesOf = (composites: Composites) => ({
-  insertable: INSERTABLE.filter((kind) => kind !== "composite"),
+export const choicesOf = (composites: Composites): ChoicesView => ({
+  insertable: INSERTABLE.filter(
+    (kind): kind is Exclude<Insertable, "composite"> => kind !== "composite",
+  ),
   composites: Object.keys(composites).sort(),
   steps: STEPS,
   roles: AgentNode.fields.role.literals,

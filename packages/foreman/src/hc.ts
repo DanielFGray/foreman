@@ -7,7 +7,6 @@ import {
   type AttachOptions,
   type CloseOptions,
   Fleet,
-  FleetError,
   type OpenOptions,
   type SpawnOptions,
   type Pane,
@@ -15,6 +14,7 @@ import {
   type WorkerState,
   labelFor,
 } from "./fleet.ts";
+import { FleetError } from "./errors.ts";
 import { harnessLaunch } from "./harness.ts";
 import { Repository, type Worktree } from "./repository.ts";
 

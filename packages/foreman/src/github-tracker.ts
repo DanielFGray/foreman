@@ -4,7 +4,8 @@ import type { Fleet } from "./fleet.ts";
 import { Github, GithubError } from "./github.ts";
 import { openCheckouts, projectSet } from "./projects.ts";
 import type { Repository } from "./repository.ts";
-import { Tracker, TrackerError } from "./tracker.ts";
+import { Tracker } from "./tracker.ts";
+import { TrackerError } from "./errors.ts";
 import { allTrackerPages } from "./tracker-pages.ts";
 
 /**

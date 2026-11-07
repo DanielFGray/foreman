@@ -36,7 +36,8 @@ import {
   rungsOn,
 } from "./ladder.ts";
 import { Quota, QuotaError, type Usage, walledSeats } from "./quota.ts";
-import { Registry, RegistryError } from "./registry.ts";
+import { Registry } from "./registry.ts";
+import { RegistryError } from "./errors.ts";
 import { seed } from "./scratch-store.ts";
 import { connectionAt, Runs } from "tasks";
 import { SqlClient } from "effect/sql";
