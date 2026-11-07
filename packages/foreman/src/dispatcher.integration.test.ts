@@ -3,24 +3,12 @@ import { BunServices } from "@effect/platform-bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  Console,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Schedule,
-  Schema as S,
-  SubscriptionRef,
-} from "effect";
+import { Console, Effect, Layer, Option, Schedule, Schema as S, SubscriptionRef } from "effect";
 import { publishedOf } from "./published.ts";
 import { Published } from "./published-schema.ts";
 import { Command } from "effect/cli";
 import { policyPath, updatePolicy } from "./policy-file.ts";
-import { Dispatcher, EMPTY_FLEET, type Held } from "./dispatcher.ts";
-import { buildHostOver } from "./host.ts";
-import { supervise } from "./serve.ts";
+import { Dispatcher, type Held } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { FleetError } from "./errors.ts";
 import { directoryFor } from "./paths.ts";
@@ -198,8 +186,6 @@ class World {
   treeDirty = false;
   /** The commit the checkout's HEAD names. */
   headCommit = "h0";
-  /** What the checkout's setup answers; `undefined` when the project has no setup script. */
-  setupOutcome: { passed: boolean; output: string } | undefined = undefined;
   /** Each push a landing made: the branch and the commit. */
   readonly pushed: Array<[string, string]> = [];
   /** The head of each branch on the remote, which a fetch takes. */
@@ -558,8 +544,7 @@ class World {
         this.removed.push(branch);
         return this.branches.delete(branch);
       }),
-    // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
-    setup: () => this.write("repository.setup", () => this.setupOutcome),
+    setup: () => this.write("repository.setup", () => undefined),
     merge: (
       _directory: string,
       branch: string,
@@ -1223,64 +1208,6 @@ describe("Dispatcher tick", () => {
     expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
     expect(world.merged).toEqual(["c1"]);
     expect(world.tasks.get(task.id)?.runs.some((run) => run.open)).toBe(false);
-  });
-
-  test("a landing whose checkout setup fails is published as the project's hold until a landing passes", async () => {
-    const task = item("ts-setup", "in_progress", [], "test", [
-      authorDone("cheap"),
-      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
-    ]);
-    const world = new World(task);
-    world.workers.set(task.id, worker(task.id, "review", "settled"));
-    world.branches.set(`foreman/${task.id}`, {
-      branch: `foreman/${task.id}`,
-      merged: false,
-      empty: false,
-      stale: undefined,
-      tip: "c1",
-    });
-    world.landing = {
-      _tag: "Held",
-      reason: "setup",
-      detail: "checkout setup failed:\ninstall broke",
-    };
-
-    // The landing's hold lives in the dispatcher, so every tick shares one
-    // layer. Each tick's reading is taken after it, so each shows the hold the
-    // tick before it recorded.
-    const readings = await Effect.runPromise(
-      Effect.gen(function* () {
-        const dispatcher = yield* Dispatcher;
-        const seen: Array<ReadonlyArray<Held>> = [];
-        for (let tick = 0; tick < 5; tick++) {
-          yield* dispatcher.tick;
-          seen.push((yield* SubscriptionRef.get(dispatcher.state)).held);
-        }
-        world.landing = { _tag: "Present" };
-        yield* dispatcher.tick;
-        yield* dispatcher.tick;
-        seen.push((yield* SubscriptionRef.get(dispatcher.state)).held);
-        return seen;
-      }).pipe(Effect.provide(layerFor(world))),
-    );
-
-    // The first reading precedes any landing attempt, so nothing is known yet.
-    // Every later reading of the failing ticks is held, and each tick retried
-    // the landing.
-    expect(readings[0]).toEqual([]);
-    for (const held of readings.slice(1, 5)) {
-      expect(held).toEqual([
-        expect.objectContaining({
-          project: "test",
-          reason: "setup",
-          detail: "checkout setup failed:\ninstall broke",
-        }),
-      ]);
-    }
-    // Five failing ticks and the passing one each attempt the landing; the tick
-    // after the completion has no landing left to attempt.
-    expect(world.mergeMessages).toHaveLength(6);
-    expect(readings[5]).toEqual([]);
   });
 });
 
@@ -4331,86 +4258,5 @@ describe("work outside the managed set", () => {
 
     expect(state.held.map((held) => [held.project, held.reason])).toEqual([["test", "ambiguous"]]);
     expect(state.stranded).toEqual([]);
-  });
-});
-
-describe("the host's code check, through the production wiring", () => {
-  /**
-   * A host over the world's services, with `codeDirectory` as foreman's own
-   * checkout. Each test names its own directory, since the commit a process
-   * loaded from is remembered per directory for the life of the process.
-   */
-  const hostFor = (world: World, codeDirectory: string) =>
-    buildHostOver({ layer: layerFor(world), codeDirectory });
-
-  test("the host's run fails while the checkout's setup fails on the new commit", async () => {
-    const world = new World(item("ts-host-setup", "in_progress", []));
-    const exit = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          world.headCommit = "loaded";
-          const host = yield* hostFor(world, "/build/host-setup");
-          world.headCommit = "landed";
-          world.setupOutcome = { passed: false, output: "install broke" };
-          return yield* Effect.exit(host.run);
-        }),
-      ),
-    );
-
-    expect(Exit.isFailure(exit)).toBe(true);
-    expect(JSON.stringify(exit)).toContain("checkout setup failed");
-    expect(JSON.stringify(exit)).toContain("install broke");
-  });
-
-  test("the host's run returns once the checkout moved and its setup passes", async () => {
-    const world = new World(item("ts-host-pass", "in_progress", []));
-    const exit = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          world.headCommit = "loaded";
-          const host = yield* hostFor(world, "/build/host-pass");
-          world.headCommit = "landed";
-          world.setupOutcome = { passed: true, output: "" };
-          return yield* Effect.exit(host.run);
-        }),
-      ),
-    );
-
-    expect(Exit.isSuccess(exit)).toBe(true);
-  });
-
-  test("supervise publishes the failed setup as the dispatcher's state", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "foreman-host-supervise-"));
-    const world = new World(item("ts-host-supervise", "in_progress", []));
-    try {
-      const published = await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const code = "/build/host-supervise";
-            // The process loads here, at "loaded"; the first built host is then
-            // the one serve restarts, and the checkout has moved by then.
-            world.headCommit = "loaded";
-            yield* Effect.scoped(hostFor(world, code));
-            world.headCommit = "landed";
-            world.setupOutcome = { passed: false, output: "install broke" };
-            const readings = yield* SubscriptionRef.make(publishedOf(EMPTY_FLEET, Option.none()));
-            yield* supervise(hostFor(world, code), join(dir, "state.json"), readings).pipe(
-              Effect.timeout("300 millis"),
-              Effect.exit,
-            );
-            return yield* SubscriptionRef.get(readings);
-          }),
-        ).pipe(Effect.provide(BunServices.layer)),
-      );
-
-      expect(published.dispatcher).toEqual(
-        expect.objectContaining({
-          state: "failed",
-          detail: expect.stringContaining("checkout setup failed"),
-        }),
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
