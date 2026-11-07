@@ -10,14 +10,12 @@ import {
   setProjectStep,
   setProjectTracker,
   Policy,
-  policyPath,
-  readPolicy,
   STEP_MODES,
   STEPS,
   TRACKERS,
-  updatePolicy,
   type Policy as PolicyType,
 } from "./policy.ts";
+import { policyPath, readPolicy, updatePolicy } from "./policy-file.ts";
 import { Linear } from "./linear.ts";
 import { checkPlace } from "./linear-tracker.ts";
 import { TrackerError } from "./tracker.ts";

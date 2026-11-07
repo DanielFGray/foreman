@@ -16,7 +16,8 @@ import { Github } from "./github.ts";
 import { Linear } from "./linear.ts";
 import { linearTracker } from "./linear-tracker.ts";
 import { Repository } from "./repository.ts";
-import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
+import { trackerOf, type Policy, type TrackerName } from "./policy.ts";
+import { policyPath, readPolicy } from "./policy-file.ts";
 
 export const TaskAddStatus = S.Literals(["open", "proposed"]);
 export type TaskAddStatus = typeof TaskAddStatus.Type;

@@ -30,7 +30,8 @@ import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeli
 import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { choicesOf } from "./pipeline-belt.ts";
-import { policyPath, readPolicy, scopesOf } from "./policy.ts";
+import { scopesOf } from "./policy.ts";
+import { policyPath, readPolicy } from "./policy-file.ts";
 import { graphReport } from "./pipeline-graph.ts";
 import { Tracker } from "./tracker.ts";
 import {

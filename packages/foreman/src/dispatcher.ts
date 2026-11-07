@@ -19,14 +19,13 @@ import { Settings } from "./config.ts";
 import {
   type AgentRole,
   type CloseOptions,
-  directoryFor,
   Fleet,
   labelFor,
   type SpawnOptions,
   taskOf,
-  verifyDirectoryFor,
   type Worker,
 } from "./fleet.ts";
+import { directoryFor, verifyDirectoryFor } from "./paths.ts";
 import { Prompts } from "./prompt.ts";
 import {
   admit,
@@ -34,10 +33,7 @@ import {
   modeOf,
   permit,
   grant,
-  policyPath,
-  readPolicy,
   scopesOf,
-  updatePolicy,
   type Permit,
   type Policy,
   type Scopes,
@@ -46,6 +42,7 @@ import {
   type Step,
   DEFAULT_POLICY,
 } from "./policy.ts";
+import { policyPath, readPolicy, updatePolicy } from "./policy-file.ts";
 import {
   createPullRequest,
   Github,

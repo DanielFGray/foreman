@@ -119,6 +119,26 @@ export const publishedPath = (): string => resolve().published;
 /** Where task worktrees and verify checkouts live. */
 export const checkoutsDirectory = (): string => resolve().checkouts;
 
+/**
+ * Where a task's worktree lives. In foreman's checkouts folder rather than inside
+ * the repository: an in-tree worktree would mean editing .gitignore in every
+ * project foreman touches, and a stray checkout is far more confusing inside a
+ * repo than outside it.
+ */
+export const directoryFor = (project: string, task: string): string =>
+  `${checkoutsDirectory()}/worktrees/${project}/${task}`;
+
+/**
+ * Where a project's landings are proved before they are applied.
+ *
+ * One per project, not one per task: it is a scratch checkout, and landings
+ * are serialised by the tick anyway. Reusing it is what lets the project's
+ * installed dependencies survive between landings, which is the difference
+ * between a verification run and a full cold install every time.
+ */
+export const verifyDirectoryFor = (project: string): string =>
+  `${checkoutsDirectory()}/verify/${project}`;
+
 /** Linear OAuth token beside the config. */
 export const tokenPath = (): string => resolve().linearToken;
 

@@ -6,16 +6,10 @@ import { join } from "node:path";
 import { Console, Effect, Layer, Option, Schedule, Schema as S, SubscriptionRef } from "effect";
 import { Published, publishedOf } from "./published.ts";
 import { Command } from "effect/cli";
-import { policyPath, updatePolicy } from "./policy.ts";
+import { policyPath, updatePolicy } from "./policy-file.ts";
 import { Dispatcher } from "./dispatcher.ts";
-import {
-  directoryFor,
-  Fleet,
-  FleetError,
-  type AgentRole,
-  type Worker,
-  type WorkerState,
-} from "./fleet.ts";
+import { Fleet, FleetError, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
+import { directoryFor } from "./paths.ts";
 import { Settings } from "./config.ts";
 import { attemptsOf, failuresOf, Records, walledBy, type Endings, type Item } from "./records.ts";
 import { applyRow, NO_WRITES, openAgentOf, type Row } from "./run-step.ts";

@@ -15,15 +15,14 @@ import {
   pauseProject,
   permit,
   Policy,
-  readPolicy,
   removeSchedule,
   schedulesOf,
   setProjectStep,
   setProjectTracker,
-  updatePolicy,
   pullRequestOf,
   type Schedule,
 } from "./policy.ts";
+import { readPolicy, updatePolicy } from "./policy-file.ts";
 
 const withGrants = (...grants: Policy["grants"]): Policy => ({ ...DEFAULT_POLICY, grants });
 
