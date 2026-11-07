@@ -27,7 +27,7 @@ import {
   compositeSave,
   compositeShow,
 } from "./composite-command.ts";
-import { queueOf } from "./host.ts";
+import { queueRowsOf } from "./host.ts";
 import {
   pipelineDiscard,
   pipelineEdit,
@@ -41,7 +41,6 @@ import {
 } from "./pipeline-command.ts";
 import { PipelineError } from "./errors.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
-import { publishedQueue } from "./published.ts";
 import { type Published } from "./published-schema.ts";
 import { UiContract } from "./ui-contract.ts";
 
@@ -141,13 +140,7 @@ export const uiHandlersLayer = UiContract.toLayer(
       Pipeline: (payload) => pipelineChanges(payload.project, payload.flow),
       Queue: (payload) =>
         SubscriptionRef.changes(readings).pipe(
-          Stream.mapEffect(() =>
-            infraAsDefects(
-              queueOf(Option.some(payload.project)).pipe(
-                Effect.map(({ queue, epics }) => publishedQueue(queue, epics)),
-              ),
-            ),
-          ),
+          Stream.mapEffect(() => infraAsDefects(queueRowsOf(Option.some(payload.project)))),
         ),
       PipelineShow: (payload) => infraAsDefects(pipelineShow(payload)),
       PipelineEdit: (payload) => infraAsDefects(pipelineEdit(payload)),

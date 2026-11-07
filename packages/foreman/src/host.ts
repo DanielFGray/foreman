@@ -98,6 +98,10 @@ export const queueOf = (project: Option.Option<string>) =>
     return { queue, epics };
   });
 
+/** The queue as the rows `foreman queue --json` prints and the page draws. */
+export const queueRowsOf = (project: Option.Option<string>) =>
+  queueOf(project).pipe(Effect.map(({ queue, epics }) => publishedQueue(queue, epics)));
+
 /**
  * Builds the services in the caller's scope and hands back one dispatcher with
  * the reads a host serves beside it. Closing the scope releases them; the
@@ -134,10 +138,7 @@ export const buildHost = Effect.gen(function* () {
     wake: dispatcher.wake,
     /** The ranked queue for one project or every open one, as published rows. */
     queue: (project: Option.Option<string>) =>
-      queueOf(project).pipe(
-        Effect.map(({ queue, epics }) => publishedQueue(queue, epics)),
-        Effect.provideContext(context),
-      ),
+      queueRowsOf(project).pipe(Effect.provideContext(context)),
   };
 });
 

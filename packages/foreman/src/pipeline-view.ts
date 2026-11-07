@@ -37,9 +37,7 @@ export const BlockView = S.Struct({
   /** Expanded block ids inside a composite instance; absent for every other kind. */
   covers: S.optional(S.Array(S.String)),
   /** A composite instance's ways in: each entry's name, and the wire target that reaches it. */
-  entries: S.optional(
-    S.Array(S.Struct({ id: S.String, name: S.String, target: S.String })),
-  ),
+  entries: S.optional(S.Array(S.Struct({ id: S.String, name: S.String, target: S.String }))),
   /** A composite instance's exits by the definition's names, including those with no wire. */
   exits: S.optional(S.Array(S.Struct({ id: S.String, name: S.String, to: S.String }))),
   x: S.Finite,

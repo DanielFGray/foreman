@@ -17,7 +17,6 @@ import {
 } from "./policy.ts";
 import type { CoveringGrantView, GraphView } from "./pipeline-graph-view.ts";
 
-
 /** What `graphReport` reads. */
 export interface GraphWorld {
   readonly project: string;
