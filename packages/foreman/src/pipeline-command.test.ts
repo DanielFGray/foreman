@@ -584,3 +584,76 @@ describe("foreman pipeline check", () => {
     await expect(run("check", fileWith(drawn))).resolves.toBeUndefined();
   });
 });
+
+describe("foreman pipeline prompt with vars", () => {
+  const reviewLoop = {
+    entries: [{ id: "entry-review-gate", name: "review-gate", block: "review-gate" }],
+    exits: [
+      { id: "exit-landable", name: "landable" },
+      { id: "exit-rework", name: "rework" },
+    ],
+    params: [{ name: "focus", default: "style", sets: [{ block: "review", field: "vars.focus" }] }],
+    blocks: [
+      { kind: "gate", id: "review-gate", step: "review", next: "review" },
+      {
+        kind: "agent",
+        id: "review",
+        role: "review",
+        model: "reviewers",
+        instructions: "focused",
+        exits: [
+          { id: "approved", name: "approved", to: "out:exit-landable" },
+          { id: "returned", name: "returned", to: "out:exit-rework", fails: "author" },
+        ],
+      },
+    ],
+  };
+  const instance = (id: string, set: object, rework: string) => ({
+    kind: "composite",
+    id,
+    of: "review-loop",
+    prefix: `${id}.`,
+    set,
+    exits: [
+      { id: "exit-landable", to: "land-gate" },
+      { id: "exit-rework", to: rework },
+    ],
+  });
+  const drawn = {
+    nodes: [
+      ...STANDARD_PIPELINES.checkout.nodes
+        .filter((node) => node.id !== "review-gate" && node.id !== "review")
+        .map((node) =>
+          node.kind === "agent" && node.id === "author"
+            ? {
+                ...node,
+                exits: node.exits.map((exit) =>
+                  exit.to === "review-gate" ? { ...exit, to: "first" } : exit,
+                ),
+              }
+            : node,
+        ),
+      instance("first", { focus: "security" }, "second"),
+      instance("second", {}, "climb"),
+    ],
+  };
+  beforeEach(() => {
+    rmSync(join(folder, "foreman"), { recursive: true, force: true });
+    writeFileSync(
+      path,
+      JSON.stringify({ pipelines: { amux: drawn }, composites: { "review-loop": reviewLoop } }),
+    );
+  });
+
+  test("each instance's prompt carries its own value of the var", async () => {
+    await run("instructions", "focused", "Review for {{ focus }}.");
+    expect(await printed("prompt", "amux", "first.review")).toContain("Review for security.");
+    expect(await printed("prompt", "amux", "second.review")).toContain("Review for style.");
+  });
+
+  test("instructions that use a var the block lacks stop the prompt", async () => {
+    await run("instructions", "focused", "Review for {{ focus }}.");
+    await run("instructions", "author", "Work on {{ focus }}.");
+    expect(await refusal("prompt", "amux", "author")).toMatch(/\{\{ focus \}\} is no placeholder/);
+  });
+});
