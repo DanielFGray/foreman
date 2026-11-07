@@ -17,6 +17,7 @@ import {
   TrackerError,
 } from "./errors.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
+import { GraphView } from "./pipeline-graph-view.ts";
 import {
   CompositeEditView,
   CompositeView,
@@ -112,7 +113,7 @@ export const PipelineSimulate = Rpc.make("PipelineSimulate", {
 
 export const PipelineGraph = Rpc.make("PipelineGraph", {
   payload: { project: S.String },
-  success: JsonView,
+  success: GraphView,
   error: S.Union([PipelineError, RecordsError, TrackerError]),
 });
 

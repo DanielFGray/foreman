@@ -14,44 +14,9 @@ import {
   type Scopes,
   type Step,
   STEPS,
-  type StepMode,
 } from "./policy.ts";
+import type { CoveringGrantView, GraphView } from "./pipeline-graph-view.ts";
 
-export interface GraphReport {
-  readonly project: string;
-  readonly items: ReadonlyArray<GraphItem>;
-  /** The edges between shown items; `item` waits for `dependsOn`. */
-  readonly edges: ReadonlyArray<Dependency>;
-  /** Each step a gate in the project's pipeline names, with its mode for the project. */
-  readonly steps: ReadonlyArray<{ readonly step: Step; readonly mode: StepMode }>;
-  /** The steps a grant from the pane gives: the gated steps that are not on. */
-  readonly grantSteps: ReadonlyArray<Step>;
-}
-
-export interface GraphItem {
-  readonly id: string;
-  readonly title: string;
-  readonly type: "task" | "epic";
-  readonly status: string;
-  readonly priority: number;
-  readonly parent: string | null;
-  /** 0 for an item no shown item blocks; else one past its furthest shown blocker. */
-  readonly column: number;
-  /** Its place within the column, from 0 at the top. */
-  readonly row: number;
-  /** Every unfinished item it waits for, shown or not. */
-  readonly waitsFor: ReadonlyArray<string>;
-  /** The grant that lets the dispatcher take some of `grantSteps` for it, if one does. */
-  readonly grant: CoveringGrant | null;
-}
-
-export interface CoveringGrant {
-  readonly scope: string;
-  /** For a task, the steps of `grantSteps` it lets the dispatcher take; for an epic, the grant's steps. */
-  readonly steps: ReadonlyArray<Step>;
-  /** How many more tasks the grant admits, when it has a count. */
-  readonly left: number | null;
-}
 
 /** What `graphReport` reads. */
 export interface GraphWorld {
@@ -70,7 +35,7 @@ export interface GraphWorld {
 /**
  * The project's graph, with the grant that covers each item (`coveringOf`).
  */
-export const graphReport = (world: GraphWorld): GraphReport => {
+export const graphReport = (world: GraphWorld): GraphView => {
   const { project, items, dependencies, statusOf, policy, scopes, pipeline } = world;
   const shown = new Set(items.map((item) => item.id));
   const unfinished = dependencies.filter(
@@ -126,7 +91,7 @@ export const gatedSteps = (
   pipeline: Pipeline,
   policy: Policy,
   project: string,
-): Pick<GraphReport, "steps" | "grantSteps"> => {
+): Pick<GraphView, "steps" | "grantSteps"> => {
   const gated = new Set(
     pipeline.nodes.flatMap((node) => (node.kind === "gate" ? [node.step] : [])),
   );
@@ -149,8 +114,8 @@ export const coveringOf = (
   scopes: Scopes,
   item: Item,
   grantSteps: ReadonlyArray<Step>,
-): CoveringGrant | null => {
-  const covering = (grant: Grant, steps: ReadonlyArray<Step>): CoveringGrant => ({
+): CoveringGrantView | null => {
+  const covering = (grant: Grant, steps: ReadonlyArray<Step>): CoveringGrantView => ({
     scope: grant.scope,
     steps,
     left:
