@@ -1,0 +1,159 @@
+/**
+ * The RpcGroup the web UI page and the UI server share (`docs/web-ui.md`).
+ *
+ * Each procedure's Schemas are foreman's: streams push readings, pipeline and
+ * queue views; verbs call the same Effect functions the CLI uses.
+ */
+import { Effect, Schema as S } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
+import { PipelineError } from "./pipeline-error.ts";
+import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
+import { TraceRequest } from "./pipeline-command.ts";
+import { Published, PublishedRow } from "./published.ts";
+
+/** Which way a pipeline drawing runs in JSON. */
+export const Flow = S.Literals(["across", "down"]);
+export type Flow = typeof Flow.Type;
+
+const flowField = Flow.pipe(S.withDecodingDefault(Effect.succeed("across" as const)));
+
+/**
+ * A JSON view the page draws: layout and choices are nested shapes without a
+ * single Schema of their own yet, so they travel as JSON. Pipeline drawings
+ * and published readings keep their Schemas.
+ */
+const JsonView = S.Any;
+
+/** Streams that push a value at once and again at each change. */
+export const Readings = Rpc.make("Readings", {
+  success: Published,
+  stream: true,
+});
+
+export const Pipeline = Rpc.make("Pipeline", {
+  payload: { project: S.String, flow: flowField },
+  success: JsonView,
+  error: PipelineError,
+  stream: true,
+});
+
+export const Queue = Rpc.make("Queue", {
+  payload: { project: S.String },
+  success: S.Array(PublishedRow),
+  error: PipelineError,
+  stream: true,
+});
+
+/** Pipeline verbs: one Rpc per exported Effect in `pipeline-command.ts`. */
+export const PipelineShow = Rpc.make("PipelineShow", {
+  payload: { project: S.String, flow: flowField },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const PipelineEdit = Rpc.make("PipelineEdit", {
+  payload: { project: S.String, change: PipelineChange, flow: flowField },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const PipelineSave = Rpc.make("PipelineSave", {
+  payload: { project: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+export const PipelineDiscard = Rpc.make("PipelineDiscard", {
+  payload: { project: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+export const PipelineInstructions = Rpc.make("PipelineInstructions", {
+  payload: {
+    name: S.String,
+    text: S.optional(S.String),
+  },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const PipelinePrompt = Rpc.make("PipelinePrompt", {
+  payload: { project: S.String, block: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+export const PipelineTrace = Rpc.make("PipelineTrace", {
+  payload: { project: S.String, request: TraceRequest },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const PipelineSimulate = Rpc.make("PipelineSimulate", {
+  payload: {
+    project: S.String,
+    seed: S.Int.pipe(S.withDecodingDefault(Effect.succeed(1))),
+    hours: S.Finite.pipe(S.withDecodingDefault(Effect.succeed(72))),
+  },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const PipelineGraph = Rpc.make("PipelineGraph", {
+  payload: { project: S.String },
+  success: JsonView,
+  error: PipelineError,
+});
+
+/** Composite verbs: one Rpc per exported Effect in `composite-command.ts`. */
+export const CompositeShow = Rpc.make("CompositeShow", {
+  payload: { name: S.String, flow: flowField },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const CompositeEdit = Rpc.make("CompositeEdit", {
+  payload: { name: S.String, change: CompositeChange, flow: flowField },
+  success: JsonView,
+  error: PipelineError,
+});
+
+export const CompositeSave = Rpc.make("CompositeSave", {
+  payload: { name: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+export const CompositeDiscard = Rpc.make("CompositeDiscard", {
+  payload: { name: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+export const CompositePrompt = Rpc.make("CompositePrompt", {
+  payload: { name: S.String, block: S.String },
+  success: S.String,
+  error: PipelineError,
+});
+
+/** The contract the page and the UI server share. */
+export const UiContract = RpcGroup.make(
+  Readings,
+  Pipeline,
+  Queue,
+  PipelineShow,
+  PipelineEdit,
+  PipelineSave,
+  PipelineDiscard,
+  PipelineInstructions,
+  PipelinePrompt,
+  PipelineTrace,
+  PipelineSimulate,
+  PipelineGraph,
+  CompositeShow,
+  CompositeEdit,
+  CompositeSave,
+  CompositeDiscard,
+  CompositePrompt,
+);
