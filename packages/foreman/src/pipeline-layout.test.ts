@@ -41,16 +41,11 @@ describe("layoutOf", () => {
       const layout = layoutOf(beltOf(pipeline), flow);
       for (const { wire, points } of layout.wires) {
         for (const [id, box] of layout.boxes) {
-          // A wire may touch its own ends on the edge; an inset ignores that
-          // contact so a stretch through the block itself still fails — the
-          // old skip of from/to missed review→climb running through climb.
-          const body = { x: box.x + 1, y: box.y + 1, w: box.w - 2, h: box.h - 2 };
-          if (body.w <= 0 || body.h <= 0) continue;
           points
             .slice(1)
             .forEach((point, index) =>
               expect(
-                crosses(points[index]!, point, body),
+                crosses(points[index]!, point, box),
                 `${wire.from}→${wire.to} runs through ${id}`,
               ).toBe(false),
             );
