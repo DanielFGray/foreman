@@ -28,6 +28,7 @@ import {
   pullRequestLands,
   QUEUE,
   routesWithoutGate,
+  splitTarget,
   standardExits,
   strandedPublishGates,
 } from "./pipeline.ts";
@@ -298,7 +299,8 @@ export const makeComposite = (
   }
   const entries: Array<CompositeEntry> = [];
   for (const target of entering) {
-    const name = target.replace("/", "-");
+    const [block, port] = splitTarget(target);
+    const name = port === undefined ? block : `${block}-${port}`;
     let id = `entry-${name}`;
     for (let n = 2; entries.some((one) => one.id === id); n++) id = `entry-${name}-${n}`;
     entries.push({ id, name, block: target });
@@ -598,20 +600,17 @@ const entryNameRefusal = (definition: CompositeDefinition, name: string, except?
 
 /** Whether `target` is `<instance>/<entry id>` of an instance in the drawing whose definition has that entry. */
 const entryTargetOf = (pipeline: Drawing, target: string, composites: Composites): boolean => {
-  const at = target.indexOf("/");
-  if (at < 0) return false;
-  const instance = pipeline.nodes.find((node) => node.id === target.slice(0, at));
+  const [block, port] = splitTarget(target);
+  if (port === undefined) return false;
+  const instance = pipeline.nodes.find((node) => node.id === block);
   return (
     instance?.kind === "composite" &&
-    (composites[instance.of]?.entries ?? []).some((entry) => entry.id === target.slice(at + 1))
+    (composites[instance.of]?.entries ?? []).some((entry) => entry.id === port)
   );
 };
 
 /** The block a wire target names: the target without its `/<entry id>`. */
-export const blockOf = (target: string): string => {
-  const at = target.indexOf("/");
-  return at < 0 ? target : target.slice(0, at);
-};
+export const blockOf = (target: string): string => splitTarget(target)[0];
 
 /** `node` with `f` applied to each wire target it holds. */
 const rewriteTargets = (node: DrawnNode, f: (target: string) => string): DrawnNode => {

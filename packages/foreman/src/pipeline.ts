@@ -29,6 +29,17 @@ import { taskOf } from "./fleet.ts";
 export const QUEUE = "queue";
 
 /**
+ * Splits a wire target or a filter's qualified reference (`<block>` or
+ * `<block>/<port>`) at its first `/`, giving the block and the entry or exit
+ * after it. Block ids hold no `/` (the drawing check refuses one), so the first
+ * `/` is the only separator.
+ */
+export const splitTarget = (target: string): readonly [string, string | undefined] => {
+  const at = target.indexOf("/");
+  return at < 0 ? [target, undefined] : [target.slice(0, at), target.slice(at + 1)];
+};
+
+/**
  * A way to end a run, wired to the block that comes next, or to `queue`.
  *
  * `id` is the exit's identity: a run that names the exit stores it, and
@@ -1224,8 +1235,10 @@ interface ExitRef {
 }
 
 const parseExitRef = (text: string): ExitRef | undefined => {
-  const match = new RegExp(`^(?:([^\\s/]+)/)?([a-z-]+)$`).exec(text);
-  return match === null ? undefined : { block: match[1], name: match[2] ?? "" };
+  const [head, port] = splitTarget(text);
+  if (port === undefined)
+    return /^[a-z-]+$/.test(head) ? { block: undefined, name: head } : undefined;
+  return /^\S+$/.test(head) && /^[a-z-]+$/.test(port) ? { block: head, name: port } : undefined;
 };
 
 /** Whether a named exit is the one `text` (an exit reference) refers to. */
@@ -1512,10 +1525,12 @@ const exitsNamedBy = (filter: string): ReadonlyArray<ExitRef> =>
  * (`exit:<block>/<name>`, `exits:<block>/<name>`).
  */
 export const mapFilterBlocks = (filter: string, f: (block: string) => string): string =>
-  filter.replace(
-    /(^|\s)(-?exits?:)([^\s/]+)\/(?=[a-z-]+(?:\s|$|[<>=]))/g,
-    (_, lead: string, head: string, block: string) => `${lead}${head}${f(block)}/`,
-  );
+  filter.replace(/(^|\s)(-?exits?:)(\S+)/g, (word, lead: string, head: string, term: string) => {
+    const [block, port] = splitTarget(term);
+    return block !== "" && port !== undefined && /^[a-z-]+(?:$|[<>=])/.test(port)
+      ? `${lead}${head}${f(block)}/${port}`
+      : word;
+  });
 
 const filtersOf = (node: PipelineNode): ReadonlyArray<string> =>
   node.kind === "source"
