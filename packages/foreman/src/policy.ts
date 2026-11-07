@@ -25,16 +25,18 @@
  * The policy is an intention, and an intention is the one thing foreman cannot
  * read back from the world. It lives in a file the operator edits through
  * `foreman policy` or the Foreman pane, so it survives a restart and both front ends
- * write it through `updatePolicy`. The dispatcher writes it too, to record
- * which tasks a grant has admitted.
+ * write it through `updatePolicy` in `policy-file.ts`. The dispatcher writes it
+ * too, to record which tasks a grant has admitted.
  *
  * Commands the operator gives by hand (`foreman dispatch`, the Foreman pane's launch)
  * are not gated: the operator pressing the key is the permission.
+ *
+ * This module holds Schemas and pure rules only. Readers and writers are
+ * `policy-file.ts`, so a browser bundle of the pipeline modules does not pull
+ * Bun's file system.
  */
-import { Effect, FileSystem, Option, Schema as S, SchemaGetter } from "effect";
+import { Effect, Option, Schema as S, SchemaGetter } from "effect";
 import type { Item } from "./records.ts";
-import { policyPath } from "./paths.ts";
-import { rewrite } from "./shared-file.ts";
 
 export const STEPS = ["author", "climb", "review", "publish", "land"] as const;
 export type Step = (typeof STEPS)[number];
@@ -385,64 +387,6 @@ export const scopesOf = <E>(
   ).pipe(Effect.map((entries): Scopes => new Map(entries)));
 
 const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
-
-export { policyPath };
-
-/**
- * The policy as the file states it.
- *
- * A missing file is the default, which takes no step. A file that does not
- * decode is paused, with the reason, because a policy foreman cannot read is
- * not permission for anything, and the operator has to see why the fleet
- * stopped.
- */
-export const readPolicy = (path: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const text = yield* fs.readFileString(path).pipe(Effect.option);
-    if (Option.isNone(text)) return { policy: DEFAULT_POLICY, error: undefined, text: undefined };
-    return yield* S.decodeEffect(S.fromJsonString(Policy))(text.value).pipe(
-      Effect.map((policy) => ({ policy, error: undefined, text: text.value })),
-      Effect.catch((error) =>
-        Effect.succeed({
-          policy: { ...DEFAULT_POLICY, paused: true },
-          error: `${path} does not decode, so the fleet is paused: ${error.message}`,
-          text: text.value,
-        }),
-      ),
-    );
-  });
-
-/**
- * Rewrites the policy through `change`, the one way anything writes it.
- *
- * Losing the race `rewrite` describes loses one write: an expiry the
- * dispatcher makes again next tick, an admission that lets a grant take on one
- * task more than its count, or an operator's change that the next reading
- * shows did not happen.
- */
-export const updatePolicy = (path: string, change: (policy: Policy) => Policy) =>
-  rewrite(
-    path,
-    Policy,
-    (path) =>
-      readPolicy(path).pipe(
-        Effect.map(({ policy, error, text }) => ({ value: policy, error, text })),
-      ),
-    change,
-  ).pipe(
-    Effect.catchTag("RewriteError", (error) =>
-      Effect.fail(new PolicyError({ detail: error.detail })),
-    ),
-  );
-
-export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
 
 /** Changes one project's entry; an entry left holding nothing is dropped. */
 const editProject = (

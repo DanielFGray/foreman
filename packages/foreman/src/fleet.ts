@@ -1,5 +1,4 @@
 import { Context, Effect, Option, Schema } from "effect";
-import { checkoutsDirectory } from "./paths.ts";
 
 /**
  * The multiplexer, as foreman needs it.
@@ -9,6 +8,10 @@ import { checkoutsDirectory } from "./paths.ts";
  * labelled with its task and role. Those labels are how foreman knows what it
  * is doing: the roster is read back from the multiplexer every tick rather
  * than remembered, so foreman holds no state that a restart could lose.
+ *
+ * Schemas and pure rules live here. Worktree and verify paths are in
+ * `paths.ts`, so a browser bundle of the pipeline modules does not pull Bun's
+ * file system.
  */
 export class Fleet extends Context.Service<
   Fleet,
@@ -309,26 +312,6 @@ export const labelFor = (task: string): string => `foreman/${task}`;
 /** The task a workspace belongs to, or undefined if it is not foreman's. */
 export const taskOf = (label: string): string | undefined =>
   label.startsWith("foreman/") ? label.slice("foreman/".length) : undefined;
-
-/**
- * Where a task's worktree lives. In foreman's checkouts folder rather than inside
- * the repository: an in-tree worktree would mean editing .gitignore in every
- * project foreman touches, and a stray checkout is far more confusing inside a
- * repo than outside it.
- */
-export const directoryFor = (project: string, task: string): string =>
-  `${checkoutsDirectory()}/worktrees/${project}/${task}`;
-
-/**
- * Where a project's landings are proved before they are applied.
- *
- * One per project, not one per task: it is a scratch checkout, and landings
- * are serialised by the tick anyway. Reusing it is what lets the project's
- * installed dependencies survive between landings, which is the difference
- * between a verification run and a full cold install every time.
- */
-export const verifyDirectoryFor = (project: string): string =>
-  `${checkoutsDirectory()}/verify/${project}`;
 
 /**
  * Runs `awaitTurn` until `working` reads false. The reading is taken after

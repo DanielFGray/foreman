@@ -3,14 +3,12 @@ import { Console, Effect, Option, Schema } from "effect";
 import {
   addSchedule,
   Policy,
-  policyPath,
-  readPolicy,
   removeSchedule,
   schedulesOf,
-  updatePolicy,
   type Policy as PolicyType,
   Schedule,
 } from "./policy.ts";
+import { policyPath, readPolicy, updatePolicy } from "./policy-file.ts";
 
 /**
  * `foreman schedule`: read and change the recurring patterns a project keeps.

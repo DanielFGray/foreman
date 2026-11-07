@@ -18,7 +18,7 @@ import { store } from "tasks";
 import { openCheckouts, projectSet } from "./projects.ts";
 import { Prompts } from "./prompt.ts";
 import { publishedOf, publishedQueue } from "./published.ts";
-import { policyPath, readPolicy } from "./policy.ts";
+import { policyPath, readPolicy } from "./policy-file.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";

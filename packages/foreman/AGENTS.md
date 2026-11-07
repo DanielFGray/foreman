@@ -54,11 +54,11 @@ a claim made by hand.
 Every tick reads all of it back, so a restart re-adopts its live workers
 instead of orphaning them.
 
-The policy file (`src/policy.ts`), the pipelines file (`src/pipeline-file.ts`),
-the drafts file beside it (`src/pipeline-draft.ts`) and the instructions files
-in `prompts/` beside them (`src/prompt.ts`)
-are the only durable things foreman holds, because nothing in the world records
-the operator's intention. The policy holds `paused`,
+The policy file (`src/policy-file.ts`, Schemas and pure rules in `src/policy.ts`),
+the pipelines file (`src/pipeline-file.ts`), the drafts file beside it
+(`src/pipeline-draft.ts`) and the instructions files in `prompts/` beside them
+(`src/prompt.ts`) are the only durable things foreman holds, because nothing in
+the world records the operator's intention. The policy holds `paused`,
 `slots`, a default for each spending step (`author`, `climb`, `review`, `publish`, `land`)
 (`on` runs it, `ask` holds it for one approval per task, `off` does nothing),
 grants that widen the default for one task or epic, and `projects`: a
@@ -740,7 +740,7 @@ Saved pipelines keep their drawn returns to the queue.
 pull-request landing is proved by the repo's required checks instead, and the
 proving ground does not run. The merge is
 made, and the project's `verify` is run, in a per-project proving ground —
-`verifyDirectoryFor` in `src/fleet.ts`, a detached git worktree reset to the
+`verifyDirectoryFor` in `src/paths.ts`, a detached git worktree reset to the
 target's current tip. Check blocks run their command there too, at the task's
 tip, after the landings.
 

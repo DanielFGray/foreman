@@ -138,10 +138,9 @@ the page's files. `foreman serve` provides it beside `supervise`.
   Tasks board, Models board, simulate, fleet, task detail.
 - **Shared code.** The page imports the contract and foreman's pure modules
   (`problemsOf`, `expand`, `beltOf`, `layoutOf`, `PipelineChange`) directly, in
-  place of the copies a mod needs. Today `src/policy.ts` and `src/fleet.ts`
-  import `src/paths.ts` and `src/shared-file.ts`, which pull Bun's file system
-  into a browser build. Their Schemas and pure rules move into modules that do
-  no I/O, and the I/O stays where it is. The page's build fails on any `node:`
+  place of the copies a mod needs. Schemas and pure rules live in `src/policy.ts`
+  and `src/fleet.ts` with no I/O; readers and writers are `src/policy-file.ts`
+  and path helpers in `src/paths.ts`. The page's build fails on any `node:`
   or `bun:` import, or on a browser polyfill warning.
 - **Notifications.** A row that newly appears under Landed posts a browser
   notification, as the pane does. The page asks for the permission once.
