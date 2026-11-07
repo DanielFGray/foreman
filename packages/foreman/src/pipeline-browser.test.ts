@@ -34,8 +34,11 @@ describe("pipeline modules browser bundle", () => {
       metafile: true,
     });
 
-    const warnings = result.logs.filter((log) => log.level === "warning" || log.level === "error");
-    expect(warnings.map((log) => String(log.message ?? log))).toEqual([]);
+    // Bun 1.4 emits build warnings with level "warn", which its types do not list, so
+    // only the non-warning levels are allowed through.
+    const quiet = ["debug", "verbose", "info"];
+    const warnings = result.logs.filter((log) => !quiet.includes(log.level));
+    expect(warnings.map((log) => log.message)).toEqual([]);
     expect(result.success).toBe(true);
 
     // String literals such as Effect's optional getBuiltinModule("node:async_hooks")
