@@ -130,13 +130,17 @@ export type FixtureServer = {
   readonly port: number;
   readonly url: string;
   readonly reading: Published;
+  /** Stops the Layer, then removes the scratch store and folder. */
   readonly interrupt: () => Promise<void>;
+  /** Removes the scratch store and folder without stopping the Layer; for a process that is exiting. */
+  readonly cleanup: () => void;
   readonly folder: string;
 };
 
 /**
  * Starts the UI server Layer on a free port with fixture readings and a scratch
- * store. Caller must `interrupt` and may remove `folder`.
+ * store. The caller ends it with `interrupt`, or with `cleanup` when the process
+ * exits.
  */
 export const startFixtureServer = async (options?: {
   readonly port?: number;
@@ -187,15 +191,19 @@ export const startFixtureServer = async (options?: {
     await new Promise((ready) => setTimeout(ready, 100));
   }
 
+  const cleanup = () => {
+    store.cleanup();
+    rmSync(folder, { recursive: true, force: true });
+  };
   return {
     port,
     url,
     reading,
     folder,
+    cleanup,
     interrupt: async () => {
       await Effect.runPromise(Fiber.interrupt(fiber));
-      store.cleanup();
-      rmSync(folder, { recursive: true, force: true });
+      cleanup();
     },
   };
 };

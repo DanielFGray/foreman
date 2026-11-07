@@ -83,6 +83,7 @@ describe("foreman-ui pages", () => {
     expect(reloads).toBe(0);
 
     await commands.startUiServer(location.origin, uiPort);
-    await expect.poll(() => reloads, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
+    // A retry runs each second, so one reload is due within two seconds of the restart.
+    await expect.poll(() => reloads, { timeout: 2_000 }).toBeGreaterThanOrEqual(1);
   });
 });

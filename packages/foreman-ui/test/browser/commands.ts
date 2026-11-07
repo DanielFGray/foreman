@@ -4,10 +4,11 @@
  * origin of the page vitest opened, whatever port vitest chose for it. Passing
  * the port again restarts the server where it was, for the reconnect test.
  */
+import { fileURLToPath } from "node:url";
 import type { BrowserCommand } from "vitest/node";
 import { freePort } from "../../src/fixtures.ts";
 
-const serverScript = new URL("./ui-server-process.ts", import.meta.url).pathname;
+const serverScript = fileURLToPath(new URL("./ui-server-process.ts", import.meta.url));
 
 let child: Bun.Subprocess<"ignore", "pipe", "inherit"> | undefined;
 
