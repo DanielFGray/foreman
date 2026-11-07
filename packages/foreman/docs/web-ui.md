@@ -125,9 +125,9 @@ the page's files. `foreman serve` provides it beside `supervise`.
 - **Stop closes open page sockets.** Bun's graceful `server.stop()` waits for
   open WebSockets forever, so Effect's BunHttpServer finalizer never finished
   with a page connected. The workspace patches `@effect/platform-bun@4.1.2` so
-  that finalizer calls `server.stop(true)`. Then `foreman serve` (SIGTERM, or
-  exit after a new commit on foreman's checkout) finishes with a page still
-  open, and that page's reconnect sees the new serve.
+  that finalizer calls `server.stop(true)`. Closing the UI server Layer
+  finishes with a page still open and closes that page's socket. The serve
+  integration must close this Layer when the process stops.
 
 ## The page
 
