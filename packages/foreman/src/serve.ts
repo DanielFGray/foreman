@@ -18,10 +18,10 @@ import {
   Cause,
   Data,
   Effect,
+  Fiber,
   Option,
   Ref,
   Schedule,
-  Semaphore,
   type Scope,
   Stream,
   SubscriptionRef,
@@ -85,25 +85,13 @@ export const supervise = <E, RR, BE, R>(
     // The last fleet reading, which a failure is published over.
     const last = yield* Ref.make(Option.none<FleetState>());
 
-    // Publish into the process-lifetime ref, then write that same value to
-    // state.json. One permit so a stream update and a final flush cannot race
-    // the same temp file. The UI Readings stream will subscribe to the ref on
-    // its own. A file that cannot be written is logged and written again with
-    // the next reading: it is a view, and a stale one says so through its
-    // timestamp.
-    const gate = Semaphore.makeUnsafe(1);
-    const publish = (published: Published) =>
-      gate.withPermits(1)(
-        SubscriptionRef.set(readings, published).pipe(
-          Effect.andThen(
-            writePublished(path, published).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("foreman's state.json was not written", cause),
-              ),
-            ),
-          ),
-        ),
-      );
+    // The only writer of state.json. It follows the ref, so the file always
+    // holds a value the ref held, and nothing else writes the temp file.
+    const writer = yield* Effect.forkChild(
+      SubscriptionRef.changes(readings).pipe(
+        Stream.runForEach((published) => writeReading(path, published)),
+      ),
+    );
 
     // One life of the dispatcher. State before its first reading is unpublished:
     // publishing it would say the fleet is empty.
@@ -115,10 +103,12 @@ export const supervise = <E, RR, BE, R>(
           // cancel an in-flight publish of the last reading.
           Effect.uninterruptible(
             Ref.set(last, Option.some(fleet)).pipe(
-              Effect.andThen(publish(publishedOf(fleet, Option.some(statusOf(fleet))))),
+              Effect.andThen(
+                SubscriptionRef.set(readings, publishedOf(fleet, Option.some(statusOf(fleet)))),
+              ),
             ),
           );
-        yield* Effect.forkScoped(
+        const streaming = yield* Effect.forkScoped(
           Stream.runForEach(
             SubscriptionRef.changes(host.state).pipe(
               Stream.filter((fleet) => fleet.observedAt !== undefined),
@@ -126,11 +116,19 @@ export const supervise = <E, RR, BE, R>(
             put,
           ),
         );
-        yield* host.run;
-        // On a clean return, flush once on this fiber so the last reading is
-        // not lost to the scope interrupt of the stream fiber.
-        const fleet = yield* SubscriptionRef.get(host.state);
-        if (fleet.observedAt !== undefined) yield* put(fleet);
+        // However the dispatcher ends, stop the stream first, so no older reading
+        // is published after the newest. Then publish the newest reading. The
+        // interrupt waits out any in-flight put.
+        yield* host.run.pipe(
+          Effect.ensuring(
+            Fiber.interrupt(streaming).pipe(
+              Effect.andThen(SubscriptionRef.get(host.state)),
+              Effect.flatMap((fleet) =>
+                fleet.observedAt === undefined ? Effect.void : put(fleet),
+              ),
+            ),
+          ),
+        );
       }),
     );
 
@@ -139,20 +137,43 @@ export const supervise = <E, RR, BE, R>(
       return Effect.logError("foreman's dispatcher failed; starting it again", cause).pipe(
         Effect.andThen(Ref.get(last)),
         Effect.flatMap((fleet) => publishedFailure(fleet, detail)),
-        Effect.flatMap(publish),
+        Effect.flatMap((published) => SubscriptionRef.set(readings, published)),
         Effect.catchCause((cause) =>
           Effect.logWarning("foreman's failure could not be published", cause),
         ),
       );
     };
 
+    // Retries until interrupted. The writer stops first, then the readings
+    // ref's current value is written, so the file ends on the newest value.
     yield* attempt.pipe(
       Effect.sandbox,
       Effect.tapError(failed),
       Effect.retry({ schedule: BACKOFF, while: (cause) => !Cause.hasInterruptsOnly(cause) }),
       Effect.catch(Effect.failCause),
+      Effect.ensuring(
+        Fiber.interrupt(writer).pipe(
+          Effect.andThen(SubscriptionRef.get(readings)),
+          Effect.flatMap((published) => writeReading(path, published)),
+        ),
+      ),
     );
   });
+
+/**
+ * Writes one published reading to state.json. The reading before a dispatcher
+ * has produced one is not written, because the file would then say the fleet
+ * is empty. A file that cannot be written is logged, and the next reading is
+ * written again: state.json is a view, and a stale one says so in its timestamp.
+ */
+const writeReading = (path: string, published: Published) =>
+  published.dispatcher === null
+    ? Effect.void
+    : writePublished(path, published).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("foreman's state.json was not written", cause),
+        ),
+      );
 
 /** Another process holds the serve lock, so it runs the dispatcher already. */
 export class ServeRunning extends Data.TaggedError("ServeRunning")<{ readonly lock: string }> {

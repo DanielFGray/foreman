@@ -129,6 +129,40 @@ describe("supervise", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("after a clean return, the ref and state.json hold the newest of many consecutive readings", async () => {
+    const dir = scratch();
+    const path = join(dir, "state.json");
+    const count = 20;
+    try {
+      const ref = await Effect.runPromise(
+        Effect.gen(function* () {
+          const readings = yield* emptyReadings();
+          // Each reading is set and then yields, so the subscriber falls behind
+          // the host and the final publish races its queued older readings.
+          const build = Effect.gen(function* () {
+            const state = yield* SubscriptionRef.make<FleetState>(EMPTY_FLEET);
+            const run = Effect.forEach(
+              Array.from({ length: count }, (_, i) => i + 1),
+              (i) =>
+                SubscriptionRef.set(state, {
+                  ...EMPTY_FLEET,
+                  observedAt: DateTime.makeUnsafe(i),
+                }).pipe(Effect.andThen(Effect.yieldNow)),
+            ).pipe(Effect.asVoid);
+            return { state, run };
+          });
+          yield* supervise(build, path, readings);
+          return yield* SubscriptionRef.get(readings);
+        }).pipe(Effect.provide(BunServices.layer)),
+      );
+      const newest = DateTime.formatIso(DateTime.makeUnsafe(count));
+      expect(ref.observedAt).toBe(newest);
+      expect(JSON.parse(readFileSync(path, "utf8")).observedAt).toBe(newest);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("holdLock", () => {
