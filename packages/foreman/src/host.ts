@@ -169,8 +169,8 @@ const codeMovedFrom = (
   });
 
 /**
- * The commit each code checkout was at when this process first built a host
- * over it: the code the process runs. Kept per process, not per host, because a
+ * The commit of foreman's checkout when this process first built a host:
+ * the code the process runs. Kept per process, not per host, because a
  * host built again after a failure still runs the code the process loaded.
  */
 let loadedCommit: string | undefined;

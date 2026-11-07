@@ -8,7 +8,7 @@ import { publishedOf } from "./published.ts";
 import { Published } from "./published-schema.ts";
 import { Command } from "effect/cli";
 import { policyPath, updatePolicy } from "./policy-file.ts";
-import { Dispatcher, type Held } from "./dispatcher.ts";
+import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
 import { FleetError } from "./errors.ts";
 import { directoryFor } from "./paths.ts";
