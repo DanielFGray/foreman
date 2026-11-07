@@ -511,7 +511,7 @@ describe("foreman pipeline check", () => {
 
   test("an instance that replaces the review loop checks as the pipeline it expands to", async () => {
     const reviewLoop = {
-      entry: "review-gate",
+      entries: [{ id: "entry-review-gate", name: "review-gate", block: "review-gate" }],
       exits: [
         { id: "exit-landable", name: "landable" },
         { id: "exit-rework", name: "rework" },

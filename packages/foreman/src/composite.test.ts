@@ -22,7 +22,7 @@ const OFFERS: SeatOffers = {
 
 /** The review-gate + review pair from the standard checkout pipeline, as a definition. */
 const reviewLoop: CompositeDefinition = {
-  entry: "review-gate",
+  entries: [{ id: "entry-review-gate", name: "review-gate", block: "review-gate" }],
   exits: [
     { id: "exit-landable", name: "landable" },
     { id: "exit-rework", name: "rework" },
@@ -156,7 +156,7 @@ describe("expand", () => {
 
   test("a nested instance expands with joined prefixes", () => {
     const inner: CompositeDefinition = {
-      entry: "inner-gate",
+      entries: [{ id: "entry-inner-gate", name: "inner-gate", block: "inner-gate" }],
       exits: [{ id: "out", name: "out" }],
       params: [],
       blocks: [
@@ -171,7 +171,7 @@ describe("expand", () => {
       ],
     };
     const outer: CompositeDefinition = {
-      entry: "wrap",
+      entries: [{ id: "entry-wrap", name: "wrap", block: "wrap" }],
       exits: [{ id: "out", name: "out" }],
       params: [],
       blocks: [
@@ -298,7 +298,7 @@ describe("expand", () => {
   test("a definition that holds itself is a problem of that project only", () => {
     const looped: Composites = {
       self: {
-        entry: "inner",
+        entries: [{ id: "entry-inner", name: "inner", block: "inner" }],
         exits: [{ id: "out", name: "out" }],
         params: [],
         blocks: [
@@ -405,13 +405,13 @@ describe("expand: ids and entries", () => {
   // equals the id of the entry block it expands to.
   test("an instance whose entry block shares its id, through nested empty prefixes, terminates", () => {
     const inner: CompositeDefinition = {
-      entry: "wrap",
+      entries: [{ id: "entry-wrap", name: "wrap", block: "wrap" }],
       exits: [],
       params: [],
       blocks: [{ kind: "done", id: "wrap" }],
     };
     const outer: CompositeDefinition = {
-      entry: "wrap",
+      entries: [{ id: "entry-wrap", name: "wrap", block: "wrap" }],
       exits: [],
       params: [],
       blocks: [{ kind: "composite", id: "wrap", of: "inner", prefix: "", set: {}, exits: [] }],
@@ -438,13 +438,13 @@ describe("expand: ids and entries", () => {
   // definition holds an instance whose id is `foo` with prefix "".
   test("an exit wire to a parent block named like a nested instance is not rewritten", () => {
     const leaf: CompositeDefinition = {
-      entry: "end",
+      entries: [{ id: "entry-end", name: "end", block: "end" }],
       exits: [{ id: "x", name: "x" }],
       params: [],
       blocks: [{ kind: "gate", id: "end", step: "review", next: "out:x" }],
     };
     const wrapper: CompositeDefinition = {
-      entry: "foo",
+      entries: [{ id: "entry-foo", name: "foo", block: "foo" }],
       exits: [{ id: "e", name: "e" }],
       params: [],
       blocks: [
@@ -484,7 +484,7 @@ describe("expand: ids and entries", () => {
 
   test("two drawn nodes named alike are a failure naming the id, not a silent choice", () => {
     const definition: CompositeDefinition = {
-      entry: "end",
+      entries: [{ id: "entry-end", name: "end", block: "end" }],
       exits: [],
       params: [],
       blocks: [{ kind: "done", id: "end" }],
@@ -504,7 +504,7 @@ describe("expand: ids and entries", () => {
 
   test("two instances with prefix empty of one definition give the duplicate-block problem", () => {
     const definition: CompositeDefinition = {
-      entry: "end",
+      entries: [{ id: "entry-end", name: "end", block: "end" }],
       exits: [],
       params: [],
       blocks: [{ kind: "done", id: "end" }],

@@ -16,6 +16,7 @@ import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   AgentNode,
   type CompositeDefinition,
+  type CompositeEntry,
   type Composites,
   type DrawnNode,
   type Drawing,
@@ -57,6 +58,8 @@ export interface Wire {
   readonly to: string;
   /** The route's filter, `else`, the exit's name, or empty for a block's one way out. */
   readonly label: string;
+  /** The entry id of a wire into a composite instance that names one; absent for the default entry and for every other block. */
+  readonly entry?: string;
 }
 
 /**
@@ -86,7 +89,13 @@ export interface Belt {
  */
 export const beltOf = (pipeline: Drawing): Belt => {
   const nodes = new Map(pipeline.nodes.map((node) => [node.id, node]));
-  const wires = wiresOf(pipeline);
+  // A wire to `<instance>/<entry id>` ends at the instance's block; `entry` keeps which way in.
+  const wires = wiresOf(pipeline).map((wire): Wire => {
+    const block = blockOf(wire.to);
+    return block === wire.to
+      ? wire
+      : { ...wire, to: block, entry: wire.to.slice(block.length + 1) };
+  });
   const backs = backWiresOf(pipeline, wires);
 
   const columns = new Map<string, number>();
@@ -231,25 +240,31 @@ export const insertOn = (
  * with one instance whose prefix is `""`, so the blocks keep their ids
  * (`docs/composite-blocks.md`).
  *
- * Refused when the selection holds a source, names a missing block, or the
- * wires into it reach more than one block (no single entry).
+ * Each distinct target a wire from outside reaches becomes one entry, named by
+ * that target, in the order the wires appear. `reaches` maps each such target
+ * to the wire target that now leads to its entry: the instance's id for the
+ * first entry, `<id>/<entry id>` for the others.
  *
- * `definitionEntry` is the entry of the definition being drawn, when the
- * drawing is one. Nothing in the drawing wires into that block, so the
- * selection's entry is counted from it as well.
+ * Refused when the selection holds a source, names a missing block, or no wire
+ * enters it.
+ *
+ * `definitionEntries` are the entries of the definition being drawn, when the
+ * drawing is one. Nothing in the drawing wires into their blocks, so the
+ * selection's entries are counted from them first.
  */
 export const makeComposite = (
   pipeline: Drawing,
   ids: ReadonlyArray<string>,
   name: string,
   composites: Composites = {},
-  definitionEntry?: string,
+  definitionEntries: ReadonlyArray<CompositeEntry> = [],
 ):
   | {
       readonly _tag: "Made";
       readonly pipeline: Drawing;
       readonly definition: CompositeDefinition;
       readonly id: string;
+      readonly reaches: ReadonlyMap<string, string>;
     }
   | { readonly _tag: "Refused"; readonly reason: string } => {
   if (ids.length === 0)
@@ -268,30 +283,32 @@ export const makeComposite = (
   }
 
   const wires = wiresOf(pipeline);
-  const entries = [
+  const entering = [
     ...new Set([
+      ...definitionEntries
+        .filter((entry) => selected.has(blockOf(entry.block)))
+        .map((entry) => entry.block),
       ...wires
-        .filter((wire) => selected.has(wire.to) && !selected.has(wire.from))
+        .filter((wire) => selected.has(blockOf(wire.to)) && !selected.has(wire.from))
         .map((wire) => wire.to),
-      ...(definitionEntry !== undefined && selected.has(definitionEntry) ? [definitionEntry] : []),
     ]),
   ];
-  const [entry, ...otherEntries] = entries;
-  if (entry === undefined || otherEntries.length > 0) {
-    return {
-      _tag: "Refused",
-      reason:
-        entries.length === 0
-          ? "no wire enters the selection"
-          : `wires into the selection reach ${entries.join(" and ")}`,
-    };
+  if (entering.length === 0) {
+    return { _tag: "Refused", reason: "no wire enters the selection" };
+  }
+  const entries: Array<CompositeEntry> = [];
+  for (const target of entering) {
+    const name = target.replace("/", "-");
+    let id = `entry-${name}`;
+    for (let n = 2; entries.some((one) => one.id === id); n++) id = `entry-${name}-${n}`;
+    entries.push({ id, name, block: target });
   }
 
   // The first wire out to each outside block names its exit, in drawing order.
   const exits: Array<{ id: string; name: string; to: string }> = [];
   const takenExitIds = new Set<string>();
   for (const wire of wires) {
-    if (!selected.has(wire.from) || selected.has(wire.to)) continue;
+    if (!selected.has(wire.from) || selected.has(blockOf(wire.to))) continue;
     if (exits.some((exit) => exit.to === wire.to)) continue;
     const source = selectedNodes.find((node) => node.id === wire.from);
     const exitName = exitNameOf(source, wire.to, composites) ?? wire.to;
@@ -305,13 +322,13 @@ export const makeComposite = (
   const outOf = new Map(exits.map((exit) => [exit.to, exit.id]));
 
   const rewrite = (target: string): string => {
-    if (target === QUEUE || selected.has(target)) return target;
+    if (target === QUEUE || selected.has(blockOf(target))) return target;
     const exitId = outOf.get(target);
     return exitId !== undefined ? `${OUT}${exitId}` : target;
   };
 
   const definition: CompositeDefinition = {
-    entry,
+    entries,
     exits: exits.map(({ id, name }) => ({ id, name })),
     params: [],
     blocks: selectedNodes.map((node) => rewriteTargets(node, rewrite)),
@@ -329,13 +346,18 @@ export const makeComposite = (
     set: {},
     exits: exits.map((exit) => ({ id: exit.id, to: exit.to })),
   };
+  const reaches = new Map(
+    entries.map((entry, at) => [entry.block, at === 0 ? id : `${id}/${entry.id}`] as const),
+  );
+  const rewired = remaining.map((node) =>
+    [...reaches].reduce((one, [from, to]) => redirect(one, from, to), node),
+  );
   return {
     _tag: "Made",
-    pipeline: {
-      nodes: [...remaining.map((node) => redirect(node, entry, id)), instance],
-    },
+    pipeline: { nodes: [...rewired, instance] },
     definition,
     id,
+    reaches,
   };
 };
 
@@ -376,8 +398,8 @@ export const unpack = (
   | {
       readonly _tag: "Unpacked";
       readonly pipeline: Drawing;
-      /** The block that wires into the instance now reach, which a definition's entry must follow. */
-      readonly entry: string;
+      /** Where a wire to the instance (or to `<id>/<entry id>`) now leads, which a definition's entries must follow. */
+      readonly reaches: ReadonlyMap<string, string>;
     }
   | { readonly _tag: "Refused"; readonly reason: string } => {
   const instance = pipeline.nodes.find((node) => node.id === id);
@@ -394,11 +416,13 @@ export const unpack = (
       nodes: [
         ...pipeline.nodes
           .filter((node) => node.id !== id)
-          .map((node) => redirect(node, id, opened.entry)),
+          .map((node) =>
+            [...opened.reaches].reduce((one, [from, to]) => redirect(one, from, to), node),
+          ),
         ...opened.blocks,
       ],
     },
-    entry: opened.entry,
+    reaches: opened.reaches,
   };
 };
 
@@ -489,17 +513,105 @@ export const renameCompositeExit = (
   };
 };
 
-/** Sets which block a wire into an instance reaches. */
+type DefinitionResult =
+  | { readonly _tag: "Changed"; readonly definition: CompositeDefinition }
+  | { readonly _tag: "Refused"; readonly reason: string };
+
+/** Adds an entry named `name` that reaches `block`, with a fresh id. */
+export const addEntry = (
+  definition: CompositeDefinition,
+  block: string,
+  name: string,
+): DefinitionResult => {
+  const refusal = entryTargetRefusal(definition, block) ?? entryNameRefusal(definition, name);
+  if (refusal !== undefined) return { _tag: "Refused", reason: refusal };
+  let id = `entry-${name}`;
+  for (let n = 2; definition.entries.some((one) => one.id === id); n++) id = `entry-${name}-${n}`;
+  return {
+    _tag: "Changed",
+    definition: { ...definition, entries: [...definition.entries, { id, name, block }] },
+  };
+};
+
+/** Drops an entry. The last one stays: a definition with no way in cannot be used. */
+export const removeEntry = (definition: CompositeDefinition, id: string): DefinitionResult => {
+  if (!definition.entries.some((entry) => entry.id === id)) {
+    return { _tag: "Refused", reason: `the definition has no entry ${id}` };
+  }
+  if (definition.entries.length === 1) {
+    return { _tag: "Refused", reason: `${id} is the last entry: a definition needs one` };
+  }
+  return {
+    _tag: "Changed",
+    definition: { ...definition, entries: definition.entries.filter((entry) => entry.id !== id) },
+  };
+};
+
+/** Renames an entry by id, leaving every wire to it in place. */
+export const renameEntry = (
+  definition: CompositeDefinition,
+  id: string,
+  name: string,
+): DefinitionResult => {
+  if (!definition.entries.some((entry) => entry.id === id)) {
+    return { _tag: "Refused", reason: `the definition has no entry ${id}` };
+  }
+  const refusal = entryNameRefusal(definition, name, id);
+  if (refusal !== undefined) return { _tag: "Refused", reason: refusal };
+  return {
+    _tag: "Changed",
+    definition: {
+      ...definition,
+      entries: definition.entries.map((entry) => (entry.id === id ? { ...entry, name } : entry)),
+    },
+  };
+};
+
+/** Points an entry at another block. */
 export const setEntry = (
   definition: CompositeDefinition,
-  entry: string,
-):
-  | { readonly _tag: "Changed"; readonly definition: CompositeDefinition }
-  | { readonly _tag: "Refused"; readonly reason: string } => {
-  if (!definition.blocks.some((block) => block.id === entry)) {
-    return { _tag: "Refused", reason: `${entry} is not in the definition` };
+  id: string,
+  block: string,
+): DefinitionResult => {
+  if (!definition.entries.some((entry) => entry.id === id)) {
+    return { _tag: "Refused", reason: `the definition has no entry ${id}` };
   }
-  return { _tag: "Changed", definition: { ...definition, entry } };
+  const refusal = entryTargetRefusal(definition, block);
+  if (refusal !== undefined) return { _tag: "Refused", reason: refusal };
+  return {
+    _tag: "Changed",
+    definition: {
+      ...definition,
+      entries: definition.entries.map((entry) => (entry.id === id ? { ...entry, block } : entry)),
+    },
+  };
+};
+
+const entryTargetRefusal = (definition: CompositeDefinition, block: string) =>
+  definition.blocks.some((one) => one.id === blockOf(block))
+    ? undefined
+    : `${block} is not in the definition`;
+
+const entryNameRefusal = (definition: CompositeDefinition, name: string, except?: string) =>
+  definition.entries.some((entry) => entry.id !== except && entry.name === name)
+    ? `the definition already has an entry named ${name}`
+    : undefined;
+
+/** Whether `target` is `<instance>/<entry id>` of an instance in the drawing whose definition has that entry. */
+const entryTargetOf = (pipeline: Drawing, target: string, composites: Composites): boolean => {
+  const at = target.indexOf("/");
+  if (at < 0) return false;
+  const instance = pipeline.nodes.find((node) => node.id === target.slice(0, at));
+  return (
+    instance?.kind === "composite" &&
+    (composites[instance.of]?.entries ?? []).some((entry) => entry.id === target.slice(at + 1))
+  );
+};
+
+/** The block a wire target names: the target without its `/<entry id>`. */
+export const blockOf = (target: string): string => {
+  const at = target.indexOf("/");
+  return at < 0 ? target : target.slice(0, at);
 };
 
 /** `node` with `f` applied to each wire target it holds. */
@@ -540,8 +652,15 @@ export const remove = (pipeline: Drawing, id: string): Drawing => {
   if (node === undefined) return pipeline;
   const others = pipeline.nodes.filter((candidate) => candidate.id !== id);
   const onward = onwardOf(node);
-  if (onward !== undefined) return { nodes: others.map((other) => redirect(other, id, onward)) };
-  return wiresOf(pipeline).some((wire) => wire.to === id) ? pipeline : { nodes: others };
+  // A wire to `<id>/<entry id>` enters the same block, so it runs on too.
+  if (onward !== undefined) {
+    return {
+      nodes: others.map((other) =>
+        rewriteTargets(other, (target) => (blockOf(target) === id ? onward : target)),
+      ),
+    };
+  }
+  return wiresOf(pipeline).some((wire) => blockOf(wire.to) === id) ? pipeline : { nodes: others };
 };
 
 /** Adds a route to a router. It joins `else` at once, until blocks are put on it. */
@@ -563,17 +682,21 @@ export const removeRoute = (pipeline: Drawing, router: string, index: number): D
  * closes a loop is drawn as a back wire, and `problemsOf` reports a loop that
  * nothing ends. An exit may also lead to `queue`, a return. Inside a
  * definition draft, `out:<exit id>` is a valid end when `outs` holds that id
- * (`docs/composite-blocks.md`). Refused (none) when either end is not allowed.
+ * (`docs/composite-blocks.md`). `<instance>/<entry id>` is a valid end when
+ * the instance's definition has that entry. Refused (none) when either end is
+ * not allowed.
  */
 export const rejoin = (
   pipeline: Drawing,
   wire: Pick<Wire, "from" | "port">,
   to: string,
   outs: ReadonlySet<string> = new Set(),
+  composites: Composites = {},
 ): Option.Option<Drawing> => {
   const outId = to.startsWith(OUT) ? to.slice(OUT.length) : undefined;
   const allowed =
     pipeline.nodes.some((node) => node.id === to) ||
+    entryTargetOf(pipeline, to, composites) ||
     (to === QUEUE && typeof wire.port === "string" && wire.port.startsWith("exit:")) ||
     (outId !== undefined && outs.has(outId));
   return pipeline.nodes.some((node) => node.id === wire.from) && allowed

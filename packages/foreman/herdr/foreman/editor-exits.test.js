@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   chargeChange,
   emptyChange,
+  entryRows,
+  entrySummary,
   exitRows,
   instanceExitRows,
   returnChange,
@@ -159,4 +161,34 @@ describe("instanceExitRows in an opened definition", () => {
       wire: { from: "nested", port: "exit:exit-rework" },
       to: "out:exit-done",
     }));
+});
+
+describe("entryRows", () => {
+  const block = {
+    id: "authors",
+    summary: "authors",
+    entries: [
+      { id: "entry-climb", name: "climb", target: "authors" },
+      { id: "entry-start", name: "start", target: "authors/entry-start" },
+    ],
+  };
+
+  test("lists the blocks whose wires enter by each entry, the default taking a wire that names none", () =>
+    expect(
+      entryRows(block, [
+        { from: "retry", to: "authors", label: "" },
+        { from: "branch", to: "authors", entry: "entry-start", label: "" },
+        { from: "review", to: "authors", entry: "entry-climb", label: "returned" },
+        { from: "review", to: "land-gate", label: "approved" },
+      ]),
+    ).toEqual([
+      { name: "climb", target: "authors", from: ["retry", "review"] },
+      { name: "start", target: "authors/entry-start", from: ["branch"] },
+    ]));
+
+  test("a block with one entry or none has nothing to choose, and the summary names the entries only when several", () => {
+    expect(entryRows({ id: "x", entries: [] }, [])).toEqual([]);
+    expect(entrySummary({ summary: "authors" , entries: block.entries.slice(0, 1) })).toBe("authors");
+    expect(entrySummary(block)).toBe("authors · in: climb, start");
+  });
 });

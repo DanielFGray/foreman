@@ -71,6 +71,7 @@ import { Drag } from "./drag.js";
 import { chip, wiresLayer } from "./parts.js";
 import { byBlock } from "./placements.js";
 import { definitionRefusal } from "./definition.js";
+import { entrySummary } from "./editor-exits.js";
 import { Navigation, same } from "./navigation.js";
 import {
   NEXT_MODE,
@@ -942,7 +943,7 @@ export default class Foreman extends View {
                 .text_size(10 * z)
                 .text_color(t.muted)
                 .truncate()
-                .child(block.summary),
+                .child(entrySummary(block)),
             ),
           ),
       );

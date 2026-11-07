@@ -6,6 +6,7 @@ import { Schema as S } from "effect";
 import {
   AgentNode,
   type CompositeDefinition,
+  type CompositeEntry,
   type Composites,
   type Drawing,
   Exit,
@@ -14,8 +15,10 @@ import {
   ParamValue,
 } from "./pipeline.ts";
 import {
+  addEntry,
   addExit,
   addParam,
+  blockOf,
   addRoute,
   addSource,
   chargeExit,
@@ -25,10 +28,12 @@ import {
   makeComposite,
   rejoin,
   remove,
+  removeEntry,
   removeExit,
   removeParam,
   removeRoute,
   renameCompositeExit,
+  renameEntry,
   renameExit,
   setEmpty,
   setEntry,
@@ -93,7 +98,7 @@ export const PipelineChange = S.Union([
 ]);
 export type PipelineChange = typeof PipelineChange.Type;
 
-/** Definition-only verbs: parameters, exit names and the entry (`docs/composite-blocks.md`). */
+/** Definition-only verbs: parameters, exit names and entries (`docs/composite-blocks.md`). */
 export const DefinitionChange = S.Union([
   S.TaggedStruct("AddParam", {
     name: S.String,
@@ -102,7 +107,10 @@ export const DefinitionChange = S.Union([
   }),
   S.TaggedStruct("RemoveParam", { name: S.String }),
   S.TaggedStruct("RenameCompositeExit", { id: S.String, name: S.String }),
-  S.TaggedStruct("SetEntry", { entry: S.String }),
+  S.TaggedStruct("AddEntry", { block: S.String, name: S.String }),
+  S.TaggedStruct("RemoveEntry", { id: S.String }),
+  S.TaggedStruct("RenameEntry", { id: S.String, name: S.String }),
+  S.TaggedStruct("SetEntry", { id: S.String, block: S.String }),
 ]);
 export type DefinitionChange = typeof DefinitionChange.Type;
 
@@ -182,7 +190,7 @@ export const applyChange = (
     case "RemoveRoute":
       return changed(removeRoute(pipeline, change.router, change.index));
     case "Rejoin": {
-      const rejoined = rejoin(pipeline, change.wire, change.to, outs);
+      const rejoined = rejoin(pipeline, change.wire, change.to, outs, composites);
       return rejoined._tag === "Some"
         ? changed(rejoined.value)
         : {
@@ -256,13 +264,16 @@ export const applyDefinitionChange = (
   change: CompositeChange,
   composites: Composites = {},
 ): ApplyDefinitionResult => {
-  // Removing the entry would leave the definition naming a block it no longer has,
-  // which no later edit can repair without first naming another entry.
-  if (change._tag === "Remove" && change.id === definition.entry) {
-    return {
-      _tag: "Refused",
-      reason: `${change.id} is the entry: point the entry at another block (SetEntry) before removing it`,
-    };
+  // Removing a block an entry names would leave the entry at nothing, which no
+  // later edit can repair without first pointing the entry elsewhere.
+  if (change._tag === "Remove") {
+    const entry = definition.entries.find((one) => blockOf(one.block) === change.id);
+    if (entry !== undefined) {
+      return {
+        _tag: "Refused",
+        reason: `${change.id} is the block of the entry ${entry.id}: point the entry at another block (SetEntry) or remove the entry first`,
+      };
+    }
   }
   switch (change._tag) {
     case "MakeComposite": {
@@ -270,7 +281,7 @@ export const applyDefinitionChange = (
         { nodes: definition.blocks },
         change,
         composites,
-        definition.entry,
+        definition.entries,
       );
       if (made._tag === "Refused") return made;
       return {
@@ -278,7 +289,7 @@ export const applyDefinitionChange = (
         definition: {
           ...definition,
           blocks: made.pipeline.nodes,
-          entry: change.ids.includes(definition.entry) ? made.id : definition.entry,
+          entries: followed(definition.entries, made.reaches),
         },
         added: made.id,
         composites: made.composites,
@@ -292,7 +303,7 @@ export const applyDefinitionChange = (
         definition: {
           ...definition,
           blocks: unpacked.pipeline.nodes,
-          entry: definition.entry === change.id ? unpacked.entry : definition.entry,
+          entries: followed(definition.entries, unpacked.reaches),
         },
         added: undefined,
         composites: {},
@@ -317,11 +328,21 @@ export const applyDefinitionChange = (
         ? renamed
         : { _tag: "Changed", definition: renamed.definition, added: undefined, composites: {} };
     }
+    case "AddEntry":
+    case "RemoveEntry":
+    case "RenameEntry":
     case "SetEntry": {
-      const set = setEntry(definition, change.entry);
-      return set._tag === "Refused"
-        ? set
-        : { _tag: "Changed", definition: set.definition, added: undefined, composites: {} };
+      const done =
+        change._tag === "AddEntry"
+          ? addEntry(definition, change.block, change.name)
+          : change._tag === "RemoveEntry"
+            ? removeEntry(definition, change.id)
+            : change._tag === "RenameEntry"
+              ? renameEntry(definition, change.id, change.name)
+              : setEntry(definition, change.id, change.block);
+      return done._tag === "Refused"
+        ? done
+        : { _tag: "Changed", definition: done.definition, added: undefined, composites: {} };
     }
     case "AddSource":
       return { _tag: "Refused", reason: "a composite definition holds no source" };
@@ -347,19 +368,20 @@ const madeComposite = (
   pipeline: Drawing,
   change: { readonly ids: ReadonlyArray<string>; readonly name: string },
   composites: Composites,
-  definitionEntry?: string,
+  definitionEntries: ReadonlyArray<CompositeEntry> = [],
 ):
   | {
       readonly _tag: "Changed";
       readonly pipeline: Drawing;
       readonly id: string;
       readonly composites: Composites;
+      readonly reaches: ReadonlyMap<string, string>;
     }
   | { readonly _tag: "Refused"; readonly reason: string } => {
   if (composites[change.name] !== undefined) {
     return { _tag: "Refused", reason: `a composite named ${change.name} already exists` };
   }
-  const made = makeComposite(pipeline, change.ids, change.name, composites, definitionEntry);
+  const made = makeComposite(pipeline, change.ids, change.name, composites, definitionEntries);
   return made._tag === "Refused"
     ? made
     : {
@@ -367,8 +389,16 @@ const madeComposite = (
         pipeline: made.pipeline,
         id: made.id,
         composites: { [change.name]: made.definition },
+        reaches: made.reaches,
       };
 };
+
+/** The entries after a change moved the wire targets they name: each target in `reaches` is replaced. */
+const followed = (
+  entries: ReadonlyArray<CompositeEntry>,
+  reaches: ReadonlyMap<string, string>,
+): ReadonlyArray<CompositeEntry> =>
+  entries.map((entry) => ({ ...entry, block: reaches.get(entry.block) ?? entry.block }));
 
 /**
  * Why an exit cannot be added, renamed to `name`, or (with no name) removed on

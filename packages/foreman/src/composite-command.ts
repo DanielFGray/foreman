@@ -13,7 +13,7 @@ import { pipelinesNow, problemsOfDrawing } from "./pipeline-check.ts";
 import { pipelinesPath, updatePipelinesFile, type PipelinesFile } from "./pipeline-file.ts";
 import { PipelineError } from "./pipeline-error.ts";
 import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
-import { choicesOf } from "./pipeline-belt.ts";
+import { blockOf, choicesOf } from "./pipeline-belt.ts";
 import { printPrompt } from "./pipeline-prompt.ts";
 
 /**
@@ -49,7 +49,7 @@ const shownDefinition = (
     ...choicesOf(composites),
     outs: definition.exits.map((exit) => ({ id: exit.id, name: exit.name })),
   },
-  entry: definition.entry,
+  entries: definition.entries,
   draft: draft === undefined ? null : { base: draft.base, definition: draft.definition },
   live,
 });
@@ -76,8 +76,8 @@ const show = Command.make("show", { name, json, flow }, ({ name, json, flow }) =
     }
     yield* Console.log(
       draft === undefined
-        ? `${name} (${definition.blocks.length} blocks, entry ${definition.entry}):`
-        : `${name} has a draft open (${definition.blocks.length} blocks, entry ${definition.entry}):`,
+        ? `${name} (${definition.blocks.length} blocks, ${entriesText(definition)}):`
+        : `${name} has a draft open (${definition.blocks.length} blocks, ${entriesText(definition)}):`,
     );
     yield* Console.log(JSON.stringify(definition, null, 2));
     if (draft !== undefined) {
@@ -96,7 +96,7 @@ const edit = Command.make(
     name,
     change: Argument.String("change").pipe(
       Argument.withDescription(
-        'One change as JSON, such as {"_tag":"SetEntry","entry":"review"} or {"_tag":"Rejoin","wire":{"from":"review","port":"exit:approved"},"to":"out:exit-landable"}',
+        'One change as JSON, such as {"_tag":"SetEntry","id":"entry-review","block":"review"} or {"_tag":"Rejoin","wire":{"from":"review","port":"exit:approved"},"to":"out:exit-landable"}',
       ),
     ),
     json,
@@ -293,15 +293,23 @@ const freshCompositeDraft = (name: string, file: PipelinesFile, inProjectDraft: 
   });
 };
 
+const entriesText = (definition: CompositeDefinition) =>
+  `entries ${definition.entries.map((entry) => `${entry.name} -> ${entry.block}`).join(", ")}`;
+
 /**
- * A definition whose entry names no block of its own. Checked on every save,
- * because a project that does not use the definition would otherwise store it
- * unnoticed.
+ * A definition with no entry, or an entry that names no block of its own.
+ * Checked on every save, because a project that does not use the definition
+ * would otherwise store it unnoticed.
  */
 const entryProblems = (name: string, definition: CompositeDefinition) =>
-  definition.blocks.some((block) => block.id === definition.entry)
-    ? []
-    : [`${name}: the entry ${definition.entry} is no block of the definition`];
+  definition.entries.length === 0
+    ? [`${name}: the definition has no entry`]
+    : definition.entries
+        .filter((entry) => !definition.blocks.some((block) => block.id === blockOf(entry.block)))
+        .map(
+          (entry) =>
+            `${name}: the entry ${entry.name} names ${entry.block}, which is no block of the definition`,
+        );
 
 /**
  * Projects that use `name` (directly or through another definition) whose

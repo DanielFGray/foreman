@@ -120,11 +120,13 @@ export const coversOf = (
 };
 
 /**
- * The expanded engine blocks of one instance, and the entry a wire into it
- * reaches. Used by Unpack so the drawing keeps the same ids the expansion
- * would have used (`docs/composite-blocks.md`). The instance's exits are read
- * in the scope of `scope`, the drawing it sits in, as `expand` reads them, so
- * an exit that leads back to the instance itself reaches its entry.
+ * The expanded engine blocks of one instance, and where a wire into each of
+ * its entries lands: `reaches` maps the instance's id (its default entry) and
+ * `<id>/<entry id>` to an expanded block id. Used by Unpack so the drawing
+ * keeps the same ids the expansion would have used
+ * (`docs/composite-blocks.md`). The instance's exits are read in the scope of
+ * `scope`, the drawing it sits in, as `expand` reads them, so an exit that
+ * leads back to the instance itself reaches one of its entries.
  */
 export const unpackInstance = (
   instance: CompositeNode,
@@ -134,7 +136,7 @@ export const unpackInstance = (
   | {
       readonly _tag: "Unpacked";
       readonly blocks: ReadonlyArray<PipelineNode>;
-      readonly entry: string;
+      readonly reaches: ReadonlyMap<string, string>;
     }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<string> } => {
   const resolve = entryResolver(scope, composites);
@@ -145,14 +147,18 @@ export const unpackInstance = (
   const problems: Array<string> = [];
   const blocks = expandInstance(resolved, composites, new Set(), problems);
   if (problems.length > 0) return { _tag: "Failed", problems: [...new Set(problems)] };
-  const entry = entryOf(resolved, composites, new Set());
-  if (entry === undefined) {
+  const reaches = new Map<string, string>();
+  for (const target of entryTargetsOf(instance, composites)) {
+    const reached = resolve(target);
+    if (reached !== target) reaches.set(target, reached);
+  }
+  if (!reaches.has(instance.id)) {
     return {
       _tag: "Failed",
       problems: [`${instance.id}: the definition ${instance.of} has no entry`],
     };
   }
-  return { _tag: "Unpacked", blocks, entry };
+  return { _tag: "Unpacked", blocks, reaches };
 };
 
 /**
@@ -186,10 +192,23 @@ const expandInstance = (
   if (values === undefined) return [];
 
   const innerById = new Map(definition.blocks.map((block) => [block.id, block]));
-  if (!innerById.has(definition.entry)) {
-    problems.push(
-      `${instance.id}: the definition ${instance.of} names entry ${definition.entry}, which is no block`,
-    );
+  if (definition.entries.length === 0) {
+    problems.push(`${instance.id}: the definition ${instance.of} has no entry`);
+    return [];
+  }
+  for (const entry of definition.entries) {
+    if (!innerById.has(splitTarget(entry.block)[0])) {
+      problems.push(
+        `${instance.id}: the definition ${instance.of} names entry ${entry.id} at ${entry.block}, which is no block`,
+      );
+      return [];
+    }
+  }
+  const slashed = [...definition.blocks.map((block) => block.id), instance.id].filter((id) =>
+    id.includes("/"),
+  );
+  if (slashed.length > 0) {
+    problems.push(...slashed.map((id) => `${id}: a block id holds no "/"`));
     return [];
   }
   const repeated = duplicateIdsOf(definition.blocks);
@@ -203,8 +222,9 @@ const expandInstance = (
   }
 
   // A wire inside the definition, resolved in the definition's scope: an
-  // exit's wire is already resolved in the instance's scope, an inner
-  // instance's wire is its entry, anything else gets the instance's prefix.
+  // exit's wire is already resolved in the instance's scope, a wire to an inner
+  // instance reaches the entry it names (else its default), anything else gets
+  // the instance's prefix.
   const wireIn = (target: string): string => {
     if (target === QUEUE) return QUEUE;
     if (target.startsWith(OUT)) {
@@ -215,22 +235,24 @@ const expandInstance = (
       );
       return target;
     }
-    const inner = innerById.get(target);
-    if (inner === undefined) {
+    const [blockId, entryId] = splitTarget(target);
+    const inner = innerById.get(blockId);
+    if (inner === undefined || (entryId !== undefined && inner.kind !== "composite")) {
       problems.push(
         `${instance.id}: the definition ${instance.of} wires ${target}, which is no block of it`,
       );
       return target;
     }
     if (inner.kind === "composite") {
-      // An entry that is itself an instance is reached by its own entry. When
-      // that fails the nested instance reports why, so a placeholder is enough.
-      const entry = entryOf(
+      // An inner instance is reached by one of its entries. When that fails
+      // the nested instance reports why, so a placeholder is enough.
+      const reached = entryOf(
         { of: inner.of, prefix: instance.prefix + inner.prefix },
+        entryId,
         composites,
         new Set([instance.of]),
       );
-      return entry ?? instance.prefix + target;
+      return reached ?? instance.prefix + blockId;
     }
     return instance.prefix + target;
   };
@@ -246,45 +268,73 @@ const expandInstance = (
   return expandList(copies, composites, new Set(stack).add(instance.of), problems);
 };
 
+/** A wire target split into the block and the entry it names (`<block>/<entry id>`). */
+const splitTarget = (target: string): readonly [string, string | undefined] => {
+  const at = target.indexOf("/");
+  return at < 0 ? [target, undefined] : [target.slice(0, at), target.slice(at + 1)];
+};
+
 /**
- * The entry of the instance: the block a wire into it reaches, with nested
- * instances at the entry followed through their definitions. Reads only the
- * definitions, so it does not depend on the expansion. Undefined when a
- * definition is unknown, has no entry, or holds itself through the entry.
+ * The block a wire into entry `entryId` of the instance reaches (the default
+ * entry when `entryId` is undefined), with an inner instance followed through
+ * its definition. Reads only the definitions, so it does not depend on the
+ * expansion. Undefined when a definition is unknown, has no such entry, or
+ * holds itself through the entry.
  */
 const entryOf = (
   instance: Pick<CompositeNode, "of" | "prefix">,
+  entryId: string | undefined,
   composites: Composites,
   visited: ReadonlySet<string>,
 ): string | undefined => {
   if (visited.has(instance.of)) return undefined;
   const definition = composites[instance.of];
   if (definition === undefined) return undefined;
-  const entry = definition.blocks.find((block) => block.id === definition.entry);
+  const entry =
+    entryId === undefined
+      ? definition.entries[0]
+      : definition.entries.find((one) => one.id === entryId);
   if (entry === undefined) return undefined;
-  if (entry.kind !== "composite") return instance.prefix + entry.id;
+  const [blockId, innerEntry] = splitTarget(entry.block);
+  const block = definition.blocks.find((one) => one.id === blockId);
+  if (block === undefined) return undefined;
+  if (block.kind !== "composite") return instance.prefix + block.id;
   return entryOf(
-    { of: entry.of, prefix: instance.prefix + entry.prefix },
+    { of: block.of, prefix: instance.prefix + block.prefix },
+    innerEntry,
     composites,
     new Set(visited).add(instance.of),
   );
 };
 
+/** The wire targets that reach an instance: its id, then `<id>/<entry id>` for each entry. */
+const entryTargetsOf = (
+  instance: Pick<CompositeNode, "id" | "of">,
+  composites: Composites,
+): ReadonlyArray<string> => [
+  instance.id,
+  ...(composites[instance.of]?.entries ?? []).map((entry) => `${instance.id}/${entry.id}`),
+];
+
 /**
- * Maps each composite instance in `nodes` to the entry a wire into it reaches.
- * A target that is no instance here is returned unchanged.
+ * Maps each wire target that names a composite instance in `nodes` (its id, or
+ * `<id>/<entry id>`) to the block it reaches. A target that names none is
+ * returned unchanged.
  */
 const entryResolver = (
   nodes: ReadonlyArray<DrawnNode>,
   composites: Composites,
 ): ((target: string) => string) => {
-  const entries = new Map<string, string>();
+  const reached = new Map<string, string>();
   for (const node of nodes) {
     if (node.kind !== "composite") continue;
-    const entry = entryOf(node, composites, new Set());
-    if (entry !== undefined) entries.set(node.id, entry);
+    for (const target of entryTargetsOf(node, composites)) {
+      const [, entryId] = splitTarget(target);
+      const block = entryOf(node, entryId, composites, new Set());
+      if (block !== undefined) reached.set(target, block);
+    }
   }
-  return (target) => entries.get(target) ?? target;
+  return (target) => reached.get(target) ?? target;
 };
 
 /** Each definition exit's wire on the instance, or nothing when one is missing or extra. */

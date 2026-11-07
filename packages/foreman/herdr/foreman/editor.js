@@ -15,6 +15,7 @@ import {
   QUEUE,
   chargeChange,
   emptyChange,
+  entryRows,
   exitRows,
   instanceExitRows,
   returnChange,
@@ -34,6 +35,9 @@ export class Editor {
     // `exitName` input holds.
     this.inserting = null;
     this.rejoining = null;
+    // The instance with several entries that a waiting rejoin was clicked onto,
+    // which waits for the entry the wire should enter by.
+    this.entering = null;
     this.addingSource = false;
     this.route = null;
     this.exit = null;
@@ -61,6 +65,7 @@ export class Editor {
   abandon() {
     this.inserting = null;
     this.rejoining = null;
+    this.entering = null;
     this.addingSource = false;
   }
 
@@ -205,6 +210,11 @@ export class Editor {
   // whether the editor took the click.
   clickedBlock(block, cx) {
     if (this.rejoining === null) return false;
+    if ((block.entries?.length ?? 0) > 1) {
+      this.entering = block;
+      cx.notify();
+      return true;
+    }
     const { from, port } = this.rejoining;
     this.rejoining = null;
     this.pane.change({ _tag: "Rejoin", wire: { from, port }, to: block.id }, cx);
@@ -251,6 +261,34 @@ export class Editor {
         .child(
           chip(t, "cancel", "insert-cancel", (cx) => {
             this.inserting = null;
+            cx.notify();
+          }),
+        );
+    }
+    if (this.rejoining !== null && this.entering !== null) {
+      const { entering } = this;
+      return bar
+        .child(
+          div()
+            .text_color(t.muted)
+            .child(
+              `which way into ${entering.id} should ${this.rejoining.from}'s ${portName(this.rejoining)} enter by`,
+            ),
+        )
+        .children(
+          entering.entries.map((entry) =>
+            chip(t, entry.name, `rejoin-entry-${entry.id}`, (cx) => {
+              const { from, port } = this.rejoining;
+              this.rejoining = null;
+              this.entering = null;
+              this.pane.change({ _tag: "Rejoin", wire: { from, port }, to: entry.target }, cx);
+            }),
+          ),
+        )
+        .child(
+          chip(t, "cancel", "rejoin-entry-cancel", (cx) => {
+            this.rejoining = null;
+            this.entering = null;
             cx.notify();
           }),
         );
@@ -360,6 +398,7 @@ export class Editor {
       .on_click((_event, cx) => {
         this.inserting = picked ? null : wire;
         this.rejoining = null;
+        this.entering = null;
         cx.notify();
       })
       .child("+");
@@ -531,9 +570,20 @@ export class Editor {
   // every exit after the first to the queue, and the drawing has no wire there.
   instanceExits(t, drawing, node) {
     const block = drawing.blocks.find((one) => one.id === node.id);
+    const ways = entryRows(block, drawing.wires);
     return v_flex()
       .gap(3)
       .pb(4)
+      .children(
+        ways.length > 1
+          ? ways.map((way, index) =>
+              div()
+                .id(`instance-entry-${index}`)
+                .text_color(t.muted)
+                .child(`in by ${way.name} ← ${way.from.length === 0 ? "nothing" : way.from.join(", ")}`),
+            )
+          : [],
+      )
       .children(
         instanceExitRows(block).map((row, index) =>
           h_flex()

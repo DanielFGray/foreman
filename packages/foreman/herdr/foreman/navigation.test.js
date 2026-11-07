@@ -284,6 +284,25 @@ describe("pending editor actions across navigation", () => {
     });
   }
 
+  test("a rejoin clicked onto an instance with several entries waits for the entry, and abandon drops it", async () => {
+    const { p, cx, pending } = await pane();
+    const editor = withEditor(p);
+    pendings.rejoining(editor);
+    const instance = {
+      id: "authors",
+      entries: [
+        { id: "entry-climb", name: "climb", target: "authors" },
+        { id: "entry-start", name: "start", target: "authors/entry-start" },
+      ],
+    };
+    expect(editor.clickedBlock(instance, cx)).toBe(true);
+    expect(editor.entering).toBe(instance);
+    expect(editor.rejoining).not.toBeNull();
+    expect(pending).toHaveLength(0);
+    editor.abandon();
+    expect(editor.entering).toBeNull();
+  });
+
   test("a pending rejoin stays while the same target is read again", async () => {
     const { p, cx, pending, flush } = await pane();
     const editor = withEditor(p);

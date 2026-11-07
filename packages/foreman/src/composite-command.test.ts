@@ -82,7 +82,7 @@ const printedComposite = async (...args: ReadonlyArray<string>) => {
 };
 
 const reviewLoop = {
-  entry: "review-gate",
+  entries: [{ id: "entry-review-gate", name: "review-gate", block: "review-gate" }],
   exits: [
     { id: "exit-landable", name: "landable" },
     { id: "exit-rework", name: "rework" },
@@ -204,6 +204,34 @@ describe("foreman composite", () => {
     expect(existsSync(drafts)).toBe(false);
   });
 
+  test("removing the last entry is refused", async () => {
+    writeReviewLoopProject();
+    const refused = await refuseComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "RemoveEntry", id: "entry-review-gate" }),
+    );
+    expect(refused).toMatch(/last entry/);
+  });
+
+  test("a save with no entry is refused when no project uses the definition", async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ pipelines: {}, composites: { "review-loop": reviewLoop } }),
+    );
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "RenameCompositeExit", id: "exit-landable", name: "ok" }),
+    );
+    const draftFile = JSON.parse(readFileSync(drafts, "utf8"));
+    draftFile.composites["review-loop"].definition.entries = [];
+    writeFileSync(drafts, JSON.stringify(draftFile));
+    const refused = await refuseComposite("save", "review-loop");
+    expect(refused).toMatch(/no entry/);
+    expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"]).toEqual(reviewLoop);
+  });
+
   test("a save with a dangling entry is refused when no project uses the definition", async () => {
     writeFileSync(
       path,
@@ -215,7 +243,7 @@ describe("foreman composite", () => {
       change({ _tag: "RenameCompositeExit", id: "exit-landable", name: "ok" }),
     );
     const draftFile = JSON.parse(readFileSync(drafts, "utf8"));
-    draftFile.composites["review-loop"].definition.entry = "nowhere";
+    draftFile.composites["review-loop"].definition.entries[0].block = "nowhere";
     writeFileSync(drafts, JSON.stringify(draftFile));
     const refused = await refuseComposite("save", "review-loop");
     expect(refused).toMatch(/nowhere/);
@@ -258,7 +286,7 @@ describe("foreman composite", () => {
     // `outer` holds one instance of review-loop whose second exit returns to the queue,
     // which the drawing has no wire for.
     const outer = {
-      entry: "nested",
+      entries: [{ id: "entry-nested", name: "nested", block: "nested" }],
       exits: [{ id: "exit-done", name: "done" }],
       params: [],
       blocks: [
@@ -366,7 +394,7 @@ describe("foreman composite", () => {
   test("a project draft save refuses when a nested definition it reaches changed", async () => {
     // review-loop nests inner-step; the project only instances review-loop.
     const inner = {
-      entry: "review-gate",
+      entries: [{ id: "entry-review-gate", name: "review-gate", block: "review-gate" }],
       exits: [
         { id: "exit-landable", name: "landable" },
         { id: "exit-rework", name: "rework" },
@@ -375,7 +403,7 @@ describe("foreman composite", () => {
       blocks: reviewLoop.blocks,
     };
     const outer = {
-      entry: "nested",
+      entries: [{ id: "entry-nested", name: "nested", block: "nested" }],
       exits: [
         { id: "exit-landable", name: "landable" },
         { id: "exit-rework", name: "rework" },
@@ -432,15 +460,23 @@ describe("foreman composite", () => {
         sets: [{ block: "review", field: "model" }],
       }),
     );
-    await runComposite("edit", "review-loop", change({ _tag: "SetEntry", entry: "review" }));
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "SetEntry", id: "entry-review-gate", block: "review" }),
+    );
     const definition = JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]
       .definition;
-    expect(definition.entry).toBe("review");
+    expect(definition.entries[0].block).toBe("review");
     expect(definition.params).toEqual([
       { name: "reviewer", default: "reviewers", sets: [{ block: "review", field: "model" }] },
     ]);
     // SetEntry to review skips the gate, so save would break amux; put the entry back.
-    await runComposite("edit", "review-loop", change({ _tag: "SetEntry", entry: "review-gate" }));
+    await runComposite(
+      "edit",
+      "review-loop",
+      change({ _tag: "SetEntry", id: "entry-review-gate", block: "review-gate" }),
+    );
     await runComposite("save", "review-loop");
     expect(JSON.parse(readFileSync(path, "utf8")).composites["review-loop"].params).toEqual([
       { name: "reviewer", default: "reviewers", sets: [{ block: "review", field: "model" }] },
@@ -466,7 +502,7 @@ describe("foreman composite", () => {
 
   test("Unpack of a definition's entry instance moves the entry into the expansion", async () => {
     const outer = {
-      entry: "nested",
+      entries: [{ id: "entry-nested", name: "nested", block: "nested" }],
       exits: reviewLoop.exits,
       params: [],
       blocks: [
@@ -492,9 +528,10 @@ describe("foreman composite", () => {
     );
     await runComposite("edit", "outer", change({ _tag: "Unpack", id: "nested" }));
     const definition = JSON.parse(readFileSync(drafts, "utf8")).composites.outer.definition;
-    expect(definition.blocks.map((block: { id: string }) => block.id)).toContain(definition.entry);
+    const entry = definition.entries[0].block;
+    expect(definition.blocks.map((block: { id: string }) => block.id)).toContain(entry);
     await runComposite("save", "outer");
-    expect(JSON.parse(readFileSync(path, "utf8")).composites.outer.entry).toBe(definition.entry);
+    expect(JSON.parse(readFileSync(path, "utf8")).composites.outer.entries[0].block).toBe(entry);
   });
 
   test("MakeComposite packs a selection that holds the definition's entry", async () => {
@@ -506,9 +543,11 @@ describe("foreman composite", () => {
     );
     const definition = JSON.parse(readFileSync(drafts, "utf8")).composites["review-loop"]
       .definition;
-    expect(definition.entry).toBe("inner");
+    expect(definition.entries[0].block).toBe("inner");
     await runComposite("save", "review-loop");
-    expect(JSON.parse(readFileSync(path, "utf8")).composites.inner.entry).toBe("review-gate");
+    expect(JSON.parse(readFileSync(path, "utf8")).composites.inner.entries[0].block).toBe(
+      "review-gate",
+    );
   });
 
   test("AddParam without a default saves, and the parameter holds no default key", async () => {

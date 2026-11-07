@@ -216,7 +216,7 @@ export const DrawnNode = S.Union([PipelineNode, CompositeNode]);
 export type DrawnNode = typeof DrawnNode.Type;
 
 /**
- * A composite definition: name, blocks, entry, exits and parameters. One
+ * A composite definition: name, blocks, entries, exits and parameters. One
  * definition serves every instance, in every project. It lives in the
  * pipelines file under `composites` (`docs/composite-blocks.md`).
  */
@@ -227,8 +227,16 @@ export const CompositeParam = S.Struct({
 });
 export type CompositeParam = typeof CompositeParam.Type;
 
+/**
+ * A way into an instance: a name, and the wire target inside the definition
+ * that a wire to the entry reaches (a block id, or `<instance>/<entry id>` of
+ * an instance inside).
+ */
+export const CompositeEntry = S.Struct({ id: S.String, name: S.String, block: S.String });
+export type CompositeEntry = typeof CompositeEntry.Type;
+
 export const CompositeDefinition = S.Struct({
-  entry: S.String,
+  entries: S.Array(CompositeEntry),
   exits: S.Array(S.Struct({ id: S.String, name: S.String })),
   params: S.Array(CompositeParam),
   blocks: S.Array(DrawnNode),
@@ -1186,6 +1194,7 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
   for (const node of pipeline.nodes) {
     if (ids.has(node.id)) problems.push(`two blocks are named ${node.id}`);
     ids.add(node.id);
+    if (node.id.includes("/")) problems.push(`${node.id}: a block id holds no "/"`);
   }
   if (!pipeline.nodes.some((node) => node.kind === "source")) {
     problems.push("no source supplied");
