@@ -18,8 +18,8 @@ primitive that no drawing of existing blocks can make.
   definition serves every instance of it, in every project.
 - **instance**: a block of kind `composite` in a pipeline. It names its
   definition, wires each exit, and gives a value to each parameter.
-- **entry**: the block inside the definition that a wire into the instance
-  reaches.
+- **entry**: a way into the instance: a name, and the block inside the
+  definition that a wire to it reaches. A definition has one or more.
 - **open end**: a wire inside the definition whose `to` is `out:<exit id>`. It
   leaves the composite by that exit.
 - **expansion**: the pipeline with each instance replaced by copies of its
@@ -38,7 +38,7 @@ The definitions live in the pipelines file, beside the pipelines, under
   "pipelines": { "foreman": { "nodes": [ /* ... */ ] } },
   "composites": {
     "review-loop": {
-      "entry": "review-gate",
+      "entries": [{ "id": "entry-review", "name": "review", "block": "review-gate" }],
       "exits": [
         { "id": "exit-landable", "name": "landable" },
         { "id": "exit-rework", "name": "rework" }
@@ -74,11 +74,24 @@ An instance in a pipeline:
 - An exit has an id and a name, as an agent's exit does (`agent-exits.md`). A
   rename changes the name. The instance wires exits by id, so a rename leaves
   every instance wired.
+- An entry has an id, a name and the block inside that it reaches. A definition
+  has at least one entry, and the first is its **default entry**. A wire to
+  `<instance id>` reaches the default entry. A wire to `<instance id>/<entry
+  id>` reaches that entry. Wires name entries by id, so a rename leaves every
+  wire in place. A part with two ways in, such as the start and climb gates in
+  front of the author, is one definition with two entries.
+- `/` separates a block from one of its ports, in wires and in filters, so no
+  block id holds a `/`.
 - A parameter sets one or more fields of blocks inside. Its value replaces each
   field before validation, so the node schema of each block checks the value.
-  Fields that a parameter can set: an agent's `model`, `instructions`, `slots`
-  and `stopped`; a check's `command`; a gate's `step`; a land's `how` and
-  `onto`. A parameter with no `default` must be set on every instance.
+  Fields that a parameter can set: an agent's `model`, `instructions`, `slots`,
+  `stopped` and `vars.<name>`; a check's `command`; a gate's `step`; a land's
+  `how` and `onto`. A parameter with no `default` must be set on every instance.
+- `vars` on an agent block maps names to text. The block's instructions may use
+  `{{ <name> }}` for each name in it, besides the placeholders every prompt has
+  (`agent-exits.md`, rule 6). A var does not take the name of one of those. So a
+  parameter that sets `vars.focus` puts its value into the prompt text of each
+  instance, and one instructions file serves every instance.
 - A definition holds no source. A task enters a composite by a wire.
 - A definition may hold instances of other composites. A definition that holds
   itself, directly or through others, is refused.
@@ -96,10 +109,14 @@ each instance:
 2. A wire inside the definition to a block id is rewritten to `<prefix><id>`. A
    wire to `out:<exit id>` is rewritten to the instance's wire for that exit. A
    wire to `queue` stays `queue`.
-3. A wire in the pipeline to the instance's id is rewritten to
-   `<prefix><entry>`.
+3. A wire in the pipeline to the instance's id is rewritten to `<prefix><block>`
+   of the default entry. A wire to `<instance id>/<entry id>` is rewritten to
+   `<prefix><block>` of that entry.
 4. A copied block that is itself an instance expands the same way, with the
    prefixes joined.
+5. A router filter term inside the definition that names a block
+   (`exit:<block>/<name>`, `exits:<block>/<name>`) gets the prefix on its block,
+   as a wire does in step 2.
 
 `pipelineFor`, `runningPipeline` and every reader of a draft call `expand`
 before anything else reads the pipeline. The dispatcher, `pipeline trace`,
@@ -142,10 +159,13 @@ others:
 
 - `MakeComposite { ids, name }`: saves the selected blocks as a new definition
   and replaces them with one instance with prefix `""`. It refuses when the
-  wires that enter the selection reach more than one block (no single entry),
-  or the selection holds a source. Each distinct block outside the selection
-  that a wire from inside reaches becomes one exit. Its name is that of the
-  first such wire's exit, else the target's id. The operator can rename it.
+  selection holds a source. Each distinct block inside the selection that a
+  wire from outside reaches becomes one entry, named by that block's id, in the
+  order the wires appear in the pipeline. The wires to the first entry then
+  lead to `<instance id>`, and the others to `<instance id>/<entry id>`. Each
+  distinct block outside the selection that a wire from inside reaches becomes
+  one exit. Its name is that of the first such wire's exit, else the target's
+  id. The operator can rename entries and exits.
 - `Unpack { id }`: replaces an instance with its expanded blocks.
 - `InsertOn { wire, kind: "composite", of }`: places an instance on a wire, as
   for the other kinds. Its first exit takes the wire's old target. Its prefix
@@ -155,11 +175,16 @@ others:
 A definition is edited as a draft of its own: `foreman composite edit <name>
 <change>`, `save` and `discard`. The same `PipelineChange` verbs act on its
 blocks, with `out:<exit id>` as a valid wire end. The definition verbs are
-`AddParam`, `RemoveParam`, `RenameCompositeExit` and `SetEntry`.
+`AddParam`, `RemoveParam`, `RenameCompositeExit`, `AddEntry { block, name }`,
+`RemoveEntry { id }`, `RenameEntry { id, name }` and `SetEntry { id, block }`,
+which points an entry at another block.
 
-Removing the entry block is refused: point the entry at another block with
-`SetEntry` first. Save refuses a definition whose entry names no block, whether
-or not a project uses it.
+Removing a block that an entry names is refused: point the entry at another
+block with `SetEntry`, or remove the entry, first. Removing the last entry is
+refused. Save refuses a definition with no entry, or with an entry that names
+no block, whether or not a project uses it. A removed entry that an instance
+still wires is a problem of that project, which the save names as for any
+other break.
 
 `foreman composite save <name>` validates the expansion of every pipeline that
 uses the definition, with the new definition. It refuses when any of them has a
@@ -169,7 +194,10 @@ when a definition it uses changed since that draft began.
 
 ## The page
 
-The Pipeline view draws an instance as one block with its exits. A task that
+The Pipeline view draws an instance as one block with its exits. An instance
+with several entries draws one way in for each, labeled with the entry's name,
+and a rejoin to that instance asks which entry. The inspector of an agent block
+edits its `vars`. A task that
 stands at a block inside it is drawn on the instance. Opening the instance
 shows its definition, which the operator edits as above. A definition that a
 project draft made opens once that draft is saved: until then it is not stored,
@@ -189,6 +217,10 @@ Each rule below is changed by this record. The record wins in each case.
 | A pipeline is standard when it holds the standard blocks (`standardOf`) | `pipeline-engine.md`, The standard pipeline | `standardOf` reads the pipeline as written, so a pipeline with an instance is not standard, and `pipeline use` does not rewrite it. |
 | Each page action is a `PipelineChange` | `agent-exits.md`, The page | Adds `MakeComposite`, `Unpack`, `SetParam`, and `InsertOn` for kind `composite`. |
 | Block ids can be reused | open task "Block ids can be reused" | Not fixed here. A removed instance's prefix can come back, as a removed block's id can. The fix for that task covers prefixes too. |
+| A block id is any string | `pipeline-engine.md`, Validation | A block id holds no `/`. |
+| Filter terms `exit:<name>` and `exits:<name>` | `pipeline-engine.md`, Routers; `agent-exits.md`, rule 4 | Each also takes a block: `exit:<block>/<name>`, `exits:<block>/<name>`. |
+| An instructions file may use only `{{ task }}`, `{{ branch }}`, `{{ base }}` and `{{ worktree }}` | `agent-exits.md`, rule 6 and Prompts | It may also use each name in its block's `vars`. |
+| MakeComposite refuses a selection whose wires in reach two blocks; one `entry` per definition; `SetEntry { entry }` | this record, before the entries change | Several entries, the entry verbs above, and `SetEntry { id, block }`. |
 
 ## Checks
 
@@ -197,8 +229,18 @@ Each rule below is changed by this record. The record wins in each case.
   result. Run it on three selections: the review loop (review gate and review),
   the author alone (the start and climb gates stay outside), and the land tail
   (land gate and land).
-- A selection of the start gate, the climb gate and the author is refused: the
-  wires into it reach two blocks.
+- A selection of the start gate, the climb gate and the author makes a
+  definition with two entries (start gate, climb gate). Expanding gives the
+  same graph as before, with the same ids and the same validation result, and a
+  task at the author stays there. A second instance of it with both entries
+  wired validates.
+- Two instances of one definition with a router after them: a filter
+  `exits:<prefix>review/returned>=2` counts only that instance's returns. The
+  same filter inside the definition, written `exits:review/returned>=2`, counts
+  each instance's own.
+- A parameter that sets `vars.focus` puts its value into the rendered prompt of
+  each instance (`pipeline prompt`). An instructions file that uses
+  `{{ focus }}` in a block with no such var stops the pipeline.
 - Unpacking an instance gives the same expansion.
 - A second instance of one definition gets prefixed ids, and validates when its
   exits are wired.
@@ -207,13 +249,3 @@ Each rule below is changed by this record. The record wins in each case.
 - A definition save that would break one project's pipeline is refused, and
   names that project.
 
-## Open questions
-
-- Two instances of one definition declare the same inner exit names, so a
-  router filter `exits:<name>>=N` counts both together. Whether a filter can
-  name an instance's exit by its prefix is open.
-- A composite has one entry. A part with two ways in, such as the start and
-  climb gates in front of the author, is saved without them. Whether a
-  composite may have several named entries is open.
-- A parameter that sets text inside an instructions file (a placeholder in the
-  prompt) is not in the first slice.

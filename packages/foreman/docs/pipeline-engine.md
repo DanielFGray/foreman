@@ -170,6 +170,9 @@ reads a label a person set.
   `=` to a whole number. `size` is 1 when unset. `exits:<name>` counts the times
   the task named that exit since it last left a source. A return counts as
   leaving.
+- `exit:<block>/<name>` and `exits:<block>/<name>` read only the exits named at
+  `<block>`, so two instances of one composite are told apart
+  (`composite-blocks.md`).
 
 ## Placement
 
@@ -303,9 +306,11 @@ A pipeline that fails validation is not run. The reading says why, and the
 project takes no step. It never falls back to the standard pipeline, because
 running a flow the operator did not draw is worse than stopping.
 
-- Block kinds and props as above, including `composite`. Pinned rungs are on the
-  ladder. Validation runs on the expansion: an unknown definition, an unwired
-  exit, a missing parameter or a recursion is a problem of that project only.
+- Block kinds and props as above, including `composite`. A block id holds no
+  `/`, which separates a block from its port in wires and filters. Pinned
+  rungs are on the ladder. Validation runs on the expansion: an unknown
+  definition, an unwired exit, a missing parameter or a recursion is a problem
+  of that project only.
 - At least one source. Every wire and every exit ends at a block or `queue`.
   Every block is reachable from a source. From every block, some route reaches
   a land, a done or a park.
@@ -319,7 +324,9 @@ running a flow the operator did not draw is worse than stopping.
   `attempts>=N`). A smaller loop inside a cycle that passes neither is a problem,
   even when the larger cycle charges. A cycle through no work block is a problem.
 - A router filter that counts an exit (`exit:<name>` or `exits:<name>>=N`)
-  names an exit some block declares, or a process ending. A rename or a removal
+  names an exit some block declares, or a process ending. With a block
+  (`exits:<block>/<name>>=N`), that block exists and declares it. A count with a
+  block grows each lap only when that block is on the cycle. A rename or a removal
   that leaves the filter counting nothing is a problem.
 - Every path to a land or a done passes a review agent after its last author.
   With the reviewers taken out of the graph, no land or done is reachable from a

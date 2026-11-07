@@ -92,6 +92,10 @@ it fixes, so the round does not move the task. The limit is `MAX_ROUNDS` in
    - `exit:<name>`: the task's last exit was `<name>`;
    - `exits:<name>>=N`: the task has named `<name>` at least N times since it
      last left a source;
+   - either of the two with a block, `exit:<block>/<name>` or
+     `exits:<block>/<name>>=N`, counts only the exits named at that block. It
+     tells apart two instances of one composite, whose inner exits share names
+     (`composite-blocks.md`);
    - `attempts>=N`: the task has had N attempts at its level.
 
    An operator can send a third `returned` to park, or route `needs-tests` and
@@ -115,8 +119,9 @@ it fixes, so the round does not move the task. The limit is `MAX_ROUNDS` in
      exactly one exit. If you name none, the task <retries | parks>."
 
    The instructions may use `{{ task }}`, `{{ branch }}`, `{{ base }}` and
-   `{{ worktree }}`. Any other placeholder stops the pipeline. When the operator
-   changes the drawing, the prompt changes with it.
+   `{{ worktree }}`, and each name in the block's `vars`
+   (`composite-blocks.md`). Any other placeholder stops the pipeline. When the
+   operator changes the drawing, the prompt changes with it.
 
 ## Recording an exit
 
@@ -181,7 +186,8 @@ Each action is a `PipelineChange` (`AddExit`, `RenameExit`, `RemoveExit`,
 for kind `composite`), sent through `foreman pipeline edit`. A definition is
 edited through `foreman composite edit` with the same verbs on its blocks
 (with `out:<exit id>` as a wire end) plus `AddParam`, `RemoveParam`,
-`RenameCompositeExit` and `SetEntry` (`docs/composite-blocks.md`).
+`RenameCompositeExit` and the entry verbs `AddEntry`, `RemoveEntry`,
+`RenameEntry` and `SetEntry` (`docs/composite-blocks.md`).
 
 - A rename keeps the exit's id and its wire. Router filters and runs that name
   the former name are left unchanged. Validation names a filter that counts a
