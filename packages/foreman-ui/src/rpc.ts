@@ -8,6 +8,7 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRpc from "effect/reactivity/AtomRpc";
 import type * as AsyncResult from "effect/reactivity/AsyncResult";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import type { PipelineChange } from "foreman/pipeline-edit";
 import type { Published } from "foreman/published-schema";
 import { UiContract } from "foreman/ui-contract";
 import * as Stream from "effect/Stream";
@@ -24,6 +25,11 @@ export const connectionAtom: Atom.Writable<ConnectionState> = Atom.make<Connecti
 export interface PageInputs {
   readonly rpcUrl: string;
   readonly reload: () => void;
+  /**
+   * Optional observer for PipelineEdit verbs the page sends. Production leaves
+   * it unset; browser tests count drops through the registry's initialValues.
+   */
+  readonly onPipelineEdit?: (change: PipelineChange) => void;
 }
 
 /**
@@ -85,3 +91,17 @@ export const readingsAtom: Atom.Atom<AsyncResult.AsyncResult<Published, unknown>
   UiRpc.runtime.atom(
     Stream.unwrap(UiRpc.use((client) => Effect.succeed(client("Readings", void 0 as never)))),
   );
+
+/**
+ * Latest pipeline view for a project from the Pipeline stream. The atom keeps
+ * the last frame as each value arrives.
+ */
+export const pipelineAtom = Atom.family((project: string) =>
+  UiRpc.runtime.atom(
+    Stream.unwrap(
+      UiRpc.use((client) =>
+        Effect.succeed(client("Pipeline", { project, flow: "across" as const })),
+      ),
+    ),
+  ),
+);

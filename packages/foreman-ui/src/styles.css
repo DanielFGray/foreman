@@ -54,6 +54,138 @@ a:hover {
   padding: 1.5rem 1.25rem 3rem;
 }
 
+.app-wide {
+  max-width: min(96rem, 100%);
+}
+
+.pipeline-editor {
+  margin-bottom: 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.75rem;
+}
+
+.pipeline-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.pipeline-toolbar button {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.pipeline-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pipeline-canvas {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg);
+}
+
+.pipeline-canvas svg {
+  display: block;
+}
+
+.pipeline-canvas .block {
+  fill: var(--panel);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.pipeline-canvas .block-label {
+  fill: var(--fg);
+  font-size: 12px;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.pipeline-canvas .wire {
+  stroke: var(--muted);
+  stroke-width: 2;
+}
+
+.pipeline-canvas .wire.back {
+  stroke-dasharray: 6 4;
+}
+
+.pipeline-canvas .wire.preview.good {
+  stroke: #1a7f37;
+  stroke-width: 3;
+}
+
+.pipeline-canvas .wire.preview.warn {
+  stroke: #9a6700;
+  stroke-width: 3;
+}
+
+.pipeline-canvas .exit-dot {
+  fill: var(--accent);
+  stroke: var(--panel);
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.pipeline-canvas .input-dot {
+  fill: transparent;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.drag-preview {
+  margin-bottom: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.drag-preview.tone-green {
+  background: color-mix(in srgb, #1a7f37 12%, var(--panel));
+  color: #1a7f37;
+}
+
+.drag-preview.tone-amber {
+  background: color-mix(in srgb, #9a6700 14%, var(--panel));
+  color: #9a6700;
+}
+
+.pipeline-problem-list {
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pipeline-canvas .wire.preview.good {
+    stroke: #3fb950;
+  }
+
+  .pipeline-canvas .wire.preview.warn {
+    stroke: #d29922;
+  }
+
+  .drag-preview.tone-green {
+    color: #3fb950;
+  }
+
+  .drag-preview.tone-amber {
+    color: #d29922;
+  }
+}
+
 .banner {
   position: sticky;
   top: 0;
