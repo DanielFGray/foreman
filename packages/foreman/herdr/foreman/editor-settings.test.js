@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changedSettings, instructionsOf } from "./editor-settings.js";
+import { changedSettings, instructionsOf, varsAfter } from "./editor-settings.js";
 
 describe("changedSettings", () => {
   const drafted = { kind: "source", id: "queue", filter: "label:bug", next: "branch" };
@@ -20,5 +20,15 @@ describe("instructionsOf", () => {
     expect(instructionsOf({ kind: "agent", role: "review" })).toBe("review");
     expect(instructionsOf({ kind: "check", command: "true" })).toBeUndefined();
     expect(instructionsOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("varsAfter", () => {
+  test("name=value sets a var and keeps the others", () =>
+    expect(varsAfter({ a: "1" }, "focus=speed")).toEqual({ a: "1", focus: "speed" }));
+  test("name= removes the var", () => expect(varsAfter({ a: "1", b: "2" }, "a=")).toEqual({ b: "2" }));
+  test("text with no name or no = changes nothing", () => {
+    expect(varsAfter({}, "focus")).toBeUndefined();
+    expect(varsAfter({}, "=x")).toBeUndefined();
   });
 });

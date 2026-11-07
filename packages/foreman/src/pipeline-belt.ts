@@ -11,7 +11,7 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
-import { expand, PARAM_FIELDS, unpackInstance } from "./composite.ts";
+import { expand, isSettable, PARAM_FIELDS, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import {
   AgentNode,
@@ -457,8 +457,7 @@ export const addParam = (
     if (node === undefined) {
       return { _tag: "Refused", reason: `${block} is not in the definition` };
     }
-    const allowed = PARAM_FIELDS[node.kind];
-    if (allowed === undefined || !allowed.includes(field)) {
+    if (!isSettable(node.kind, field)) {
       return {
         _tag: "Refused",
         reason: `parameter ${param.name} cannot set ${field} on ${node.kind} ${block}`,
@@ -892,7 +891,8 @@ const settled = (node: DrawnNode, setting: BlockSetting): DrawnNode => {
       return node.kind === "land" ? { ...node, how: setting.how, onto: setting.onto } : node;
     case "agent": {
       if (node.kind !== "agent") return node;
-      const { slots: _slots, ...rest } = node;
+      const { slots: _slots, vars: _vars, ...rest } = node;
+      const vars = setting.vars ?? node.vars;
       return {
         ...rest,
         role: setting.role,
@@ -903,6 +903,8 @@ const settled = (node: DrawnNode, setting: BlockSetting): DrawnNode => {
             ? node.exits
             : node.exits.map(({ empty: _empty, ...exit }) => exit),
         ...(setting.slots === undefined ? {} : { slots: setting.slots }),
+        // Absent keeps the block's vars; an empty record clears them.
+        ...(vars === undefined || Object.keys(vars).length === 0 ? {} : { vars }),
       };
     }
     case "router":

@@ -15,6 +15,7 @@ import {
   type DrawnNode,
   DrawnNode as DrawnNodeSchema,
   type Drawing,
+  isVarName,
   mapFilterBlocks,
   type ParamValue,
   type Pipeline,
@@ -36,7 +37,24 @@ export const PARAM_FIELDS: Readonly<Record<string, ReadonlyArray<string>>> = {
   gate: ["step"],
   land: ["how", "onto"],
 };
-const SETTABLE = PARAM_FIELDS;
+/** Whether a parameter may set `field` on a block of `kind`: a listed field, or an agent's `vars.<name>`. */
+export const isSettable = (kind: string, field: string): boolean =>
+  PARAM_FIELDS[kind]?.includes(field) === true ||
+  (kind === "agent" && field.startsWith(VARS_PREFIX) && isVarName(field.slice(VARS_PREFIX.length)));
+
+const VARS_PREFIX = "vars.";
+
+/** `block` with `field` set to `value`; `vars.<name>` sets one entry of the agent's vars. */
+const withField = (block: DrawnNode, field: string, value: ParamValue): object =>
+  field.startsWith(VARS_PREFIX)
+    ? {
+        ...block,
+        vars: {
+          ...("vars" in block ? block.vars : undefined),
+          [field.slice(VARS_PREFIX.length)]: String(value),
+        },
+      }
+    : { ...block, [field]: value };
 
 export type ExpandResult =
   | { readonly _tag: "Expanded"; readonly pipeline: Pipeline }
@@ -410,14 +428,13 @@ const applyParams = (
   for (const [param, value] of values) {
     for (const { block: target, field } of param.sets) {
       if (target !== block.id) continue;
-      const allowed = SETTABLE[current.kind];
-      if (allowed === undefined || !allowed.includes(field)) {
+      if (!isSettable(current.kind, field)) {
         problems.push(
           `${instance.id}: parameter ${param.name} cannot set ${field} on ${current.kind} ${block.id}`,
         );
         return undefined;
       }
-      const decoded = S.decodeUnknownResult(DrawnNodeSchema)({ ...current, [field]: value });
+      const decoded = S.decodeUnknownResult(DrawnNodeSchema)(withField(current, field, value));
       if (Result.isFailure(decoded)) {
         problems.push(
           `${instance.id}: parameter ${param.name} sets a value ${block.id}.${field} refuses`,

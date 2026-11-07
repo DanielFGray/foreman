@@ -136,6 +136,7 @@ export class Prompts extends Context.Service<Prompts>()("Prompts", {
       /** The full prompt for an agent block's run on a task. */
       agent: (block: AgentNode, run: AgentRun) =>
         render(instructionsOf(block), {
+          ...block.vars,
           task: run.task.id,
           branch: labelFor(run.task.id),
           base: run.base,

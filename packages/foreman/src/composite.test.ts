@@ -685,3 +685,43 @@ describe("filters that name a block", () => {
     ).toBe(true);
   });
 });
+
+describe("vars on agent blocks", () => {
+  const withFocus: Composites = {
+    "review-loop": {
+      ...reviewLoop,
+      params: [
+        { name: "focus", default: "style", sets: [{ block: "review", field: "vars.focus" }] },
+      ],
+    },
+  };
+  const varsOf = (pipeline: Pipeline, id: string) => {
+    const node = pipeline.nodes.find((one) => one.id === id);
+    return node?.kind === "agent" ? node.vars : undefined;
+  };
+
+  test("a parameter that sets vars.focus reaches each instance's block", () => {
+    const drawn = withReviewInstances(
+      { id: "a", prefix: "a.", set: { focus: "security" } },
+      { id: "b", prefix: "b." },
+    );
+    const result = expand(drawn, withFocus);
+    if (result._tag !== "Expanded") throw new Error(JSON.stringify(result));
+    expect(varsOf(result.pipeline, "a.review")).toEqual({ focus: "security" });
+    expect(varsOf(result.pipeline, "b.review")).toEqual({ focus: "style" });
+  });
+
+  test("a var takes no built-in placeholder's name", () => {
+    const composites: Composites = {
+      "review-loop": {
+        ...reviewLoop,
+        params: [{ name: "t", default: "x", sets: [{ block: "review", field: "vars.task" }] }],
+      },
+    };
+    const result = expand(withReviewInstances({ id: "a", prefix: "a." }), composites);
+    if (result._tag !== "Expanded") throw new Error(JSON.stringify(result));
+    expect(problemsOf(result.pipeline, OFFERS)).toContain(
+      "a.review: var task is a built-in placeholder: name it otherwise",
+    );
+  });
+});

@@ -15,6 +15,7 @@ export const FIELDS = {
   newSource: { label: "filter", placeholder: "a tasks filter; empty takes every task", of: () => "" },
   exitName: { label: "name", placeholder: "lower-case words and hyphens, then Enter", of: () => "" },
   newExit: { label: "new exit", placeholder: "a name for the agent to end its run with, then Enter", of: () => "" },
+  setVar: { label: "var", placeholder: "name=value, then Enter; name= removes it", of: () => "" },
   // The name a MakeComposite selection is saved under.
   compositeName: { label: "name", placeholder: "a name for the new kind, then Enter", of: () => "" },
 };
@@ -36,3 +37,19 @@ export const changedSettings = (before, after) => {
 // them: its own `instructions`, else its role. Nothing for another kind of block.
 export const instructionsOf = (node) =>
   node?.kind === "agent" ? node.instructions ?? node.role : undefined;
+
+// An agent's vars after the operator typed `name=value` (a value sets the var,
+// an empty one removes it). Undefined when the text names no var. Foreman
+// validates the name.
+export const varsAfter = (vars, text) => {
+  const at = text.indexOf("=");
+  const name = (at < 0 ? text : text.slice(0, at)).trim();
+  if (at < 0 || name === "") return undefined;
+  const { [name]: _removed, ...rest } = vars ?? {};
+  const value = text.slice(at + 1).trim();
+  return value === "" ? rest : { ...rest, [name]: value };
+};
+
+// The vars of an agent block as lines of `name=value`, for the inspector.
+export const varLines = (node) =>
+  Object.entries(node?.vars ?? {}).map(([name, value]) => `${name}=${value}`);

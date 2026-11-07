@@ -10,7 +10,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, EditorState, Editor as TextEditor } from "gpui-base";
 import { chip, picker, portName } from "./parts.js";
-import { FIELDS, changedSettings, instructionsOf, settingsOf } from "./editor-settings.js";
+import { FIELDS, changedSettings, instructionsOf, settingsOf, varLines, varsAfter } from "./editor-settings.js";
 import {
   QUEUE,
   chargeChange,
@@ -203,6 +203,12 @@ export class Editor {
       case "newExit":
         this.inputs.newExit.set_value("");
         return change({ _tag: "AddExit", id: node.id, name: value });
+      case "setVar": {
+        const vars = varsAfter(node.vars, value);
+        if (vars === undefined) return;
+        this.inputs.setVar.set_value("");
+        return configure({ ...agent, vars });
+      }
     }
   }
 
@@ -695,6 +701,13 @@ export class Editor {
         }),
       )
       .when(this.exit !== null, (el) => el.child(this.field(t, "exitName", `rename ${this.exit}`)))
+      .when(node.kind === "agent", (el) =>
+        varLines(node).reduce(
+          (box, line) => box.child(div().pl(70).text_size(12).text_color(t.muted).child(line)),
+          el,
+        ),
+      )
+      .when(node.kind === "agent", (el) => el.child(this.field(t, "setVar")))
       .when(node.kind === "agent", (el) => el.child(this.field(t, "newExit")));
   }
 
