@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { DateTime, Option, Schema as S } from "effect";
-import type { BoardColumn } from "./board.ts";
+import type { BoardColumn } from "./board-columns.ts";
 import { EMPTY_FLEET, placementIn, type FleetState } from "./dispatcher.ts";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { Policy } from "./policy.ts";
-import { Published, publishedOf } from "./published.ts";
+import { publishedOf } from "./published.ts";
+import { Published } from "./published-schema.ts";
 import type { Item, TaskStatus } from "./records.ts";
 import { approvalOf, authorDone, authorRun, reviewRun, stoppedRun } from "./task-fixture.ts";
 

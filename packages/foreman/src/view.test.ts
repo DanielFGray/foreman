@@ -15,15 +15,8 @@ import {
 } from "./view.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { STANDARD_PIPELINES, type AgentNode } from "./pipeline.ts";
-import {
-  Published,
-  publishedOf,
-  publishedQueue,
-  publishedRow,
-  statusOf,
-  writePublished,
-  type DispatcherStatus,
-} from "./published.ts";
+import { publishedOf, publishedQueue, publishedRow, statusOf, writePublished } from "./published.ts";
+import { Published, type DispatcherStatus } from "./published-schema.ts";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Option, Schema as S } from "effect";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";

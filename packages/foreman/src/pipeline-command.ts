@@ -42,6 +42,7 @@ import {
 import { PipelineError } from "./pipeline-error.ts";
 import { Settings, settings } from "./config.ts";
 import { type TraceReport, traceReport } from "./pipeline-trace.ts";
+import { TraceRequest } from "./trace-request.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
@@ -49,17 +50,6 @@ import { readMeasured, ratesOf } from "./run-rates.ts";
 
 export { PipelineError };
 
-/** What `trace` reads: the pretend task, and the events chosen so far. */
-export const TraceRequest = S.Struct({
-  task: S.Struct({
-    labels: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-    size: S.optional(S.Int),
-    priority: S.Int.pipe(S.withDecodingDefault(Effect.succeed(2))),
-    parent: S.optional(S.String),
-  }),
-  events: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
-});
-export type TraceRequest = S.Schema.Type<typeof TraceRequest>;
 
 /**
  * `foreman pipeline`: read, check and change the pipeline each project runs.

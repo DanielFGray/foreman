@@ -4,6 +4,7 @@
 // Nothing is read from or written to the store. The simulator
 // (`pipeline-simulate.ts`) moves its tasks with the same events.
 import { Option } from "effect";
+import type { TraceRequest } from "./trace-request.ts";
 import type { Run } from "tasks";
 import { type BlockSeat, seatAt } from "./agent-rung.ts";
 import { wallAccountOf } from "./harness.ts";
@@ -25,13 +26,7 @@ import { newRunFor } from "./run-record.ts";
 import { applyRow, openAgentOf, type RunEvent, stepOf, type StepRules } from "./run-step.ts";
 
 /** The task a trace pretends to run: what a filter or a router reads of it. */
-export interface PretendTask {
-  readonly labels: ReadonlyArray<string>;
-  /** Written as the `size:N` label; none reads as 1. */
-  readonly size: number | undefined;
-  readonly priority: number;
-  readonly parent: string | undefined;
-}
+export type PretendTask = TraceRequest["task"];
 
 /**
  * What the operator pretends happened at the block the task stands at, in the
@@ -112,12 +107,6 @@ export const traceOf = (
   }
   return { steps, refused: undefined };
 };
-
-/** What `foreman pipeline trace` reads: the pretend task, and the events chosen so far. */
-export interface TraceRequest {
-  readonly task: PretendTask;
-  readonly events: ReadonlyArray<TraceEvent>;
-}
 
 /** The pipelines a project could be traced through: its draft, if any, and the one it runs. */
 export interface TraceSources {

@@ -41,7 +41,8 @@ import {
 } from "./pipeline-command.ts";
 import { PipelineError } from "./pipeline-error.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
-import { publishedQueue, type Published } from "./published.ts";
+import { publishedQueue } from "./published.ts";
+import { type Published } from "./published-schema.ts";
 import { UiContract } from "./ui-contract.ts";
 
 /** Default listen port when `FOREMAN_UI_PORT` is unset. */

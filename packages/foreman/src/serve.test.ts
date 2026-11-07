@@ -18,7 +18,8 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
-import { type Published, publishedOf } from "./published.ts";
+import { publishedOf } from "./published.ts";
+import { type Published } from "./published-schema.ts";
 import { holdLock, ServeRunning, supervise } from "./serve.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "foreman-serve-"));

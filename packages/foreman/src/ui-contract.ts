@@ -8,8 +8,8 @@ import { Effect, Schema as S } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { PipelineError } from "./pipeline-error.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
-import { TraceRequest } from "./pipeline-command.ts";
-import { Published, PublishedRow } from "./published.ts";
+import { TraceRequest } from "./trace-request.ts";
+import { Published, PublishedRow } from "./published-schema.ts";
 
 /** Which way a pipeline drawing runs in JSON. */
 export const Flow = S.Literals(["across", "down"]);
