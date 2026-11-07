@@ -2,9 +2,11 @@
  * `foreman serve`: the one process that runs the dispatcher.
  *
  * The dispatcher is supervised: when it fails, the failure is logged and
- * written to state.json as the reading's state, and the dispatcher starts
- * again after a pause. Each reading is written to state.json, which the
- * herdr-app Foreman pane reads.
+ * published as the reading's state, and the dispatcher starts again after a
+ * pause. Readings live in one `SubscriptionRef<Published>` for the life of
+ * the process. Each reading and each published failure is written to that
+ * ref and to `state.json` (for the herdr-app Foreman pane); the UI server
+ * will read the same ref.
  *
  * A lock on a file beside state.json is held for the life of the process, so
  * a second serve refuses to start and cannot race the first one's landings.
@@ -19,21 +21,31 @@ import {
   Option,
   Ref,
   Schedule,
+  Semaphore,
   type Scope,
   Stream,
   SubscriptionRef,
 } from "effect";
 import { Command } from "effect/cli";
-import type { FleetState } from "./dispatcher.ts";
+import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 import { buildHost, publishedFailure } from "./host.ts";
-import { publishedOf, publishedPath, statusOf, writePublished } from "./published.ts";
+import {
+  type Published,
+  publishedOf,
+  publishedPath,
+  statusOf,
+  writePublished,
+} from "./published.ts";
 
 export const serveCommand = Command.make("serve", {}, () =>
   Effect.scoped(
     Effect.gen(function* () {
       const path = publishedPath();
       yield* holdLock(lockPath(path));
-      yield* supervise(buildHost, path);
+      // One readings ref for the process: each dispatcher writes into it;
+      // state.json and the UI Readings stream both take their values from it.
+      const readings = yield* SubscriptionRef.make(publishedOf(EMPTY_FLEET, Option.none()));
+      yield* supervise(buildHost, path, readings);
       // The dispatcher returns only when foreman's own checkout has a new
       // commit. A new dispatcher in this process would still load the code
       // already in memory, so the process exits and its service manager starts
@@ -57,26 +69,39 @@ export interface Supervised<E, R> {
 
 /**
  * Runs one dispatcher after another until one returns, writing each reading
- * to `path`.
+ * and each published failure to `readings` and to `path`.
  *
  * A failure is logged and published over the last reading, and a new
  * dispatcher is built after a pause. An interruption is the process stopping,
- * so supervise ends without a retry.
+ * so supervise ends without a retry. The readings ref outlives each
+ * dispatcher, so a subscriber keeps receiving after a restart.
  */
 export const supervise = <E, RR, BE, R>(
   build: Effect.Effect<Supervised<E, RR>, BE, R | Scope.Scope>,
   path: string,
+  readings: SubscriptionRef.SubscriptionRef<Published>,
 ) =>
   Effect.gen(function* () {
-    // The last reading, which a failure is published over.
+    // The last fleet reading, which a failure is published over.
     const last = yield* Ref.make(Option.none<FleetState>());
 
-    // A file that cannot be written is logged and written again with the next
-    // reading: it is a view, and a stale one says so through its timestamp.
-    const publish = (published: Parameters<typeof writePublished>[1]) =>
-      writePublished(path, published).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("foreman's state.json was not written", cause),
+    // Publish into the process-lifetime ref, then write that same value to
+    // state.json. One permit so a stream update and a final flush cannot race
+    // the same temp file. The UI Readings stream will subscribe to the ref on
+    // its own. A file that cannot be written is logged and written again with
+    // the next reading: it is a view, and a stale one says so through its
+    // timestamp.
+    const gate = Semaphore.makeUnsafe(1);
+    const publish = (published: Published) =>
+      gate.withPermits(1)(
+        SubscriptionRef.set(readings, published).pipe(
+          Effect.andThen(
+            writePublished(path, published).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("foreman's state.json was not written", cause),
+              ),
+            ),
+          ),
         ),
       );
 
@@ -85,18 +110,27 @@ export const supervise = <E, RR, BE, R>(
     const attempt = Effect.scoped(
       Effect.gen(function* () {
         const host = yield* build;
+        const put = (fleet: FleetState) =>
+          // Uninterruptible: when the attempt scope closes it would otherwise
+          // cancel an in-flight publish of the last reading.
+          Effect.uninterruptible(
+            Ref.set(last, Option.some(fleet)).pipe(
+              Effect.andThen(publish(publishedOf(fleet, Option.some(statusOf(fleet))))),
+            ),
+          );
         yield* Effect.forkScoped(
           Stream.runForEach(
             SubscriptionRef.changes(host.state).pipe(
               Stream.filter((fleet) => fleet.observedAt !== undefined),
             ),
-            (fleet) =>
-              Ref.set(last, Option.some(fleet)).pipe(
-                Effect.andThen(publish(publishedOf(fleet, Option.some(statusOf(fleet))))),
-              ),
+            put,
           ),
         );
-        return yield* host.run;
+        yield* host.run;
+        // On a clean return, flush once on this fiber so the last reading is
+        // not lost to the scope interrupt of the stream fiber.
+        const fleet = yield* SubscriptionRef.get(host.state);
+        if (fleet.observedAt !== undefined) yield* put(fleet);
       }),
     );
 
