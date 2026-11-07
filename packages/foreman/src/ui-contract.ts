@@ -17,20 +17,21 @@ import {
   TrackerError,
 } from "./errors.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
+import {
+  CompositeEditView,
+  CompositeView,
+  Flow,
+  InstructionsView,
+  PipelineEditView,
+  PipelineShowView,
+  ShownPipeline,
+} from "./pipeline-view.ts";
 import { TraceRequest } from "./trace-request.ts";
 import { Published, PublishedRow } from "./published-schema.ts";
 
-/** Which way a pipeline drawing runs in JSON. */
-export const Flow = S.Literals(["across", "down"]);
-export type Flow = typeof Flow.Type;
-
 const flowField = Flow.pipe(S.withDecodingDefault(Effect.succeed("across" as const)));
 
-/**
- * A JSON view the page draws: layout and choices are nested shapes without a
- * single Schema of their own yet, so they travel as JSON. Pipeline drawings
- * and published readings keep their Schemas.
- */
+/** Temporary: trace, simulate and graph views until their Schemas land. */
 const JsonView = S.Any;
 
 /** Streams that push a value at once and again at each change. */
@@ -41,7 +42,7 @@ export const Readings = Rpc.make("Readings", {
 
 export const Pipeline = Rpc.make("Pipeline", {
   payload: { project: S.String, flow: flowField },
-  success: JsonView,
+  success: ShownPipeline,
   error: S.Union([PathsError, PipelineError, RegistryError]),
   stream: true,
 });
@@ -56,13 +57,13 @@ export const Queue = Rpc.make("Queue", {
 /** Pipeline verbs: one Rpc per exported Effect in `pipeline-command.ts`. */
 export const PipelineShow = Rpc.make("PipelineShow", {
   payload: { project: S.String, flow: flowField },
-  success: JsonView,
+  success: PipelineShowView,
   error: S.Union([PathsError, PipelineError, RegistryError]),
 });
 
 export const PipelineEdit = Rpc.make("PipelineEdit", {
   payload: { project: S.String, change: PipelineChange, flow: flowField },
-  success: JsonView,
+  success: PipelineEditView,
   error: S.Union([PathsError, PipelineError, RegistryError, RewriteError]),
 });
 
@@ -83,7 +84,7 @@ export const PipelineInstructions = Rpc.make("PipelineInstructions", {
     name: S.String,
     text: S.optional(S.String),
   },
-  success: JsonView,
+  success: InstructionsView,
   error: S.Union([PathsError, PipelineError, PromptError]),
 });
 
@@ -118,13 +119,13 @@ export const PipelineGraph = Rpc.make("PipelineGraph", {
 /** Composite verbs: one Rpc per exported Effect in `composite-command.ts`. */
 export const CompositeShow = Rpc.make("CompositeShow", {
   payload: { name: S.String, flow: flowField },
-  success: JsonView,
+  success: CompositeView,
   error: S.Union([PipelineError]),
 });
 
 export const CompositeEdit = Rpc.make("CompositeEdit", {
   payload: { name: S.String, change: CompositeChange, flow: flowField },
-  success: JsonView,
+  success: CompositeEditView,
   error: S.Union([PipelineError, RewriteError]),
 });
 

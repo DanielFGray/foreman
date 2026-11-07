@@ -13,9 +13,7 @@ import {
   type Port,
   type Wire,
 } from "./pipeline-belt.ts";
-
-/** Which way work moves through a drawing: left to right, or top to bottom. */
-export type Flow = "across" | "down";
+import type { DrawingView, Flow } from "./pipeline-view.ts";
 
 export interface Box {
   readonly x: number;
@@ -47,56 +45,8 @@ export interface Layout {
   readonly wires: ReadonlyArray<PlacedWire>;
 }
 
-/**
- * A pipeline as a renderer draws it, in plain JSON: each block at its box with
- * the words on its card, and each wire as the corners of its route. It is what
- * `foreman pipeline show --json` prints, so a renderer that cannot run this
- * module, such as a herdr-app mod, draws the same picture as one that can.
- */
-export interface Drawing {
-  readonly flow: Flow;
-  readonly width: number;
-  readonly height: number;
-  readonly blocks: ReadonlyArray<{
-    readonly id: string;
-    readonly kind: DrawnNode["kind"];
-    readonly icon: string;
-    readonly summary: string;
-    /** Expanded block ids inside a composite instance; absent for every other kind. */
-    readonly covers?: ReadonlyArray<string>;
-    /** A composite instance's ways in: each entry's name, and the wire target that reaches it (the instance's id for the first, `<id>/<entry id>` for the others). */
-    readonly entries?: ReadonlyArray<{
-      readonly id: string;
-      readonly name: string;
-      readonly target: string;
-    }>;
-    /** A composite instance's exits by the definition's names, including those that return to the queue and so have no wire. */
-    readonly exits?: ReadonlyArray<{
-      readonly id: string;
-      readonly name: string;
-      readonly to: string;
-    }>;
-    readonly x: number;
-    readonly y: number;
-    readonly w: number;
-    readonly h: number;
-  }>;
-  readonly wires: ReadonlyArray<{
-    readonly from: string;
-    readonly port: Port;
-    readonly to: string;
-    readonly label: string;
-    /** The entry id the wire enters a composite instance by, when it names one. */
-    readonly entry?: string;
-    /** Whether the wire runs against the flow, back along a return lane past the last lane. */
-    readonly back: boolean;
-    readonly points: ReadonlyArray<Point>;
-    readonly anchor: Point;
-    readonly plus: Point;
-  }>;
-}
-
-export const drawingOf = (pipeline: PipelineDrawing, flow: Flow): Drawing => {
+/** A pipeline as a renderer draws it; the JSON shape is `DrawingView`. */
+export const drawingOf = (pipeline: PipelineDrawing, flow: Flow): DrawingView => {
   const layout = layoutOf(beltOf(pipeline), flow);
   return {
     flow,
@@ -629,7 +579,7 @@ export const writtenDrawingOf = (
   pipeline: PipelineDrawing,
   composites: Composites,
   flow: Flow,
-): Drawing => {
+): DrawingView => {
   const layout = drawingOf(pipeline, flow);
   const covers = coversOf(pipeline, composites);
   return {

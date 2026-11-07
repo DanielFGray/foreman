@@ -24,7 +24,8 @@ import {
   updatePipelinesFile,
 } from "./pipeline-file.ts";
 import { pipelinesNow, problemsAgainstLadder, problemsOfDrawing } from "./pipeline-check.ts";
-import { writtenDrawingOf, type Flow } from "./pipeline-layout.ts";
+import { writtenDrawingOf } from "./pipeline-layout.ts";
+import type { Flow } from "./pipeline-view.ts";
 import { applyChange, PipelineChange } from "./pipeline-edit.ts";
 import { choicesOf } from "./pipeline-belt.ts";
 import { scopesOf } from "./policy.ts";
