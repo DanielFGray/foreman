@@ -1,10 +1,10 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Layer, Option, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, Layer, Option, Queue, Stream, SubscriptionRef } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { RpcTest } from "effect/rpc";
 import { Command } from "effect/cli";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Settings } from "./config.ts";
@@ -19,6 +19,7 @@ import { Repository } from "./repository.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { UiContract } from "./ui-contract.ts";
+import { resolve } from "./paths.ts";
 import { localRequest, ReadingsRef, uiHandlersLayer, uiRoutesLayer } from "./ui-server.ts";
 
 const folder = mkdtempSync(join(tmpdir(), "foreman-ui-server-"));
@@ -101,15 +102,11 @@ const testSettings = Layer.succeed(
  * and Settings cover Queue/simulate/graph; PipelineEdit under test only needs
  * the registry and files.
  */
-const handlers = uiHandlersLayer.pipe(
-  Layer.provide(fixedReadings),
-  Layer.provide(
-    Layer.mergeAll(Records.layer, testSettings, Repository.Default, fakeFleet).pipe(
-      Layer.provideMerge(BunServices.layer),
-      Layer.provideMerge(store.registry),
-    ),
-  ),
+const services = Layer.mergeAll(Records.layer, testSettings, Repository.Default, fakeFleet).pipe(
+  Layer.provideMerge(BunServices.layer),
+  Layer.provideMerge(store.registry),
 );
+const handlers = uiHandlersLayer.pipe(Layer.provideMerge(fixedReadings), Layer.provide(services));
 
 const pipelineCommand = pipelineCommandWith(
   Layer.effect(Dispatcher, Effect.die("ui tests do not run pipeline place")),
@@ -223,5 +220,88 @@ describe("Origin and Host checks", () => {
     } finally {
       await dispose();
     }
+  });
+});
+
+/**
+ * Runs `stream` until its second value. The write runs after the first value
+ * and a short wait, so the file watches are attached before the change lands.
+ */
+const secondValueAfter = <A, E, R>(
+  stream: Stream.Stream<A, E, R>,
+  write: Effect.Effect<unknown, unknown, never>,
+) =>
+  Effect.gen(function* () {
+    const values = yield* Queue.make<A>();
+    const fiber = yield* stream.pipe(
+      Stream.runForEach((value) => Queue.offer(values, value)),
+      Effect.forkScoped,
+    );
+    yield* Queue.take(values);
+    yield* Effect.sleep("300 millis");
+    yield* write;
+    const second = yield* Queue.take(values).pipe(Effect.timeout("5 seconds"));
+    yield* Fiber.interrupt(fiber);
+    return second;
+  });
+
+describe("Pipeline and Queue streams", () => {
+  test("Pipeline sends again when the pipelines file changes", async () => {
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        return yield* secondValueAfter(
+          client.Pipeline({ project: "amux", flow: "across" }),
+          Effect.sync(() =>
+            writeFileSync(path, JSON.stringify({ pipelines: { amux: pinned }, composites: {} })),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(second.drawn).toBe(true);
+  });
+
+  test("Pipeline sends again when a contract edit changes the drafts file", async () => {
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        return yield* secondValueAfter(
+          client.Pipeline({ project: "amux", flow: "across" }),
+          client.PipelineEdit({ project: "amux", change, flow: "across" }),
+        );
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(second.draft).not.toBeNull();
+  });
+
+  test("Pipeline sends again when a file in the instructions folder changes", async () => {
+    const folderOfPrompts = join(resolve().configDirectory, "prompts");
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        return yield* secondValueAfter(
+          client.Pipeline({ project: "amux", flow: "across" }),
+          Effect.sync(() => {
+            mkdirSync(folderOfPrompts, { recursive: true });
+            writeFileSync(join(folderOfPrompts, "author.md"), "instructions");
+          }),
+        );
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(second.project).toBe("amux");
+  });
+
+  test("Queue sends again when a reading changes", async () => {
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        const readings = yield* ReadingsRef;
+        return yield* secondValueAfter(
+          client.Queue({ project: "amux" }),
+          SubscriptionRef.set(readings, publishedOf(EMPTY_FLEET, Option.none())),
+        );
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(Array.isArray(second)).toBe(true);
   });
 });

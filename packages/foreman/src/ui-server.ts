@@ -209,7 +209,7 @@ const pipelineChanges = (project: string, flow: "across" | "down") =>
  */
 export const uiRoutesLayer = (port: number) =>
   Layer.mergeAll(
-    RpcServer.layerHttp({ group: UiContract, path: UI_RPC_PATH }),
+    RpcServer.layerHttp({ group: UiContract, path: UI_RPC_PATH, protocol: "websocket" }),
     // Global middleware is itself a Layer (route middleware would use `.layer`).
     localOnlyMiddleware(port),
   ).pipe(Layer.provide(RpcSerialization.layerJson));
