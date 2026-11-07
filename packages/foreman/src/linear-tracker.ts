@@ -3,6 +3,7 @@ import { type Dependency, Item, type ListFilterInput, type Status } from "tasks"
 import { confirm, splitBody } from "./github-tracker.ts";
 import { Linear, LinearError, type LinearRate } from "./linear.ts";
 import { Tracker, TrackerError } from "./tracker.ts";
+import { allTrackerPages } from "./tracker-pages.ts";
 
 import type { LinearPlace } from "./policy.ts";
 
@@ -141,11 +142,26 @@ export const linearTracker = (
       Effect.gen(function* () {
         const read = yield* snapshot(project);
         const place = yield* placeOf(project);
-        const { value } = yield* query(LabeledData, `list ${label}`, labeledQuery, {
-          ...place,
-          label,
-        });
-        return value.issues.nodes.map((issue) => itemOf(project, read, issue));
+        const found = yield* allTrackerPages(
+          (after) =>
+            query(LabeledData, `list ${label}`, labeledQuery, {
+              ...place,
+              label,
+              ...(after === undefined ? {} : { after }),
+            }).pipe(
+              Effect.map(({ value }) => ({
+                nodes: value.issues.nodes,
+                hasNextPage: value.issues.pageInfo.hasNextPage,
+                endCursor: value.issues.pageInfo.endCursor,
+              })),
+            ),
+          () =>
+            new TrackerError({
+              command: `list ${label}`,
+              detail: "Linear omitted the cursor for another page",
+            }),
+        );
+        return found.map((issue) => itemOf(project, read, issue));
       }).pipe(Effect.mapError(fail(`list ${label}`)));
 
     const issueOf = (task: string) => {
@@ -596,8 +612,8 @@ query($team: String!, $project: String!, $after: String!) {
 fragment issue on Issue { ${ISSUE_FIELDS} }`;
 
 const labeledQuery = `
-query($team: String!, $project: String!, $label: String!) {
-  issues(first: 100, includeArchived: true, filter: {
+query($team: String!, $project: String!, $label: String!, $after: String) {
+  issues(first: 100, after: $after, includeArchived: true, filter: {
     team: { key: { eq: $team } }
     project: { name: { eq: $project } }
     labels: { some: { name: { eq: $label } } }

@@ -26,11 +26,17 @@ const node = (number: number, change: Partial<IssueNode> = {}): IssueNode => ({
 
 const ok = (stdout: string): GhResult => ({ exitCode: 0, stdout, stderr: "" });
 
-const snapshot = (nodes: ReadonlyArray<IssueNode>) =>
+const snapshot = (
+  nodes: ReadonlyArray<IssueNode>,
+  pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null } = {
+    hasNextPage: false,
+    endCursor: null,
+  },
+) =>
   ok(
     JSON.stringify({
       data: {
-        repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } },
+        repository: { issues: { pageInfo, nodes } },
         rateLimit: { remaining: 4000, limit: 5000, resetAt: "2026-11-03T00:00:00Z" },
       },
     }),
@@ -93,6 +99,20 @@ const closedScheduleGithub = () => {
   return { calls, tracker };
 };
 
+const paginatedScheduleGithub = () => {
+  const gh = fakeGh((args) => {
+    if (args[1] !== "graphql") return ok("");
+    return args.includes("after=next")
+      ? snapshot([node(10, { state: "CLOSED", labels: { nodes: [{ name: "schedule:retro" }] } })])
+      : snapshot([node(9, { labels: { nodes: [{ name: "schedule:retro" }] } })], {
+          hasNextPage: true,
+          endCursor: "next",
+        });
+  });
+  const tracker = githubTracker(() => Effect.succeed("o/r")).pipe(Effect.provide(gh.layer));
+  return { calls: gh.calls, tracker };
+};
+
 const graphqlCalls = (calls: ReadonlyArray<ReadonlyArray<string>>) =>
   calls.filter((args) => args[1] === "graphql").length;
 
@@ -109,6 +129,18 @@ describe("githubTracker reads", () => {
     expect(calls.some((args) => args.some((arg) => arg.includes("states: [OPEN, CLOSED]")))).toBe(
       true,
     );
+  });
+
+  test("labeled reads every page", async () => {
+    const { calls, tracker } = paginatedScheduleGithub();
+    const found = await Effect.runPromise(
+      Effect.gen(function* () {
+        const t = yield* tracker;
+        return yield* t.labeled("beta", "schedule:retro");
+      }),
+    );
+    expect(found.map((issue) => issue.id)).toEqual(["beta#9", "beta#10"]);
+    expect(graphqlCalls(calls)).toBe(2);
   });
 
   test("ready answers the open, unassigned, unblocked tasks of one read", async () => {

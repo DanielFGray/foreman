@@ -8,7 +8,6 @@ import {
   type LogEntry,
   type Status,
   type TaskEvent,
-  type TaskState,
 } from "tasks";
 import { Fleet } from "./fleet.ts";
 import { HcFleet } from "./hc.ts";
@@ -18,6 +17,9 @@ import { Linear } from "./linear.ts";
 import { linearTracker } from "./linear-tracker.ts";
 import { Repository } from "./repository.ts";
 import { policyPath, readPolicy, trackerOf, type Policy, type TrackerName } from "./policy.ts";
+
+export const TaskAddStatus = S.Literals(["open", "proposed"]);
+export type TaskAddStatus = typeof TaskAddStatus.Type;
 
 /**
  * The task tracker foreman takes its work from, in tracker terms: which tasks
@@ -70,7 +72,7 @@ export class Tracker extends Context.Service<
        * The status the task is filed in: `open`, or `proposed`, which holds it
        * out of the queue until the operator opens it. Absent means `open`.
        */
-      readonly status?: TaskState;
+      readonly status?: TaskAddStatus;
     }) => Effect.Effect<string, TrackerError>;
     /**
      * The status moves. Each skips a task that already has the status it

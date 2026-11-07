@@ -10,6 +10,7 @@ import { Refused } from "./commands.ts";
 import { place, type Placement } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
+import { runTitles } from "./run-titles.ts";
 
 /**
  * Reads of the task store that a client makes every few seconds, and the
@@ -241,14 +242,14 @@ export const runsCommand = Command.make(
   (args) =>
     Effect.gen(function* () {
       const records = yield* Records;
-      const tasks = yield* (yield* Tracker).list({ project: args.project });
-      const titles = new Map(tasks.map((task) => [task.id, task.title] as const));
       const after = Option.getOrElse(args.since, () => "1970-01-01T00:00:00.000Z");
       const onlyWork = Option.getOrUndefined(args.work);
       const closed = (yield* records.closedSince(new Date(after)))
         .filter((run) => run.project === args.project)
         .filter((run) => onlyWork === undefined || run.work === onlyWork)
         .filter((run) => !args.notes || Option.isSome(run.notes));
+      const tracker = yield* Tracker;
+      const titles = yield* runTitles(tracker, args.project, closed);
       if (args.json) {
         return yield* Console.log(
           JSON.stringify(yield* Schema.encodeEffect(Schema.Array(RunRecord))(closed)),

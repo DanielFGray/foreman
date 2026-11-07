@@ -36,6 +36,7 @@ const listProject = Argument.String("project").pipe(
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));
 
 const everyLanded = Flag.Int("every-landed").pipe(
+  Flag.withSchema(Schema.Int.check(Schema.isGreaterThan(0))),
   Flag.withDescription("File after this many distinct tasks land (committed or answered)"),
 );
 

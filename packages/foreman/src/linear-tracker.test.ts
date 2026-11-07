@@ -100,7 +100,15 @@ const fakeLinear = (
       const matching = [...issues.values(), ...closed.values()].filter((issue) =>
         issue.labels.nodes.some((label) => label.name === variables["label"]),
       );
-      return { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: matching } };
+      const start = variables["after"] === undefined ? 0 : Number(variables["after"]);
+      const nodes = matching.slice(start, start + 100);
+      const end = start + nodes.length;
+      return {
+        issues: {
+          pageInfo: { hasNextPage: end < matching.length, endCursor: String(end) },
+          nodes,
+        },
+      };
     }
     if (document.includes("after: $after")) return { issues: page(variables["after"]) };
     if (document.includes("number: { eq: $number }")) {
@@ -186,6 +194,28 @@ describe("linearTracker", () => {
       }),
     );
     expect(found.map((issue) => [issue.id, issue.status])).toEqual([["foreman#ENG-9", "done"]]);
+  });
+
+  test("labeled reads every page so the latest creation remains the window anchor", async () => {
+    const closed = Array.from({ length: 101 }, (_, index) =>
+      node(index + 1, {
+        state: { type: "completed" },
+        createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        labels: { nodes: [{ name: "schedule:retro" }] },
+      }),
+    );
+    const linear = fakeLinear({ closed });
+    const found = await run(
+      Effect.gen(function* () {
+        const t = yield* linear.tracker;
+        return yield* t.labeled("foreman", "schedule:retro");
+      }),
+    );
+    expect(found).toHaveLength(101);
+    expect(found.toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]?.id).toBe(
+      "foreman#ENG-101",
+    );
+    expect(linear.calls.filter((call) => call.document.includes("labels: { some:")).length).toBe(2);
   });
 
   test("an issue's page is its Linear url", async () => {
