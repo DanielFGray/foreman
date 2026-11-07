@@ -113,9 +113,12 @@ the page's files. `foreman serve` provides it beside `supervise`.
   reach `127.0.0.1` with that domain's name. This server dispatches agents,
   changes the policy and lands code. So the server refuses each request and
   each WebSocket upgrade whose `Host` is not `127.0.0.1:<port>` or
-  `localhost:<port>`, or whose `Origin` is present and is not
-  `http://127.0.0.1:<port>` or `http://localhost:<port>`. The refusal is 403
-  with no body.
+  `localhost:<port>`, or whose `Origin` is present and is not the **trusted
+  page origin**. The refusal is 403 with no body. The Layer takes the trusted
+  page origin as an input: `foreman serve` passes its own address
+  (`http://127.0.0.1:<port>` and `http://localhost:<port>`), and the page tests
+  pass the origin of vitest's browser page, which serves the page under test.
+  The check runs on every request in both cases.
 - **Reconnect.** When the WebSocket closes, the page shows that it is
   disconnected, tries again each second, and reloads itself when a new
   connection succeeds, so it runs the code of the new serve.
@@ -159,11 +162,21 @@ serve` to check that it starts") stays as it is.
   readings ref with fixed readings.
 - **Origin**: a WebSocket upgrade with a foreign `Origin`, and a request with a
   foreign `Host`, each get 403.
-- **Page**: Playwright with headless Chromium starts the UI server Layer on a
-  free port with the fixtures above, then drives the page with real pointer
-  events: a drag from an exit to a block gives the expected `PipelineEdit`, and
-  an amber preview shows the problem count. These tests run in the gate. A
-  missing Chromium fails the gate. It does not skip the tests.
+- **Page**: vitest Browser Mode with the Playwright provider
+  (`@vitest/browser-playwright`) and headless Chromium. The package's vitest
+  config has two projects: `unit`, which runs on Bun, and `browser`, which
+  renders the page's React views in Chromium. The browser project's
+  `globalSetup` runs on Bun. It starts the UI server Layer on a free port with
+  the fixtures above, with vitest's browser page as the trusted page origin,
+  and gives the port to the tests with `provide`. The tests drive the views
+  with real pointer events: a drag from an exit to a block gives the expected
+  `PipelineEdit`, and an amber preview shows the problem count. These tests
+  run in the gate. A missing Chromium fails the gate. It does not skip the
+  tests.
+- **Runner**: every test in the package runs with `bunx --bun vitest run` on
+  `@effect/vitest`. On Node, vitest's workers cannot load `bun:` modules. The
+  Playwright version matches the Chromium that is installed, so the gate does
+  not download a browser.
 - **A look by an agent**: `bun run dev` in `packages/foreman-ui` starts the
   same Layer with the same fixtures and prints its URL. An agent opens it with
   its browser tool. The operator is not needed to test the page.
@@ -184,6 +197,9 @@ Each rule below is changed by this record. The record wins in each case.
 | Do not run `foreman serve` to check that it starts | `AGENTS.md`, Traps | No change: the tests start the UI server Layer, never serve. |
 | Durable state beyond the policy, pipelines, drafts and instructions files is a wall | `AGENTS.md`, "The world holds the work" | No conflict: the port is an environment setting, and the page stores nothing. |
 | `effect` and `@effect/platform-bun` are pinned to 4.1.0 | `packages/foreman/package.json` | 4.1.2, for `@effect/atom-react`. |
+| An `Origin` other than `http://127.0.0.1:<port>` or `http://localhost:<port>` is refused | this record, before vitest Browser Mode | The Layer takes the trusted page origin as an input; serve passes its own address. |
+| The page tests are plain Playwright | this record, before vitest Browser Mode | vitest Browser Mode with the Playwright provider, in the same vitest run as the unit tests. |
+| Tests use `bun:test` | every package's `test:unit` script | `packages/foreman-ui` uses `@effect/vitest` on Bun. foreman and tasks move later, in their own task. |
 
 ## Checks
 
