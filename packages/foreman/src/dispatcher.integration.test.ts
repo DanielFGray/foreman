@@ -544,7 +544,6 @@ class World {
         this.removed.push(branch);
         return this.branches.delete(branch);
       }),
-    // `setup` answers `undefined` when the project has no setup script; `Effect.void` would not type as that answer.
     setup: () => this.write("repository.setup", () => undefined),
     merge: (
       _directory: string,

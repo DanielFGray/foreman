@@ -199,8 +199,10 @@ workspace closes when its last pane does.
 
 A fresh worktree holds committed files only. Before each dispatch, foreman
 runs the project's `scripts/worktree-setup.sh` there when the project has one,
-and refuses a worktree whose setup failed. The script must be safe to run
-again.
+and refuses a worktree whose setup failed. Before `foreman serve` exits for a
+restart on a new commit, it runs the same script on the operator's checkout.
+If setup fails, serve publishes the failure and keeps running its loaded code.
+The script must be safe to run again.
 
 The branch outlives the workspace only as long as it is the only copy of the
 work. Every tick deletes foreman's merged branches from each project, so a

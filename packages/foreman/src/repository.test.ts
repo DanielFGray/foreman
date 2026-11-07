@@ -587,6 +587,8 @@ describe("Repository", () => {
 // A branch can declare what the tree needs installed, such as a new package
 // and its dependencies. Verification judges the merged tree, so the setup
 // script has to run on that tree, not only on the base it was proved against.
+// The operator's checkout takes the same files after apply. Serve installs it
+// before restarting; landing verification remains in the proving ground.
 describe("Repository landing a branch that changes what setup installs", () => {
   test("verifies the merged tree with the merged tree's setup", async () => {
     const here = await mkdtemp(join(tmpdir(), "foreman-merged-setup-"));

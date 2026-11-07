@@ -22,7 +22,7 @@ import { policyPath, readPolicy } from "./policy-file.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
-import { Repository } from "./repository.ts";
+import { Repository, RepositoryError } from "./repository.ts";
 import { telemetry } from "./telemetry.ts";
 
 /**
@@ -115,25 +115,21 @@ export const buildHost = Effect.gen(function* () {
   const dispatcher = Context.get(context, Dispatcher);
   const repository = Context.get(context, Repository);
   const headOfCode = repository.head(import.meta.dir).pipe(Effect.option);
-  loadedCommit ??= Option.getOrUndefined(yield* headOfCode);
-  const loaded = loadedCommit;
+  if (loadedCommit === undefined) {
+    const head = yield* headOfCode;
+    if (Option.isSome(head)) loadedCommit = head.value;
+  }
+  const codeMoved = codeMovedFrom(repository, loadedCommit, import.meta.dir);
   return {
     /** Each reading of the world, replaced whole. */
     state: dispatcher.state,
     /**
      * Ticks until interrupted, until a tick fails, or until the checkout this
-     * process loaded foreman from has a new commit. It returns only in the
-     * last case, and the host then starts a new process on the new code.
+     * process loaded foreman from has a new commit whose setup succeeded. It
+     * returns only in the last case, and the host then starts a new process
+     * on the new code.
      */
-    run: dispatcher
-      .run(
-        headOfCode.pipe(
-          Effect.map(
-            (head) => loaded !== undefined && Option.isSome(head) && head.value !== loaded,
-          ),
-        ),
-      )
-      .pipe(Effect.provideContext(context)),
+    run: dispatcher.run(codeMoved).pipe(Effect.provideContext(context)),
     /** Asks for a reading now, after a command changed the world. */
     wake: dispatcher.wake,
     /** The ranked queue for one project or every open one, as published rows. */
@@ -145,9 +141,37 @@ export const buildHost = Effect.gen(function* () {
 export type Host = Effect.Success<typeof buildHost>;
 
 /**
- * The commit of foreman's own checkout when this process first built a host:
- * the code it runs. Kept per process, not per host, because a host built
- * again after a failure still runs the code the process loaded.
+ * True only when the checkout at `directory` has moved past `loaded` and that
+ * checkout's setup has succeeded on the new commit. A landing can move HEAD and
+ * still leave dependencies on the older lockfile; exiting before setup would
+ * make the service restart onto a tree that cannot run. A setup failure fails
+ * the effect so supervise logs and publishes it, and the process stays on the
+ * code it already loaded until a later tick's setup passes.
+ */
+const codeMovedFrom = (
+  repository: Repository["Service"],
+  loaded: string | undefined,
+  directory: string,
+): Effect.Effect<boolean, RepositoryError> =>
+  Effect.gen(function* () {
+    const head = yield* repository.head(directory).pipe(Effect.option);
+    if (loaded === undefined || Option.isNone(head) || head.value === loaded) return false;
+    const checkout = yield* repository.checkoutOf(directory);
+    if (checkout === undefined) return true;
+    const setup = yield* repository.setup(checkout);
+    if (setup !== undefined && !setup.passed) {
+      return yield* new RepositoryError({
+        directory: checkout,
+        detail: `checkout setup failed:\n${setup.output}`,
+      });
+    }
+    return true;
+  });
+
+/**
+ * The commit of foreman's checkout when this process first built a host:
+ * the code the process runs. Kept per process, not per host, because a
+ * host built again after a failure still runs the code the process loaded.
  */
 let loadedCommit: string | undefined;
 

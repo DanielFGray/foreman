@@ -423,20 +423,20 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       fs.makeDirectory(path.dirname(proving), { recursive: true }).pipe(Effect.ignore);
 
     /**
-     * Installs a proving ground's dependencies, the same way a task worktree
-     * gets them.
+     * Installs a directory's dependencies via the project's setup script, the
+     * same way a task worktree gets them.
      *
      * A checkout of source alone cannot run a test suite, and a verification
      * that could not run must never read as green — that is the one gate the
-     * whole landing rests on. So a failed setup holds the project: it is the
-     * machine's fault or the project's, never the branch's.
+     * whole landing rests on. A failed setup holds the landing because it is
+     * the machine's fault or the project's, never the branch's.
      */
-    const prepare = (proving: string) =>
+    const prepare = (directory: string) =>
       Effect.gen(function* () {
-        const script = `${proving}/${SETUP_SCRIPT}`;
+        const script = `${directory}/${SETUP_SCRIPT}`;
         const present = yield* fs.exists(script).pipe(Effect.orElseSucceed(() => false));
         if (!present) return undefined;
-        const result = yield* check(proving, `./${SETUP_SCRIPT}`);
+        const result = yield* check(directory, `./${SETUP_SCRIPT}`);
         return result.passed
           ? undefined
           : ({ _tag: "Held", detail: `proving ground setup failed:\n${result.output}` } as const);
@@ -1218,7 +1218,7 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         proving: string,
         message: string,
         how: How,
-      ) =>
+      ): Effect.Effect<Landing, RepositoryError> =>
         Effect.gen(function* () {
           // A branch-mode task has its branch out in this checkout. Landing it
           // starts by checking the operator's branch out again, so every step
