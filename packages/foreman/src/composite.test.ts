@@ -626,7 +626,7 @@ describe("filters that name a block", () => {
   const filterOrLoopProblems = (pipeline: Pipeline) =>
     problemsOf(pipeline, OFFERS).filter((problem) => /filter|loop/.test(problem));
 
-  test.each(["review", "review:one"])(
+  test.each(["review", "review:one", "review=one", "review>one", "review<one"])(
     "a filter written in the definition counts each instance's own block (%s)",
     (reviewId) => {
       const pipeline = expandTwo(reviewId);
@@ -651,25 +651,31 @@ describe("filters that name a block", () => {
     expect(matches(facts, "exits:returned>=2")).toBe(true);
   });
 
-  test("a block id with a colon is matched whole", () => {
-    const facts = factsNamed([returnedAt("checks:review")]);
-    expect(matches(facts, "exit:checks:review/returned")).toBe(true);
-    expect(matches(facts, "exits:checks:review/returned>=1")).toBe(true);
-    expect(matches(facts, "exits:checks/returned>=1")).toBe(false);
-  });
+  test.each(["checks:review", "checks=review", "checks>review", "checks<review"])(
+    "a block id %s is matched whole",
+    (block) => {
+      const facts = factsNamed([returnedAt(block)]);
+      expect(matches(facts, `exit:${block}/returned`)).toBe(true);
+      expect(matches(facts, `exits:${block}/returned>=1`)).toBe(true);
+      expect(matches(facts, "exits:checks/returned>=1")).toBe(false);
+    },
+  );
 
-  test("validation refuses a block that is absent or does not declare the exit", () => {
-    const pipeline = expandTwo("review:one");
-    expect(filterOrLoopProblems(pipeline)).toEqual([]);
-    expect(
-      problemsOf(withWhen(pipeline, "checks.cap", "exits:nowhere/returned>=2"), OFFERS),
-    ).toContain("checks.cap: the filter counts the exit returned at nowhere, which is no block");
-    expect(
-      problemsOf(withWhen(pipeline, "checks.cap", "exit:checks.review:one/landed"), OFFERS),
-    ).toContain(
-      "checks.cap: the filter counts the exit landed at checks.review:one, which declares no such exit",
-    );
-  });
+  test.each(["review", "review=one", "review>one"])(
+    "validation refuses a block that is absent or does not declare the exit (%s)",
+    (reviewId) => {
+      const pipeline = expandTwo(reviewId);
+      expect(filterOrLoopProblems(pipeline)).toEqual([]);
+      expect(
+        problemsOf(withWhen(pipeline, "checks.cap", "exits:nowhere/returned>=2"), OFFERS),
+      ).toContain("checks.cap: the filter counts the exit returned at nowhere, which is no block");
+      expect(
+        problemsOf(withWhen(pipeline, "checks.cap", `exit:checks.${reviewId}/landed`), OFFERS),
+      ).toContain(
+        `checks.cap: the filter counts the exit landed at checks.${reviewId}, which declares no such exit`,
+      );
+    },
+  );
 
   test("a qualified count grows each lap only when its block is on the cycle", () => {
     const pipeline = expandTwo("review");
