@@ -1,10 +1,11 @@
 /**
  * The UI server Layer: HTTP on this machine only, the contract's handlers on a
- * WebSocket route, Origin and Host checks (`docs/web-ui.md`).
+ * WebSocket route, Origin and Host checks, and the page's Bun.build outputs
+ * served from memory (`docs/web-ui.md`).
  *
  * Handlers call the pipeline and composite verb functions; they hold no logic
- * of their own. The page's static build lands with the page package; this Layer
- * is the contract transport and the local-only bind.
+ * of their own. The trusted page origin is an input of this Layer: serve passes
+ * its own address; page tests pass vitest's browser-page origin.
  */
 import { BunHttpServer, BunServices } from "@effect/platform-bun";
 import {
@@ -19,6 +20,7 @@ import {
 } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   compositeDiscard,
@@ -39,7 +41,7 @@ import {
   pipelineSimulate,
   pipelineTrace,
 } from "./pipeline-command.ts";
-import { PipelineError } from "./errors.ts";
+import { PageBuildError } from "./errors.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
 import { type Published } from "./published-schema.ts";
 import { UiContract } from "./ui-contract.ts";
@@ -66,23 +68,29 @@ export const uiPort = Config.Int("FOREMAN_UI_PORT").pipe(Config.withDefault(DEFA
 export const allowedHosts = (port: number): ReadonlySet<string> =>
   new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
-/** Origin values this server accepts when Origin is present. */
-export const allowedOrigins = (port: number): ReadonlySet<string> =>
-  new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+/**
+ * Origins serve trusts by default: its own listen address under both names.
+ * Page tests pass the origin of vitest's browser page instead.
+ */
+export const serveOrigins = (port: number): ReadonlyArray<string> => [
+  `http://127.0.0.1:${port}`,
+  `http://localhost:${port}`,
+];
 
 /**
  * Whether a request's Host and Origin are allowed for this listen port.
  * Missing Origin is allowed (non-browser clients); a foreign Origin or Host is not.
+ * `trustedOrigins` is the exact trusted page origin set the Layer was given.
  */
 export const localRequest = (
   port: number,
   headers: { readonly host: string | undefined; readonly origin: string | undefined },
+  trustedOrigins: ReadonlyArray<string> = serveOrigins(port),
 ): boolean => {
   const host = headers.host;
   if (host === undefined || !allowedHosts(port).has(host)) return false;
   const origin = headers.origin;
-  if (origin !== undefined && !allowedOrigins(port).has(origin)) return false;
-  return true;
+  return origin === undefined || trustedOrigins.includes(origin);
 };
 
 /** 403 with no body for a foreign Host or Origin. */
@@ -90,17 +98,22 @@ const refuse = HttpServerResponse.empty({ status: 403 });
 
 /**
  * Global middleware: every request and WebSocket upgrade must name this
- * machine's listen address. Returns 403 with no body otherwise.
+ * machine's listen address, and when Origin is present it must be one of the
+ * trusted page origins. Returns 403 with no body otherwise.
  */
-export const localOnlyMiddleware = (port: number) =>
+export const localOnlyMiddleware = (port: number, trustedOrigins: ReadonlyArray<string>) =>
   HttpRouter.middleware(
     (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        return localRequest(port, {
-          host: request.headers.host,
-          origin: request.headers.origin,
-        })
+        return localRequest(
+          port,
+          {
+            host: request.headers.host,
+            origin: request.headers.origin,
+          },
+          trustedOrigins,
+        )
           ? yield* httpEffect
           : refuse;
       }),
@@ -192,24 +205,134 @@ const pipelineChanges = (project: string, flow: "across" | "down") =>
   );
 
 /**
+ * Options for {@link uiServerOn} / {@link uiRoutesLayer}: the trusted page
+ * origin(s) and whether to Bun.build and serve the page.
+ */
+export type UiServerOptions = {
+  readonly trustedOrigins?: ReadonlyArray<string>;
+  /** When false, skip the page build (contract-only tests). Default true. */
+  readonly page?: boolean;
+};
+
+/** Built page files keyed by URL path (`/`, `/main.js`, …). */
+export type PageAssets = ReadonlyMap<
+  string,
+  { readonly body: Uint8Array; readonly contentType: string }
+>;
+
+/**
+ * Page bundle entry, located from this module's own file so the result does
+ * not depend on the caller's cwd. The page tests load this module through
+ * vitest, whose cwd is the test package, not the foreman checkout.
+ */
+export const resolvePageEntrypoint = (): string =>
+  fileURLToPath(new URL("../../foreman-ui/src/main.tsx", import.meta.url));
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".map": "application/json",
+};
+
+const contentTypeOf = (path: string): string => {
+  const dot = path.lastIndexOf(".");
+  return (dot >= 0 ? CONTENT_TYPES[path.slice(dot)] : undefined) ?? "application/octet-stream";
+};
+
+/**
+ * Runs `Bun.build` on the page entry for the browser target. A failed build
+ * fails this Effect so the UI server Layer stops; the dispatcher is separate.
+ */
+export const buildPageAssets: Effect.Effect<PageAssets, PageBuildError> = Effect.tryPromise({
+  try: async () => {
+    const result = await Bun.build({
+      entrypoints: [resolvePageEntrypoint()],
+      target: "browser",
+      format: "esm",
+      minify: false,
+      sourcemap: "none",
+    });
+    if (!result.success) {
+      const messages = result.logs.map((log) => log.message ?? String(log)).join("\n");
+      throw new PageBuildError({ detail: `foreman-ui Bun.build failed:\n${messages}` });
+    }
+    const assets = new Map<string, { readonly body: Uint8Array; readonly contentType: string }>();
+    let mainJs = "/main.js";
+    let mainCss: string | undefined;
+    for (const output of result.outputs) {
+      const bytes = new Uint8Array(await output.arrayBuffer());
+      const base = output.path.split(/[/\\]/).at(-1) ?? "main.js";
+      const urlPath = `/${base}`;
+      assets.set(urlPath, { body: bytes, contentType: contentTypeOf(urlPath) });
+      if (base.endsWith(".js") && !base.endsWith(".js.map")) mainJs = urlPath;
+      if (base.endsWith(".css")) mainCss = urlPath;
+    }
+    const cssLink = mainCss === undefined ? "" : `<link rel="stylesheet" href="${mainCss}"/>`;
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Foreman</title>
+${cssLink}
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="${mainJs}"></script>
+</body>
+</html>
+`;
+    const htmlBytes = new TextEncoder().encode(html);
+    assets.set("/", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
+    assets.set("/index.html", { body: htmlBytes, contentType: "text/html; charset=utf-8" });
+    return assets;
+  },
+  catch: (cause) =>
+    cause instanceof PageBuildError
+      ? cause
+      : new PageBuildError({ detail: cause instanceof Error ? cause.message : String(cause) }),
+});
+
+/** Serves built page assets; unknown paths fall through to the SPA shell at `/`. */
+export const pageRoutesLayer = (assets: PageAssets) =>
+  HttpRouter.add("GET", "*", (request) => {
+    // Bun's request.url is the path (e.g. `/main.js`), not an absolute URL.
+    const path = request.url.split("?")[0] ?? request.url;
+    const asset =
+      assets.get(path) ?? (path.startsWith("/p/") || path === "/" ? assets.get("/") : undefined);
+    if (asset === undefined) {
+      return Effect.succeed(HttpServerResponse.empty({ status: 404 }));
+    }
+    return Effect.succeed(
+      HttpServerResponse.uint8Array(asset.body, {
+        contentType: asset.contentType,
+        headers: { "cache-control": "no-store" },
+      }),
+    );
+  });
+
+/**
  * Routes: the contract on a WebSocket at `/rpc`, and the Origin/Host gate.
  * Callers provide `uiHandlersLayer` (and its services) and this Layer provides
  * the HTTP router wiring.
  */
-export const uiRoutesLayer = (port: number) =>
+export const uiRoutesLayer = (
+  port: number,
+  trustedOrigins: ReadonlyArray<string> = serveOrigins(port),
+) =>
   Layer.mergeAll(
     RpcServer.layerHttp({ group: UiContract, path: UI_RPC_PATH, protocol: "websocket" }),
     // Global middleware is itself a Layer (route middleware would use `.layer`).
-    localOnlyMiddleware(port),
+    localOnlyMiddleware(port, trustedOrigins),
   ).pipe(Layer.provide(RpcSerialization.layerJson));
 
 /**
  * One Layer: listen on `127.0.0.1` at `FOREMAN_UI_PORT` (default 7341), serve
- * the contract over WebSocket, refuse foreign Host and Origin. Requires
- * `ReadingsRef`, handler services, and the services the verbs need.
- *
- * Page static files are not part of this Layer yet: the page package lands in
- * its own task, and serve will merge that build beside this transport.
+ * the contract over WebSocket, refuse foreign Host and Origin, and serve the
+ * page's Bun.build outputs. Requires `ReadingsRef`, handler services, and the
+ * services the verbs need.
  */
 export const uiServerLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -224,11 +347,26 @@ export const uiServerLayer = Layer.unwrap(
  *
  * Stop uses `@effect/platform-bun`'s patched `server.stop(true)` so an open
  * page WebSocket does not hold the Layer open (see patches/ and web-ui.md).
+ * `trustedOrigins` defaults to the server's own address; page tests pass
+ * vitest's page origin.
  */
-export const uiServerOn = (port: number) =>
-  HttpRouter.serve(uiRoutesLayer(port).pipe(Layer.provide(uiHandlersLayer)), {
-    disableLogger: true,
-  }).pipe(
-    Layer.provide(BunHttpServer.layer({ hostname: "127.0.0.1", port })),
-    Layer.provide(BunServices.layer),
+export const uiServerOn = (port: number, options?: UiServerOptions) => {
+  const trustedOrigins = options?.trustedOrigins ?? serveOrigins(port);
+  const withPage = options?.page !== false;
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const routes = withPage
+        ? Layer.mergeAll(
+            uiRoutesLayer(port, trustedOrigins),
+            pageRoutesLayer(yield* buildPageAssets),
+          )
+        : uiRoutesLayer(port, trustedOrigins);
+      return HttpRouter.serve(routes.pipe(Layer.provide(uiHandlersLayer)), {
+        disableLogger: true,
+      }).pipe(
+        Layer.provide(BunHttpServer.layer({ hostname: "127.0.0.1", port })),
+        Layer.provide(BunServices.layer),
+      );
+    }),
   );
+};

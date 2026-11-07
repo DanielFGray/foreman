@@ -1,0 +1,146 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --muted: #5c5c5c;
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --border: #d8d8d4;
+  --accent: #0b5fff;
+  --danger: #b42318;
+  --danger-bg: #fef3f2;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f2f2f0;
+    --muted: #a3a39c;
+    --bg: #121212;
+    --panel: #1c1c1c;
+    --border: #2e2e2e;
+    --accent: #6ea8ff;
+    --danger: #f97066;
+    --danger-bg: #2a1215;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0.65rem 1rem;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.header .muted {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.project-list a {
+  display: block;
+  padding: 0.85rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--fg);
+}
+
+.project-list a:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.project-list .dir {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 0.2rem;
+}
+
+.readings {
+  display: grid;
+  gap: 1rem;
+}
+
+.readings section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.85rem 1rem;
+}
+
+.readings h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.readings ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.readings .empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: 1rem;
+  color: var(--muted);
+}

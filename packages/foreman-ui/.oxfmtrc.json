@@ -1,0 +1,4 @@
+{
+  "$schema": "../foreman/node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100
+}

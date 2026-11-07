@@ -21,8 +21,11 @@ import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { UiContract } from "./ui-contract.ts";
 import { resolve } from "./paths.ts";
 import {
+  buildPageAssets,
   localRequest,
   ReadingsRef,
+  resolvePageEntrypoint,
+  serveOrigins,
   uiHandlersLayer,
   uiRoutesLayer,
   uiServerOn,
@@ -157,6 +160,27 @@ describe("localRequest", () => {
       false,
     );
   });
+
+  test("accepts a trusted page origin that is not the listen address", () => {
+    expect(
+      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://localhost:17341" }, [
+        "http://localhost:17341",
+      ]),
+    ).toBe(true);
+    expect(
+      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:7341" }, [
+        "http://localhost:17341",
+      ]),
+    ).toBe(false);
+  });
+
+  test("refuses another loopback port when only one page origin is trusted", () => {
+    expect(
+      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:23315" }, [
+        "http://127.0.0.1:17342",
+      ]),
+    ).toBe(false);
+  });
 });
 
 describe("UiContract handlers", () => {
@@ -202,7 +226,9 @@ describe("UiContract over a WebSocket", () => {
     rmSync(drafts, { force: true });
 
     const server = Effect.runFork(
-      Layer.launch(uiServerOn(port).pipe(Layer.provide(Layer.mergeAll(handlers, services)))),
+      Layer.launch(
+        uiServerOn(port, { page: false }).pipe(Layer.provide(Layer.mergeAll(handlers, services))),
+      ),
     );
     try {
       await new Promise((ready) => setTimeout(ready, 300));
@@ -271,11 +297,64 @@ describe("UiContract over a WebSocket", () => {
   });
 });
 
+describe("page assets", () => {
+  test("the page entry is found and built from a cwd outside the checkout", async () => {
+    const before = process.cwd();
+    process.chdir(tmpdir());
+    try {
+      expect(resolvePageEntrypoint()).toMatch(/foreman-ui\/src\/main\.tsx$/);
+      const assets = await Effect.runPromise(buildPageAssets);
+      expect(assets.has("/")).toBe(true);
+    } finally {
+      process.chdir(before);
+    }
+  });
+
+  test("Bun.build page is served at / and /p/<project>", async () => {
+    const port = 7343;
+    const server = Effect.runFork(
+      Layer.launch(
+        uiServerOn(port, { page: true }).pipe(Layer.provide(Layer.mergeAll(handlers, services))),
+      ),
+    );
+    try {
+      const deadline = Date.now() + 20_000;
+      let home: Response | undefined;
+      while (Date.now() < deadline) {
+        try {
+          home = await fetch(`http://127.0.0.1:${port}/`, {
+            headers: { host: `127.0.0.1:${port}` },
+          });
+          if (home.status === 200) break;
+        } catch {
+          // build still running
+        }
+        await new Promise((ready) => setTimeout(ready, 100));
+      }
+      expect(home?.status).toBe(200);
+      const html = await home!.text();
+      expect(html).toContain('id="root"');
+      expect(html).toContain("main.js");
+
+      const project = await fetch(`http://127.0.0.1:${port}/p/amux`, {
+        headers: { host: `127.0.0.1:${port}` },
+      });
+      expect(project.status).toBe(200);
+      expect(await project.text()).toContain('id="root"');
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(server));
+    }
+  });
+});
+
 describe("Origin and Host checks", () => {
   test("an upgrade with Origin http://example.com and a request with a foreign Host each get 403", async () => {
     const port = 7341;
     const { handler, dispose } = HttpRouter.toWebHandler(
-      uiRoutesLayer(port).pipe(Layer.provide(handlers), Layer.provide(HttpServer.layerServices)),
+      uiRoutesLayer(port, serveOrigins(port)).pipe(
+        Layer.provide(handlers),
+        Layer.provide(HttpServer.layerServices),
+      ),
       { disableLogger: true },
     );
     try {
@@ -301,6 +380,41 @@ describe("Origin and Host checks", () => {
       );
       expect(foreignOrigin.status).toBe(403);
       expect(await foreignOrigin.text()).toBe("");
+    } finally {
+      await dispose();
+    }
+  });
+
+  test("with one trusted page origin, another loopback port gets 403 on a request and an upgrade", async () => {
+    const port = 7344;
+    const trusted = "http://127.0.0.1:17342";
+    const { handler, dispose } = HttpRouter.toWebHandler(
+      uiRoutesLayer(port, [trusted]).pipe(
+        Layer.provide(handlers),
+        Layer.provide(HttpServer.layerServices),
+      ),
+      { disableLogger: true },
+    );
+    const host = `127.0.0.1:${port}`;
+    const plain = (origin: string) =>
+      new Request(`http://${host}/rpc`, { headers: { host, origin } });
+    const upgrade = (origin: string) =>
+      new Request(`http://${host}/rpc`, {
+        headers: {
+          host,
+          origin,
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-key": Buffer.from("foreman-ui-test").toString("base64"),
+          "sec-websocket-version": "13",
+        },
+      });
+    const foreign = "http://127.0.0.1:23315";
+    try {
+      expect((await handler(upgrade(trusted))).status).not.toBe(403);
+      expect((await handler(upgrade(foreign))).status).toBe(403);
+      expect((await handler(plain(trusted))).status).not.toBe(403);
+      expect((await handler(plain(foreign))).status).toBe(403);
     } finally {
       await dispose();
     }

@@ -10,7 +10,10 @@
     "./pipeline": "./src/pipeline.ts",
     "./pipeline-belt": "./src/pipeline-belt.ts",
     "./pipeline-edit": "./src/pipeline-edit.ts",
-    "./pipeline-layout": "./src/pipeline-layout.ts"
+    "./pipeline-layout": "./src/pipeline-layout.ts",
+    "./published-schema": "./src/published-schema.ts",
+    "./ui-contract": "./src/ui-contract.ts",
+    "./ui-server": "./src/ui-server.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",
