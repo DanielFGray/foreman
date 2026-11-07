@@ -14,6 +14,8 @@ import {
   STEPS,
   TRACKERS,
   type Policy as PolicyType,
+  type Step,
+  type StepMode,
 } from "./policy.ts";
 import { policyPath, readPolicy, updatePolicy } from "./policy-file.ts";
 import { Linear } from "./linear.ts";
@@ -24,9 +26,58 @@ import { TrackerError } from "./tracker.ts";
  * `foreman policy`: read and change what the fleet may do by itself.
  *
  * Every subcommand writes through `updatePolicy` and prints the policy that
- * results, so the Foreman pane and a person at the shell change the file the same
- * way and see the same answer. The dispatcher reads the file on its next tick.
+ * results, so the Foreman pane and a person at the shell change the file the
+ * same way and see the same answer. The dispatcher reads the file on its next
+ * tick. The pane's verbs (set, grant, revoke, slots, pause, resume) are
+ * exported Effects the CLI and the coming UI contract both call.
  */
+
+/** Set one step's mode for the fleet, or for one project when `project` is set. */
+export const policySet = (input: {
+  readonly step: Step;
+  readonly setting: StepMode;
+  readonly project: string | undefined;
+}) =>
+  updatePolicy(policyPath(), (policy) =>
+    input.project === undefined
+      ? { ...policy, default: { ...policy.default, [input.step]: input.setting } }
+      : setProjectStep(policy, input.project, input.step, input.setting),
+  );
+
+/** Stop every step until resumed; with `project`, stop that project only. */
+export const policyPause = (input: { readonly project: string | undefined }) =>
+  updatePolicy(policyPath(), (policy) =>
+    input.project === undefined
+      ? { ...policy, paused: true }
+      : pauseProject(policy, input.project, true),
+  );
+
+/** Undo pause; with `project`, resume that project only. */
+export const policyResume = (input: { readonly project: string | undefined }) =>
+  updatePolicy(policyPath(), (policy) =>
+    input.project === undefined
+      ? { ...policy, paused: false }
+      : pauseProject(policy, input.project, false),
+  );
+
+/** Set how many agents may work at once. */
+export const policySlots = (input: { readonly count: number }) =>
+  updatePolicy(policyPath(), (policy) => ({ ...policy, slots: input.count }));
+
+/** Allow steps for one task or epic beyond the default. */
+export const policyGrant = (input: {
+  readonly scope: string;
+  readonly steps: ReadonlyArray<Step>;
+  readonly remaining: number | undefined;
+}) =>
+  updatePolicy(policyPath(), (policy) => grant(policy, input.scope, input.steps, input.remaining));
+
+/** Remove the grant on a task or epic. */
+export const policyRevoke = (input: { readonly scope: string }) =>
+  updatePolicy(policyPath(), (policy) => ({
+    ...policy,
+    grants: policy.grants.filter((g) => g.scope !== input.scope),
+  }));
 
 const show = Command.make("show", {}, () =>
   Effect.gen(function* () {
@@ -44,15 +95,12 @@ const projectFlag = Flag.String("project").pipe(
 const projectOf = (flag: Option.Option<string>): string | undefined => Option.getOrUndefined(flag);
 
 const pauseOrResume = (name: "pause" | "resume") => {
-  const paused = name === "pause";
-  return Command.make(name, { project: projectFlag }, ({ project }) => {
-    const only = projectOf(project);
-    return write((policy) =>
-      only === undefined ? { ...policy, paused } : pauseProject(policy, only, paused),
-    );
-  }).pipe(
+  const verb = name === "pause" ? policyPause : policyResume;
+  return Command.make(name, { project: projectFlag }, ({ project }) =>
+    verb({ project: projectOf(project) }).pipe(Effect.flatMap(print)),
+  ).pipe(
     Command.withDescription(
-      paused
+      name === "pause"
         ? "Stop every step, grants included, until resumed; with --project, stop that project only"
         : "Undo pause; the default and the grants apply again; with --project, resume that project only",
     ),
@@ -62,14 +110,13 @@ const pauseOrResume = (name: "pause" | "resume") => {
 const step = Argument.Literals("step", STEPS);
 const setting = Argument.Literals("setting", STEP_MODES);
 
-const set = Command.make("set", { step, setting, project: projectFlag }, (args) => {
-  const only = projectOf(args.project);
-  return write((policy) =>
-    only === undefined
-      ? { ...policy, default: { ...policy.default, [args.step]: args.setting } }
-      : setProjectStep(policy, only, args.step, args.setting),
-  );
-}).pipe(
+const set = Command.make("set", { step, setting, project: projectFlag }, (args) =>
+  policySet({
+    step: args.step,
+    setting: args.setting,
+    project: projectOf(args.project),
+  }).pipe(Effect.flatMap(print)),
+).pipe(
   Command.withDescription(
     "Set one step for every task, or one project's tasks with --project: on runs it, ask waits for one approval per task, off does nothing",
   ),
@@ -163,7 +210,7 @@ const count = Argument.Int("count").pipe(
 );
 
 const slots = Command.make("slots", { count }, ({ count }) =>
-  write((policy) => ({ ...policy, slots: count })),
+  policySlots({ count }).pipe(Effect.flatMap(print)),
 ).pipe(Command.withDescription("Set how many agents may work at once"));
 
 const scope = Argument.String("scope").pipe(
@@ -180,14 +227,11 @@ const grantCommand = Command.make(
   "grant",
   { scope, steps: step.pipe(Argument.atLeast(1)), remaining },
   (args) =>
-    write((policy) =>
-      grant(
-        policy,
-        args.scope,
-        args.steps,
-        args.remaining._tag === "Some" ? args.remaining.value : undefined,
-      ),
-    ),
+    policyGrant({
+      scope: args.scope,
+      steps: args.steps,
+      remaining: Option.getOrUndefined(args.remaining),
+    }).pipe(Effect.flatMap(print)),
 ).pipe(
   Command.withDescription(
     "Allow steps for one task or epic beyond the default; `grant ts-1 land --count 1` lands one approved task",
@@ -195,10 +239,7 @@ const grantCommand = Command.make(
 );
 
 const revoke = Command.make("revoke", { scope }, ({ scope }) =>
-  write((policy) => ({
-    ...policy,
-    grants: policy.grants.filter((g) => g.scope !== scope),
-  })),
+  policyRevoke({ scope }).pipe(Effect.flatMap(print)),
 ).pipe(Command.withDescription("Remove the grant on a task or epic"));
 
 export const policyCommand = Command.make("policy", {}).pipe(
