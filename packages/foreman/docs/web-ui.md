@@ -142,7 +142,10 @@ the page's files. `foreman serve` provides it beside `supervise`.
   on the expansion, in the browser, and colours the preview green when it has no
   problem and amber with the count when it has some. On drop the page sends
   that change through `PipelineEdit`, and the `Pipeline` stream sends the new
-  draft. Until it arrives, the page draws the dropped state.
+  draft. Until it arrives, the page draws the dropped state. The checks use the
+  composites and offers the `Pipeline` stream carries, the ones the server
+  checks with. The toolbar's Save and Discard send `PipelineSave` and
+  `PipelineDiscard`; Save is disabled while the drawing has problems.
 - **The other views** follow as the operator decides which features move:
   Tasks board, Models board, simulate, fleet, task detail.
 - **Shared code.** The page imports the contract and foreman's pure modules

@@ -980,34 +980,25 @@ knows what happened, whatever the workflow.
 
 ## Front ends
 
-The operator's page is `packages/foreman-ui`, served by `foreman serve` through
-the UI server Layer (`src/ui-server.ts`, `docs/web-ui.md`). One URL per project
-(`/p/<project>`; `/` lists projects). The page talks to foreman over the UI
-contract (`src/ui-contract.ts`): streams for readings, a project's pipeline and
-its queue, and verbs that call the same Effect functions as the CLI. It imports
-foreman's pure modules (`problemsOf`, `expand`, `beltOf`, `layoutOf`,
-`PipelineChange`) and checks drag previews in the browser. The pipeline editor
-draws the project's draft from the Pipeline stream with `layoutOf` (as
-`DrawingView`), rejoins exits with dragology, and saves or discards the draft
-through the contract. Further views (tasks, models, simulate, fleet) move over
-as the operator decides.
+The operator's page is `packages/foreman-ui`, served by `foreman serve`. Its
+behaviour is in `docs/web-ui.md`. The herdr-app Foreman pane (`herdr/foreman/`)
+is frozen: it gets no new features and no fixes until the operator decides which
+features move to the page.
 
-`foreman serve` still writes every reading to `state.json` (`src/published.ts`).
-The herdr-app Foreman pane (`herdr/foreman/`) is frozen while the operator
-decides which features stay in the pane and which move to the page: it gets no
-new features and no fixes. It still reads `state.json`, and reads the queue and
-a task's record through `foreman queue` and `foreman show`
-(`src/store-commands.ts`). Its Pipeline view draws the `drawing` that
-`foreman pipeline show --json` prints, laid out by `src/pipeline-layout.ts`,
-because a mod cannot load foreman's modules. Its `--flow` is `down` in a pane
-taller than it is wide, else `across`. It edits a project's draft through
-`foreman pipeline edit`, `save` and `discard`, and the block kinds, steps,
-roles and landings it offers are the `choices` in that JSON. An exit wired into
-a block that reaches it back is a back wire, laid out on a return lane past
-every block and drawn dashed. While the operator edits an agent block, the pane
-edits its instructions through `foreman pipeline instructions` and shows the
-prompt the block sends a pretend task from `foreman pipeline prompt`, which
-renders through `Prompts.agent` as `foreman prompt` does.
+`foreman serve` writes every reading to `state.json` (`src/published.ts`).
+The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
+reads `state.json`, and reads the queue and a task's record through
+`foreman queue` and `foreman show` (`src/store-commands.ts`). Its Pipeline view
+draws the `drawing` that `foreman pipeline show --json` prints, laid out by
+`src/pipeline-layout.ts`, because a mod cannot load foreman's modules. Its
+`--flow` is `down` in a pane taller than it is wide, else `across`. It edits a
+project's draft through `foreman pipeline edit`, `save` and `discard`, and the
+block kinds, steps, roles and landings it offers are the `choices` in that JSON.
+An exit wired into a block that reaches it back is a back wire, laid out on a
+return lane past every block and drawn dashed. While the operator edits an agent
+block, the pane edits its instructions through `foreman pipeline instructions`
+and shows the prompt the block sends a pretend task from `foreman pipeline
+prompt`, which renders through `Prompts.agent` as `foreman prompt` does.
 `foreman pipeline trace <project> --json` walks a pretend task through the
 draft with the events a front end chose, from scratch on each call
 (`src/pipeline-trace.ts`). It folds the dispatcher's own rows over a task held
@@ -1027,10 +1018,9 @@ before, as in the fleet. Each frame holds only the tasks that moved, so the
 board at a frame is the fold of the frames up to it. Its `assumes` names every
 fact it does not read from the world. The pane's fleet controls
 (`herdr/foreman/fleet.js`) call it on demand and after each change to
-the draft, and draw the frames on the board up to a time the operator picks.
-Both act through `foreman <action> <id>` and `foreman policy`. Neither runs
-`tasks`. `state.json` is a view, not a memory: nothing in foreman reads it
-back.
+the draft, and draw the frames on the board up to a time the operator picks. Both act through
+`foreman <action> <id>` and `foreman policy`. Neither runs `tasks`. `state.json`
+is a view, not a memory: nothing in foreman reads it back.
 
 `src/view.ts` is a total function from a reading (`FleetState`) to rows and the
 actions each row takes, with no renderer, which is why its test is plain
