@@ -332,7 +332,7 @@ export const uiRoutesLayer = (
  * One Layer: listen on `127.0.0.1` at `FOREMAN_UI_PORT` (default 7341), serve
  * the contract over WebSocket, refuse foreign Host and Origin, and serve the
  * page's Bun.build outputs. Requires `ReadingsRef`, handler services, and the
- * services the verbs need.
+ * services the verbs need. `foreman serve` provides this beside supervise.
  */
 export const uiServerLayer = Layer.unwrap(
   Effect.gen(function* () {

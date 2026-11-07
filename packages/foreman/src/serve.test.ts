@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import {
+  Cause,
   DateTime,
   Deferred,
   Duration,
@@ -11,16 +12,25 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
   Stream,
   SubscriptionRef,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { Settings } from "./config.ts";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
+import { Fleet, type Worker } from "./fleet.ts";
+import { FleetError, PageBuildError } from "./errors.ts";
+import type { Ladder } from "./ladder.ts";
 import { publishedOf } from "./published.ts";
 import { type Published } from "./published-schema.ts";
-import { holdLock, ServeRunning, supervise } from "./serve.ts";
+import { Records } from "./records.ts";
+import { Repository } from "./repository.ts";
+import { scratchStore, seed } from "./scratch-store.ts";
+import { holdLock, isolateUiServer, ServeRunning, supervise } from "./serve.ts";
+import { ReadingsRef, uiServerOn } from "./ui-server.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "foreman-serve-"));
 
@@ -180,6 +190,144 @@ describe("holdLock", () => {
       const after = await Effect.runPromise(Effect.scoped(holdLock(lock)).pipe(Effect.option));
       expect(Option.isSome(after)).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("UI server beside supervise", () => {
+  test("a page that does not build stops only the UI server; the dispatcher side still runs", async () => {
+    const dir = scratch();
+    const path = join(dir, "state.json");
+    const store = scratchStore();
+    const priorConfig = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = dir;
+    // The page build is the external boundary that fails: Bun.build reports a
+    // broken page. The dispatcher waits for that failure, so a reading that
+    // reaches state.json proves the dispatcher ran after the UI server stopped.
+    const order: Array<string> = [];
+    const pageFailed = Promise.withResolvers<void>();
+    const build = spyOn(Bun, "build").mockImplementation(async () => {
+      order.push("page build failed");
+      pageFailed.resolve();
+      return {
+        success: false,
+        logs: [{ message: "Unexpected token" }],
+        outputs: [],
+      } as unknown as Awaited<ReturnType<typeof Bun.build>>;
+    });
+    const stopped: Array<unknown> = [];
+    // A log call with a message and extra values carries an array as its message.
+    const capture = Logger.make((options) => {
+      const message = Array.isArray(options.message) ? options.message[0] : options.message;
+      if (message === "foreman's UI server stopped") {
+        stopped.push(Cause.squash(options.cause));
+      }
+    });
+    try {
+      await Effect.runPromise(
+        seed(`
+          INSERT INTO pools (pool, harness, provider_default) VALUES ('Pool', 'pi', 'prov');
+          INSERT INTO models (model, provider, pool, harness, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'pool');
+          INSERT INTO ladder (rank, level, rung, model) VALUES (1, 1, 'cheap', 'm1');
+        `).pipe(Effect.provide(store.layer)),
+      );
+      const handlers = Layer.mergeAll(
+        Records.layer,
+        Layer.succeed(
+          Settings,
+          Settings.of({
+            ladder: [
+              {
+                name: "cheap",
+                harness: "test",
+                level: 0,
+                model: undefined,
+                provider: undefined,
+                enabled: true,
+                author: true,
+                unmetered: false,
+              },
+            ] satisfies Ladder,
+            reviewers: [],
+            otlpEndpoint: "http://localhost:4318",
+            pollInterval: 60,
+            staleAfter: 24,
+            coachWindow: 60,
+            stallGrace: 5,
+            landedWindow: 7,
+            attemptsPerLevel: 2,
+          }),
+        ),
+        Repository.Default,
+        Layer.succeed(
+          Fleet,
+          Fleet.of({
+            open: () => Effect.fail(new FleetError({ operation: "open", detail: "unused" })),
+            attach: () => Effect.fail(new FleetError({ operation: "attach", detail: "unused" })),
+            spawn: () => Effect.fail(new FleetError({ operation: "spawn", detail: "unused" })),
+            roster: Effect.succeed([] as ReadonlyArray<Worker>),
+            awaitTurn: () => Effect.void,
+            spaces: Effect.succeed([] as ReadonlyArray<string>),
+            say: () => Effect.void,
+            screen: () => Effect.succeedNone,
+            preview: () => Effect.succeed("preview"),
+            focus: () => Effect.void,
+            stop: () => Effect.void,
+            close: () => Effect.void,
+            notify: () => Effect.void,
+            inWorker: Effect.succeed(false),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store.registry));
+
+      const uiExit = await Effect.runPromise(
+        Effect.gen(function* () {
+          const readings = yield* emptyReadings();
+          // Same composition serve uses: the UI Layer forked beside supervise,
+          // wrapped in isolateUiServer.
+          const ui = yield* Effect.forkChild(
+            isolateUiServer(
+              Layer.launch(
+                uiServerOn(17345).pipe(
+                  Layer.provide(Layer.mergeAll(Layer.succeed(ReadingsRef, readings), handlers)),
+                ),
+              ),
+            ),
+          );
+          const dispatcher = Effect.gen(function* () {
+            const state = yield* SubscriptionRef.make<FleetState>(EMPTY_FLEET);
+            return {
+              state,
+              run: Effect.promise(() => pageFailed.promise).pipe(
+                Effect.andThen(Effect.sync(() => order.push("dispatcher ran"))),
+                Effect.andThen(SubscriptionRef.set(state, reading)),
+              ),
+            };
+          });
+          yield* supervise(dispatcher, path, readings);
+          return yield* Fiber.await(ui);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              BunServices.layer,
+              Logger.layer([capture], { mergeWithExisting: false }),
+            ),
+          ),
+        ),
+      );
+      expect(Exit.isSuccess(uiExit)).toBe(true);
+      expect(build).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(["page build failed", "dispatcher ran"]);
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toBeInstanceOf(PageBuildError);
+      const published = JSON.parse(readFileSync(path, "utf8"));
+      expect(published.dispatcher).toEqual({ state: "idle" });
+    } finally {
+      build.mockRestore();
+      if (priorConfig === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = priorConfig;
+      store.cleanup();
       rmSync(dir, { recursive: true, force: true });
     }
   });

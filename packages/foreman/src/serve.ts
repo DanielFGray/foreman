@@ -1,12 +1,16 @@
 /**
- * `foreman serve`: the one process that runs the dispatcher.
+ * `foreman serve`: the one process that runs the dispatcher and the UI server.
  *
  * The dispatcher is supervised: when it fails, the failure is logged and
  * published as the reading's state, and the dispatcher starts again after a
  * pause. Readings live in one `SubscriptionRef<Published>` for the life of
  * the process. Each reading and each published failure is written to that
  * ref and to `state.json` (for the herdr-app Foreman pane); the UI server
- * will read the same ref.
+ * reads the same ref.
+ *
+ * The UI server Layer runs beside supervise. It Bun.builds the page when it
+ * starts and serves the outputs from memory. A failed build is logged and
+ * stops only that Layer; the dispatcher keeps running.
  *
  * A lock on a file beside state.json is held for the life of the process, so
  * a second serve refuses to start and cannot race the first one's landings.
@@ -19,6 +23,7 @@ import {
   Data,
   Effect,
   Fiber,
+  Layer,
   Option,
   Ref,
   Schedule,
@@ -28,10 +33,11 @@ import {
 } from "effect";
 import { Command } from "effect/cli";
 import { EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
-import { buildHost, publishedFailure } from "./host.ts";
+import { buildHost, publishedFailure, uiServices } from "./host.ts";
 import { publishedOf, statusOf, writePublished } from "./published.ts";
 import { type Published } from "./published-schema.ts";
 import { publishedPath } from "./paths.ts";
+import { ReadingsRef, uiServerLayer } from "./ui-server.ts";
 
 export const serveCommand = Command.make("serve", {}, () =>
   Effect.scoped(
@@ -41,6 +47,8 @@ export const serveCommand = Command.make("serve", {}, () =>
       // One readings ref for the process: each dispatcher writes into it;
       // state.json and the UI Readings stream both take their values from it.
       const readings = yield* SubscriptionRef.make(publishedOf(EMPTY_FLEET, Option.none()));
+      // Beside supervise: a page-build failure stops only this fiber.
+      yield* Effect.forkChild(runUiServer(readings));
       yield* supervise(buildHost, path, readings);
       // The dispatcher returns only when foreman's own checkout has a new
       // commit. A new dispatcher in this process would still load the code
@@ -56,6 +64,34 @@ export const serveCommand = Command.make("serve", {}, () =>
     "Run the dispatcher until its code changes, starting it again after each failure",
   ),
 );
+
+/**
+ * Launches the UI server Layer against `readings`. A failure — including a
+ * page that does not Bun.build — is logged and ends only this Effect; the
+ * caller (supervise) is unaffected.
+ */
+export const runUiServer = (
+  readings: SubscriptionRef.SubscriptionRef<Published>,
+): Effect.Effect<void> =>
+  isolateUiServer(
+    Layer.launch(
+      uiServerLayer.pipe(
+        Layer.provide(Layer.mergeAll(Layer.succeed(ReadingsRef, readings), uiServices)),
+      ),
+    ),
+  );
+
+/**
+ * A UI server failure (build or listen) is logged and swallowed so supervise
+ * keeps the dispatcher. serve and the DoD test both wrap Layer.launch in this.
+ */
+export const isolateUiServer = <A, E, R>(
+  launch: Effect.Effect<A, E, R>,
+): Effect.Effect<void, never, R> =>
+  launch.pipe(
+    Effect.catchCause((cause) => Effect.logError("foreman's UI server stopped", cause)),
+    Effect.asVoid,
+  );
 
 /** What `supervise` needs of a dispatcher: its readings, and its run. */
 export interface Supervised<E, R> {
