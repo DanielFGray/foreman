@@ -2147,13 +2147,32 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * Delete it while the task is still in review and the next tick reads a
      * task with no branch, concludes nothing was written, and sends finished
      * work back to the queue.
+     *
+     * The reading that chose each branch spans several store and git reads
+     * taken at different moments, so a dispatch from another process can land
+     * between them and leave a live task's brand-new branch (empty, hence
+     * "merged") in none of the lists. The store is therefore asked again at
+     * delete time: only a task that is closed or gone loses its branch.
      */
+    const closedNow = (task: string) =>
+      records.lookup(task).pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => true,
+            onSome: (item) => item.status === "done" || item.status === "canceled",
+          }),
+        ),
+      );
+
     const tidy = (current: Interpretation) =>
       Effect.gen(function* () {
         yield* Effect.forEach(
           current.prunable,
           (entry) =>
-            repository.remove(entry.directory, entry.branch).pipe(
+            closedNow(entry.task).pipe(
+              Effect.flatMap((closed) =>
+                closed ? repository.remove(entry.directory, entry.branch) : Effect.succeed(false),
+              ),
               Effect.flatMap((deleted) =>
                 deleted
                   ? // Named rather than counted. A branch foreman deleted is the
@@ -2643,7 +2662,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const tip = yield* tipOf(task, project);
       if (!base || tip === undefined) {
         return yield* Effect.logWarning(
-          `review of ${task.id} deferred: no base for its work in ${project.directory}`,
+          `review of ${task.id} deferred: no base for its work in ${project.directory} (a branch with no recorded upstream has no target; set one with git branch --set-upstream-to=<target> foreman/${task.id})`,
         );
       }
 
@@ -4689,6 +4708,7 @@ interface Interpretation extends FleetState {
     readonly project: string;
     readonly directory: string;
     readonly branch: string;
+    readonly task: string;
   }>;
 }
 

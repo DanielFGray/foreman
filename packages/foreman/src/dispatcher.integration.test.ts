@@ -907,6 +907,28 @@ describe("Dispatcher tick", () => {
     expect(world.removed).toEqual(["foreman/ts-swept"]);
   });
 
+  test("keeps a merged branch whose task the store reports live, though no list holds it", async () => {
+    // A dispatch from another process lands between the claimed and ready
+    // reads: the task is in neither list, and its fresh branch is empty,
+    // which counts as merged. The store, asked at delete time, says live.
+    const racing = item("ts-racing", "in_progress", []);
+    const world = new World(racing);
+    world.records.claimedEverywhere = Effect.succeed([]);
+    world.records.claimed = () => Effect.succeed([]);
+    world.branches.set("foreman/ts-racing", {
+      branch: "foreman/ts-racing",
+      merged: true,
+      empty: true,
+      stale: undefined,
+      tip: "c1",
+    });
+
+    await tick(world);
+
+    expect(world.removed).toEqual([]);
+    expect(world.branches.has("foreman/ts-racing")).toBe(true);
+  });
+
   test("keeps the branch of a merged workspace whose task was deleted", async () => {
     const world = new World();
     world.workers.set("ts-orphan", worker("ts-orphan", "author", "working"));
