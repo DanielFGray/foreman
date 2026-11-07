@@ -8,7 +8,6 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRpc from "effect/reactivity/AtomRpc";
 import type * as AsyncResult from "effect/reactivity/AsyncResult";
 import { RpcClient, RpcSerialization } from "effect/rpc";
-import type { PipelineChange } from "foreman/pipeline-edit";
 import type { Published } from "foreman/published-schema";
 import { UiContract } from "foreman/ui-contract";
 import * as Stream from "effect/Stream";

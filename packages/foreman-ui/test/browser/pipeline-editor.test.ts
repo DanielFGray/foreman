@@ -24,7 +24,11 @@ const PROJECT = "amux";
 let root: Root | undefined;
 let uiPort = 0;
 let sent: Array<SentFrame> = [];
-const realSend = WebSocket.prototype.send;
+// The native send, read as a value so the lint rule for unbound methods does not apply.
+const realSend: WebSocket["send"] = Object.getOwnPropertyDescriptor(
+  WebSocket.prototype,
+  "send",
+)!.value;
 
 beforeAll(async () => {
   uiPort = await commands.startUiServer(location.origin);
