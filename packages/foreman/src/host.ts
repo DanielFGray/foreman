@@ -148,7 +148,7 @@ export type Host = Effect.Success<typeof buildHost>;
  * the effect so supervise logs and publishes it, and the process stays on the
  * code it already loaded until a later tick's setup passes.
  */
-export const codeMovedFrom = (
+const codeMovedFrom = (
   repository: Repository["Service"],
   loaded: string | undefined,
   directory: string,
