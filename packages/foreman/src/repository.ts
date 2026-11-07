@@ -6,7 +6,7 @@ import { Array as Arr, Context, Effect, FileSystem, Layer, Path, Schema, Stream 
 const ours = "foreman/";
 
 /** Why a checkout is not free to work against. */
-export type HoldReason = "dirty" | "noBranch" | "busy" | "unreadable" | "ambiguous";
+export type HoldReason = "dirty" | "noBranch" | "busy" | "unreadable" | "ambiguous" | "setup";
 
 /**
  * Whether a checkout is free to work against, and if not, why.
@@ -441,7 +441,11 @@ export class Repository extends Context.Service<Repository>()("Repository", {
         const result = yield* check(directory, `./${SETUP_SCRIPT}`);
         return result.passed
           ? undefined
-          : ({ _tag: "Held", detail: `${label} setup failed:\n${result.output}` } as const);
+          : ({
+              _tag: "Held",
+              reason: "setup",
+              detail: `${label} setup failed:\n${result.output}`,
+            } as const);
       });
 
     /**

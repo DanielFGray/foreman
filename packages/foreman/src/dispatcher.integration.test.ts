@@ -1210,6 +1210,53 @@ describe("Dispatcher tick", () => {
     expect(world.merged).toEqual(["c1"]);
     expect(world.tasks.get(task.id)?.runs.some((run) => run.open)).toBe(false);
   });
+
+  test("a landing whose checkout setup fails is published as the project's hold until a landing passes", async () => {
+    const task = item("ts-setup", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(task);
+    world.workers.set(task.id, worker(task.id, "review", "settled"));
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    world.landing = {
+      _tag: "Held",
+      reason: "setup",
+      detail: "checkout setup failed:\ninstall broke",
+    };
+
+    // The landing's hold lives in the dispatcher, so the ticks share one layer.
+    // A reading shows what the previous tick's landing reported; the second
+    // readings are after a landing that passes.
+    const { during, after } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const dispatcher = yield* Dispatcher;
+        yield* dispatcher.tick;
+        yield* dispatcher.tick;
+        const during = yield* SubscriptionRef.get(dispatcher.state);
+        world.landing = { _tag: "Present" };
+        yield* dispatcher.tick;
+        yield* dispatcher.tick;
+        const after = yield* SubscriptionRef.get(dispatcher.state);
+        return { during, after };
+      }).pipe(Effect.provide(layerFor(world))),
+    );
+
+    expect(during.held).toEqual([
+      expect.objectContaining({
+        project: "test",
+        reason: "setup",
+        detail: "checkout setup failed:\ninstall broke",
+      }),
+    ]);
+    expect(after.held).toEqual([]);
+  });
 });
 
 describe("naming an exit", () => {

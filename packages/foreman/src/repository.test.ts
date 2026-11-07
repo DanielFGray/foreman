@@ -692,6 +692,13 @@ describe("Repository landing a branch that changes what setup installs", () => {
           .exitCode,
       ).toBe(0);
 
+      // The already-present path runs the same setup, so a retry while the
+      // install is still broken stays held.
+      const retry = await merge(here, "breaks-install");
+      expect(retry._tag).toBe("Held");
+      if (retry._tag !== "Held") return;
+      expect(retry.detail).toContain("checkout setup failed");
+
       // Repair the install the way an operator or a fixed script would, then
       // the already-present path completes without merging again.
       await writeFile(join(here, "scripts", "worktree-setup.sh"), "#!/bin/sh\n", {

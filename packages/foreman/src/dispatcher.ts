@@ -240,6 +240,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     // safe in the queue either way.
     const dispatchFailures = yield* Ref.make(new Map<string, DispatchFailure>());
 
+    // The setup failures the last settle's landings hit. A landing whose setup
+    // fails keeps its approval and is retried each tick, so the failure is
+    // re-recorded for as long as it holds. Settle replaces the list whole, so a
+    // hold clears on the tick whose landing no longer fails setup.
+    const landingHolds = yield* Ref.make<ReadonlyArray<Held>>([]);
+
     // Whether the accounts have been read at all yet. A fleet that has just
     // started has nothing to say about them, and "no reading" and "nothing
     // left" are not distinguishable on a dashboard — so the first tick asks
@@ -656,6 +662,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // is held rather than guessed at; closing one of the spaces resolves it.
       const checkoutHolds: ReadonlyArray<Held> = [
         ...checkouts,
+        ...(yield* Ref.get(landingHolds)),
         ...unreachable,
         ...ambiguous.map((one): Held => ({
           project: one.name,
@@ -1339,6 +1346,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const coachCutoff = DateTime.subtract(yield* DateTime.now, {
         minutes: settings.coachWindow,
       });
+      yield* Ref.set(landingHolds, []);
       const stallCutoff = DateTime.toEpochMillis(
         DateTime.subtract(yield* DateTime.now, { minutes: settings.stallGrace }),
       );
@@ -1968,6 +1976,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           // could not run — never clears and must not retry in silence.
           if (result.reason !== "dirty" && result.reason !== "busy" && result.detail) {
             yield* Effect.logWarning(`landing ${task.id} (${project.name}) held: ${result.detail}`);
+          }
+          // A setup failure is the project's state, not the task's: the landing
+          // retries each tick, so it is published as a project hold until one passes.
+          if (result.reason === "setup") {
+            yield* Ref.update(landingHolds, (holds): ReadonlyArray<Held> => [
+              ...holds,
+              { project: project.name, reason: "setup", detail: result.detail ?? "" },
+            ]);
           }
           return yield* stopAgents(worker);
         }
