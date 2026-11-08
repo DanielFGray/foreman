@@ -19,6 +19,17 @@ Recovery after a crash follows the system boundary in Shi, Zhang, Cui, "A
 Programming Paradigm for Spatiotemporal Composability" (arXiv 2608.25512,
 section 6.1), as amux does.
 
+## Operator decisions (2026-11-07)
+
+Recorded by the orchestrator from the operator's answers. Sections 1 to 8 rely
+on them.
+
+- **No policy step.** Drawing a command block in a pipeline is the permission,
+  for inside and outside plugins alike. A command block has no gate before it.
+- **No fleet slot.** A command block takes no slot of the fleet's `slots`, as
+  checks do today. A plugin may cap its own concurrent runs with `slots`.
+- **Every command has a timeout.** `timeoutMinutes` defaults to 10.
+
 ## Terms
 
 - **plugin**: a named command-block kind in the plugins file. It names a
@@ -31,38 +42,38 @@ section 6.1), as amux does.
   outside command runs, and passes to that command. It is how a second run of
   the same work is recognised.
 - **boundary**: where the plugin's effects fall. `inside` means the task's own
-  branch, which foreman can reset. `outside` means an emission foreman cannot
-  take back.
+  branch and worktree, which foreman can restore. `outside` means an emission
+  foreman cannot take back.
+- **workspace mode**: where the task works, per the pipeline: `worktree` (a
+  directory foreman made for the task), `checkout` (the operator's checkout on
+  the task's branch), or `direct` (the operator's checkout on the operator's own
+  branch, no branch). `docs/workspace-blocks.md` defines them.
 - **requirement**: a coeffect the plugin declares (an environment variable, a
   binary on `PATH`, a login). A block whose requirements are unmet does not
   run.
+- **run snapshot**: the plugin entry as it was when a run started, stored in
+  the run row in foreman's own records.
 
 ## 1. One block kind
 
 The pipeline node kind is `command`. A check is a command block of the built-in
-plugin `check`, with exits `passed` and `failed` and the base-commit comparison
-foreman already runs for checks.
+plugin `check`, with exits `passed` and `failed`.
+
+The **kind `check` is deleted**. Foreman does not read a `kind: "check"` node,
+does not convert one on load or on save, and has no alias for it. The
+operator's pipelines and drafts files hold no check node today, so there is
+nothing to convert. The standard pipelines that `foreman pipeline use` draws
+write `command` with `of: "check"` directly.
+
+Why no conversion: foreman has no compatibility path for a shape nobody
+deployed, and a converter would be a second path that must stay in step with
+the first. A drawing that still holds `kind: "check"` gets one problem row,
+which names the replacement, so the operator edits it by hand.
 
 The **router stays**. A router is instant and reads facts (counts, failures,
 labels). A command that chooses a route is for a choice that needs a process:
-external state, a binary, or logic a filter cannot express. Replacing routers
-with commands would turn every `exits:returned>=3` into a process spawn. Counts
-and filters stay on the router; judgment that needs a command is a command
-block.
-
-An existing `kind: "check"` node is sugar for
-
-```jsonc
-{ "kind": "command", "id": "lint", "of": "check",
-  "set": { "command": "./scripts/lint.sh" },
-  "exits": [
-    { "id": "passed", "name": "passed", "to": "land-gate" },
-    { "id": "failed", "name": "failed", "to": "queue", "fails": "author" }
-  ] }
-```
-
-`problemsOf` and the palette speak `command`. The first pipeline save after the
-cutover rewrites each `check` node to that form, so drawings hold one kind.
+external state, a binary, or logic a filter cannot express. Counts and filters
+stay on the router; judgment that needs a command is a command block.
 
 ## 2. Input and output
 
@@ -84,15 +95,19 @@ Foreman runs the plugin's command with the task as JSON on standard input:
 `key` is present only for an `outside` plugin. The Schema lives in foreman
 (`CommandInput`); plugins do not define it.
 
-The command names its exit on standard output: the first line is an exit id the
-block declares. Process status 0 means that exit stands. A non-zero status is a
-process failure, not an exit name: recovery follows the plugin's boundary. A
-line that is not a declared exit is a process failure too.
+Every plugin's exit is one of two declared ways, chosen by its entry:
 
-The built-in `check` plugin keeps today's tip and base comparison inside
-foreman. It runs the operator's `command` parameter in the proving ground, maps
-status to `passed` or `failed`, and does not require that parameter's process to
-speak the stdout protocol. Every other plugin speaks the protocol above.
+- **stdout** (the default): the first line of standard output is an exit id the
+  block declares. Process status 0 means that exit stands. A non-zero status is a
+  process failure, not an exit name. A line that is not a declared exit is a
+  process failure too.
+- **`exitFromStatus`**: the plugin's exits are exactly `passed` and `failed`.
+  Status 0 names `passed`; any other status names `failed`. Standard output is
+  not read.
+
+Both are general options on the plugin entry. The `check` plugin is an ordinary
+entry that sets `exitFromStatus` and `compareBase`. No plugin has a protocol of
+its own, and no block has a second channel.
 
 ## 3. The plugins file
 
@@ -109,19 +124,18 @@ object was already durable and missing from the list).
     "check": {
       "boundary": "inside",
       "ground": "proving",
+      "exitFromStatus": true,
       "compareBase": true,
       "exits": [
         { "id": "passed", "name": "passed" },
         { "id": "failed", "name": "failed" }
       ],
-      "params": [
-        { "name": "command" }
-      ],
+      "params": [{ "name": "command" }],
       "requirements": [],
       "timeoutMinutes": 30
     },
     "notify-landed": {
-      "command": "~/.config/foreman/plugins/notify-landed.sh",
+      "command": ["~/.config/foreman/plugins/notify-landed.sh"],
       "boundary": "outside",
       "ground": "none",
       "idempotent": true,
@@ -131,53 +145,76 @@ object was already durable and missing from the list).
         { "kind": "env", "name": "SLACK_BOT_TOKEN" },
         { "kind": "bin", "name": "curl" }
       ],
-      "compensate": "~/.config/foreman/plugins/notify-landed-undo.sh",
+      "compensate": ["~/.config/foreman/plugins/notify-landed-undo.sh"],
       "timeoutMinutes": 2
     }
   }
 }
 ```
 
-- **`command`**: the argv foreman runs. Required unless `compareBase` is true.
-  No shell unless the operator's script starts one.
+- **`command`**: the argv foreman runs, as an array. No shell unless the
+  operator's script starts one. When the entry omits `command`, the block's
+  `command` parameter is the argv, as a `check` block's is. A plugin with neither
+  is refused.
 - **`boundary`**: `inside` or `outside`.
 - **`ground`**: where the process's working directory is. `worktree` is the
   task's worktree or checkout. `proving` is the project's proving ground at the
-  tip. `none` is foreman's own directory (no project tree).
-- **`compareBase`**: only the built-in check uses this. Foreman runs the
-  parameter `command` in the proving ground and applies today's tip / base
-  comparison. The plugin entry has no argv of its own.
+  tip, a disposable tree (section 4 relies on this). `none` is foreman's own
+  directory (no project tree).
+- **`exitFromStatus`**: see section 2.
+- **`compareBase`**: general. When true, after the exit is decided foreman
+  compares the tip with the base as it does for checks today, and a run whose
+  tip moved while the command ran is not recorded. `check` sets it. Any plugin
+  may.
 - **`idempotent`**: for `outside` only. When true, the invocation key makes a
   second run safe and foreman retries a started-with-no-end run with the same
   key. When false, that case is a decision for the operator.
-- **`compensate`**: optional undo command. Same input Schema, plus the exit the
-  forward run named when it finished.
-- **`requirements`**: `env`, `bin`, or `login` (a named login probe foreman
-  already knows how to ask, such as `gh auth`). Secrets are environment values
-  only. The pipelines file and the plugins file never hold them.
+- **`compensate`**: optional undo argv. It takes the same input Schema, plus the
+  exit the forward run named.
+- **`requirements`**: `env` or `bin`. A login probe is not a kind: foreman has
+  none of its own, and a plugin that needs a login names an `env` or `bin`
+  requirement that the operator's environment satisfies (for example `gh` on
+  `PATH` with its token in `GH_TOKEN`). Secrets are environment values only. The
+  pipelines file and the plugins file never hold them.
 - **`timeoutMinutes`**: wall clock from start. Default 10. A timeout is a
   process failure for recovery.
-- **`slots`**: optional cap on how many of this plugin's blocks run at once,
-  inside the fleet's `slots`, as an agent block's `slots` does.
+- **`slots`**: optional cap on how many of this plugin's runs run at once. It
+  is not a fleet slot (section 7).
 
 The palette offers each plugin as a block kind. `problemsOf` checks that a
 pipeline's `of` names a plugin, that every wired exit id is declared, that each
-required parameter is set, and that an `outside` plugin with no `idempotent`
-field is refused (the operator must say whether a retry is safe).
+required parameter is set, that a plugin with no `command` has a `command`
+parameter, and that an `outside` plugin with no `idempotent` field is refused
+(the operator must say whether a retry is safe). It refuses a `kind: "check"`
+node with the replacement named.
 
 ## 4. The system boundary
 
-Each plugin declares where its effects fall. The boundary decides recovery:
-whether foreman can restore the state before the run.
+Each plugin declares where its effects fall. The boundary and the workspace mode
+together decide recovery: whether foreman can restore the state before the run.
 
 ### Inside
 
-Effects are commits on the task's own branch (and uncommitted edits in its
-worktree). Foreman records the tip before the run. After a process failure or a
-crash (a started run with no end), it resets the branch and the worktree to that
-tip and runs again. The proving ground is disposable, so a `ground: proving`
-inside plugin needs no tip reset of the task branch; a started-with-no-end run
-is simply tried again.
+Effects are commits on the task's own branch and uncommitted edits in its tree.
+Foreman records the tip before the run. What recovery may do depends on the
+workspace mode, because only a worktree belongs to foreman alone:
+
+- **`worktree`**: foreman owns the directory and the branch. After a process
+  failure or a crash (a started run with no end), it resets the branch and the
+  worktree to the recorded tip and runs again.
+- **`checkout` and `direct`**: the tree is the operator's. A reset would drop
+  edits the operator made during the run, and in `direct` it would also drop
+  the operator's own commits (`docs/workspace-blocks.md`, rule 4). So foreman
+  never resets there. After a failure or crash it retries only when the tree is
+  clean and HEAD is still the recorded tip, which means the run left nothing
+  behind. Otherwise the task goes to the operator as a decision (attention),
+  with `release` and `intervene`, and the tree is not touched.
+- **`ground: proving`** (any mode): the command runs in the disposable proving
+  ground, not in the task's tree, so there is nothing to reset. A started run
+  with no end is run again.
+
+A plugin with `boundary: inside` and no commits, such as `check`, is therefore
+safe in every mode: it runs in the proving ground.
 
 ### Outside
 
@@ -203,14 +240,15 @@ is the operator's choice at draw time, surfaced rather than silent.
 
 ### Compensation
 
-A plugin may name a `compensate` command. When the task's work is abandoned
-(`cancel`, `kill`, or a reset that drops the branch), foreman runs each finished
-outside run's compensate command in reverse order of those runs, with the same
-invocation key and the exit that run named. A compensate process failure is
-logged and the next compensate still runs; the task's abandon does not wait on
-a perfect undo. Inside runs need no compensate: the tip reset is the undo.
-Unfinished (started-with-no-end) outside runs are not compensated; they follow
-the uncertain-case rule above first.
+When the task's work is abandoned (`cancel`, `kill`, or a reset that drops the
+branch), foreman runs each finished outside run's compensate command in reverse
+order of those runs. It uses the compensate argv in that run's snapshot (section
+6), the same invocation key, and the exit that run named. A compensate process
+failure is logged and the next compensate still runs; the abandon does not wait
+on a perfect undo. Inside runs need no compensate: the tip reset (worktree) or
+the operator's decision (checkout, direct) is their undo. Unfinished
+(started-with-no-end) outside runs are not compensated; they follow the
+uncertain-case rule above first.
 
 ## 5. Requirements as coeffects
 
@@ -225,13 +263,23 @@ Secrets come from the environment the dispatcher already runs in. A requirement
 of kind `env` names the variable; its value never enters the plugins file, the
 pipelines file, or a run row.
 
-## 6. Binding
+## 6. Binding and the run snapshot
 
-A run records the hash of the plugin definition it started with (canonical JSON
-of that plugin's entry). An edit to the plugins file during a run does not
-change what that run means: settle, recovery and compensation read the hash
-from the run, and refuse to apply a different definition to it. New runs read
-the file as it is now. The hash is foreman's, not the plugin author's.
+A run stores a **snapshot** of the plugin entry it started with, in foreman's
+own records, not a hash. Settle, recovery and compensation read the command,
+exits, boundary and compensate argv from that snapshot. So an edit to the
+plugins file, or removing the plugin, during a run changes nothing about that
+run, and no recovery path needs the operator's file to still hold the old
+definition.
+
+- A compensate argv whose script was deleted fails as a process failure, is
+  logged, and the next compensate runs (section 4).
+- New runs read the file as it is now.
+- The snapshot holds no secret: requirements name variables, and values are
+  never stored (section 5).
+
+A hash was rejected because it identifies a definition without giving recovery
+the definition to run. A snapshot costs one JSON value per run.
 
 ## 7. Where commands run
 
@@ -245,10 +293,9 @@ ground per project. A slow command there stalls every project.
 - **Proving ground.** A plugin with `ground: proving` takes the project's
   proving-ground lock, shared with land. Land and proving commands on one
   project stay serialised. Other projects and other grounds run in parallel.
-- **Slots.** A running command takes a fleet slot, as an agent does. A plugin's
-  optional `slots` caps that plugin's concurrent runs. Today's check took no
-  slot; that ends with this record, because an unbounded pile of commands is
-  the same resident-memory problem agents already have.
+- **Fleet slots.** A command block takes no fleet slot (operator decision,
+  2026-11-07). A plugin's `slots` caps that plugin's concurrent runs, so an
+  unbounded pile of one command is still prevented.
 - **Timeout.** `timeoutMinutes` on the plugin (default 10). On timeout foreman
   kills the process and treats it as a process failure for recovery.
 
@@ -256,9 +303,16 @@ ground per project. A slow command there stalls every project.
 
 The gate covers, as unit tests over the runner with a fake command:
 
-- For an `inside` plugin: a crash between "started" and the end resets the
-  branch to the recorded tip and runs again; the second run's commits are the
-  ones that remain.
+- Inside, `worktree`: a crash between "started" and the end resets the branch
+  and worktree to the recorded tip and runs again; the second run's commits are
+  the ones that remain.
+- Inside, `checkout` and `direct`: a crash with a clean tree at the recorded
+  tip runs again. A crash after the run committed, or with a dirty tree, becomes
+  a decision, and the test asserts that the tree and HEAD are unchanged.
+- Inside, `ground: proving`: a crash runs again with no reset of the task's
+  tree.
+- The run snapshot: editing or removing the plugin during a run, then a crash,
+  recovers with the command and compensate argv from the snapshot.
 - For an `outside` plugin with `idempotent: true`: a started-with-no-end run is
   retried with the same invocation key, and the command receives that key both
   times.
@@ -268,24 +322,37 @@ The gate covers, as unit tests over the runner with a fake command:
   canceled, and a failing compensate does not skip the rest.
 - An unmet requirement publishes the attention row and runs no command; when
   the requirement appears, the next tick runs it.
+- A plugin's `slots` caps its concurrent runs, and a command run takes no fleet
+  slot.
 
 No test starts `foreman serve`.
 
 ## What it replaces, and conflicts
 
-Each rule below is changed by this record. The record wins in each case.
+Each rule below is changed by this record. The record wins in each case. Where
+the losing text stands is the file named in the "Where it stands" column; each
+of those files must be edited in the build slice named in the last column.
 
-| Rule | Where it stands | Change |
-| --- | --- | --- |
-| Check is its own block kind with `command` and exits `passed` / `failed` | `src/pipeline.ts` `CheckNode`; `docs/pipeline-engine.md` Blocks; `docs/agent-exits.md` Check block | One kind `command`. `check` is a built-in plugin, and a `kind: "check"` node is sugar rewritten on save. |
-| A check gets no task context | epic `ep-3ca01a`; `runCheck` in `src/dispatcher.ts` | Standard input carries the task JSON for every command plugin. The built-in check keeps tip / base comparison in foreman. |
-| A check takes no slot | `docs/pipeline-engine.md` Blocks table; settle path in `src/dispatcher.ts` | A command takes a fleet slot. A plugin may set `slots`. |
-| Landings and checks are serialised by the dispatcher's one fiber over one proving ground per project | `AGENTS.md` Front ends | Landings and `ground: proving` commands share the proving-ground lock. Each command runs on its own fiber. The tick fiber does not wait out a non-proving command. |
-| The durable intention files are the policy, pipelines, drafts and instructions files | `AGENTS.md` "The world holds the work" | Those four, plus the plugins file. The same paragraph names the composites object in the pipelines and drafts files. |
-| Durable state beyond those files and foreman's own records is a wall | `AGENTS.md` same section | No conflict: plugin definitions are operator intention in the plugins file; run hashes and started keys are foreman's own records. |
-| A check's command is judged only by exit status | `CheckNode` doc comment; `repository.check` | General plugins name an exit on stdout. Status 0 accepts it. The built-in check still maps status through tip / base comparison. |
-| Absence that needs a person is a park | `AGENTS.md` park rule | An unmet plugin requirement is an attention row, not a park. It clears when the requirement appears. |
-| Router is the only way to choose a route from facts | `docs/pipeline-engine.md`; `docs/agent-exits.md` | Router stays for filters and counts. A command block may also choose a route when the choice needs a process. |
+| Rule | Where it stands | Change | Built by |
+| --- | --- | --- | --- |
+| Check is its own block kind with `command` and exits `passed` / `failed` | `src/pipeline.ts` `CheckNode`; `docs/pipeline-engine.md` Blocks; `docs/agent-exits.md` Check block | Kind `check` is deleted, with no conversion. `command` with `of: "check"` replaces it. The global rule "No backwards compatibility with unshipped code" is the basis; the operator's files hold no check node. | ts-44824b |
+| A check gets no task context | epic `ep-3ca01a`; `runCheck` in `src/dispatcher.ts` | Standard input carries the task JSON for every command plugin. | ts-ed85e7 |
+| A check's command is judged only by exit status | `CheckNode` doc comment; `repository.check` | Judged by the plugin entry: `exitFromStatus` (status) or stdout. `check` sets `exitFromStatus`. | ts-ed85e7 |
+| A check takes no slot | `docs/pipeline-engine.md` Blocks table; settle path in `src/dispatcher.ts` | Unchanged for command blocks: no fleet slot. A plugin may cap its own runs with `slots`. | ts-ed85e7 |
+| Every agent, check, land and done has a gate on each path into it; a check's gate names an existing step | `docs/pipeline-engine.md` lines on policy steps ("The policy has no step of its own for a check"; "So does every check") | No policy step and no gate for a command block. Drawing it is the permission, for inside and outside plugins alike (operator decision, 2026-11-07). The validation that "every path to a check passes an author first" stays for `command` with `of: "check"`. | ts-44824b |
+| Landings and checks are serialised by the dispatcher's one fiber over one proving ground per project | `AGENTS.md` Front ends | Landings and `ground: proving` commands share the proving-ground lock. Each command runs on its own fiber. The tick fiber does not wait out a non-proving command. | ts-ed85e7 |
+| Inside recovery is by tip reset | this record, section 4 (earlier draft) | Reset only in `worktree`. `checkout` and `direct` never reset; they retry only at a clean recorded tip, else decide. | ts-9aecc2 |
+| The plugin's definition is bound by hash | this record, section 6 (earlier draft) | A run stores a snapshot of the plugin entry. | ts-ed85e7 |
+| Login probe as a requirement kind | this record, section 3 (earlier draft) | Removed. Requirements are `env` and `bin`. | ts-604c78 |
+| The durable intention files are the policy, pipelines, drafts and instructions files | `AGENTS.md` "The world holds the work" | Those four, plus the plugins file. The same paragraph names the composites object in the pipelines and drafts files. | ts-5a8dd8 |
+| Durable state beyond those files and foreman's own records is a wall | `AGENTS.md` same section | No conflict: plugin definitions are operator intention in the plugins file; run snapshots and started keys are foreman's own records. | ts-5a8dd8 |
+| Absence that needs a person is a park | `AGENTS.md` park rule | An unmet plugin requirement is an attention row, not a park. It clears when the requirement appears. | ts-604c78 |
+| Router is the only way to choose a route from facts | `docs/pipeline-engine.md`; `docs/agent-exits.md` | Router stays for filters and counts. A command block may also choose a route when the choice needs a process. | ts-44824b |
+
+The cutover rule the review cited ("the pipelines and drafts files carry no
+format version, and the one-time cutovers are deleted") is not in AGENTS.md or
+`docs/`, so this record does not change it. The delete-the-check-kind decision
+makes no cutover, so it does not conflict with that rule either way.
 
 ## Build slices
 
@@ -294,32 +361,33 @@ waits on this design record.
 
 1. `ts-5a8dd8` — Plugins file Schema, load/save, `FOREMAN_PLUGINS`, and the
    AGENTS.md durable files list (plugins file + composites object).
-2. `ts-44824b` — Pipeline `command` node, `check` sugar, palette and
-   `problemsOf` (unknown plugin, exits, params, missing `idempotent` on
-   outside, withholding warning).
-3. `ts-ed85e7` — Runner: input Schema, stdout exit protocol, run row with
-   plugin hash, slots and timeout, own fiber; proving-ground lock shared with
-   land.
-4. `ts-9aecc2` — Inside recovery: tip snapshot, reset, retry; built-in `check`
-   moved onto the runner with `compareBase`.
+2. `ts-44824b` — Pipeline `command` node, `check` plugin, deletion of
+   `kind: "check"`, palette and `problemsOf` (unknown plugin, exits, params,
+   missing `idempotent` on outside, withholding warning, `check` node refused).
+3. `ts-ed85e7` — Runner: input Schema, stdout and `exitFromStatus` exit
+   protocols, run row with snapshot, per-plugin `slots`, timeout, own fiber;
+   proving-ground lock shared with land.
+4. `ts-9aecc2` — Inside recovery per workspace mode (reset in `worktree` only;
+   decision in `checkout` and `direct`); built-in `check` moved onto the runner
+   with `compareBase`.
 5. `ts-04727d` — Outside recovery: started record and invocation key before
    exec; idempotent retry vs decision.
 6. `ts-604c78` — Requirements check and attention row.
-7. `ts-f606c2` — Compensation on cancel, kill and branch reset, reverse order.
+7. `ts-f606c2` — Compensation on cancel, kill and branch reset, reverse order,
+   from the run snapshot.
 8. `ts-1a29b7` — Gate tests named in section 8.
-
-No operator question was left open: the epic already recorded the four jobs,
-the local plugins file, and the paper 6.1 recovery source; this record decides
-the rest.
 
 ## Checks
 
-- A drawing with `kind: "check"` loads, and the next save writes `kind:
-  "command", "of": "check"`.
+- A drawing with `kind: "check"` loads with one problem row naming
+  `command` with `of: "check"`, and runs nothing.
 - `problemsOf` on a pipeline that posts outside before a land returns one
   withholding warning and no hard problem.
-- Killing the process of an `inside` command between start and end leaves the
-  branch at the tip recorded before the run, and the next tick runs it again.
+- Killing the process of an `inside` command in a `worktree` between start and
+  end leaves the branch at the tip recorded before the run, and the next tick
+  runs it again.
+- Killing an `inside` command in a `checkout` after it committed leaves a
+  decision and the tree untouched.
 - Killing an `outside` `idempotent: false` command after start leaves a
   decision, not a second run.
 - Canceling a task after two outside runs ran compensate for the second, then
