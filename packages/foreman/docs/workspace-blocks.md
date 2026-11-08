@@ -41,7 +41,7 @@ also refuses when the project already has a drawing that is no standard pipeline
 so a hand-drawn pipeline is never lost.
 
 A worktree task can be served for a look. `foreman preview <task>` runs the
-project's `scripts/preview.sh` in the task's worktree, in the hc terminal
+project's `scripts/preview` in the task's worktree, in the hc terminal
 `preview-<task>`, and prints that terminal's address. A preview terminal that is
 still live is used again. The `preview` action shows only on a row whose task has
 a worktree, in a project that keeps the script. A task in your checkout needs no

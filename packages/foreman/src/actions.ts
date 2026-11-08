@@ -120,6 +120,5 @@ export const ACTION_HELP: Record<Action, string> = {
   onboard: "Send an agent to salvage the uncommitted work holding a project",
   adopt: "Put an unread branch in front of a reviewer",
   approve: "Allow the step a task is waiting on, once, for that task alone",
-  preview:
-    "Run the project's scripts/preview.sh in a task's worktree, in the terminal preview-<task>",
+  preview: "Run the project's scripts/preview in a task's worktree, in the terminal preview-<task>",
 };

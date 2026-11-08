@@ -33,7 +33,7 @@ export const agentPrompt = (project: string, pipeline: Pipeline, block: string, 
       workspace,
       base: "<base>",
       trunk: routeTarget(pipeline, factsOf(task, pipeline)) ?? "<trunk>",
-      verify: "./scripts/verify.sh",
+      verify: "./scripts/verify",
       pipeline,
     });
   }).pipe(Effect.provide(Prompts.Default));

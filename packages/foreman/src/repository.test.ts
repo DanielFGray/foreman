@@ -600,7 +600,7 @@ describe("Repository landing a branch that changes what setup installs", () => {
       await mkdir(join(here, "scripts"), { recursive: true });
       // Stands in for `bun install`: it installs what the tree declares.
       await writeFile(
-        join(here, "scripts", "worktree-setup.sh"),
+        join(here, "scripts", "worktree-setup"),
         "#!/bin/sh\nif [ -f needs.txt ]; then cp needs.txt installed.txt; fi\n",
         { mode: 0o755 },
       );
@@ -632,7 +632,7 @@ const fresh = await mkdtemp(join(tmpdir(), "foreman-setup-"));
 afterAll(() => rm(fresh, { recursive: true, force: true }));
 
 describe("Repository.setup", () => {
-  const script = join(fresh, "scripts", "worktree-setup.sh");
+  const script = join(fresh, "scripts", "worktree-setup");
   const write = (body: string) => writeFile(script, body, { mode: 0o755 });
 
   test("says nothing when the project keeps no script", async () => {

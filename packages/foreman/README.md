@@ -198,7 +198,7 @@ the pane, so the next role picks up where the last one stopped, and the
 workspace closes when its last pane does.
 
 A fresh worktree holds committed files only. Before each dispatch, foreman
-runs the project's `scripts/worktree-setup.sh` there when the project has one,
+runs the project's `scripts/worktree-setup` there when the project has one,
 and refuses a worktree whose setup failed. Before `foreman serve` exits for a
 restart on a new commit, it runs the same script on the operator's checkout.
 If setup fails, serve publishes the failure and keeps running its loaded code.
@@ -366,7 +366,10 @@ pre-merge tree to establish whether it was red already — only after a confirme
 failure, since that is the only time the question is live. A project that was
 already red still takes the merge, because one broken test would otherwise hold
 every task in the fleet. A project names the command by keeping an executable
-`scripts/verify.sh`; without one, a landing rests on the merge alone.
+`scripts/verify`; without one, a landing rests on the merge alone. Each project script
+(`verify`, `worktree-setup`, `preview`) has no extension and may be in any language: its
+`#!` line picks the interpreter, as in a git hook. It must be executable: one without the
+executable bit fails, and that failure holds the landing.
 
 The reviewers are a list of their own, apart from the ladder: the ladder says
 who writes, and the reviewers say who reads. A reviewer is a model with its own
