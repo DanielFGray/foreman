@@ -161,19 +161,31 @@ describe("drawingOf", () => {
   });
 
   it("draws a return to the queue as a stub that starts on its exit's edge", () => {
-    const pipeline = Option.getOrThrow(
-      rejoin(STANDARD_PIPELINES.worktree, { from: "review", port: "exit:approved" }, QUEUE),
+    const placed = rejoin(
+      STANDARD_PIPELINES.worktree,
+      { from: "review", port: "exit:approved" },
+      QUEUE,
+    ).pipe(
+      Option.map((pipeline) => drawingOf(pipeline, "across")),
+      Option.flatMap((drawing) =>
+        Option.all({
+          block: Option.fromNullishOr(drawing.blocks.find((one) => one.id === "review")),
+          stub: Option.fromNullishOr(
+            drawing.wires.find((wire) => wire.from === "review" && wire.port === "exit:approved"),
+          ),
+        }),
+      ),
+      Option.map(({ block, stub }) => {
+        const [start] = stub.points;
+        return {
+          to: stub.to,
+          points: stub.points.length,
+          onEdge: start?.[0] === block.x + block.w,
+          alongBlock: start !== undefined && start[1] >= block.y && start[1] <= block.y + block.h,
+        };
+      }),
     );
-    const drawing = drawingOf(pipeline, "across");
-    const block = drawing.blocks.find((one) => one.id === "review")!;
-    const stub = drawing.wires.find(
-      (wire) => wire.from === "review" && wire.port === "exit:approved",
-    );
-    expect(stub?.to).toBe(QUEUE);
-    expect(stub?.points).toHaveLength(2);
-    expect(stub?.points[0]).toEqual([block.x + block.w, stub!.points[0]![1]]);
-    expect(stub!.points[0]![1]).toBeGreaterThanOrEqual(block.y);
-    expect(stub!.points[0]![1]).toBeLessThanOrEqual(block.y + block.h);
+    expect(placed).toEqual(Option.some({ to: QUEUE, points: 2, onEdge: true, alongBlock: true }));
   });
 });
 

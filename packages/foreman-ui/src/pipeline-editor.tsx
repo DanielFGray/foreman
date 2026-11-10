@@ -30,11 +30,8 @@ const viewFrom = (shown: ShownPipeline): ViewOf =>
     ? shown.draft
     : { pipeline: shown.pipeline, problems: shown.problems, drawing: shown.drawing };
 
-const wirePath = (points: ReadonlyArray<readonly [number, number]>): string => {
-  if (points.length === 0) return "";
-  const [first, ...rest] = points;
-  return `M${first![0]} ${first![1]}` + rest.map(([x, y]) => `L${x} ${y}`).join("");
-};
+const wirePath = (points: ReadonlyArray<readonly [number, number]>): string =>
+  points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x} ${y}`).join("");
 
 /** Default wire stroke; preview tones stay as stroke so dragology can lerp them. */
 const WIRE_STROKE = "#656d76";

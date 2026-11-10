@@ -214,7 +214,7 @@ export const layoutOf = (belt: Belt, flow: Flow): Layout => {
   const last = belt.rows - 1;
   const wires = [
     ...belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index)),
-    ...belt.returns.map((ret) => placedReturnOf(grid, ret)),
+    ...belt.returns.flatMap((ret) => placedReturnOf(grid, ret)),
   ];
   // The drawing holds every block and every wire, a back wire's return lane included.
   const reach = (axis: 0 | 1) =>
@@ -336,22 +336,23 @@ const slotOf = (exit: { readonly label: string }, down: boolean) =>
  * The stub a return to the queue draws off its exit: the exit's slot leads
  * out to a short run that ends at no block, so the exit has a handle to drag.
  */
-const placedReturnOf = (grid: Grid, ret: BeltReturn): PlacedWire => {
+const placedReturnOf = (grid: Grid, ret: BeltReturn): ReadonlyArray<PlacedWire> => {
   const { down, spans } = grid;
-  const span = spans.get(ret.from)!;
+  const span = spans.get(ret.from);
+  if (span === undefined) return [];
   const b0 = exitOf(grid, ret, span);
-  const out: Point = [span.a + span.la, b0];
-  const end: Point = [out[0] + RETURN_STUB, b0];
-  const points = dedupe([out, end].map(([a, b]): Point => (down ? [b, a] : [a, b])));
-  const [start, finish] = [points[0]!, points[points.length - 1]!];
-  const middle: Point = [(start[0] + finish[0]) / 2, (start[1] + finish[1]) / 2];
-  return {
-    wire: { from: ret.from, port: ret.port, to: QUEUE, label: ret.label, back: false },
-    points,
-    anchor: middle,
-    room: RETURN_STUB,
-    plus: middle,
-  };
+  const edge = span.a + span.la;
+  const at = (a: number): Point => (down ? [b0, a] : [a, b0]);
+  const middle = at(edge + RETURN_STUB / 2);
+  return [
+    {
+      wire: { from: ret.from, port: ret.port, to: QUEUE, label: ret.label, back: false },
+      points: [at(edge), at(edge + RETURN_STUB)],
+      anchor: middle,
+      room: RETURN_STUB,
+      plus: middle,
+    },
+  ];
 };
 
 /** A wire runs on a lane when a block stands in its own row between its two ends. */

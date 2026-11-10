@@ -25,7 +25,7 @@ const currentTarget = (drawing: Drawing): string => {
     (one) => one.from === BRANCH_NEXT.from && one.port === BRANCH_NEXT.port,
   );
   assert.isDefined(wire);
-  return wire!.to;
+  return wire.to;
 };
 
 describe("rejoinFrames", () => {
@@ -35,8 +35,8 @@ describe("rejoinFrames", () => {
       (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "start",
     );
     assert.isDefined(toStart);
-    assert.strictEqual(toStart!.problems.length, 1);
-    assert.strictEqual(toStart!.problems[0], "no source reaches retry");
+    assert.strictEqual(toStart.problems.length, 1);
+    assert.strictEqual(toStart.problems[0], "no source reaches retry");
   });
 
   it("keeps the committed block positions so closest can hit the visible target", () => {
@@ -51,11 +51,11 @@ describe("rejoinFrames", () => {
     assert.isDefined(toStart);
     assert.isDefined(toClimb);
     assert.deepStrictEqual(
-      handlePoint(toStart!, BRANCH_NEXT),
+      handlePoint(toStart, BRANCH_NEXT),
       inputPoint(committed.drawing, "start"),
     );
     assert.deepStrictEqual(
-      handlePoint(toClimb!, BRANCH_NEXT),
+      handlePoint(toClimb, BRANCH_NEXT),
       inputPoint(committed.drawing, "climb"),
     );
   });
@@ -71,7 +71,7 @@ describe("rejoinFrames", () => {
       (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === currentTarget(configured),
     );
     assert.isDefined(unchanged);
-    assert.deepStrictEqual(unchanged!.problems, []);
+    assert.deepStrictEqual(unchanged.problems, []);
   });
 
   it("checks a composite instance with the definitions the server holds, so its unchanged target has no problem", () => {
@@ -92,6 +92,6 @@ describe("rejoinFrames", () => {
         frame.pending?._tag === "Rejoin" && frame.pending.to === currentTarget(made.pipeline),
     );
     assert.isDefined(unchanged);
-    assert.deepStrictEqual(unchanged!.problems, []);
+    assert.deepStrictEqual(unchanged.problems, []);
   });
 });

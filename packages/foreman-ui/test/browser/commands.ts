@@ -4,15 +4,15 @@
  * origin of the page vitest opened, whatever port vitest chose for it. Passing
  * the port again restarts the server where it was, for the reconnect test.
  */
-import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import type { BrowserCommand } from "vitest/node";
+import { BunServices } from "@effect/platform-bun";
+import { Effect } from "effect";
+import { readDrafts, updateDrafts } from "foreman/pipeline-draft";
+import { readPipelines } from "foreman/pipeline-file";
 import { type Drawing, DEFAULT_PIPELINE } from "foreman/pipeline";
 import { freePort } from "../../src/fixtures.ts";
-
-/** The drafts file as these commands read it: each draft's pipeline, and its other fields as written. */
-type DraftsFixture = { drafts: Record<string, { pipeline: Drawing } & Record<string, unknown>> };
 
 const serverScript = fileURLToPath(new URL("./ui-server-process.ts", import.meta.url));
 
@@ -27,19 +27,25 @@ const waitForReady = async (
   const reader = stdout.getReader();
   const decoder = new TextDecoder();
   let text = "";
-  let ready = /ui-server ready (\d+) (\S+)/.exec(text);
-  while (ready === null) {
+  let ready = readyIn(text);
+  while (ready === undefined) {
     const { done, value } = await reader.read();
     if (done) throw new Error(`UI server process exited before it was ready:\n${text}`);
     text += decoder.decode(value);
-    ready = /ui-server ready (\d+) (\S+)/.exec(text);
+    ready = readyIn(text);
   }
   void (async () => {
     while (!(await reader.read()).done) {
       // drain, so the child never blocks on a full pipe
     }
   })();
-  return { port: Number(ready[1]), folder: ready[2]! };
+  return ready;
+};
+
+/** The port and folder on the child's ready line, once the line is there. */
+const readyIn = (text: string): { port: number; folder: string } | undefined => {
+  const [, port, folder] = /ui-server ready (\d+) (\S+)/.exec(text) ?? [];
+  return port === undefined || folder === undefined ? undefined : { port: Number(port), folder };
 };
 
 /** Starts the UI server in a child process and returns its port. */
@@ -74,55 +80,52 @@ export const stopUiServer: BrowserCommand<[], void> = async () => {
  * process writing the file would. The UI server then holds no such block, and
  * an edit that names it is refused.
  */
-export const removeDraftBlock: BrowserCommand<[project: string, block: string], void> = async (
+export const removeDraftBlock: BrowserCommand<[project: string, block: string], void> = (
   _context,
   project,
   block,
-) => {
-  if (fixtureFolder === undefined) throw new Error("UI server is not running");
-  const path = join(fixtureFolder, "pipelines.draft.json");
-  const file = ((await fixtureJson("pipelines.draft.json")) as DraftsFixture | null) ?? {
-    drafts: {},
-  };
-  // With no draft open, the page shows the default pipeline, and so does the server's fresh draft.
-  const draft = file.drafts[project] ?? {
-    base: null,
-    pipeline: DEFAULT_PIPELINE as Drawing,
-    composites: {},
-    bases: {},
-  };
-  file.drafts[project] = {
-    ...draft,
-    pipeline: { nodes: draft.pipeline.nodes.filter((node) => node.id !== block) },
-  };
-  await writeFile(path, `${JSON.stringify(file, null, 2)}\n`);
-};
-
-/** A fixture file's JSON, or null when the server has not written it yet. */
-const fixtureJson = async (name: string): Promise<unknown> => {
-  if (fixtureFolder === undefined) throw new Error("UI server is not running");
-  const file = Bun.file(join(fixtureFolder, name));
-  return (await file.exists()) ? file.json() : null;
-};
+) =>
+  onFixtures((folder) =>
+    updateDrafts(join(folder, "pipelines.draft.json"), (drafts) => {
+      // With no draft open, the page shows the default pipeline, and so does the server's fresh draft.
+      const draft = drafts[project] ?? {
+        base: null,
+        pipeline: DEFAULT_PIPELINE,
+        composites: {},
+        bases: {},
+      };
+      const nodes = draft.pipeline.nodes.filter((node) => node.id !== block);
+      return { ...drafts, [project]: { ...draft, pipeline: { nodes } } };
+    }).pipe(Effect.asVoid),
+  );
 
 /** The pipeline `foreman` runs for a project, as the pipelines file holds it on disk. */
-export const savedPipeline: BrowserCommand<[project: string], Drawing | null> = async (
+export const savedPipeline: BrowserCommand<[project: string], Drawing | null> = (
   _context,
   project,
-) => {
-  const file = (await fixtureJson("pipelines.json")) as {
-    pipelines: Record<string, Drawing>;
-  } | null;
-  return file?.pipelines[project] ?? null;
-};
+) =>
+  onFixtures((folder) =>
+    readPipelines(join(folder, "pipelines.json")).pipe(
+      Effect.map((read) => read.value.pipelines[project] ?? null),
+    ),
+  );
 
 /** The open draft for a project, as the drafts file holds it on disk. */
-export const draftPipeline: BrowserCommand<[project: string], Drawing | null> = async (
+export const draftPipeline: BrowserCommand<[project: string], Drawing | null> = (
   _context,
   project,
-) => {
-  const file = (await fixtureJson("pipelines.draft.json")) as {
-    drafts: Record<string, { pipeline: Drawing }>;
-  } | null;
-  return file?.drafts[project]?.pipeline ?? null;
-};
+) =>
+  onFixtures((folder) =>
+    readDrafts(join(folder, "pipelines.draft.json")).pipe(
+      Effect.map((read) => read.value[project]?.pipeline ?? null),
+    ),
+  );
+
+/**
+ * Reads or rewrites a file in the folder the UI server writes, through
+ * foreman's own readers, so a fixture decodes as the dispatcher decodes it.
+ */
+const onFixtures = <A, E>(use: (folder: string) => Effect.Effect<A, E, BunServices.BunServices>) =>
+  fixtureFolder === undefined
+    ? Promise.reject(new Error("UI server is not running"))
+    : Effect.runPromise(use(fixtureFolder).pipe(Effect.provide(BunServices.layer)));

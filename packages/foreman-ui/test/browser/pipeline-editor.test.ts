@@ -11,24 +11,41 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { commands, page, userEvent } from "vitest/browser";
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
+import { Option, Schema } from "effect";
 import type { Drawing } from "foreman/pipeline";
+import { PipelineEdit } from "foreman/ui-contract";
 import { App } from "../../src/App.tsx";
 import { pageInputsAtom } from "../../src/rpc.ts";
 import "../../src/styles.css";
 
-/** A frame the page sent, as the RPC JSON protocol encodes it. */
-type SentFrame = { readonly _tag?: string; readonly tag?: string; readonly payload?: unknown };
+/**
+ * A PipelineEdit request as the RPC JSON protocol encodes it. Every other
+ * frame the page sends fails to decode, so it is not counted.
+ */
+const EditRequest = Schema.fromJsonString(
+  Schema.Struct({
+    _tag: Schema.Literal("Request"),
+    tag: Schema.Literal("PipelineEdit"),
+    payload: Schema.toEncoded(PipelineEdit.payloadSchema),
+  }),
+);
+const editRequestOf = Schema.decodeUnknownOption(EditRequest);
 
 const PROJECT = "amux";
 
 let root: Root | undefined;
 let uiPort = 0;
-let sent: Array<SentFrame> = [];
-// The native send, read as a value so the lint rule for unbound methods does not apply.
-const realSend: WebSocket["send"] = Object.getOwnPropertyDescriptor(
-  WebSocket.prototype,
-  "send",
-)!.value;
+/** The text frames the page has sent since the test began. */
+let sent: Array<string> = [];
+
+const NativeWebSocket = globalThis.WebSocket;
+/** The page's socket, with every text frame it sends kept in `sent`. */
+class RecordingWebSocket extends NativeWebSocket {
+  override send(data: Parameters<WebSocket["send"]>[0]): void {
+    if (typeof data === "string") sent.push(data);
+    super.send(data);
+  }
+}
 
 beforeAll(async () => {
   uiPort = await commands.startUiServer(location.origin);
@@ -40,14 +57,11 @@ afterAll(async () => {
 
 beforeEach(() => {
   sent = [];
-  WebSocket.prototype.send = function (this: WebSocket, data) {
-    if (typeof data === "string") sent.push(JSON.parse(data) as SentFrame);
-    return realSend.call(this, data);
-  };
+  globalThis.WebSocket = RecordingWebSocket;
 });
 
 afterEach(() => {
-  WebSocket.prototype.send = realSend;
+  globalThis.WebSocket = NativeWebSocket;
   root?.unmount();
   root = undefined;
   document.body.replaceChildren();
@@ -79,8 +93,7 @@ const mountProject = () => {
 };
 
 /** The PipelineEdit frames the page has sent since the test began. */
-const editRequests = (): ReadonlyArray<SentFrame> =>
-  sent.filter((frame) => frame._tag === "Request" && frame.tag === "PipelineEdit");
+const editRequests = () => sent.flatMap((frame) => Option.toArray(editRequestOf(frame)));
 
 /** Where `id`'s next exit leads in a drawing, or undefined. */
 const nextOf = (drawing: Drawing | null, id: string): unknown => {
