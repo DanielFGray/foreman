@@ -134,7 +134,7 @@ const isInfra = <E>(
 
 /**
  * Failures no page can answer: a file the OS would not open, a store that
- * would not answer, a stored file that no longer decodes. They end the call as
+ * would not answer, a stored file that fails to decode. They end the call as
  * a defect. The refusals a verb names stay in the contract as their tagged
  * errors, the ones the CLI prints.
  */

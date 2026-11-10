@@ -329,7 +329,7 @@ const verification = ({ task, repository, workspace, verify }: AgentRun): string
     ? "This work is already on the operator's branch, and nothing verifies it after you: the full run is yours."
     : verify
       ? `Foreman runs \`${verify}\` in ${repository} before and after it merges, and undoes a merge that turns it red, so do not spend a full suite run repeating it: other agents share this machine.`
-      : `Foreman lands this branch on git's exit code alone: ${task.project} keeps no \`scripts/verify.sh\`. The full run is yours.`;
+      : `Foreman lands this branch on git's exit code alone: ${task.project} keeps no \`scripts/verify\`. The full run is yours.`;
 
 /**
  * One line per exit the block declares, then what follows when the agent

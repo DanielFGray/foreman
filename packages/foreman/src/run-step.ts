@@ -63,7 +63,7 @@ export type RunEvent =
   | { readonly _tag: "Checked"; readonly block: CheckNode; readonly check: CheckRun }
   /** The task's work is in the operator's checkout: merged, already present, or done. */
   | { readonly _tag: "Landed" }
-  /** The branch would not merge because the trunk moved after it was cut. */
+  /** The branch would not merge because the trunk moved after the branch was cut from it. */
   | { readonly _tag: "Conflicted" }
   /**
    * The operator closed the task's pull request without a merge, and the

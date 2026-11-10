@@ -86,7 +86,7 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"terminals":[],"value":null}}'
 
     await Bun.$`sqlite3 ${database} < ${join(sourcePackage, "e2e", "registry.sql")}`.quiet();
     await mkdir(join(root, "scripts"), { recursive: true });
-    await writeFile(join(root, "scripts", "worktree-setup.sh"), "#!/bin/sh\nexit 0\n", {
+    await writeFile(join(root, "scripts", "worktree-setup"), "#!/bin/sh\nexit 0\n", {
       mode: 0o755,
     });
     await writeFile(join(root, "version.txt"), "loaded\n");
@@ -132,7 +132,7 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"terminals":[],"value":null}}'
       expect(await Bun.file(setupAttempts).exists()).toBe(false);
 
       await writeFile(
-        join(root, "scripts", "worktree-setup.sh"),
+        join(root, "scripts", "worktree-setup"),
         `#!/bin/sh
 count=0
 if [ -f "$SETUP_ATTEMPTS" ]; then count=$(cat "$SETUP_ATTEMPTS"); fi
@@ -143,7 +143,7 @@ if [ "$count" -eq 1 ]; then echo 'install broke' >&2; exit 1; fi
         { mode: 0o755 },
       );
       await writeFile(join(root, "version.txt"), "landed\n");
-      expect((await git("add", "scripts/worktree-setup.sh", "version.txt")).exitCode).toBe(0);
+      expect((await git("add", "scripts/worktree-setup", "version.txt")).exitCode).toBe(0);
       expect((await git("commit", "-qm", "landed code")).exitCode).toBe(0);
 
       const failed = await waitForPublished((value) => value.dispatcher?.state === "failed");

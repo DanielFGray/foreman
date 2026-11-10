@@ -404,9 +404,9 @@ const epicRow = ({ epic, children }: EpicProgress): ColumnRow => ({
   committed: false,
 });
 
-// A parked task with a branch behind it is a resumption: an earlier author
-// committed and the task came back. Marked rather than counted, because the
-// commit count is a read per branch per tick to say what "resume" already says.
+// A parked task with a branch behind it is a resumption: the author committed
+// and the task returned. Marked rather than counted, because the commit count
+// is a read per branch per tick to say what "resume" already says.
 const yoursRow = (task: Item, state: FleetState): ColumnRow => ({
   ...queueRow(task),
   column: "yours",

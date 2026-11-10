@@ -157,7 +157,7 @@ under way. When a project leaves both sets while authored tasks are still
 mid-pipeline, attention shows one stranded row for that project — surface,
 don't finish; reopening a space resumes the pipeline. Two checkouts with one
 name are held as `ambiguous`, because a task names a project, not a directory. A project's verify command is its own
-`scripts/verify.sh`, and its preview command is its own `scripts/preview.sh`:
+`scripts/verify`, and its preview command is its own `scripts/preview`:
 `foreman preview <task>` runs it in a task's worktree, in the hc terminal
 `preview-<task>`, which carries no fleet label, so the roster never reads it as
 an agent.
@@ -208,8 +208,13 @@ that exited cleanly **and** one a human closed to take over, and nothing tells
 them apart, so foreman does not try. Treating it as failure means closing an
 agent to stop a run spends money on the next rung.
 
-A vanished worker becomes a **decision** in `FleetState`, surfaced in
-attention, and the task stays claimed until someone answers. After
+A vanished author's task returns to the queue at the same level, and its
+worktree is kept so the next author continues from it; the vanish counts as an
+attempt, never a charge. A vanished reviewer is a **decision** in `FleetState`,
+surfaced in attention: the task stays claimed at review until the operator
+answers. Settle handles a vanish once, while the task is claimed; a queued
+task's kept worktree also reads as a gone worker, and waits for its next
+author. After
 `staleAfterHours` of no activity the claim is released with a log line — only a
 claim foreman's own agent made, which its author run records. A claim made by
 hand or by another session is its owner's to give up: foreman cannot tell an
@@ -407,7 +412,7 @@ with one right answer, written as prose in a prompt, is the worst of both: it
 costs tokens every dispatch, a cheap model can skip it, and the failure it causes
 gets charged to the task rather than to the setup.
 
-`scripts/worktree-setup.sh` is that split made concrete. A worktree does not
+`scripts/worktree-setup` is that split made concrete. A worktree does not
 share the checkout's installed dependencies, so `workspaceFor` runs the script
 before every dispatch and refuses to hand over a worktree whose setup failed —
 that failure is the project's or the machine's, never the task's.
@@ -672,7 +677,7 @@ already being collected. What the reviewer uniquely catches is a stub, or a test
 weakened to get the suite green — neither of which is found by running tests,
 since a green suite is what both produce. So it reads what the diff does to the
 tests and runs only those covering the code it touched. The review prompt's workspace section renders
-the project's `scripts/verify.sh` into the prompt; a project with none has no landing
+the project's `scripts/verify` into the prompt; a project with none has no landing
 gate, and there the full run is the reviewer's after all.
 
 **The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
@@ -764,7 +769,7 @@ The proving ground is reset from the target's tip on the next landing anyway,
 so nothing there ever needs undoing.
 
 The ground is per project, not per task — landings are serialised by the tick,
-and reusing it is what lets `scripts/worktree-setup.sh` keep its installed
+and reusing it is what lets `scripts/worktree-setup` keep its installed
 dependencies between landings instead of paying for a cold install every time. A
 ground whose setup fails holds the project: a verification that could not run
 must never read as green.
@@ -800,7 +805,7 @@ A local landing also runs `verify`. Only a ground that was green and reproducibl
 is the branch's fault: the output is logged and the task returns to the queue.
 A checkout already red still accepts the merge, because a branch cannot be
 blamed for damage that predates it and one broken test would otherwise freeze the
-whole fleet. A project with no `scripts/verify.sh` lands on the merge's success alone, and
+whole fleet. A project with no `scripts/verify` lands on the merge's success alone, and
 the task log says so.
 
 **The baseline is lazy, and that is not an optimisation.** The merged ground is

@@ -8,7 +8,7 @@ or log the open decision and stop.
 Run tests with `./scripts/test-changed.sh` instead of the full suite. This script
 runs tests only in workspace packages changed since the branch base commit
 (merge-base with develop). If root files outside any package are changed, it runs
-all package tests. The foreman landing verify (`scripts/verify.sh`) still runs
+all package tests. The foreman landing verify (`scripts/verify`) still runs
 everything.
 
 ## Start
@@ -22,7 +22,7 @@ everything.
 
 ## Rules
 
-- If you repair this workspace by hand, add the step to `scripts/worktree-setup.sh`
+- If you repair this workspace by hand, add the step to `scripts/worktree-setup`
   and commit it. Foreman runs that script before every dispatch, so each step must be
   safe to run twice.
 - Commit each logical unit. Log each settled decision with

@@ -33,6 +33,12 @@ export const TaskPhase = Schema.Literals([
   "Canceled",
   "ReviewReturned",
   "VanishedAttached",
+  /**
+   * A reviewer's pane is gone with its review run still open. The task stays
+   * claimed at review and attention asks the operator: a person may have
+   * closed it to take over, and nothing tells that from a crash.
+   */
+  "ReviewVanished",
   "VanishedWithWork",
   "VanishedEmpty",
   "Blocked",
@@ -55,6 +61,11 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
   }
 
   if (input.worker === "gone") {
+    // Settling a vanish returns the task to the queue and keeps its worktree
+    // for the next author, which still reads as a gone worker. Only a claimed
+    // task has a vanish left to settle.
+    if (input.status !== "in_progress") return "Idle";
+    if (input.reviewer !== undefined) return "ReviewVanished";
     if (input.attached) return "VanishedAttached";
     return input.committed || input.holdsWork ? "VanishedWithWork" : "VanishedEmpty";
   }

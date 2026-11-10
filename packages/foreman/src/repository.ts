@@ -69,14 +69,17 @@ const dirtyPaths = (status: string): ReadonlyArray<string> => {
  * The script a project may keep to make a fresh worktree usable. A path rather
  * than a config field: the project is what knows how to build itself, and
  * saying it twice lets the two drift.
+ *
+ * The project scripts carry no extension, like git hooks: the role is the name,
+ * and the file's `#!` line picks the language.
  */
-const SETUP_SCRIPT = "scripts/worktree-setup.sh";
+const SETUP_SCRIPT = "scripts/worktree-setup";
 
 /** The script a project keeps to decide whether it works; see `scriptsOf`. */
-const VERIFY_SCRIPT = "scripts/verify.sh";
+const VERIFY_SCRIPT = "scripts/verify";
 
 /** The script a project keeps to serve a worktree for a look; see `scriptsOf`. */
-const PREVIEW_SCRIPT = "scripts/preview.sh";
+const PREVIEW_SCRIPT = "scripts/preview";
 
 /**
  * The checkout a project's tasks branch from and merge back into.
@@ -1340,7 +1343,7 @@ export interface Stale {
    *
    * A modify/delete conflict needs a different answer from a content conflict:
    * the target deleted a path the branch changed, so the branch's change is
-   * either superseded or must be re-expressed against what replaced the path.
+   * either overtaken or must be carried onto what takes the path's place.
    */
   readonly modifyDelete: boolean;
 }

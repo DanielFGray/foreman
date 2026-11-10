@@ -5,7 +5,7 @@ decisions, or log the open decision and stop.
 
 ## Rules
 
-- If you repair the workspace by hand, add the step to `scripts/worktree-setup.sh` and
+- If you repair the workspace by hand, add the step to `scripts/worktree-setup` and
   commit it; reject a setup step that is not safe to run twice.
 - Log each decision with `foreman log {{ task }} "Decision. ... Evidence. ... Result. ..."`.
 

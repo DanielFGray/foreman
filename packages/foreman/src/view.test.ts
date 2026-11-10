@@ -345,10 +345,10 @@ describe("actionsFor", () => {
 
   test("offers preview only for a task with a worktree in a project that keeps the script", () => {
     const fibrae = { name: "fibrae", directory: "/build/fibrae", verify: undefined, open: true };
-    const served = { ...state, projects: [{ ...fibrae, preview: "./scripts/preview.sh" }] };
+    const served = { ...state, projects: [{ ...fibrae, preview: "./scripts/preview" }] };
     const inWorktree = rowsForView("working", served).find((each) => each.key === "ts-w1");
     expect(actionsFor("working", inWorktree)).toContain("preview");
-    expect(inWorktree?.preview).toBe("./scripts/preview.sh");
+    expect(inWorktree?.preview).toBe("./scripts/preview");
 
     const noScript = { ...state, projects: [{ ...fibrae, preview: undefined }] };
     const unserved = rowsForView("working", noScript).find((each) => each.key === "ts-w1");

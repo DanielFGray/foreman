@@ -27,10 +27,10 @@ export interface Project {
   readonly name: string;
   readonly directory: string;
 
-  /** The project's own check, `scripts/verify.sh`, when it keeps one. */
+  /** The project's own check, `scripts/verify`, when it keeps one. */
   readonly verify: string | undefined;
 
-  /** The project's own dev server, `scripts/preview.sh`, when it keeps one. It runs in a task's worktree. */
+  /** The project's own dev server, `scripts/preview`, when it keeps one. It runs in a task's worktree. */
   readonly preview: string | undefined;
 
   /** A space is open in this checkout, so new work may start here. */

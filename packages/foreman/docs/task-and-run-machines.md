@@ -142,6 +142,26 @@ prints the placement after each event. `applyRow` in `src/run-step.ts` applies a
 row to a task held in memory. The integration tests check that the trace places
 the task where the dispatcher does after each event.
 
+## Patches from outside the fleet
+
+Operator decision (2026-11-09, recorded by the orchestrator): a branch written
+by the operator or by an agent session outside the fleet enters through
+`foreman submit <branch> [--task id]`. It files a task or uses the one given,
+takes the branch as `foreman/<id>`, and records an author run whose author is
+outside the fleet. The task then runs through checks, review and land like any
+other, so "a task is foreman's to review only if it has an author run" holds.
+
+The build slice (`ts-4c4e26`) settles:
+
+- What the run's `rung` column holds for an outside author. Every reader that
+  treats it as a ladder rung must read it as no rung: the charges, the attempt
+  count, the walled accounts, and the reviewer pick that prefers a model other
+  than the author's.
+- The branch's upstream. `submit` records it, because a branch with no upstream
+  holds at landing with `noBranch`.
+- Where a returned outside patch goes. Foreman cannot dispatch a person or a
+  peer session. This is the question `ts-9abcd2`.
+
 ## Tests
 
 The fake world in `src/dispatcher.integration.test.ts` applies each row with

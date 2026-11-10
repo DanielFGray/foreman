@@ -1563,6 +1563,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 ),
               ),
               Match.when("VanishedAttached", () => Effect.void),
+              Match.when("ReviewVanished", () => Effect.void),
               Match.when("VanishedWithWork", () =>
                 Option.match(wall, {
                   onNone: () =>

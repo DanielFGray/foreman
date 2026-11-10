@@ -380,7 +380,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
      * keep the order given.
      *
      * Rung names are the identity tasks record, so a renamed rung is a different
-     * rung, and a task that recorded the former name positions nothing. Ranks are
+     * rung, and a task that recorded the other name positions nothing. Ranks are
      * rewritten from the sorted list, so the stored rank is the order of the rows
      * by (level, rank). Everything is validated before anything is written, and
      * the write is one transaction, so a bad edit leaves the ladder unchanged.
