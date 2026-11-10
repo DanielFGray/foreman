@@ -27,6 +27,12 @@ describe("task phases", () => {
     expect(phaseOf(input({ worker: "gone", attached: true }))).toBe("VanishedAttached");
   });
 
+  test("leaves a vanished reviewer to the operator, with no author attempt", () => {
+    expect(
+      phaseOf(input({ worker: "gone", reviewer: "codex-sol", underReview: true, committed: true })),
+    ).toBe("ReviewVanished");
+  });
+
   test("settles a vanish once: a queued task's worktree waits for its next author", () => {
     expect(phaseOf(input({ status: "open", worker: "gone", committed: true }))).toBe("Idle");
     expect(phaseOf(input({ status: "open", worker: "gone", holdsWork: true }))).toBe("Idle");
