@@ -55,6 +55,10 @@ export const phaseOf = (input: TaskPhaseInput): TaskPhase => {
   }
 
   if (input.worker === "gone") {
+    // Settling a vanish returns the task to the queue and keeps its worktree
+    // for the next author, which still reads as a gone worker. Only a claimed
+    // task has a vanish left to settle.
+    if (input.status !== "in_progress") return "Idle";
     if (input.attached) return "VanishedAttached";
     return input.committed || input.holdsWork ? "VanishedWithWork" : "VanishedEmpty";
   }

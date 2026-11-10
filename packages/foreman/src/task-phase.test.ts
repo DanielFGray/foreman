@@ -27,6 +27,11 @@ describe("task phases", () => {
     expect(phaseOf(input({ worker: "gone", attached: true }))).toBe("VanishedAttached");
   });
 
+  test("settles a vanish once: a queued task's worktree waits for its next author", () => {
+    expect(phaseOf(input({ status: "open", worker: "gone", committed: true }))).toBe("Idle");
+    expect(phaseOf(input({ status: "open", worker: "gone", holdsWork: true }))).toBe("Idle");
+  });
+
   test("keeps blocked and waiting work untouched", () => {
     expect(phaseOf(input({ worker: "blocked" }))).toBe("Blocked");
     expect(phaseOf(input({ underReview: true }))).toBe("ReviewWaiting");
