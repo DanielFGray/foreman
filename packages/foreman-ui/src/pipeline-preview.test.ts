@@ -7,12 +7,16 @@ import {
   type SeatOffers,
 } from "foreman/pipeline";
 import { writtenDrawingOf } from "foreman/pipeline-layout";
+import { Option } from "effect";
 import {
+  frameAfter,
   frameOf,
   handlePoint,
   inputPoint,
   rejoinFrames,
   type CheckInputs,
+  type EditorFrame,
+  type ServerView,
 } from "./pipeline-preview.ts";
 
 const LADDER_OFFERS: SeatOffers = { rungs: [{ name: "cheap", author: true }], reviewers: [] };
@@ -31,9 +35,7 @@ const currentTarget = (drawing: Drawing): string => {
 describe("rejoinFrames", () => {
   it("marks rejoining branch.next to start with one unreachable problem", () => {
     const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
-    const toStart = frames.find(
-      (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "start",
-    );
+    const toStart = frames.find((frame) => rejoinsTo(frame, "start"));
     assert.isDefined(toStart);
     assert.strictEqual(toStart.problems.length, 1);
     assert.strictEqual(toStart.problems[0], "no source reaches retry");
@@ -42,12 +44,8 @@ describe("rejoinFrames", () => {
   it("keeps the committed block positions so closest can hit the visible target", () => {
     const committed = frameOf(DEFAULT_PIPELINE, [], CHECKS, "across");
     const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
-    const toStart = frames.find(
-      (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "start",
-    );
-    const toClimb = frames.find(
-      (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === "climb",
-    );
+    const toStart = frames.find((frame) => rejoinsTo(frame, "start"));
+    const toClimb = frames.find((frame) => rejoinsTo(frame, "climb"));
     assert.isDefined(toStart);
     assert.isDefined(toClimb);
     assert.deepStrictEqual(
@@ -67,9 +65,7 @@ describe("rejoinFrames", () => {
       ),
     };
     const frames = rejoinFrames(configured, BRANCH_NEXT, CHECKS, "across");
-    const unchanged = frames.find(
-      (frame) => frame.pending?._tag === "Rejoin" && frame.pending.to === currentTarget(configured),
-    );
+    const unchanged = frames.find((frame) => rejoinsTo(frame, currentTarget(configured)));
     assert.isDefined(unchanged);
     assert.deepStrictEqual(unchanged.problems, []);
   });
@@ -87,11 +83,51 @@ describe("rejoinFrames", () => {
       offers: { rungs: [], reviewers: ["codex"] },
     };
     const frames = rejoinFrames(made.pipeline, BRANCH_NEXT, checks, "across");
-    const unchanged = frames.find(
-      (frame) =>
-        frame.pending?._tag === "Rejoin" && frame.pending.to === currentTarget(made.pipeline),
-    );
+    const unchanged = frames.find((frame) => rejoinsTo(frame, currentTarget(made.pipeline)));
     assert.isDefined(unchanged);
     assert.deepStrictEqual(unchanged.problems, []);
+  });
+});
+
+/** Whether a drag candidate rejoins its wire to `to`. */
+const rejoinsTo = (frame: EditorFrame, to: string): boolean =>
+  Option.exists(frame.pending, (change) => change._tag === "Rejoin" && change.to === to);
+
+/** Where `id`'s next exit leads in a drawing. */
+const nextOf = (drawing: Drawing, id: string): Option.Option<string> =>
+  Option.fromNullishOr(drawing.nodes.find((one) => one.id === id)).pipe(
+    Option.flatMap((node) => ("next" in node ? Option.some(node.next) : Option.none())),
+  );
+
+describe("frameAfter", () => {
+  const view: ServerView = {
+    pipeline: DEFAULT_PIPELINE,
+    problems: ["as the server reports it"],
+    drawing: writtenDrawingOf(DEFAULT_PIPELINE, {}, "across"),
+    draft: null,
+    ...CHECKS,
+  };
+  const startToClimb = {
+    _tag: "Rejoin",
+    wire: { from: "start", port: "next" },
+    to: "climb",
+  } as const;
+
+  it("draws the server's view and its problems when no edit waits", () => {
+    const frame = frameAfter(view, [], "across");
+    assert.deepStrictEqual(frame.pipeline, DEFAULT_PIPELINE);
+    assert.deepStrictEqual(frame.problems, ["as the server reports it"]);
+  });
+
+  it("replays the unanswered edits over the server's view, and checks the result itself", () => {
+    const frame = frameAfter(view, [startToClimb], "across");
+    assert.deepStrictEqual(nextOf(frame.pipeline, "start"), Option.some("climb"));
+    assert.deepStrictEqual(frame.problems, []);
+  });
+
+  it("leaves out an edit the view no longer takes, and replays the rest", () => {
+    const gone = { _tag: "Rejoin", wire: { from: "gone", port: "next" }, to: "start" } as const;
+    const frame = frameAfter(view, [gone, startToClimb], "across");
+    assert.deepStrictEqual(nextOf(frame.pipeline, "start"), Option.some("climb"));
   });
 });

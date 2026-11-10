@@ -23,8 +23,7 @@ import "../../src/styles.css";
  * frame the page sends fails to decode, so it is not counted.
  */
 const EditRequest = Schema.fromJsonString(
-  Schema.Struct({
-    _tag: Schema.Literal("Request"),
+  Schema.TaggedStruct("Request", {
     tag: Schema.Literal("PipelineEdit"),
     payload: Schema.toEncoded(PipelineEdit.payloadSchema),
   }),
@@ -38,14 +37,53 @@ let uiPort = 0;
 /** The text frames the page has sent since the test began. */
 let sent: Array<string> = [];
 
+/** While true, the page's sockets keep what the server sends instead of delivering it. */
+let holding = false;
+/** The sockets the page opened, so a test can deliver what they held. */
+let sockets: Array<RecordingWebSocket> = [];
+
 const NativeWebSocket = globalThis.WebSocket;
-/** The page's socket, with every text frame it sends kept in `sent`. */
+/**
+ * The page's socket, with every text frame it sends kept in `sent`. While
+ * `holding`, a message from the server stops at the first listener, which this
+ * constructor registers ahead of the page's, and `deliver` sends it on later.
+ */
 class RecordingWebSocket extends NativeWebSocket {
+  private held: Array<MessageEvent> = [];
+
+  constructor(...args: ConstructorParameters<typeof WebSocket>) {
+    super(...args);
+    sockets.push(this);
+    this.addEventListener("message", (event) => {
+      if (!holding) return;
+      event.stopImmediatePropagation();
+      this.held.push(new MessageEvent("message", { data: event.data }));
+    });
+  }
+
   override send(data: Parameters<WebSocket["send"]>[0]): void {
     if (typeof data === "string") sent.push(data);
     super.send(data);
   }
+
+  /** Sends on every held message, in the order it arrived. */
+  deliver(): void {
+    const held = this.held;
+    this.held = [];
+    held.forEach((event) => this.dispatchEvent(event));
+  }
 }
+
+/** Stops the server's messages reaching the page, as a slow answer would. */
+const hold = () => {
+  holding = true;
+};
+
+/** Lets the server's messages through again, the held ones first. */
+const release = () => {
+  holding = false;
+  sockets.forEach((socket) => socket.deliver());
+};
 
 beforeAll(async () => {
   uiPort = await commands.startUiServer(location.origin);
@@ -57,6 +95,8 @@ afterAll(async () => {
 
 beforeEach(() => {
   sent = [];
+  sockets = [];
+  holding = false;
   globalThis.WebSocket = RecordingWebSocket;
 });
 
@@ -95,11 +135,11 @@ const mountProject = () => {
 /** The PipelineEdit frames the page has sent since the test began. */
 const editRequests = () => sent.flatMap((frame) => Option.toArray(editRequestOf(frame)));
 
-/** Where `id`'s next exit leads in a drawing, or undefined. */
-const nextOf = (drawing: Drawing | null, id: string): unknown => {
-  const node = drawing?.nodes.find((one) => one.id === id);
-  return node !== undefined && "next" in node ? node.next : undefined;
-};
+/** Where `id`'s next exit leads in a drawing. */
+const nextOf = (drawing: Drawing | null, id: string): Option.Option<string> =>
+  Option.fromNullishOr(drawing?.nodes.find((one) => one.id === id)).pipe(
+    Option.flatMap((node) => ("next" in node ? Option.some(node.next) : Option.none())),
+  );
 
 /** The drawn wire from `from`'s `next` exit, as the SVG path the page renders. */
 const wireOf = (from: string): SVGPathElement => {
@@ -132,12 +172,14 @@ const releaseOver = (blockId: string) => {
 };
 
 /** The target a named exit of a drafted node leads to. */
-const exitTarget = (drawing: Drawing | null, id: string, name: string): unknown => {
-  const node = drawing?.nodes.find((one) => one.id === id);
-  if (node === undefined || !("exits" in node)) return undefined;
-  const exits: ReadonlyArray<{ readonly name?: string; readonly to: string }> = node.exits;
-  return exits.find((exit) => exit.name === name)?.to;
-};
+const exitTarget = (drawing: Drawing | null, id: string, name: string): Option.Option<string> =>
+  Option.fromNullishOr(drawing?.nodes.find((one) => one.id === id)).pipe(
+    Option.flatMap((node) => {
+      if (!("exits" in node)) return Option.none();
+      const exits: ReadonlyArray<{ readonly name?: string; readonly to: string }> = node.exits;
+      return Option.fromNullishOr(exits.find((exit) => exit.name === name)?.to);
+    }),
+  );
 
 /** Holds a drag from the exit handle `handleId` over a block, and waits for the preview. */
 const dragHandleOver = async (handleId: string, blockId: string) => {
@@ -155,6 +197,58 @@ const dragNextExitOver = (from: string, blockId: string) =>
   dragHandleOver(`exit-${from}-next`, blockId);
 
 describe("pipeline editor wire drag", () => {
+  it("previews a second drag while the first drop waits for the server's answer", async () => {
+    mountProject();
+    await dragNextExitOver("start", "climb");
+    hold();
+    releaseOver("climb");
+
+    await expect.poll(() => editRequests().length).toBe(1);
+    await expect
+      .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "start"))
+      .toEqual(Option.some("climb"));
+
+    // The answer to the first edit has not reached the page, and a drag still previews.
+    await dragNextExitOver("branch", "start");
+    await expect.element(page.getByTestId("drag-preview")).toHaveAttribute("data-tone", "amber");
+    releaseOver("start");
+    // The page sends its next edit only after the server answers the first.
+    expect(editRequests()).toHaveLength(1);
+
+    release();
+    await expect.poll(() => editRequests().length).toBe(2);
+    await expect
+      .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "branch"))
+      .toEqual(Option.some("start"));
+    expect(nextOf(await commands.draftPipeline(PROJECT), "start")).toEqual(Option.some("climb"));
+
+    await userEvent.click(page.getByTestId("pipeline-discard"));
+    await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
+  });
+
+  it("draws the server's draft when it differs from the drawing the page dropped", async () => {
+    mountProject();
+    await expect.element(page.getByTestId("block-branch")).toBeInTheDocument();
+    // Another writer removes branch, and the page has not heard yet, so it drops
+    // onto a drawing that still has branch. No drawing the server sends equals it.
+    hold();
+    await commands.removeDraftBlock(PROJECT, "branch");
+    await dragNextExitOver("start", "climb");
+    releaseOver("climb");
+    await expect
+      .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "start"))
+      .toEqual(Option.some("climb"));
+    expect(document.querySelector('[data-testid="block-branch"]')).not.toBeNull();
+    release();
+
+    await expect.poll(() => document.querySelector('[data-testid="block-branch"]')).toBeNull();
+    await expect.element(page.getByTestId("exit-start-next")).toBeInTheDocument();
+    expect(document.getElementById("wire-branch-next")).toBeNull();
+
+    await userEvent.click(page.getByTestId("pipeline-discard"));
+    await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
+  });
+
   it("shows the server's reason and redraws its drawing when it refuses an edit", async () => {
     mountProject();
     await dragNextExitOver("branch", "start");
@@ -172,7 +266,7 @@ describe("pipeline editor wire drag", () => {
     await expect.poll(() => document.querySelector('[data-testid="block-branch"]')).toBeNull();
     expect(document.getElementById("wire-branch-next")).toBeNull();
     await expect.element(page.getByTestId("drag-preview")).not.toBeInTheDocument();
-    expect(nextOf(await commands.draftPipeline(PROJECT), "start")).toBe("author");
+    expect(nextOf(await commands.draftPipeline(PROJECT), "start")).toEqual(Option.some("author"));
 
     await userEvent.click(page.getByTestId("pipeline-discard"));
     await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
@@ -193,7 +287,7 @@ describe("pipeline editor wire drag", () => {
     });
     await expect
       .poll(async () => exitTarget(await commands.draftPipeline(PROJECT), "author", "done"))
-      .toBe("queue");
+      .toEqual(Option.some("queue"));
 
     // The stream's drawing keeps the queue exit: its handle is on the page and its wire is drawn.
     await expect.element(page.getByTestId("exit-author-exit-done")).toBeInTheDocument();
@@ -210,7 +304,7 @@ describe("pipeline editor wire drag", () => {
     });
     await expect
       .poll(async () => exitTarget(await commands.draftPipeline(PROJECT), "author", "done"))
-      .toBe("review-gate");
+      .toEqual(Option.some("review-gate"));
   });
 
   it("shows an amber one-problem preview for an unreachable rejoin, and drops one PipelineEdit", async () => {
@@ -233,10 +327,10 @@ describe("pipeline editor wire drag", () => {
       change: { _tag: "Rejoin", wire: { from: "branch", port: "next" }, to: "start" },
       flow: "across",
     });
-    // The server wrote the change to the draft, and the page keeps the dropped drawing.
+    // The server wrote the change to the draft.
     await expect
       .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "branch"))
-      .toBe("start");
+      .toEqual(Option.some("start"));
     expect(editRequests()).toHaveLength(1);
 
     await expect.element(page.getByTestId("pipeline-discard")).toBeInTheDocument();
@@ -282,14 +376,14 @@ describe("pipeline editor wire drag", () => {
     });
     await expect
       .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "start"))
-      .toBe("climb");
+      .toEqual(Option.some("climb"));
 
     await expect.element(page.getByTestId("pipeline-save")).toBeEnabled();
     await userEvent.click(page.getByTestId("pipeline-save"));
     await expect.element(page.getByTestId("pipeline-toolbar-message")).toHaveTextContent("Saved.");
     await expect
       .poll(async () => nextOf(await commands.savedPipeline(PROJECT), "start"))
-      .toBe("climb");
+      .toEqual(Option.some("climb"));
     await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
     expect(editRequests()).toHaveLength(1);
   });
