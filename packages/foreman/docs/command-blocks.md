@@ -30,14 +30,22 @@ on them.
   checks do today. A plugin may cap its own concurrent runs with `slots`.
 - **Every command has a timeout.** `timeoutMinutes` defaults to 10.
 
-## Operator decisions (2026-11-09)
+## Operator decisions (2026-11-09 and 2026-11-10)
 
 Recorded by the orchestrator from the operator's answers. Sections 9 and 10
 rely on them.
 
-- **A gate runs the target's copy.** Verify and every check-shaped block run the
-  command as it stands on the branch the task lands on, not the task's own copy
-  (section 10).
+- **A gate runs the approved commit's copy** (2026-11-10). A review comes before
+  every landing and reads the whole diff, gate files included, so the gate that
+  runs is the one the reviewer approved (section 10). This replaces the choice
+  of 2026-11-09 to run the target's copy, which tested a valid gate change
+  against the gate it replaced and failed it.
+- **Foreman makes the signoff for app projects** (2026-11-10). After each
+  landing on an app project, foreman runs `ops signoff` on the landed commit, so
+  the operator's push to `main` passes the pre-push hook. The record is the
+  deploy runner's (server-ansible `docs/design/continuous-deployment.md`), and
+  foreman keeps no second one. Verify runs twice per landing, in the proving
+  ground and in the export, and that cost is accepted.
 - **Blocks come from the project's own tooling.** The operator's words: "ideally
   we integrate with known project tooling, if we find a package.json we can list
   .scripts, there's probably similar we can do for other platforms." The
@@ -370,46 +378,36 @@ The palette offers it. Foreman never draws one by itself, because a `dev` or
 Shapes that carry trust or recovery stay in the plugins file: `outside`,
 `idempotent`, `compensate` and `requirements`. A plugin there may run a
 discovered command. There is no checked-in manifest of block kinds, although the
-operator's "all of the above" included one. A manifest lives on the branch
-under review, so a patch could declare its own outside block `idempotent` or
-drop its requirements. Discovery reads only names and command text, which
-section 10 already takes from the target.
+operator's "all of the above" included one. An outside block holds secrets and
+emits what foreman cannot take back, and a block can run before the review. A
+manifest on the branch would let an unreviewed patch define such a block, or
+mark its own outside block `idempotent`. A discovered command is inside and
+runs in the disposable proving ground, so a branch may define it.
 
-Under section 10, a discovered command runs as the target's text. `bun run test`
-in the merged tree reads the branch's package.json, so a source resolves the
-text at the target's tip and foreman runs that text in the merged tree. The
-slice that builds the package.json source checks how each package manager runs
-a literal command with the project's local binaries on `PATH`, and what it
-loses (pre and post scripts, the manager's environment variables).
+A discovered command runs in the tree by its name, through the package manager
+for package.json (`bun run test`), so the tree's own definition runs (section
+10).
 
 ## 10. Which copy gates a patch
 
 A **gate** is verify at landing, and every command block of the `check` plugin.
-A gate runs the command as it stands at the tip of the task's target (the
-branch's upstream, as for landing), never the task's own copy. For a script,
-foreman reads the file from the target's tip, writes it outside the tree, and
-runs it with the merged tree as its working directory. For a discovered
-command, the source resolves the text at the target's tip (section 9).
+A gate runs the command as it stands in the tree it tests: at landing, the
+merged tree, which holds the commit the reviewer approved. Every route to a
+land passes a review, and the review reads the whole diff, gate files included.
+So a valid gate change is judged by the reviewer, not by the gate it replaces.
 
-- A patch that changes a gate is tested by the gate it replaces. The new gate
-  takes effect after it lands. The review prompt names each gate file the diff
-  changes, so the reviewer reads the change.
-- `worktree-setup` is not a gate. It runs the tree's own copy, because a branch
-  that adds a dependency needs its own install.
-- The baseline is unchanged: it runs the target's gate on the target's tree.
+- The review prompt lists each gate file the diff changes: the gate's script,
+  the package configuration it reads, and the helpers it calls. The reviewer
+  judges each one.
+- A red gate on the merged tree is the branch's, as today: the baseline and the
+  rerun rules in AGENTS.md "The review gate" are unchanged.
+- A check block that runs before the review tests the unreviewed tip. Its
+  result is evidence for the reviewer, not an approval.
 - A target with no gate has no landing gate, as today. A branch that adds the
-  first gate, or renames the one there, lands without one.
+  first gate lands under that gate, which the reviewer read.
 
-**Limit.** The target's copy protects the gate's entry point only. The test
-files, the helpers and scripts the gate calls, the package configuration, and
-what `worktree-setup` installs all come from the branch. It closes the cheapest
-bypass, a patch that changes its gate to pass. The reviewer stays the guard
-for weakened tests, as AGENTS.md "The review gate" says.
-
-**Open.** A target gate can fail because the branch validly changed something
-the gate calls, such as a renamed helper. Then the merged tree is red, the
-baseline is green, and foreman charges the branch. Whether that case is a charge
-or a decision for the operator is a question task under this epic.
+The reviewer is the guard against a weakened gate or weakened tests, as
+AGENTS.md "The review gate" already says.
 
 ## What it replaces, and conflicts
 
@@ -432,7 +430,8 @@ of those files must be edited in the build slice named in the last column.
 | Durable state beyond those files and foreman's own records is a wall | `AGENTS.md` same section | No conflict: plugin definitions are operator intention in the plugins file; run snapshots and started keys are foreman's own records. | ts-5a8dd8 |
 | Absence that needs a person is a park | `AGENTS.md` park rule | An unmet plugin requirement is an attention row, not a park. It clears when the requirement appears. | ts-604c78 |
 | Router is the only way to choose a route from facts | `docs/pipeline-engine.md`; `docs/agent-exits.md` | Router stays for filters and counts. A command block may also choose a route when the choice needs a process. | ts-44824b |
-| Verify runs the merged tree's copy of `scripts/verify` | `src/repository.ts`, the doc comment of `scriptsOf` | A gate runs the target's copy (section 10). `worktree-setup` keeps the tree's copy. | ts-60a4e5 |
+| The reviewer reads the diff with no list of the gate files it changes | `prompts/review.md` | The review prompt lists each gate file the diff changes (section 10). | ts-60a4e5 |
+| A land leads to `done`, and no block stands after it | `docs/pipeline-engine.md`; validation in `src/pipeline.ts` | A command block may follow a land, with the landed commit and the project's checkout in its input, for `ops signoff`. | ts-778a1e |
 | A project's checks are only the scripts the operator names | this record, section 3 | Command sources offer the project's own names in the palette (section 9, proposal). | ts-627559 |
 
 The cutover rule the review cited ("the pipelines and drafts files carry no
@@ -465,9 +464,9 @@ waits on this design record.
 
 Filed later, from sections 9 and 10, also as drafts:
 
-- `ts-60a4e5` — Gates run the target's copy; the review prompt names changed
-  gate files. Waits on the question `ts-5bed50` (charge or decision when the
-  target's gate fails on a valid branch change).
+- `ts-60a4e5` — The review prompt lists each gate file the diff changes.
+- `ts-778a1e` — `ops signoff` after a land on an app project: a command block
+  after a land. Waits on `ts-04727d`.
 - `ts-627559` — Command sources for `scripts/` and package.json, offered in the
   palette. Waits on `ts-44824b`, and on the operator confirming section 9.
 - `ts-ae4224` — Command sources for other tooling. Waits on `ts-627559`.
