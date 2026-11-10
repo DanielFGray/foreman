@@ -292,10 +292,10 @@ export class Records extends Context.Service<Records>()("Records", {
        * Every claimed task the trackers can see, across projects.
        *
        * The reading that finds mid-pipeline work in a project whose last
-       * space has closed: that project is no longer in the managed set, so
-       * a per-project claim query never asks for it. The tasks store answers
-       * for every local project in one join; other trackers ride
-       * `policy.projects` the same way `ready` does.
+       * space has closed: that project is outside the managed set, so a
+       * per-project claim query never asks for it. The
+       * tasks store answers for every local project in one join; other
+       * trackers ride `policy.projects` the same way `ready` does.
        */
       claimedEverywhere: tracker
         .list({ status: "in_progress", type: "task" })

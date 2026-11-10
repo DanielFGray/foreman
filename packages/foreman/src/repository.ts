@@ -1343,7 +1343,7 @@ export interface Stale {
    *
    * A modify/delete conflict needs a different answer from a content conflict:
    * the target deleted a path the branch changed, so the branch's change is
-   * either superseded or must be re-expressed against what replaced the path.
+   * either overtaken or must be carried onto what takes the path's place.
    */
   readonly modifyDelete: boolean;
 }

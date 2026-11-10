@@ -99,9 +99,8 @@ describe("interleave", () => {
     expect(result.map(({ id }) => id)).toEqual(["a1", "b1", "a2", "b2"]);
   });
 
-  // The case that started this: a backlog filed almost entirely at one priority
-  // sorts by age alone, so a feature batch entered first drains ahead of every
-  // defect discovered after it.
+  // A backlog filed almost entirely at one priority sorts by age alone, so a
+  // feature batch entered first drains ahead of every defect.
   test("puts a defect ahead of same-priority work no matter how long that has waited", () => {
     const result = interleave(
       [task("feature", "a", 1, ancient), bug("defect", "a", 1)],
