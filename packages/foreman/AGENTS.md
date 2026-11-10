@@ -208,8 +208,13 @@ that exited cleanly **and** one a human closed to take over, and nothing tells
 them apart, so foreman does not try. Treating it as failure means closing an
 agent to stop a run spends money on the next rung.
 
-A vanished worker becomes a **decision** in `FleetState`, surfaced in
-attention, and the task stays claimed until someone answers. After
+A vanished author's task returns to the queue at the same level, and its
+worktree is kept so the next author continues from it; the vanish counts as an
+attempt, never a charge. A vanished reviewer is a **decision** in `FleetState`,
+surfaced in attention: the task stays claimed at review until the operator
+answers. Settle handles a vanish once, while the task is claimed; a queued
+task's kept worktree also reads as a gone worker, and waits for its next
+author. After
 `staleAfterHours` of no activity the claim is released with a log line — only a
 claim foreman's own agent made, which its author run records. A claim made by
 hand or by another session is its owner's to give up: foreman cannot tell an
