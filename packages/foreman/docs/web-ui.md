@@ -8,7 +8,7 @@ record does not change it.
 
 The herdr-app Foreman pane (`herdr/foreman/`) is frozen while the operator
 decides which features stay in the pane and which move to the page. Until then
-the pane gets no new features and no fixes, and it reads `state.json` as it does
+the pane gets no new features and no fixes, except that its Pipeline tab opens the page (`foreman open <project>`). It reads `state.json` as it does
 now.
 
 ## Terms
