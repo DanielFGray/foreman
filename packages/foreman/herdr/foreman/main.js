@@ -93,6 +93,8 @@ const ZOOM_MAX = 2.5;
 const FIT_MIN = 0.75;
 // The Tasks view's mode, kept in the mod's own storage.
 const TASKS_MODE_KEY = "tasks-mode";
+const VIEW_KEY = "view";
+const VIEWS = ["pipeline", "tasks", "models"];
 const PENDING = Symbol("pending");
 
 // Where a space is now: the live folder of its first terminal, in tab order.
@@ -146,7 +148,7 @@ export default class Foreman extends View {
     this.drag = new Drag();
     // The pane root's bounds in the window, from the last move over it.
     this.origin = null;
-    this.mode = "tasks";
+    this.mode = storedView();
     this.tasksMode = storedTasksMode();
     this.reload(cx);
     this.watching = { state: false, config: false };
@@ -237,6 +239,9 @@ export default class Foreman extends View {
   show(mode, cx) {
     if (this.mode === mode) return;
     this.mode = mode;
+    try {
+      localStorage.setItem(VIEW_KEY, mode);
+    } catch {}
     this.drag.pressedAnywhere();
     this.loadView(cx);
     cx.notify();
@@ -1077,6 +1082,16 @@ export default class Foreman extends View {
     cx.notify();
   }
 }
+
+// The view the pane showed last, so a reload opens on it; Tasks when none was kept.
+const storedView = () => {
+  try {
+    const view = localStorage.getItem(VIEW_KEY);
+    return VIEWS.includes(view) ? view : "tasks";
+  } catch {
+    return "tasks";
+  }
+};
 
 const storedTasksMode = () => {
   try {
