@@ -150,6 +150,7 @@ export const startFixtureServer = async (options?: {
   const folder = mkdtempSync(join(tmpdir(), "foreman-ui-fixtures-"));
   process.env["FOREMAN_PIPELINES"] = join(folder, "pipelines.json");
   process.env["XDG_CONFIG_HOME"] = folder;
+  process.env["FOREMAN_POLICY"] = join(folder, "policy.json");
 
   const store = scratchStore();
   await Effect.runPromise(

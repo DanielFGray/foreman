@@ -6,6 +6,7 @@
  * the pure rules never pulls Bun's file system.
  */
 import { Effect, FileSystem, Option, Schema as S } from "effect";
+import { PolicyError } from "./errors.ts";
 import { policyPath } from "./paths.ts";
 import { DEFAULT_POLICY, Policy, type Policy as PolicyType } from "./policy.ts";
 import { rewrite } from "./shared-file.ts";
@@ -59,11 +60,3 @@ export const updatePolicy = (path: string, change: (policy: PolicyType) => Polic
       Effect.fail(new PolicyError({ detail: error.detail })),
     ),
   );
-
-export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
-  detail: S.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}

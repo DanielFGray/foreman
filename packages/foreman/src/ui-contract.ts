@@ -10,6 +10,7 @@ import {
   FleetError,
   PathsError,
   PipelineError,
+  PolicyError,
   PromptError,
   RecordsError,
   RegistryError,
@@ -18,6 +19,8 @@ import {
 } from "./errors.ts";
 import { PipelineChange, CompositeChange } from "./pipeline-edit.ts";
 import { GraphView } from "./pipeline-graph-view.ts";
+import { Policy, STEPS } from "./policy.ts";
+import { TaskState } from "tasks/item";
 import { TraceReportView } from "./pipeline-trace-view.ts";
 import { SimulateReportView } from "./pipeline-simulate-view.ts";
 import {
@@ -111,9 +114,29 @@ export const PipelineSimulate = Rpc.make("PipelineSimulate", {
 });
 
 export const PipelineGraph = Rpc.make("PipelineGraph", {
-  payload: { project: S.String },
+  payload: {
+    project: S.String,
+    statuses: S.Array(TaskState),
+  },
   success: GraphView,
   error: S.Union([PipelineError, RecordsError, TrackerError]),
+});
+
+/** Policy verbs: one Rpc per exported Effect in `policy-command.ts`. */
+export const PolicyGrant = Rpc.make("PolicyGrant", {
+  payload: {
+    scope: S.String,
+    steps: S.Array(S.Literals(STEPS)),
+    remaining: S.OptionFromOptional(S.Int),
+  },
+  success: Policy,
+  error: S.Union([PolicyError]),
+});
+
+export const PolicyRevoke = Rpc.make("PolicyRevoke", {
+  payload: { scope: S.String },
+  success: Policy,
+  error: S.Union([PolicyError]),
 });
 
 /** Composite verbs: one Rpc per exported Effect in `composite-command.ts`. */
@@ -161,6 +184,8 @@ export const UiContract = RpcGroup.make(
   PipelineTrace,
   PipelineSimulate,
   PipelineGraph,
+  PolicyGrant,
+  PolicyRevoke,
   CompositeShow,
   CompositeEdit,
   CompositeSave,

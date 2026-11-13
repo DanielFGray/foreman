@@ -81,3 +81,12 @@ export class PageBuildError extends S.TaggedError<PageBuildError>()("PageBuildEr
     return this.detail;
   }
 }
+
+/** A policy file that could not be rewritten: the detail is what the operator reads. */
+export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
+  detail: S.String,
+}) {
+  override get message() {
+    return this.detail;
+  }
+}

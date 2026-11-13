@@ -1,10 +1,11 @@
-// A project's unfinished work as a graph, for the Foreman pane to draw: each
-// task and epic in a column right of the items it waits for, the grant that
-// covers it, and the steps the project's pipeline gates on. The pane lays
-// nothing out and picks no steps itself: dropping a card on the board grants
-// it `grantSteps`.
+// A project's work as a graph, for a front end to draw: each task and epic in
+// a column right of the items it waits for, the grant that covers it, and the
+// steps the project's pipeline gates on. The front end picks no steps itself:
+// sending a card through grants it `grantSteps`. The page places its folded
+// and filtered graph again with `placeGraph`, so the rule has one home.
 import { Option } from "effect";
-import { columnsOf, type Dependency, type Item } from "tasks";
+import type { Item } from "tasks";
+import { columnsOf, type Dependency } from "tasks/graph";
 import type { Pipeline } from "./pipeline.ts";
 import {
   type Grant,
@@ -20,7 +21,7 @@ import type { CoveringGrantView, GraphView } from "./pipeline-graph-view.ts";
 /** What `graphReport` reads. */
 export interface GraphWorld {
   readonly project: string;
-  /** The project's open and in-progress tasks and epics. */
+  /** The project's tasks and epics in the statuses asked for. */
   readonly items: ReadonlyArray<Item>;
   /** Every dependency from the project's items. */
   readonly dependencies: ReadonlyArray<Dependency>;
@@ -40,38 +41,28 @@ export const graphReport = (world: GraphWorld): GraphView => {
   const unfinished = dependencies.filter(
     (edge) => !FINISHED.has(statusOf(edge.dependsOn) ?? "done"),
   );
-  const edges = unfinished.filter((edge) => shown.has(edge.item) && shown.has(edge.dependsOn));
-  const columns = columnsOf(
-    items.map((item) => item.id),
+  const edges = dependencies.filter((edge) => shown.has(edge.item) && shown.has(edge.dependsOn));
+  const placed = placeGraph(
+    items.map((item) => ({
+      item,
+      id: item.id,
+      priority: item.priority,
+      parent: Option.getOrNull(item.parent),
+    })),
     edges,
   );
-  const ordered = [...items].sort(
-    (a, b) =>
-      a.priority - b.priority ||
-      Option.getOrElse(a.parent, () => a.id).localeCompare(
-        Option.getOrElse(b.parent, () => b.id),
-      ) ||
-      a.id.localeCompare(b.id),
-  );
-  const rows = new Map<string, number>();
-  const filled = new Map<number, number>();
-  for (const item of ordered) {
-    const column = columns.get(item.id) ?? 0;
-    rows.set(item.id, filled.get(column) ?? 0);
-    filled.set(column, (filled.get(column) ?? 0) + 1);
-  }
   const { steps, grantSteps } = gatedSteps(pipeline, policy, project);
   return {
     project,
-    items: ordered.map((item) => ({
+    items: placed.map(({ item, parent, column, row }) => ({
       id: item.id,
       title: item.title,
       type: item.type,
       status: item.status,
       priority: item.priority,
-      parent: Option.getOrNull(item.parent),
-      column: columns.get(item.id) ?? 0,
-      row: rows.get(item.id) ?? 0,
+      parent,
+      column,
+      row,
       waitsFor: unfinished.filter((edge) => edge.item === item.id).map((edge) => edge.dependsOn),
       grant: coveringOf(policy, scopes, item, grantSteps),
     })),
@@ -79,6 +70,42 @@ export const graphReport = (world: GraphWorld): GraphView => {
     steps,
     grantSteps,
   };
+};
+
+/** What placement reads of a node. */
+export interface Placeable {
+  readonly id: string;
+  readonly priority: number;
+  /** The node's epic, which keeps a family together in a column. */
+  readonly parent: string | null;
+}
+
+/**
+ * Puts each node in a column one past its furthest blocker among `nodes`, and
+ * gives it a row in that column by priority, then epic, then id. Returns the
+ * nodes in that order. An edge to a node not in `nodes` places nothing.
+ */
+export const placeGraph = <A extends Placeable>(
+  nodes: ReadonlyArray<A>,
+  edges: ReadonlyArray<Dependency>,
+): ReadonlyArray<A & { readonly column: number; readonly row: number }> => {
+  const columns = columnsOf(
+    nodes.map((node) => node.id),
+    edges,
+  );
+  const ordered = [...nodes].sort(
+    (a, b) =>
+      a.priority - b.priority ||
+      (a.parent ?? a.id).localeCompare(b.parent ?? b.id) ||
+      a.id.localeCompare(b.id),
+  );
+  const filled = new Map<number, number>();
+  return ordered.map((node) => {
+    const column = columns.get(node.id) ?? 0;
+    const row = filled.get(column) ?? 0;
+    filled.set(column, row + 1);
+    return { ...node, column, row };
+  });
 };
 
 /**

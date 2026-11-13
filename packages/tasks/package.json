@@ -7,7 +7,9 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./endings": "./src/endings.ts"
+    "./endings": "./src/endings.ts",
+    "./graph": "./src/graph.ts",
+    "./item": "./src/item.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { Item } from "tasks";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
-import { type GraphWorld, graphReport } from "./pipeline-graph.ts";
+import { type GraphWorld, graphReport, placeGraph } from "./pipeline-graph.ts";
 import { DEFAULT_POLICY, grant } from "./policy.ts";
 
 const item = (id: string, over: Partial<Item> = {}): Item =>
@@ -128,5 +128,35 @@ describe("graphReport", () => {
       }),
     );
     expect(report.items.map((it) => `${it.id}${it.row}`)).toEqual(["z0", "y1", "x2"]);
+  });
+});
+
+describe("placeGraph", () => {
+  const node = (id: string, priority = 2, parent: string | null = null) => ({
+    id,
+    priority,
+    parent,
+  });
+
+  test("puts a node one past its furthest blocker among the nodes, and ignores an edge to a node not given", () => {
+    const placed = placeGraph(
+      [node("a"), node("b"), node("c")],
+      [
+        { item: "b", dependsOn: "a" },
+        { item: "c", dependsOn: "b" },
+        { item: "c", dependsOn: "a" },
+        { item: "a", dependsOn: "gone" },
+      ],
+    );
+    expect(placed.map(({ id, column, row }) => `${id}${column}.${row}`)).toEqual([
+      "a0.0",
+      "b1.0",
+      "c2.0",
+    ]);
+  });
+
+  test("keeps the fields it was given", () => {
+    const [only] = placeGraph([{ ...node("a"), title: "kept" }], []);
+    expect(only?.title).toBe("kept");
   });
 });

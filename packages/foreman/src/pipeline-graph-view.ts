@@ -3,6 +3,7 @@
  * the pure rules in `pipeline-graph.ts` build it, and the page decodes it.
  */
 import { Schema as S } from "effect";
+import type { TaskState } from "tasks/item";
 import { STEP_MODES, STEPS } from "./policy.ts";
 
 const Step = S.Literals(STEPS);
@@ -49,3 +50,6 @@ export const GraphView = S.Struct({
   grantSteps: S.Array(Step),
 });
 export type GraphView = typeof GraphView.Type;
+
+/** The statuses a graph shows when none are asked for: the work still to do. */
+export const GRAPH_STATUSES: ReadonlyArray<TaskState> = ["open", "in_progress"];

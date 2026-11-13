@@ -36,6 +36,7 @@ import { choicesOf } from "./pipeline-belt.ts";
 import { scopesOf } from "./policy.ts";
 import { policyPath, readPolicy } from "./policy-file.ts";
 import { graphReport } from "./pipeline-graph.ts";
+import { GRAPH_STATUSES } from "./pipeline-graph-view.ts";
 import { Tracker } from "./tracker.ts";
 import {
   type Draft,
@@ -53,6 +54,7 @@ import { TraceRequest } from "./trace-request.ts";
 import { runSummary, simulateReport } from "./pipeline-simulate.ts";
 import { Records } from "./records.ts";
 import { prose } from "tasks";
+import { TaskState } from "tasks/item";
 import { readMeasured, ratesOf } from "./run-rates.ts";
 
 export { PipelineError };
@@ -572,14 +574,17 @@ const simulate = Command.make(
 );
 
 /**
- * A project's open and claimed tasks and epics in columns by what they wait
- * for, with the grant that covers each.
+ * A project's tasks and epics in the statuses asked for, in columns by what
+ * they wait for, with the grant that covers each.
  */
-export const pipelineGraph = (input: { readonly project: string }) =>
+export const pipelineGraph = (input: {
+  readonly project: string;
+  readonly statuses: ReadonlyArray<TaskState>;
+}) =>
   Effect.gen(function* () {
     const tracker = yield* Tracker;
     const records = yield* Records;
-    const items = (yield* Effect.forEach(["open", "in_progress"] as const, (status) =>
+    const items = (yield* Effect.forEach(new Set(input.statuses), (status) =>
       tracker.list({ project: input.project, status }),
     )).flat();
     const dependencies = yield* tracker.dependencies(input.project);
@@ -601,9 +606,19 @@ export const pipelineGraph = (input: { readonly project: string }) =>
     });
   });
 
-const graph = Command.make("graph", { project, json }, ({ project, json }) =>
+const statuses = Flag.Literals("status", TaskState.literals).pipe(
+  Flag.withDescription(
+    `Show items in this status; repeat it for more. Without it: ${GRAPH_STATUSES.join(", ")}`,
+  ),
+  Flag.atLeast(0),
+);
+
+const graph = Command.make("graph", { project, json, statuses }, ({ project, json, statuses }) =>
   Effect.gen(function* () {
-    const report = yield* pipelineGraph({ project });
+    const report = yield* pipelineGraph({
+      project,
+      statuses: statuses.length === 0 ? GRAPH_STATUSES : statuses,
+    });
     if (json) return yield* Console.log(JSON.stringify(report));
     for (const item of report.items) {
       const waits = item.waitsFor.length === 0 ? "" : `  waits for ${item.waitsFor.join(", ")}`;
@@ -618,7 +633,7 @@ const graph = Command.make("graph", { project, json }, ({ project, json }) =>
   }),
 ).pipe(
   Command.withDescription(
-    "Print a project's open and claimed tasks and epics in columns by what they wait for, with the grant that covers each and the steps a grant gives. Writes nothing",
+    "Print a project's tasks and epics, open and claimed unless --status says otherwise, in columns by what they wait for, with the grant that covers each and the steps a grant gives. Writes nothing",
   ),
 );
 

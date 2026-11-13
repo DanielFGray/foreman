@@ -157,7 +157,8 @@ the page's files. `foreman serve` provides it beside `supervise`.
   checks with. The toolbar's Save and Discard send `PipelineSave` and
   `PipelineDiscard`; Save is disabled while the drawing has problems.
 - **The other views** follow as the operator decides which features move:
-  Tasks board, Models board, simulate, fleet, task detail.
+  Tasks board, Models board, simulate, fleet, task detail. The task graph
+  moved first; see "The task graph" below.
 - **Shared code.** The page imports the contract and foreman's pure modules
   (`problemsOf`, `expand`, `beltOf`, `layoutOf`, `PipelineChange`) directly, in
   place of the copies a mod needs. Schemas and pure rules live in `src/policy.ts`
@@ -180,6 +181,62 @@ the page's files. `foreman serve` provides it beside `supervise`.
   390 by 844 viewport checks the width, the touch-action values and that a
   touch drag sends one `PipelineEdit` with `flow: "down"`. The other browser
   tests run at 1280 by 800.
+
+## The task graph
+
+`/p/<project>/graph` draws a project's tasks and epics as one 2D graph. It
+replaces two front ends: the pane's Graph mode (`herdr/foreman/tasks.js`) and
+`prog web`, the Three.js graph of the retired `prog` tracker. It takes prog
+web's epics that fold, its filters, its search and its detail panel, and the
+pane's picked cards and send through.
+
+- **Data.** `PipelineGraph { project, statuses }` is a verb, not a stream: the
+  page asks once, again after each grant or revoke it sends, and again when
+  the operator presses Refresh. `statuses` defaults to `open` and
+  `in_progress`, which is what the pane reads. `foreman pipeline graph
+  --status <s>` (repeatable) is the same field, so the pane's output does not
+  change. The graph shows what the project's tracker lists: the GitHub and
+  Linear adapters keep only unfinished issues, so `done` and `canceled` show
+  nothing there.
+- **Edges.** An edge joins two shown items. An edge whose blocker is `done` or
+  `canceled` is resolved; the page draws it dashed. An item's `waitsFor` still
+  names only its unfinished blockers, shown or not.
+- **Placement is one function.** `placeGraph` in `src/pipeline-graph.ts` puts
+  each item in a column one past its furthest shown blocker, and orders a
+  column by priority, then epic, then id. `graphReport` calls it for the
+  pane's `column` and `row`. The page calls it again on what it shows after it
+  folds and filters, because a folded epic or a hidden item changes which
+  nodes and edges there are. The page imports `columnsOf` through the `tasks`
+  package's `./graph` export, because the package root also exports the
+  SQLite store.
+- **Folding.** An epic is the head of its family: every shown item whose
+  parent chain reaches it. A folded epic stands for its whole family. An edge
+  from a member to an item outside the family is drawn from the epic, and the
+  edges that join the same two drawn nodes merge into one, labelled with their
+  count. Edges inside a folded family are not drawn; the detail panel counts
+  them. Every epic is unfolded at first, so the graph starts as the pane draws
+  it.
+- **Filters and search.** A checkbox per status chooses `statuses`. The search
+  box matches an item's id or title, case-insensitive. A match keeps its
+  ancestors, drawn faded as context, and unfolds them, so every match is
+  visible.
+- **Picks and send through.** A tap on a card picks it or unpicks it. The
+  toolbar's "send through" grants each picked item `grantSteps` with
+  `PolicyGrant`, as the pane's drop does; an epic's grant covers every task
+  under it. A card covered by a grant is marked. The detail panel's "revoke"
+  sends `PolicyRevoke` for the grant's scope. With no `grantSteps` the toolbar
+  says that every gated step is on, and it offers no send.
+- **Detail panel.** The last picked card's id, title, type, status, priority,
+  epic, grant, the items it waits for and the items that wait for it, each a
+  link that picks that item. A task's description and runs come later, with a
+  `TaskShow` verb over `taskShow`.
+- **View state is in the URL.** The page reloads after each reconnect, and
+  serve restarts after each commit. So the query holds what the operator set:
+  `status`, `q` (search), `fold` (folded epics) and `pick` (picked cards). The
+  page stores nothing else.
+- **Flow.** The graph runs across, left to right, in a landscape viewport and
+  down in a portrait one, by the same rule as the pipeline editor. The SVG sits
+  in a container that scrolls.
 
 ## Tests
 
@@ -234,6 +291,7 @@ Each rule below is changed by this record. The record wins in each case.
 | An `Origin` other than `http://127.0.0.1:<port>` or `http://localhost:<port>` is refused | this record, before vitest Browser Mode | The Layer takes the trusted page origin as an input; serve passes its own address. |
 | The server answers only requests that name `127.0.0.1:<port>` or `localhost:<port>` | this record, before `FOREMAN_UI_HOSTS` | The gate also admits each name in `FOREMAN_UI_HOSTS`, from its https origin, so a phone reaches the page through `tailscale serve`. The listen address stays `127.0.0.1`. |
 | The Playwright version matches the Chromium that is installed, so the gate does not download a browser | this record, Tests, Runner | `scripts/worktree-setup` installs the Chromium build the pinned Playwright names; the gate still downloads nothing. |
+| The pane is frozen until the operator decides which features move to the page | `AGENTS.md`, Front ends; this record's opening | The task graph moves now. The pane's Graph mode stays as it is, unfixed, until the operator decides to remove it; `prog web` likewise. |
 | The page tests are plain Playwright | this record, before vitest Browser Mode | vitest Browser Mode with the Playwright provider, in the same vitest run as the unit tests. |
 | Tests use `bun:test` | every package's `test:unit` script | `packages/foreman-ui` uses `@effect/vitest` on Bun. foreman and tasks move later, in their own task. |
 
@@ -251,3 +309,10 @@ Each rule below is changed by this record. The record wins in each case.
   evil.example` from its own origin is refused.
 - A drag in the editor that would leave a block unreachable shows an amber
   preview with one problem, and a drop sends exactly one `PipelineEdit`.
+- `foreman pipeline graph <project> --json` with no `--status` prints what it
+  printed before `statuses` existed.
+- With an epic folded, an edge from one of its tasks to a task outside it is
+  drawn from the epic, and the column of each drawn node is one past its
+  furthest drawn blocker.
+- A tap on a card and on "send through" sends one `PolicyGrant` with the
+  project's `grantSteps`, and the card then shows its grant.

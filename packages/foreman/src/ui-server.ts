@@ -42,6 +42,7 @@ import {
   pipelineSimulate,
   pipelineTrace,
 } from "./pipeline-command.ts";
+import { policyGrant, policyRevoke } from "./policy-command.ts";
 import { PageBuildError } from "./errors.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
 import { type Published } from "./published-schema.ts";
@@ -179,6 +180,8 @@ export const uiHandlersLayer = UiContract.toLayer(
       PipelineTrace: (payload) => infraAsDefects(pipelineTrace(payload)),
       PipelineSimulate: (payload) => infraAsDefects(pipelineSimulate(payload)),
       PipelineGraph: (payload) => infraAsDefects(pipelineGraph(payload)),
+      PolicyGrant: (payload) => infraAsDefects(policyGrant(payload)),
+      PolicyRevoke: (payload) => infraAsDefects(policyRevoke(payload)),
       CompositeShow: (payload) => infraAsDefects(compositeShow(payload)),
       CompositeEdit: (payload) => infraAsDefects(compositeEdit(payload)),
       CompositeSave: (payload) => infraAsDefects(compositeSave(payload)),

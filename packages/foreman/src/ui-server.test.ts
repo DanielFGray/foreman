@@ -28,6 +28,8 @@ import { Repository } from "./repository.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { UiContract } from "./ui-contract.ts";
+import { GRAPH_STATUSES } from "./pipeline-graph-view.ts";
+import type { TaskState } from "tasks/item";
 import { resolve } from "./paths.ts";
 import {
   buildPageAssets,
@@ -46,6 +48,7 @@ const folder = mkdtempSync(join(tmpdir(), "foreman-ui-server-"));
 const path = join(folder, "pipelines.json");
 process.env["FOREMAN_PIPELINES"] = path;
 process.env["XDG_CONFIG_HOME"] = folder;
+process.env["FOREMAN_POLICY"] = join(folder, "policy.json");
 const store = scratchStore();
 afterAll(() => {
   rmSync(folder, { recursive: true, force: true });
@@ -62,6 +65,12 @@ await Effect.runPromise(
     INSERT INTO pools (pool, harness, provider_default) VALUES ('Pool', 'pi', 'prov');
     INSERT INTO models (model, provider, pool, harness, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'pool');
     INSERT INTO ladder (rank, level, rung, model) VALUES (1, 1, 'cheap', 'm1');
+    INSERT INTO items (id, project, type, title, status, parent_id) VALUES
+      ('ep-g', 'graphp', 'epic', 'Graph epic', 'in_progress', NULL),
+      ('ts-a', 'graphp', 'task', 'First', 'open', 'ep-g'),
+      ('ts-b', 'graphp', 'task', 'Second', 'open', NULL),
+      ('ts-d', 'graphp', 'task', 'Landed', 'done', NULL);
+    INSERT INTO deps (item_id, depends_on) VALUES ('ts-b', 'ts-a'), ('ts-b', 'ts-d');
   `).pipe(Effect.provide(store.layer)),
 );
 
@@ -243,6 +252,56 @@ describe("UiContract handlers", () => {
     const fromContract = readFileSync(drafts, "utf8");
 
     expect(JSON.parse(fromContract)).toEqual(JSON.parse(fromCli));
+  });
+
+  const graphOf = (statuses?: ReadonlyArray<TaskState>) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        return yield* client.PipelineGraph({
+          project: "graphp",
+          statuses: statuses ?? GRAPH_STATUSES,
+        });
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+
+  test("PipelineGraph shows open and claimed work unless statuses ask for more", async () => {
+    const unfinished = await graphOf();
+    expect(unfinished.items.map((item) => item.id).toSorted()).toEqual(["ep-g", "ts-a", "ts-b"]);
+    expect(unfinished.edges).toEqual([{ item: "ts-b", dependsOn: "ts-a" }]);
+
+    const all = await graphOf(["open", "in_progress", "done"]);
+    expect(all.items.map((item) => item.id).toSorted()).toEqual(["ep-g", "ts-a", "ts-b", "ts-d"]);
+    expect(all.edges.toSorted((a, b) => a.dependsOn.localeCompare(b.dependsOn))).toEqual([
+      { item: "ts-b", dependsOn: "ts-a" },
+      { item: "ts-b", dependsOn: "ts-d" },
+    ]);
+    const second = all.items.find((item) => item.id === "ts-b");
+    expect(second?.waitsFor).toEqual(["ts-a"]);
+    expect(second?.column).toBe(1);
+  });
+
+  test("PolicyGrant and PolicyRevoke write the policy file the dispatcher reads", async () => {
+    const policyFile = join(folder, "policy.json");
+    const scopes = (text: string) =>
+      (JSON.parse(text) as { grants: ReadonlyArray<{ scope: string }> }).grants.map(
+        (one) => one.scope,
+      );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        const granted = yield* client.PolicyGrant({
+          scope: "ep-g",
+          steps: ["author"],
+          remaining: Option.none(),
+        });
+        expect(granted.grants.map((one) => one.scope)).toEqual(["ep-g"]);
+        expect(scopes(readFileSync(policyFile, "utf8"))).toEqual(["ep-g"]);
+        const revoked = yield* client.PolicyRevoke({ scope: "ep-g" });
+        expect(revoked.grants).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(scopes(readFileSync(policyFile, "utf8"))).toEqual([]);
   });
 
   test("Readings stream sends the fixed reading", async () => {
