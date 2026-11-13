@@ -133,7 +133,7 @@ describe("catalog candidates", () => {
   const cardOf = (key) => available.cards.find((one) => one.key === key);
 
   test("Available lists a candidate once, grouped by its provider, and skips one the registry has", () => {
-    expect(available.cards.map((one) => one.name)).toEqual(["off", "free", "x/new"]);
+    expect(available.cards.map((one) => one.name)).toEqual(["off", "free", "New"]);
     expect(available.groups.map((group) => group.label)).toEqual(["p", "q", "x"]);
   });
 
@@ -148,5 +148,24 @@ describe("catalog candidates", () => {
   test("a drop on Reviewers registers it first too", () => {
     const drop = dropsOf(cardOf("model:x/new"), cols, withCandidates).find((one) => one.zone.key === "reviewers");
     expect(drop.commands.map((command) => command.slice(0, 2))).toEqual([["models", "add"], ["reviewers", "add"]]);
+  });
+});
+
+describe("one model in several harnesses", () => {
+  const route = (harness, model) => ({ model, harness, provider: "anthropic", retired: false, modelsDev: "anthropic/sonnet" });
+  const two = { rungs: [], reviewers: [], models: [route("claude", "sonnet"), route("opencode", "anthropic/sonnet")] };
+  const cardOf = (picks) => columnsOf(two, picks).find((column) => column.kind === "available").cards;
+
+  test("is one card, on its first route", () => {
+    const cards = cardOf(new Map());
+    expect(cards.map((one) => [one.key, one.harness, one.model, one.routes.length])).toEqual([["model:anthropic/sonnet", "claude", "sonnet", 2]]);
+  });
+
+  test("a pick shows another route, and a drop adds that route's model", () => {
+    const cols = columnsOf(two, new Map([["anthropic/sonnet", 1]]));
+    const card = cols.find((column) => column.kind === "available").cards[0];
+    expect([card.harness, card.model]).toEqual(["opencode", "anthropic/sonnet"]);
+    const drops = dropsOf(card, [{ kind: "level", level: 1, key: "level:1", cards: [{ key: "x", name: "x" }] }, ...cols], { ...two });
+    expect(drops.some((one) => one.commands.some((command) => command[0] === "ladder" && command[3] === "anthropic/sonnet"))).toBe(true);
   });
 });

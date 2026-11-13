@@ -30,7 +30,7 @@ export const THINKING = [null, "low", "medium", "high"];
 // line can set, steps to none.
 export const nextThinking = (level) => THINKING[(THINKING.indexOf(level ?? null) + 1) % THINKING.length];
 
-export const columnsOf = ({ rungs, models, reviewers, candidates = [] }) => {
+export const columnsOf = ({ rungs, models, reviewers, candidates = [] }, picks = new Map()) => {
   const levels = [...new Set(rungs.filter((rung) => rung.enabled).map((rung) => rung.level))].sort((a, b) => a - b);
   const seated = new Set([...rungs, ...reviewers].map((seat) => seat.model));
   return [
@@ -44,29 +44,41 @@ export const columnsOf = ({ rungs, models, reviewers, candidates = [] }) => {
         key: `reviewer:${one.name}`, kind: "reviewer", name: one.name, model: one.model, thinking: one.thinking ?? null, reviewer: one,
       })),
     },
-    availableOf(rungs, models, seated, candidates),
+    availableOf(rungs, models, seated, candidates, picks),
   ];
 };
 
-// The Available column, its cards grouped by provider.
-const availableOf = (rungs, models, seated, candidates) => {
+// The Available column: every disabled rung, and one card per model, grouped
+// by the provider the model comes from. A model is its catalog identity, so
+// one model that runs in several harnesses is one card; each harness it can run
+// in is a route (a registered one, or a catalog candidate), and `picks` says
+// which route a card shows. A route a rung or reviewer already uses is not
+// offered.
+const availableOf = (rungs, models, seated, candidates, picks) => {
   const known = new Set(models.map((one) => one.model));
-  const unregistered = candidates.filter((one) => !known.has(one.model));
-  const providers = new Map([...models, ...unregistered].map((one) => [one.model, one.provider]));
-  const cards = [
-    ...rungs.filter((rung) => !rung.enabled).map(rungCard),
-    ...models.filter((one) => !one.retired && !seated.has(one.model)).map((one) => ({
-      key: `model:${one.model}`, kind: "model", name: one.model, model: one.model, thinking: null, harness: one.harness,
-    })),
-    ...unregistered.map((one) => ({
-      key: `model:${one.model}`, kind: "model", name: one.model, model: one.model, thinking: null, harness: one.harness, candidate: one,
-    })),
+  const routes = [
+    ...models.filter((one) => !one.retired && !seated.has(one.model)).map((one) => ({ ...one, identity: one.modelsDev ?? one.model })),
+    ...candidates.filter((one) => !known.has(one.model)).map((one) => ({ ...one, identity: one.modelsDev, candidate: one })),
   ];
-  const groups = [...new Set(cards.map((card) => providers.get(card.model)))].sort().map((provider) => ({
-    key: `available:${provider}`, label: provider, cards: cards.filter((card) => providers.get(card.model) === provider),
+  const byModel = Map.groupBy(routes, (route) => route.identity);
+  const cards = [...byModel].map(([identity, list]) => {
+    const route = list[(picks.get(identity) ?? 0) % list.length];
+    return {
+      key: `model:${identity}`, kind: "model", identity, name: route.name ?? identity, model: route.model, thinking: null,
+      harness: route.harness, candidate: route.candidate, routes: list,
+    };
+  });
+  const providerOf = (card) => (card.identity.includes("/") && card.routes[0].modelsDev ? card.identity.split("/")[0] : card.routes[0].provider);
+  const disabled = rungs.filter((rung) => !rung.enabled).map(rungCard);
+  const groups = [...new Set([...disabled.map((card) => providerOfRung(card, models)), ...cards.map(providerOf)])].sort().map((provider) => ({
+    key: `available:${provider}`, label: provider,
+    cards: [...disabled.filter((card) => providerOfRung(card, models) === provider), ...cards.filter((card) => providerOf(card) === provider)],
   }));
   return { key: "available", kind: "available", label: "Available", groups, cards: groups.flatMap((group) => group.cards) };
 };
+
+// A disabled rung's provider: its model's, or none the registry knows.
+const providerOfRung = (card, models) => models.find((one) => one.model === card.model)?.provider;
 
 export const ROW = { PAD: 12, LABEL_W: 128, CARD_MIN: 200, CARD_H: 40, GAP: 8, ROW_GAP: 14, SECTION_GAP: 28, HEAD_H: 24 };
 

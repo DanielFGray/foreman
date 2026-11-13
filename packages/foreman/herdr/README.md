@@ -64,7 +64,10 @@ stop this project's pipeline.
   model no rung or reviewer names, plus the models.dev catalog models the
   operator's logins could run (`foreman models candidates`: the providers in
   opencode's `auth.json`, and the claude and codex logins), dimmed and read
-  when Available first opens; and Reviewers. Available and Reviewers stay
+  when Available first opens, one card per model: a model that runs in several
+  harnesses is one card, and a click on its harness chip shows the next route.
+  A drag from Available folds it and shows the rows from the top, so the levels
+  are a short move away; the fold ends with the drag. And Reviewers. Available and Reviewers stay
   at the right edge, and the level columns scroll across under them, so a rung
   in any level can reach both. Each change is a drag:
   - A rung dropped on a level column joins that level (`foreman ladder

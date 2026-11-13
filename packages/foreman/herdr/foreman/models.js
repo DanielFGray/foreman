@@ -38,6 +38,8 @@ export class Models {
     // Catalog models the operator's logins could run (`foreman models candidates --json`),
     // read once, when Available is first opened: it is a network read.
     this.candidates = null;
+    // The route each model card shows in Available, by catalog identity: an index into its harnesses.
+    this.picks = new Map();
     // The view's bounds in the window, from the last move over it.
     this.bounds = null;
     // How far the rows are scrolled down.
@@ -80,6 +82,12 @@ export class Models {
     this.pane.act(first, cx, (done, cx) => (done && rest.length > 0 ? this.run(rest, cx) : this.load(cx)));
   }
 
+  // Shows the next harness a model can run in.
+  nextRoute(card, cx) {
+    this.picks.set(card.identity, (this.picks.get(card.identity) ?? 0) + 1);
+    cx.notify();
+  }
+
   toggle(key, cx) {
     if (!this.open.delete(key)) this.open.add(key);
     if (key === "available" && this.open.has(key)) this.loadCandidates(cx);
@@ -87,15 +95,25 @@ export class Models {
     cx.notify();
   }
 
-  columns() { return this.ladder === null ? [] : columnsOf({ ...this.ladder, candidates: this.candidates ?? [] }); }
+  columns() { return this.ladder === null ? [] : columnsOf({ ...this.ladder, candidates: this.candidates ?? [] }, this.picks); }
+
+  // Whether the card is one of Available's. Dragging it folds Available and
+  // shows the rows from the top, so the levels it can drop on are a short move
+  // away, however long the list was. The fold is derived from the drag, so any
+  // end of it (drop, cancel, a release that never arrived) restores the view.
+  fromAvailable(key, columns) {
+    return columns.find((column) => column.kind === "available")?.cards.some((card) => card.key === key) ?? false;
+  }
 
   // The rows as `rowsOf` places them, moved up by the scroll, and how far the
-  // rows can scroll.
-  layout(columns) {
+  // rows can scroll. `folded` is Available folded for a drag from it.
+  layout(columns, folded = this.pane.drag.dragging() && this.fromAvailable(this.pane.drag.now.key, columns)) {
     const width = this.bounds?.width ?? this.pane.size?.width ?? 600;
     const height = this.bounds?.height ?? this.pane.size?.height ?? 600;
-    const placed = rowsOf(columns, width, this.open);
-    const up = (rect) => ({ ...rect, y: rect.y - this.scroll });
+    const open = folded ? new Set([...this.open].filter((key) => key !== "available")) : this.open;
+    const scroll = folded ? 0 : this.scroll;
+    const placed = rowsOf(columns, width, open);
+    const up = (rect) => ({ ...rect, y: rect.y - scroll });
     return {
       rows: placed.rows.map((row) => ({ ...row, rect: up(row.rect) })),
       heads: placed.heads.map((head) => ({ ...head, rect: up(head.rect) })),
@@ -110,13 +128,13 @@ export class Models {
   // rows; and the card's own row, which runs nothing.
   targets(card, columns) {
     if (this.bounds === null) return [];
-    const { rows, cards, gaps } = this.layout(columns);
+    const { rows, cards, gaps } = this.layout(columns, this.fromAvailable(card.key, columns));
     const window = (rect) => ({ ...rect, x: rect.x + this.bounds.x, y: rect.y + this.bounds.y });
     const rowOf = (key) => rows.find((row) => row.column.key === key).rect;
     const drops = dropsOf(card, columns, this.ladder);
     const home = columns.find((column) => column.cards.some((one) => one.key === card.key));
     return [
-      { rect: cards.get(card.key), run: null },
+      ...(cards.has(card.key) ? [{ rect: cards.get(card.key), run: null }] : []),
       ...[...drops.filter((drop) => drop.zone.kind === "gap"), ...drops.filter((drop) => drop.zone.kind === "column")].map((drop) => ({
         rect: drop.zone.kind === "gap" ? gaps[drop.zone.at] : rowOf(drop.zone.key),
         gap: drop.zone.kind === "gap", run: (cx) => this.run(drop.commands, cx),
@@ -219,7 +237,7 @@ export class Models {
   card(card, column, rect, t, ghost) {
     const thinking = this.thinking(card, t).id(`models-thinking-${card.key}`)
       .hover((s) => s.text_color(t.accent))
-      .on_click((_event, cx) => this.run([thinkingArgs(card)], cx));
+      .on_click((_event, cx) => (card.kind === "model" ? this.nextRoute(card, cx) : this.run([thinkingArgs(card)], cx)));
     return this.face(card, column, rect, t, thinking).id(`models-card-${card.key}`)
       .when(ghost, (el) => el.opacity(0.35))
       .when(card.candidate !== undefined, (el) => el.opacity(0.7))
@@ -236,7 +254,7 @@ export class Models {
       ? [card.model, this.accountOf(card.name)].filter(Boolean).join(" · ")
       : card.kind === "reviewer"
         ? [card.model, card.reviewer.provider].filter(Boolean).join(" · ")
-        : [card.harness, card.candidate?.pool].filter(Boolean).join(" · ");
+        : [card.model, card.candidate?.pool].filter(Boolean).join(" · ");
     // Only a rung in a level shows its trial state: in Available, an old rung and a
     // bare model are the same choice, and a drop on a level takes either.
     const tag = card.kind === "rung" && card.rung.enabled ? card.rung.state : null;
@@ -247,12 +265,13 @@ export class Models {
         .child(h_flex().gap(6).text_size(12)
           .child(div().flex_1().truncate().child(card.name))
           .when(tag !== null, (el) => el.child(div().flex_none().text_size(10).text_color(t.muted).child(tag)))
-          .when(card.kind !== "model", (el) => el.child(thinking)))
+          .child(thinking))
         .child(div().text_size(10).text_color(t.muted).truncate().child(detail)));
   }
 
   // The card's thinking level. "default" is no level: the harness's own default applies.
   thinking(card, t) {
+    if (card.kind === "model") return div().flex_none().px(5).rounded(4).text_size(10).bg(t.canvas).text_color(t.foreground).child(`${card.harness} ▸`);
     return div().flex_none().px(5).rounded(4).text_size(10)
       .bg(t.canvas).text_color(card.thinking === null ? t.dim : t.foreground)
       .child(card.thinking ?? "default");

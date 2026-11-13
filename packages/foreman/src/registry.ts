@@ -66,6 +66,8 @@ export interface ModelEntry {
   readonly harness: string;
   /** The account it bills, as `foreman models add --provider` stored it. */
   readonly provider: string;
+  /** The catalog identity (`provider/model`), which names the model across harnesses; null when none is recorded. */
+  readonly modelsDev: string | null;
   readonly retired: boolean;
 }
 
@@ -152,6 +154,7 @@ const ModelRow = Schema.Struct({
   model: Schema.String,
   harness: Schema.String,
   provider: Schema.String,
+  models_dev: Schema.NullOr(Schema.String),
   retired: Schema.BooleanFromBit,
 });
 
@@ -235,10 +238,10 @@ export class Registry extends Context.Service<Registry>()("Registry", {
     /** Every model the registry knows, by model id. */
     const readModels = Effect.gen(function* () {
       const rows =
-        yield* sql`SELECT model, harness, provider, retired FROM models ORDER BY model`.pipe(
+        yield* sql`SELECT model, harness, provider, retired, models_dev FROM models ORDER BY model`.pipe(
           Effect.flatMap(rowsOf(ModelRow)),
         );
-      return rows.map((row): ModelEntry => ({ ...row }));
+      return rows.map(({ models_dev, ...row }): ModelEntry => ({ ...row, modelsDev: models_dev }));
     }).pipe(Effect.mapError(registryError("reading the models")));
 
     /**

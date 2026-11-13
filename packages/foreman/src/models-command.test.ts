@@ -45,6 +45,7 @@ describe("foreman models add", () => {
             model: "opencode/deepseek-v4-pro",
             harness: "opencode",
             provider: "opencode",
+            modelsDev: null,
             retired: false,
           },
         ]);
