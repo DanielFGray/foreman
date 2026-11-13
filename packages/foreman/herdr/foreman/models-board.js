@@ -10,7 +10,9 @@
 //   rung each.
 // - Reviewers.
 // - Available: every disabled rung and every model that no rung and no
-//   reviewer names, to make a rung or a reviewer from, in one group per
+//   reviewer names, to make a rung or a reviewer from, and the catalog
+//   candidates the operator's logins could run, not yet in the registry (a drop
+//   registers one first), in one group per
 //   provider (the account the model bills), providers by name. Available and
 //   each of its groups is closed until the operator opens it, so its cards
 //   show only on request.
@@ -28,7 +30,7 @@ export const THINKING = [null, "low", "medium", "high"];
 // line can set, steps to none.
 export const nextThinking = (level) => THINKING[(THINKING.indexOf(level ?? null) + 1) % THINKING.length];
 
-export const columnsOf = ({ rungs, models, reviewers }) => {
+export const columnsOf = ({ rungs, models, reviewers, candidates = [] }) => {
   const levels = [...new Set(rungs.filter((rung) => rung.enabled).map((rung) => rung.level))].sort((a, b) => a - b);
   const seated = new Set([...rungs, ...reviewers].map((seat) => seat.model));
   return [
@@ -42,17 +44,22 @@ export const columnsOf = ({ rungs, models, reviewers }) => {
         key: `reviewer:${one.name}`, kind: "reviewer", name: one.name, model: one.model, thinking: one.thinking ?? null, reviewer: one,
       })),
     },
-    availableOf(rungs, models, seated),
+    availableOf(rungs, models, seated, candidates),
   ];
 };
 
 // The Available column, its cards grouped by provider.
-const availableOf = (rungs, models, seated) => {
-  const providers = new Map(models.map((one) => [one.model, one.provider]));
+const availableOf = (rungs, models, seated, candidates) => {
+  const known = new Set(models.map((one) => one.model));
+  const unregistered = candidates.filter((one) => !known.has(one.model));
+  const providers = new Map([...models, ...unregistered].map((one) => [one.model, one.provider]));
   const cards = [
     ...rungs.filter((rung) => !rung.enabled).map(rungCard),
     ...models.filter((one) => !one.retired && !seated.has(one.model)).map((one) => ({
       key: `model:${one.model}`, kind: "model", name: one.model, model: one.model, thinking: null, harness: one.harness,
+    })),
+    ...unregistered.map((one) => ({
+      key: `model:${one.model}`, kind: "model", name: one.model, model: one.model, thinking: null, harness: one.harness, candidate: one,
     })),
   ];
   const groups = [...new Set(cards.map((card) => providers.get(card.model)))].sort().map((provider) => ({
@@ -119,16 +126,16 @@ export const dropsOf = (card, columns, ladder) => {
   if (card.kind === "rung" || card.kind === "model") {
     for (let at = 0; at <= levels.length; at++) {
       const place = gapPlace(levels, at, card);
-      if (place !== null) drops.push({ zone: { kind: "gap", at }, commands: placed(card, { own: place }, ladder) });
+      if (place !== null) drops.push({ zone: { kind: "gap", at }, commands: registered(card, placed(card, { own: place }, ladder)) });
     }
     for (const column of levels) {
-      if (column !== home) drops.push({ zone: { kind: "column", key: column.key }, commands: placed(card, { join: column.level }, ladder) });
+      if (column !== home) drops.push({ zone: { kind: "column", key: column.key }, commands: registered(card, placed(card, { join: column.level }, ladder)) });
     }
   }
   if (card.kind === "rung" && card.rung.enabled) drops.push({ zone: { kind: "column", key: "available" }, commands: [["ladder", "disable", card.name]] });
   if (card.kind === "reviewer") drops.push({ zone: { kind: "column", key: "available" }, commands: [["reviewers", "remove", card.name]] });
   if (card.kind !== "reviewer" && !ladder.reviewers.some((one) => one.model === card.model)) {
-    drops.push({ zone: { kind: "column", key: "reviewers" }, commands: [reviewerArgs(card)] });
+    drops.push({ zone: { kind: "column", key: "reviewers" }, commands: registered(card, [reviewerArgs(card)]) });
   }
   return drops;
 };
@@ -187,4 +194,13 @@ const placed = (card, { own, join }, ladder) => {
   if (card.kind === "model") return [["ladder", "add", rungNameFor(card.model, ladder.rungs), card.model, ...flags]];
   const move = own !== undefined ? ["ladder", "move", card.name, ...own] : ["ladder", "level", card.name, String(join)];
   return card.rung.enabled ? [move] : [move, ["ladder", "enable", card.name]];
+};
+
+// The commands for a card, led by the `foreman models add` that registers it
+// when it is a catalog candidate: the ladder and reviewer commands need a
+// registry row for the model first.
+const registered = (card, commands) => {
+  const one = card.candidate;
+  if (one === undefined) return commands;
+  return [["models", "add", one.model, "--harness", one.harness, "--provider", one.provider, "--pool", one.pool, "--models-dev", one.modelsDev], ...commands];
 };

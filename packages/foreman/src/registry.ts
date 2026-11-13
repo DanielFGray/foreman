@@ -86,6 +86,8 @@ export interface NewModel {
   readonly provider: string;
   readonly pool: string;
   readonly limitScope: "pool" | "model";
+  /** The catalog identity (`provider/model`), when the model has one. */
+  readonly modelsDev: Option.Option<string>;
 }
 
 /** How an empty ladder tells the operator to seed the registry. */
@@ -295,9 +297,9 @@ export class Registry extends Context.Service<Registry>()("Registry", {
               yield* sql`INSERT INTO pools (pool, harness, provider_default)
                 VALUES (${entry.pool}, ${entry.harness}, ${entry.provider})`;
             }
-            yield* sql`INSERT INTO models (model, provider, pool, harness, limit_scope)
+            yield* sql`INSERT INTO models (model, provider, pool, harness, limit_scope, models_dev)
               VALUES (${entry.model}, ${entry.provider}, ${entry.pool},
-                      ${entry.harness}, ${entry.limitScope})`;
+                      ${entry.harness}, ${entry.limitScope}, ${Option.getOrNull(entry.modelsDev)})`;
           }),
         );
       }).pipe(Effect.mapError(registryError("adding a model")));

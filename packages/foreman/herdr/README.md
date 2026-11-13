@@ -61,7 +61,10 @@ stop this project's pipeline.
 
 - **Models** (`foreman ladder --json`): a column per ladder level that holds
   an enabled rung, cheapest first; Available, every disabled rung and every
-  model no rung or reviewer names; and Reviewers. Available and Reviewers stay
+  model no rung or reviewer names, plus the models.dev catalog models the
+  operator's logins could run (`foreman models candidates`: the providers in
+  opencode's `auth.json`, and the claude and codex logins), dimmed and read
+  when Available first opens; and Reviewers. Available and Reviewers stay
   at the right edge, and the level columns scroll across under them, so a rung
   in any level can reach both. Each change is a drag:
   - A rung dropped on a level column joins that level (`foreman ladder

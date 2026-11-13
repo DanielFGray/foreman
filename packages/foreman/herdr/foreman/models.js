@@ -35,6 +35,9 @@ export class Models {
     this.pane = pane;
     // The last `foreman ladder --json`: { rungs, models, reviewers }.
     this.ladder = null;
+    // Catalog models the operator's logins could run (`foreman models candidates --json`),
+    // read once, when Available is first opened: it is a network read.
+    this.candidates = null;
     // The view's bounds in the window, from the last move over it.
     this.bounds = null;
     // How far the rows are scrolled down.
@@ -53,6 +56,20 @@ export class Models {
         try { this.ladder = JSON.parse(result.stdout); } catch (error) { this.pane.problem = String(error.message ?? error); }
       } else this.pane.problem = refusalOf(result);
       cx.notify();
+      if (this.open.has("available")) this.loadCandidates(cx);
+    });
+  }
+
+  // Reads the candidates once. A refusal shows as the pane's problem and leaves Available as it was.
+  loadCandidates(cx) {
+    if (this.candidates !== null) return;
+    this.candidates = [];
+    cx.spawn(async (cx) => {
+      const result = await this.pane.foreman(["models", "candidates", "--json"]);
+      if (result.code === 0) {
+        try { this.candidates = JSON.parse(result.stdout); } catch (error) { this.pane.problem = String(error.message ?? error); this.candidates = null; }
+      } else { this.pane.problem = refusalOf(result); this.candidates = null; }
+      cx.notify();
     });
   }
 
@@ -65,11 +82,12 @@ export class Models {
 
   toggle(key, cx) {
     if (!this.open.delete(key)) this.open.add(key);
+    if (key === "available" && this.open.has(key)) this.loadCandidates(cx);
     try { localStorage.setItem(OPEN_KEY, JSON.stringify([...this.open])); } catch {}
     cx.notify();
   }
 
-  columns() { return this.ladder === null ? [] : columnsOf(this.ladder); }
+  columns() { return this.ladder === null ? [] : columnsOf({ ...this.ladder, candidates: this.candidates ?? [] }); }
 
   // The rows as `rowsOf` places them, moved up by the scroll, and how far the
   // rows can scroll.
@@ -204,6 +222,7 @@ export class Models {
       .on_click((_event, cx) => this.run([thinkingArgs(card)], cx));
     return this.face(card, column, rect, t, thinking).id(`models-card-${card.key}`)
       .when(ghost, (el) => el.opacity(0.35))
+      .when(card.candidate !== undefined, (el) => el.opacity(0.7))
       .hover((s) => s.border_color(COLORS[column.kind](t)))
       .cursor_grab().on_mouse_down("left", (event, _cx) => this.press(card, event));
   }
@@ -217,7 +236,7 @@ export class Models {
       ? [card.model, this.accountOf(card.name)].filter(Boolean).join(" · ")
       : card.kind === "reviewer"
         ? [card.model, card.reviewer.provider].filter(Boolean).join(" · ")
-        : card.harness;
+        : [card.harness, card.candidate?.pool].filter(Boolean).join(" · ");
     // Only a rung in a level shows its trial state: in Available, an old rung and a
     // bare model are the same choice, and a drop on a level takes either.
     const tag = card.kind === "rung" && card.rung.enabled ? card.rung.state : null;

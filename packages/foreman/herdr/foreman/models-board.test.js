@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { ROW, columnsOf, dropsOf, nextThinking, rowsOf, reviewerArgs, rungNameFor, thinkingArgs } from "./models-board.js";
 
 const rung = (name, level, enabled, extra = {}) => ({ rung: name, level, model: `m/${name}`, thinking: "low", enabled, ...extra });
@@ -123,4 +123,30 @@ test("an open Available shows a head per provider, and an open provider's cards 
   expect(cards.has("rung:off")).toBe(false);
   expect(cards.get("model:free")).toEqual({ x: 140, y: 252, width: 200, height: ROW.CARD_H });
   expect(rows.at(-1).rect.height).toBe(104);
+});
+
+describe("catalog candidates", () => {
+  const candidate = { model: "x/new", harness: "opencode", provider: "x", pool: "X Pool", modelsDev: "x/new", name: "New" };
+  const withCandidates = { ...ladder, candidates: [candidate, { ...candidate, model: "free" }] };
+  const cols = columnsOf(withCandidates);
+  const available = cols.find((column) => column.kind === "available");
+  const cardOf = (key) => available.cards.find((one) => one.key === key);
+
+  test("Available lists a candidate once, grouped by its provider, and skips one the registry has", () => {
+    expect(available.cards.map((one) => one.name)).toEqual(["off", "free", "x/new"]);
+    expect(available.groups.map((group) => group.label)).toEqual(["p", "q", "x"]);
+  });
+
+  test("a drop on a level registers the candidate before it adds the rung", () => {
+    const drop = dropsOf(cardOf("model:x/new"), cols, withCandidates).find((one) => one.zone.key === "level:1");
+    expect(drop.commands).toEqual([
+      ["models", "add", "x/new", "--harness", "opencode", "--provider", "x", "--pool", "X Pool", "--models-dev", "x/new"],
+      ["ladder", "add", "x/new", "x/new", "--level", "1"],
+    ]);
+  });
+
+  test("a drop on Reviewers registers it first too", () => {
+    const drop = dropsOf(cardOf("model:x/new"), cols, withCandidates).find((one) => one.zone.key === "reviewers");
+    expect(drop.commands.map((command) => command.slice(0, 2))).toEqual([["models", "add"], ["reviewers", "add"]]);
+  });
 });

@@ -42,10 +42,14 @@ const ModelCost = S.Struct({
 });
 
 const ModelEntry = S.Struct({
+  name: S.optional(S.String),
+  tool_call: S.optional(S.Boolean),
+  status: S.optional(S.String),
   cost: S.optional(S.NullOr(ModelCost)),
 });
 
 const ProviderEntry = S.Struct({
+  name: S.optional(S.String),
   models: S.optional(S.Record(S.String, ModelEntry)),
 });
 
