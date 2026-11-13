@@ -121,6 +121,15 @@ export const draftPipeline: BrowserCommand<[project: string], Drawing | null> = 
     ),
   );
 
+/** The scope of each grant in the policy file the UI server writes; none when it has no file yet. */
+export const grantScopes: BrowserCommand<[], ReadonlyArray<string>> = async () => {
+  if (fixtureFolder === undefined) throw new Error("UI server is not running");
+  const file = Bun.file(join(fixtureFolder, "policy.json"));
+  if (!(await file.exists())) return [];
+  const policy = (await file.json()) as { readonly grants?: ReadonlyArray<{ scope: string }> };
+  return (policy.grants ?? []).map((grant) => grant.scope);
+};
+
 /**
  * Reads or rewrites a file in the folder the UI server writes, through
  * foreman's own readers, so a fixture decodes as the dispatcher decodes it.

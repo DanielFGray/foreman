@@ -158,6 +158,14 @@ export const startFixtureServer = async (options?: {
       INSERT INTO pools (pool, harness, provider_default) VALUES ('Pool', 'pi', 'prov');
       INSERT INTO models (model, provider, pool, harness, limit_scope) VALUES ('m1', 'prov', 'Pool', 'pi', 'pool');
       INSERT INTO ladder (rank, level, rung, model) VALUES (1, 1, 'cheap', 'm1');
+      INSERT INTO items (id, project, type, title, status, priority, parent_id) VALUES
+        ('ep-graph', 'amux', 'epic', 'Draw the task graph', 'in_progress', 2, NULL),
+        ('ts-g1', 'amux', 'task', 'Place each item one past its blockers', 'open', 1, 'ep-graph'),
+        ('ts-g2', 'amux', 'task', 'Fold an epic into one card', 'open', 2, 'ep-graph'),
+        ('ts-g3', 'amux', 'task', 'Send picked cards through', 'open', 2, NULL),
+        ('ts-g4', 'amux', 'task', 'Read the store once', 'done', 2, NULL);
+      INSERT INTO deps (item_id, depends_on) VALUES
+        ('ts-g2', 'ts-g1'), ('ts-g3', 'ts-g2'), ('ts-g1', 'ts-g4');
     `).pipe(Effect.provide(store.layer)),
   );
 

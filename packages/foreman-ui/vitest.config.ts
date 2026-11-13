@@ -3,6 +3,7 @@ import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 import {
   draftPipeline,
+  grantScopes,
   removeDraftBlock,
   savedPipeline,
   startUiServer,
@@ -64,6 +65,7 @@ export default defineConfig({
               stopUiServer,
               savedPipeline,
               draftPipeline,
+              grantScopes,
               removeDraftBlock,
             },
             // Give Chromium time to start before the first test.

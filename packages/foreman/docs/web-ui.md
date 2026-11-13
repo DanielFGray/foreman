@@ -206,9 +206,9 @@ pane's picked cards and send through.
   column by priority, then epic, then id. `graphReport` calls it for the
   pane's `column` and `row`. The page calls it again on what it shows after it
   folds and filters, because a folded epic or a hidden item changes which
-  nodes and edges there are. The page imports `columnsOf` through the `tasks`
-  package's `./graph` export, because the package root also exports the
-  SQLite store.
+  nodes and edges there are. `placeGraph` reaches `columnsOf` through the
+  `tasks` package's `./graph` export, and the page reads `TaskState` from its
+  `./item` export, because the package root also exports the SQLite store.
 - **Folding.** An epic is the head of its family: every shown item whose
   parent chain reaches it. A folded epic stands for its whole family. An edge
   from a member to an item outside the family is drawn from the epic, and the

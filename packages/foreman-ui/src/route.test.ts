@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { routeOf } from "./route.ts";
+import { graphPath, routeOf } from "./route.ts";
 
 describe("routeOf", () => {
   it("lists projects at /", () => {
@@ -13,5 +13,20 @@ describe("routeOf", () => {
 
   it("decodes the project name", () => {
     assert.deepStrictEqual(routeOf("/p/my%20app"), { _tag: "project", name: "my app" });
+  });
+});
+
+describe("routeOf, the task graph", () => {
+  it("reads a project's graph at /p/<project>/graph", () => {
+    assert.deepStrictEqual(routeOf("/p/amux/graph"), { _tag: "graph", name: "amux" });
+    assert.deepStrictEqual(routeOf("/p/my%20app/graph/"), { _tag: "graph", name: "my app" });
+  });
+
+  it("falls back to the list for any other path under a project", () => {
+    assert.deepStrictEqual(routeOf("/p/amux/other"), { _tag: "projects" });
+  });
+
+  it("round-trips graphPath", () => {
+    assert.deepStrictEqual(routeOf(graphPath("my app")), { _tag: "graph", name: "my app" });
   });
 });

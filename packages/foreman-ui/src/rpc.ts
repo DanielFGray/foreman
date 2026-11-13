@@ -3,7 +3,7 @@
  * ConnectionHooks that drive the disconnect banner and reconnect reload.
  */
 import { BrowserSocket } from "@effect/platform-browser";
-import { Effect, Layer, Schedule } from "effect";
+import { Effect, Layer, Schedule, Schema as S } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRpc from "effect/reactivity/AtomRpc";
 import type * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -11,6 +11,7 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { Flow } from "foreman/pipeline-view";
 import type { Published } from "foreman/published-schema";
 import { UiContract } from "foreman/ui-contract";
+import { TaskState } from "tasks/item";
 import * as Stream from "effect/Stream";
 
 /** Connection to the UI server as the page shows it. */
@@ -95,6 +96,25 @@ export const pipelineAtom = Atom.family((project: string) =>
   Atom.family((flow: Flow) =>
     UiRpc.runtime.atom(
       Stream.unwrap(UiRpc.use((client) => Effect.succeed(client("Pipeline", { project, flow })))),
+    ),
+  ),
+);
+
+/** The reactivity key every task-graph read and policy write shares. */
+export const GRAPH_KEYS = ["graph"] as const;
+
+/**
+ * A project's task graph in the statuses that `statusKey` lists, joined by
+ * commas. PipelineGraph answers once; a PolicyGrant or PolicyRevoke sent with
+ * `GRAPH_KEYS` asks it again. The key is a string so one atom serves each
+ * filter.
+ */
+export const graphAtom = Atom.family((project: string) =>
+  Atom.family((statusKey: string) =>
+    UiRpc.query(
+      "PipelineGraph",
+      { project, statuses: statusKey.split(",").filter(S.is(TaskState)) },
+      { reactivityKeys: GRAPH_KEYS },
     ),
   ),
 );

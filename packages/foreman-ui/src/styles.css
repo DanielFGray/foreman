@@ -8,6 +8,7 @@
   --accent: #0b5fff;
   --danger: #b42318;
   --danger-bg: #fef3f2;
+  --granted: #1a7f37;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   line-height: 1.45;
 }
@@ -22,6 +23,7 @@
     --accent: #6ea8ff;
     --danger: #f97066;
     --danger-bg: #2a1215;
+    --granted: #4ac26b;
   }
 }
 
@@ -277,7 +279,10 @@ a:hover {
     r: 12px;
   }
 
-  .pipeline-toolbar button {
+  .pipeline-toolbar button,
+  .graph-filters button,
+  .graph-toolbar button,
+  .graph-detail button:not(.link) {
     min-height: 2.75rem;
   }
 }
@@ -295,5 +300,244 @@ a:hover {
 
   .pipeline-editor {
     padding: 0.5rem;
+  }
+}
+
+/* The task graph (docs/web-ui.md, "The task graph"). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.header a[data-testid="graph-link"] {
+  margin-left: auto;
+}
+
+.graph-filters,
+.graph-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.graph-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.graph-statuses label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.graph-filters input[type="search"] {
+  font: inherit;
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.graph-filters button,
+.graph-toolbar button,
+.graph-detail button:not(.link) {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.graph-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.problem {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.graph-body {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.graph-canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 75vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg);
+}
+
+.graph-canvas svg {
+  display: block;
+}
+
+.graph-card {
+  cursor: pointer;
+}
+
+.graph-card > rect {
+  fill: var(--panel);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.graph-card.epic > rect {
+  stroke-width: 2.5;
+}
+
+.graph-card.granted > rect {
+  stroke: var(--granted);
+}
+
+.graph-card.picked > rect {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.graph-card.context {
+  opacity: 0.45;
+}
+
+.graph-card.status-done,
+.graph-card.status-canceled {
+  opacity: 0.6;
+}
+
+.graph-card:focus-visible {
+  outline: none;
+}
+
+.graph-card:focus-visible > rect {
+  stroke: var(--accent);
+  stroke-dasharray: 4 3;
+}
+
+.graph-card text {
+  fill: var(--fg);
+  font-size: 13px;
+}
+
+.graph-card .graph-card-meta {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.graph-card .graph-card-grant {
+  fill: var(--granted);
+  font-size: 11px;
+}
+
+.graph-fold > rect {
+  fill: var(--bg);
+  stroke: var(--border);
+}
+
+.graph-fold text {
+  font-size: 11px;
+}
+
+.graph-edge path {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
+.graph-edge.resolved path {
+  stroke-dasharray: 5 4;
+  opacity: 0.6;
+}
+
+.graph-arrowhead {
+  fill: var(--muted);
+}
+
+.graph-edge-count {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.graph-detail {
+  flex: 0 0 18rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.graph-detail h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.graph-detail h3 {
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0.25rem;
+  color: var(--muted);
+}
+
+.graph-detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0 0 0.5rem;
+}
+
+.graph-detail dt {
+  color: var(--muted);
+}
+
+.graph-detail dd {
+  margin: 0;
+}
+
+.graph-detail ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+button.link {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 40rem) {
+  .graph-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .graph-detail {
+    flex-basis: auto;
+  }
+
+  .graph-canvas {
+    max-height: 60vh;
   }
 }

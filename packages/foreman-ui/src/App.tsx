@@ -3,7 +3,8 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Published } from "foreman/published-schema";
 import { PipelineEditor } from "./pipeline-editor.tsx";
 import { connectionAtom, readingsAtom } from "./rpc.ts";
-import { routeOf } from "./route.ts";
+import { graphPath, routeOf } from "./route.ts";
+import { TaskGraph } from "./task-graph.tsx";
 
 const ProjectList = ({ reading }: { readonly reading: Published }) => (
   <div className="app">
@@ -52,6 +53,9 @@ const ProjectReadings = ({
       <header className="header">
         <h1>{name}</h1>
         <span className="muted">{project?.directory ?? "not in reading"}</span>
+        <a href={graphPath(name)} data-testid="graph-link">
+          task graph →
+        </a>
       </header>
       <PipelineEditor project={name} />
       <div className="readings">
@@ -110,13 +114,29 @@ const ProjectReadings = ({
   );
 };
 
+const ProjectGraph = ({ name }: { readonly name: string }) => (
+  <div className="app app-wide" data-testid={`graph-page-${name}`}>
+    <a className="back" href={`/p/${encodeURIComponent(name)}`}>
+      ← {name}
+    </a>
+    <header className="header">
+      <h1>{name}</h1>
+      <span className="muted">task graph</span>
+    </header>
+    <TaskGraph project={name} />
+  </div>
+);
+
 const ReadingBody = ({ reading }: { readonly reading: Published }) => {
   const route = routeOf(globalThis.location.pathname);
-  return route._tag === "project" ? (
-    <ProjectReadings name={route.name} reading={reading} />
-  ) : (
-    <ProjectList reading={reading} />
-  );
+  switch (route._tag) {
+    case "project":
+      return <ProjectReadings name={route.name} reading={reading} />;
+    case "graph":
+      return <ProjectGraph name={route.name} />;
+    case "projects":
+      return <ProjectList reading={reading} />;
+  }
 };
 
 /** Root page: disconnect banner and the route for the current path. */
