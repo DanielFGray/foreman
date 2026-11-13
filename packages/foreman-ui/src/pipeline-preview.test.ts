@@ -32,6 +32,23 @@ const currentTarget = (drawing: Drawing): string => {
   return wire.to;
 };
 
+describe("inputPoint", () => {
+  for (const flow of ["across", "down"] as const) {
+    it(`is where the layout ends each wire into a block, laid out ${flow}`, () => {
+      const drawing = writtenDrawingOf(DEFAULT_PIPELINE, {}, flow);
+      const intoBlocks = drawing.wires.filter((wire) => wire.to !== "queue");
+      assert.isAbove(intoBlocks.length, 0);
+      for (const wire of intoBlocks) {
+        assert.deepStrictEqual(
+          inputPoint(drawing, wire.to, flow),
+          Option.fromNullishOr(wire.points.at(-1)),
+          `${wire.from} → ${wire.to}`,
+        );
+      }
+    });
+  }
+});
+
 describe("rejoinFrames", () => {
   it("marks rejoining branch.next to start with one unreachable problem", () => {
     const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
@@ -50,11 +67,11 @@ describe("rejoinFrames", () => {
     assert.isDefined(toClimb);
     assert.deepStrictEqual(
       handlePoint(toStart, BRANCH_NEXT),
-      inputPoint(committed.drawing, "start"),
+      inputPoint(committed.drawing, "start", "across"),
     );
     assert.deepStrictEqual(
       handlePoint(toClimb, BRANCH_NEXT),
-      inputPoint(committed.drawing, "climb"),
+      inputPoint(committed.drawing, "climb", "across"),
     );
   });
 

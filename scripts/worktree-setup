@@ -11,4 +11,5 @@ bun install
 # Playwright names. The browser cache is shared by every project on the
 # machine, and another project's Playwright can replace that build, so setup
 # installs it. Playwright skips the download when the build is present.
-(cd packages/foreman-ui && bunx playwright install chromium-headless-shell)
+# Skipping its garbage collection keeps the builds other projects use.
+(cd packages/foreman-ui && PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium-headless-shell)

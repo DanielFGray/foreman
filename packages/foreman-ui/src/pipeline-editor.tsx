@@ -212,7 +212,7 @@ const EditorSvg: Draggable<EditorFrame> = ({ state, d, draggedId }) => {
         </g>
       ))}
       {drawing.blocks.map((block) =>
-        Option.match(inputPoint(drawing, block.id), {
+        Option.match(inputPoint(drawing, block.id, state.flow), {
           onNone: () => null,
           onSome: (at) => (
             <circle

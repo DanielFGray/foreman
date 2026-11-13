@@ -105,22 +105,27 @@ export const frameOf = (
 /**
  * The committed drawing with one wire's end moved to `to`. Block positions stay
  * put so dragology's closest snaps to the blocks the operator sees; a full
- * layoutOf runs only after the drop.
+ * layoutOf runs only after the drop. The moved wire turns once halfway along
+ * the flow, as the layout's wires do.
  */
-export const drawingWithRejoin = (drawing: DrawingView, wire: WireRef, to: string): DrawingView =>
-  Option.match(inputPoint(drawing, to), {
+export const drawingWithRejoin = (
+  drawing: DrawingView,
+  wire: WireRef,
+  to: string,
+  flow: Flow,
+): DrawingView =>
+  Option.match(inputPoint(drawing, to, flow), {
     onNone: () => drawing,
     onSome: (end) => ({
       ...drawing,
       wires: drawing.wires.map((one) => {
         if (one.from !== wire.from || !samePort(one.port, wire.port)) return one;
         const start = one.points[0] ?? one.anchor;
-        const midX = (start[0] + end[0]) / 2;
-        return {
-          ...one,
-          to,
-          points: [start, [midX, start[1]], [midX, end[1]], end],
-        };
+        const points: ReadonlyArray<Point> =
+          flow === "down"
+            ? [start, [start[0], (start[1] + end[1]) / 2], [end[0], (start[1] + end[1]) / 2], end]
+            : [start, [(start[0] + end[0]) / 2, start[1]], [(start[0] + end[0]) / 2, end[1]], end];
+        return { ...one, to, points };
       }),
     }),
   });
@@ -149,7 +154,7 @@ export const rejoinFrames = (
           {
             pipeline: result.pipeline,
             problems: problemsOfExpansion(result.pipeline, checks),
-            drawing: drawingWithRejoin(base, wire, to),
+            drawing: drawingWithRejoin(base, wire, to, flow),
             checks,
             flow,
             pending: Option.some(change),
@@ -158,17 +163,25 @@ export const rejoinFrames = (
   });
 };
 
-/** Left-centre of a block: where a wire enters. The queue's is the top of the source block. */
-export const inputPoint = (drawing: DrawingView, id: string): Option.Option<Point> =>
-  id === "queue"
+/**
+ * Where a wire enters a block, as the layout routes it: the block's start
+ * along the flow, centred across it (left-centre across, top-centre down).
+ * The queue's input is on the source block's side, centred along the flow.
+ */
+export const inputPoint = (drawing: DrawingView, id: string, flow: Flow): Option.Option<Point> => {
+  const down = flow === "down";
+  return id === "queue"
     ? Option.map(
         Option.fromNullishOr(drawing.blocks.find((block) => block.kind === "source")),
-        (source): Point => [source.x + source.w / 2, source.y],
+        (source): Point =>
+          down ? [source.x, source.y + source.h / 2] : [source.x + source.w / 2, source.y],
       )
     : Option.map(
         Option.fromNullishOr(drawing.blocks.find((one) => one.id === id)),
-        (block): Point => [block.x, block.y + block.h / 2],
+        (block): Point =>
+          down ? [block.x + block.w / 2, block.y] : [block.x, block.y + block.h / 2],
       );
+};
 
 /** Where an exit's drag handle sits in this frame: at the target's input when rejoined, else at the wire's start. */
 export const handlePoint = (frame: EditorFrame, wire: WireRef): Option.Option<Point> =>
@@ -176,7 +189,7 @@ export const handlePoint = (frame: EditorFrame, wire: WireRef): Option.Option<Po
     Option.filter(frame.pending, (change) => movesWire(change, wire)),
     {
       onSome: (change) =>
-        change._tag === "Rejoin" ? inputPoint(frame.drawing, change.to) : Option.none(),
+        change._tag === "Rejoin" ? inputPoint(frame.drawing, change.to, frame.flow) : Option.none(),
       onNone: () =>
         Option.fromNullishOr(
           frame.drawing.wires.find((one) => one.from === wire.from && samePort(one.port, wire.port))
