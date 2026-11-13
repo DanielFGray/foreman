@@ -28,6 +28,7 @@ import {
 import { scheduleCommand } from "./schedule-command.ts";
 import { services, storeServices } from "./host.ts";
 import { serveCommand } from "./serve.ts";
+import { openCommand } from "./open-command.ts";
 
 /**
  * The command line. `foreman serve` runs the dispatcher (`serve.ts`); every
@@ -138,6 +139,7 @@ const foreman = Command.make("foreman", { skill }, ({ skill }) =>
 ).pipe(
   Command.withSubcommands([
     serveCommand,
+    openCommand,
     quotaCommand,
     Command.provide(ladderCommand, Registry.layerSql.pipe(Layer.provideMerge(Runs.layer))),
     Command.provide(modelsCommand, Registry.layer),

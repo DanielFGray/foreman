@@ -987,7 +987,7 @@ knows what happened, whatever the workflow.
 
 The operator's page is `packages/foreman-ui`, served by `foreman serve`. Its
 behaviour is in `docs/web-ui.md`. The herdr-app Foreman pane (`herdr/foreman/`)
-is frozen: it gets no new features and no fixes until the operator decides which
+is frozen, except that its Pipeline tab runs `foreman open <project>` (`src/open-command.ts`), which opens the project's page in the browser. Otherwise it gets no new features and no fixes until the operator decides which
 features move to the page.
 
 `foreman serve` writes every reading to `state.json` (`src/published.ts`).

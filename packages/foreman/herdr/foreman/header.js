@@ -57,8 +57,16 @@ export class Header {
       div().id(`mode-${mode}`).px(6).rounded(4).border(1)
         .border_color(pane.mode === mode ? t.accent : t.border).text_color(pane.mode === mode ? t.accent : t.foreground)
         .hover((s) => s.bg(t.hover))
-        .on_click((_event, cx) => pane.show(mode, cx))
-        .child(label)));
+        .on_click((_event, cx) => mode === "pipeline" ? this.openPage(cx) : pane.show(mode, cx))
+        .child(mode === "pipeline" ? `${label} ↗` : label)));
+  }
+
+  // The Pipeline tab opens the project's page in the browser, where the
+  // pipeline is edited. The pane's own Pipeline view is no longer reachable.
+  openPage(cx) {
+    const project = this.pane.project();
+    if (project === null) return;
+    this.pane.act(["open", project], cx, () => cx.notify());
   }
 
   // The fleet-wide mode of each step, and each grant with its revoke.
