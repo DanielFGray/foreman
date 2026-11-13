@@ -7,10 +7,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./composite": "./src/composite.ts",
     "./pipeline": "./src/pipeline.ts",
     "./pipeline-belt": "./src/pipeline-belt.ts",
+    "./pipeline-draft": "./src/pipeline-draft.ts",
     "./pipeline-edit": "./src/pipeline-edit.ts",
+    "./pipeline-file": "./src/pipeline-file.ts",
     "./pipeline-layout": "./src/pipeline-layout.ts",
+    "./pipeline-view": "./src/pipeline-view.ts",
     "./published-schema": "./src/published-schema.ts",
     "./ui-contract": "./src/ui-contract.ts",
     "./ui-server": "./src/ui-server.ts"

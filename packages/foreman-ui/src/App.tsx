@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Published } from "foreman/published-schema";
+import { PipelineEditor } from "./pipeline-editor.tsx";
 import { connectionAtom, readingsAtom } from "./rpc.ts";
 import { routeOf } from "./route.ts";
 
@@ -44,7 +45,7 @@ const ProjectReadings = ({
   const placements = reading.placements.filter((p) => p.project === name);
   const stopped = reading.stopped.filter((s) => s.project === name);
   return (
-    <div className="app" data-testid={`project-page-${name}`}>
+    <div className="app app-wide" data-testid={`project-page-${name}`}>
       <a className="back" href="/">
         ← projects
       </a>
@@ -52,6 +53,7 @@ const ProjectReadings = ({
         <h1>{name}</h1>
         <span className="muted">{project?.directory ?? "not in reading"}</span>
       </header>
+      <PipelineEditor project={name} />
       <div className="readings">
         <section data-testid="project-meta">
           <h2>Project</h2>

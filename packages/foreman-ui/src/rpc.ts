@@ -85,3 +85,17 @@ export const readingsAtom: Atom.Atom<AsyncResult.AsyncResult<Published, unknown>
   UiRpc.runtime.atom(
     Stream.unwrap(UiRpc.use((client) => Effect.succeed(client("Readings", void 0 as never)))),
   );
+
+/**
+ * Latest pipeline view for a project from the Pipeline stream. The atom keeps
+ * the last frame as each value arrives.
+ */
+export const pipelineAtom = Atom.family((project: string) =>
+  UiRpc.runtime.atom(
+    Stream.unwrap(
+      UiRpc.use((client) =>
+        Effect.succeed(client("Pipeline", { project, flow: "across" as const })),
+      ),
+    ),
+  ),
+);

@@ -208,7 +208,7 @@ describe("drawing a draft", () => {
     const inserted = blocks.find((one: { exits: ReadonlyArray<{ to: string }> }) =>
       one.exits.some((exit) => exit.to === "queue"),
     );
-    // The first exit leads on; every later one returns to the queue, where the drawing has no wire.
+    // The first exit leads on; every later one returns to the queue, a stub the drawing still draws.
     expect(inserted.exits.map((exit: { to: string }) => exit.to === "queue")).toEqual(
       inserted.exits.map((_: unknown, at: number) => at > 0),
     );
@@ -218,7 +218,7 @@ describe("drawing a draft", () => {
     expect(inserted.exits.map((exit: { name: string }) => exit.name)).toEqual(names);
     expect(
       shown.draft.drawing.wires.filter((wire: { from: string }) => wire.from === inserted.id),
-    ).toHaveLength(1);
+    ).toHaveLength(inserted.exits.length);
   });
 
   test("save checks the draft, then writes it as the pipeline the project runs", async () => {

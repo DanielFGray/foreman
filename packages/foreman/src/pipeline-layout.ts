@@ -2,11 +2,18 @@
 // what each block shows (`sizeOf`), so the renderer measures nothing: a
 // column is as wide as its widest block, a row as tall as its tallest, and a
 // wire's route is a list of points that the view draws as a path.
-import type { DrawnNode, Drawing as PipelineDrawing, Landing, Pipeline } from "./pipeline.ts";
+import {
+  type DrawnNode,
+  type Drawing as PipelineDrawing,
+  type Landing,
+  type Pipeline,
+  QUEUE,
+} from "./pipeline.ts";
 import { coversOf } from "./composite.ts";
 import type { Composites } from "./pipeline.ts";
 import {
   type Belt,
+  type BeltReturn,
   type BeltWire,
   beltOf,
   type Cell,
@@ -95,6 +102,8 @@ const PLUS = 14;
 const PLUS_ROOM = PLUS + 4;
 /** How far apart the return lanes run past the last lane, one per back wire. */
 const RETURN_SPACING = 10;
+/** How far a return to the queue runs out from its exit before it ends. */
+const RETURN_STUB = 28;
 
 /**
  * How big a block draws before its exits widen it: gates and routers are chips,
@@ -203,7 +212,10 @@ export const layoutOf = (belt: Belt, flow: Flow): Layout => {
   const trackOf = (sizes: ReadonlyArray<number>, gaps: ReadonlyArray<number>) =>
     sizes.flatMap((size, index) => (index < sizes.length - 1 ? [size, gaps[index]!] : [size]));
   const last = belt.rows - 1;
-  const wires = belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index));
+  const wires = [
+    ...belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index)),
+    ...belt.returns.flatMap((ret) => placedReturnOf(grid, ret)),
+  ];
   // The drawing holds every block and every wire, a back wire's return lane included.
   const reach = (axis: 0 | 1) =>
     Math.max(0, ...wires.flatMap(({ points }) => points.map((point) => point[axis] + PAD)));
@@ -305,16 +317,43 @@ const lengthsOf = (
   return down ? { la: h, lb: Math.max(w, exits) } : { la: w, lb: Math.max(h, exits) };
 };
 
-const exitsOf = (belt: Belt, id: string) => belt.wires.filter((wire) => wire.from === id);
+/** A block's exits, wires and returns alike, so each keeps its own slot along the block. */
+const exitsOf = (belt: Belt, id: string): ReadonlyArray<BeltReturn | Wire> => [
+  ...belt.wires.filter((wire) => wire.from === id),
+  ...belt.returns.filter((ret) => ret.from === id),
+];
 
 /**
  * The room an exit takes across its block: down, its label stands on the exit
  * with its "+" beside it, so their widths.
  */
-const slotOf = (wire: Wire, down: boolean) =>
+const slotOf = (exit: { readonly label: string }, down: boolean) =>
   down
-    ? Math.max(EXIT_SPACING, labelWidth(wire.label) + 12 + (wire.label === "" ? 0 : PLUS_ROOM))
+    ? Math.max(EXIT_SPACING, labelWidth(exit.label) + 12 + (exit.label === "" ? 0 : PLUS_ROOM))
     : EXIT_SPACING;
+
+/**
+ * The stub a return to the queue draws off its exit: the exit's slot leads
+ * out to a short run that ends at no block, so the exit has a handle to drag.
+ */
+const placedReturnOf = (grid: Grid, ret: BeltReturn): ReadonlyArray<PlacedWire> => {
+  const { down, spans } = grid;
+  const span = spans.get(ret.from);
+  if (span === undefined) return [];
+  const b0 = exitOf(grid, ret, span);
+  const edge = span.a + span.la;
+  const at = (a: number): Point => (down ? [b0, a] : [a, b0]);
+  const middle = at(edge + RETURN_STUB / 2);
+  return [
+    {
+      wire: { from: ret.from, port: ret.port, to: QUEUE, label: ret.label, back: false },
+      points: [at(edge), at(edge + RETURN_STUB)],
+      anchor: middle,
+      room: RETURN_STUB,
+      plus: middle,
+    },
+  ];
+};
 
 /** A wire runs on a lane when a block stands in its own row between its two ends. */
 const onLane = (belt: Belt, cellOf: ReadonlyMap<string, Cell>, wire: Wire) => {
@@ -414,10 +453,10 @@ const placedWireOf = (grid: Grid, wire: BeltWire, index: number): ReadonlyArray<
 };
 
 /** Where a wire leaves its block across the flow: the middle of its slot, with the slots centred on the block. */
-const exitOf = (grid: Grid, wire: Wire, span: Span): number => {
-  const siblings = exitsOf(grid.belt, wire.from);
+const exitOf = (grid: Grid, exit: Pick<Wire, "from" | "port">, span: Span): number => {
+  const siblings = exitsOf(grid.belt, exit.from);
   const slots = siblings.map((other) => slotOf(other, grid.down));
-  const at = siblings.findIndex((other) => other.port === wire.port);
+  const at = siblings.findIndex((other) => other.port === exit.port);
   const sum = (sizes: ReadonlyArray<number>) => sizes.reduce((total, size) => total + size, 0);
   return span.b + (span.lb - sum(slots)) / 2 + sum(slots.slice(0, at)) + slots[at]! / 2;
 };

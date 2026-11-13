@@ -141,8 +141,14 @@ the page's files. `foreman serve` provides it beside `supervise`.
   give, as `PipelineChange` values. The page checks each one with `problemsOf`
   on the expansion, in the browser, and colours the preview green when it has no
   problem and amber with the count when it has some. On drop the page sends
-  that change through `PipelineEdit`, and the `Pipeline` stream sends the new
-  draft. Until it arrives, the page draws the dropped state.
+  that change through `PipelineEdit`. The page draws the newest view the server
+  sent, a `Pipeline` stream frame or an edit's answer, with the edits it has not
+  answered replayed over it. It sends those edits one at a time, in drop order,
+  so the replay matches what the server applies, and a refused edit drops the
+  edits after it. The checks use the
+  composites and offers the `Pipeline` stream carries, the ones the server
+  checks with. The toolbar's Save and Discard send `PipelineSave` and
+  `PipelineDiscard`; Save is disabled while the drawing has problems.
 - **The other views** follow as the operator decides which features move:
   Tasks board, Models board, simulate, fleet, task detail.
 - **Shared code.** The page imports the contract and foreman's pure modules

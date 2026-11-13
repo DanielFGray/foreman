@@ -985,6 +985,11 @@ knows what happened, whatever the workflow.
 
 ## Front ends
 
+The operator's page is `packages/foreman-ui`, served by `foreman serve`. Its
+behaviour is in `docs/web-ui.md`. The herdr-app Foreman pane (`herdr/foreman/`)
+is frozen: it gets no new features and no fixes until the operator decides which
+features move to the page.
+
 `foreman serve` writes every reading to `state.json` (`src/published.ts`).
 The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
 reads `state.json`, and reads the queue and a task's record through
