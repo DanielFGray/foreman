@@ -18,7 +18,7 @@ import type { Published } from "foreman/published-schema";
 import { Records } from "../../foreman/src/records.ts";
 import { Repository } from "../../foreman/src/repository.ts";
 import { scratchStore, seed } from "../../foreman/src/scratch-store.ts";
-import { ReadingsRef, serveOrigins, uiServerOn, type UiServerOptions } from "foreman/ui-server";
+import { ReadingsRef, serveGate, uiServerOn, type UiServerOptions } from "foreman/ui-server";
 
 /** A free TCP port on 127.0.0.1. */
 export const freePort = (): Promise<number> =>
@@ -169,9 +169,9 @@ export const startFixtureServer = async (options?: {
   const handlers = Layer.mergeAll(readings, services);
 
   const port = options?.port ?? (await freePort());
-  const trustedOrigins = options?.trustedOrigins ?? serveOrigins(port);
+  const gate = serveGate(port);
   const serverOptions: UiServerOptions = {
-    trustedOrigins,
+    gate: { ...gate, origins: options?.trustedOrigins ?? gate.origins },
     page: options?.page,
   };
 

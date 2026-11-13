@@ -1,11 +1,12 @@
 /**
- * The UI server Layer: HTTP on this machine only, the contract's handlers on a
+ * The UI server Layer: HTTP on 127.0.0.1, the contract's handlers on a
  * WebSocket route, Origin and Host checks, and the page's Bun.build outputs
  * served from memory (`docs/web-ui.md`).
  *
  * Handlers call the pipeline and composite verb functions; they hold no logic
- * of their own. The trusted page origin is an input of this Layer: serve passes
- * its own address; page tests pass vitest's browser-page origin.
+ * of their own. The gate is an input of this Layer: serve passes its own
+ * address and the names in `FOREMAN_UI_HOSTS`; page tests pass vitest's
+ * browser-page origin.
  */
 import { BunHttpServer, BunServices } from "@effect/platform-bun";
 import {
@@ -64,56 +65,69 @@ export class ReadingsRef extends Context.Service<
 /** `FOREMAN_UI_PORT` through Config, default 7341. */
 export const uiPort = Config.Int("FOREMAN_UI_PORT").pipe(Config.withDefault(DEFAULT_UI_PORT));
 
-/** Host values this server accepts for the given listen port. */
-export const allowedHosts = (port: number): ReadonlySet<string> =>
-  new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+/**
+ * Extra names the page is reached by, such as a Tailscale name, from
+ * `FOREMAN_UI_HOSTS`: comma separated, each exactly as the browser sends it in
+ * `Host` (`box.tailnet.ts.net`, or `box.tailnet.ts.net:8443` off port 443).
+ */
+export const uiHosts = Config.String("FOREMAN_UI_HOSTS").pipe(
+  Config.map((list) =>
+    list
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name !== ""),
+  ),
+  Config.withDefault<ReadonlyArray<string>>([]),
+);
 
 /**
- * Origins serve trusts by default: its own listen address under both names.
- * Page tests pass the origin of vitest's browser page instead.
+ * What the server admits: the `Host` values a request may name, and the
+ * `Origin` values a browser page may send.
  */
-export const serveOrigins = (port: number): ReadonlyArray<string> => [
-  `http://127.0.0.1:${port}`,
-  `http://localhost:${port}`,
-];
-
-/**
- * Whether a request's Host and Origin are allowed for this listen port.
- * Missing Origin is allowed (non-browser clients); a foreign Origin or Host is not.
- * `trustedOrigins` is the exact trusted page origin set the Layer was given.
- */
-export const localRequest = (
-  port: number,
-  headers: { readonly host: string | undefined; readonly origin: string | undefined },
-  trustedOrigins: ReadonlyArray<string> = serveOrigins(port),
-): boolean => {
-  const host = headers.host;
-  if (host === undefined || !allowedHosts(port).has(host)) return false;
-  const origin = headers.origin;
-  return origin === undefined || trustedOrigins.includes(origin);
+export type Gate = {
+  readonly hosts: ReadonlySet<string>;
+  readonly origins: ReadonlyArray<string>;
 };
+
+/**
+ * The gate serve uses: its listen address under both loopback names, over
+ * http, and each extra name over https. An extra name is reached through a
+ * proxy such as `tailscale serve`, which serves only https.
+ */
+export const serveGate = (port: number, names: ReadonlyArray<string> = []): Gate => ({
+  hosts: new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...names]),
+  origins: [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    ...names.map((name) => `https://${name}`),
+  ],
+});
+
+/**
+ * Whether the gate admits a request. Missing Origin is admitted (navigation
+ * and non-browser clients); the Host check covers them.
+ */
+export const admits = (
+  gate: Gate,
+  headers: { readonly host: string | undefined; readonly origin: string | undefined },
+): boolean =>
+  headers.host !== undefined &&
+  gate.hosts.has(headers.host) &&
+  (headers.origin === undefined || gate.origins.includes(headers.origin));
 
 /** 403 with no body for a foreign Host or Origin. */
 const refuse = HttpServerResponse.empty({ status: 403 });
 
 /**
- * Global middleware: every request and WebSocket upgrade must name this
- * machine's listen address, and when Origin is present it must be one of the
- * trusted page origins. Returns 403 with no body otherwise.
+ * Global middleware: every request and WebSocket upgrade the gate does not
+ * admit gets 403 with no body.
  */
-export const localOnlyMiddleware = (port: number, trustedOrigins: ReadonlyArray<string>) =>
+export const gateMiddleware = (gate: Gate) =>
   HttpRouter.middleware(
     (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        return localRequest(
-          port,
-          {
-            host: request.headers.host,
-            origin: request.headers.origin,
-          },
-          trustedOrigins,
-        )
+        return admits(gate, { host: request.headers.host, origin: request.headers.origin })
           ? yield* httpEffect
           : refuse;
       }),
@@ -205,11 +219,12 @@ const pipelineChanges = (project: string, flow: "across" | "down") =>
   );
 
 /**
- * Options for {@link uiServerOn} / {@link uiRoutesLayer}: the trusted page
- * origin(s) and whether to Bun.build and serve the page.
+ * Options for {@link uiServerOn}: the gate, and whether to Bun.build and serve
+ * the page.
  */
 export type UiServerOptions = {
-  readonly trustedOrigins?: ReadonlyArray<string>;
+  /** Default: {@link serveGate} for the port, with no extra names. */
+  readonly gate?: Gate;
   /** When false, skip the page build (contract-only tests). Default true. */
   readonly page?: boolean;
 };
@@ -318,26 +333,24 @@ export const pageRoutesLayer = (assets: PageAssets) =>
  * Callers provide `uiHandlersLayer` (and its services) and this Layer provides
  * the HTTP router wiring.
  */
-export const uiRoutesLayer = (
-  port: number,
-  trustedOrigins: ReadonlyArray<string> = serveOrigins(port),
-) =>
+export const uiRoutesLayer = (gate: Gate) =>
   Layer.mergeAll(
     RpcServer.layerHttp({ group: UiContract, path: UI_RPC_PATH, protocol: "websocket" }),
     // Global middleware is itself a Layer (route middleware would use `.layer`).
-    localOnlyMiddleware(port, trustedOrigins),
+    gateMiddleware(gate),
   ).pipe(Layer.provide(RpcSerialization.layerJson));
 
 /**
  * One Layer: listen on `127.0.0.1` at `FOREMAN_UI_PORT` (default 7341), serve
- * the contract over WebSocket, refuse foreign Host and Origin, and serve the
- * page's Bun.build outputs. Requires `ReadingsRef`, handler services, and the
- * services the verbs need. `foreman serve` provides this beside supervise.
+ * the contract over WebSocket, refuse a Host or Origin outside the gate
+ * (`FOREMAN_UI_HOSTS` adds names), and serve the page's Bun.build outputs.
+ * Requires `ReadingsRef`, handler services, and the services the verbs need.
+ * `foreman serve` provides this beside supervise.
  */
 export const uiServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const port = yield* uiPort;
-    return uiServerOn(port);
+    return uiServerOn(port, { gate: serveGate(port, yield* uiHosts) });
   }),
 );
 
@@ -347,20 +360,16 @@ export const uiServerLayer = Layer.unwrap(
  *
  * Stop uses `@effect/platform-bun`'s patched `server.stop(true)` so an open
  * page WebSocket does not hold the Layer open (see patches/ and web-ui.md).
- * `trustedOrigins` defaults to the server's own address; page tests pass
- * vitest's page origin.
+ * Page tests pass a gate whose origin is vitest's page.
  */
 export const uiServerOn = (port: number, options?: UiServerOptions) => {
-  const trustedOrigins = options?.trustedOrigins ?? serveOrigins(port);
+  const gate = options?.gate ?? serveGate(port);
   const withPage = options?.page !== false;
   return Layer.unwrap(
     Effect.gen(function* () {
       const routes = withPage
-        ? Layer.mergeAll(
-            uiRoutesLayer(port, trustedOrigins),
-            pageRoutesLayer(yield* buildPageAssets),
-          )
-        : uiRoutesLayer(port, trustedOrigins);
+        ? Layer.mergeAll(uiRoutesLayer(gate), pageRoutesLayer(yield* buildPageAssets))
+        : uiRoutesLayer(gate);
       return HttpRouter.serve(routes.pipe(Layer.provide(uiHandlersLayer)), {
         disableLogger: true,
       }).pipe(

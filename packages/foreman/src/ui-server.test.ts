@@ -1,6 +1,15 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { BunServices, BunSocket } from "@effect/platform-bun";
-import { Effect, Fiber, Layer, Option, Queue, Stream, SubscriptionRef } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc";
 import { Command } from "effect/cli";
@@ -22,12 +31,14 @@ import { UiContract } from "./ui-contract.ts";
 import { resolve } from "./paths.ts";
 import {
   buildPageAssets,
-  localRequest,
+  admits,
+  type Gate,
   ReadingsRef,
   resolvePageEntrypoint,
-  serveOrigins,
+  serveGate,
   uiHandlersLayer,
   uiRoutesLayer,
+  uiHosts,
   uiServerOn,
 } from "./ui-server.ts";
 
@@ -146,40 +157,72 @@ const pinned = {
   ),
 };
 
-describe("localRequest", () => {
+describe("admits", () => {
+  const local = serveGate(7341);
+  const pageAt = (origin: string): Gate => ({ ...local, origins: [origin] });
+
   test("accepts localhost Host and Origin for the listen port", () => {
-    expect(localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:7341" })).toBe(
-      true,
-    );
-    expect(localRequest(7341, { host: "localhost:7341", origin: undefined })).toBe(true);
+    expect(admits(local, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:7341" })).toBe(true);
+    expect(admits(local, { host: "localhost:7341", origin: undefined })).toBe(true);
   });
 
   test("refuses a foreign Host or Origin", () => {
-    expect(localRequest(7341, { host: "example.com:7341", origin: undefined })).toBe(false);
-    expect(localRequest(7341, { host: "127.0.0.1:7341", origin: "http://example.com" })).toBe(
-      false,
-    );
+    expect(admits(local, { host: "example.com:7341", origin: undefined })).toBe(false);
+    expect(admits(local, { host: "127.0.0.1:7341", origin: "http://example.com" })).toBe(false);
   });
 
   test("accepts a trusted page origin that is not the listen address", () => {
-    expect(
-      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://localhost:17341" }, [
-        "http://localhost:17341",
-      ]),
-    ).toBe(true);
-    expect(
-      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:7341" }, [
-        "http://localhost:17341",
-      ]),
-    ).toBe(false);
+    const gate = pageAt("http://localhost:17341");
+    expect(admits(gate, { host: "127.0.0.1:7341", origin: "http://localhost:17341" })).toBe(true);
+    expect(admits(gate, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:7341" })).toBe(false);
   });
 
   test("refuses another loopback port when only one page origin is trusted", () => {
     expect(
-      localRequest(7341, { host: "127.0.0.1:7341", origin: "http://127.0.0.1:23315" }, [
-        "http://127.0.0.1:17342",
-      ]),
+      admits(pageAt("http://127.0.0.1:17342"), {
+        host: "127.0.0.1:7341",
+        origin: "http://127.0.0.1:23315",
+      }),
     ).toBe(false);
+  });
+
+  test("accepts a FOREMAN_UI_HOSTS name from its https page, with or without a port", () => {
+    const gate = serveGate(7341, ["box.tailnet.ts.net", "box.tailnet.ts.net:8443"]);
+    expect(admits(gate, { host: "box.tailnet.ts.net", origin: "https://box.tailnet.ts.net" })).toBe(
+      true,
+    );
+    expect(
+      admits(gate, { host: "box.tailnet.ts.net:8443", origin: "https://box.tailnet.ts.net:8443" }),
+    ).toBe(true);
+    expect(admits(gate, { host: "box.tailnet.ts.net", origin: undefined })).toBe(true);
+  });
+
+  test("refuses a rebound host from its own origin, and an extra name over http", () => {
+    const gate = serveGate(7341, ["box.tailnet.ts.net"]);
+    expect(admits(gate, { host: "evil.example", origin: "https://evil.example" })).toBe(false);
+    expect(admits(gate, { host: "box.tailnet.ts.net", origin: "http://box.tailnet.ts.net" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("uiHosts", () => {
+  const read = (value: string | undefined) =>
+    Effect.runSync(
+      Effect.gen(function* () {
+        return yield* uiHosts;
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: value === undefined ? {} : { FOREMAN_UI_HOSTS: value } }),
+          ),
+        ),
+      ),
+    );
+
+  test("is empty when unset, and splits a comma list with spaces and empties dropped", () => {
+    expect(read(undefined)).toEqual([]);
+    expect(read(" a.ts.net , ,b.ts.net:8443")).toEqual(["a.ts.net", "b.ts.net:8443"]);
   });
 });
 
@@ -351,7 +394,7 @@ describe("Origin and Host checks", () => {
   test("an upgrade with Origin http://example.com and a request with a foreign Host each get 403", async () => {
     const port = 7341;
     const { handler, dispose } = HttpRouter.toWebHandler(
-      uiRoutesLayer(port, serveOrigins(port)).pipe(
+      uiRoutesLayer(serveGate(port)).pipe(
         Layer.provide(handlers),
         Layer.provide(HttpServer.layerServices),
       ),
@@ -389,7 +432,7 @@ describe("Origin and Host checks", () => {
     const port = 7344;
     const trusted = "http://127.0.0.1:17342";
     const { handler, dispose } = HttpRouter.toWebHandler(
-      uiRoutesLayer(port, [trusted]).pipe(
+      uiRoutesLayer({ ...serveGate(port), origins: [trusted] }).pipe(
         Layer.provide(handlers),
         Layer.provide(HttpServer.layerServices),
       ),

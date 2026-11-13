@@ -106,19 +106,26 @@ the page's files. `foreman serve` provides it beside `supervise`.
   again, so the page always matches the code that serves it. No built files are
   committed. A build that fails is logged and stops the UI server only: the
   dispatcher runs on.
-- **This machine only.** The server listens on `127.0.0.1`. The port is
-  `FOREMAN_UI_PORT`, read through `Config`, with a default of `7341`.
+- **Listens on this machine only.** The server listens on `127.0.0.1`. The
+  port is `FOREMAN_UI_PORT`, read through `Config`, with a default of `7341`.
+  Another device reaches it only through a proxy on this machine, such as
+  `tailscale serve`.
 - **Origin and Host checks.** Any web page open in the operator's browser can
   open a WebSocket to `localhost`. DNS rebinding lets a page on another domain
   reach `127.0.0.1` with that domain's name. This server dispatches agents,
   changes the policy and lands code. So the server refuses each request and
-  each WebSocket upgrade whose `Host` is not `127.0.0.1:<port>` or
-  `localhost:<port>`, or whose `Origin` is present and is not the **trusted
-  page origin**. The refusal is 403 with no body. The Layer takes the trusted
-  page origin as an input: `foreman serve` passes its own address
-  (`http://127.0.0.1:<port>` and `http://localhost:<port>`), and the page tests
-  pass the origin of vitest's browser page, which serves the page under test.
-  The check runs on every request in both cases.
+  each WebSocket upgrade that its **gate** does not admit. The gate is a set
+  of `Host` values and a list of page origins. A request is admitted when its
+  `Host` is in the set and its `Origin` is absent or in the list. The refusal
+  is 403 with no body. The Layer takes the gate as an input. `foreman serve`
+  passes `serveGate`: `127.0.0.1:<port>` and `localhost:<port>` over http, and
+  each name in `FOREMAN_UI_HOSTS` over https. That setting is a comma-separated
+  list of names written exactly as the browser sends them in `Host`
+  (`box.tailnet.ts.net`, or `box.tailnet.ts.net:8443` off port 443). It is
+  empty by default. An extra name is https only, because `tailscale serve`
+  serves only https. The page tests pass the origin of vitest's browser page,
+  which serves the page under test. The check runs on every request in both
+  cases.
 - **Reconnect.** When the WebSocket closes, the page shows that it is
   disconnected, tries again each second, and reloads itself when a new
   connection succeeds, so it runs the code of the new serve.
@@ -187,9 +194,11 @@ serve` to check that it starts") stays as it is.
   run in the gate. A missing Chromium fails the gate. It does not skip the
   tests.
 - **Runner**: every test in the package runs with `bunx --bun vitest run` on
-  `@effect/vitest`. On Node, vitest's workers cannot load `bun:` modules. The
-  Playwright version matches the Chromium that is installed, so the gate does
-  not download a browser.
+  `@effect/vitest`. On Node, vitest's workers cannot load `bun:` modules.
+  `scripts/worktree-setup` installs the headless Chromium build that the
+  pinned Playwright names. The browser cache is shared by every project on the
+  machine, and another project's Playwright can replace that build. The gate
+  itself does not download a browser.
 - **A look by an agent**: `bun run dev` in `packages/foreman-ui` starts the
   same Layer with the same fixtures and prints its URL. An agent opens it with
   its browser tool. The operator is not needed to test the page.
@@ -211,6 +220,8 @@ Each rule below is changed by this record. The record wins in each case.
 | Durable state beyond the policy, pipelines, drafts and instructions files is a wall | `AGENTS.md`, "The world holds the work" | No conflict: the port is an environment setting, and the page stores nothing. |
 | `effect` and `@effect/platform-bun` are pinned to 4.1.0 | `packages/foreman/package.json` | 4.1.2, for `@effect/atom-react`. |
 | An `Origin` other than `http://127.0.0.1:<port>` or `http://localhost:<port>` is refused | this record, before vitest Browser Mode | The Layer takes the trusted page origin as an input; serve passes its own address. |
+| The server answers only requests that name `127.0.0.1:<port>` or `localhost:<port>` | this record, before `FOREMAN_UI_HOSTS` | The gate also admits each name in `FOREMAN_UI_HOSTS`, from its https origin, so a phone reaches the page through `tailscale serve`. The listen address stays `127.0.0.1`. |
+| The Playwright version matches the Chromium that is installed, so the gate does not download a browser | this record, Tests, Runner | `scripts/worktree-setup` installs the Chromium build the pinned Playwright names; the gate still downloads nothing. |
 | The page tests are plain Playwright | this record, before vitest Browser Mode | vitest Browser Mode with the Playwright provider, in the same vitest run as the unit tests. |
 | Tests use `bun:test` | every package's `test:unit` script | `packages/foreman-ui` uses `@effect/vitest` on Bun. foreman and tasks move later, in their own task. |
 
@@ -223,5 +234,8 @@ Each rule below is changed by this record. The record wins in each case.
   `foreman pipeline edit` leave the same drafts file.
 - A bundle of the page has no `node:` or `bun:` import.
 - An upgrade from `Origin: http://example.com` is refused.
+- With `FOREMAN_UI_HOSTS=box.tailnet.ts.net`, a request with that `Host` and
+  `Origin: https://box.tailnet.ts.net` is admitted, and one with `Host:
+  evil.example` from its own origin is refused.
 - A drag in the editor that would leave a block unreachable shows an amber
   preview with one problem, and a drop sends exactly one `PipelineEdit`.

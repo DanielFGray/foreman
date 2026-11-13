@@ -677,6 +677,40 @@ What it starts by itself is the policy's to say; see above.
 foreman opens workspaces in the session it is running in, so serve must
 reach that hc server.
 
+### The page
+
+serve also serves the operator's page at `http://127.0.0.1:7341`
+(`FOREMAN_UI_PORT` sets the port). `foreman open <project>` opens a project's
+page. The server listens on this machine only, and it refuses a request that
+names a host it does not know. This stops a web page from reaching it through
+DNS rebinding.
+
+The page can dispatch agents and land code, and it has no login. To use it
+from a phone, reach it through [Tailscale](https://tailscale.com), which admits
+only your own devices:
+
+1. Serve the page over HTTPS to your tailnet:
+
+   ```bash
+   tailscale serve --bg --https=7443 http://127.0.0.1:7341
+   ```
+
+   `tailscale serve status` prints the address, for example
+   `https://box.tailnet.ts.net:7443`.
+
+2. Tell serve to accept that name, exactly as the address writes it (with no
+   port when you serve on 443), in a drop-in for the unit:
+
+   ```bash
+   printf '[Service]\nEnvironment=FOREMAN_UI_HOSTS=box.tailnet.ts.net:7443\n' \
+     > ~/.config/systemd/user/foreman.service.d/hosts.conf
+   systemctl --user daemon-reload && systemctl --user restart foreman.service
+   ```
+
+   `FOREMAN_UI_HOSTS` takes several names, separated by commas.
+
+3. Open the address on any device in your tailnet.
+
 ## Ports
 
 `Fleet` (`src/fleet.ts`) is the whole multiplexer surface: open a task's

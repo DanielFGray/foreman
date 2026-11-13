@@ -6,3 +6,9 @@
 set -euo pipefail
 
 bun install
+
+# The page's browser tests run on the Chromium build this checkout's pinned
+# Playwright names. The browser cache is shared by every project on the
+# machine, and another project's Playwright can replace that build, so setup
+# installs it. Playwright skips the download when the build is present.
+(cd packages/foreman-ui && bunx playwright install chromium-headless-shell)
