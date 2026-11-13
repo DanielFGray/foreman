@@ -53,3 +53,6 @@ export type GraphView = typeof GraphView.Type;
 
 /** The statuses a graph shows when none are asked for: the work still to do. */
 export const GRAPH_STATUSES: ReadonlyArray<TaskState> = ["open", "in_progress"];
+
+/** The statuses that resolve a dependency: its blocker no longer holds anything back. */
+export const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);

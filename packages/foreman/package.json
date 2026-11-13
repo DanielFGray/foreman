@@ -17,7 +17,9 @@
     "./pipeline-view": "./src/pipeline-view.ts",
     "./published-schema": "./src/published-schema.ts",
     "./ui-contract": "./src/ui-contract.ts",
-    "./ui-server": "./src/ui-server.ts"
+    "./ui-server": "./src/ui-server.ts",
+    "./pipeline-graph": "./src/pipeline-graph.ts",
+    "./pipeline-graph-view": "./src/pipeline-graph-view.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

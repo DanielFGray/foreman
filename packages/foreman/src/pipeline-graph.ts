@@ -16,7 +16,7 @@ import {
   type Step,
   STEPS,
 } from "./policy.ts";
-import type { CoveringGrantView, GraphView } from "./pipeline-graph-view.ts";
+import { type CoveringGrantView, FINISHED, type GraphView } from "./pipeline-graph-view.ts";
 
 /** What `graphReport` reads. */
 export interface GraphWorld {
@@ -163,5 +163,3 @@ export const coveringOf = (
         granted.map(({ step }) => step),
       );
 };
-
-const FINISHED: ReadonlySet<string> = new Set(["done", "canceled"]);
