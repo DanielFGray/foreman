@@ -8,6 +8,7 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRpc from "effect/reactivity/AtomRpc";
 import type * as AsyncResult from "effect/reactivity/AsyncResult";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import type { Flow } from "foreman/pipeline-view";
 import type { Published } from "foreman/published-schema";
 import { UiContract } from "foreman/ui-contract";
 import * as Stream from "effect/Stream";
@@ -87,15 +88,13 @@ export const readingsAtom: Atom.Atom<AsyncResult.AsyncResult<Published, unknown>
   );
 
 /**
- * Latest pipeline view for a project from the Pipeline stream. The atom keeps
- * the last frame as each value arrives.
+ * Latest pipeline view for a project, laid out in `flow`, from the Pipeline
+ * stream. The atom keeps the last frame as each value arrives.
  */
 export const pipelineAtom = Atom.family((project: string) =>
-  UiRpc.runtime.atom(
-    Stream.unwrap(
-      UiRpc.use((client) =>
-        Effect.succeed(client("Pipeline", { project, flow: "across" as const })),
-      ),
+  Atom.family((flow: Flow) =>
+    UiRpc.runtime.atom(
+      Stream.unwrap(UiRpc.use((client) => Effect.succeed(client("Pipeline", { project, flow })))),
     ),
   ),
 );

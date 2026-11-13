@@ -57,6 +57,8 @@ export default defineConfig({
             provider: playwright(),
             headless: true,
             instances: [{ browser: "chromium", headless: true }],
+            // A desktop screen; a phone test sets its own viewport.
+            viewport: { width: 1280, height: 800 },
             commands: {
               startUiServer,
               stopUiServer,

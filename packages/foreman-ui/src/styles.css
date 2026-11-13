@@ -251,3 +251,49 @@ a:hover {
   margin-bottom: 1rem;
   color: var(--muted);
 }
+
+/* dragology puts touch-action: none on its whole SVG, so a finger on the
+   drawing could not scroll the page or the canvas. The drawing pans, and only
+   the exit handles, which a finger drags, keep none. The inline style needs
+   !important to be overridden. */
+.pipeline-canvas svg {
+  touch-action: pan-x pan-y !important;
+}
+
+.pipeline-canvas .exit-dot {
+  touch-action: none;
+}
+
+/* Long names and paths wrap rather than widen the page. */
+.header .muted,
+.project-list .dir,
+.readings li,
+.pipeline-problem-list li {
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .pipeline-canvas .exit-dot {
+    r: 12px;
+  }
+
+  .pipeline-toolbar button {
+    min-height: 2.75rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .app {
+    padding: 1rem 1rem 2rem;
+  }
+
+  .header {
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .pipeline-editor {
+    padding: 0.5rem;
+  }
+}

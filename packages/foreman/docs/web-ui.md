@@ -168,6 +168,18 @@ the page's files. `foreman serve` provides it beside `supervise`.
   notification, as the pane does. The page asks for the permission once.
 - **Theme.** The page follows the browser's light or dark setting, with colour
   tokens in CSS.
+- **Phones.** The page fits a phone's width with no sideways page scroll. The
+  pipeline lays out `down` while the viewport is taller than it is wide, else
+  `across`, as the pane does. The `Pipeline` stream and each `PipelineEdit`
+  send the same flow, and each editor frame carries the flow it was laid out
+  in. The canvas is as wide as its container, or as the drawing when the
+  drawing is wider. dragology sets `touch-action: none` on its whole SVG; the
+  page overrides it to `pan-x pan-y`, so a finger on the drawing scrolls, and
+  keeps `none` on the exit handles, so a finger on a handle drags. On a touch
+  screen the handles and the toolbar buttons are larger. A browser test at a
+  390 by 844 viewport checks the width, the touch-action values and that a
+  touch drag sends one `PipelineEdit` with `flow: "down"`. The other browser
+  tests run at 1280 by 800.
 
 ## Tests
 

@@ -31,6 +31,8 @@ export type EditorFrame = {
   readonly problems: ReadonlyArray<string>;
   readonly drawing: DrawingView;
   readonly checks: CheckInputs;
+  /** The direction `drawing` is laid out in. */
+  readonly flow: Flow;
   /** The change a drag candidate makes to the frame it started from. */
   readonly pending: Option.Option<PipelineChange>;
 };
@@ -96,6 +98,7 @@ export const frameOf = (
   problems,
   drawing: writtenDrawingOf(pipeline, checks.composites, flow),
   checks,
+  flow,
   pending: Option.none(),
 });
 
@@ -148,6 +151,7 @@ export const rejoinFrames = (
             problems: problemsOfExpansion(result.pipeline, checks),
             drawing: drawingWithRejoin(base, wire, to),
             checks,
+            flow,
             pending: Option.some(change),
           },
         ];

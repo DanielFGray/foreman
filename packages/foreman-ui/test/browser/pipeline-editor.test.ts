@@ -153,7 +153,7 @@ const wireOf = (from: string): SVGPathElement => {
  * can hang once React has re-rendered the drag, so the release is dispatched on
  * the document, at the centre of the target block.
  */
-const releaseOver = (blockId: string) => {
+const releaseOver = (blockId: string, pointerType: "mouse" | "touch" = "mouse") => {
   const box = document.querySelector(`[data-testid="block-${blockId}"]`)?.getBoundingClientRect();
   const clientX = box !== undefined ? box.left + box.width / 2 : 0;
   const clientY = box !== undefined ? box.top + box.height / 2 : 0;
@@ -162,7 +162,7 @@ const releaseOver = (blockId: string) => {
       bubbles: true,
       cancelable: true,
       pointerId: 1,
-      pointerType: "mouse",
+      pointerType,
       button: 0,
       buttons: 0,
       clientX,
@@ -195,6 +195,80 @@ const dragHandleOver = async (handleId: string, blockId: string) => {
 
 const dragNextExitOver = (from: string, blockId: string) =>
   dragHandleOver(`exit-${from}-next`, blockId);
+
+/** The centre of the element with test id `id`, in client coordinates. */
+const centreOf = (id: string) => {
+  const box = document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
+  if (box === undefined) throw new Error(`no ${id}`);
+  return { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+};
+
+/**
+ * Presses a finger on `handleId` and moves it over `blockId`, as a phone's
+ * pointer events do once touch-action lets the drag through.
+ */
+const touchDragOver = async (handleId: string, blockId: string) => {
+  const touch = { bubbles: true, cancelable: true, pointerId: 2, pointerType: "touch" };
+  const handle = document.querySelector(`[data-testid="${handleId}"]`);
+  if (handle === null) throw new Error(`no ${handleId}`);
+  const from = centreOf(handleId);
+  const to = centreOf(`block-${blockId}`);
+  handle.dispatchEvent(
+    new PointerEvent("pointerdown", { ...touch, isPrimary: true, button: 0, buttons: 1, ...from }),
+  );
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    document.dispatchEvent(
+      new PointerEvent("pointermove", {
+        ...touch,
+        isPrimary: true,
+        buttons: 1,
+        clientX: from.clientX + (to.clientX - from.clientX) * step,
+        clientY: from.clientY + (to.clientY - from.clientY) * step,
+      }),
+    );
+  }
+  await expect.element(page.getByTestId("drag-preview")).toBeInTheDocument();
+};
+
+describe("pipeline editor on a phone", () => {
+  it("fits the screen, lays out down, and sends one PipelineEdit for a touch drag", async () => {
+    const desktop = { width: innerWidth, height: innerHeight };
+    await page.viewport(390, 844);
+    try {
+      mountProject();
+      await expect.element(page.getByTestId("exit-start-next")).toBeInTheDocument();
+      await expect.element(page.getByTestId("block-climb")).toBeInTheDocument();
+
+      const html = document.documentElement;
+      expect(html.scrollWidth).toBeLessThanOrEqual(html.clientWidth);
+      // A finger on the drawing scrolls; a finger on an exit handle drags.
+      const svg = document.querySelector('[data-testid="pipeline-canvas"] svg');
+      if (svg === null) throw new Error("no pipeline svg");
+      expect(getComputedStyle(svg).touchAction).toBe("pan-x pan-y");
+      const handle = document.querySelector('[data-testid="exit-start-next"]');
+      if (handle === null) throw new Error("no exit-start-next");
+      expect(getComputedStyle(handle).touchAction).toBe("none");
+
+      await touchDragOver("exit-start-next", "climb");
+      releaseOver("climb", "touch");
+
+      await expect.poll(() => editRequests().length).toBe(1);
+      expect(editRequests()[0]?.payload).toEqual({
+        project: PROJECT,
+        change: { _tag: "Rejoin", wire: { from: "start", port: "next" }, to: "climb" },
+        flow: "down",
+      });
+      await expect
+        .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "start"))
+        .toEqual(Option.some("climb"));
+
+      await userEvent.click(page.getByTestId("pipeline-discard"));
+      await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
+    } finally {
+      await page.viewport(desktop.width, desktop.height);
+    }
+  });
+});
 
 describe("pipeline editor wire drag", () => {
   it("previews a second drag while the first drop waits for the server's answer", async () => {

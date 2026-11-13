@@ -29,12 +29,13 @@ import {
   type EditorFrame,
 } from "./pipeline-preview.ts";
 import { pipelineAtom, UiRpc } from "./rpc.ts";
-
-const FLOW = "across" as const;
+import { useFlow, useWidth } from "./screen.ts";
 
 /** The editor for one project's pipeline on `/p/<project>`. */
 export const PipelineEditor = ({ project }: { readonly project: string }) => {
-  const streamed = useAtomValue(pipelineAtom(project));
+  const flow = useFlow();
+  const [canvasWidth, canvasRef] = useWidth();
+  const streamed = useAtomValue(pipelineAtom(project)(flow));
   const edit = useAtomSet(UiRpc.mutation("PipelineEdit"), { mode: "promiseExit" });
 
   const [reading, setReading] = useState<Option.Option<ShownPipeline>>(Option.none());
@@ -54,7 +55,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
   useEffect(() => {
     if (head === undefined || Option.contains(sending.current, head)) return;
     sending.current = Option.some(head);
-    void edit({ payload: { project, change: head, flow: FLOW } }).then(
+    void edit({ payload: { project, change: head, flow } }).then(
       Exit.match({
         onSuccess: (answer) => {
           setReading(Option.some(answer));
@@ -67,9 +68,9 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
         },
       }),
     );
-  }, [head, edit, project]);
+  }, [head, edit, project, flow]);
 
-  const shown = Option.map(reading, (view) => frameAfter(view, unanswered, FLOW));
+  const shown = Option.map(reading, (view) => frameAfter(view, unanswered, flow));
 
   const onDropState = (dropped: EditorFrame) => {
     const changed = Option.exists(shown, (frame) => !sameDrawing(frame.pipeline, dropped.pipeline));
@@ -127,11 +128,11 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
               </div>
             ),
           })}
-          <div className="pipeline-canvas" data-testid="pipeline-canvas">
+          <div className="pipeline-canvas" data-testid="pipeline-canvas" ref={canvasRef}>
             <DraggableRenderer
               draggable={EditorSvg}
               state={display}
-              width={Math.max(display.drawing.width, 640)}
+              width={Math.max(display.drawing.width, canvasWidth)}
               height={Math.max(display.drawing.height, 240)}
               onDragState={(next) => setDragFrame(Option.some(next))}
               onDropState={onDropState}
@@ -242,7 +243,7 @@ const EditorSvg: Draggable<EditorFrame> = ({ state, d, draggedId }) => {
               dragologyZIndex={draggedId === id ? "/1" : false}
               dragologyOnDrag={() => {
                 const committed: EditorFrame = { ...state, pending: Option.none() };
-                const frames = rejoinFrames(committed.pipeline, ref, state.checks, FLOW);
+                const frames = rejoinFrames(committed.pipeline, ref, state.checks, state.flow);
                 const options = frames.length === 0 ? [committed] : frames;
                 return d.closest(options).whenFar(committed, { gap: 160 }).withFloating();
               }}
