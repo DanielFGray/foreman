@@ -13,6 +13,7 @@ mock.module("herdr", () => ({
   props: () => ({}),
   home: () => "/home",
   spaces: () => [],
+  panes: () => [],
   notify: () => {},
   settings: () => ({}),
 }));

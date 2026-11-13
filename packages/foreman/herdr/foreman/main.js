@@ -55,6 +55,7 @@ import {
   props,
   home,
   spaces,
+  panes,
   notify,
   settings,
 } from "herdr";
@@ -93,6 +94,18 @@ const FIT_MIN = 0.75;
 // The Tasks view's mode, kept in the mod's own storage.
 const TASKS_MODE_KEY = "tasks-mode";
 const PENDING = Symbol("pending");
+
+// Where a space is now: the live folder of its first terminal, in tab order.
+// A space's own `folder` is only where its new terminals start, and it can name
+// another checkout than the one the space works in.
+const spaceFolder = (space) => {
+  const live = panes();
+  for (const tab of space.tabs) {
+    const pane = live.find((one) => one.tab === tab.id && one.terminal && one.cwd);
+    if (pane) return pane.cwd;
+  }
+  return space.folder;
+};
 
 export default class Foreman extends View {
   init(_props, cx) {
@@ -164,16 +177,17 @@ export default class Foreman extends View {
 
   // The project of the shown space, or null for a space in no checkout.
   project() {
-    const folder = spaces().find((space) => space.active)?.folder;
+    const shown = spaces().find((space) => space.active);
+    const folder = shown ? spaceFolder(shown) : null;
     const name = folder ? this.checkouts.get(folder) : null;
     return typeof name === "string" ? name : null;
   }
 
   // Asks git once for each space folder not yet resolved.
   resolveCheckouts(cx) {
-    const unresolved = spaces().filter(
-      (space) => space.folder && !this.checkouts.has(space.folder),
-    );
+    const unresolved = spaces()
+      .map((space) => ({ folder: spaceFolder(space), machine: space.machine }))
+      .filter((one) => one.folder && !this.checkouts.has(one.folder));
     if (unresolved.length === 0) return;
     for (const space of unresolved) this.checkouts.set(space.folder, PENDING);
     cx.spawn(async (cx) => {
