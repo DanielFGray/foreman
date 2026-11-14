@@ -23,6 +23,12 @@ import { bytesLabel, dashboardOf, type DispatcherLine, type ProjectLine } from "
 import { reasonOf } from "./reason.ts";
 import { UiRpc } from "./rpc.ts";
 
+/**
+ * Key-only actions that ask before they run: on a phone a stray tap would
+ * return a task to the queue or close it.
+ */
+const ASKS_FIRST: ReadonlySet<Action> = new Set(["release", "close"]);
+
 /** Sections the dashboard opens by default; the others are history or accounts. */
 const OPEN_SECTIONS = new Set(["attention", "working", "review"]);
 
@@ -213,8 +219,9 @@ const RowLine = ({
 );
 
 /**
- * The actions a row lists. A key-only action runs on a tap; `complete`,
- * `kill` and `intervene` open a form for what they take first.
+ * The actions a row lists. A key-only action runs on a tap, except that
+ * `ASKS_FIRST` ones show one button that sends; `complete`, `kill` and
+ * `intervene` open a form for what they take first.
  */
 const RowActions = ({
   row,
@@ -257,7 +264,7 @@ const RowActions = ({
             aria-pressed={form === action}
             data-testid={`action-${row.key}-${commandName(action)}`}
             onClick={() =>
-              isKeyOnly(action)
+              isKeyOnly(action) && !ASKS_FIRST.has(action)
                 ? void send({ _tag: action })
                 : setForm(form === action ? null : action)
             }
@@ -266,7 +273,18 @@ const RowActions = ({
           </button>
         ))}
       </div>
-      {form === null || isKeyOnly(form) ? null : (
+      {form === null ? null : isKeyOnly(form) ? (
+        <div className="action-form" data-testid={`action-form-${form}`}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send({ _tag: form })}
+            data-testid="action-send"
+          >
+            {commandName(form)} {row.key}
+          </button>
+        </div>
+      ) : (
         <ActionForm
           action={form}
           rungs={rungs}

@@ -65,7 +65,7 @@ export const fixtureReading = (): Published => {
   return {
     ...base,
     rows: [
-      fixtureRow("working", "ts-demo", "Wire the page", ["focus", "kill"]),
+      fixtureRow("working", "ts-demo", "Wire the page", ["focus", "kill", "release"]),
       fixtureRow("attention", "ts-ask", "asks  Land the page", ["approve"]),
       fixtureRow("landed", "ts-old", "Read the store once", []),
     ],

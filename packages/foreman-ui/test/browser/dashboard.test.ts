@@ -1,6 +1,6 @@
 /**
  * The dashboard at `/` against the real UI server Layer and the fixture
- * reading: a working row `ts-demo` (focus, kill), a needs-you row `ts-ask`
+ * reading: a working row `ts-demo` (focus, kill, release), a needs-you row `ts-ask`
  * (approve), and a landed row `ts-old`, all in amux (docs/web-ui.md, "The
  * dashboard"). The fixture fleet has no open space, so a row action reaches a
  * one-shot dispatcher that finds no row and refuses: the refusal is the
@@ -96,6 +96,17 @@ describe("dashboard", () => {
     await expect
       .element(page.getByTestId("action-note-ts-ask"))
       .toMatchTextContent(/approve does not apply to ts-ask: no row has that key/);
+  });
+
+  it("asks before it releases", async () => {
+    mountDashboard();
+    await userEvent.click(page.getByTestId("action-ts-demo-release"));
+    await expect.element(page.getByTestId("action-form-release")).toBeInTheDocument();
+    expect(document.querySelector("[data-testid=action-note-ts-demo]")).toBeNull();
+    await userEvent.click(page.getByTestId("action-send"));
+    await expect
+      .element(page.getByTestId("action-note-ts-demo"))
+      .toMatchTextContent(/release does not apply to ts-demo/);
   });
 
   it("asks kill for its reason before it sends", async () => {

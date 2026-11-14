@@ -221,8 +221,10 @@ the page's files. `foreman serve` provides it beside `supervise`.
   folded. Each row shows its project, label, detail, task page and pull
   request.
 - **Row actions.** Each row shows a button for each action its `actions`
-  lists. An action that takes only the key runs on a tap; `complete`, `kill`
-  and `intervene` open a form for what they take first. Each sends
+  lists. An action that takes only the key runs on a tap, except `release`
+  and `close`, which show one button to send first, because a stray tap on a
+  phone would return a task to the queue or close it. `complete`, `kill` and
+  `intervene` open a form for what they take first. Each sends
   `TaskAction`. The reply's refusal, if any, shows under the row; the row
   itself changes with the next reading.
 - **Projects.** One line per project: how many placed tasks stand in each
