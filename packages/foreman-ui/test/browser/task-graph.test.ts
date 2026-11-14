@@ -91,13 +91,21 @@ describe("task graph", () => {
     await expect.element(page.getByTestId("graph-detail")).toMatchTextContent("ts-g3");
     await userEvent.click(page.getByTestId("graph-send"));
 
-    await expect.poll(() => commands.grantScopes()).toEqual(["ts-g3"]);
+    await expect
+      .poll(() =>
+        commands.storedPolicy().then((policy) => policy.grants.map((grant) => grant.scope)),
+      )
+      .toEqual(["ts-g3"]);
     await expect.element(card("ts-g3")).toHaveClass(/granted/);
 
     await userEvent.click(card("ts-g3"));
     await expect.element(page.getByTestId("graph-detail-grant")).not.toHaveTextContent("none");
     await userEvent.click(page.getByTestId("graph-revoke"));
-    await expect.poll(() => commands.grantScopes()).toEqual([]);
+    await expect
+      .poll(() =>
+        commands.storedPolicy().then((policy) => policy.grants.map((grant) => grant.scope)),
+      )
+      .toEqual([]);
     await expect.element(page.getByTestId("graph-detail-grant")).toHaveTextContent("none");
   });
 });

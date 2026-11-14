@@ -90,3 +90,22 @@ export class PolicyError extends S.TaggedError<PolicyError>()("PolicyError", {
     return this.detail;
   }
 }
+
+/** A command that does not apply to what it was pointed at, and why. */
+export class Refused extends S.TaggedError<Refused>()("Refused", {
+  detail: S.String,
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
+
+/** A git command that failed in a checkout. */
+export class RepositoryError extends S.TaggedError<RepositoryError>()("RepositoryError", {
+  directory: S.String,
+  detail: S.String,
+}) {
+  override get message() {
+    return `${this.directory}: ${this.detail}`;
+  }
+}

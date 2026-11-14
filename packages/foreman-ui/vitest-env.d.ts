@@ -1,4 +1,5 @@
 import type { Drawing } from "foreman/pipeline";
+import type { Policy } from "foreman/policy";
 
 declare module "vitest/browser" {
   interface BrowserCommands {
@@ -6,7 +7,7 @@ declare module "vitest/browser" {
     stopUiServer: () => Promise<void>;
     savedPipeline: (project: string) => Promise<Drawing | null>;
     draftPipeline: (project: string) => Promise<Drawing | null>;
-    grantScopes: () => Promise<ReadonlyArray<string>>;
+    storedPolicy: () => Promise<Policy>;
     removeDraftBlock: (project: string, block: string) => Promise<void>;
   }
 }

@@ -1,11 +1,7 @@
 import { Option } from "effect";
 import type { Dispatcher, FleetState } from "./dispatcher.ts";
-import { actionsFor, rowsForView, type Action, type ColumnRow } from "./view.ts";
-import { VIEWS } from "./view-names.ts";
-
-/** The ways an intervention can resume a task, in the order they are offered. */
-export const INTERVENTIONS = ["continue", "diagnose", "review"] as const;
-export type Intervention = (typeof INTERVENTIONS)[number];
+import { actionsFor, rowsForView, type ColumnRow } from "./view.ts";
+import { VIEWS, type Action, type Intervention } from "./view-names.ts";
 
 /** The dispatcher's target for an intervention on a row, or `undefined` when the row names no task. */
 const interventionOf = (row: ColumnRow) => {

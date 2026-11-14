@@ -1,5 +1,5 @@
 import { Match, Option } from "effect";
-import { VIEWS, type ViewName } from "./view-names.ts";
+import { VIEWS, type Action, type ViewName } from "./view-names.ts";
 import type {
   Active,
   Ask,
@@ -134,26 +134,6 @@ export interface ColumnRow {
   readonly hasWork: boolean;
   readonly committed: boolean;
 }
-
-export const ACTIONS_LIST = [
-  "complete",
-  "retry",
-  "release",
-  "close",
-  "takeOver",
-  "focus",
-  "kill",
-  "intervene",
-  "descend",
-  "unassign",
-  "onboard",
-  "adopt",
-  "approve",
-  "preview",
-] as const;
-
-/** Something an operator does to one row. */
-export type Action = (typeof ACTIONS_LIST)[number];
 
 /**
  * Which keys mean something in which column.

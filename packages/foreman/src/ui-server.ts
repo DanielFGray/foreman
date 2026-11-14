@@ -42,7 +42,31 @@ import {
   pipelineSimulate,
   pipelineTrace,
 } from "./pipeline-command.ts";
-import { policyGrant, policyRevoke } from "./policy-command.ts";
+import {
+  policyGrant,
+  policyPause,
+  policyResume,
+  policyRevoke,
+  policySlots,
+} from "./policy-command.ts";
+import {
+  taskAdopt,
+  taskApprove,
+  taskClose,
+  taskComplete,
+  taskDescend,
+  taskFocus,
+  taskIntervene,
+  taskKill,
+  taskOnboard,
+  taskPreview,
+  taskRelease,
+  taskRetry,
+  taskTakeOver,
+  taskUnassign,
+} from "./commands.ts";
+import type { RowAction } from "./ui-contract.ts";
+import { Dispatcher } from "./dispatcher.ts";
 import { PageBuildError } from "./errors.ts";
 import { draftsPath, pipelinesPath, resolve } from "./paths.ts";
 import { type Published } from "./published-schema.ts";
@@ -182,6 +206,13 @@ export const uiHandlersLayer = UiContract.toLayer(
       PipelineGraph: (payload) => infraAsDefects(pipelineGraph(payload)),
       PolicyGrant: (payload) => infraAsDefects(policyGrant(payload)),
       PolicyRevoke: (payload) => infraAsDefects(policyRevoke(payload)),
+      PolicyPause: (payload) => infraAsDefects(policyPause(payload)),
+      PolicyResume: (payload) => infraAsDefects(policyResume(payload)),
+      PolicySlots: (payload) => infraAsDefects(policySlots(payload)),
+      TaskAction: (payload) =>
+        infraAsDefects(runRowAction(payload.id, payload.action)).pipe(
+          Effect.provide(Dispatcher.Default),
+        ),
       CompositeShow: (payload) => infraAsDefects(compositeShow(payload)),
       CompositeEdit: (payload) => infraAsDefects(compositeEdit(payload)),
       CompositeSave: (payload) => infraAsDefects(compositeSave(payload)),
@@ -382,3 +413,38 @@ export const uiServerOn = (port: number, options?: UiServerOptions) => {
     }),
   );
 };
+
+/** The CLI verb for a row action, so `TaskAction` and `foreman <action> <id>` share one path. */
+const runRowAction = (id: string, action: RowAction) =>
+  Effect.gen(function* () {
+    switch (action._tag) {
+      case "complete":
+        return yield* Effect.asVoid(taskComplete({ id, reason: action.reason }));
+      case "kill":
+        return yield* Effect.asVoid(taskKill({ id, reason: action.reason }));
+      case "intervene":
+        return yield* Effect.asVoid(taskIntervene({ id, how: action.how, rung: action.rung }));
+      case "retry":
+        return yield* Effect.asVoid(taskRetry({ id }));
+      case "release":
+        return yield* Effect.asVoid(taskRelease({ id }));
+      case "close":
+        return yield* Effect.asVoid(taskClose({ id }));
+      case "takeOver":
+        return yield* Effect.asVoid(taskTakeOver({ id }));
+      case "focus":
+        return yield* Effect.asVoid(taskFocus({ id }));
+      case "descend":
+        return yield* Effect.asVoid(taskDescend({ id }));
+      case "unassign":
+        return yield* Effect.asVoid(taskUnassign({ id }));
+      case "onboard":
+        return yield* Effect.asVoid(taskOnboard({ id }));
+      case "adopt":
+        return yield* Effect.asVoid(taskAdopt({ id }));
+      case "approve":
+        return yield* Effect.asVoid(taskApprove({ id }));
+      case "preview":
+        return yield* Effect.asVoid(taskPreview({ id }));
+    }
+  });

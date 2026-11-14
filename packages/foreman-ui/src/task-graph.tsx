@@ -26,6 +26,7 @@ import {
 } from "./graph-url.ts";
 import { GRAPH_KEYS, graphAtom, UiRpc } from "./rpc.ts";
 import { useFlow } from "./screen.ts";
+import { reasonOf } from "./reason.ts";
 
 export const TaskGraph = ({ project }: { readonly project: string }) => {
   const [state, setState] = useState(() => graphStateOf(globalThis.location.search));
@@ -121,14 +122,14 @@ const LoadedGraph = ({
         payload: { scope: item.id, steps: view.grantSteps, remaining: Option.none() },
         reactivityKeys: GRAPH_KEYS,
       });
-      if (Exit.isFailure(exit)) return setProblem(`${item.id}: ${Cause.pretty(exit.cause)}`);
+      if (Exit.isFailure(exit)) return setProblem(`${item.id}: ${reasonOf(exit.cause)}`);
     }
     setState((now) => ({ ...now, picked: [] }));
   };
   const revokeScope = async (scope: string) => {
     setProblem(null);
     const exit = await revoke({ payload: { scope }, reactivityKeys: GRAPH_KEYS });
-    if (Exit.isFailure(exit)) setProblem(`${scope}: ${Cause.pretty(exit.cause)}`);
+    if (Exit.isFailure(exit)) setProblem(`${scope}: ${reasonOf(exit.cause)}`);
   };
 
   const last = picked.at(-1);

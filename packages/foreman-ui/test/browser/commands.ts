@@ -12,6 +12,8 @@ import { Effect } from "effect";
 import { readDrafts, updateDrafts } from "foreman/pipeline-draft";
 import { readPipelines } from "foreman/pipeline-file";
 import { type Drawing, DEFAULT_PIPELINE } from "foreman/pipeline";
+import type { Policy } from "foreman/policy";
+import { readPolicy } from "foreman/policy-file";
 import { freePort } from "../../src/fixtures.ts";
 
 const serverScript = fileURLToPath(new URL("./ui-server-process.ts", import.meta.url));
@@ -121,14 +123,11 @@ export const draftPipeline: BrowserCommand<[project: string], Drawing | null> = 
     ),
   );
 
-/** The scope of each grant in the policy file the UI server writes; none when it has no file yet. */
-export const grantScopes: BrowserCommand<[], ReadonlyArray<string>> = async () => {
-  if (fixtureFolder === undefined) throw new Error("UI server is not running");
-  const file = Bun.file(join(fixtureFolder, "policy.json"));
-  if (!(await file.exists())) return [];
-  const policy = (await file.json()) as { readonly grants?: ReadonlyArray<{ scope: string }> };
-  return (policy.grants ?? []).map((grant) => grant.scope);
-};
+/** The policy the UI server wrote, as the dispatcher would read it: the default when there is no file yet. */
+export const storedPolicy: BrowserCommand<[], Policy> = () =>
+  onFixtures((folder) =>
+    readPolicy(join(folder, "policy.json")).pipe(Effect.map((read) => read.policy)),
+  );
 
 /**
  * Reads or rewrites a file in the folder the UI server writes, through

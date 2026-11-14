@@ -13,7 +13,7 @@
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { type Draggable, DraggableRenderer, translate } from "dragology";
-import { Cause, Exit, Option } from "effect";
+import { Exit, Option } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Drawing } from "foreman/pipeline";
 import type { PipelineChange, WireRef } from "foreman/pipeline-edit";
@@ -30,6 +30,7 @@ import {
 } from "./pipeline-preview.ts";
 import { pipelineAtom, UiRpc } from "./rpc.ts";
 import { useFlow, useWidth } from "./screen.ts";
+import { reasonOf } from "./reason.ts";
 
 /** The editor for one project's pipeline on `/p/<project>`. */
 export const PipelineEditor = ({ project }: { readonly project: string }) => {
@@ -163,13 +164,6 @@ const hintOf = (count: number) => ({
       ? "Drop here: the result passes the drawing check."
       : `Drop here: the result has ${count} problem${count === 1 ? "" : "s"}.`,
 });
-
-/** The reason an RPC call failed, as the operator reads it: the error's own message, else the whole cause. */
-const reasonOf = <E extends { readonly message: string }>(cause: Cause.Cause<E>): string =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => Cause.pretty(cause),
-    onSome: (error) => error.message,
-  });
 
 const sameDrawing = (a: Drawing, b: Drawing): boolean => JSON.stringify(a) === JSON.stringify(b);
 

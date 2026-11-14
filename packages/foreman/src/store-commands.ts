@@ -6,7 +6,7 @@ import { Records } from "./records.ts";
 import { Tracker } from "./tracker.ts";
 import { PublishedRow } from "./published-schema.ts";
 import { queueOf, queueRowsOf } from "./host.ts";
-import { Refused } from "./commands.ts";
+import { Refused } from "./errors.ts";
 import { place, type Placement } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";

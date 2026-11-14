@@ -23,7 +23,8 @@ import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
 import { Registry } from "./registry.ts";
-import { Repository, RepositoryError } from "./repository.ts";
+import { Repository } from "./repository.ts";
+import { RepositoryError } from "./errors.ts";
 import { telemetry } from "./telemetry.ts";
 
 /**
@@ -68,9 +69,10 @@ export const storeServices = Layer.mergeAll(
 ).pipe(Layer.provideMerge(BunServices.layer), Layer.provide(store));
 
 /**
- * Services the UI server's handlers need for the life of serve. No Dispatcher:
- * the page talks to the world through verbs and the readings ref, and a second
- * dispatcher would race the supervised one. Lives as long as the process, so a
+ * Services the UI server's handlers need for the life of serve. No long-lived
+ * Dispatcher: a second one would race the supervised one. A row action builds a
+ * one-shot Dispatcher for its call from these services, as `foreman <action>`
+ * does in its own process. Lives as long as the process, so a
  * dispatcher restart does not tear the page's sockets down. `store` is
  * provideMerged so SqlClient and Registry stay visible to verb Effects that
  * yield them (the page tests build the same shape).
@@ -81,6 +83,8 @@ export const uiServices = Layer.mergeAll(
   HcFleet,
   Repository.Default,
   Prompts.Default,
+  Quota.Default,
+  Machine.Default,
   Registry.layerSql,
 ).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store));
 

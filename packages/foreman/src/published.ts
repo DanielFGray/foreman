@@ -17,15 +17,8 @@ import type { Placement } from "./pipeline.ts";
 import { columnOf, recentlyLanded } from "./board.ts";
 import { coveringOf, gatedSteps } from "./pipeline-graph.ts";
 import { modeOf, stepModesFor, trackerOf } from "./policy.ts";
-import type { ViewName } from "./view-names.ts";
-import {
-  actionsFor,
-  pullRequestView,
-  queueRows,
-  rowsForView,
-  type Action,
-  type ColumnRow,
-} from "./view.ts";
+import { commandName, type ViewName } from "./view-names.ts";
+import { actionsFor, pullRequestView, queueRows, rowsForView, type ColumnRow } from "./view.ts";
 import {
   DispatcherStatus,
   PUBLISHED_VERSION,
@@ -175,9 +168,6 @@ export const publishedQueue = (
   epics: ReadonlyArray<EpicProgress>,
 ): ReadonlyArray<PublishedRow> => queueRows(queue, epics).map(publishedRow("queue", undefined));
 /** An action as a command line writes it: `takeOver` is `take-over`. */
-export const commandName = (action: Action): string =>
-  action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-
 /**
  * Replaces the published file whole.
  *

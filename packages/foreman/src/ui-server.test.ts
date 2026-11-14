@@ -1,3 +1,4 @@
+import { SqlClient } from "effect/sql";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { BunServices, BunSocket } from "@effect/platform-bun";
 import {
@@ -31,6 +32,7 @@ import { UiContract } from "./ui-contract.ts";
 import { GRAPH_STATUSES } from "./pipeline-graph-view.ts";
 import type { TaskState } from "tasks/item";
 import { resolve } from "./paths.ts";
+import { offlineHost } from "./offline-host.ts";
 import {
   buildPageAssets,
   admits,
@@ -50,6 +52,26 @@ process.env["FOREMAN_PIPELINES"] = path;
 process.env["XDG_CONFIG_HOME"] = folder;
 process.env["FOREMAN_POLICY"] = join(folder, "policy.json");
 const store = scratchStore();
+// The open space: a git checkout, so a one-shot read finds the project `actp`
+// and gives its queued task a row.
+const checkout = join(folder, "actp");
+mkdirSync(checkout);
+for (const args of [
+  ["init", "-q"],
+  [
+    "-c",
+    "user.email=foreman@test",
+    "-c",
+    "user.name=foreman",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ],
+]) {
+  Bun.spawnSync(["git", "-C", checkout, ...args]);
+}
 afterAll(() => {
   rmSync(folder, { recursive: true, force: true });
   store.cleanup();
@@ -69,7 +91,8 @@ await Effect.runPromise(
       ('ep-g', 'graphp', 'epic', 'Graph epic', 'in_progress', NULL),
       ('ts-a', 'graphp', 'task', 'First', 'open', 'ep-g'),
       ('ts-b', 'graphp', 'task', 'Second', 'open', NULL),
-      ('ts-d', 'graphp', 'task', 'Landed', 'done', NULL);
+      ('ts-d', 'graphp', 'task', 'Landed', 'done', NULL),
+      ('ts-q', 'actp', 'task', 'Queued', 'open', NULL);
     INSERT INTO deps (item_id, depends_on) VALUES ('ts-b', 'ts-a'), ('ts-b', 'ts-d');
   `).pipe(Effect.provide(store.layer)),
 );
@@ -83,7 +106,7 @@ const fakeFleet = Layer.succeed(
     spawn: () => Effect.fail(new FleetError({ operation: "spawn", detail: "unused" })),
     roster: Effect.succeed([] as ReadonlyArray<Worker>),
     awaitTurn: () => Effect.void,
-    spaces: Effect.succeed([folder]),
+    spaces: Effect.succeed([checkout]),
     say: () => Effect.void,
     screen: () => Effect.succeedNone,
     preview: () => Effect.succeed("preview"),
@@ -131,10 +154,13 @@ const testSettings = Layer.succeed(
  * and Settings cover Queue/simulate/graph; PipelineEdit under test only needs
  * the registry and files.
  */
-const services = Layer.mergeAll(Records.layer, testSettings, Repository.Default, fakeFleet).pipe(
-  Layer.provideMerge(BunServices.layer),
-  Layer.provideMerge(store.registry),
-);
+const services = Layer.mergeAll(
+  Records.layer,
+  testSettings,
+  Repository.Default,
+  fakeFleet,
+  offlineHost,
+).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store.registry));
 const handlers = uiHandlersLayer.pipe(Layer.provideMerge(fixedReadings), Layer.provide(services));
 
 const pipelineCommand = pipelineCommandWith(
@@ -302,6 +328,56 @@ describe("UiContract handlers", () => {
       }).pipe(Effect.scoped, Effect.provide(handlers)),
     );
     expect(scopes(readFileSync(policyFile, "utf8"))).toEqual([]);
+  });
+
+  test("PolicyPause, PolicyResume and PolicySlots write the policy file", async () => {
+    const policyFile = join(folder, "policy.json");
+    const stored = () =>
+      JSON.parse(readFileSync(policyFile, "utf8")) as {
+        paused?: boolean;
+        slots?: number;
+        projects?: Record<string, { paused?: boolean }>;
+      };
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        expect((yield* client.PolicyPause({ project: Option.none() })).paused).toBe(true);
+        expect(stored().paused).toBe(true);
+        yield* client.PolicyResume({ project: Option.none() });
+        expect(stored().paused).toBe(false);
+        yield* client.PolicyPause({ project: Option.some("graphp") });
+        expect(stored().projects?.["graphp"]?.paused).toBe(true);
+        yield* client.PolicyResume({ project: Option.some("graphp") });
+        expect((yield* client.PolicySlots({ count: 3 })).slots).toBe(3);
+        expect(stored().slots).toBe(3);
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+  });
+
+  test("TaskAction runs a row action through a one-shot dispatcher, and refuses a key no row has", async () => {
+    const refusal = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        return yield* client
+          .TaskAction({ id: "ts-nowhere", action: { _tag: "retry" } })
+          .pipe(Effect.flip);
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(refusal).toMatchObject({ _tag: "Refused" });
+    expect(refusal.message).toContain("no row has that key");
+    const probe = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(UiContract);
+        yield* client.TaskAction({ id: "ts-q", action: { _tag: "complete", reason: "by hand" } });
+        return yield* SqlClient.SqlClient.pipe(
+          Effect.flatMap(
+            (sql) => sql<{ status: string }>`SELECT status FROM items WHERE id = 'ts-q'`,
+          ),
+          Effect.provide(store.layer),
+        );
+      }).pipe(Effect.scoped, Effect.provide(handlers)),
+    );
+    expect(probe.map((row) => row.status)).toEqual(["done"]);
   });
 
   test("Readings stream sends the fixed reading", async () => {

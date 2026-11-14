@@ -192,35 +192,6 @@ a:hover {
   font-size: 0.95rem;
 }
 
-.project-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.5rem;
-}
-
-.project-list a {
-  display: block;
-  padding: 0.85rem 1rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.35rem;
-  color: var(--fg);
-}
-
-.project-list a:hover {
-  border-color: var(--accent);
-  text-decoration: none;
-}
-
-.project-list .dir {
-  display: block;
-  color: var(--muted);
-  font-size: 0.85rem;
-  margin-top: 0.2rem;
-}
-
 .readings {
   display: grid;
   gap: 1rem;
@@ -268,7 +239,6 @@ a:hover {
 
 /* Long names and paths wrap rather than widen the page. */
 .header .muted,
-.project-list .dir,
 .readings li,
 .pipeline-problem-list li {
   overflow-wrap: anywhere;
@@ -539,5 +509,209 @@ button.link {
 
   .graph-canvas {
     max-height: 60vh;
+  }
+}
+
+/* The dashboard at `/`. */
+.dash-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.dash-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.dash-header .problem {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.dash-header button,
+.dash-actions button {
+  font: inherit;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.dash-header button:disabled,
+.dash-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dash-actions button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.slots {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.slots label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+
+.slots input {
+  width: 4rem;
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.chip {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip.state-running {
+  color: var(--granted);
+  border-color: var(--granted);
+}
+
+.chip.state-failed,
+.chip.state-stale {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.dash-section {
+  margin-bottom: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.85rem;
+}
+
+.dash-section summary {
+  cursor: pointer;
+}
+
+.dash-section h2 {
+  display: inline;
+  font-size: 1rem;
+  margin: 0;
+}
+
+section.dash-section h2 {
+  display: block;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.dash-section .empty {
+  color: var(--muted);
+  margin: 0.5rem 0;
+}
+
+.dash-rows,
+.dash-projects {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.dash-row,
+.dash-project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.dash-row-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.dash-detail {
+  font-size: 0.9rem;
+}
+
+.dash-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.dash-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.dash-actions p {
+  margin: 0;
+}
+
+.action-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.action-form input,
+.action-form select {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--panel);
+  color: var(--fg);
+  min-width: 0;
+}
+
+.dash-project-name {
+  font-weight: 600;
+}
+
+@media (pointer: coarse) {
+  .dash-header button,
+  .dash-actions button,
+  .slots input,
+  .action-form input,
+  .action-form select {
+    min-height: 2.75rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .dash-actions,
+  .dash-buttons {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .action-form input {
+    flex: 1 1 10rem;
   }
 }

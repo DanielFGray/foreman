@@ -13,7 +13,9 @@ import {
   PolicyError,
   PromptError,
   RecordsError,
+  Refused,
   RegistryError,
+  RepositoryError,
   RewriteError,
   TrackerError,
 } from "./errors.ts";
@@ -34,6 +36,7 @@ import {
 } from "./pipeline-view.ts";
 import { TraceRequest } from "./trace-request.ts";
 import { Published, PublishedRow } from "./published-schema.ts";
+import { INTERVENTIONS, KEY_ONLY_ACTIONS } from "./view-names.ts";
 
 const flowField = Flow.pipe(S.withDecodingDefault(Effect.succeed("across" as const)));
 
@@ -139,6 +142,54 @@ export const PolicyRevoke = Rpc.make("PolicyRevoke", {
   error: S.Union([PolicyError]),
 });
 
+export const PolicyPause = Rpc.make("PolicyPause", {
+  payload: { project: S.OptionFromOptional(S.String) },
+  success: Policy,
+  error: S.Union([PolicyError]),
+});
+
+export const PolicyResume = Rpc.make("PolicyResume", {
+  payload: { project: S.OptionFromOptional(S.String) },
+  success: Policy,
+  error: S.Union([PolicyError]),
+});
+
+export const PolicySlots = Rpc.make("PolicySlots", {
+  payload: { count: S.Int.check(S.isGreaterThan(0)) },
+  success: Policy,
+  error: S.Union([PolicyError]),
+});
+
+/**
+ * A row action and what it takes beyond the row's key: `complete` a reason for
+ * the task log, `kill` an optional one, and `intervene` how to resume and,
+ * except for a review, the rung.
+ */
+export const RowAction = S.Union([
+  S.TaggedStruct("complete", { reason: S.String }),
+  S.TaggedStruct("kill", { reason: S.OptionFromOptional(S.String) }),
+  S.TaggedStruct("intervene", {
+    how: S.Literals(INTERVENTIONS),
+    rung: S.OptionFromOptional(S.String),
+  }),
+  S.Struct({ _tag: S.Literals(KEY_ONLY_ACTIONS) }),
+]);
+export type RowAction = typeof RowAction.Type;
+
+/** Runs one row action, as `foreman <action> <id>` does: one Rpc for every verb in `ACTIONS_LIST`. */
+export const TaskAction = Rpc.make("TaskAction", {
+  payload: { id: S.String, action: RowAction },
+  error: S.Union([
+    Refused,
+    FleetError,
+    PolicyError,
+    PromptError,
+    RecordsError,
+    RepositoryError,
+    TrackerError,
+  ]),
+});
+
 /** Composite verbs: one Rpc per exported Effect in `composite-command.ts`. */
 export const CompositeShow = Rpc.make("CompositeShow", {
   payload: { name: S.String, flow: flowField },
@@ -186,6 +237,10 @@ export const UiContract = RpcGroup.make(
   PipelineGraph,
   PolicyGrant,
   PolicyRevoke,
+  PolicyPause,
+  PolicyResume,
+  PolicySlots,
+  TaskAction,
   CompositeShow,
   CompositeEdit,
   CompositeSave,

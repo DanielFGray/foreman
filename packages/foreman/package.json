@@ -19,7 +19,11 @@
     "./ui-contract": "./src/ui-contract.ts",
     "./ui-server": "./src/ui-server.ts",
     "./pipeline-graph": "./src/pipeline-graph.ts",
-    "./pipeline-graph-view": "./src/pipeline-graph-view.ts"
+    "./pipeline-graph-view": "./src/pipeline-graph-view.ts",
+    "./board-columns": "./src/board-columns.ts",
+    "./view-names": "./src/view-names.ts",
+    "./policy": "./src/policy.ts",
+    "./policy-file": "./src/policy-file.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

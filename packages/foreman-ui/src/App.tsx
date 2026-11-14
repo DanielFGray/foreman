@@ -1,38 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Published } from "foreman/published-schema";
+import { Dashboard } from "./dashboard.tsx";
 import { PipelineEditor } from "./pipeline-editor.tsx";
 import { connectionAtom, readingsAtom } from "./rpc.ts";
 import { graphPath, routeOf } from "./route.ts";
 import { TaskGraph } from "./task-graph.tsx";
-
-const ProjectList = ({ reading }: { readonly reading: Published }) => (
-  <div className="app">
-    <header className="header">
-      <h1>Foreman</h1>
-      <span className="muted">projects</span>
-    </header>
-    {reading.projects.length === 0 ? (
-      <p className="empty" data-testid="projects-empty">
-        No projects in the reading.
-      </p>
-    ) : (
-      <ul className="project-list" data-testid="project-list">
-        {reading.projects.map((project) => (
-          <li key={project.name}>
-            <a
-              href={`/p/${encodeURIComponent(project.name)}`}
-              data-testid={`project-${project.name}`}
-            >
-              {project.name}
-              <span className="dir">{project.directory}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    )}
-  </div>
-);
 
 const ProjectReadings = ({
   name,
@@ -135,7 +108,7 @@ const ReadingBody = ({ reading }: { readonly reading: Published }) => {
     case "graph":
       return <ProjectGraph name={route.name} />;
     case "projects":
-      return <ProjectList reading={reading} />;
+      return <Dashboard reading={reading} />;
   }
 };
 

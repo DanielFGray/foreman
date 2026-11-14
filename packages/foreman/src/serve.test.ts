@@ -31,6 +31,7 @@ import { Repository } from "./repository.ts";
 import { scratchStore, seed } from "./scratch-store.ts";
 import { holdLock, isolateUiServer, ServeRunning, supervise } from "./serve.ts";
 import { ReadingsRef, uiServerOn } from "./ui-server.ts";
+import { offlineHost } from "./offline-host.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "foreman-serve-"));
 
@@ -233,6 +234,7 @@ describe("UI server beside supervise", () => {
         `).pipe(Effect.provide(store.layer)),
       );
       const handlers = Layer.mergeAll(
+        offlineHost,
         Records.layer,
         Layer.succeed(
           Settings,

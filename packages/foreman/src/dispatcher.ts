@@ -64,7 +64,6 @@ import { phaseOf } from "./task-phase.ts";
 import {
   missingTarget,
   Repository,
-  RepositoryError,
   type Hold,
   type HoldReason,
   wrongBranch,
@@ -132,7 +131,7 @@ import {
   Records,
 } from "./records.ts";
 import { Tracker } from "./tracker.ts";
-import { TrackerError } from "./errors.ts";
+import { RepositoryError, TrackerError } from "./errors.ts";
 import {
   authoredBy,
   directBase,

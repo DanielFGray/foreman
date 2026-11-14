@@ -2,7 +2,6 @@ import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
 import {
   ACTION_HELP,
-  INTERVENTIONS,
   performAdopt,
   performApprove,
   performClose,
@@ -17,18 +16,25 @@ import {
   performRetry,
   performUnassign,
   rowFor,
-  type Intervention,
 } from "./actions.ts";
 import { Dispatcher, notAuthored } from "./dispatcher.ts";
 import { Fleet, untilNotWorking } from "./fleet.ts";
 import { roundsOf } from "./lap.ts";
 import { Records } from "./records.ts";
-import { ACTIONS_LIST, actionsFor, rowsForView, type Action, type ColumnRow } from "./view.ts";
-import { VIEWS } from "./view-names.ts";
-import { commandName, publishedOf } from "./published.ts";
+import { actionsFor, rowsForView, type ColumnRow } from "./view.ts";
+import {
+  ACTIONS_LIST,
+  commandName,
+  INTERVENTIONS,
+  VIEWS,
+  type Action,
+  type Intervention,
+} from "./view-names.ts";
+import { publishedOf } from "./published.ts";
 import { Settings } from "./config.ts";
 import { Tracker } from "./tracker.ts";
 import { prose } from "tasks";
+import { Refused } from "./errors.ts";
 
 /**
  * The lifecycle as one-shot commands.
@@ -643,15 +649,6 @@ export const subcommands = <E>(services: Services<E>) => [
   Command.provide(wait, services),
   ...ACTIONS_LIST.map((action) => actionCommand(action, services)),
 ];
-
-/** A command that does not apply to what it was pointed at, and why. */
-export class Refused extends Schema.TaggedError<Refused>()("Refused", {
-  detail: Schema.String,
-}) {
-  override get message() {
-    return this.detail;
-  }
-}
 
 /** What a one-shot command reads. */
 type Services<E> = Layer.Layer<Dispatcher | Fleet | Records | Settings | Tracker, E>;

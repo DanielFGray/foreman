@@ -986,9 +986,12 @@ knows what happened, whatever the workflow.
 ## Front ends
 
 The operator's page is `packages/foreman-ui`, served by `foreman serve`. Its
-behaviour is in `docs/web-ui.md`. The herdr-app Foreman pane (`herdr/foreman/`)
-is frozen, except that its Pipeline tab runs `foreman open <project>` (`src/open-command.ts`), which opens the project's page in the browser. Otherwise it gets no new features and no fixes until the operator decides which
-features move to the page.
+behaviour is in `docs/web-ui.md`. The page replaces the herdr-app Foreman pane
+(`herdr/foreman/`): every pane feature moves to it, one slice at a time, and the
+pane is removed once the page does all of it. Until then the pane gets no new
+features and no fixes, except that its Pipeline tab runs `foreman open
+<project>` (`src/open-command.ts`), which opens the project's page in the
+browser.
 
 `foreman serve` writes every reading to `state.json` (`src/published.ts`).
 The herdr-app Foreman pane (`herdr/foreman/main.js`) shows the project of the shown space. It
@@ -1032,9 +1035,12 @@ actions each row takes, with no renderer, which is why its test is plain
 assertions. `src/actions.ts` holds one `perform<Action>` function per action,
 which turns that action on a row into a dispatcher command, and
 `src/commands.ts` exposes each action as an exported verb and a subcommand. A
-new action is an entry in `ACTIONS_LIST` and the column tables in
+new action is an entry in `ACTIONS_LIST` (`src/view-names.ts`, with
+`KEY_ONLY_ACTIONS` when it takes only the key), the column tables in
 `src/view.ts`, a `perform<Action>` function in `src/actions.ts`, an exported
-verb in `src/commands.ts`, and a line in `ACTION_HELP`.
+verb in `src/commands.ts`, a line in `ACTION_HELP`, and a case in the UI
+server's `runRowAction` (`src/ui-server.ts`), with a `RowAction` member in the
+contract when it takes more than the key.
 
 A one-shot command runs `Dispatcher.read` — a tick's observation, acting on
 nothing — then finds the row its id keys. It does not talk to the dispatcher:

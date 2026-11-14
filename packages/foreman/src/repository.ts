@@ -1,6 +1,7 @@
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { BunServices } from "@effect/platform-bun";
 import { Array as Arr, Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect";
+import { RepositoryError } from "./errors.ts";
 
 /** The namespace `labelFor` puts every branch foreman authors under. */
 const ours = "foreman/";
@@ -1404,12 +1405,3 @@ export const worktreesOf = (output: string): ReadonlyArray<Worktree> =>
         },
       ];
     });
-
-export class RepositoryError extends Schema.TaggedError<RepositoryError>()("RepositoryError", {
-  directory: Schema.String,
-  detail: Schema.String,
-}) {
-  override get message() {
-    return `${this.directory}: ${this.detail}`;
-  }
-}

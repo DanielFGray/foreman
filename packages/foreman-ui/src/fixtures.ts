@@ -14,11 +14,12 @@ import { FleetError } from "../../foreman/src/errors.ts";
 import type { Ladder } from "../../foreman/src/ladder.ts";
 import { Settings } from "../../foreman/src/config.ts";
 import { publishedOf } from "../../foreman/src/published.ts";
-import type { Published } from "foreman/published-schema";
+import type { Published, PublishedRow } from "foreman/published-schema";
 import { Records } from "../../foreman/src/records.ts";
 import { Repository } from "../../foreman/src/repository.ts";
 import { scratchStore, seed } from "../../foreman/src/scratch-store.ts";
 import { ReadingsRef, serveGate, uiServerOn, type UiServerOptions } from "foreman/ui-server";
+import { offlineHost } from "../../foreman/src/offline-host.ts";
 
 /** A free TCP port on 127.0.0.1. */
 export const freePort = (): Promise<number> =>
@@ -64,18 +65,9 @@ export const fixtureReading = (): Published => {
   return {
     ...base,
     rows: [
-      {
-        view: "working",
-        key: "ts-demo",
-        label: "Wire the page",
-        detail: null,
-        project: "amux",
-        parent: null,
-        epic: false,
-        actions: [],
-        url: null,
-        pr: null,
-      },
+      fixtureRow("working", "ts-demo", "Wire the page", ["focus", "kill"]),
+      fixtureRow("attention", "ts-ask", "asks  Land the page", ["approve"]),
+      fixtureRow("landed", "ts-old", "Read the store once", []),
     ],
   };
 };
@@ -171,10 +163,13 @@ export const startFixtureServer = async (options?: {
 
   const reading = fixtureReading();
   const readings = Layer.effect(ReadingsRef, SubscriptionRef.make(reading));
-  const services = Layer.mergeAll(Records.layer, testSettings, Repository.Default, fakeFleet).pipe(
-    Layer.provideMerge(BunServices.layer),
-    Layer.provideMerge(store.registry),
-  );
+  const services = Layer.mergeAll(
+    Records.layer,
+    testSettings,
+    Repository.Default,
+    fakeFleet,
+    offlineHost,
+  ).pipe(Layer.provideMerge(BunServices.layer), Layer.provideMerge(store.registry));
   const handlers = Layer.mergeAll(readings, services);
 
   const port = options?.port ?? (await freePort());
@@ -216,3 +211,22 @@ export const startFixtureServer = async (options?: {
     },
   };
 };
+
+/** A row of the fixture reading in project amux. */
+const fixtureRow = (
+  view: PublishedRow["view"],
+  key: string,
+  label: string,
+  actions: ReadonlyArray<string>,
+): PublishedRow => ({
+  view,
+  key,
+  label,
+  detail: null,
+  project: "amux",
+  parent: null,
+  epic: false,
+  actions,
+  url: null,
+  pr: null,
+});
