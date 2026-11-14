@@ -10,7 +10,7 @@ import {
   standardOf,
   standardPipeline,
 } from "./pipeline.ts";
-import { pipelineOf } from "./pipeline-fixture.ts";
+import { insertedOn, pipelineOf } from "./pipeline-fixture.ts";
 import {
   addExit,
   addRoute,
@@ -18,7 +18,6 @@ import {
   beltOf,
   chargeExit,
   configure,
-  insertOn,
   makeComposite,
   rejoin,
   remove,
@@ -72,7 +71,7 @@ describe("the standard pipeline as belts", () => {
 
 describe("belt edits", () => {
   test("a block put on a wire runs on to where the wire went", () => {
-    const { pipeline, id } = insertOn(
+    const { pipeline, id } = insertedOn(
       STANDARD_PIPELINES.worktree,
       { from: "review", port: "exit:approved" },
       "agent",
@@ -98,7 +97,7 @@ describe("belt edits", () => {
   });
 
   test("a check put on a wire names no command until the operator sets one", () => {
-    const { pipeline, id } = insertOn(
+    const { pipeline, id } = insertedOn(
       STANDARD_PIPELINES.worktree,
       { from: "author", port: "exit:done" },
       "check",
@@ -129,8 +128,8 @@ describe("belt edits", () => {
   });
 
   test("new blocks never reuse an id", () => {
-    const first = insertOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "gate");
-    const second = insertOn(first.pipeline, { from: "queue", port: "next" }, "gate");
+    const first = insertedOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "gate");
+    const second = insertedOn(first.pipeline, { from: "queue", port: "next" }, "gate");
     expect(new Set(ids(second.pipeline)).size).toBe(ids(second.pipeline).length);
   });
 
@@ -142,8 +141,7 @@ describe("belt edits", () => {
     expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
   });
 
-  test("an end stays, and turns from land to done to park and back", () => {
-    expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
+  test("an end turns from land to done to park and back", () => {
     const done = swapEnd(STANDARD_PIPELINES.worktree, "land");
     expect(node(done, "land")).toEqual({ kind: "done", id: "land" });
     const park = swapEnd(done, "land");
@@ -262,7 +260,7 @@ describe("belt edits", () => {
       "land",
     );
     expect(problemsOf(pipelineOf(direct), OFFERS)).toEqual([]);
-    const branched = insertOn(direct, { from: "queue", port: "next" }, "branch");
+    const branched = insertedOn(direct, { from: "queue", port: "next" }, "branch");
     expect(node(branched.pipeline, branched.id)).toEqual({
       kind: "branch",
       id: branched.id,
@@ -278,34 +276,43 @@ describe("belt edits", () => {
     expect(node(routed, "retry")).toMatchObject({
       routes: [{}, {}, { when: "size>=3", to: "start" }],
     });
-    const { pipeline, id } = insertOn(routed, { from: "retry", port: 2 }, "gate");
+    const { pipeline, id } = insertedOn(routed, { from: "retry", port: 2 }, "gate");
     expect(node(pipeline, id)).toMatchObject({ next: "start" });
     expect(at(pipeline)[id]![1]).toBeGreaterThan(0);
   });
 
-  test("dropping a route keeps the blocks only it reached, named as unreached", () => {
+  test("dropping a route keeps the blocks only it reached, which take no task", () => {
     const routed = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
-    const inserted = insertOn(routed, { from: "retry", port: 2 }, "gate");
+    const inserted = insertedOn(routed, { from: "retry", port: 2 }, "gate");
     const pipeline = removeRoute(inserted.pipeline, "retry", 2);
     expect(ids(pipeline)).toContain(inserted.id);
-    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toContain(`no source reaches ${inserted.id}`);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
     expect(ids(remove(pipeline, inserted.id))).not.toContain(inserted.id);
   });
 
   test("removing the only source removes that block alone, and a new source joins the rest", () => {
     const pipeline = remove(STANDARD_PIPELINES.worktree, "queue");
     expect(ids(pipeline)).toEqual(ids(STANDARD_PIPELINES.worktree).filter((id) => id !== "queue"));
-    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual(["no source supplied"]);
+    expect(problemsOf(pipelineOf(pipeline), OFFERS)).toEqual([]);
     const { pipeline: supplied, id } = addSource(pipeline, "");
     expect(node(supplied, id)).toMatchObject({ next: "branch" });
     expect(problemsOf(pipelineOf(supplied), OFFERS)).toEqual([]);
   });
 
-  test("an end no wire enters can go; one a wire enters stays", () => {
-    const routed = insertOn(STANDARD_PIPELINES.worktree, { from: "queue", port: "next" }, "router");
+  test("an end goes, and the wires into it become loose ends", () => {
+    const routed = insertedOn(
+      STANDARD_PIPELINES.worktree,
+      { from: "queue", port: "next" },
+      "router",
+    );
     const parked = { nodes: [...routed.pipeline.nodes, { kind: "park" as const, id: "hold" }] };
     expect(ids(remove(parked, "hold"))).not.toContain("hold");
-    expect(remove(STANDARD_PIPELINES.worktree, "land")).toBe(STANDARD_PIPELINES.worktree);
+    expect(node(remove(STANDARD_PIPELINES.worktree, "land"), "land-gate")).toEqual({
+      kind: "gate",
+      id: "land-gate",
+      step: "land",
+      next: undefined,
+    });
   });
 
   test("a wire rejoins a later block or an earlier one, never one the pipeline lacks", () => {
@@ -329,8 +336,8 @@ describe("belt edits", () => {
       label: "approved",
       back: true,
     });
-    // The loop leaves the land unreached, and validation says so.
-    expect(problemsOf(pipelineOf(looped), OFFERS)).toContain("no source reaches land");
+    // The loop leaves no way out, and validation says so.
+    expect(problemsOf(pipelineOf(looped), OFFERS)[0]).toMatch(/nothing ends the loop/);
     expect(
       rejoin(
         STANDARD_PIPELINES.worktree,

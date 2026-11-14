@@ -25,6 +25,8 @@ import {
   configure,
   INSERTABLE,
   insertOn,
+  PLACEABLE,
+  placeBlock,
   makeComposite,
   rejoin,
   remove,
@@ -79,6 +81,12 @@ export const PipelineChange = S.Union([
   S.TaggedStruct("InsertOn", {
     wire: WireRef,
     kind: S.Literals(INSERTABLE),
+    of: S.optional(S.String),
+  }),
+  /** A new block named `id`, wired to nothing (`placeBlock`). */
+  S.TaggedStruct("Place", {
+    kind: S.Literals(PLACEABLE),
+    id: S.String,
     of: S.optional(S.String),
   }),
   S.TaggedStruct("Remove", { id: S.String }),
@@ -145,9 +153,10 @@ export type ApplyDefinitionResult =
  * rejoin that names a
  * block the pipeline lacks, a setting for another kind of block, a new exit
  * name the block already has, an exit added, renamed or removed on a check,
- * whose exits are passed and failed, or a claim on a block that is no author.
- * A change that names a block, wire or exit
- * the pipeline lacks otherwise leaves it as it was.
+ * whose exits are passed and failed, a claim on a block that is no author, an
+ * insert on a way out the pipeline lacks, a removal of a block it lacks, or a
+ * placed block whose id is taken or holds a `/`. Any other change that names
+ * a block, wire or exit the pipeline lacks leaves it as it was.
  *
  * `composites` are the definitions the drawing may use: InsertOn of a
  * composite, Unpack and landing-gate placement read them; MakeComposite
@@ -170,22 +179,34 @@ export const applyChange = (
     }) as const;
   switch (change._tag) {
     case "InsertOn": {
-      if (change.kind === "composite") {
-        if (change.of === undefined) {
-          return { _tag: "Refused", reason: "InsertOn of a composite needs of" };
-        }
-        if (composites[change.of] === undefined) {
-          return {
-            _tag: "Refused",
-            reason: `the definition ${change.of} is unknown`,
-          };
-        }
-      }
+      const unknown = definitionProblem(change._tag, change.kind, change.of, composites);
+      if (unknown !== undefined) return { _tag: "Refused", reason: unknown };
       const inserted = insertOn(pipeline, change.wire, change.kind, change.of, composites);
-      return changed(inserted.pipeline, inserted.id);
+      return inserted === undefined
+        ? {
+            _tag: "Refused",
+            reason: `${change.wire.from} has no way out ${change.wire.port}`,
+          }
+        : changed(inserted.pipeline, inserted.id);
+    }
+    case "Place": {
+      const unknown = definitionProblem(change._tag, change.kind, change.of, composites);
+      if (unknown !== undefined) return { _tag: "Refused", reason: unknown };
+      if (change.id.trim() === "" || change.id.includes("/")) {
+        return { _tag: "Refused", reason: `"${change.id}" is no block id: name it, with no "/"` };
+      }
+      if (pipeline.nodes.some((node) => node.id === change.id)) {
+        return { _tag: "Refused", reason: `the pipeline already has a block ${change.id}` };
+      }
+      const placed = placeBlock(pipeline, change.kind, change.id, change.of, composites);
+      return placed === undefined
+        ? { _tag: "Refused", reason: `the definition ${change.of} is unknown` }
+        : changed(placed, change.id);
     }
     case "Remove":
-      return changed(remove(pipeline, change.id));
+      return pipeline.nodes.some((node) => node.id === change.id)
+        ? changed(remove(pipeline, change.id))
+        : { _tag: "Refused", reason: `the pipeline has no block ${change.id}` };
     case "AddRoute":
       return changed(addRoute(pipeline, change.router, change.when));
     case "RemoveRoute":
@@ -414,3 +435,18 @@ const exitRefusal = (pipeline: Drawing, id: string, name: string | undefined) =>
   }
   return undefined;
 };
+
+/** Why a new composite block cannot be made: no definition named, or one that is unknown. */
+const definitionProblem = (
+  verb: "InsertOn" | "Place",
+  kind: string,
+  of: string | undefined,
+  composites: Composites,
+): string | undefined =>
+  kind !== "composite"
+    ? undefined
+    : of === undefined
+      ? `${verb} of a composite needs of`
+      : composites[of] === undefined
+        ? `the definition ${of} is unknown`
+        : undefined;

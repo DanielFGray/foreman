@@ -182,8 +182,8 @@ Each exit shows where it leads and the rung it charges.
 The operator adds, renames and removes an agent's exits. The operator charges an
 exit, and leads an exit to any block, an earlier one included, or to the queue.
 Each action is a `PipelineChange` (`AddExit`, `RenameExit`, `RemoveExit`,
-`ChargeExit`, `Rejoin`, `MakeComposite`, `Unpack`, `SetParam`, and `InsertOn`
-for kind `composite`), sent through `foreman pipeline edit`. A definition is
+`ChargeExit`, `Rejoin`, `Place`, `MakeComposite`, `Unpack`, `SetParam`, and
+`InsertOn` for kind `composite`), sent through `foreman pipeline edit`. A definition is
 edited through `foreman composite edit` with the same verbs on its blocks
 (with `out:<exit id>` as a wire end) plus `AddParam`, `RemoveParam`,
 `RenameCompositeExit` and the entry verbs `AddEntry`, `RemoveEntry`,

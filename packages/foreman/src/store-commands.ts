@@ -7,7 +7,7 @@ import { Tracker } from "./tracker.ts";
 import { PublishedRow } from "./published-schema.ts";
 import { queueOf, queueRowsOf } from "./host.ts";
 import { Refused } from "./errors.ts";
-import { place, type Placement } from "./pipeline.ts";
+import { blockOf, place } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { pipelineFor, pipelinesPath, readPipelines } from "./pipeline-file.ts";
 import { runTitles } from "./run-titles.ts";
@@ -63,14 +63,6 @@ export const queueCommand = Command.make("queue", { json, project }, (args) =>
 ).pipe(Command.withDescription("Print the ready queue in the order the fleet would dispatch it"));
 
 const id = Argument.String("id").pipe(Argument.withDescription("A task id"));
-
-/** The block placement puts the task at, named for a human reader. */
-const stepOf = (placement: Placement): string | undefined =>
-  placement._tag === "At"
-    ? placement.node.id
-    : placement._tag === "Parked" || placement._tag === "ExitGone"
-      ? placement.node
-      : undefined;
 
 const MINUTES = (minutes: number) => minutes.toFixed(1);
 
@@ -153,7 +145,7 @@ export const taskShow = (input: { readonly id: string }) =>
     // there is no block to name.
     const step =
       reading._tag === "Expanded"
-        ? stepOf(place(reading.pipeline, factsOf(task, reading.pipeline)))
+        ? blockOf(place(reading.pipeline, factsOf(task, reading.pipeline)))
         : undefined;
     const history = yield* records.history(task.id);
     const now = new Date(yield* Clock.currentTimeMillis);

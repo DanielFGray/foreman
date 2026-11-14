@@ -251,11 +251,9 @@ describe("drawing a draft", () => {
     expect(draftOf()).toBeDefined();
   });
 
-  test("removing the only source keeps the rest of the draft, and save refuses until a source is added", async () => {
+  test("removing the only source keeps the rest of the draft, which saves and takes no task", async () => {
     await run("edit", "amux", change({ _tag: "Remove", id: "queue" }));
     expect(draftOf().pipeline.nodes.map((node: { id: string }) => node.id)).toContain("author");
-    expect(await refusal("save", "amux")).toMatch(/no source supplied/);
-    await run("edit", "amux", change({ _tag: "AddSource", filter: "" }));
     await run("save", "amux");
     expect(existsSync(path)).toBe(true);
   });
@@ -266,7 +264,7 @@ describe("drawing a draft", () => {
     expect(await refusal("save", "amux")).toMatch(/changed since this draft began/);
   });
 
-  test("a rejoin to an earlier block is written, and save names what the loop leaves unreached", async () => {
+  test("a rejoin to an earlier block is written, and save names the loop nothing ends", async () => {
     await run(
       "edit",
       "amux",
@@ -275,7 +273,7 @@ describe("drawing a draft", () => {
     expect(
       draftOf().pipeline.nodes.find((node: { id: string }) => node.id === "review").exits[0],
     ).toEqual({ id: "approved", name: "approved", to: "start" });
-    expect(await refusal("save", "amux")).toMatch(/no source reaches land-gate/);
+    expect(await refusal("save", "amux")).toMatch(/nothing ends the loop/);
   });
 
   test("an exit added, wired back to the author's gate and charged lets the draft save", async () => {

@@ -11,7 +11,7 @@
  * rung the ladder has) is `problemsOf`'s to report.
  */
 import { Option } from "effect";
-import { expand, isSettable, PARAM_FIELDS, unpackInstance } from "./composite.ts";
+import { expand, isSettable, mapTargets, PARAM_FIELDS, unpackInstance } from "./composite.ts";
 import type { BlockSetting } from "./pipeline-edit.ts";
 import type { ChoicesView } from "./pipeline-view.ts";
 import {
@@ -175,6 +175,10 @@ export const INSERTABLE = [
 ] as const;
 export type Insertable = (typeof INSERTABLE)[number];
 
+/** The kinds of block an operator places on its own, wired to nothing. */
+export const PLACEABLE = [...INSERTABLE, "source", "land", "done", "park"] as const;
+export type Placeable = (typeof PLACEABLE)[number];
+
 /**
  * What an editor that cannot load foreman's modules offers for a block's
  * settings, read from the schemas. `composite` is not a bare choice: a
@@ -191,15 +195,13 @@ export const choicesOf = (composites: Composites): ChoicesView => ({
 });
 
 /**
- * Puts a new block on a wire: the wire runs into it, and it runs on to where
- * the wire went. Answers the pipeline and the new block's id.
+ * Puts a new block on a way out of a block: the output runs into it, and it
+ * runs on to where the output went. On a loose end, the new block's outputs
+ * are loose too. Answers the pipeline and the new block's id, or nothing when
+ * the block has no such output or the composite's definition is unknown.
  *
- * A new router sends everything to `else` until a route is added; a new agent
- * authors from the ladder; a new gate holds for `author`; a new check names no
- * command, which validation reports until the operator names one. A branch
- * or a worktree has nothing to set. A composite instance names its definition
- * (`of`); its first exit takes the wire's old target and its prefix is
- * `<id>.` (`docs/composite-blocks.md`). The operator sets each one after.
+ * The new block's settings are those of `newBlock`. A composite instance's
+ * prefix is `<id>.` (`docs/composite-blocks.md`).
  */
 export const insertOn = (
   pipeline: Drawing,
@@ -207,47 +209,88 @@ export const insertOn = (
   kind: Insertable,
   of?: string,
   composites: Composites = {},
-): { readonly pipeline: Drawing; readonly id: string } => {
-  const target = targetOf(pipeline, wire);
-  if (target === undefined) return { pipeline, id: "" };
-  if (kind === "composite") {
-    if (of === undefined) return { pipeline, id: "" };
-    const definition = composites[of];
-    if (definition === undefined) return { pipeline, id: "" };
-    const id = freshId(pipeline, of);
-    const block: DrawnNode = {
-      kind: "composite",
-      id,
-      of,
-      prefix: `${id}.`,
-      set: {},
-      exits: definition.exits.map((exit, at) => ({
-        id: exit.id,
-        to: at === 0 ? target : QUEUE,
-      })),
-    };
-    const rewired = retargeted(pipeline, wire, id);
-    return { pipeline: { nodes: [...rewired.nodes, block] }, id };
+): { readonly pipeline: Drawing; readonly id: string } | undefined => {
+  const output = outputOf(pipeline, wire);
+  if (output === undefined) return undefined;
+  const id = freshId(pipeline, kind === "composite" ? (of ?? kind) : kind);
+  const block = newBlock(pipeline, kind, id, output.to, of, composites);
+  if (block === undefined) return undefined;
+  return { pipeline: { nodes: [...retargeted(pipeline, wire, id).nodes, block] }, id };
+};
+
+/**
+ * Puts a new block named `id` in the drawing, wired to nothing: each of its
+ * outputs is a loose end, so it idles until the operator wires it
+ * (`rejoin`). Its settings are those of `newBlock`. Nothing when the
+ * composite's definition is unknown; the caller checks the id.
+ */
+export const placeBlock = (
+  pipeline: Drawing,
+  kind: Placeable,
+  id: string,
+  of?: string,
+  composites: Composites = {},
+): Drawing | undefined => {
+  const block = newBlock(pipeline, kind, id, undefined, of, composites);
+  return block === undefined
+    ? undefined
+    : { nodes: [...pipeline.nodes, mapTargets(block, () => undefined)] };
+};
+
+/**
+ * A new block of `kind`, its way on leading to `to`. A new router sends
+ * everything to `else` until a route is added; a new agent authors from the
+ * ladder; a new gate holds for `author`; a new check names no command, which
+ * validation reports until the operator names one; a new source takes every
+ * ready task. A branch, a worktree and an end have nothing to set. A
+ * composite instance's first exit leads to `to` and the others return to the
+ * queue. The operator sets each one after.
+ */
+const newBlock = (
+  pipeline: Drawing,
+  kind: Placeable,
+  id: string,
+  to: string | undefined,
+  of: string | undefined,
+  composites: Composites,
+): DrawnNode | undefined => {
+  switch (kind) {
+    case "composite": {
+      const definition = of === undefined ? undefined : composites[of];
+      if (of === undefined || definition === undefined) return undefined;
+      return {
+        kind,
+        id,
+        of,
+        prefix: `${id}.`,
+        set: {},
+        exits: definition.exits.map((exit, at) => ({ id: exit.id, to: at === 0 ? to : QUEUE })),
+      };
+    }
+    case "gate":
+      return { kind, id, step: "author", next: to };
+    case "agent":
+      return {
+        kind,
+        id,
+        role: "author",
+        model: "ladder",
+        exits: freshExits(pipeline, standardExits({ kind, role: "author" }, to)),
+      };
+    case "check":
+      return { kind, id, command: "", exits: standardExits({ kind }, to) };
+    case "router":
+      return { kind, id, routes: [], else: to };
+    case "source":
+      return { kind, id, filter: "", next: to };
+    case "branch":
+    case "worktree":
+      return { kind, id, next: to };
+    case "land":
+    case "done":
+    case "park":
+      return { kind, id };
   }
-  const id = freshId(pipeline, kind);
-  const block: DrawnNode =
-    kind === "gate"
-      ? { kind, id, step: "author", next: target }
-      : kind === "agent"
-        ? {
-            kind,
-            id,
-            role: "author",
-            model: "ladder",
-            exits: freshExits(pipeline, standardExits({ kind, role: "author" }, target)),
-          }
-        : kind === "check"
-          ? { kind, id, command: "", exits: standardExits({ kind }, target) }
-          : kind === "router"
-            ? { kind, id, routes: [], else: target }
-            : { kind, id, next: target };
-  const rewired = retargeted(pipeline, wire, id);
-  return { pipeline: { nodes: [...rewired.nodes, block] }, id };
 };
 
 /**
@@ -347,7 +390,7 @@ export const makeComposite = (
     entries,
     exits: exits.map(({ id, name }) => ({ id, name })),
     params: [],
-    blocks: selectedNodes.map((node) => rewriteTargets(node, rewrite)),
+    blocks: selectedNodes.map((node) => mapTargets(node, rewrite)),
   };
 
   const remaining = pipeline.nodes.filter((node) => !selected.has(node.id));
@@ -626,53 +669,25 @@ const entryTargetOf = (pipeline: Drawing, target: string, composites: Composites
 /** The block a wire target names: the target without its `/<entry id>`. */
 export const blockOf = (target: string): string => splitTarget(target)[0];
 
-/** `node` with `f` applied to each wire target it holds. */
-const rewriteTargets = (node: DrawnNode, f: (target: string) => string): DrawnNode => {
-  switch (node.kind) {
-    case "source":
-    case "gate":
-    case "branch":
-    case "worktree":
-      return { ...node, next: f(node.next) };
-    case "agent":
-    case "check":
-      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: f(exit.to) })) };
-    case "composite":
-      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: f(exit.to) })) };
-    case "router":
-      return {
-        ...node,
-        routes: node.routes.map((route) => ({ ...route, to: f(route.to) })),
-        else: f(node.else),
-      };
-    case "land":
-    case "done":
-    case "park":
-      return node;
-  }
-};
-
 /**
  * Takes a block out, and no other. The wires into it run on to where it went:
- * a router's `else`, an agent's or a check's first exit that does not return
- * the task, or a block's `next`. An end (land, done or park) goes only when no
- * wire enters it, since a wire must end at a block; turn one into another
- * instead. The blocks only this one reached stay, and `problemsOf` names them.
+ * a router's `else`, an agent's or a check's first wired exit that does not
+ * return the task, or a block's `next`. When it went nowhere (an end, or a
+ * block whose way on is loose), the wires into it become loose ends. The
+ * blocks only this one reached stay, and take no task.
  */
 export const remove = (pipeline: Drawing, id: string): Drawing => {
   const node = pipeline.nodes.find((candidate) => candidate.id === id);
   if (node === undefined) return pipeline;
-  const others = pipeline.nodes.filter((candidate) => candidate.id !== id);
   const onward = onwardOf(node);
   // A wire to `<id>/<entry id>` enters the same block, so it runs on too.
-  if (onward !== undefined) {
-    return {
-      nodes: others.map((other) =>
-        rewriteTargets(other, (target) => (blockOf(target) === id ? onward : target)),
-      ),
-    };
-  }
-  return wiresOf(pipeline).some((wire) => blockOf(wire.to) === id) ? pipeline : { nodes: others };
+  return {
+    nodes: pipeline.nodes.flatMap((other) =>
+      other.id === id
+        ? []
+        : [mapTargets(other, (target) => (blockOf(target) === id ? onward : target))],
+    ),
+  };
 };
 
 /** Adds a route to a router. It joins `else` at once, until blocks are put on it. */
@@ -716,14 +731,16 @@ export const rejoin = (
     : Option.none();
 };
 
-/** Starts a new belt: a source with this filter that joins the first source's belt. */
+/**
+ * Starts a new belt: a source with this filter that joins the first source's
+ * belt, else the first block. In an empty drawing its way on is a loose end.
+ */
 export const addSource = (
   pipeline: Drawing,
   filter: string,
 ): { readonly pipeline: Drawing; readonly id: string } => {
   const first = pipeline.nodes.find((node) => node.kind === "source");
   const next = first?.kind === "source" ? first.next : pipeline.nodes[0]?.id;
-  if (next === undefined) return { pipeline, id: "" };
   const id = freshId(pipeline, "source");
   return { pipeline: { nodes: [...pipeline.nodes, { kind: "source", id, filter, next }] }, id };
 };
@@ -1001,8 +1018,12 @@ const returnsOf = (pipeline: Drawing): ReadonlyArray<BeltReturn> =>
     }
   });
 
-const wiresOf = (pipeline: Drawing): ReadonlyArray<Wire> =>
-  pipeline.nodes.flatMap((node): ReadonlyArray<Wire> => {
+/** A block's way out as the belt names it, with no `to` when it is a loose end. */
+type Output = Omit<Wire, "to"> & { readonly to: string | undefined };
+
+/** Every way out of the drawing's blocks, loose ends included; returns to the queue left out. */
+const outputsOf = (pipeline: Drawing): ReadonlyArray<Output> =>
+  pipeline.nodes.flatMap((node): ReadonlyArray<Output> => {
     switch (node.kind) {
       case "source":
       case "gate":
@@ -1011,16 +1032,23 @@ const wiresOf = (pipeline: Drawing): ReadonlyArray<Wire> =>
         return [{ from: node.id, port: "next", to: node.next, label: "" }];
       case "agent":
       case "check":
-        return node.exits.flatMap((exit): ReadonlyArray<Wire> =>
+        return node.exits.flatMap((exit) =>
           exit.to === QUEUE
             ? []
-            : [{ from: node.id, port: `exit:${exit.name}`, to: exit.to, label: exit.name }],
+            : [
+                {
+                  from: node.id,
+                  port: `exit:${exit.name}` as const,
+                  to: exit.to,
+                  label: exit.name,
+                },
+              ],
         );
       case "composite":
-        return node.exits.flatMap((exit): ReadonlyArray<Wire> =>
+        return node.exits.flatMap((exit) =>
           exit.to === QUEUE
             ? []
-            : [{ from: node.id, port: `exit:${exit.id}`, to: exit.to, label: exit.id }],
+            : [{ from: node.id, port: `exit:${exit.id}` as const, to: exit.to, label: exit.id }],
         );
       case "router":
         return [
@@ -1039,14 +1067,30 @@ const wiresOf = (pipeline: Drawing): ReadonlyArray<Wire> =>
     }
   });
 
-const targetOf = (pipeline: Drawing, wire: Pick<Wire, "from" | "port">): string | undefined =>
-  wiresOf(pipeline).find(
+/** The drawing's wires: its outputs that lead somewhere. */
+const wiresOf = (pipeline: Drawing): ReadonlyArray<Wire> =>
+  outputsOf(pipeline).flatMap((output) =>
+    output.to === undefined ? [] : [{ ...output, to: output.to }],
+  );
+
+/** The output `wire` names, wired or loose, or nothing when the block has no such output. */
+const outputOf = (pipeline: Drawing, wire: Pick<Wire, "from" | "port">): Output | undefined =>
+  outputsOf(pipeline).find(
     (candidate) => candidate.from === wire.from && candidate.port === wire.port,
-  )?.to;
+  );
 
 const retargeted = (pipeline: Drawing, wire: Pick<Wire, "from" | "port">, to: string): Drawing =>
   mapNode(pipeline, wire.from, (node): DrawnNode => {
-    if (wire.port === "next" && "next" in node) return { ...node, next: to };
+    // A loose `next` may be absent from the node, so the kind says whether it has one.
+    if (
+      wire.port === "next" &&
+      (node.kind === "source" ||
+        node.kind === "gate" ||
+        node.kind === "branch" ||
+        node.kind === "worktree")
+    ) {
+      return { ...node, next: to };
+    }
     if (wire.port === "else" && node.kind === "router") return { ...node, else: to };
     if (typeof wire.port === "string" && wire.port.startsWith("exit:")) {
       const name = wire.port.slice("exit:".length);
@@ -1073,31 +1117,8 @@ const retargeted = (pipeline: Drawing, wire: Pick<Wire, "from" | "port">, to: st
   });
 
 /** Retargets every wire of `node` that ran to `from` so it runs to `to`. */
-const redirect = (node: DrawnNode, from: string, to: string): DrawnNode => {
-  const swap = (id: string) => (id === from ? to : id);
-  switch (node.kind) {
-    case "source":
-    case "gate":
-    case "branch":
-    case "worktree":
-      return { ...node, next: swap(node.next) };
-    case "agent":
-    case "check":
-      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: swap(exit.to) })) };
-    case "composite":
-      return { ...node, exits: node.exits.map((exit) => ({ ...exit, to: swap(exit.to) })) };
-    case "router":
-      return {
-        ...node,
-        routes: node.routes.map((route) => ({ ...route, to: swap(route.to) })),
-        else: swap(node.else),
-      };
-    case "land":
-    case "done":
-    case "park":
-      return node;
-  }
-};
+const redirect = (node: DrawnNode, from: string, to: string): DrawnNode =>
+  mapTargets(node, (id) => (id === from ? to : id));
 
 const mapNode = (
   pipeline: Drawing,
@@ -1181,16 +1202,16 @@ const freshId = (pipeline: Drawing, kind: string): string => {
   }
 };
 
-/** Where the wires into a block run once it is taken out, or nothing for a block that cannot go. */
+/** Where the wires into a block run once it is taken out, or nothing, which leaves them loose. */
 const onwardOf = (node: DrawnNode): string | undefined => {
   switch (node.kind) {
     case "router":
       return node.else;
     case "agent":
     case "check":
-      return node.exits.find((exit) => exit.to !== QUEUE)?.to;
+      return node.exits.find((exit) => exit.to !== undefined && exit.to !== QUEUE)?.to;
     case "composite":
-      return node.exits.find((exit) => exit.to !== QUEUE)?.to;
+      return node.exits.find((exit) => exit.to !== undefined && exit.to !== QUEUE)?.to;
     case "land":
     case "done":
     case "park":

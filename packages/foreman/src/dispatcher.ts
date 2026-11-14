@@ -1449,8 +1449,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           const placement = pipeline && place(pipeline, factsOf(task, pipeline));
           return (
             pipeline !== undefined &&
-            // A task whose last exit the drawing lost is the operator's to answer.
+            // A task whose last exit the drawing lost, or that waits before an
+            // idle block, is the operator's to answer.
             placement?._tag !== "ExitGone" &&
+            placement?._tag !== "Idle" &&
             diagnosticIntent(task) === undefined &&
             !awaitingLanding(pipeline, task) &&
             // An agent that named its exit finished; the step above closes its run.
@@ -2200,6 +2202,13 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const cutoff = DateTime.subtract(now, { hours: settings.staleAfter });
+        // A task before an idle block waits for the operator to wire it, and
+        // keeps its claim and workspace until it can go on.
+        const idle = new Set(
+          current.placed.flatMap(({ task, placement }) =>
+            placement._tag === "Idle" ? [task.id] : [],
+          ),
+        );
 
         yield* Effect.forEach(
           [
@@ -2207,6 +2216,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             ...current.review.filter(({ task }) => reviewedBy(task) !== undefined),
           ].filter(
             ({ task, worker }) =>
+              !idle.has(task.id) &&
               (worker === undefined || worker.state === "gone") &&
               DateTime.isLessThan(DateTime.fromDateUnsafe(task.lastActivityAt), cutoff),
           ),

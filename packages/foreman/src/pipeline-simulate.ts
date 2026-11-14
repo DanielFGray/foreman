@@ -20,6 +20,7 @@ import {
 import { labelFor, type Worker } from "./fleet.ts";
 import { isEnabled, mayAuthor } from "./ladder.ts";
 import {
+  blockOf,
   type Exit,
   isUnderReview,
   type Pipeline,
@@ -496,7 +497,9 @@ const snapshot = (sim: Sim, now: number) => {
           ? "parked"
           : placement._tag === "ExitGone"
             ? "gone"
-            : "outside";
+            : placement._tag === "Idle"
+              ? "idle"
+              : "outside";
     return { task: id, node: nodeOf(placement), state };
   });
   const last = sim.frames.at(-1);
@@ -566,11 +569,7 @@ const workerOf = (sim: Sim, task: Item): Worker | undefined =>
 
 /** The block a placement names, if any. */
 const nodeOf = (placement: Placement): string | null =>
-  placement._tag === "At"
-    ? placement.stands
-    : placement._tag === "Parked" || placement._tag === "ExitGone"
-      ? placement.node
-      : null;
+  placement._tag === "At" ? placement.stands : (blockOf(placement) ?? null);
 
 const hoursOf = (hours: number): number => Math.round(hours * 100) / 100;
 

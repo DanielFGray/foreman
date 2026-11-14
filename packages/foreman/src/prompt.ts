@@ -365,7 +365,9 @@ const whereTo = (exit: Exit): string => {
       : exit.fails === "self"
         ? ", and your model is charged with a failure"
         : "";
-  return exit.to === QUEUE
-    ? `the task returns to the queue${charge}.`
-    : `the task goes to ${exit.to}${charge}.`;
+  return exit.to === undefined
+    ? `the task waits here until the operator wires this exit${charge}.`
+    : exit.to === QUEUE
+      ? `the task returns to the queue${charge}.`
+      : `the task goes to ${exit.to}${charge}.`;
 };

@@ -3,12 +3,11 @@
 A **pipeline** is the flow each project runs. It is a graph of **blocks**
 (nodes) joined by **wires**. The dispatcher places each task in the graph and
 runs the block where the task stands. A project with no pipeline runs the
-**empty pipeline** (`EMPTY_PIPELINE`): no block, so it takes no task, and its
-only problem is "no source supplied". The operator builds each project's
-pipeline from blocks, in the page or with `foreman pipeline edit`; foreman
-draws none for them. The standard pipelines (`STANDARD_PIPELINES`) stay in
-code as test fixtures and as the drawing a pipeline built from nothing must
-be able to reach.
+**empty pipeline** (`EMPTY_PIPELINE`): no block, so it takes no task, and it is
+valid. The operator builds each project's pipeline from blocks, in the page or
+with `foreman pipeline edit`; foreman draws none for them. The standard
+pipelines (`STANDARD_PIPELINES`) stay in code as test fixtures and as the
+drawing a pipeline built from nothing must be able to reach.
 
 The executors do the work inside a block: dispatching an agent into the task's
 worktree, reading how its run ended, landing, usage walls, trials and teardown.
@@ -19,9 +18,9 @@ The pipeline decides which block a task takes next.
 | Question | Answered by |
 | --- | --- |
 | What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the empty pipeline |
-| Where is this task in it? | derived every tick by `place` from the task's facts |
-| Which block did it last leave? | a fact: the exit its last named run named, and the commit it was named on |
-| May this step run for this task? | the policy: the gate's step, its mode, grants |
+| Where is this task in it?                | derived every tick by `place` from the task's facts                           |
+| Which block did it last leave?           | a fact: the exit its last named run named, and the commit it was named on     |
+| May this step run for this task?         | the policy: the gate's step, its mode, grants                                 |
 
 The pipeline is operator intention. It lives in its own file, `pipelines.json`
 (`$FOREMAN_PIPELINES` overrides), in the policy file's directory. The dispatcher
@@ -176,6 +175,42 @@ reads a label a person set.
   `<block>`, so two instances of one composite are told apart
   (`composite-blocks.md`).
 
+## Loose ends
+
+The operator builds a pipeline from blocks: place a block, then wire it. So a
+drawing may hold **loose ends**: outputs wired to nothing. An output is a
+block's `next`, a router's `else` or one of its routes, or an exit. Each
+target is optional in the drawing, in the pipelines file and in a draft alike.
+
+A block with at least one loose end is **idle**. An idle block takes no task in,
+and the rest of the pipeline runs:
+
+- The walk stops before an idle block. The task is `Idle` there, with the
+  block and its loose outputs. It takes no step: an open task is not claimed
+  and gets no branch or worktree, and a claimed task keeps its claim and its
+  workspace: neither the stall stop nor the stale release takes it. The
+  reading says which output to wire.
+- An agent already running at a block that goes idle keeps running. When it
+  names an exit, the next tick places the task by that exit as usual; a loose
+  exit leaves the task `Idle` at the block that named it.
+- A router idles when any of its outputs is loose, not only the route a task
+  would take, so a router's state does not depend on the task.
+- A composite instance idles when one of its exits is loose. Inside a
+  definition, a loose end idles the block that holds it, in every instance.
+- A source with a loose `next` takes no task. A pipeline with no source, the
+  empty pipeline among them, is valid and takes no task.
+
+A loose end is never a problem: it does not stop the pipeline or its save.
+Wiring the output wakes the block on the next tick. Idleness is derived from
+the drawing on every tick (`looseEnds` in `src/pipeline.ts`), never stored.
+
+So a pipeline is built from nothing one valid drawing at a time. `Place` puts
+a block of any kind by its id, with every output loose; `Rejoin` wires an
+output; `AddSource` adds a source, loose when the drawing has no block to join.
+`Remove` takes a block out and wires each wire into it to where the block led,
+or leaves it loose. An edit that names a block, a way out or a definition the
+drawing lacks is refused (`src/pipeline-edit.ts`).
+
 ## Placement
 
 `place(pipeline, task)` is a pure function:
@@ -189,7 +224,8 @@ reads a label a person set.
    drawing as it is now, and walk from its wire. An open task, a return or no
    exit at all: walk from the source. A missing block or exit is `ExitGone`, a
    decision for the operator.
-4. Walk forward. At a router, follow the first matching route. At a gate,
+4. Walk forward. At an idle block, stop: the task is `Idle` before it (see
+   "Loose ends"). At a router, follow the first matching route. At a gate,
    remember the gate. Stop at the first work block. The task is **at** that
    block, `waiting`. The remembered gates decide when it may start. The walk has
    a step bound, so a cycle of routers cannot hang it.
@@ -313,9 +349,10 @@ running a flow the operator did not draw is worse than stopping.
   rungs are on the ladder. Validation runs on the expansion: an unknown
   definition, an unwired exit, a missing parameter or a recursion is a problem
   of that project only.
-- At least one source. Every wire and every exit ends at a block or `queue`.
-  Every block is reachable from a source. From every block, some route reaches
-  a land, a done or a park.
+- Every wired output ends at a block or `queue`; a loose one ends nowhere and
+  idles its block. A block no source reaches takes no task, and is no
+  problem. From every block, some route reaches a land, a done, a park or a
+  loose end: a fully wired trap with no way out is a problem.
 - An agent block declares at least one exit. Exit names are unique on their
   block, match `[a-z-]+`, and are not process endings. A check's exits are
   `passed` and `failed`. `fails: self` is refused on a check, because a check has
@@ -325,6 +362,7 @@ running a flow the operator did not draw is worse than stopping.
   a router that leaves on a count that grows each lap (`exits:<name>>=N` or
   `attempts>=N`). A smaller loop inside a cycle that passes neither is a problem,
   even when the larger cycle charges. A cycle through no work block is a problem.
+  A cycle through an idle block is none: the walk stops at that block.
 - A router filter that counts an exit (`exit:<name>` or `exits:<name>>=N`)
   names an exit some block declares, or a process ending. With a block
   (`exits:<block>/<name>>=N`), that block exists and declares it. A count with a

@@ -45,12 +45,13 @@ describe("inputPoint", () => {
 });
 
 describe("rejoinFrames", () => {
-  it("marks rejoining branch.next to start with one unreachable problem", () => {
+  it("marks rejoining branch.next to land-gate with the one problem of skipping review", () => {
     const frames = rejoinFrames(STANDARD_PIPELINES.checkout, BRANCH_NEXT, CHECKS, "across");
-    const toStart = frames.find((frame) => rejoinsTo(frame, "start"));
-    assert.isDefined(toStart);
-    assert.strictEqual(toStart.problems.length, 1);
-    assert.strictEqual(toStart.problems[0], "no source reaches retry");
+    const toLand = frames.find((frame) => rejoinsTo(frame, "land-gate"));
+    assert.isDefined(toLand);
+    assert.deepStrictEqual(toLand.problems, [
+      "a route from queue reaches land with no review after it",
+    ]);
   });
 
   it("keeps the committed block positions so closest can hit the visible target", () => {
@@ -108,7 +109,7 @@ const rejoinsTo = (frame: EditorFrame, to: string): boolean =>
 /** Where `id`'s next exit leads in a drawing. */
 const nextOf = (drawing: Drawing, id: string): Option.Option<string> =>
   Option.fromNullishOr(drawing.nodes.find((one) => one.id === id)).pipe(
-    Option.flatMap((node) => ("next" in node ? Option.some(node.next) : Option.none())),
+    Option.flatMap((node) => ("next" in node ? Option.fromNullishOr(node.next) : Option.none())),
   );
 
 describe("frameAfter", () => {

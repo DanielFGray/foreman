@@ -619,7 +619,9 @@ const whereIs = (placement: Placement): string =>
       ? `parked at ${placement.node}`
       : placement._tag === "ExitGone"
         ? `waiting for the operator: ${placement.reason}`
-        : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
+        : placement._tag === "Idle"
+          ? `idle before ${placement.node}: wire ${placement.loose.join(", ")}`
+          : `at ${placement.node.id} ${placement.state}  gates: ${placement.gates.map((gate) => `${gate.id} (${gate.step})`).join(", ") || "none"}  ahead: ${placement.ahead}`;
 
 /** A trace step in words: the event, where the task stands, and what comes next. */
 const traceLine = (step: TraceStepView): string =>

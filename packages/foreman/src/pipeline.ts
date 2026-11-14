@@ -60,7 +60,7 @@ export const splitTarget = (target: string): readonly [string, string | undefine
 export const Exit = S.Struct({
   id: S.String,
   name: S.String,
-  to: S.String,
+  to: S.optional(S.String),
   fails: S.optional(S.Literals(["author", "self"])),
   empty: S.optional(S.Literal("claim")),
 });
@@ -71,15 +71,15 @@ export const SourceNode = S.Struct({
   kind: S.Literal("source"),
   id: S.String,
   filter: S.String,
-  next: S.String,
+  next: S.optional(S.String),
 });
 
 /** Sends a task on by the first route whose filter it matches. */
 export const RouterNode = S.Struct({
   kind: S.Literal("router"),
   id: S.String,
-  routes: S.Array(S.Struct({ when: S.String, to: S.String })),
-  else: S.String,
+  routes: S.Array(S.Struct({ when: S.String, to: S.optional(S.String) })),
+  else: S.optional(S.String),
 });
 
 /** Holds a task before the next work block until the policy permits `step`. */
@@ -87,7 +87,7 @@ export const GateNode = S.Struct({
   kind: S.Literal("gate"),
   id: S.String,
   step: S.Literals(STEPS),
-  next: S.String,
+  next: S.optional(S.String),
 });
 
 /**
@@ -136,7 +136,11 @@ export const CheckNode = S.Struct({
  * placement walks through it: the branch is made when the first agent after
  * it dispatches, and git's record of the branch is what says it passed.
  */
-export const BranchNode = S.Struct({ kind: S.Literal("branch"), id: S.String, next: S.String });
+export const BranchNode = S.Struct({
+  kind: S.Literal("branch"),
+  id: S.String,
+  next: S.optional(S.String),
+});
 
 /**
  * Checks the task's branch out in a directory of its own. Like a branch block
@@ -146,7 +150,7 @@ export const BranchNode = S.Struct({ kind: S.Literal("branch"), id: S.String, ne
 export const WorktreeNode = S.Struct({
   kind: S.Literal("worktree"),
   id: S.String,
-  next: S.String,
+  next: S.optional(S.String),
 });
 
 /**
@@ -201,7 +205,7 @@ export const CompositeNode = S.Struct({
   of: S.String,
   prefix: S.String,
   set: S.Record(S.String, ParamValue),
-  exits: S.Array(S.Struct({ id: S.String, to: S.String })),
+  exits: S.Array(S.Struct({ id: S.String, to: S.optional(S.String) })),
 });
 export type CompositeNode = typeof CompositeNode.Type;
 
@@ -341,6 +345,12 @@ export const Placement = S.Union([
   S.Struct({ _tag: S.Literal("Outside") }),
   S.Struct({ _tag: S.Literal("Parked"), node: S.String }),
   /**
+   * The task's route reaches a block with outputs wired to nothing (`loose`).
+   * The block takes no task in, so the task takes no step until the operator
+   * wires them (docs/pipeline-engine.md, "Loose ends").
+   */
+  S.Struct({ _tag: S.Literal("Idle"), node: S.String, loose: S.Array(S.String) }),
+  /**
    * The task's last exit is one the drawing lacks, or was named at a block
    * the drawing lacks. Absence is an unknown, not evidence, so the task
    * waits for the operator rather than starting at its source again.
@@ -370,6 +380,14 @@ export const Placement = S.Union([
   }),
 ]);
 export type Placement = typeof Placement.Type;
+
+/** The block a placement names: nothing for a task outside the pipeline. */
+export const blockOf = (placement: Placement): string | undefined =>
+  placement._tag === "Outside"
+    ? undefined
+    : placement._tag === "At"
+      ? placement.node.id
+      : placement.node;
 
 /**
  * Where a task with these facts stands in `pipeline`.
@@ -401,9 +419,10 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
   const bound = pipeline.nodes.length;
 
   const named = facts.status === "open" ? [] : facts.named;
-  let reached = walk(nodes, source.next, facts, bound);
+  let reached = walk(nodes, source.id, facts, bound);
   // A named exit that still wires places the task. One wired to the queue
-  // leaves the walk at the source; one the drawing lacks places it nowhere.
+  // leaves the walk at the source; one the drawing lacks places it nowhere;
+  // a loose one leaves it idle at the block that named it.
   let viaExit = false;
   let gone: NamedExit | undefined;
   for (let last = named.length - 1; last >= 0; last--) {
@@ -414,7 +433,12 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
       break;
     }
     if (wire._tag === "Queue") break;
-    const target = walk(nodes, wire.exit.to, facts, bound);
+    if (wire._tag === "Loose") {
+      reached = { node: undefined, gates: [], idle: wire.node };
+      viaExit = true;
+      break;
+    }
+    const target = walk(nodes, wire.to, facts, bound);
     // A land or a done takes the commit the exit was named on, so an exit
     // that names none, or names one the tip has moved past, binds nothing.
     const moved = exit.commit === undefined || exit.commit !== facts.tip;
@@ -452,7 +476,8 @@ export const place = (pipeline: Pipeline, facts: Facts): Placement => {
         : `the pipeline no longer has the block ${gone.node}, where the task's run named ${gone.id}`,
     };
   }
-  const { node, gates } = reached;
+  const { node, gates, idle } = reached;
+  if (idle !== undefined) return { _tag: "Idle", node: idle.id, loose: looseEnds(idle) };
   if (node === undefined) return { _tag: "Outside" };
   if (node.kind === "park") return { _tag: "Parked", node: node.id };
   const state = stateByStatus(node, facts, viaExit);
@@ -540,20 +565,20 @@ const workspaceWalk = (
   for (let steps = 0; node !== undefined && steps <= pipeline.nodes.length; steps++) {
     switch (node.kind) {
       case "router":
-        node = nodes.get(routeOf(node, facts));
+        node = blockAt(nodes, routeOf(node, facts));
         continue;
       case "branch":
         branch = node.id;
         workspace = node.kind;
-        node = nodes.get(node.next);
+        node = blockAt(nodes, node.next);
         continue;
       case "worktree":
         workspace = node.kind;
-        node = nodes.get(node.next);
+        node = blockAt(nodes, node.next);
         continue;
       case "source":
       case "gate":
-        node = nodes.get(node.next);
+        node = blockAt(nodes, node.next);
         continue;
       default:
         return { workspace, branch };
@@ -582,7 +607,7 @@ export const nextAgent = (
   let node: PipelineNode | undefined = placement.node;
   for (let steps = 0; steps <= pipeline.nodes.length; steps++) {
     if (node?.kind === "agent" && node.role === role) return node;
-    const advance: Exit | undefined =
+    const advance: WiredExit | undefined =
       node?.kind === "agent" || node?.kind === "check" ? advanceOf(node) : undefined;
     if (advance === undefined) return undefined;
     node = walk(nodes, advance.to, facts, pipeline.nodes.length).node;
@@ -624,12 +649,12 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
   const ends = pipeline.nodes.filter(
     (node) => node.kind === "land" || node.kind === "done" || node.kind === "park",
   );
+  // A loose end is a way out the operator has yet to wire, so it counts as an
+  // end here. A block no source reaches takes no task, which harms nothing.
+  const outs = [...ends, ...pipeline.nodes.filter(isIdle)];
   for (const node of pipeline.nodes) {
-    if (!sources.some((source) => wired.reaches(source.id, node.id))) {
-      problems.push(`no source reaches ${node.id}`);
-    }
-    if (!ends.some((end) => end.id === node.id || wired.reaches(node.id, end.id))) {
-      problems.push(`no route from ${node.id} reaches a land, a done or a park`);
+    if (!outs.some((out) => out.id === node.id || wired.reaches(node.id, out.id))) {
+      problems.push(`no route from ${node.id} reaches a land, a done, a park or a loose end`);
     }
   }
 
@@ -641,7 +666,7 @@ export const problemsOf = (pipeline: Pipeline, offers: SeatOffers): ReadonlyArra
   // and its review. A land or a done before a review is the rule below.
   for (const author of authors) {
     const claim = author.kind === "agent" ? claimOf(author) : undefined;
-    if (claim === undefined || claim.to === QUEUE) continue;
+    if (claim?.to === undefined || claim.to === QUEUE) continue;
     for (const reached of stopsBeforeReview(nodes, claim.to)) {
       problems.push(`${author.id}: the claim ${claim.name} reaches ${reached.id} before a review`);
     }
@@ -815,6 +840,8 @@ const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
   const problems: Array<string> = [];
   const pathOf = (blocks: ReadonlyArray<PipelineNode>) => blocks.map((node) => node.id).join(", ");
   for (const blocks of loopsOf(graphOf(pipeline).graph)) {
+    // The walk stops before an idle block, so a loop through one cannot spin.
+    if (blocks.some(isIdle)) continue;
     if (!blocks.some(isWork)) {
       problems.push(`the wires loop through ${pathOf(blocks)} with no work block on the loop`);
       continue;
@@ -829,7 +856,9 @@ const cycleProblems = (pipeline: Pipeline): ReadonlyArray<string> => {
     );
     const counts = (node: PipelineNode) =>
       node.kind === "router" &&
-      node.routes.some((route) => !ids.has(route.to) && growsEachLap(route.when, named));
+      node.routes.some(
+        (route) => route.to !== undefined && !ids.has(route.to) && growsEachLap(route.when, named),
+      );
     const unbounded = graphOf(
       { nodes: blocks },
       (node) => !counts(node),
@@ -965,7 +994,7 @@ const isRole =
  */
 export const standardExits = (
   node: { readonly kind: "agent"; readonly role: AgentNode["role"] } | { readonly kind: "check" },
-  next: string,
+  next: string | undefined,
 ): ReadonlyArray<Exit> =>
   node.kind === "check"
     ? [
@@ -1048,11 +1077,6 @@ export const STANDARD_PIPELINES = {
  */
 export const EMPTY_PIPELINE: Pipeline = { nodes: [] };
 
-/**
- * The standard pipeline `pipeline` is, if any. Its workspace blocks and its
- * land name the only standard it can be, so it is that one when it has the
- * same blocks; the order the blocks are listed in means nothing.
- */
 /**
  * The standard pipeline `drawing` is, if any. Reads the drawing as written: a
  * composite instance means it is not standard, even when its expansion would
@@ -1266,9 +1290,6 @@ const shapeProblems = (pipeline: Pipeline, offers: SeatOffers): Array<string> =>
     ids.add(node.id);
     if (node.id.includes("/")) problems.push(`${node.id}: a block id holds no "/"`);
   }
-  if (!pipeline.nodes.some((node) => node.kind === "source")) {
-    problems.push("no source supplied");
-  }
   const declared = new Set(
     pipeline.nodes.flatMap((node) =>
       node.kind === "agent" || node.kind === "check" ? node.exits.map((exit) => exit.name) : [],
@@ -1411,7 +1432,7 @@ const stopsBeforeReview = (
     }
     if (node.kind === "check") {
       const passed = node.exits.find((exit) => exit.id === "passed");
-      if (passed !== undefined) visit(passed.to);
+      if (passed?.to !== undefined) visit(passed.to);
       return;
     }
     for (const wire of wiresOf(node)) visit(wire.to);
@@ -1481,27 +1502,41 @@ const graphOf = (
   };
 };
 
-/** The wires out of a block, returns to the queue left out. */
-const wiresOf = (
+/**
+ * A block's outputs, each with its target, or none when it is a loose end.
+ * `port` names the output as the reading names a loose end: `next`, `else`,
+ * `route <filter>` or `exit <name>`.
+ */
+const outputsOf = (
   node: PipelineNode,
-): ReadonlyArray<{ readonly to: string; readonly label: string; readonly fails?: boolean }> => {
+): ReadonlyArray<{
+  readonly port: string;
+  readonly label: string;
+  readonly to: string | undefined;
+  readonly fails?: boolean;
+}> => {
   switch (node.kind) {
     case "source":
     case "gate":
     case "branch":
     case "worktree":
-      return [{ to: node.next, label: "" }];
+      return [{ port: "next", label: "", to: node.next }];
     case "agent":
     case "check":
-      return node.exits.flatMap((exit) =>
-        exit.to === QUEUE
-          ? []
-          : [{ to: exit.to, label: exit.name, fails: exit.fails !== undefined }],
-      );
+      return node.exits.map((exit) => ({
+        port: `exit ${exit.name}`,
+        label: exit.name,
+        to: exit.to,
+        fails: exit.fails !== undefined,
+      }));
     case "router":
       return [
-        ...node.routes.map((route) => ({ to: route.to, label: route.when })),
-        { to: node.else, label: "else" },
+        ...node.routes.map((route) => ({
+          port: `route ${route.when}`,
+          label: route.when,
+          to: route.to,
+        })),
+        { port: "else", label: "else", to: node.else },
       ];
     case "land":
     case "done":
@@ -1509,6 +1544,31 @@ const wiresOf = (
       return [];
   }
 };
+
+/** The wires out of a block: loose ends and returns to the queue left out. */
+const wiresOf = (
+  node: PipelineNode,
+): ReadonlyArray<{ readonly to: string; readonly label: string; readonly fails?: boolean }> =>
+  outputsOf(node).flatMap(({ to, label, fails }) =>
+    to === undefined || to === QUEUE
+      ? []
+      : [{ to, label, ...(fails === undefined ? {} : { fails }) }],
+  );
+
+/**
+ * The outputs of `node` wired to nothing. A block with any is idle: it takes
+ * no task in (docs/pipeline-engine.md, "Loose ends").
+ */
+export const looseEnds = (node: PipelineNode): ReadonlyArray<string> =>
+  outputsOf(node).flatMap(({ port, to }) => (to === undefined ? [port] : []));
+
+const isIdle = (node: PipelineNode): boolean => looseEnds(node).length > 0;
+
+/** The block an output leads to: nothing for a loose end, or a target no block has. */
+const blockAt = (
+  nodes: ReadonlyMap<string, PipelineNode>,
+  to: string | undefined,
+): PipelineNode | undefined => (to === undefined ? undefined : nodes.get(to));
 
 /**
  * The exits a filter's `exit:` and `exits:` terms name, but for the endings of a
@@ -1557,8 +1617,10 @@ const sourceOf = (pipeline: Pipeline, facts: Facts) =>
     (node): node is typeof SourceNode.Type => node.kind === "source" && matches(facts, node.filter),
   );
 
-const routeOf = (router: typeof RouterNode.Type, facts: Facts): string =>
-  router.routes.find((route) => matches(facts, route.when))?.to ?? router.else;
+const routeOf = (router: typeof RouterNode.Type, facts: Facts): string | undefined => {
+  const route = router.routes.find((candidate) => matches(facts, candidate.when));
+  return route === undefined ? router.else : route.to;
+};
 
 /**
  * The exit with id `exit` at block `node`, as the drawing stands now: nothing
@@ -1587,61 +1649,74 @@ const wireOf = (
   nodes: ReadonlyMap<string, PipelineNode>,
   named: NamedExit,
 ):
-  | { readonly _tag: "Wire"; readonly exit: Exit }
+  | { readonly _tag: "Wire"; readonly to: string }
   | { readonly _tag: "Queue" }
+  | { readonly _tag: "Loose"; readonly node: PipelineNode }
   | { readonly _tag: "Gone" } => {
   const node = nodes.get(named.node);
   const exit =
     node?.kind === "agent" || node?.kind === "check"
       ? node.exits.find((candidate) => candidate.id === named.id)
       : undefined;
-  if (exit === undefined) return { _tag: "Gone" };
-  return exit.to === QUEUE ? { _tag: "Queue" } : { _tag: "Wire", exit };
+  if (node === undefined || exit === undefined) return { _tag: "Gone" };
+  if (exit.to === undefined) return { _tag: "Loose", node };
+  return exit.to === QUEUE ? { _tag: "Queue" } : { _tag: "Wire", to: exit.to };
 };
 
-/** The exit that moves a task on from a work block: its first that does not return it. */
-const advanceOf = (node: WorkNode): Exit | undefined =>
+/**
+ * The exit that moves a task on from a work block: its first that is wired
+ * and does not return it.
+ */
+type WiredExit = Exit & { readonly to: string };
+
+const advanceOf = (node: WorkNode): WiredExit | undefined =>
   node.kind === "agent" || node.kind === "check"
-    ? node.exits.find((exit) => exit.to !== QUEUE)
+    ? node.exits.find((exit): exit is WiredExit => exit.to !== undefined && exit.to !== QUEUE)
     : undefined;
 
 /**
  * From block `from`, through routers, gates and workspace blocks, to the next
- * work block or park, with the gates on the way. The walk is bounded by the
- * graph's size, because placement may be asked about a pipeline that was
- * never validated.
+ * work block or park, with the gates on the way. The walk stops before an
+ * idle block, and answers it as `idle`. The walk is bounded by the graph's
+ * size, because placement may be asked about a pipeline that was never
+ * validated.
  */
 const walk = (
   nodes: ReadonlyMap<string, PipelineNode>,
   from: string,
   facts: Facts,
   bound: number,
-): {
-  readonly node: WorkNode | typeof ParkNode.Type | undefined;
-  readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
-} => {
+): Walked => {
   const gates: Array<{ id: string; step: Step }> = [];
   let node = nodes.get(from);
   for (let steps = 0; node !== undefined && steps <= bound; steps++) {
+    if (isIdle(node)) return { node: undefined, gates, idle: node };
     switch (node.kind) {
       case "gate":
         gates.push({ id: node.id, step: node.step });
-        node = nodes.get(node.next);
+        node = blockAt(nodes, node.next);
         continue;
       case "router":
-        node = nodes.get(routeOf(node, facts));
+        node = blockAt(nodes, routeOf(node, facts));
         continue;
       case "source":
       case "branch":
       case "worktree":
-        node = nodes.get(node.next);
+        node = blockAt(nodes, node.next);
         continue;
       default:
-        return { node, gates };
+        return { node, gates, idle: undefined };
     }
   }
-  return { node: undefined, gates };
+  return { node: undefined, gates, idle: undefined };
 };
+
+interface Walked {
+  readonly node: WorkNode | typeof ParkNode.Type | undefined;
+  readonly gates: ReadonlyArray<{ readonly id: string; readonly step: Step }>;
+  /** The idle block the walk stopped before, if it stopped at one. */
+  readonly idle: PipelineNode | undefined;
+}
 
 /**
  * The state at a block the walk reached, with no open agent run there. A

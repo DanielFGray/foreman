@@ -13,6 +13,7 @@ import type {
   Unreviewed,
 } from "./dispatcher.ts";
 import { reviewedBy } from "./lap.ts";
+import { blockOf } from "./pipeline.ts";
 import { exhausted, type Allowance } from "./quota.ts";
 import { resetsLabel, usedLabel } from "./format.ts";
 import type { Worker } from "./fleet.ts";
@@ -403,12 +404,7 @@ const activeRow = (
   state: FleetState,
 ): ColumnRow => {
   const placement = state.placed.find((entry) => entry.task.id === task.id)?.placement;
-  const step =
-    placement?._tag === "At"
-      ? placement.node.id
-      : placement?._tag === "Parked" || placement?._tag === "ExitGone"
-        ? placement.node
-        : undefined;
+  const step = placement === undefined ? undefined : blockOf(placement);
   return {
     column,
     key: task.id,

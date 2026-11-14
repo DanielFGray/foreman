@@ -10,7 +10,10 @@ const Label = S.Literals(["Measured", "Assumed"]);
 const Role = S.Literals(["author", "review"]);
 
 /** Where a task stands in a frame: a block's run state, or out of the pipeline for good or for now. */
-export const FrameState = S.Union([RunState, S.Literals(["landed", "parked", "gone", "outside"])]);
+export const FrameState = S.Union([
+  RunState,
+  S.Literals(["landed", "parked", "gone", "idle", "outside"]),
+]);
 export type FrameState = typeof FrameState.Type;
 
 export const Standing = S.Struct({

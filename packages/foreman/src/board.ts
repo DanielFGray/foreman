@@ -15,7 +15,8 @@ export const LANDED_HOURS = 24;
 /**
  * The column of a task that stands in its project's pipeline.
  *
- * - `needs-you`: it is parked, a gate holds it for a person's approval, or
+ * - `needs-you`: it is parked, it waits before an idle block (a loose end
+ *   the operator has to wire), a gate holds it for a person's approval, or
  *   the dashboard asks a decision about it (`decisionsOf`), such as a claim
  *   no agent works on.
  * - `queue`: it waits for an author and no verdict has sent it back.
@@ -30,7 +31,14 @@ export const columnOf = (
   placement: Exclude<Placement, { readonly _tag: "Outside" }>,
   asksYou: boolean,
 ): BoardColumn => {
-  if (placement._tag === "Parked" || placement._tag === "ExitGone" || asksYou) return "needs-you";
+  if (
+    placement._tag === "Parked" ||
+    placement._tag === "ExitGone" ||
+    placement._tag === "Idle" ||
+    asksYou
+  ) {
+    return "needs-you";
+  }
   const { node, state } = placement;
   switch (node.kind) {
     case "agent":

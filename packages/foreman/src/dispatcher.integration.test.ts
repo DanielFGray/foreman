@@ -3064,6 +3064,50 @@ describe("a drawn pipeline", () => {
     expect(reading.queue.map((task) => task.id)).not.toContain("ts-lost");
   });
 
+  /** The standard pipeline with the author's gate and the review's gate wired to nothing. */
+  const IDLE_GATES = STANDARD_PIPELINES.worktree.nodes.map((node): PipelineNode =>
+    node.kind === "gate" && (node.id === "start" || node.id === "review-gate")
+      ? { kind: "gate", id: node.id, step: node.step }
+      : node,
+  );
+
+  test("a task before an idle block takes no step: an open one is not claimed, a claimed one keeps its claim", async () => {
+    draw(IDLE_GATES);
+    const world = handedOver("ts-idle-claimed");
+    world.tasks.set("ts-idle-open", item("ts-idle-open", "open", [], "test"));
+    await tick(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(world.writes).not.toContain("records.release");
+    expect(world.tasks.get("ts-idle-claimed")?.status).toBe("in_progress");
+    expect(world.tasks.get("ts-idle-open")?.status).toBe("open");
+    expect([...world.branches.keys()]).toEqual(["foreman/ts-idle-claimed"]);
+    const reading = await readingOf(world);
+    expect(
+      reading.placed
+        .map(({ task, placement }) => [task.id, placement])
+        .sort(([one], [other]) => String(one).localeCompare(String(other))),
+    ).toEqual([
+      ["ts-idle-claimed", { _tag: "Idle", node: "review-gate", loose: ["next"] }],
+      ["ts-idle-open", { _tag: "Idle", node: "start", loose: ["next"] }],
+    ]);
+  });
+
+  test("a task before an idle block keeps its claim past the stale window", async () => {
+    draw(IDLE_GATES);
+    const world = handedOver("ts-idle-stale");
+    const task = world.tasks.get("ts-idle-stale")!;
+    world.tasks.set("ts-idle-stale", {
+      ...task,
+      lastActivityAt: new Date(task.lastActivityAt.getTime() - 48 * 60 * 60 * 1000),
+    });
+    world.workers.delete("ts-idle-stale");
+    await tick(world);
+
+    expect(world.writes).not.toContain("records.release");
+    expect(world.tasks.get("ts-idle-stale")?.status).toBe("in_progress");
+  });
+
   test("a task whose last exit the drawing lost keeps its claim past the stale window", async () => {
     draw(authorDoneAs("done", "exit-qzvmktrwpa"));
     const world = handedOver("ts-lost-stale");

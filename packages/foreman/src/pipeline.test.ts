@@ -449,13 +449,13 @@ describe("validation", () => {
     });
   });
 
-  test("a project with no drawing runs the empty pipeline, which has no source", () => {
+  test("a project with no drawing runs the empty pipeline, which is valid and takes no task", () => {
     expect(pipelineFor({ pipelines: {}, composites: {} }, "amux")).toEqual({
       _tag: "Expanded",
       pipeline: EMPTY_PIPELINE,
       drawn: false,
     });
-    expect(problemsOf(EMPTY_PIPELINE, OFFERS)).toEqual(["no source supplied"]);
+    expect(problemsOf(EMPTY_PIPELINE, OFFERS)).toEqual([]);
   });
 
   test("each standard pipeline is valid, and is named by its blocks", () => {
@@ -611,7 +611,7 @@ describe("validation", () => {
       OFFERS,
     );
     expect(problems[0]).toMatch(/^the wires loop through .*author.*nothing ends the loop/);
-    expect(problems).toContain("no source reaches land");
+    expect(problems).toContain("no route from queue reaches a land, a done, a park or a loose end");
   });
 
   test("refuses a route to a land that skips review", () => {
@@ -621,8 +621,6 @@ describe("validation", () => {
         OFFERS,
       ),
     ).toEqual([
-      "no source reaches review",
-      "no source reaches land-gate",
       "a route from queue reaches land with no review after it",
       "a route from author reaches land with no review after it",
     ]);
@@ -679,7 +677,7 @@ describe("validation", () => {
         }),
         OFFERS,
       ),
-    ).toEqual(["no source reaches land-gate", "a route from review reaches land through no gate"]);
+    ).toEqual(["a route from review reaches land through no gate"]);
     expect(
       problemsOf(
         {
@@ -691,7 +689,7 @@ describe("validation", () => {
         },
         OFFERS,
       ),
-    ).toEqual(["no source reaches retry", "no source reaches climb"]);
+    ).toEqual([]);
   });
 
   test("a router does not stand in for a gate", () => {

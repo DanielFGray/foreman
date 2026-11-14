@@ -1,6 +1,6 @@
 /**
- * Definition of done for the pipeline editor: a drag that leaves a block
- * unreachable shows an amber preview with one problem, and a drop sends
+ * Definition of done for the pipeline editor: a drag that makes a
+ * problem shows an amber preview with one problem, and a drop sends
  * exactly one PipelineEdit (docs/web-ui.md Checks; ts-755cb5).
  *
  * The count is taken from the frames the page sends over its WebSocket, and the
@@ -138,7 +138,7 @@ const editRequests = () => sent.flatMap((frame) => Option.toArray(editRequestOf(
 /** Where `id`'s next exit leads in a drawing. */
 const nextOf = (drawing: Drawing | null, id: string): Option.Option<string> =>
   Option.fromNullishOr(drawing?.nodes.find((one) => one.id === id)).pipe(
-    Option.flatMap((node) => ("next" in node ? Option.some(node.next) : Option.none())),
+    Option.flatMap((node) => ("next" in node ? Option.fromNullishOr(node.next) : Option.none())),
   );
 
 /** The drawn wire from `from`'s `next` exit, as the SVG path the page renders. */
@@ -176,7 +176,7 @@ const exitTarget = (drawing: Drawing | null, id: string, name: string): Option.O
   Option.fromNullishOr(drawing?.nodes.find((one) => one.id === id)).pipe(
     Option.flatMap((node) => {
       if (!("exits" in node)) return Option.none();
-      const exits: ReadonlyArray<{ readonly name?: string; readonly to: string }> = node.exits;
+      const exits: ReadonlyArray<{ readonly name?: string; readonly to?: string }> = node.exits;
       return Option.fromNullishOr(exits.find((exit) => exit.name === name)?.to);
     }),
   );
@@ -283,9 +283,9 @@ describe("pipeline editor wire drag", () => {
       .toEqual(Option.some("climb"));
 
     // The answer to the first edit has not reached the page, and a drag still previews.
-    await dragNextExitOver("branch", "start");
+    await dragNextExitOver("branch", "land-gate");
     await expect.element(page.getByTestId("drag-preview")).toHaveAttribute("data-tone", "amber");
-    releaseOver("start");
+    releaseOver("land-gate");
     // The page sends its next edit only after the server answers the first.
     expect(editRequests()).toHaveLength(1);
 
@@ -293,7 +293,7 @@ describe("pipeline editor wire drag", () => {
     await expect.poll(() => editRequests().length).toBe(2);
     await expect
       .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "branch"))
-      .toEqual(Option.some("start"));
+      .toEqual(Option.some("land-gate"));
     expect(nextOf(await commands.draftPipeline(PROJECT), "start")).toEqual(Option.some("climb"));
 
     await userEvent.click(page.getByTestId("pipeline-discard"));
@@ -381,10 +381,10 @@ describe("pipeline editor wire drag", () => {
       .toEqual(Option.some("review-gate"));
   });
 
-  it("shows an amber one-problem preview for an unreachable rejoin, and drops one PipelineEdit", async () => {
+  it("shows an amber one-problem preview for a rejoin that skips review, and drops one PipelineEdit", async () => {
     mountProject();
 
-    await dragNextExitOver("branch", "start");
+    await dragNextExitOver("branch", "land-gate");
 
     const preview = page.getByTestId("drag-preview");
     await expect.element(preview).toHaveAttribute("data-tone", "amber");
@@ -393,18 +393,18 @@ describe("pipeline editor wire drag", () => {
     await expect.poll(() => getComputedStyle(wireOf("branch")).stroke).toBe("rgb(154, 103, 0)");
     expect(getComputedStyle(wireOf("branch")).strokeWidth).toBe("3px");
 
-    releaseOver("start");
+    releaseOver("land-gate");
 
     await expect.poll(() => editRequests().length).toBe(1);
     expect(editRequests()[0]?.payload).toEqual({
       project: PROJECT,
-      change: { _tag: "Rejoin", wire: { from: "branch", port: "next" }, to: "start" },
+      change: { _tag: "Rejoin", wire: { from: "branch", port: "next" }, to: "land-gate" },
       flow: "across",
     });
     // The server wrote the change to the draft.
     await expect
       .poll(async () => nextOf(await commands.draftPipeline(PROJECT), "branch"))
-      .toEqual(Option.some("start"));
+      .toEqual(Option.some("land-gate"));
     expect(editRequests()).toHaveLength(1);
 
     await expect.element(page.getByTestId("pipeline-discard")).toBeInTheDocument();

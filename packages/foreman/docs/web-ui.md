@@ -177,7 +177,8 @@ the page's files. `foreman serve` provides it beside `supervise`.
   edits after it. The checks use the
   composites and offers the `Pipeline` stream carries, the ones the server
   checks with. The toolbar's Save and Discard send `PipelineSave` and
-  `PipelineDiscard`; Save is disabled while the drawing has problems.
+  `PipelineDiscard`; Save is disabled while the drawing has problems. A loose
+  end is no problem (`docs/pipeline-engine.md`, "Loose ends").
 - **The other views** follow, one slice each: the fleet defaults (each
   step's mode and the grants), the project board with a task detail shared by
   the board, the dashboard and the graph, simulate and the fleet preview, and

@@ -1,6 +1,7 @@
 import { QUEUE, STANDARD_PIPELINES } from "./pipeline.ts";
 import { Option } from "effect";
-import { addRoute, beltOf, insertOn, rejoin } from "./pipeline-belt.ts";
+import { addRoute, beltOf, rejoin } from "./pipeline-belt.ts";
+import { insertedOn } from "./pipeline-fixture.ts";
 import { describe, expect, it } from "bun:test";
 import {
   besideOf,
@@ -13,7 +14,7 @@ import {
 
 const branched = () => {
   const withRoute = addRoute(STANDARD_PIPELINES.worktree, "retry", "size>=3");
-  return insertOn(withRoute, { from: "retry", port: 2 }, "gate").pipeline;
+  return insertedOn(withRoute, { from: "retry", port: 2 }, "gate").pipeline;
 };
 
 /** The review's approval led back to the start gate: a second back wire beside the returned one. */

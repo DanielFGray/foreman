@@ -71,7 +71,7 @@ export const PublishedPlacement = S.Struct({
   /** The block a board draws the task on (`stands` on a placement); `node` is the block it waits for or runs at. */
   stands: S.String,
   /** `gone`: its last exit is one the drawing lacks (`ExitGone`), so it waits for the operator. */
-  state: S.Literals(["waiting", "running", "ended", "parked", "gone"]),
+  state: S.Literals(["waiting", "running", "ended", "parked", "gone", "idle"]),
   gates: S.Array(S.Struct({ id: S.String, step: S.String })),
   /** The board column the task shows in (`columnOf`). */
   column: S.Literals(BOARD_COLUMNS),

@@ -124,6 +124,8 @@ const placementOf = (
       return { node: placement.node, stands: placement.node, state: "parked", gates: [] };
     case "ExitGone":
       return { node: placement.node, stands: placement.node, state: "gone", gates: [] };
+    case "Idle":
+      return { node: placement.node, stands: placement.node, state: "idle", gates: [] };
     case "At":
       return {
         node: placement.node.id,

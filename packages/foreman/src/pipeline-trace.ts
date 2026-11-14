@@ -400,8 +400,8 @@ const routeAfter = (route: ReadonlyArray<string>, placement: Placement): Readonl
   const at =
     placement._tag === "At"
       ? [...placement.gates.map((gate) => gate.id), placement.node.id]
-      : placement._tag === "Parked" || placement._tag === "ExitGone"
-        ? [placement.node]
-        : [];
+      : placement._tag === "Outside"
+        ? []
+        : [placement.node];
   return at.length === 0 || route.at(-1) === at.at(-1) ? route : [...route, ...at];
 };

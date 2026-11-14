@@ -255,8 +255,8 @@ const ASKING: Policy = {
 const at = (placement: Placement): string =>
   placement._tag === "Outside"
     ? "outside"
-    : placement._tag === "Parked" || placement._tag === "ExitGone"
-      ? `${placement._tag === "Parked" ? "parked" : "exit gone"} at ${placement.node}`
+    : placement._tag !== "At"
+      ? `${{ Parked: "parked", ExitGone: "exit gone", Idle: "idle" }[placement._tag]} at ${placement.node}`
       : [
           placement.node.id,
           placement.state,

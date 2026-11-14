@@ -162,7 +162,10 @@ export const unpackInstance = (
   const resolve = entryResolver(scope, composites);
   const resolved: CompositeNode = {
     ...instance,
-    exits: instance.exits.map((exit) => ({ ...exit, to: resolve(exit.to) })),
+    exits: instance.exits.map((exit) => ({
+      ...exit,
+      to: exit.to === undefined ? undefined : resolve(exit.to),
+    })),
   };
   const problems: Array<string> = [];
   const blocks = expandInstance(resolved, composites, new Set(), problems);
@@ -245,11 +248,12 @@ const expandInstance = (
   // exit's wire is already resolved in the instance's scope, a wire to an inner
   // instance reaches the entry it names (else its default), anything else gets
   // the instance's prefix.
-  const wireIn = (target: string): string => {
+  // A wire to an exit the instance leaves loose is loose too.
+  const wireIn = (target: string): string | undefined => {
     if (target === QUEUE) return QUEUE;
     if (target.startsWith(OUT)) {
-      const wire = exitWires.get(target.slice(OUT.length));
-      if (wire !== undefined) return wire;
+      const exit = target.slice(OUT.length);
+      if (exitWires.has(exit)) return exitWires.get(exit);
       problems.push(
         `${instance.id}: the definition ${instance.of} wires ${target}, which is no exit of it`,
       );
@@ -357,9 +361,9 @@ const wiresOfExits = (
   instance: CompositeNode,
   definition: CompositeDefinition,
   problems: Array<string>,
-): ReadonlyMap<string, string> | undefined => {
+): ReadonlyMap<string, string | undefined> | undefined => {
   const declared = new Set(definition.exits.map((exit) => exit.id));
-  const wired = new Map<string, string>();
+  const wired = new Map<string, string | undefined>();
   for (const exit of instance.exits) {
     if (!declared.has(exit.id)) {
       problems.push(
@@ -468,8 +472,15 @@ const mapFilters = (node: DrawnNode, f: (block: string) => string): DrawnNode =>
   }
 };
 
-/** `node` with `f` applied to each wire target it holds. */
-const mapTargets = (node: DrawnNode, f: (target: string) => string): DrawnNode => {
+/**
+ * `node` with `to` applied to each wire target it holds. A loose end stays
+ * loose, and `to` may make a target loose.
+ */
+export const mapTargets = (
+  node: DrawnNode,
+  to: (target: string) => string | undefined,
+): DrawnNode => {
+  const f = (target: string | undefined) => (target === undefined ? undefined : to(target));
   switch (node.kind) {
     case "source":
     case "gate":
