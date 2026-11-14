@@ -4230,12 +4230,34 @@ describe("work outside the managed set", () => {
   test("reopening the space resumes the pipeline: the row clears and the approved task lands", async () => {
     const world = closedProject();
     world.spaces.push("/build/pg");
+    writeFileSync(
+      join(policies, "pipelines.json"),
+      JSON.stringify({
+        pipelines: { test: STANDARD_PIPELINES.worktree, pg: STANDARD_PIPELINES.checkout },
+      }),
+    );
 
     const state = await readState(world);
 
     expect(state.stranded).toEqual([]);
     expect(world.closed).toContain("ts-pg-approved");
     expect(world.tasks.get("ts-pg-approved")?.status).toBe("done");
+  });
+
+  test("a project with no drawing takes no step: its claimed task keeps its claim and its open task waits", async () => {
+    const world = new World(
+      item("ts-bare-claimed", "in_progress", [], "bare", [authorDone("cheap")]),
+      item("ts-bare-open", "open", [], "bare"),
+    );
+    world.spaces.push("/build/bare");
+
+    await tick(world);
+
+    expect(world.tasks.get("ts-bare-claimed")?.status).toBe("in_progress");
+    expect(world.tasks.get("ts-bare-open")?.status).toBe("open");
+    expect(world.spawned).toEqual([]);
+    expect(world.stopped).toEqual([]);
+    expect([...world.closed, ...world.removed, ...world.merged]).toEqual([]);
   });
 
   test("an open project whose tracker does not answer is held, not stranded", async () => {

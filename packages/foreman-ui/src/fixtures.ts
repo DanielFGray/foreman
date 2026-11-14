@@ -5,7 +5,7 @@
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Fiber, Layer, Option, SubscriptionRef } from "effect";
 import { createServer } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EMPTY_FLEET } from "../../foreman/src/dispatcher.ts";
@@ -16,6 +16,7 @@ import { Settings } from "../../foreman/src/config.ts";
 import { publishedOf } from "../../foreman/src/published.ts";
 import type { Published, PublishedRow } from "foreman/published-schema";
 import { Records } from "../../foreman/src/records.ts";
+import { STANDARD_PIPELINES } from "../../foreman/src/pipeline.ts";
 import { Repository } from "../../foreman/src/repository.ts";
 import { scratchStore, seed } from "../../foreman/src/scratch-store.ts";
 import { ReadingsRef, serveGate, uiServerOn, type UiServerOptions } from "foreman/ui-server";
@@ -141,6 +142,12 @@ export const startFixtureServer = async (options?: {
 }): Promise<FixtureServer> => {
   const folder = mkdtempSync(join(tmpdir(), "foreman-ui-fixtures-"));
   process.env["FOREMAN_PIPELINES"] = join(folder, "pipelines.json");
+  // amux has drawn the checkout pipeline, which the editor's tests edit; foreman
+  // has drawn none, so it runs the empty one.
+  writeFileSync(
+    join(folder, "pipelines.json"),
+    JSON.stringify({ pipelines: { amux: STANDARD_PIPELINES.checkout } }),
+  );
   process.env["XDG_CONFIG_HOME"] = folder;
   process.env["FOREMAN_POLICY"] = join(folder, "policy.json");
 

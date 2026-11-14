@@ -214,7 +214,7 @@ Each rule below is changed by this record. The record wins in each case.
 | A pipelines file that does not decode stops every project | `AGENTS.md`, same section | Still true. A definition that decodes but fails validation stops only the projects that use it. |
 | Durable state beyond the policy, pipelines, drafts and instructions files is a wall | `AGENTS.md` | No conflict: the definitions live in the pipelines and drafts files. |
 | "Block kinds and props as above" | `pipeline-engine.md`, Validation | Adds the kind `composite`. |
-| A pipeline is standard when it holds the standard blocks (`standardOf`) | `pipeline-engine.md`, The standard pipeline | `standardOf` reads the pipeline as written, so a pipeline with an instance is not standard, and `pipeline use` does not rewrite it. |
+| A pipeline is standard when it holds the standard blocks (`standardOf`) | `pipeline-engine.md`, The standard pipeline | `standardOf` reads the pipeline as written, so a pipeline with an instance is not standard. `pipeline use` is removed (2026-11-13), so nothing rewrites a standard pipeline any more. |
 | Each page action is a `PipelineChange` | `agent-exits.md`, The page | Adds `MakeComposite`, `Unpack`, `SetParam`, and `InsertOn` for kind `composite`. |
 | Block ids can be reused | open task "Block ids can be reused" | Not fixed here. A removed instance's prefix can come back, as a removed block's id can. The fix for that task covers prefixes too. |
 | A block id is any string | `pipeline-engine.md`, Validation | A block id holds no `/`. |

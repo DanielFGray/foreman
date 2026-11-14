@@ -102,7 +102,6 @@ import {
   type LandNode,
   type Pipeline,
   QUEUE,
-  DEFAULT_PIPELINE,
   offersOf,
   type Placement,
   type Workspace,
@@ -697,7 +696,6 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         (project) => [project.name, pipelineFor(drawings.value, project.name)] as const,
       );
       const instructionSources = [
-        DEFAULT_PIPELINE,
         ...projectReadings.flatMap(([, reading]) =>
           reading._tag === "Expanded" ? [reading.pipeline] : [],
         ),

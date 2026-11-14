@@ -338,7 +338,7 @@ describe("foreman composite", () => {
   });
 
   test("a definition a project draft made is not readable until that draft is saved", async () => {
-    await runPipeline("use", "checkout", "--project", "amux");
+    writeFileSync(path, JSON.stringify({ pipelines: { amux: STANDARD_PIPELINES.checkout } }));
     await runPipeline(
       "edit",
       "amux",

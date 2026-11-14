@@ -4,7 +4,7 @@ import { Dispatcher } from "./dispatcher.ts";
 import { expand } from "./composite.ts";
 import {
   type Composites,
-  DEFAULT_PIPELINE,
+  EMPTY_PIPELINE,
   describeStandard,
   Drawing,
   LANDINGS,
@@ -109,7 +109,7 @@ const show = Command.make("show", { project, json, flow }, ({ project, json, flo
       const { mermaid: _m, label: _l, ...body } = shown;
       return yield* Console.log(JSON.stringify(body, null, 2));
     }
-    yield* Console.log(`${project} runs ${shown.label}${shown.drawn ? "" : " (the default)"}:`);
+    yield* Console.log(`${project} runs ${shown.label}${shown.drawn ? "" : " (none drawn)"}:`);
     if (shown.mermaid !== null) yield* Console.log(shown.mermaid);
     for (const problem of shown.problems) yield* Console.error(`problem: ${problem}`);
     if (shown.draft !== null)
@@ -136,59 +136,6 @@ const set = Command.make("set", { project, source }, ({ project, source }) =>
     yield* Console.log(`${project} now runs the pipeline in ${source}`);
   }),
 ).pipe(Command.withDescription("Check a pipeline, then make it the one a project runs"));
-
-const use = Command.make(
-  "use",
-  {
-    workspace: Argument.Literals("workspace", WORKSPACE_CHOICES).pipe(
-      Argument.withDescription(
-        "checkout (your checkout, on the task's branch), worktree (a worktree of the task's own) or direct (your checkout, on your branch)",
-      ),
-    ),
-    project: Flag.String("project"),
-    land: Flag.Literals("land", LANDINGS).pipe(
-      Flag.optional,
-      Flag.withDescription(
-        "How the task's branch lands: merge (a merge commit; the default), fast-forward, or pull-request (with a publish gate). Not with direct",
-      ),
-    ),
-    onto: Flag.String("onto").pipe(
-      Flag.optional,
-      Flag.withDescription(
-        "The branch the task lands on; absent, the branch your checkout has out. Not with direct",
-      ),
-    ),
-  },
-  ({ workspace, project, land, onto }) =>
-    Effect.gen(function* () {
-      if (workspace === "direct" && (Option.isSome(land) || Option.isSome(onto)))
-        return yield* new PipelineError({
-          detail:
-            "a direct route commits onto your branch and lands nothing, so it takes no --land or --onto",
-        });
-      const standard: Standard =
-        workspace === "direct"
-          ? { workspace }
-          : {
-              workspace,
-              how: Option.getOrElse(land, () => "merge" as const),
-              onto: Option.getOrUndefined(onto),
-            };
-      const { drawing, drawn } = yield* drawnPipeline(project);
-      // Only a standard variant is replaced, so a pipeline the operator drew by hand is never lost.
-      // standardOf reads the drawing as written, so a pipeline with an instance is not standard.
-      if (drawn && Option.isNone(standardOf(drawing)))
-        return yield* new PipelineError({
-          detail: `${project} runs its own drawn pipeline, so use leaves it as it is: see it with foreman pipeline show ${project}, and drop it with foreman pipeline clear ${project}`,
-        });
-      yield* runPipeline(project, standardPipeline(standard));
-      yield* Console.log(`${project} now runs ${describeStandard(standard)}`);
-    }),
-).pipe(
-  Command.withDescription(
-    "Draw a standard pipeline for a project: its agents work in your checkout, in a worktree, or directly on your branch, and a task on a branch lands as --land and --onto say",
-  ),
-);
 
 /**
  * Apply one change to a project's draft (starting one from the live pipeline
@@ -306,9 +253,11 @@ const discard = Command.make("discard", { project }, ({ project }) =>
 const clear = Command.make("clear", { project }, ({ project }) =>
   Effect.gen(function* () {
     yield* updatePipelines(pipelinesPath(), ({ [project]: _dropped, ...others }) => others);
-    yield* Console.log(`${project} runs the default pipeline`);
+    yield* Console.log(`${project} runs an empty pipeline`);
   }),
-).pipe(Command.withDescription("Drop a project's own pipeline, so it runs the default one"));
+).pipe(
+  Command.withDescription("Drop a project's pipeline, so it runs an empty one and takes no task"),
+);
 
 /**
  * The prompt an agent block of the draft, else of the pipeline the project
@@ -319,7 +268,7 @@ export const pipelinePrompt = (input: { readonly project: string; readonly block
     const file = yield* pipelinesNow;
     const draft = (yield* draftsNow)[input.project];
     const pipeline = yield* expandedOf(
-      draft?.pipeline ?? file.pipelines[input.project] ?? DEFAULT_PIPELINE,
+      draft?.pipeline ?? file.pipelines[input.project] ?? EMPTY_PIPELINE,
       { ...file.composites, ...draft?.composites },
     );
     return yield* agentPrompt(input.project, pipeline, input.block, `${input.project}'s pipeline`);
@@ -510,7 +459,7 @@ export const pipelineSimulate = (input: {
     const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
     const liveForSim =
       live._tag === "Failed"
-        ? { pipeline: DEFAULT_PIPELINE, drawn: live.drawn, problems: live.problems }
+        ? { pipeline: EMPTY_PIPELINE, drawn: live.drawn, problems: live.problems }
         : {
             pipeline: live.pipeline,
             drawn: live.drawn,
@@ -524,7 +473,7 @@ export const pipelineSimulate = (input: {
       draftExpanded === undefined
         ? undefined
         : draftExpanded._tag === "Failed"
-          ? { pipeline: DEFAULT_PIPELINE, problems: draftExpanded.problems }
+          ? { pipeline: EMPTY_PIPELINE, problems: draftExpanded.problems }
           : { pipeline: draftExpanded.pipeline, problems: draftExpanded.problems };
     return simulateReport(
       {
@@ -649,7 +598,6 @@ export const pipelineCommand = <E>(services: Layer.Layer<Dispatcher, E>) =>
       show,
       check,
       set,
-      use,
       edit,
       save,
       discard,
@@ -717,7 +665,7 @@ const drawnPipeline = (project: string) =>
     Effect.map((file) => {
       const drawn = file.pipelines[project];
       return drawn === undefined
-        ? { drawing: DEFAULT_PIPELINE as Drawing, drawn: false as const }
+        ? { drawing: EMPTY_PIPELINE, drawn: false as const }
         : { drawing: drawn, drawn: true as const };
     }),
   );
@@ -743,7 +691,7 @@ const freshDraft = (project: string) =>
   Effect.gen(function* () {
     const file = yield* pipelinesNow;
     const drawn = file.pipelines[project];
-    const drawing = drawn ?? (DEFAULT_PIPELINE as Drawing);
+    const drawing = drawn ?? EMPTY_PIPELINE;
     return {
       base: drawn === undefined ? null : drawing,
       pipeline: drawing,

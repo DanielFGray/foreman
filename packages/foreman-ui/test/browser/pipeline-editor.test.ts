@@ -418,7 +418,7 @@ describe("pipeline editor wire drag", () => {
   it("shows a green preview when the candidate passes the check, and drops nothing for the unchanged target", async () => {
     mountProject();
 
-    // branch.next already leads to retry, the one target the default pipeline can take.
+    // branch.next already leads to retry, the one target the checkout pipeline can take.
     await dragNextExitOver("branch", "retry");
 
     const preview = page.getByTestId("drag-preview");

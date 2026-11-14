@@ -106,60 +106,6 @@ describe("foreman pipeline", () => {
   });
 });
 
-describe("foreman pipeline use", () => {
-  test("draws each standard choice, which reads back from the file as drawn", async () => {
-    for (const choice of WORKSPACE_CHOICES) {
-      await run("use", choice, "--project", "amux");
-      const read = await Effect.runPromise(
-        readPipelines(path).pipe(Effect.provide(BunServices.layer)),
-      );
-      expect(read.error).toBeUndefined();
-      expect(read.value.pipelines["amux"]).toEqual(STANDARD_PIPELINES[choice]);
-    }
-  });
-
-  test("draws the landing --land and --onto name, over another standard choice", async () => {
-    await run("use", "checkout", "--project", "amux");
-    await run(
-      "use",
-      "worktree",
-      "--land",
-      "pull-request",
-      "--onto",
-      "develop",
-      "--project",
-      "amux",
-    );
-    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
-      JSON.parse(
-        JSON.stringify(
-          standardPipeline({ workspace: "worktree", how: "pull-request", onto: "develop" }),
-        ),
-      ),
-    );
-  });
-
-  test("refuses --land or --onto with direct, and writes nothing", async () => {
-    for (const flag of [
-      ["--land", "merge"],
-      ["--onto", "develop"],
-    ]) {
-      expect(await refusal("use", "direct", ...flag, "--project", "amux")).toMatch(
-        /takes no --land or --onto/,
-      );
-    }
-    expect(existsSync(path)).toBe(false);
-  });
-
-  test("refuses over a drawing that is no standard choice, and leaves it as it is", async () => {
-    await run("set", "amux", fileWith(pinned));
-    expect(await refusal("use", "worktree", "--project", "amux")).toMatch(
-      /amux runs its own drawn pipeline/,
-    );
-    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(pinned);
-  });
-});
-
 describe("reading the pipelines file", () => {
   test("a file that does not decode reports its path and why", async () => {
     writeFileSync(path, "{ not json");
@@ -172,20 +118,24 @@ describe("reading the pipelines file", () => {
 });
 
 describe("drawing a draft", () => {
+  // A project with no drawing runs the empty pipeline; these edits start from the checkout one.
+  beforeEach(() => run("set", "amux", fileWith(STANDARD_PIPELINES.checkout)));
   const change = (value: unknown) => JSON.stringify(value);
   const draftOf = () => JSON.parse(readFileSync(drafts, "utf8")).drafts.amux;
 
   test("edit starts a draft from the pipeline the project runs, and leaves that pipeline as it is", async () => {
     await run("edit", "amux", change({ _tag: "Remove", id: "climb" }));
-    expect(existsSync(path)).toBe(false);
-    expect(draftOf().base).toBeNull();
+    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
+      STANDARD_PIPELINES.checkout,
+    );
+    expect(draftOf().base).toEqual(STANDARD_PIPELINES.checkout);
     expect(draftOf().pipeline.nodes.some((node: { id: string }) => node.id === "climb")).toBe(
       false,
     );
   });
 
   test("an instance inserted from the palette draws every exit by the definition's name, the queue ones too", async () => {
-    await run("use", "checkout", "--project", "amux");
+    await run("set", "amux", fileWith(STANDARD_PIPELINES.checkout));
     await run(
       "edit",
       "amux",
@@ -235,7 +185,7 @@ describe("drawing a draft", () => {
   });
 
   test("MakeComposite carries the definition on the draft, and save writes both", async () => {
-    await run("use", "checkout", "--project", "amux");
+    await run("set", "amux", fileWith(STANDARD_PIPELINES.checkout));
     await run(
       "edit",
       "amux",
@@ -257,8 +207,8 @@ describe("drawing a draft", () => {
   });
 
   test("a save refuses a definition another project's save already created, and keeps the first", async () => {
-    await run("use", "checkout", "--project", "amux");
-    await run("use", "checkout", "--project", "fibrae");
+    await run("set", "amux", fileWith(STANDARD_PIPELINES.checkout));
+    await run("set", "fibrae", fileWith(STANDARD_PIPELINES.checkout));
     const make = change({ _tag: "MakeComposite", ids: ["review-gate", "review"], name: "shared" });
     await run("edit", "amux", make);
     await run("edit", "fibrae", make);
@@ -273,7 +223,7 @@ describe("drawing a draft", () => {
   });
 
   test("one change of a land to pull-request leaves a draft that saves", async () => {
-    await run("use", "worktree", "--project", "amux");
+    await run("set", "amux", fileWith(STANDARD_PIPELINES.worktree));
     await run(
       "edit",
       "amux",
@@ -295,7 +245,9 @@ describe("drawing a draft", () => {
       change({ _tag: "InsertOn", wire: { from: "queue", port: "next" }, kind: "check" }),
     );
     expect(await refusal("save", "amux")).toMatch(/cannot run/);
-    expect(existsSync(path)).toBe(false);
+    expect(JSON.parse(readFileSync(path, "utf8")).pipelines.amux).toEqual(
+      STANDARD_PIPELINES.checkout,
+    );
     expect(draftOf()).toBeDefined();
   });
 
@@ -471,6 +423,7 @@ const printed = async (...args: ReadonlyArray<string>) => {
 };
 
 describe("foreman pipeline prompt and instructions", () => {
+  beforeEach(() => run("set", "amux", fileWith(STANDARD_PIPELINES.checkout)));
   const change = (value: unknown) => JSON.stringify(value);
   const own = join(folder, "foreman", "prompts", "author.md");
   beforeEach(() => rmSync(join(folder, "foreman"), { recursive: true, force: true }));

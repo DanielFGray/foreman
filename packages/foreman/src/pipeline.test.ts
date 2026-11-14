@@ -23,12 +23,13 @@ import {
   type Standard,
   standardOf,
   standardPipeline,
-  DEFAULT_PIPELINE,
+  EMPTY_PIPELINE,
   STANDARD_PIPELINES,
   WORKSPACE_CHOICES,
   toMermaid,
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
+import { pipelineFor } from "./pipeline-file.ts";
 
 const facts = (over: Partial<Facts> = {}): Facts => ({
   status: "open",
@@ -448,11 +449,13 @@ describe("validation", () => {
     });
   });
 
-  test("the default pipeline works in the operator's checkout on the task's branch", () => {
-    expect(DEFAULT_PIPELINE).toBe(STANDARD_PIPELINES.checkout);
-    const kinds = DEFAULT_PIPELINE.nodes.map((node) => node.kind);
-    expect(kinds).toContain("branch");
-    expect(kinds).not.toContain("worktree");
+  test("a project with no drawing runs the empty pipeline, which has no source", () => {
+    expect(pipelineFor({ pipelines: {}, composites: {} }, "amux")).toEqual({
+      _tag: "Expanded",
+      pipeline: EMPTY_PIPELINE,
+      drawn: false,
+    });
+    expect(problemsOf(EMPTY_PIPELINE, OFFERS)).toEqual(["no source supplied"]);
   });
 
   test("each standard pipeline is valid, and is named by its blocks", () => {
@@ -482,7 +485,7 @@ describe("validation", () => {
     expect(kinds).not.toContain("branch");
     expect(kinds).toContain("done");
     const pinned = {
-      nodes: DEFAULT_PIPELINE.nodes.map((node) =>
+      nodes: STANDARD_PIPELINES.checkout.nodes.map((node) =>
         node.id === "author" ? { ...node, model: "cheap" } : node,
       ),
     };

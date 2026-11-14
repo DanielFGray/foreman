@@ -3,10 +3,12 @@
 A **pipeline** is the flow each project runs. It is a graph of **blocks**
 (nodes) joined by **wires**. The dispatcher places each task in the graph and
 runs the block where the task stands. A project with no pipeline runs the
-**default pipeline**: the standard pipeline in the operator's checkout, on the
-task's branch. `foreman pipeline use <checkout|worktree|direct> [--land
-merge|fast-forward|pull-request] [--onto <branch>] --project <name>` draws a
-standard pipeline (`docs/workspace-blocks.md`).
+**empty pipeline** (`EMPTY_PIPELINE`): no block, so it takes no task, and its
+only problem is "no source supplied". The operator builds each project's
+pipeline from blocks, in the page or with `foreman pipeline edit`; foreman
+draws none for them. The standard pipelines (`STANDARD_PIPELINES`) stay in
+code as test fixtures and as the drawing a pipeline built from nothing must
+be able to reach.
 
 The executors do the work inside a block: dispatching an agent into the task's
 worktree, reading how its run ended, landing, usage walls, trials and teardown.
@@ -16,7 +18,7 @@ The pipeline decides which block a task takes next.
 
 | Question | Answered by |
 | --- | --- |
-| What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the default pipeline |
+| What does this project's flow look like? | its entry in `pipelines.json` beside the policy file, else the empty pipeline |
 | Where is this task in it? | derived every tick by `place` from the task's facts |
 | Which block did it last leave? | a fact: the exit its last named run named, and the commit it was named on |
 | May this step run for this task? | the policy: the gate's step, its mode, grants |
@@ -387,8 +389,7 @@ gate(author), gate(climb) → agent(author, ladder)
 A pipeline is standard when it holds the same blocks as the standard pipeline of
 its own workspace blocks and land, in any order (`standardOf`). `standardOf`
 reads the pipeline as written, so a pipeline with a composite instance is not
-standard, and `pipeline use` does not rewrite it. `pipeline show` names a
-standard drawing. `pipeline use` rewrites only a standard pipeline.
+standard. `pipeline show` names a standard drawing.
 
 The router is `authorStep` in `src/policy.ts`, drawn as a block. A conflict
 returns with no evidence. So the router reads the same labels as before, and the

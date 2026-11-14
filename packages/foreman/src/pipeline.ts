@@ -994,7 +994,7 @@ export const WORKSPACE_CHOICES = ["checkout", "worktree", "direct"] as const;
 export type WorkspaceChoice = (typeof WORKSPACE_CHOICES)[number];
 
 /**
- * What `foreman pipeline use` draws: where agents work, and for a route on a
+ * A standard pipeline's choices: where agents work, and for a route on a
  * branch, how and onto which branch its land lands. A direct route has no
  * branch to land, so it takes no landing.
  */
@@ -1042,8 +1042,11 @@ export const STANDARD_PIPELINES = {
   direct: standardPipeline({ workspace: "direct" }),
 } satisfies Record<WorkspaceChoice, Pipeline>;
 
-/** The pipeline of a project that has drawn none: its agents work in the operator's checkout. */
-export const DEFAULT_PIPELINE = STANDARD_PIPELINES.checkout;
+/**
+ * The pipeline of a project that has drawn none: no block, so it takes no task.
+ * The operator builds each project's pipeline from blocks.
+ */
+export const EMPTY_PIPELINE: Pipeline = { nodes: [] };
 
 /**
  * The standard pipeline `pipeline` is, if any. Its workspace blocks and its
@@ -1072,7 +1075,7 @@ export const standardOf = (drawing: Drawing): Option.Option<Standard> => {
   return sameBlocks(pipeline, standardPipeline(candidate)) ? Option.some(candidate) : Option.none();
 };
 
-/** A standard pipeline in words, as `pipeline show` and `pipeline use` name it. */
+/** A standard pipeline in words, as `pipeline show` names it. */
 export const describeStandard = (standard: Standard): string =>
   standard.workspace === "direct"
     ? "the standard direct pipeline"

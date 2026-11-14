@@ -66,16 +66,10 @@ it off, or onto Reviewers to make it a reviewer.
 
 ## Workflows
 
-One command draws a standard pipeline for a project:
-
-```sh
-foreman pipeline use checkout                         # your checkout, on the task's branch
-foreman pipeline use worktree                         # a worktree for each task
-foreman pipeline use direct                           # commits go directly onto your branch
-foreman pipeline use worktree --onto develop          # land on develop
-foreman pipeline use worktree --land fast-forward
-foreman pipeline use worktree --land pull-request     # open a pull request, not a merge
-```
+A project starts with an empty pipeline and takes no task until you build one
+from blocks, on the project's page (`foreman open <project>`) or with
+`foreman pipeline edit`. `foreman pipeline show <project>` prints the one it
+runs.
 
 Tasks come from a tracker that you choose for each project:
 

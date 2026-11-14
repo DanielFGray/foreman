@@ -1,11 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { makeComposite } from "foreman/pipeline-belt";
-import {
-  DEFAULT_PIPELINE,
-  STANDARD_PIPELINES,
-  type Drawing,
-  type SeatOffers,
-} from "foreman/pipeline";
+import { STANDARD_PIPELINES, type Drawing, type SeatOffers } from "foreman/pipeline";
 import { writtenDrawingOf } from "foreman/pipeline-layout";
 import { Option } from "effect";
 import {
@@ -35,7 +30,7 @@ const currentTarget = (drawing: Drawing): string => {
 describe("inputPoint", () => {
   for (const flow of ["across", "down"] as const) {
     it(`is where the layout ends each wire into a block, laid out ${flow}`, () => {
-      const drawing = writtenDrawingOf(DEFAULT_PIPELINE, {}, flow);
+      const drawing = writtenDrawingOf(STANDARD_PIPELINES.checkout, {}, flow);
       const intoBlocks = drawing.wires.filter((wire) => wire.to !== "queue");
       assert.isAbove(intoBlocks.length, 0);
       for (const wire of intoBlocks) {
@@ -51,7 +46,7 @@ describe("inputPoint", () => {
 
 describe("rejoinFrames", () => {
   it("marks rejoining branch.next to start with one unreachable problem", () => {
-    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
+    const frames = rejoinFrames(STANDARD_PIPELINES.checkout, BRANCH_NEXT, CHECKS, "across");
     const toStart = frames.find((frame) => rejoinsTo(frame, "start"));
     assert.isDefined(toStart);
     assert.strictEqual(toStart.problems.length, 1);
@@ -59,8 +54,8 @@ describe("rejoinFrames", () => {
   });
 
   it("keeps the committed block positions so closest can hit the visible target", () => {
-    const committed = frameOf(DEFAULT_PIPELINE, [], CHECKS, "across");
-    const frames = rejoinFrames(DEFAULT_PIPELINE, BRANCH_NEXT, CHECKS, "across");
+    const committed = frameOf(STANDARD_PIPELINES.checkout, [], CHECKS, "across");
+    const frames = rejoinFrames(STANDARD_PIPELINES.checkout, BRANCH_NEXT, CHECKS, "across");
     const toStart = frames.find((frame) => rejoinsTo(frame, "start"));
     const toClimb = frames.find((frame) => rejoinsTo(frame, "climb"));
     assert.isDefined(toStart);
@@ -77,7 +72,7 @@ describe("rejoinFrames", () => {
 
   it("checks with the author's configured rung, so the unchanged target has no problem", () => {
     const configured: Drawing = {
-      nodes: DEFAULT_PIPELINE.nodes.map((node) =>
+      nodes: STANDARD_PIPELINES.checkout.nodes.map((node) =>
         node.kind === "agent" && node.role === "author" ? { ...node, model: "cheap" } : node,
       ),
     };
@@ -118,9 +113,9 @@ const nextOf = (drawing: Drawing, id: string): Option.Option<string> =>
 
 describe("frameAfter", () => {
   const view: ServerView = {
-    pipeline: DEFAULT_PIPELINE,
+    pipeline: STANDARD_PIPELINES.checkout,
     problems: ["as the server reports it"],
-    drawing: writtenDrawingOf(DEFAULT_PIPELINE, {}, "across"),
+    drawing: writtenDrawingOf(STANDARD_PIPELINES.checkout, {}, "across"),
     draft: null,
     ...CHECKS,
   };
@@ -132,7 +127,7 @@ describe("frameAfter", () => {
 
   it("draws the server's view and its problems when no edit waits", () => {
     const frame = frameAfter(view, [], "across");
-    assert.deepStrictEqual(frame.pipeline, DEFAULT_PIPELINE);
+    assert.deepStrictEqual(frame.pipeline, STANDARD_PIPELINES.checkout);
     assert.deepStrictEqual(frame.problems, ["as the server reports it"]);
   });
 

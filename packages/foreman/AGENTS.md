@@ -165,8 +165,8 @@ an agent.
 ### One workspace per task
 
 The task's route says where it works (see "Workspace blocks" below): the
-operator's checkout by default, or a worktree of its own when the project draws
-the `worktree` choice with `foreman pipeline use`.
+operator's checkout, or a worktree of its own when the project's pipeline
+draws a `worktree` block.
 
 `foreman/<task-id>` is the git branch. Each of the task's agents runs in an hc
 terminal labelled with the task (`fm.task`) and its role (`fm.role`), in
@@ -371,8 +371,7 @@ records whether they are passed, so tasks in flight place as before.
   target that moved returns the task like a conflict. Foreman never rebases: a
   rebase makes a commit the reviewer did not read. `pull-request` needs a
   publish gate besides its land gate, so a change of `how` brings or takes out
-  the publish gate in the same edit, and `foreman pipeline use --land
-pull-request` draws it.
+  the publish gate in the same edit.
 
 ### Onboarding salvages the operator's checkout
 
@@ -974,7 +973,7 @@ To change how foreman works, edit one of these.
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | where tasks come from               | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example                                                             |
 | where agents run                    | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example                                                       |
-| the steps a task goes through       | `standardPipeline` in `src/pipeline.ts` (`foreman pipeline use` draws one, with `--land` and `--onto`), or draw one on the page |
+| the steps a task goes through       | the project's drawing, built from blocks on the page or with `foreman pipeline edit` (an undrawn project runs `EMPTY_PIPELINE` and takes no task) |
 | what an agent is told               | the files in `~/.config/foreman/prompts/`                                                                                       |
 | which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`)                                                                      |
 | which models review                 | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`)                                                    |

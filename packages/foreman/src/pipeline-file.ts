@@ -2,7 +2,7 @@ import { Effect, FileSystem, Option, Schema as S } from "effect";
 import { expand } from "./composite.ts";
 import {
   Composites,
-  DEFAULT_PIPELINE,
+  EMPTY_PIPELINE,
   Drawing,
   instructionProblems,
   type Pipeline,
@@ -16,7 +16,7 @@ import { type Read, rewrite } from "./shared-file.ts";
  * The drawings the operator made, one per project, in a file of their own
  * beside the policy.
  *
- * A project with no entry runs the default pipeline. The file sits in the
+ * A project with no entry runs `EMPTY_PIPELINE` and takes no task. The file sits in the
  * policy's directory, so the dispatcher's watch on that directory sees a
  * change to either file.
  */
@@ -98,7 +98,7 @@ export type PipelineReading =
 export const pipelineFor = (file: PipelinesFile, project: string): PipelineReading => {
   const drawn = file.pipelines[project];
   if (drawn === undefined) {
-    return { _tag: "Expanded", pipeline: DEFAULT_PIPELINE, drawn: false };
+    return { _tag: "Expanded", pipeline: EMPTY_PIPELINE, drawn: false };
   }
   const result = expand(drawn, file.composites);
   return result._tag === "Failed"

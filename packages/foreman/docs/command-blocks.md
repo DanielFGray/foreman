@@ -84,7 +84,7 @@ plugin `check`, with exits `passed` and `failed`.
 The **kind `check` is deleted**. Foreman does not read a `kind: "check"` node,
 does not convert one on load or on save, and has no alias for it. The
 operator's pipelines and drafts files hold no check node today, so there is
-nothing to convert. The standard pipelines that `foreman pipeline use` draws
+nothing to convert. The standard pipelines (`STANDARD_PIPELINES`)
 write `command` with `of: "check"` directly.
 
 Why no conversion: foreman has no compatibility path for a shape nobody

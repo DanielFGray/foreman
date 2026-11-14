@@ -11,7 +11,7 @@ import { BunServices } from "@effect/platform-bun";
 import { Effect } from "effect";
 import { readDrafts, updateDrafts } from "foreman/pipeline-draft";
 import { readPipelines } from "foreman/pipeline-file";
-import { type Drawing, DEFAULT_PIPELINE } from "foreman/pipeline";
+import { type Drawing, EMPTY_PIPELINE } from "foreman/pipeline";
 import type { Policy } from "foreman/policy";
 import { readPolicy } from "foreman/policy-file";
 import { freePort } from "../../src/fixtures.ts";
@@ -88,16 +88,19 @@ export const removeDraftBlock: BrowserCommand<[project: string, block: string], 
   block,
 ) =>
   onFixtures((folder) =>
-    updateDrafts(join(folder, "pipelines.draft.json"), (drafts) => {
-      // With no draft open, the page shows the default pipeline, and so does the server's fresh draft.
-      const draft = drafts[project] ?? {
-        base: null,
-        pipeline: DEFAULT_PIPELINE,
-        composites: {},
-        bases: {},
-      };
-      const nodes = draft.pipeline.nodes.filter((node) => node.id !== block);
-      return { ...drafts, [project]: { ...draft, pipeline: { nodes } } };
+    Effect.gen(function* () {
+      const saved = (yield* readPipelines(join(folder, "pipelines.json"))).value.pipelines[project];
+      return yield* updateDrafts(join(folder, "pipelines.draft.json"), (drafts) => {
+        // With no draft open, the server's fresh draft starts from the saved pipeline.
+        const draft = drafts[project] ?? {
+          base: saved ?? null,
+          pipeline: saved ?? EMPTY_PIPELINE,
+          composites: {},
+          bases: {},
+        };
+        const nodes = draft.pipeline.nodes.filter((node) => node.id !== block);
+        return { ...drafts, [project]: { ...draft, pipeline: { nodes } } };
+      });
     }).pipe(Effect.asVoid),
   );
 
