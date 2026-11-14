@@ -8,7 +8,7 @@ import { Cause, Exit, Option } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { GraphItemView, GraphView } from "foreman/pipeline-graph-view";
 import type { Flow } from "foreman/pipeline-view";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { TaskState } from "tasks/item";
 import {
   type DrawnEdge,
@@ -18,8 +18,7 @@ import {
 } from "./graph-projection.ts";
 import {
   type GraphUrlState,
-  graphStateOf,
-  searchOf,
+  type SetGraphState,
   toggleFold,
   togglePick,
   toggleStatus,
@@ -28,11 +27,16 @@ import { GRAPH_KEYS, graphAtom, UiRpc } from "./rpc.ts";
 import { useFlow } from "./screen.ts";
 import { reasonOf } from "./reason.ts";
 
-export const TaskGraph = ({ project }: { readonly project: string }) => {
-  const [state, setState] = useState(() => graphStateOf(globalThis.location.search));
-  useEffect(() => {
-    globalThis.history.replaceState(null, "", `${globalThis.location.pathname}${searchOf(state)}`);
-  }, [state]);
+/** The graph of `project`, with the view state its route keeps in the URL. */
+export const TaskGraph = ({
+  project,
+  state,
+  setState,
+}: {
+  readonly project: string;
+  readonly state: GraphUrlState;
+  readonly setState: SetGraphState;
+}) => {
   const atom = graphAtom(project)(state.statuses.join(","));
   const result = useAtomValue(atom);
   const refresh = useAtomRefresh(atom);
@@ -53,15 +57,13 @@ export const TaskGraph = ({ project }: { readonly project: string }) => {
   );
 };
 
-type SetState = (change: (state: GraphUrlState) => GraphUrlState) => void;
-
 const Filters = ({
   state,
   setState,
   refresh,
 }: {
   readonly state: GraphUrlState;
-  readonly setState: SetState;
+  readonly setState: SetGraphState;
   readonly refresh: () => void;
 }) => (
   <div className="graph-filters">
@@ -103,7 +105,7 @@ const LoadedGraph = ({
 }: {
   readonly view: GraphView;
   readonly state: GraphUrlState;
-  readonly setState: SetState;
+  readonly setState: SetGraphState;
   readonly flow: Flow;
 }) => {
   const projection = useMemo(

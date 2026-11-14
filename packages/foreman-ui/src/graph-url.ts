@@ -1,5 +1,5 @@
 /**
- * The task graph's view state as the URL query holds it, so a reload after a
+ * The task graph's view state and its search params, so a reload after a
  * reconnect keeps what the operator set (docs/web-ui.md, "The task graph").
  */
 import { Schema as S } from "effect";
@@ -15,30 +15,47 @@ export interface GraphUrlState {
   readonly picked: ReadonlyArray<string>;
 }
 
-/** Reads the state from `location.search`. An unknown status is dropped. */
-export const graphStateOf = (search: string): GraphUrlState => {
-  const params = new URLSearchParams(search);
-  const status = params.get("status");
+/**
+ * The graph route's search params as the URL holds them: lists joined with
+ * commas, and a field at its default left out.
+ */
+export interface GraphSearch {
+  readonly status?: string;
+  readonly q?: string;
+  readonly fold?: string;
+  readonly pick?: string;
+}
+
+/** Keeps the graph's own keys of a parsed query (the route's `validateSearch`). */
+export const graphSearchOf = (query: Record<string, unknown>): GraphSearch =>
+  Object.fromEntries(
+    SEARCH_KEYS.flatMap((key) => (typeof query[key] === "string" ? [[key, query[key]]] : [])),
+  );
+
+/** Reads the state from the search params. An unknown status is dropped. */
+export const graphStateOf = (search: GraphSearch): GraphUrlState => ({
+  statuses:
+    search.status === undefined
+      ? GRAPH_STATUSES
+      : inOrder(listOf(search.status).filter(S.is(TaskState))),
+  query: search.q ?? "",
+  folded: new Set(listOf(search.fold ?? "")),
+  picked: listOf(search.pick ?? ""),
+});
+
+/** The search params for the state, leaving out each field at its default. */
+export const searchOf = (state: GraphUrlState): GraphSearch => {
+  const statuses = inOrder(state.statuses).join(",");
   return {
-    statuses: status === null ? GRAPH_STATUSES : inOrder(listOf(status).filter(S.is(TaskState))),
-    query: params.get("q") ?? "",
-    folded: new Set(listOf(params.get("fold") ?? "")),
-    picked: listOf(params.get("pick") ?? ""),
+    ...(statuses === inOrder(GRAPH_STATUSES).join(",") ? {} : { status: statuses }),
+    ...(state.query === "" ? {} : { q: state.query }),
+    ...(state.folded.size === 0 ? {} : { fold: [...state.folded].join(",") }),
+    ...(state.picked.length === 0 ? {} : { pick: state.picked.join(",") }),
   };
 };
 
-/** The query for the state, leaving out each field at its default. */
-export const searchOf = (state: GraphUrlState): string => {
-  const params = new URLSearchParams();
-  const statuses = inOrder(state.statuses);
-  if (statuses.join(",") !== inOrder(GRAPH_STATUSES).join(","))
-    params.set("status", statuses.join(","));
-  if (state.query !== "") params.set("q", state.query);
-  if (state.folded.size > 0) params.set("fold", [...state.folded].join(","));
-  if (state.picked.length > 0) params.set("pick", state.picked.join(","));
-  const text = params.toString();
-  return text === "" ? "" : `?${text}`;
-};
+/** A change to the state, written to the URL. */
+export type SetGraphState = (change: (state: GraphUrlState) => GraphUrlState) => void;
 
 /** Picks `id`, or unpicks it when it is picked already. */
 export const togglePick = (state: GraphUrlState, id: string): GraphUrlState => ({
@@ -62,6 +79,8 @@ export const toggleStatus = (state: GraphUrlState, status: TaskState): GraphUrlS
     ? state.statuses.filter((one) => one !== status)
     : inOrder([...state.statuses, status]),
 });
+
+const SEARCH_KEYS = ["status", "q", "fold", "pick"] as const;
 
 const listOf = (text: string): ReadonlyArray<string> =>
   text.split(",").filter((part) => part !== "");

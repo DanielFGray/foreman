@@ -15,6 +15,7 @@
     "@effect/atom-react": "4.1.2",
     "@effect/platform-browser": "4.1.2",
     "@effect/platform-bun": "4.1.2",
+    "@tanstack/react-router": "1.170.46",
     "dragology": "0.2.0",
     "effect": "4.1.2",
     "foreman": "workspace:*",

@@ -41,6 +41,17 @@ page (`foreman open <project>`), and it reads `state.json` as it does now.
 - **dragology is pinned to 0.2.0 exactly.** It has no documentation besides
   its demos and `docs/AGENTS.md` in its package, and its API can change in any
   release. An upgrade is its own task.
+- **TanStack Router routes the page.** `@tanstack/react-router`, pinned
+  exactly, with code-based routes in `src/App.tsx` and no loaders: AtomRpc is
+  the one data path. A link moves to the next page inside the one page load,
+  so the WebSocket, its atoms and the browser history stay. A route's view
+  state is its search params. The query is flat strings with lists joined by
+  commas, by the page's own `parseSearch` and `stringifySearch`, so a link
+  stays readable and a typed "123" stays text; each route decodes its own keys.
+  The other TanStack libraries add nothing yet: Query would be a second data
+  path beside AtomRpc, Form and Table have no form or table big enough to pay
+  for them (look again at the project board and the Models view), and Store,
+  Virtual and Pacer duplicate atoms or answer no problem the page has.
 - **Effect runs on both sides.** The page uses Effect 4's `Atom` with
   `@effect/atom-react` for state, `AtomRpc` for the contract's client, and
   `@effect/platform-browser` for the WebSocket. `@effect/atom-react` 4.1.2 needs
@@ -147,8 +158,10 @@ the page's files. `foreman serve` provides it beside `supervise`.
 
 ## The page
 
-- **One project per URL**: `/p/<project>`. `/` is the dashboard; see "The
-  dashboard" below. The page has no other state of its own besides what the operator is
+- **One project per URL**: `/p/<project>`, and its task graph at
+  `/p/<project>/graph`. `/` is the dashboard; see "The dashboard" below. Any
+  other path under `/p/` shows "No page at this address" with a link to
+  the dashboard. The page has no other state of its own besides what the operator is
   in the middle of (a drag, an open inspector).
 - **Pipeline editor first.** The page begins with the pipeline editor, the
   reason for the move. It follows the prototype's wires view (branch
@@ -267,9 +280,11 @@ pane's picked cards and send through.
   link that picks that item. A task's description and runs come later, with a
   `TaskShow` verb over `taskShow`.
 - **View state is in the URL.** The page reloads after each reconnect, and
-  serve restarts after each commit. So the query holds what the operator set:
-  `status`, `q` (search), `fold` (folded epics) and `pick` (picked cards). The
-  page stores nothing else.
+  serve restarts after each commit. So the graph route's search params hold
+  what the operator set: `status`, `q` (search), `fold` (folded epics) and
+  `pick` (picked cards), each list joined with commas (`src/graph-url.ts`). A
+  change replaces the history entry, so Back leaves the graph. The page stores
+  nothing else.
 - **Flow.** The graph runs across, left to right, in a landscape viewport and
   down in a portrait one, by the same rule as the pipeline editor. The SVG sits
   in a container that scrolls.
@@ -330,7 +345,8 @@ Each rule below is changed by this record. The record wins in each case.
 | The pane is frozen until the operator decides which features move to the page | `AGENTS.md`, Front ends; this record's opening | Decided (2026-11-13): every pane feature moves to the page, and the pane and `prog web` are removed once it has. The opening and Front ends say so now. |
 | The UI server's services have no Dispatcher, because a second dispatcher would race the supervised one | `src/host.ts`, `uiServices` doc comment | Still no long-lived one. A row action builds a one-shot Dispatcher per call, as the CLI does in its own process. The comment says so now. |
 | `/` lists the projects in the readings | this record, The page | `/` is the dashboard. |
-| The page tests are plain Playwright | this record, before vitest Browser Mode | vitest Browser Mode with the Playwright provider, in the same vitest run as the unit tests. |
+| An unknown path falls back to the project list | `src/route.ts` (deleted) and its test | The router shows "No page at this address" with a link to the dashboard. |
+$1 | this record, before vitest Browser Mode | vitest Browser Mode with the Playwright provider, in the same vitest run as the unit tests. |
 | Tests use `bun:test` | every package's `test:unit` script | `packages/foreman-ui` uses `@effect/vitest` on Bun. foreman and tasks move later, in their own task. |
 
 ## Checks

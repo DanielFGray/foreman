@@ -24,7 +24,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ["dragology", "react", "react-dom", "react/jsx-runtime"],
+    include: ["@tanstack/react-router", "dragology", "react", "react-dom", "react/jsx-runtime"],
   },
   test: {
     // One Chromium worker: both browser files share the fixture UI server process.
@@ -47,7 +47,7 @@ export default defineConfig({
           },
         },
         optimizeDeps: {
-          include: ["dragology", "react", "react-dom", "react/jsx-runtime"],
+          include: ["@tanstack/react-router", "dragology", "react", "react-dom", "react/jsx-runtime"],
         },
         test: {
           name: "browser",

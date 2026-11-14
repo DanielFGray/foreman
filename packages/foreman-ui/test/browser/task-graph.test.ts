@@ -110,6 +110,24 @@ describe("task graph", () => {
   });
 });
 
+describe("navigation", () => {
+  it("moves between pages inside the one page load, and Back returns", async () => {
+    mount("/");
+    const load = performance.timeOrigin;
+    await userEvent.click(page.getByTestId("project-amux").getByText("graph"));
+    await expect.element(page.getByTestId("graph-page-amux")).toBeInTheDocument();
+    expect(location.pathname).toBe("/p/amux/graph");
+
+    await userEvent.type(page.getByTestId("graph-search"), "g3");
+    await expect.element(page.getByTestId("graph-search")).toHaveValue("g3");
+    expect(new URLSearchParams(location.search).get("q")).toBe("g3");
+
+    history.back();
+    await expect.element(page.getByTestId("dashboard")).toBeInTheDocument();
+    expect(performance.timeOrigin).toBe(load);
+  });
+});
+
 describe("task graph on a phone", () => {
   it("fits the screen and lays out down", async () => {
     const desktop = { width: innerWidth, height: innerHeight };

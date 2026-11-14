@@ -5,6 +5,7 @@
  * control's effect shows in the next reading.
  */
 import { useAtomSet } from "@effect/atom-react";
+import { Link } from "@tanstack/react-router";
 import { Exit, Option } from "effect";
 import type { Published, PublishedRow } from "foreman/published-schema";
 import type { Policy } from "foreman/policy";
@@ -20,7 +21,6 @@ import {
 import { useEffect, useState, type FormEvent } from "react";
 import { bytesLabel, dashboardOf, type DispatcherLine, type ProjectLine } from "./dashboard.ts";
 import { reasonOf } from "./reason.ts";
-import { graphPath } from "./route.ts";
 import { UiRpc } from "./rpc.ts";
 
 /** Sections the dashboard opens by default; the others are history or accounts. */
@@ -190,9 +190,9 @@ const RowLine = ({
   <li className="dash-row" data-testid={`row-${row.view}-${row.key}`}>
     <div className="dash-row-text">
       {row.project === null ? null : (
-        <a className="chip" href={`/p/${encodeURIComponent(row.project)}`}>
+        <Link className="chip" to="/p/$name" params={{ name: row.project }}>
           {row.project}
-        </a>
+        </Link>
       )}
       <span className="dash-label">{row.label}</span>
       {row.detail === null ? null : <span className="muted dash-detail">{row.detail}</span>}
@@ -367,16 +367,18 @@ const ProjectItem = ({ project }: { readonly project: ProjectLine }) => {
   const counts = Object.entries(project.counts).filter(([, count]) => count > 0);
   return (
     <li className="dash-project" data-testid={`project-${project.name}`}>
-      <a className="dash-project-name" href={`/p/${encodeURIComponent(project.name)}`}>
+      <Link className="dash-project-name" to="/p/$name" params={{ name: project.name }}>
         {project.name}
-      </a>
+      </Link>
       {project.paused ? <span className="chip state-paused">paused</span> : null}
       <span className="muted">
         {counts.length === 0
           ? "nothing placed"
           : counts.map(([column, count]) => `${count} ${column}`).join(" · ")}
       </span>
-      <a href={graphPath(project.name)}>graph</a>
+      <Link to="/p/$name/graph" params={{ name: project.name }}>
+        graph
+      </Link>
       {project.problems.map((problem) => (
         <span key={problem} className="problem">
           {problem}
