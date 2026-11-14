@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import type { Ladder } from "./ladder.ts";
 import { type Pipeline, STANDARD_PIPELINES, standardExits } from "./pipeline.ts";
-import { simulate, simulateReport, type SimulateWorld } from "./pipeline-simulate.ts";
+import { CHECKOUT_STAGES, pipelineOf } from "./pipeline-fixture.ts";
+import { MAX_FRAMES, simulate, simulateReport, type SimulateWorld } from "./pipeline-simulate.ts";
 import type { Frame } from "./pipeline-simulate-view.ts";
 import type { Item } from "./records.ts";
 import { type AgentSample, type Measured, ratesOf } from "./run-rates.ts";
@@ -285,4 +286,38 @@ describe("simulateReport", () => {
       ["dear", "review", "Measured"],
     ]);
   });
+});
+
+describe("simulate over a pipeline built from nothing", () => {
+  test("every drawing on the way plays to an end, and only the finished one lands work", () => {
+    for (const stage of CHECKOUT_STAGES.slice(0, -1)) {
+      const run = played(pipelineOf(stage), always("approved"));
+      expect(run.frames.length).toBeLessThan(MAX_FRAMES);
+      expect(run.landed).toBe(0);
+    }
+    // Runs store exit ids, and the build gave each exit a fresh one.
+    const built = CHECKOUT_STAGES.at(-1)!;
+    const idOf = (block: string, name: string) =>
+      built.nodes.flatMap((node) =>
+        node.kind === "agent" && node.id === block
+          ? node.exits.filter((exit) => exit.name === name).map((exit) => exit.id)
+          : [],
+      )[0]!;
+    const measured: Measured = {
+      agents: [
+        sample("cheap", "author", idOf("author", "done"), 30),
+        sample("dear", "review", idOf("review", "approved"), 10),
+      ],
+      checks: [],
+    };
+    expect(played(pipelineOf(built), measured).landed).toBe(5);
+  });
+});
+test("probe", () => {
+  const b = played(pipelineOf(CHECKOUT_STAGES.at(-1)!), always("approved"));
+  console.log("PROBE", JSON.stringify(b.frames.map((f) => f.moves)).slice(0, 2500));
+  console.log(
+    "EXITS",
+    JSON.stringify(CHECKOUT_STAGES.at(-1)!.nodes.filter((n) => n.kind === "agent")),
+  );
 });

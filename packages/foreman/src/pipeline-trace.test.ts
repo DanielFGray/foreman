@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { Ladder } from "./ladder.ts";
 import { STANDARD_PIPELINES } from "./pipeline.ts";
 import { configure } from "./pipeline-belt.ts";
-import { pipelineOf } from "./pipeline-fixture.ts";
-import { traceReport } from "./pipeline-trace.ts";
+import { CHECKOUT_STAGES, pipelineOf } from "./pipeline-fixture.ts";
+import { traceOf, traceReport } from "./pipeline-trace.ts";
 
 const RULES = {
   ladder: [
@@ -64,5 +64,20 @@ describe("traceReport", () => {
     expect(start!.rung).toEqual({ _tag: "Dispatch", name: "cheap" });
     expect(report.refused?.event).toBe("nonsense");
     expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+  });
+});
+
+describe("traceOf over a pipeline built from nothing", () => {
+  test("a task waits Idle on each unfinished drawing until a wired route reaches the author", () => {
+    const tags = CHECKOUT_STAGES.slice(1, -1).map((stage) => {
+      const trace = traceOf(REQUEST.task, [], { ...RULES, pipeline: pipelineOf(stage) });
+      expect(trace.refused).toBeUndefined();
+      const placement = trace.steps.at(-1)!.placement;
+      return placement._tag === "At" ? `At ${placement.stands}` : placement._tag;
+    });
+    const reached = tags.indexOf("At author");
+    expect(reached).toBeGreaterThan(0);
+    expect(tags.slice(0, reached).every((tag) => tag === "Idle")).toBe(true);
+    expect(tags.slice(reached).every((tag) => tag === "At author")).toBe(true);
   });
 });

@@ -2207,6 +2207,33 @@ describe("a usage wall", () => {
     );
   });
 
+  test("past the stall grace an author whose exits are wired to nothing is still stopped", async () => {
+    writeFileSync(
+      join(policies, "pipelines.json"),
+      JSON.stringify({
+        pipelines: {
+          test: {
+            nodes: STANDARD_PIPELINES.worktree.nodes.map((node) =>
+              node.kind === "agent" && node.id === "author"
+                ? { ...node, exits: node.exits.map(({ to: _, ...exit }) => exit) }
+                : node,
+            ),
+          },
+        },
+      }),
+    );
+    const world = stoppedOn("ts-stalled-idle", "all done\n  ctrl+p commands", true);
+    idleFor(world, "ts-stalled-idle", 10);
+
+    await tick(world);
+
+    expect(world.stopped).toContainEqual(["ts-stalled-idle", "author"]);
+    expect(world.tasks.get("ts-stalled-idle")?.runs[0]).toMatchObject({
+      open: false,
+      ending: Option.some("stopped"),
+    });
+  });
+
   test("past the stall grace an empty worktree is removed", async () => {
     const world = stoppedOn("ts-stalled-empty", "all done\n  ctrl+p commands", false);
     idleFor(world, "ts-stalled-empty", 10);

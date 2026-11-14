@@ -9,68 +9,13 @@ import {
   STANDARD_PIPELINES,
 } from "./pipeline.ts";
 import { applyChange, type PipelineChange } from "./pipeline-edit.ts";
-import { pipelineOf } from "./pipeline-fixture.ts";
+import { CHECKOUT_STAGES, pipelineOf, stagesOf } from "./pipeline-fixture.ts";
+import { writtenDrawingOf } from "./pipeline-layout.ts";
 
 const OFFERS: SeatOffers = {
   rungs: [{ name: "cheap", author: true }],
   reviewers: ["sharp"],
 };
-
-/**
- * The standard checkout pipeline, built from nothing the way an operator
- * builds one: place each block by name, set it, then wire it.
- */
-const CHECKOUT_BUILD: ReadonlyArray<PipelineChange> = [
-  { _tag: "Place", kind: "source", id: "queue" },
-  { _tag: "Place", kind: "branch", id: "branch" },
-  { _tag: "Rejoin", wire: { from: "queue", port: "next" }, to: "branch" },
-  { _tag: "Place", kind: "router", id: "retry" },
-  { _tag: "Rejoin", wire: { from: "branch", port: "next" }, to: "retry" },
-  { _tag: "Place", kind: "gate", id: "start" },
-  { _tag: "Place", kind: "gate", id: "climb" },
-  { _tag: "Configure", id: "climb", setting: { kind: "gate", step: "climb" } },
-  { _tag: "Rejoin", wire: { from: "retry", port: "else" }, to: "start" },
-  { _tag: "AddRoute", router: "retry", when: "failed" },
-  { _tag: "AddRoute", router: "retry", when: "attempts>=1" },
-  { _tag: "Rejoin", wire: { from: "retry", port: 0 }, to: "climb" },
-  { _tag: "Rejoin", wire: { from: "retry", port: 1 }, to: "climb" },
-  { _tag: "Place", kind: "agent", id: "author" },
-  { _tag: "Rejoin", wire: { from: "start", port: "next" }, to: "author" },
-  { _tag: "Rejoin", wire: { from: "climb", port: "next" }, to: "author" },
-  { _tag: "Place", kind: "gate", id: "review-gate" },
-  { _tag: "Configure", id: "review-gate", setting: { kind: "gate", step: "review" } },
-  { _tag: "Rejoin", wire: { from: "author", port: "exit:done" }, to: "review-gate" },
-  { _tag: "Rejoin", wire: { from: "author", port: "exit:already-done" }, to: "review-gate" },
-  { _tag: "Place", kind: "agent", id: "review" },
-  {
-    _tag: "Configure",
-    id: "review",
-    setting: { kind: "agent", role: "review", model: "reviewers" },
-  },
-  { _tag: "RenameExit", id: "review", name: "done", to: "approved" },
-  { _tag: "RenameExit", id: "review", name: "already-done", to: "returned" },
-  { _tag: "SetEmpty", id: "review", name: "returned", empty: undefined },
-  { _tag: "ChargeExit", id: "review", name: "returned", fails: "author" },
-  { _tag: "Rejoin", wire: { from: "review-gate", port: "next" }, to: "review" },
-  { _tag: "Rejoin", wire: { from: "review", port: "exit:returned" }, to: "climb" },
-  { _tag: "Place", kind: "gate", id: "land-gate" },
-  { _tag: "Configure", id: "land-gate", setting: { kind: "gate", step: "land" } },
-  { _tag: "Rejoin", wire: { from: "review", port: "exit:approved" }, to: "land-gate" },
-  { _tag: "Place", kind: "land", id: "land" },
-  { _tag: "Configure", id: "land", setting: { kind: "land", how: "merge", onto: undefined } },
-  { _tag: "Rejoin", wire: { from: "land-gate", port: "next" }, to: "land" },
-];
-
-/** Each drawing the build passes through, the empty one first. */
-const stagesOf = (changes: ReadonlyArray<PipelineChange>): ReadonlyArray<Drawing> =>
-  changes.reduce<ReadonlyArray<Drawing>>(
-    (stages, change) => {
-      const result = applyChange(stages.at(-1)!, change);
-      if (result._tag === "Refused") throw new Error(`${change._tag}: ${result.reason}`);
-      return [...stages, result.pipeline];
-    },
-    [EMPTY_PIPELINE],
-  );
 
 /** A drawing with each exit's id left out: edits give a new exit a random one. */
 const withoutExitIds = (drawing: Drawing) => ({
@@ -97,7 +42,7 @@ const open: Facts = {
 };
 
 describe("a pipeline built from nothing", () => {
-  const stages = stagesOf(CHECKOUT_BUILD);
+  const stages = CHECKOUT_STAGES;
 
   test("edits alone build the standard checkout pipeline, all but its exit ids", () => {
     expect(withoutExitIds(stages.at(-1)!)).toEqual(withoutExitIds(STANDARD_PIPELINES.checkout));
@@ -105,6 +50,18 @@ describe("a pipeline built from nothing", () => {
 
   test("every drawing on the way is valid: a loose end idles a block, it is no problem", () => {
     for (const stage of stages) expect(problemsOf(pipelineOf(stage), OFFERS)).toEqual([]);
+  });
+
+  test("every drawing on the way lays out every block, and draws no wire for a loose end", () => {
+    for (const stage of stages) {
+      for (const flow of ["across", "down"] as const) {
+        const drawn = writtenDrawingOf(stage, {}, flow);
+        expect(drawn.blocks.map((block) => block.id).sort()).toEqual(
+          stage.nodes.map((node) => node.id).sort(),
+        );
+        expect(drawn.wires.every((wire) => wire.to !== undefined)).toBe(true);
+      }
+    }
   });
 
   test("an open task waits before the first idle block, then reaches the author once it is wired", () => {
