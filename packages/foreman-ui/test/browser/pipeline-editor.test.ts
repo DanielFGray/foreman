@@ -576,3 +576,32 @@ describe("pipeline editor from nothing", () => {
     );
   }, 180_000);
 });
+
+describe("pipeline inspector", () => {
+  it("sends one SetEmpty when an exit's empty-branch choice changes", async () => {
+    mountProject();
+    await selectBlock("author");
+    await userEvent.selectOptions(page.getByTestId("inspector-exit-already-done-empty"), "");
+
+    await expect.poll(() => editRequests().length).toBe(1);
+    expect(editRequests()[0]?.payload.change).toEqual({
+      _tag: "SetEmpty",
+      id: "author",
+      name: "already-done",
+      empty: undefined,
+    });
+    await expect
+      .poll(async () => {
+        const author = (await commands.draftPipeline(PROJECT))?.nodes.find(
+          (node) => node.id === "author",
+        );
+        return author?.kind === "agent"
+          ? author.exits.find((exit) => exit.name === "already-done")?.empty
+          : "no author";
+      })
+      .toBeUndefined();
+
+    await userEvent.click(page.getByTestId("pipeline-discard"));
+    await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
+  });
+});
