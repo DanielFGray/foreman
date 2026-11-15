@@ -1,8 +1,10 @@
 /**
  * Pipeline editor: the project's draft drawn as wires (layoutOf via the stream's
- * DrawingView), with exit-to-block rejoins through dragology. Each drag lists
- * PipelineChange candidates; the preview snaps to the closest, green with no
- * problem and amber with the count from problemsOf on the expansion.
+ * DrawingView), with exit-to-block rejoins through dragology, a palette that
+ * places blocks and an inspector that sets the clicked one (`pipeline-blocks`).
+ * Each drag lists PipelineChange candidates; the preview snaps to the closest,
+ * green with no problem and amber with the count from problemsOf on the
+ * expansion.
  *
  * The page holds the newest view the server sent (a Pipeline stream frame or an
  * edit's answer) and the edits it has not answered, and draws the edits
@@ -18,7 +20,8 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Drawing } from "foreman/pipeline";
 import type { PipelineChange, WireRef } from "foreman/pipeline-edit";
 import type { ShownPipeline } from "foreman/pipeline-view";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Inspector, Palette } from "./pipeline-blocks.tsx";
 import {
   frameAfter,
   handlePoint,
@@ -45,6 +48,9 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
   /** The frame dragology reports while a drag is under way. */
   const [dragFrame, setDragFrame] = useState<Option.Option<EditorFrame>>(Option.none());
   const [message, setMessage] = useState<Option.Option<string>>(Option.none());
+  /** The block the inspector sets, by id. */
+  const [selected, setSelected] = useState<Option.Option<string>>(Option.none());
+  const draggable = useMemo(() => editorSvgOf(selected, setSelected), [selected]);
   /** The edit already sent, so a re-render does not send it twice. */
   const sending = useRef<Option.Option<PipelineChange>>(Option.none());
 
@@ -73,14 +79,17 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
 
   const shown = Option.map(reading, (view) => frameAfter(view, unanswered, flow));
 
+  const queueEdit = (change: PipelineChange) => {
+    setUnanswered((queue) => [...queue, change]);
+    setMessage(Option.none());
+    if (change._tag === "Place") setSelected(Option.some(change.id));
+  };
+
   const onDropState = (dropped: EditorFrame) => {
     const changed = Option.exists(shown, (frame) => !sameDrawing(frame.pipeline, dropped.pipeline));
     Option.map(
       Option.filter(dropped.pending, () => changed),
-      (change) => {
-        setUnanswered((queue) => [...queue, change]);
-        setMessage(Option.none());
-      },
+      queueEdit,
     );
   };
 
@@ -116,6 +125,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
             message={message}
             onMessage={setMessage}
           />
+          <Palette composites={view.choices.composites} onEdit={queueEdit} />
           {Option.match(hint, {
             onNone: () => null,
             onSome: (shownHint) => (
@@ -131,7 +141,7 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
           })}
           <div className="pipeline-canvas" data-testid="pipeline-canvas" ref={canvasRef}>
             <DraggableRenderer
-              draggable={EditorSvg}
+              draggable={draggable}
               state={display}
               width={Math.max(display.drawing.width, canvasWidth)}
               height={Math.max(display.drawing.height, 240)}
@@ -149,6 +159,16 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
               ))}
             </ul>
           ) : null}
+          <Inspector
+            node={Option.getOrUndefined(
+              Option.flatMap(selected, (id) =>
+                Option.fromNullishOr(base.pipeline.nodes.find((node) => node.id === id)),
+              ),
+            )}
+            choices={view.choices}
+            offers={view.offers}
+            onEdit={queueEdit}
+          />
         </div>
       );
     },
@@ -175,79 +195,111 @@ const WIRE_STROKE = "#656d76";
 const WIRE_GOOD = "#1a7f37";
 const WIRE_WARN = "#9a6700";
 
-const EditorSvg: Draggable<EditorFrame> = ({ state, d, draggedId }) => {
-  const { drawing, problems, pending } = state;
+/**
+ * The drawing, with `selected` outlined. A click on a block selects it for the
+ * inspector; a click is below dragology's drag threshold, so it reaches the block.
+ */
+const editorSvgOf =
+  (
+    selected: Option.Option<string>,
+    onSelect: (id: Option.Option<string>) => void,
+  ): Draggable<EditorFrame> =>
+  ({ state, d, draggedId }) => {
+    const { drawing, problems, pending } = state;
 
-  return (
-    <g>
-      {drawing.wires.map((wire) => {
-        const draggingThis = Option.exists(pending, (change) => movesWire(change, wire));
-        const stroke = draggingThis ? (problems.length === 0 ? WIRE_GOOD : WIRE_WARN) : WIRE_STROKE;
-        return (
-          <path
-            id={`wire-${wire.from}-${portKey(wire.port)}`}
-            d={wirePath(wire.points)}
-            // className stays "wire": dragology cannot lerp "wire" vs "wire back".
-            className="wire"
-            stroke={stroke}
-            strokeWidth={draggingThis ? 3 : 2}
-            strokeDasharray={wire.back ? "6 4" : "0"}
-            fill="none"
-          />
-        );
-      })}
-      {drawing.blocks.map((block) => (
-        <g id={`block-${block.id}`} transform={translate(block.x, block.y)}>
-          <rect width={block.w} height={block.h} rx={6} className="block" />
-          <text x={10} y={18} className="block-label">
-            {block.icon} {block.id}
-          </text>
-          <title>{block.summary}</title>
-        </g>
-      ))}
-      {drawing.blocks.map((block) =>
-        Option.match(inputPoint(drawing, block.id, state.flow), {
-          onNone: () => null,
-          onSome: (at) => (
-            <circle
-              id={`input-${block.id}`}
-              data-testid={`block-${block.id}`}
-              transform={translate(at[0], at[1])}
-              r={10}
-              className="input-dot"
+    return (
+      <g>
+        {drawing.wires.map((wire) => {
+          const draggingThis = Option.exists(pending, (change) => movesWire(change, wire));
+          const stroke = draggingThis
+            ? problems.length === 0
+              ? WIRE_GOOD
+              : WIRE_WARN
+            : WIRE_STROKE;
+          return (
+            <path
+              id={`wire-${wire.from}-${portKey(wire.port)}`}
+              d={wirePath(wire.points)}
+              // className stays "wire": dragology cannot lerp "wire" vs "wire back".
+              className="wire"
+              stroke={stroke}
+              strokeWidth={draggingThis ? 3 : 2}
+              strokeDasharray={wire.back ? "6 4" : "0"}
+              fill="none"
             />
-          ),
-        }),
-      )}
-      {drawing.wires.map((wire) => {
-        const ref: WireRef = { from: wire.from, port: wire.port };
-        const id = `exit-${wire.from}-${portKey(wire.port)}`;
-        const at = Option.orElse(handlePoint(state, ref), () =>
-          Option.fromNullishOr(wire.points[0]),
-        );
-        return Option.match(at, {
-          onNone: () => null,
-          onSome: (point) => (
-            <circle
-              id={id}
-              data-testid={id}
-              transform={translate(point[0], point[1])}
-              r={7}
-              className="exit-dot"
-              dragologyZIndex={draggedId === id ? "/1" : false}
-              dragologyOnDrag={() => {
-                const committed: EditorFrame = { ...state, pending: Option.none() };
-                const frames = rejoinFrames(committed.pipeline, ref, state.checks, state.flow);
-                const options = frames.length === 0 ? [committed] : frames;
-                return d.closest(options).whenFar(committed, { gap: 160 }).withFloating();
-              }}
+          );
+        })}
+        {drawing.blocks.map((block) => (
+          <g
+            id={`block-${block.id}`}
+            transform={translate(block.x, block.y)}
+            onClick={() => onSelect(Option.some(block.id))}
+          >
+            <rect
+              width={block.w}
+              height={block.h}
+              rx={6}
+              data-testid={`select-${block.id}`}
+              className="block"
             />
-          ),
-        });
-      })}
-    </g>
-  );
-};
+            {/* dragology blends each render into the next and cannot blend two class
+                names, so the outline is always drawn and selection sets its opacity. */}
+            <rect
+              width={block.w}
+              height={block.h}
+              rx={6}
+              className="block-outline"
+              strokeOpacity={Option.contains(selected, block.id) ? 1 : 0}
+            />
+            <text x={10} y={18} className="block-label">
+              {block.icon} {block.id}
+            </text>
+            <title>{block.summary}</title>
+          </g>
+        ))}
+        {drawing.blocks.map((block) =>
+          Option.match(inputPoint(drawing, block.id, state.flow), {
+            onNone: () => null,
+            onSome: (at) => (
+              <circle
+                id={`input-${block.id}`}
+                data-testid={`block-${block.id}`}
+                transform={translate(at[0], at[1])}
+                r={10}
+                className="input-dot"
+              />
+            ),
+          }),
+        )}
+        {drawing.wires.map((wire) => {
+          const ref: WireRef = { from: wire.from, port: wire.port };
+          const id = `exit-${wire.from}-${portKey(wire.port)}`;
+          const at = Option.orElse(handlePoint(state, ref), () =>
+            Option.fromNullishOr(wire.points[0]),
+          );
+          return Option.match(at, {
+            onNone: () => null,
+            onSome: (point) => (
+              <circle
+                id={id}
+                data-testid={id}
+                transform={translate(point[0], point[1])}
+                r={7}
+                className="exit-dot"
+                dragologyZIndex={draggedId === id ? "/1" : false}
+                dragologyOnDrag={() => {
+                  const committed: EditorFrame = { ...state, pending: Option.none() };
+                  const frames = rejoinFrames(committed.pipeline, ref, state.checks, state.flow);
+                  const options = frames.length === 0 ? [committed] : frames;
+                  return d.closest(options).whenFar(committed, { gap: 160 }).withFloating();
+                }}
+              />
+            ),
+          });
+        })}
+      </g>
+    );
+  };
 
 const Toolbar = ({
   project,

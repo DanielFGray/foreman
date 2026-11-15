@@ -54,7 +54,6 @@ export const CHECKOUT_BUILD: ReadonlyArray<PipelineChange> = [
   },
   { _tag: "RenameExit", id: "review", name: "done", to: "approved" },
   { _tag: "RenameExit", id: "review", name: "already-done", to: "returned" },
-  { _tag: "SetEmpty", id: "review", name: "returned", empty: undefined },
   { _tag: "ChargeExit", id: "review", name: "returned", fails: "author" },
   { _tag: "Rejoin", wire: { from: "review-gate", port: "next" }, to: "review" },
   { _tag: "Rejoin", wire: { from: "review", port: "exit:returned" }, to: "climb" },

@@ -1,7 +1,7 @@
 /**
- * Definition of done for the pipeline editor: a drag that makes a
- * problem shows an amber preview with one problem, and a drop sends
- * exactly one PipelineEdit (docs/web-ui.md Checks; ts-755cb5).
+ * The pipeline editor: a drag previews its result and a drop sends exactly one
+ * PipelineEdit, and the palette, drags and inspector build a whole pipeline
+ * on a project with no drawing (docs/web-ui.md, "Checks").
  *
  * The count is taken from the frames the page sends over its WebSocket, and the
  * result from the drafts and pipelines files the UI server writes.
@@ -12,25 +12,31 @@ import { commands, page, userEvent } from "vitest/browser";
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
 import { Option, Schema } from "effect";
-import type { Drawing } from "foreman/pipeline";
+import { type Drawing, STANDARD_PIPELINES } from "foreman/pipeline";
+import type { PipelineChange } from "foreman/pipeline-edit";
+import { CHECKOUT_BUILD } from "foreman/pipeline-fixture";
 import { PipelineEdit } from "foreman/ui-contract";
 import { App } from "../../src/App.tsx";
+import { portKey } from "../../src/pipeline-preview.ts";
 import { pageInputsAtom } from "../../src/rpc.ts";
 import "../../src/styles.css";
 
 /**
- * A PipelineEdit request as the RPC JSON protocol encodes it. Every other
- * frame the page sends fails to decode, so it is not counted.
+ * A PipelineEdit request, decoded with the JSON codec the RPC protocol encodes
+ * it with (an absent optional field is sent as null). Every other frame the
+ * page sends fails to decode, so it is not counted.
  */
 const EditRequest = Schema.fromJsonString(
   Schema.TaggedStruct("Request", {
     tag: Schema.Literal("PipelineEdit"),
-    payload: Schema.toEncoded(PipelineEdit.payloadSchema),
+    payload: Schema.toCodecJson(PipelineEdit.payloadSchema),
   }),
 );
 const editRequestOf = Schema.decodeUnknownOption(EditRequest);
 
 const PROJECT = "amux";
+/** A fixture project with no drawing, which runs the empty pipeline. */
+const UNDRAWN = "foreman";
 
 let root: Root | undefined;
 let uiPort = 0;
@@ -107,8 +113,8 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-const mountProject = () => {
-  history.replaceState(null, "", `/p/${PROJECT}`);
+const mountProject = (project = PROJECT) => {
+  history.replaceState(null, "", `/p/${project}`);
   const host = document.createElement("div");
   host.id = "root";
   document.body.replaceChildren(host);
@@ -231,7 +237,7 @@ const touchDragOver = async (handleId: string, blockId: string) => {
 };
 
 describe("pipeline editor on a phone", () => {
-  it("fits the screen, lays out down, and sends one PipelineEdit for a touch drag", async () => {
+  it("fits the screen with its palette and inspector, lays out down, and sends one PipelineEdit for a touch drag", async () => {
     const desktop = { width: innerWidth, height: innerHeight };
     await page.viewport(390, 844);
     try {
@@ -240,6 +246,11 @@ describe("pipeline editor on a phone", () => {
       await expect.element(page.getByTestId("block-climb")).toBeInTheDocument();
 
       const html = document.documentElement;
+      expect(html.scrollWidth).toBeLessThanOrEqual(html.clientWidth);
+      // The palette and the inspector of the block with the most settings fit too.
+      await expect.element(page.getByTestId("pipeline-palette")).toBeInTheDocument();
+      await selectBlock("review");
+      await expect.element(page.getByTestId("inspector-exit-approved")).toBeInTheDocument();
       expect(html.scrollWidth).toBeLessThanOrEqual(html.clientWidth);
       // A finger on the drawing scrolls; a finger on an exit handle drags.
       const svg = document.querySelector('[data-testid="pipeline-canvas"] svg');
@@ -461,4 +472,107 @@ describe("pipeline editor wire drag", () => {
     await expect.poll(() => commands.draftPipeline(PROJECT)).toBeNull();
     expect(editRequests()).toHaveLength(1);
   });
+});
+
+/** A drawing with each exit's id left out: the page's edits give a new exit a random one. */
+const withoutExitIds = (drawing: Drawing | null) =>
+  drawing === null
+    ? null
+    : {
+        nodes: drawing.nodes.map((node) =>
+          node.kind === "agent" || node.kind === "check"
+            ? {
+                ...node,
+                exits: node.exits.map(({ name, to, fails, empty }) => ({ name, to, fails, empty })),
+              }
+            : node,
+        ),
+      };
+
+/** Selects a block by clicking it, and waits for the inspector to show it. */
+const selectBlock = async (id: string) => {
+  await userEvent.click(page.getByTestId(`select-${id}`));
+  await expect.element(page.getByTestId("inspector-block")).toHaveAttribute("data-block", id);
+};
+
+/** Makes one change with the page's own controls: the palette, a drag, or the inspector. */
+const gesture = async (change: PipelineChange): Promise<void> => {
+  switch (change._tag) {
+    case "Place":
+      await userEvent.selectOptions(page.getByTestId("palette-kind"), change.kind);
+      await userEvent.fill(page.getByTestId("palette-id"), change.id);
+      await userEvent.click(page.getByTestId("palette-place"));
+      return;
+    case "Rejoin":
+      await dragHandleOver(`exit-${change.wire.from}-${portKey(change.wire.port)}`, change.to);
+      releaseOver(change.to);
+      return;
+    case "Configure": {
+      await selectBlock(change.id);
+      const { setting } = change;
+      if (setting.kind === "gate") {
+        await userEvent.selectOptions(page.getByTestId("inspector-step"), setting.step);
+      } else if (setting.kind === "agent") {
+        await userEvent.selectOptions(page.getByTestId("inspector-role"), setting.role);
+        await userEvent.selectOptions(page.getByTestId("inspector-model"), setting.model);
+      } else if (setting.kind === "land") {
+        await userEvent.selectOptions(page.getByTestId("inspector-how"), setting.how);
+        await userEvent.fill(page.getByTestId("inspector-onto"), setting.onto ?? "");
+      } else {
+        throw new Error(`no gesture sets a ${setting.kind} block`);
+      }
+      await userEvent.click(page.getByTestId("inspector-set"));
+      return;
+    }
+    case "AddRoute":
+      await selectBlock(change.router);
+      await userEvent.fill(page.getByTestId("inspector-route-when"), change.when);
+      await userEvent.click(page.getByTestId("inspector-route-add"));
+      return;
+    case "RenameExit":
+      await selectBlock(change.id);
+      await userEvent.fill(page.getByTestId(`inspector-exit-${change.name}-name`), change.to);
+      await userEvent.click(page.getByTestId(`inspector-exit-${change.name}-rename`));
+      return;
+    case "SetEmpty":
+      await selectBlock(change.id);
+      await userEvent.selectOptions(
+        page.getByTestId(`inspector-exit-${change.name}-empty`),
+        change.empty ?? "",
+      );
+      return;
+    case "ChargeExit":
+      await selectBlock(change.id);
+      await userEvent.selectOptions(
+        page.getByTestId(`inspector-exit-${change.name}-fails`),
+        change.fails ?? "",
+      );
+      return;
+    default:
+      throw new Error(`no gesture for ${change._tag}`);
+  }
+};
+
+describe("pipeline editor from nothing", () => {
+  it("builds the standard checkout pipeline on an undrawn project with the palette, drags and the inspector, and saves it", async () => {
+    mountProject(UNDRAWN);
+    await expect.element(page.getByTestId("pipeline-palette")).toBeInTheDocument();
+    expect(await commands.savedPipeline(UNDRAWN)).toBeNull();
+
+    for (const [index, change] of CHECKOUT_BUILD.entries()) {
+      await gesture(change);
+      await expect.poll(() => editRequests().length).toBe(index + 1);
+    }
+    expect(editRequests().map((request) => request.payload.change)).toEqual(CHECKOUT_BUILD);
+
+    await expect
+      .poll(async () => withoutExitIds(await commands.draftPipeline(UNDRAWN)), { timeout: 15_000 })
+      .toEqual(withoutExitIds(STANDARD_PIPELINES.checkout));
+    await expect.element(page.getByTestId("pipeline-problems")).toHaveTextContent("No problems");
+    await userEvent.click(page.getByTestId("pipeline-save"));
+    await expect.element(page.getByTestId("pipeline-toolbar-message")).toHaveTextContent("Saved.");
+    expect(withoutExitIds(await commands.savedPipeline(UNDRAWN))).toEqual(
+      withoutExitIds(STANDARD_PIPELINES.checkout),
+    );
+  }, 180_000);
 });

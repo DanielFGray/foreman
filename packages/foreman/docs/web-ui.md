@@ -179,6 +179,26 @@ the page's files. `foreman serve` provides it beside `supervise`.
   checks with. The toolbar's Save and Discard send `PipelineSave` and
   `PipelineDiscard`; Save is disabled while the drawing has problems. A loose
   end is no problem (`docs/pipeline-engine.md`, "Loose ends").
+- **Building a pipeline.** A project with no drawing shows an empty canvas,
+  and the operator builds its pipeline from blocks. The palette above the
+  canvas places a block: pick a kind (`PLACEABLE`), type an id, and press
+  Place. The page sends `Place`, and selects the new block. Placing is a click,
+  not a drag, because a block has no stored position until the free-form
+  drawing task. Every way out that ends at no block is drawn as a short stub
+  with a handle (`BeltStub` in `src/pipeline-belt.ts`): a return to the queue,
+  or a loose end, which a `WireView` with no `to` carries. The operator drags
+  a handle to a block to wire it (`Rejoin`). A click on a block selects it, and
+  the inspector below the canvas sends one change per control. Set sends
+  `Configure`: a source's filter, a gate's step, an agent's role and model, a
+  check's command, or a land's how and onto. A router lists its routes, with
+  `AddRoute` and `RemoveRoute`. An agent or a check lists its exits, with
+  `RenameExit`, `SetEmpty`, `ChargeExit`, `AddExit` and `RemoveExit`. Remove
+  sends `Remove`. The steps, roles and landings come from the stream's
+  `choices`. An agent's models are its role's pool (`ladder` or `reviewers`)
+  and that role's seats in `offers`, and a new role resets the model to the
+  pool. The selected block's outline is an SVG attribute, as the wire tones
+  are: dragology blends one render into the next and cannot blend two class
+  names.
 - **The other views** follow, one slice each: the fleet defaults (each
   step's mode and the grants), the project board with a task detail shared by
   the board, the dashboard and the graph, simulate and the fleet preview, and
@@ -313,8 +333,12 @@ serve` to check that it starts") stays as it is.
   origin, and returns the port. The child process is stopped the way serve
   stops, so a disconnect test drops the page's real socket. The tests drive the views
   with real pointer events: a drag from an exit to a block gives the expected
-  `PipelineEdit`, and an amber preview shows the problem count. These tests
-  run in the gate. A missing Chromium fails the gate. It does not skip the
+  `PipelineEdit`, and an amber preview shows the problem count. One test
+  builds the standard checkout pipeline on a project with no drawing with the
+  palette, drags and the inspector alone (`CHECKOUT_BUILD` in
+  `src/pipeline-fixture.ts`), and saves it. A test decodes the frames the page
+  sends with the JSON codec of the RPC protocol, which writes an absent field
+  as null. These tests run in the gate. A missing Chromium fails the gate. It does not skip the
   tests.
 - **Runner**: every test in the package runs with `bunx --bun vitest run` on
   `@effect/vitest`. On Node, vitest's workers cannot load `bun:` modules.
@@ -364,8 +388,12 @@ $1 | this record, before vitest Browser Mode | vitest Browser Mode with the Play
 - With `FOREMAN_UI_HOSTS=box.tailnet.ts.net`, a request with that `Host` and
   `Origin: https://box.tailnet.ts.net` is admitted, and one with `Host:
   evil.example` from its own origin is refused.
-- A drag in the editor that would leave a block unreachable shows an amber
-  preview with one problem, and a drop sends exactly one `PipelineEdit`.
+- A drag in the editor that rejoins `branch.next` to `land-gate`, which skips
+  review, shows an amber preview with one problem, and a drop sends exactly
+  one `PipelineEdit`.
+- On a project with no drawing, the palette, drags and the inspector send the
+  changes of `CHECKOUT_BUILD` in order, and Save writes the standard checkout
+  pipeline, all but its exit ids.
 - `foreman pipeline graph <project> --json` with no `--status` prints what it
   printed before `statuses` existed.
 - With an epic folded, an edge from one of its tasks to a task outside it is

@@ -3,6 +3,7 @@ import {
   type Drawing,
   EMPTY_PIPELINE,
   type Facts,
+  looseEnds,
   place,
   problemsOf,
   type SeatOffers,
@@ -52,14 +53,20 @@ describe("a pipeline built from nothing", () => {
     for (const stage of stages) expect(problemsOf(pipelineOf(stage), OFFERS)).toEqual([]);
   });
 
-  test("every drawing on the way lays out every block, and draws no wire for a loose end", () => {
+  test("every drawing on the way lays out every block in a finite size, and a stub with no end for each loose end", () => {
     for (const stage of stages) {
       for (const flow of ["across", "down"] as const) {
         const drawn = writtenDrawingOf(stage, {}, flow);
+        expect([drawn.width, drawn.height].every(Number.isFinite)).toBe(true);
         expect(drawn.blocks.map((block) => block.id).sort()).toEqual(
           stage.nodes.map((node) => node.id).sort(),
         );
-        expect(drawn.wires.every((wire) => wire.to !== undefined)).toBe(true);
+        for (const node of pipelineOf(stage).nodes) {
+          const stubs = drawn.wires.filter(
+            (wire) => wire.from === node.id && wire.to === undefined,
+          );
+          expect(stubs.length).toBe(looseEnds(node).length);
+        }
       }
     }
   });

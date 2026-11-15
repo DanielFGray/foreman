@@ -23,7 +23,7 @@ const currentTarget = (drawing: Drawing): string => {
   const wire = writtenDrawingOf(drawing, {}, "across").wires.find(
     (one) => one.from === BRANCH_NEXT.from && one.port === BRANCH_NEXT.port,
   );
-  assert.isDefined(wire);
+  assert.isDefined(wire?.to);
   return wire.to;
 };
 
@@ -31,7 +31,9 @@ describe("inputPoint", () => {
   for (const flow of ["across", "down"] as const) {
     it(`is where the layout ends each wire into a block, laid out ${flow}`, () => {
       const drawing = writtenDrawingOf(STANDARD_PIPELINES.checkout, {}, flow);
-      const intoBlocks = drawing.wires.filter((wire) => wire.to !== "queue");
+      const intoBlocks = drawing.wires.flatMap((wire) =>
+        wire.to === undefined || wire.to === "queue" ? [] : [{ ...wire, to: wire.to }],
+      );
       assert.isAbove(intoBlocks.length, 0);
       for (const wire of intoBlocks) {
         assert.deepStrictEqual(

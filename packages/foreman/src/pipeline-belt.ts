@@ -73,20 +73,22 @@ export interface BeltWire extends Wire {
 }
 
 /**
- * An exit that returns to the queue. It is not a wire: the queue is a source
- * block, and a wire into it would draw a loop, so layout draws a short stub off
- * the exit instead.
+ * A way out that ends at no block, so layout draws a short stub off it, which
+ * gives the way out a handle to drag. It is a return to the queue (`to` is the
+ * queue: the queue is a source block, and a wire into it would draw a loop), or
+ * a loose end (no `to`: docs/pipeline-engine.md, "Loose ends").
  */
-export interface BeltReturn {
+export interface BeltStub {
   readonly from: string;
   readonly port: Port;
   readonly label: string;
+  readonly to: typeof QUEUE | undefined;
 }
 
 export interface Belt {
   readonly cells: ReadonlyArray<Cell>;
   readonly wires: ReadonlyArray<BeltWire>;
-  readonly returns: ReadonlyArray<BeltReturn>;
+  readonly stubs: ReadonlyArray<BeltStub>;
   readonly columns: number;
   readonly rows: number;
 }
@@ -157,7 +159,7 @@ export const beltOf = (pipeline: Drawing): Belt => {
       ...wire,
       back: backs.has(wire),
     })),
-    returns: returnsOf(pipeline),
+    stubs: stubsOf(pipeline),
     columns: Math.max(0, ...cells.map((cell) => cell.column + 1)),
     rows: nextRow,
   };
@@ -1000,18 +1002,30 @@ const depthsOf = (pipeline: Drawing, wires: ReadonlyArray<Wire>): ReadonlyMap<st
   return depth;
 };
 
+/** The ways out that end at no block: the returns to the queue, then the loose ends. */
+const stubsOf = (pipeline: Drawing): ReadonlyArray<BeltStub> => [
+  ...returnsOf(pipeline),
+  ...outputsOf(pipeline).flatMap((output): ReadonlyArray<BeltStub> =>
+    output.to === undefined ? [{ ...output, to: undefined }] : [],
+  ),
+];
+
 /** The exits that return to the queue, in the order `wiresOf` lists the other exits. */
-const returnsOf = (pipeline: Drawing): ReadonlyArray<BeltReturn> =>
-  pipeline.nodes.flatMap((node): ReadonlyArray<BeltReturn> => {
+const returnsOf = (pipeline: Drawing): ReadonlyArray<BeltStub> =>
+  pipeline.nodes.flatMap((node): ReadonlyArray<BeltStub> => {
     switch (node.kind) {
       case "agent":
       case "check":
-        return node.exits.flatMap((exit): ReadonlyArray<BeltReturn> =>
-          exit.to === QUEUE ? [{ from: node.id, port: `exit:${exit.name}`, label: exit.name }] : [],
+        return node.exits.flatMap((exit): ReadonlyArray<BeltStub> =>
+          exit.to === QUEUE
+            ? [{ from: node.id, port: `exit:${exit.name}`, label: exit.name, to: QUEUE }]
+            : [],
         );
       case "composite":
-        return node.exits.flatMap((exit): ReadonlyArray<BeltReturn> =>
-          exit.to === QUEUE ? [{ from: node.id, port: `exit:${exit.id}`, label: exit.id }] : [],
+        return node.exits.flatMap((exit): ReadonlyArray<BeltStub> =>
+          exit.to === QUEUE
+            ? [{ from: node.id, port: `exit:${exit.id}`, label: exit.id, to: QUEUE }]
+            : [],
         );
       default:
         return [];

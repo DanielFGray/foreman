@@ -7,13 +7,12 @@ import {
   type Drawing as PipelineDrawing,
   type Landing,
   type Pipeline,
-  QUEUE,
 } from "./pipeline.ts";
 import { coversOf } from "./composite.ts";
 import type { Composites } from "./pipeline.ts";
 import {
   type Belt,
-  type BeltReturn,
+  type BeltStub,
   type BeltWire,
   beltOf,
   type Cell,
@@ -32,7 +31,8 @@ export interface Box {
 export type Point = readonly [number, number];
 
 export interface PlacedWire {
-  readonly wire: BeltWire;
+  /** The wire, or a stub off a way out that ends at no block: `to` is then the queue, or none for a loose end. */
+  readonly wire: Omit<BeltWire, "to"> & { readonly to: string | undefined };
   /** The corners of the wire's route, from the block it leaves to the block it enters. */
   readonly points: ReadonlyArray<Point>;
   /** Where the wire's label sits, and how wide it may draw there. */
@@ -76,7 +76,7 @@ export const drawingOf = (pipeline: PipelineDrawing, flow: Flow): DrawingView =>
     wires: layout.wires.map(({ wire, points, anchor, plus }) => ({
       from: wire.from,
       port: wire.port,
-      to: wire.to,
+      ...(wire.to === undefined ? {} : { to: wire.to }),
       label: wire.label,
       ...(wire.entry === undefined ? {} : { entry: wire.entry }),
       back: wire.back,
@@ -214,12 +214,13 @@ export const layoutOf = (belt: Belt, flow: Flow): Layout => {
   const last = belt.rows - 1;
   const wires = [
     ...belt.wires.flatMap((wire, index) => placedWireOf(grid, wire, index)),
-    ...belt.returns.flatMap((ret) => placedReturnOf(grid, ret)),
+    ...belt.stubs.flatMap((stub) => placedStubOf(grid, stub)),
   ];
   // The drawing holds every block and every wire, a back wire's return lane included.
   const reach = (axis: 0 | 1) =>
     Math.max(0, ...wires.flatMap(({ points }) => points.map((point) => point[axis] + PAD)));
-  const along = grid.layerStart[belt.columns - 1]! + layerLength[belt.columns - 1]! + PAD;
+  const along =
+    (grid.layerStart[belt.columns - 1] ?? PAD) + (layerLength[belt.columns - 1] ?? 0) + PAD;
   const beside = (laneStart[last] ?? PAD) + (laneWidth[last] ?? 0) + (laneGap[last] ?? 0) / 2 + PAD;
   const alongTracks = trackOf(layerLength, gap);
   const besideTracks = trackOf(laneWidth, laneGap);
@@ -318,9 +319,9 @@ const lengthsOf = (
 };
 
 /** A block's exits, wires and returns alike, so each keeps its own slot along the block. */
-const exitsOf = (belt: Belt, id: string): ReadonlyArray<BeltReturn | Wire> => [
+const exitsOf = (belt: Belt, id: string): ReadonlyArray<BeltStub | Wire> => [
   ...belt.wires.filter((wire) => wire.from === id),
-  ...belt.returns.filter((ret) => ret.from === id),
+  ...belt.stubs.filter((stub) => stub.from === id),
 ];
 
 /**
@@ -333,10 +334,10 @@ const slotOf = (exit: { readonly label: string }, down: boolean) =>
     : EXIT_SPACING;
 
 /**
- * The stub a return to the queue draws off its exit: the exit's slot leads
- * out to a short run that ends at no block, so the exit has a handle to drag.
+ * The stub a way out that ends at no block draws: its slot leads out to a
+ * short run, so the way out has a handle to drag.
  */
-const placedReturnOf = (grid: Grid, ret: BeltReturn): ReadonlyArray<PlacedWire> => {
+const placedStubOf = (grid: Grid, ret: BeltStub): ReadonlyArray<PlacedWire> => {
   const { down, spans } = grid;
   const span = spans.get(ret.from);
   if (span === undefined) return [];
@@ -346,7 +347,7 @@ const placedReturnOf = (grid: Grid, ret: BeltReturn): ReadonlyArray<PlacedWire> 
   const middle = at(edge + RETURN_STUB / 2);
   return [
     {
-      wire: { from: ret.from, port: ret.port, to: QUEUE, label: ret.label, back: false },
+      wire: { from: ret.from, port: ret.port, to: ret.to, label: ret.label, back: false },
       points: [at(edge), at(edge + RETURN_STUB)],
       anchor: middle,
       room: RETURN_STUB,

@@ -51,7 +51,8 @@ export type BlockView = typeof BlockView.Type;
 export const WireView = S.Struct({
   from: S.String,
   port: WirePort,
-  to: S.String,
+  /** The block the wire enters, or the queue; absent for a loose end, drawn as a stub off its way out. */
+  to: S.optional(S.String),
   label: S.String,
   /** The entry id the wire enters a composite instance by, when it names one. */
   entry: S.optional(S.String),

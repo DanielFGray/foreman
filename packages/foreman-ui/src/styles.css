@@ -108,7 +108,16 @@ a:hover {
   stroke-width: 1.5;
 }
 
+/* The selected block's outline; its opacity is an SVG attribute, so no rule sets it here. */
+.pipeline-canvas .block-outline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  pointer-events: none;
+}
+
 .pipeline-canvas .block-label {
+  pointer-events: none;
   fill: var(--fg);
   font-size: 12px;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
@@ -127,6 +136,79 @@ a:hover {
   fill: transparent;
   stroke: var(--border);
   stroke-width: 1.5;
+}
+
+/* The palette and the block inspector (docs/web-ui.md, "Building a pipeline"). */
+.pipeline-palette,
+.inspector-row,
+.inspector-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pipeline-palette {
+  margin-bottom: 0.65rem;
+}
+
+.pipeline-inspector {
+  margin-top: 0.65rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.pipeline-inspector p {
+  margin: 0;
+}
+
+.inspector-list ol,
+.inspector-list ul {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.inspector-list li > .inspector-row + .inspector-row {
+  margin-top: 0.35rem;
+}
+
+.pipeline-inspector label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pipeline-palette input,
+.pipeline-palette select,
+.pipeline-palette button,
+.pipeline-inspector input,
+.pipeline-inspector select,
+.pipeline-inspector button {
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg);
+  color: var(--fg);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pipeline-palette button,
+.pipeline-inspector button {
+  cursor: pointer;
+}
+
+.pipeline-palette button:disabled,
+.pipeline-inspector button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pipeline-canvas .block {
+  cursor: pointer;
 }
 
 .drag-preview {
@@ -249,6 +331,12 @@ a:hover {
     r: 12px;
   }
 
+  .pipeline-palette button,
+  .pipeline-palette select,
+  .pipeline-palette input,
+  .pipeline-inspector button,
+  .pipeline-inspector select,
+  .pipeline-inspector input,
   .pipeline-toolbar button,
   .graph-filters button,
   .graph-toolbar button,

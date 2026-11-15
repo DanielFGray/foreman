@@ -13,6 +13,7 @@
     "./pipeline-draft": "./src/pipeline-draft.ts",
     "./pipeline-edit": "./src/pipeline-edit.ts",
     "./pipeline-file": "./src/pipeline-file.ts",
+    "./pipeline-fixture": "./src/pipeline-fixture.ts",
     "./pipeline-layout": "./src/pipeline-layout.ts",
     "./pipeline-view": "./src/pipeline-view.ts",
     "./published-schema": "./src/published-schema.ts",
