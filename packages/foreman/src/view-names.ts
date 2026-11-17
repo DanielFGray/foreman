@@ -6,6 +6,8 @@ export const ACTIONS_LIST = [
   "complete",
   "retry",
   "release",
+  "requeueFresh",
+  "cancel",
   "close",
   "takeOver",
   "focus",
@@ -38,6 +40,8 @@ export const actionNamed = (name: string): Action | undefined =>
 export const KEY_ONLY_ACTIONS = [
   "retry",
   "release",
+  "requeueFresh",
+  "cancel",
   "close",
   "takeOver",
   "focus",

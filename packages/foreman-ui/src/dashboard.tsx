@@ -25,9 +25,9 @@ import { UiRpc } from "./rpc.ts";
 
 /**
  * Key-only actions that ask before they run: on a phone a stray tap would
- * return a task to the queue or close it.
+ * return a task to the queue, close it, drop its branch or cancel it.
  */
-const ASKS_FIRST: ReadonlySet<Action> = new Set(["release", "close"]);
+const ASKS_FIRST: ReadonlySet<Action> = new Set(["release", "close", "requeueFresh", "cancel"]);
 
 /** Sections the dashboard opens by default; the others are history or accounts. */
 const OPEN_SECTIONS = new Set(["attention", "working", "review"]);

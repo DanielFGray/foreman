@@ -51,6 +51,12 @@ export const performRetry = (dispatcher: Dispatcher["Service"], row: ColumnRow) 
 export const performRelease = (dispatcher: Dispatcher["Service"], row: ColumnRow) =>
   row.task ? dispatcher.release(row.task) : undefined;
 
+export const performRequeueFresh = (dispatcher: Dispatcher["Service"], row: ColumnRow) =>
+  row.task ? dispatcher.requeueFresh(row.task) : undefined;
+
+export const performCancel = (dispatcher: Dispatcher["Service"], row: ColumnRow) =>
+  row.task ? dispatcher.cancel(row.task) : undefined;
+
 // Named by the workspace, not the task: an orphaned workspace is one whose task
 // the store has deleted, and it is closed the same way.
 export const performClose = (dispatcher: Dispatcher["Service"], row: ColumnRow) =>
@@ -106,6 +112,9 @@ export const ACTION_HELP: Record<Action, string> = {
   complete: "Close a queued task by hand, without a workspace or a landing",
   retry: "Start a fresh agent where a worker vanished or a dispatch failed",
   release: "Hand a claimed task back to the queue and take its workspace down",
+  requeueFresh:
+    "Delete a returned task's branch and worktree, so its next author starts from the current trunk",
+  cancel: "Delete a returned task's branch and worktree, and cancel the task",
   close: "Take down a workspace whose task nothing owns",
   takeOver: "Focus a vanished worker's pane so you can continue by hand",
   focus: "Focus the pane of a task's live agent",

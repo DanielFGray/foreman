@@ -9,9 +9,12 @@ import { Published } from "./published-schema.ts";
 import { Command } from "effect/cli";
 import { SqlClient } from "effect/sql";
 import { policyPath, updatePolicy } from "./policy-file.ts";
-import { Dispatcher } from "./dispatcher.ts";
+import { Dispatcher, type DecisionCause } from "./dispatcher.ts";
+import { performCancel, performIntervene, performRequeueFresh, rowFor } from "./actions.ts";
+import type { ColumnRow } from "./view.ts";
+import type { Action } from "./view-names.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
-import { FleetError } from "./errors.ts";
+import { FleetError, RepositoryError } from "./errors.ts";
 import { directoryFor } from "./paths.ts";
 import { Settings } from "./config.ts";
 import { attemptsOf, failuresOf, Records, walledBy, type Endings, type Item } from "./records.ts";
@@ -188,6 +191,8 @@ class World {
   checkedOut: string | undefined = undefined;
   /** Whether the checkout has uncommitted changes, which a start in the checkout refuses. */
   treeDirty = false;
+  /** What git says when it refuses `branch -D`, for a delete that fails whatever the checkout holds. */
+  dropRefusal: string | undefined = undefined;
   /** The commit the checkout's HEAD names. */
   headCommit = "h0";
   /** Each push a landing made: the branch and the commit. */
@@ -597,11 +602,21 @@ class World {
       }),
     descends: (_directory: string, ancestor: string, descendant: string) =>
       Effect.sync(() => this.ancestors.has(`${ancestor}..${descendant}`)),
-    dropBranch: (_directory: string, branch: string) =>
-      this.write("repository.dropBranch", () => {
-        this.removed.push(branch);
-        this.branches.delete(branch);
-      }),
+    // git refuses to delete a branch a checkout has out.
+    dropBranch: (directory: string, branch: string) =>
+      Effect.suspend(() =>
+        this.checkedOut === branch || this.dropRefusal !== undefined
+          ? Effect.fail(
+              new RepositoryError({
+                directory,
+                detail: this.dropRefusal ?? `cannot delete branch '${branch}' used by worktree`,
+              }),
+            )
+          : this.write("repository.dropBranch", () => {
+              this.removed.push(branch);
+              this.branches.delete(branch);
+            }),
+      ),
     trunkBranch: () => Effect.succeed("main"),
     // The operator's branch is `main`; `checkedOut` holds a task's branch out.
     checkedOut: () => Effect.sync(() => this.checkedOut ?? "main"),
@@ -1236,6 +1251,250 @@ describe("Dispatcher tick", () => {
     expect(world.mergeMessages).toEqual([`Merge foreman/${task.id}: ${task.title}`]);
     expect(world.merged).toEqual(["c1"]);
     expect(world.tasks.get(task.id)?.runs.some((run) => run.open)).toBe(false);
+  });
+
+  test("a rejected landing returns the task, and a grant dispatches its author at the same rung", async () => {
+    const quiet = { author: "off", climb: "off", review: "off", land: "on" } as const;
+    usePolicy({ slots: 1, default: quiet });
+    writeFileSync(
+      join(policies, "pipelines.json"),
+      JSON.stringify({ pipelines: { test: STANDARD_PIPELINES.checkout } }),
+    );
+    const task = item("ts-conflict", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+    world.landing = { _tag: "Rejected", detail: "CONFLICT (content): src/a.ts" };
+    world.workers.set(task.id, worker(task.id, "review", "settled"));
+
+    await tick(world);
+
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(world.spawned).toEqual([]);
+
+    usePolicy({
+      slots: 1,
+      default: quiet,
+      grants: [{ scope: task.id, steps: ["author"], remaining: 1, admitted: [] }],
+    });
+    await tick(world);
+
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+    expect(world.tasks.get(task.id)?.runs.at(-1)?.rung).toEqual(Option.some("cheap"));
+  });
+});
+
+describe("a landing that returned its task", () => {
+  const quiet = { author: "off", climb: "off", review: "off", land: "on" } as const;
+
+  /** The reading a tick publishes. */
+  const readingOf = (world: World) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        dispatcher.read.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+  const decisionsOf = async (world: World) =>
+    (await readingOf(world)).decisions.map((decision) => [decision.task.id, decision.cause]);
+
+  /** Answers the task's row as `foreman <action> <id>` does: on a fresh reading, through `rowFor`. */
+  const answer = <E>(
+    world: World,
+    id: string,
+    action: Action,
+    perform: (
+      dispatcher: Dispatcher["Service"],
+      row: ColumnRow,
+    ) => Effect.Effect<unknown, E> | undefined,
+    // What changes in the world after the row is read and before the command runs.
+    meanwhile: () => void = () => {},
+  ) =>
+    Effect.runPromise(
+      Dispatcher.use((dispatcher) =>
+        Effect.gen(function* () {
+          yield* dispatcher.read;
+          const row = rowFor(yield* SubscriptionRef.get(dispatcher.state), id, action);
+          meanwhile();
+          const command = row === undefined ? undefined : perform(dispatcher, row);
+          if (command === undefined) return yield* Effect.die(`no row of ${id} takes ${action}`);
+          return yield* command;
+        }),
+      ).pipe(Effect.provide(layerFor(world))),
+    );
+
+  /**
+   * An approved branch whose landing conflicted, in a project whose space the
+   * operator closed: only the reviewer's terminal keeps the project in the reading.
+   */
+  const returnedInClosedSpace = async (pipeline: "worktree" | "checkout") => {
+    usePolicy({ slots: 1, default: quiet });
+    writeFileSync(
+      join(policies, "pipelines.json"),
+      JSON.stringify({ pipelines: { test: STANDARD_PIPELINES[pipeline] } }),
+    );
+    const task = item("ts-conflict", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(task);
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      // git's merge-tree reading of the branch against its target.
+      stale: { paths: ["src/a.ts"], modifyDelete: false },
+      tip: "c1",
+    });
+    world.landing = { _tag: "Rejected", detail: "CONFLICT (content): src/a.ts" };
+    world.spaces.length = 0;
+    world.workers.set(task.id, {
+      ...worker(task.id, "review", "settled"),
+      repository: "/build/test",
+    });
+    await tick(world);
+    return { world, task: world.tasks.get(task.id)! };
+  };
+
+  /** The teardown writes made since `from`, in order. */
+  const teardownOf = (world: World, from: number) =>
+    world.writes
+      .slice(from)
+      .filter((write) => write === "fleet.close" || write === "repository.dropBranch");
+
+  const conflicted: [string, DecisionCause] = [
+    "ts-conflict",
+    {
+      _tag: "LandingReturned",
+      detail: "the branch conflicts with its target in src/a.ts",
+    },
+  ];
+
+  test("is a decision in a closed space, and a grant does not dispatch it there", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+    expect(task.status).toBe("open");
+    expect(await decisionsOf(world)).toEqual([conflicted]);
+
+    usePolicy({
+      slots: 1,
+      default: quiet,
+      grants: [{ scope: task.id, steps: ["author"], remaining: 1, admitted: [] }],
+    });
+    await tick(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(await decisionsOf(world)).toEqual([conflicted]);
+  });
+
+  test("requeue fresh deletes the branch and worktree, and the task is plain queued work", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+    const before = world.writes.length;
+
+    await answer(world, task.id, "requeueFresh", performRequeueFresh);
+
+    expect(world.removed).toEqual([`foreman/${task.id}`]);
+    expect(teardownOf(world, before)).toEqual(["fleet.close", "repository.dropBranch"]);
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(await decisionsOf(world)).toEqual([]);
+  });
+
+  test("cancel deletes the branch and worktree, and cancels the task", async () => {
+    const { world, task } = await returnedInClosedSpace("checkout");
+    // The operator's checkout has the branch out, on a clean tree.
+    world.checkedOut = `foreman/${task.id}`;
+    const before = world.writes.length;
+
+    await answer(world, task.id, "cancel", performCancel);
+
+    expect(world.removed).toEqual([`foreman/${task.id}`]);
+    expect(world.checkedOut).toBeUndefined();
+    expect(teardownOf(world, before)).toEqual(["fleet.close", "repository.dropBranch"]);
+    expect(world.tasks.get(task.id)?.status).toBe("canceled");
+    expect(await decisionsOf(world)).toEqual([]);
+  });
+
+  test("requeue fresh is refused, with nothing taken down, when a tick claimed the task after the row was read", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+    const before = world.writes.length;
+
+    const answered = answer(world, task.id, "requeueFresh", performRequeueFresh, () => {
+      world.tasks.set(task.id, { ...world.tasks.get(task.id)!, status: "in_progress" });
+    });
+
+    await expect(answered).rejects.toThrow("is in_progress now");
+    expect(world.branches.has(`foreman/${task.id}`)).toBe(true);
+    expect(teardownOf(world, before)).toEqual([]);
+  });
+
+  test("cancel is refused, with nothing taken down, while an agent works on the task", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+    const before = world.writes.length;
+
+    const answered = answer(world, task.id, "cancel", performCancel, () => {
+      world.workers.set(task.id, {
+        ...worker(task.id, "author", "working"),
+        repository: "/build/test",
+      });
+    });
+
+    await expect(answered).rejects.toThrow("an agent is working on");
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(teardownOf(world, before)).toEqual([]);
+  });
+
+  test("requeue fresh is refused before teardown while the checkout has the branch out on a dirty tree", async () => {
+    const { world, task } = await returnedInClosedSpace("checkout");
+    world.checkedOut = `foreman/${task.id}`;
+    world.treeDirty = true;
+    const before = world.writes.length;
+
+    await expect(answer(world, task.id, "requeueFresh", performRequeueFresh)).rejects.toThrow(
+      "uncommitted changes in uncommitted.txt",
+    );
+    expect(teardownOf(world, before)).toEqual([]);
+  });
+
+  test("a delete git refuses after teardown is logged to the task", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+    world.dropRefusal = "the disk is read-only";
+
+    await expect(answer(world, task.id, "cancel", performCancel)).rejects.toThrow(
+      "the disk is read-only",
+    );
+
+    expect(world.tasks.get(task.id)?.status).toBe("open");
+    expect(world.logs).toContainEqual([
+      task.id,
+      `foreman: took down the agents and worktree of ${task.id}, but git would not delete foreman/${task.id}: /build/test: the disk is read-only`,
+    ]);
+  });
+
+  test("intervene sends an author to the branch, which clears the decision", async () => {
+    const { world, task } = await returnedInClosedSpace("worktree");
+
+    await answer(world, task.id, "intervene", (dispatcher, row) =>
+      performIntervene(dispatcher, row, "continue", "cheap"),
+    );
+
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+    expect(world.tasks.get(task.id)?.status).toBe("in_progress");
+    expect(await decisionsOf(world)).toEqual([]);
+  });
+
+  test("a branch whose landing broke verification is ordinary queued work", async () => {
+    const { world } = await returnedInClosedSpace("worktree");
+    const branch = world.branches.get("foreman/ts-conflict")!;
+    world.branches.set(branch.branch, { ...branch, stale: undefined });
+
+    expect(await decisionsOf(world)).toEqual([]);
   });
 });
 
@@ -3860,6 +4119,17 @@ describe("a pull-request landing", () => {
   };
   const verbs = (world: World) =>
     world.ghCalls.filter(([noun]) => noun === "pr").map(([, verb]) => verb);
+  /** The returned-landing decisions a fresh reading lists, with their reasons. */
+  const returnedOf = async (world: World) =>
+    (
+      await Effect.runPromise(
+        Dispatcher.use((dispatcher) =>
+          dispatcher.read.pipe(Effect.andThen(SubscriptionRef.get(dispatcher.state))),
+        ).pipe(Effect.provide(layerFor(world))),
+      )
+    ).decisions.flatMap(({ task, cause }) =>
+      cause?._tag === "LandingReturned" ? [[task.id, cause.detail]] : [],
+    );
 
   test("publish pushes the approved commit and opens a pull request", async () => {
     steps({ publish: "on", land: "off" });
@@ -4081,6 +4351,9 @@ describe("a pull-request landing", () => {
     expect(world.tasks.get("ts-pr")?.status).toBe("open");
     expect(world.tasks.get("ts-pr")?.charges).toEqual([]);
     expect(verbs(world)).not.toContain("merge");
+    expect(await returnedOf(world)).toEqual([
+      ["ts-pr", "pull request #7 no longer merges into its base"],
+    ]);
   });
 
   test("a failed required check returns the task a rung up, with the checks in its log", async () => {
@@ -4118,6 +4391,9 @@ describe("a pull-request landing", () => {
     expect(task.status).toBe("open");
     expect(task.parked).toBeUndefined();
     expect(task.charges).toEqual([]);
+    expect(await returnedOf(world)).toEqual([
+      ["ts-pr", "pull request #7 was closed without a merge"],
+    ]);
   });
 
   test("closed: cancel cancels the task", async () => {

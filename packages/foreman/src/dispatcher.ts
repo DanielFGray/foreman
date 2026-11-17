@@ -68,6 +68,7 @@ import {
   type Hold,
   type HoldReason,
   type ProjectHoldReason,
+  type Stale,
   wrongBranch,
 } from "./repository.ts";
 import { Machine } from "./machine.ts";
@@ -908,16 +909,21 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
         const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue]);
 
-        // The pull request of each task at a pull-request land block. It is the
-        // world's record of that landing, so it is read like git, every reading.
+        // The pull request of each task at a pull-request land block, and of
+        // each queued task such a landing returned (`returnedFrom`). It is the
+        // world's record of that landing, so it is read like git, every reading. A
+        // returned task costs one `gh` call per reading until it is claimed again
+        // or its branch is gone, because its reason is read from that pull request.
+        const tippedQueue = queue.map(withTip);
         const pullRequests = new Map(
-          yield* Effect.forEach([...claimed, ...reviewing], (task) => {
+          yield* Effect.forEach([...claimed, ...reviewing, ...tippedQueue], (task) => {
             const placement = placementIn(pipelines, task);
+            const land =
+              placement._tag === "At" && placement.node.kind === "land"
+                ? placement.node
+                : returnedFrom(pipelines, task);
             const project = projects.find((candidate) => candidate.name === task.project);
-            return placement?._tag === "At" &&
-              placement.node.kind === "land" &&
-              placement.node.how === "pull-request" &&
-              project !== undefined
+            return land?.how === "pull-request" && project !== undefined
               ? readPullRequest(task, project, policy).pipe(
                   Effect.map((reading) => [[task.id, reading] as const]),
                 )
@@ -952,7 +958,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           reviewing,
           stranded,
           epics,
-          queue: queue.map(withTip),
+          queue: tippedQueue,
           policy,
           policyError,
           pipelines,
@@ -1154,6 +1160,30 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ? []
           : [{ ...row, cause: { _tag: "ExitGone", detail: reason } }];
       });
+      // A task a landing handed back waits for the operator whatever the author
+      // step says: in a project whose space is closed the queue never takes it.
+      const returned = queue.flatMap((task): ReadonlyArray<Active> => {
+        const land = returnedFrom(pipelines, task);
+        const detail =
+          land === undefined
+            ? undefined
+            : returnedWhy(
+                land,
+                branches.find((entry) => entry.task === task.id)?.stale,
+                pullRequests.get(task.id),
+              );
+        return detail === undefined
+          ? []
+          : [
+              {
+                task,
+                worker: ownedByTask.get(task.id)?.worker,
+                kind: authoredBy(task),
+                cause: { _tag: "LandingReturned", detail },
+              },
+            ];
+      });
+      const returnedIds = new Set(returned.map(({ task }) => task.id));
 
       const {
         reviews,
@@ -1225,9 +1255,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // leftover workspace or label would name it — so it is filtered out
         // of the ordinary kinds rather than shown twice. The failures that
         // have no row here yet are read back in `interpret`.
-        decisions: [...decisionsOf(claimedActive, reviewingActive, owned), ...exitGone].filter(
-          (decision) => !failedIds.has(decision.task.id),
-        ),
+        // A returned task's kept workspace is that decision, not an orphaned one.
+        decisions: [
+          ...decisionsOf(claimedActive, reviewingActive, owned).filter(
+            ({ task }) => !returnedIds.has(task.id),
+          ),
+          ...exitGone,
+          ...returned,
+        ].filter((decision) => !failedIds.has(decision.task.id)),
         policy,
         policyError,
         scopes,
@@ -3304,6 +3339,63 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         Effect.flatMap((repository) => fleet.close({ task: task.id, repository })),
       );
 
+    /**
+     * Ends the task's agents, removes its worktree and deletes its branch,
+     * commits included.
+     *
+     * Refused, with nothing changed, when any check fails:
+     * - The reading has no checkout for the project, so nothing says where
+     *   the branch lives.
+     * - The task is no longer open, or an agent is working on it. The row
+     *   the operator answered was read before this ran, and a tick may have
+     *   dispatched the task since; going on would end that agent and delete
+     *   its new commits.
+     * - The operator's checkout has the branch out on a dirty tree. Teardown
+     *   leaves such a branch in place, so git would refuse the delete only
+     *   after the worktree and agents were gone.
+     *
+     * A delete that git still refuses after teardown is logged to the task,
+     * saying what was already taken down.
+     */
+    const discardBranch = (task: Item) =>
+      Effect.gen(function* () {
+        const project = yield* projectFor(task.project);
+        if (project === undefined) {
+          return yield* new Refused({
+            detail: `${task.project} has no checkout in this reading; open a space on it first`,
+          });
+        }
+        const branch = labelFor(task.id);
+        const now = yield* records.lookup(task.id);
+        if (Option.isNone(now) || now.value.status !== "open") {
+          return yield* new Refused({
+            detail: `${task.id} is ${Option.isNone(now) ? "gone" : now.value.status} now, not a returned task; read it again`,
+          });
+        }
+        if ((yield* fleet.roster).some((worker) => worker.task === task.id && isBusy(worker))) {
+          return yield* new Refused({ detail: `an agent is working on ${task.id} now` });
+        }
+        if ((yield* repository.checkedOut(project.directory)) === branch) {
+          const dirty = yield* repository.changes(project.directory);
+          if (dirty.length > 0) {
+            return yield* new Refused({
+              detail: `${project.directory} has ${branch} out with uncommitted changes in ${dirty.join(", ")}; commit or clear them first`,
+            });
+          }
+        }
+        yield* fleet.close({ task: task.id, repository: project.directory });
+        yield* repository
+          .dropBranch(project.directory, branch)
+          .pipe(
+            Effect.tapError((error) =>
+              tracker.log(
+                task.id,
+                `foreman: took down the agents and worktree of ${task.id}, but git would not delete ${branch}: ${error.message}`,
+              ),
+            ),
+          );
+      });
+
     const eachProject = <A>(
       projects: ReadonlyArray<Project>,
       read: (project: Project) => Effect.Effect<ReadonlyArray<A>, Error>,
@@ -3546,6 +3638,37 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             yield* records.release(task.id);
             yield* teardown(task);
           }),
+        ),
+
+      /**
+       * Drops the branch a landing handed back, so the task's next author
+       * starts from the current trunk. The task stays open at its rung: with
+       * its branch gone the approval binds nothing, so it is plain queued work.
+       */
+      requeueFresh: (task: Item) =>
+        commanded(
+          discardBranch(task).pipe(
+            Effect.andThen(
+              tracker.log(
+                task.id,
+                `foreman: deleted ${labelFor(task.id)} and its worktree at the operator's word; the next author starts from the current trunk.`,
+              ),
+            ),
+          ),
+        ),
+
+      /** Drops the branch a landing handed back, and cancels the task. */
+      cancel: (task: Item) =>
+        commanded(
+          discardBranch(task).pipe(
+            Effect.andThen(
+              tracker.log(
+                task.id,
+                `foreman: deleted ${labelFor(task.id)} and its worktree, and canceled the task, at the operator's word.`,
+              ),
+            ),
+            Effect.andThen(tracker.cancel(task.id)),
+          ),
         ),
 
       /**
@@ -3965,6 +4088,52 @@ export const placementIn = (
 ): Placement => {
   const pipeline = runningPipeline(pipelines, task.project);
   return pipeline === undefined ? { _tag: "Outside" } : place(pipeline, factsOf(task, pipeline));
+};
+
+/**
+ * The land block a queued task was handed back from, if its approval still stands.
+ *
+ * A landing that returns a task (a conflict, a pull request that no longer
+ * merges or was closed) reopens it and leaves its runs as they were, so its
+ * exits still lead to that land while they bind its tip. They are read as if
+ * the task were still claimed, through `place`, so the one-commit rule has one
+ * copy: a new commit or a deleted branch voids the approval, and the task is
+ * plain queued work again. A project the reading has no pipeline for has no
+ * land to name.
+ */
+export const returnedFrom = (
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+  task: Item,
+): LandNode | undefined => {
+  if (task.status !== "open") return undefined;
+  const pipeline = runningPipeline(pipelines, task.project);
+  if (pipeline === undefined) return undefined;
+  const placement = place(pipeline, { ...factsOf(task, pipeline), status: "in_progress" });
+  return placement._tag === "At" && placement.node.kind === "land" ? placement.node : undefined;
+};
+
+/**
+ * Why the landing at `land` handed the task back, as the world shows it now:
+ * git's conflicting paths for a local landing, the pull request for one on
+ * GitHub. Nothing when the world shows no such reason — a branch that broke
+ * verification, or one the operator released, is ordinary queued work.
+ */
+const returnedWhy = (
+  land: LandNode,
+  stale: Stale | undefined,
+  reading: PullRequestReading | undefined,
+): string | undefined => {
+  if (land.how !== "pull-request") {
+    return stale === undefined
+      ? undefined
+      : `the branch conflicts with its target in ${stale.paths.join(", ")}`;
+  }
+  if (reading?._tag === "Closed") {
+    return `pull request #${reading.pr.number} was closed without a merge`;
+  }
+  return reading?._tag === "Open" && reading.pr.mergeState === "DIRTY"
+    ? `pull request #${reading.pr.number} no longer merges into its base`
+    : undefined;
 };
 
 /**
@@ -4914,7 +5083,8 @@ export interface Active {
 /** Why a task is a decision, with the detail the operator reads on its row. */
 export type DecisionCause =
   | { readonly _tag: "DispatchFailed"; readonly detail: string }
-  | { readonly _tag: "ExitGone"; readonly detail: string };
+  | { readonly _tag: "ExitGone"; readonly detail: string }
+  | { readonly _tag: "LandingReturned"; readonly detail: string };
 
 export interface InterventionTarget {
   readonly task: Item | Item;

@@ -239,7 +239,16 @@ branch whose tip has not moved fast-forwards and cannot conflict — a conflict
 therefore means the trunk moved afterwards, which no model is stronger at
 avoiding. It returns to the queue at the same rung, with the conflicting paths
 on its log, and the ordinary attempt count still bounds a task that cannot
-get past it. An agent that merely stopped without
+get past it. While its approved branch stands and git or the pull request still
+shows why it will not land, the task is also a `landing returned` decision, in
+any project the reading knows, so a closed space cannot hide it while a foreman
+terminal still runs in that checkout. With none, the project is not in the
+reading and the task is not listed. The mark is
+derived, not stored: `requeueFresh` deletes the branch and worktree, which voids
+the approval and leaves plain queued work; `cancel` does that and cancels the
+task; `intervene` sends an author to the branch. The two deletes read the task again
+and refuse, changing nothing, once it is claimed or an agent works on it, or
+while the checkout has the branch out on a dirty tree. An agent that merely stopped without
 finishing has said nothing about its model — a crash and a timeout end the same
 way — so the task stays at the level and is tried again, on the peer whose turn
 it is. The count of those endings is the task's runs on any rung of the level
@@ -1087,7 +1096,7 @@ read to decide what the queue under it should do next. An epic row takes no
 action: it has no branch and no worker.
 
 Attention combines the exceptional states in urgency order: decisions
-(vanished workers, failed dispatches and lost exits), yours, stranded
+(vanished workers, failed dispatches, lost exits and returned landings), yours, stranded
 projects (authored mid-pipeline work outside the managed set), stale reviews,
 unreviewed branches, orphaned workers, held projects, and last the spent
 accounts. Each row keeps its source kind, so
@@ -1106,8 +1115,9 @@ dispatch gate; `slots` still meters concurrency.
 
 Each source kind allows only the actions that make sense there, and `rowFor`
 finds no row for an action the row cannot take, so `runAction` refuses it. Decisions are named from the task's
-status: only the status — neither claimed nor under review — marks a worker as
-residue.
+status, except the kinds whose cause names them (a failed dispatch, a lost exit,
+a returned landing): only the status — neither claimed nor under review — marks a
+worker as residue.
 
 The two corrections follow the records, not the views. `descend` forgives the
 charges at the highest charged level, because a charge is only ever as good as

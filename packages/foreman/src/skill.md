@@ -52,7 +52,7 @@ Run `foreman <command> --help` for the options.
 
 Each row action is a command that takes the id of a row in `foreman status`:
 
-`retry`, `release`, `close`, `take-over`, `focus`, `descend`,
+`retry`, `release`, `requeue-fresh`, `cancel`, `close`, `take-over`, `focus`, `descend`,
 `unassign`, `onboard`, `adopt`, `complete --reason`, `kill [--reason]`,
 `intervene --how continue|diagnose|review [--rung R]`.
 

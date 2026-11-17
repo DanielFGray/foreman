@@ -51,7 +51,8 @@ export type DecisionKind =
   | "reviewer vanished"
   | "orphaned workspace"
   | "dispatch failed"
-  | "exit gone";
+  | "exit gone"
+  | "landing returned";
 
 /**
  * Which kind of decision a row is, from the task's status.
@@ -60,9 +61,10 @@ export type DecisionKind =
  * carries its by-* label while its task sits back in the queue, so naming from
  * the labels alone would call it an author that vanished; the task's status —
  * neither claimed nor under review — is what makes it residue. A dispatch
- * failure and a lost exit are the kinds status cannot name: a failed task is
- * ordinary queue work, and a task whose last exit the drawing lost is an
- * ordinary claim, so the cause itself is what marks the row.
+ * failure, a lost exit and a returned landing are the kinds status cannot
+ * name: a failed task and a returned one are ordinary queue work, and a task
+ * whose last exit the drawing lost is an ordinary claim, so the cause itself
+ * is what marks the row.
  */
 export const decisionKind = (
   task: Item,
@@ -72,11 +74,13 @@ export const decisionKind = (
     ? "dispatch failed"
     : cause?._tag === "ExitGone"
       ? "exit gone"
-      : reviewedBy(task) !== undefined
-        ? "reviewer vanished"
-        : task.status === "in_progress"
-          ? "author vanished"
-          : "orphaned workspace";
+      : cause?._tag === "LandingReturned"
+        ? "landing returned"
+        : reviewedBy(task) !== undefined
+          ? "reviewer vanished"
+          : task.status === "in_progress"
+            ? "author vanished"
+            : "orphaned workspace";
 
 /**
  * Whether an open review run has no live reviewer behind it, so it is stale.
@@ -205,6 +209,9 @@ const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   // No retry: nothing says which block the task would go to. The operator
   // releases it to the queue, or sends an agent at it by hand.
   "exit gone": ["release", "intervene"],
+  // The branch is approved but will not land. An agent can merge the trunk into
+  // it, or the operator can drop the branch and start over or stop.
+  "landing returned": ["intervene", "requeueFresh", "cancel"],
 };
 
 /** The commands that are meaningful for this exact row, not just its column. */
@@ -249,6 +256,8 @@ export const actionsFor = (
       ),
       Match.when("retry", () => row.task !== undefined),
       Match.when("release", () => row.task !== undefined),
+      Match.when("requeueFresh", () => row.task !== undefined),
+      Match.when("cancel", () => row.task !== undefined),
       // Closing takes down a workspace, so the workspace is what it needs —
       // an orphan's task has been deleted out of the store and there is none.
       Match.when("close", () => row.worker !== undefined),

@@ -12,7 +12,9 @@ import {
   performKill,
   performOnboard,
   performPreview,
+  performCancel,
   performRelease,
+  performRequeueFresh,
   performRetry,
   performUnassign,
   rowFor,
@@ -127,6 +129,14 @@ export const taskRetry = (input: { readonly id: string }) =>
 export const taskRelease = (input: { readonly id: string }) =>
   runAction("release", input.id, performRelease);
 
+/** Delete a returned task's branch and worktree, so its next author starts from the trunk. */
+export const taskRequeueFresh = (input: { readonly id: string }) =>
+  runAction("requeueFresh", input.id, performRequeueFresh);
+
+/** Delete a returned task's branch and worktree, and cancel the task. */
+export const taskCancel = (input: { readonly id: string }) =>
+  runAction("cancel", input.id, performCancel);
+
 /** Take down a workspace whose task nothing owns. */
 export const taskClose = (input: { readonly id: string }) =>
   runAction("close", input.id, performClose);
@@ -237,6 +247,10 @@ const actionCommand = <E>(action: Action, services: Services<E>) => {
       return keyOnly(taskRetry);
     case "release":
       return keyOnly(taskRelease);
+    case "requeueFresh":
+      return keyOnly(taskRequeueFresh);
+    case "cancel":
+      return keyOnly(taskCancel);
     case "close":
       return keyOnly(taskClose);
     case "takeOver":

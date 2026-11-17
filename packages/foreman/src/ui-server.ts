@@ -60,7 +60,9 @@ import {
   taskKill,
   taskOnboard,
   taskPreview,
+  taskCancel,
   taskRelease,
+  taskRequeueFresh,
   taskRetry,
   taskTakeOver,
   taskUnassign,
@@ -436,6 +438,10 @@ const runRowAction = (id: string, action: RowAction) =>
         return yield* Effect.asVoid(taskRetry({ id }));
       case "release":
         return yield* Effect.asVoid(taskRelease({ id }));
+      case "requeueFresh":
+        return yield* Effect.asVoid(taskRequeueFresh({ id }));
+      case "cancel":
+        return yield* Effect.asVoid(taskCancel({ id }));
       case "close":
         return yield* Effect.asVoid(taskClose({ id }));
       case "takeOver":
