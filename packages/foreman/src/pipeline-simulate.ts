@@ -563,6 +563,7 @@ const workerOf = (sim: Sim, task: Item): Worker | undefined =>
         repository: undefined,
         state: "working",
         since: undefined,
+        owner: "foreman",
         roles: new Map(),
       }
     : undefined;

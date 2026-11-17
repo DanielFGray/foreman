@@ -241,6 +241,14 @@ export interface Worker {
   readonly directory: string;
 
   /**
+   * Who started the agents in this workspace. `foreman` terminals carry the
+   * fleet label and are foreman's to settle, stop and reclaim. `hand` terminals
+   * carry only the task label: a coordinator started them by hand. Foreman reads
+   * them so the task shows as in progress, and never acts on them.
+   */
+  readonly owner: WorkerOwner;
+
+  /**
    * Set when the multiplexer made a worktree for this workspace, absent when
    * the workspace is attached to a checkout that was already there.
    *
@@ -283,6 +291,9 @@ export interface Worker {
    */
   readonly roles: ReadonlyMap<AgentRole, Pane>;
 }
+
+/** Who started a worker's agents; see `Worker.owner`. */
+export type WorkerOwner = "foreman" | "hand";
 
 /** One role's pane: what its agent is doing, and since when (see `Worker.since`). */
 export interface Pane {

@@ -11,6 +11,7 @@ import {
   type SpawnOptions,
   type Pane,
   type Worker,
+  type WorkerOwner,
   type WorkerState,
   labelFor,
 } from "./fleet.ts";
@@ -113,16 +114,31 @@ export function hcFleetOver() {
         );
 
       /**
-       * Every foreman terminal, finished ones included.
-       *
-       * Finished ones are kept on purpose: an agent that exited is a role that
-       * is `gone`, which is a question for the operator, and only `stop` and
-       * `close` remove the record.
+       * Foreman's own terminals, finished ones included: an agent that exited
+       * is a role that is `gone`, which is a question for the operator, and only
+       * `stop` and `close` remove the record. Only these are ever acted on.
        */
       const terminals = call(TerminalList, "roster", "terminal.list", {
         all: true,
         labels: { [FLEET]: "foreman" },
       }).pipe(Effect.map((list) => list.terminals));
+
+      /**
+       * Live hand-started terminals: a task label and no fleet label. hc matches
+       * labels by equality only, so the absent fleet label is checked here. Only
+       * live ones are read, since a finished hand terminal is not kept as a
+       * record; the coordinator owns its lifecycle.
+       */
+      const handTerminals = call(TerminalList, "roster", "terminal.list", { all: false }).pipe(
+        Effect.map((list) =>
+          list.terminals.filter(
+            (terminal) =>
+              terminal.state === "live" &&
+              terminal.labels[TASK] !== undefined &&
+              terminal.labels[FLEET] === undefined,
+          ),
+        ),
+      );
 
       const ofTask = (task: string) =>
         terminals.pipe(
@@ -151,7 +167,9 @@ export function hcFleetOver() {
           Effect.orElseSucceed(() => placementOf([], task, checkout)),
         );
 
-      const roster = terminals.pipe(Effect.map(workersOf));
+      const roster = Effect.all([terminals, handTerminals]).pipe(
+        Effect.map(([fleet, hand]) => workersOf([...fleet, ...hand])),
+      );
 
       const fail = (operation: string) => (cause: { readonly message: string }) =>
         new FleetError({ operation, detail: cause.message });
@@ -223,7 +241,9 @@ export function hcFleetOver() {
 
         open: (options: OpenOptions) =>
           Effect.gen(function* () {
-            const existing = (yield* roster).find((worker) => worker.task === options.task);
+            const existing = (yield* roster).find(
+              (worker) => worker.task === options.task && worker.owner === "foreman",
+            );
             if (existing) return existing;
             const worktrees = yield* repository
               .worktrees(options.repository)
@@ -260,8 +280,9 @@ export function hcFleetOver() {
           roster.pipe(
             Effect.map(
               (workers) =>
-                workers.find((worker) => worker.task === options.task) ??
-                idle(options.task, options.repository, options.repository),
+                workers.find(
+                  (worker) => worker.task === options.task && worker.owner === "foreman",
+                ) ?? idle(options.task, options.repository, options.repository),
             ),
           ),
 
@@ -280,6 +301,20 @@ export function hcFleetOver() {
               return yield* new FleetError({
                 operation: "spawn",
                 detail: `${worker.task} already runs a ${options.role} in ${live.address}`,
+              });
+            }
+            // A hand-started agent in the same role shares the worktree, so the
+            // same refusal applies to it, though foreman never ends it.
+            const handHeld = (yield* handTerminals).find(
+              (other) =>
+                other.labels[TASK] === worker.task &&
+                (other.labels[ROLE] ?? "author") === options.role &&
+                stillRunning(stateOf(other)),
+            );
+            if (handHeld) {
+              return yield* new FleetError({
+                operation: "spawn",
+                detail: `${worker.task} is worked by a hand-started ${options.role} in ${handHeld.address}`,
               });
             }
 
@@ -395,7 +430,11 @@ export function hcFleetOver() {
 
         focus: (worker: Worker) =>
           Effect.gen(function* () {
-            const all = yield* ofTask(worker.task);
+            // Showing a pane changes nothing, so a hand-started agent's terminal
+            // is shown too: the operator may need to look at it.
+            const all = [...(yield* terminals), ...(yield* handTerminals)].filter(
+              (terminal) => terminal.labels[TASK] === worker.task,
+            );
             const shown = all.find((terminal) => terminal.state === "live") ?? all[0];
             if (!shown) {
               return yield* new FleetError({
@@ -420,6 +459,10 @@ export function hcFleetOver() {
           Effect.gen(function* () {
             const all = yield* ofTask(options.task);
             yield* Effect.forEach(all, (terminal) => end("close", terminal), { discard: true });
+            // A coordinator's hand-started agent is working in this workspace:
+            // removing its worktree or checking the branch out from under it
+            // would end that work, so the workspace is left as it is.
+            if ((yield* handTerminals).some((other) => other.labels[TASK] === options.task)) return;
             const worker = workersOf(all)[0];
             const home = worker?.repository ?? options.repository;
             if (home === undefined) return;
@@ -511,6 +554,7 @@ const idle = (task: string, directory: string, repository: string): Worker => ({
   state: "gone",
   since: undefined,
   roles: new Map(),
+  owner: "foreman",
 });
 
 /**
@@ -547,38 +591,74 @@ const worktreeFor = (worktrees: ReadonlyArray<Worktree>, branch: string): Worktr
 /**
  * The workers a set of terminals describes, one per task.
  *
+ * A task's worker is foreman's, unless no live foreman terminal carries the
+ * task and a live hand-started terminal does: then the hand terminal is the
+ * worker, owned by hand. A coordinator that started it by hand is still
+ * working the task, so the task reads as claimed. Hand terminals carry no
+ * fleet label, so `Fleet` never acts on them.
+ *
  * A role's state is its newest terminal's: `spawn` ends the spent ones after
  * the replacement starts, so for a moment both exist.
  */
 export const workersOf = (all: ReadonlyArray<Terminal>): ReadonlyArray<Worker> => {
-  const byTask = new Map<string, Array<Terminal>>();
-  for (const terminal of all) {
+  const foreman = byTask(all.filter((terminal) => terminal.labels[FLEET] === "foreman"));
+  const hand = byTask(
+    all.filter((terminal) => terminal.labels[FLEET] === undefined && terminal.state === "live"),
+  );
+  // A task foreman ran and then a coordinator took over by hand keeps its
+  // finished foreman terminals, so only a live foreman terminal outranks a
+  // live hand one.
+  const handWorks = (task: string, mine: ReadonlyArray<Terminal>) =>
+    !mine.some((terminal) => terminal.state === "live") && hand.has(task);
+  return [
+    ...[...foreman].map(([task, mine]) =>
+      handWorks(task, mine)
+        ? workerOf(task, hand.get(task)!, "hand")
+        : workerOf(task, mine, "foreman"),
+    ),
+    ...[...hand]
+      .filter(([task]) => !foreman.has(task))
+      .map(([task, mine]) => workerOf(task, mine, "hand")),
+  ];
+};
+
+const byTask = (terminals: ReadonlyArray<Terminal>): Map<string, Array<Terminal>> => {
+  const grouped = new Map<string, Array<Terminal>>();
+  for (const terminal of terminals) {
     const task = terminal.labels[TASK];
     if (task === undefined) continue;
-    byTask.set(task, [...(byTask.get(task) ?? []), terminal]);
+    grouped.set(task, [...(grouped.get(task) ?? []), terminal]);
   }
-  return [...byTask].map(([task, mine]) => {
-    const newest = [...mine].sort((a, b) => b.created_ms - a.created_ms);
-    const roles = new Map<AgentRole, Pane>();
-    for (const terminal of newest) {
-      const role = terminal.labels[ROLE];
-      if (S.is(AgentRoleSchema)(role) && !roles.has(role)) {
-        roles.set(role, { state: stateOf(terminal), since: terminal.status_ms ?? undefined });
-      }
+  return grouped;
+};
+
+/**
+ * One task's worker from its terminals. A hand terminal with no role label is
+ * the author: that is the only role a coordinator starts by hand without
+ * naming one.
+ */
+const workerOf = (task: string, mine: ReadonlyArray<Terminal>, owner: WorkerOwner): Worker => {
+  const newest = [...mine].sort((a, b) => b.created_ms - a.created_ms);
+  const roles = new Map<AgentRole, Pane>();
+  for (const terminal of newest) {
+    const role = terminal.labels[ROLE] ?? (owner === "hand" ? "author" : undefined);
+    if (S.is(AgentRoleSchema)(role) && !roles.has(role)) {
+      roles.set(role, { state: stateOf(terminal), since: terminal.status_ms ?? undefined });
     }
-    const pane = aggregate([...roles.values()]);
-    const first = newest[0]!;
-    const repository = first.labels[REPOSITORY];
-    return {
-      task,
-      directory: first.cwd,
-      worktree: repository === undefined || first.cwd === repository ? undefined : first.cwd,
-      repository,
-      state: pane?.state ?? "gone",
-      since: pane?.since,
-      roles,
-    } satisfies Worker;
-  });
+  }
+  const pane = aggregate([...roles.values()]);
+  const first = newest[0]!;
+  const repository = first.labels[REPOSITORY];
+  return {
+    task,
+    directory: first.cwd,
+    worktree: repository === undefined || first.cwd === repository ? undefined : first.cwd,
+    repository,
+    state: pane?.state ?? "gone",
+    since: pane?.since,
+    roles,
+    owner,
+  } satisfies Worker;
 };
 
 /**

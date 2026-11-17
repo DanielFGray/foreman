@@ -75,6 +75,7 @@ const worker = (task: string, state: WorkerState): Worker => ({
   worktree: `/tmp/wt-${task}`,
   state,
   since: undefined,
+  owner: "foreman",
   roles: new Map([["author", { state, since: undefined }]]),
 });
 
@@ -382,6 +383,17 @@ describe("actionsFor", () => {
     };
     const alone = rowsForView("working", settled).find((each) => each.key === "ts-w2");
     expect(actionsFor("working", alone)).not.toContain("kill");
+  });
+
+  // A hand-started agent is the coordinator's: the row may show its pane, but
+  // no answer that ends, restarts or releases the claim.
+  test("a hand-started worker's row offers the look at its pane and nothing else", () => {
+    const byHand = {
+      ...row("working", "ts-w1"),
+      worker: { ...worker("ts-w1", "working"), owner: "hand" as const },
+    };
+    expect(actionsFor("working", byHand)).toEqual(["focus"]);
+    expect(actionsFor("decisions", byHand)).toEqual(["takeOver"]);
   });
 
   // A stale row's answers are the corrections and the release that sends the

@@ -136,6 +136,7 @@ const worker = (task: string, role: "author" | "review", state: WorkerState): Wo
   worktree: `/worktree/${task}`,
   state,
   since: undefined,
+  owner: "foreman",
   roles: new Map([[role, { state, since: undefined }]]),
 });
 
@@ -242,6 +243,7 @@ class World {
       worktree: directory === repository ? undefined : directory,
       state: "gone",
       since: undefined,
+      owner: "foreman",
       roles: new Map(),
     };
     this.workers.set(task, created);
@@ -828,6 +830,26 @@ describe("Dispatcher tick", () => {
     expect(world.tasks.get(task.id)?.charges).toEqual([]);
     expect(reviewerOf(world, task.id)).toBe("cheap");
     expect(world.spawned).toEqual([[task.id, "review"]]);
+  });
+
+  test("never stops a hand-started author whose turn ended", async () => {
+    const task = item("ts-hand", "in_progress", [], "test", [authorDone("cheap")]);
+    const world = new World(task);
+    world.workers.set(task.id, { ...worker(task.id, "author", "settled"), owner: "hand" });
+    world.branches.set(`foreman/${task.id}`, {
+      branch: `foreman/${task.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+
+    await tick(world);
+
+    expect(world.stopped).toEqual([]);
+    expect(world.closed).toEqual([]);
+    expect(world.tasks.get(task.id)?.status).toBe("in_progress");
+    expect(world.tasks.get(task.id)?.labels).toEqual([]);
   });
 
   test("allows a settled role to receive the next dispatch", async () => {
@@ -1522,8 +1544,16 @@ describe("a fleet that is not running", () => {
       ...item("ts-ours", "in_progress", [], "test", [authorRun("cheap")]),
       lastActivityAt: old,
     };
-    const byHand = { ...item("ts-by-hand", "in_progress", []), lastActivityAt: old };
+    // Foreman authored this task earlier, so its claim is one foreman's agent
+    // made; a coordinator now works it by hand.
+    const byHand = {
+      ...item("ts-by-hand", "in_progress", [], "test", [authorRun("cheap")]),
+      lastActivityAt: old,
+    };
     const world = new World(ours, byHand);
+    // The coordinator's agent exited: reclaim reads a gone worker as a vanished
+    // one, but a hand-started worker is never foreman's to reclaim.
+    world.workers.set(byHand.id, { ...worker(byHand.id, "author", "gone"), owner: "hand" });
 
     await tick(world);
 

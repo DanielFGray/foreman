@@ -584,6 +584,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // out of this reading entirely and the next tick asks again. Only
       // `lookup` returning nothing is a fact, and it makes the workspace an
       // orphan below.
+      const scopedNames = new Set(projects.map((project) => project.name));
       const readings = yield* Effect.forEach(roster, (worker) =>
         records.lookup(worker.task).pipe(
           Effect.map((task) => [{ worker, task }] as const),
@@ -593,7 +594,18 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             ),
           ),
         ),
-      ).pipe(Effect.map((entries) => entries.flat()));
+      ).pipe(
+        Effect.map((entries) => entries.flat()),
+        // A hand worker has no checkout to be scoped by, so its task's project
+        // decides whether it is this dispatcher's to count.
+        Effect.map((entries) =>
+          entries.filter(
+            ({ worker, task }) =>
+              worker.owner === "foreman" ||
+              (Option.isSome(task) && scopedNames.has(task.value.project)),
+          ),
+        ),
+      );
 
       // Each checkout's tip and its uncommitted paths. A task that works in the
       // operator's checkout starts only from a clean tree, and a task on the
@@ -891,7 +903,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Nothing will ever be dispatched into it and no task records it, so it
       // would otherwise sit open forever — the one residue foreman can name
       // but not prove is spent, because the worktree may still hold work.
-      const orphans = readings.flatMap(({ worker, task }) => (Option.isNone(task) ? [worker] : []));
+      // A hand worker with no task in the store is not an orphan: the coordinator
+      // that started it owns it, and `close` would end the coordinator's work.
+      const orphans = readings.flatMap(({ worker, task }) =>
+        Option.isNone(task) && worker.owner === "foreman" ? [worker] : [],
+      );
 
       const { owned, workers } = scopeRoster(roster, tasks);
       const ownedByTask = new Map(owned.map((entry) => [entry.task.id, entry]));
@@ -1441,6 +1457,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       yield* Effect.forEach(
         current.owned.filter(
           ({ task, worker }) =>
+            worker.owner === "foreman" &&
             pipelineOf(task) !== undefined &&
             diagnosticIntent(task) !== undefined &&
             worker.state !== "working" &&
@@ -1463,6 +1480,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
       yield* Effect.forEach(
         current.owned.filter(({ task, worker }) => {
+          // A hand worker is never settled: its turn ending is not the end of the task.
+          if (worker.owner !== "foreman") return false;
           const pipeline = pipelineOf(task);
           const run = task.runs.at(-1);
           const block = pipeline?.nodes.find(
@@ -2245,7 +2264,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           ].filter(
             ({ task, worker }) =>
               !idle.has(task.id) &&
-              (worker === undefined || worker.state === "gone") &&
+              (worker === undefined || (worker.owner === "foreman" && worker.state === "gone")) &&
               DateTime.isLessThan(DateTime.fromDateUnsafe(task.lastActivityAt), cutoff),
           ),
           ({ task, worker }) =>
@@ -3042,7 +3061,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * both exist. Every caller here means "end this task's agents" anyway.
      */
     const stopAgents = (worker: Worker | undefined) =>
-      worker
+      worker?.owner === "foreman"
         ? Effect.forEach([...worker.roles.keys()], (role) => fleet.stop(worker, role), {
             discard: true,
           })
@@ -4197,7 +4216,11 @@ export const decisionsOf = (
   reviewing: ReadonlyArray<Active>,
   owned: ReadonlyArray<Owned>,
 ): ReadonlyArray<Active> => [
-  ...claimed.filter(({ worker }) => worker === undefined || worker.state === "gone"),
+  // A hand-started worker that exited is its coordinator's to answer, not a
+  // vanished worker foreman must decide about.
+  ...claimed.filter(
+    ({ worker }) => worker === undefined || (worker.owner === "foreman" && worker.state === "gone"),
+  ),
   ...reviewing.filter(
     ({ task, worker }) =>
       reviewedBy(task) !== undefined &&
@@ -4390,24 +4413,30 @@ export const reviewable = (
 /**
  * The workspaces this dispatcher owns, out of a roster that shows every dispatcher's.
  *
- * The fleet lists every task's workers whoever started them, and the
- * label records no ownership — two foremen against different configs are not
- * competing for the same slots, and a workspace opened by hand in the same
- * namespace belongs to neither. The checkout a workspace's worktree belongs to
- * is what the config's project set scopes, and the fleet reports it, so this is
- * settled before the store is asked anything.
+ * The fleet lists every task's workers whoever started them. Two foremen
+ * against different configs are not competing for the same slots, so the
+ * fleet's own label is the only ownership a worker carries. A foreman worker's
+ * checkout is what the config's project set scopes, and the fleet reports it,
+ * so this is settled before the store is asked anything.
  *
  * The checkout rather than the task's project, because the checkout is what
  * foreman acts on — worktree, branch, landing — and it is still there after
  * the task is deleted, which is when ownership most needs an answer. A
- * workspace with no worktree at all has no checkout to be scoped by and is
- * therefore nobody's: foreman never opens one.
+ * foreman workspace with no worktree at all has no checkout to be scoped by and
+ * is therefore nobody's: foreman never opens one.
+ *
+ * A hand worker has no checkout label, so it is kept whatever its checkout;
+ * the caller scopes it by its task's project instead.
  */
 export const ours = (
   roster: ReadonlyArray<Worker>,
   checkouts: ReadonlySet<string>,
 ): ReadonlyArray<Worker> =>
-  roster.filter((worker) => worker.repository !== undefined && checkouts.has(worker.repository));
+  roster.filter(
+    (worker) =>
+      worker.owner === "hand" ||
+      (worker.repository !== undefined && checkouts.has(worker.repository)),
+  );
 
 /**
  * The workspaces this dispatcher may act on, split out of a roster that shows

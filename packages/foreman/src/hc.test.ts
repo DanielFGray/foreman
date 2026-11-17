@@ -82,6 +82,47 @@ describe("workersOf", () => {
   test("ignores terminals that carry no task", () => {
     expect(workersOf([terminal({ labels: { "fm.task": undefined as never } })])).toEqual([]);
   });
+
+  // A coordinator starts an agent by hand with the task label and no fleet
+  // label. Foreman reads it as the task's worker and owns none of it.
+  const byHand = (overrides: Partial<Terminal> = {}): Terminal => ({
+    address: "t3",
+    cwd: "/state/worktrees/proj/ts-1",
+    state: "live",
+    created_ms: 1,
+    status: { state: "working" },
+    ...overrides,
+    labels: { "fm.task": "ts-1", ...overrides.labels },
+  });
+
+  test("reads a live terminal with the task label and no fleet label as a hand worker", () => {
+    const [worker, ...rest] = workersOf([byHand({ status: { state: "working" } })]);
+    expect(rest).toEqual([]);
+    expect(worker!.task).toBe("ts-1");
+    expect(worker!.owner).toBe("hand");
+    expect(worker!.state).toBe("working");
+    // With no role label, a hand-started agent is the author.
+    expect(worker!.roles.get("author")?.state).toBe("working");
+  });
+
+  test("a foreman terminal for the task takes precedence over a hand one", () => {
+    const [worker, ...rest] = workersOf([byHand(), terminal({ address: "t2" })]);
+    expect(rest).toEqual([]);
+    expect(worker!.owner).toBe("foreman");
+  });
+
+  // A task foreman ran before, which a coordinator then took over by hand: the
+  // finished foreman terminal must not hide the live hand agent.
+  test("a live hand terminal is the worker over a finished foreman one", () => {
+    const [worker, ...rest] = workersOf([terminal({ address: "t1", state: "finished" }), byHand()]);
+    expect(rest).toEqual([]);
+    expect(worker!.owner).toBe("hand");
+    expect(worker!.state).toBe("working");
+  });
+
+  test("a finished hand terminal is not a worker", () => {
+    expect(workersOf([byHand({ state: "finished" })])).toEqual([]);
+  });
 });
 
 describe("placementOf", () => {

@@ -80,6 +80,7 @@ const worker = (state: WorkerState, id = "ts-123456"): Worker => ({
   worktree: "/tmp/worktree",
   state,
   since: undefined,
+  owner: "foreman",
   roles: new Map([
     ["author", { state: "settled", since: undefined }],
     ["review", { state, since: undefined }],
@@ -234,6 +235,15 @@ describe("decisions", () => {
   test("surfaces a claim made outside foreman that no worker holds", () => {
     const claimed = [active(task("ts-1", [], "in_progress"), undefined)];
     expect(decisionsOf(claimed, [], []).map((decision) => decision.task.id)).toEqual(["ts-1"]);
+  });
+
+  // A coordinator's hand-started agent is working the task, so the claim is
+  // not an orphan. The same claim with no terminal is still a decision above.
+  test("a hand-started agent that exited is not a vanished decision", () => {
+    const claimed = [
+      active(task("ts-1", [], "in_progress"), { ...worker("gone", "ts-1"), owner: "hand" }),
+    ];
+    expect(decisionsOf(claimed, [], [])).toEqual([]);
   });
 
   test("ignores a claimed or reviewing task that is still being worked", () => {

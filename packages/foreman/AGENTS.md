@@ -50,7 +50,7 @@ a claim made by hand.
 | How many tries has this rung had? | its author runs on the rung that ended `stopped` or `vanished` since the rung's last charge                                                                                                                                            |
 | Is this one waiting on a person?  | every configured rung has failed it, or it has a park                                                                                                                                                                                  |
 | Is this task mine to review?      | it has an author run                                                                                                                                                                                                                   |
-| Is this worker mine?              | the checkout in its terminals' `fm.repo` label                                                                                                                                                                                         |
+| Is this worker mine?              | the `fm.fleet` label marks foreman's; a foreman terminal's `fm.repo` checkout scopes it; a hand terminal (`fm.task` only) is read and never acted on                                                                                   |
 | Which projects are in play?       | the git checkouts of the operator's open herdr-app spaces                                                                                                                                                                              |
 | Is this project free to work in?  | `git` in its checkout                                                                                                                                                                                                                  |
 
@@ -179,9 +179,11 @@ worktree git still has registered for the branch, else creating both. Teardown
 reads git's record of the branch too, so a worktree whose agents already ended is
 removed rather than orphaned.
 
-The roster is every foreman terminal on the hc server. `ours` in
-`src/dispatcher.ts` keeps the workers whose `fm.repo` checkout is a managed
+The roster is every foreman terminal on the hc server, plus every live terminal
+with a task label and no fleet label. `ours` in `src/dispatcher.ts` keeps the workers whose `fm.repo` checkout is a managed
 project, so ownership is settled before the store is asked anything.
+
+A terminal with `fm.task` and no `fm.fleet` is a hand worker: foreman reads it as the task's worker and never acts on it.
 
 The checkout, not the task's project. The task's project answers the same
 question right up until the task is deleted — which is exactly when ownership
@@ -972,15 +974,15 @@ Nothing above that file knows which endpoint or which client says so.
 
 To change how foreman works, edit one of these.
 
-| To change                           | Edit                                                                                                                            |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| where tasks come from               | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example                                                             |
-| where agents run                    | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example                                                       |
+| To change                           | Edit                                                                                                                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| where tasks come from               | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example                                                                                                                                           |
+| where agents run                    | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example                                                                                                                                     |
 | the steps a task goes through       | the project's drawing, built from blocks on the page or with `foreman pipeline edit`, or started from a standard pipeline while it has no blocks (an undrawn project runs `EMPTY_PIPELINE` and takes no task) |
-| what an agent is told               | the files in `~/.config/foreman/prompts/`                                                                                       |
-| which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`)                                                                      |
-| which models review                 | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`)                                                    |
-| what runs without asking            | the policy file (author, climb, review, publish, land)                                                                          |
+| what an agent is told               | the files in `~/.config/foreman/prompts/`                                                                                                                                                                     |
+| which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`)                                                                                                                                                    |
+| which models review                 | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`)                                                                                                                                  |
+| what runs without asking            | the policy file (author, climb, review, publish, land)                                                                                                                                                        |
 
 Keep `Records` and `Repository` as they are: the runs and git are how foreman
 knows what happened, whatever the workflow.

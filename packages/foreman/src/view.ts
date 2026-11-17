@@ -95,7 +95,8 @@ export const staleReview = (
 ): boolean =>
   reviewedBy(task) !== undefined &&
   (task.status === undefined || task.status === "open") &&
-  (worker === undefined || worker.state === "gone" || worker.state === "settled");
+  (worker === undefined ||
+    (worker.owner === "foreman" && (worker.state === "gone" || worker.state === "settled")));
 
 /** One selectable line in any column, with the targets its actions need. */
 export interface ColumnRow {
@@ -218,6 +219,11 @@ export const actionsFor = (
     column === "decisions" && row.task
       ? DECISION_ACTIONS[decisionKind(row.task, row.cause)]
       : ACTIONS[column];
+  // A hand-started agent belongs to the coordinator: every action that ends,
+  // restarts or releases the claim is left out. Looking at its pane is not.
+  if (row.worker?.owner === "hand") {
+    return actions.filter((action) => action === "focus" || action === "takeOver");
+  }
 
   return actions.filter((action) =>
     Match.value(action).pipe(
