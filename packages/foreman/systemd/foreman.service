@@ -13,6 +13,8 @@ ExecStart=/bin/zsh -lc 'exec bun src/main.ts serve'
 # commit, and only a restart runs the new code.
 Restart=always
 RestartSec=5
+# bun exits 130 on the SIGINT of a stop; that is a clean stop, not a failure.
+SuccessExitStatus=130
 
 [Install]
 WantedBy=default.target
