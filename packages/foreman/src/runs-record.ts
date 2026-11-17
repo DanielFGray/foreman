@@ -21,7 +21,7 @@ import {
 } from "tasks";
 import { Refused } from "./errors.ts";
 import { Records } from "./records.ts";
-import { poolFor } from "./run-record.ts";
+import { Registry } from "./registry.ts";
 import { Tracker } from "./tracker.ts";
 
 /** The fields of `hc get <terminal> --json` a hand run reads. */
@@ -119,58 +119,73 @@ export const checkFlags = (flags: RawFlags): Effect.Effect<CheckedFlags, Refused
   });
 
 /**
- * The run a terminal's agent made. The harness is the basename of the launch
- * argv's program; the model is the value after `--model` in that argv, or the
- * `--model` flag when the argv names none; the pool is the model's provider
- * prefix, as `newRunFor` writes it. The task's project and title are the row's.
+ * The model a terminal's agent launched with: the value after `--model` in its
+ * launch argv, else the `--model` flag. Refused when the terminal runs no
+ * program (its agent has ended, so its argv is gone) or neither names a model.
  */
+export const modelOf = (terminal: HandTerminal, flag: Option.Option<string>) => {
+  const argv = terminal.foreground?.argv ?? [];
+  if (argv[0] === undefined) {
+    return Effect.fail(
+      new Refused({
+        detail: `terminal ${terminal.address} runs no program; start its agent first`,
+      }),
+    );
+  }
+  const at = argv.indexOf("--model");
+  const named = at < 0 ? Option.none<string>() : Option.fromNullishOr(argv[at + 1]);
+  return Effect.fromOption(Option.orElse(named, () => flag)).pipe(
+    Effect.mapError(
+      () =>
+        new Refused({
+          detail: `no --model in the launch argv of ${terminal.address}; pass --model <provider/model>`,
+        }),
+    ),
+  );
+};
+
+/**
+ * The pool and harness of the model's registry row, the row dispatch reads. A
+ * model with no row is refused rather than filed under a guessed pool.
+ */
+export const registeredOf = (
+  model: string,
+  row: Option.Option<{ readonly pool: string; readonly harness: string }>,
+) =>
+  Effect.fromOption(row).pipe(
+    Effect.mapError(
+      () =>
+        new Refused({
+          detail: `model ${model} has no row in the models table; add it before recording its run: foreman models add ${model} --harness <kind> --provider <id> --pool <name>`,
+        }),
+    ),
+  );
+
+/** The run a hand-launched agent made, in the row shape `Runs.recordHandRun` writes. */
 export const handRunFor = (input: {
   readonly terminal: HandTerminal;
   readonly task: Pick<Item, "id" | "project" | "title">;
   readonly flags: CheckedFlags;
+  readonly model: string;
+  readonly registered: { readonly pool: string; readonly harness: string };
   readonly closedAt: Date;
-}): Effect.Effect<HandRunInput, Refused> =>
-  Effect.gen(function* () {
-    const { terminal, task, flags } = input;
-    const argv = terminal.foreground?.argv ?? [];
-    const program = yield* Effect.fromOption(Option.fromNullishOr(argv[0])).pipe(
-      Effect.mapError(
-        () =>
-          new Refused({
-            detail: `terminal ${terminal.address} runs no program; start its agent first`,
-          }),
-      ),
-    );
-    const kind = program.split("/").at(-1) ?? program;
-    const at = argv.indexOf("--model");
-    const named = at < 0 ? Option.none<string>() : Option.fromNullishOr(argv[at + 1]);
-    const model = yield* Effect.fromOption(Option.orElse(named, () => flags.model)).pipe(
-      Effect.mapError(
-        () =>
-          new Refused({
-            detail: `no --model in the launch argv of ${terminal.address}; pass --model <provider/model>`,
-          }),
-      ),
-    );
-    const [provider, ...rest] = model.split("/");
-    return {
-      project: task.project,
-      task: task.id,
-      slice: task.title,
-      kind,
-      pool: rest.length > 0 && provider !== undefined ? poolFor(provider) : kind,
-      model,
-      work: flags.work,
-      outcome: flags.outcome,
-      startedAt: new Date(terminal.created_ms),
-      closedAt: input.closedAt,
-      rounds: flags.rounds,
-      size: flags.size,
-      reportAccurate: flags.accurate,
-      notes: Option.getOrUndefined(flags.notes),
-      defects: flags.defects,
-    };
-  });
+}): HandRunInput => ({
+  project: input.task.project,
+  task: input.task.id,
+  slice: input.task.title,
+  kind: input.registered.harness,
+  pool: input.registered.pool,
+  model: input.model,
+  work: input.flags.work,
+  outcome: input.flags.outcome,
+  startedAt: new Date(input.terminal.created_ms),
+  closedAt: input.closedAt,
+  rounds: input.flags.rounds,
+  size: input.flags.size,
+  reportAccurate: input.flags.accurate,
+  notes: Option.getOrUndefined(input.flags.notes),
+  defects: input.flags.defects,
+});
 
 /** Runs `hc get <address> --json` and decodes the terminal it prints. */
 const readTerminal = (address: string) =>
@@ -283,10 +298,15 @@ export const recordCommand = Command.make(
       });
       const hand = yield* readTerminal(args.terminal);
       const task = yield* taskOf(hand);
-      const run = yield* handRunFor({
+      const model = yield* modelOf(hand, flags.model);
+      const registry = yield* Registry;
+      const registered = yield* registeredOf(model, yield* registry.poolOf(model));
+      const run = handRunFor({
         terminal: hand,
         task,
         flags,
+        model,
+        registered,
         closedAt: new Date(yield* Clock.currentTimeMillis),
       });
       const records = yield* Records;

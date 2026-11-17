@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Option } from "effect";
-import { checkFlags, handRunFor, type HandTerminal, type RawFlags } from "./runs-record.ts";
+import {
+  checkFlags,
+  handRunFor,
+  modelOf,
+  registeredOf,
+  type HandTerminal,
+  type RawFlags,
+} from "./runs-record.ts";
 
 const flags = (over: Partial<RawFlags> = {}): RawFlags => ({
   work: "build",
@@ -73,23 +80,69 @@ describe("checkFlags", () => {
   });
 });
 
-describe("handRunFor", () => {
-  test("takes the task, harness, model and start from the terminal", async () => {
-    const checked = await Effect.runPromise(checkFlags(flags()));
-    const run = await Effect.runPromise(
-      handRunFor({
-        terminal: terminal(),
-        task,
-        flags: checked,
-        closedAt: new Date("2026-11-16T10:30:00.000Z"),
-      }),
+describe("modelOf", () => {
+  test("reads the model after --model in the launch argv, before the flag", async () => {
+    const model = await Effect.runPromise(modelOf(terminal(), Option.some("opencode-go/kimi")));
+    expect(model).toBe("openai-codex/gpt-5.6-luna");
+  });
+
+  test("falls back to the --model flag when the argv names none", async () => {
+    const model = await Effect.runPromise(
+      modelOf(
+        terminal({ foreground: { argv: ["/usr/bin/claude"] } }),
+        Option.some("opencode-go/kimi"),
+      ),
     );
+    expect(model).toBe("opencode-go/kimi");
+  });
+
+  test("refuses when neither the argv nor the flag names a model", async () => {
+    const refusal = await Effect.runPromise(
+      modelOf(terminal({ foreground: { argv: ["/usr/bin/claude"] } }), Option.none()).pipe(
+        Effect.flip,
+      ),
+    );
+    expect(refusal.detail).toBe(
+      "no --model in the launch argv of t7; pass --model <provider/model>",
+    );
+  });
+});
+
+describe("registeredOf", () => {
+  test("takes the pool and harness of the model's registry row", async () => {
+    const row = await Effect.runPromise(
+      registeredOf("claude-opus-5-5", Option.some({ pool: "Anthropic", harness: "claude" })),
+    );
+    expect(row).toEqual({ pool: "Anthropic", harness: "claude" });
+  });
+
+  test("refuses a model with no registry row, naming the command that adds it", async () => {
+    const refusal = await Effect.runPromise(
+      registeredOf("openai-codex/gpt-5.6-luna", Option.none()).pipe(Effect.flip),
+    );
+    expect(refusal.detail).toBe(
+      "model openai-codex/gpt-5.6-luna has no row in the models table; add it before recording its run: foreman models add openai-codex/gpt-5.6-luna --harness <kind> --provider <id> --pool <name>",
+    );
+  });
+});
+
+describe("handRunFor", () => {
+  test("takes the task, harness, pool, model and start from the terminal and the registry", async () => {
+    const checked = await Effect.runPromise(checkFlags(flags()));
+    const run = handRunFor({
+      terminal: terminal(),
+      task,
+      flags: checked,
+      model: "openai-codex/gpt-5.6-luna",
+      registered: { pool: "OpenAI Codex", harness: "pi" },
+      closedAt: new Date("2026-11-16T10:30:00.000Z"),
+    });
     expect(run).toEqual({
       project: "quill",
       task: "ts-1",
       slice: "lazy service defaults",
       kind: "pi",
-      pool: "openai-codex",
+      pool: "OpenAI Codex",
       model: "openai-codex/gpt-5.6-luna",
       work: "build",
       outcome: "committed",
@@ -102,44 +155,13 @@ describe("handRunFor", () => {
       defects: [],
     });
   });
+});
 
-  test("takes the model flag when the launch argv names none", async () => {
-    const checked = await Effect.runPromise(
-      checkFlags(flags({ model: Option.some("opencode-go/kimi") })),
+describe("modelOf refusals", () => {
+  test("refuses a terminal whose agent has ended, since its argv is gone", async () => {
+    const refusal = await Effect.runPromise(
+      modelOf(terminal({ foreground: null }), Option.none()).pipe(Effect.flip),
     );
-    const run = await Effect.runPromise(
-      handRunFor({
-        terminal: terminal({ foreground: { argv: ["/usr/bin/claude", "--no-chrome"] } }),
-        task,
-        flags: checked,
-        closedAt: new Date(0),
-      }),
-    );
-    expect(run.kind).toBe("claude");
-    expect(run.model).toBe("opencode-go/kimi");
-  });
-
-  test("refuses a terminal with no model anywhere, and one that runs no program", async () => {
-    const checked = await Effect.runPromise(checkFlags(flags()));
-    const noModel = await Effect.runPromise(
-      handRunFor({
-        terminal: terminal({ foreground: { argv: ["/usr/bin/claude"] } }),
-        task,
-        flags: checked,
-        closedAt: new Date(0),
-      }).pipe(Effect.flip),
-    );
-    expect(noModel.detail).toBe(
-      "no --model in the launch argv of t7; pass --model <provider/model>",
-    );
-    const noProgram = await Effect.runPromise(
-      handRunFor({
-        terminal: terminal({ foreground: null }),
-        task,
-        flags: checked,
-        closedAt: new Date(0),
-      }).pipe(Effect.flip),
-    );
-    expect(noProgram.detail).toBe("terminal t7 runs no program; start its agent first");
+    expect(refusal.detail).toBe("terminal t7 runs no program; start its agent first");
   });
 });

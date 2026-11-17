@@ -157,6 +157,8 @@ const ModelRow = Schema.Struct({
 
 const ModelIdRow = Schema.Struct({ model: Schema.String });
 
+const PoolRow = Schema.Struct({ pool: Schema.String, harness: Schema.String });
+
 const ReviewerRow = Schema.Struct({
   reviewer: Schema.String,
   model: Schema.String,
@@ -240,6 +242,15 @@ export class Registry extends Context.Service<Registry>()("Registry", {
         );
       return rows.map(({ models_dev, ...row }): ModelEntry => ({ ...row, modelsDev: models_dev }));
     }).pipe(Effect.mapError(registryError("reading the models")));
+
+    /** The pool and harness a model's row names, or none when the model has no row. */
+    const poolOf = (model: string) =>
+      Effect.gen(function* () {
+        const rows = yield* sql`SELECT pool, harness FROM models WHERE model = ${model}`.pipe(
+          Effect.flatMap(rowsOf(PoolRow)),
+        );
+        return Option.fromIterable(rows);
+      }).pipe(Effect.mapError(registryError("reading the models")));
 
     /**
      * The reviewers, by name. A reviewer whose model is retired is left out: it
@@ -468,6 +479,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
       readStatus,
       knownModels,
       readModels,
+      poolOf,
       addModel,
       readReviewers,
       addReviewer,
