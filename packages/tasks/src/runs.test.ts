@@ -701,3 +701,76 @@ describe("the ladder levels migration", () => {
     ]);
   });
 });
+
+describe("hand runs", () => {
+  test("a hand run is written closed, with its defects, in one transaction", async () => {
+    const file = join(dir, `store-${++files}.db`);
+    const handRun = {
+      project: "p",
+      task: "ts-1",
+      slice: "a slice",
+      kind: "pi",
+      pool: "Pool",
+      model: "m1",
+      work: "build",
+      outcome: "committed",
+      startedAt: new Date("2026-11-16T10:00:00.000Z"),
+      closedAt: new Date("2026-11-16T10:30:00.000Z"),
+      rounds: 1,
+      size: 2,
+      reportAccurate: true,
+      defects: [{ kind: "duplication", detail: "re-implemented the parser" }],
+    } as const;
+    const id = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runs = yield* Runs;
+        return yield* runs.recordHandRun(handRun);
+      }).pipe(Effect.provide(Runs.layerAt(file))),
+    );
+    const read = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient;
+        const run = yield* sql<{ closed_at: string; outcome: string; report_accurate: number }>`
+          SELECT closed_at, outcome, report_accurate FROM runs WHERE id = ${id}`;
+        const defects = yield* sql<{ kind: string; detail: string }>`
+          SELECT kind, detail FROM defects WHERE run_id = ${id}`;
+        return { run: run[0], defects };
+      }).pipe(Effect.provide(Runs.layerAt(file))),
+    );
+    expect(read).toEqual({
+      run: { closed_at: "2026-11-16 10:30:00 +0000 UTC", outcome: "committed", report_accurate: 1 },
+      defects: [{ kind: "duplication", detail: "re-implemented the parser" }],
+    });
+  });
+
+  test("the store refuses a defect kind outside the list and keeps the run's other rows", async () => {
+    const file = join(dir, `store-${++files}.db`);
+    const outcome = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runs = yield* Runs;
+        const sql = yield* SqlClient;
+        const id = yield* runs.recordHandRun({
+          project: "p",
+          task: "ts-1",
+          slice: "a slice",
+          kind: "pi",
+          pool: "Pool",
+          model: "m1",
+          work: "build",
+          outcome: "committed",
+          startedAt: new Date("2026-11-16T10:00:00.000Z"),
+          closedAt: new Date("2026-11-16T10:30:00.000Z"),
+          rounds: 0,
+          size: 1,
+          reportAccurate: true,
+          defects: [],
+        });
+        const refused = yield* sql`INSERT INTO defects (run_id, kind, detail)
+          VALUES (${id}, 'logic', 'wrong branch')`.pipe(Effect.exit);
+        const defects = yield* sql<{ n: number }>`SELECT COUNT(*) AS n FROM defects`;
+        return { refused: Exit.isFailure(refused), defects: defects[0]?.n };
+      }).pipe(Effect.provide(Runs.layerAt(file))),
+    );
+    expect(outcome).toEqual({ refused: true, defects: 0 });
+  });
+});

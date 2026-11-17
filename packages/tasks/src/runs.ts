@@ -7,8 +7,9 @@ import { SqlClient } from "effect/sql";
 import { connectionAt, store } from "./connection.ts";
 import { Ending, isExit } from "./endings.ts";
 import { TaskEvent } from "./item.ts";
+import { AGENT_WORK, AUTHOR_WORK, DEFECT_KINDS, OUTCOMES, WORK } from "./run-values.ts";
 import { Tasks, TaskError } from "./store.ts";
-import { parseStored } from "./time.ts";
+import { formatGo, parseStored } from "./time.ts";
 
 export { Ending, isExit } from "./endings.ts";
 
@@ -18,7 +19,7 @@ export const CheckEnding = S.Literals(CHECK_ENDINGS);
 export type CheckEnding = typeof CheckEnding.Type;
 
 /** The registry's four words for how a run went. */
-export const Outcome = S.Literals(["committed", "dropped", "handed-off", "answered"]);
+export const Outcome = S.Literals(OUTCOMES);
 export type Outcome = typeof Outcome.Type;
 
 /**
@@ -29,15 +30,16 @@ export type Outcome = typeof Outcome.Type;
 export const Role = S.Literals(["author", "review", "check"]);
 export type Role = typeof Role.Type;
 
-/** The kinds of work an author's run can be. */
-const AUTHOR_WORK = ["build", "correction", "research"] as const;
-
 /** The `work` column: an author's run says what kind of work it was. */
-export const Work = S.Literals([...AUTHOR_WORK, "review", "check"]);
+export const Work = S.Literals(WORK);
 export type Work = typeof Work.Type;
 
 /** An agent's work: a check is written by `recordCheck`, never opened. */
-const AgentWork = S.Literals([...AUTHOR_WORK, "review"]);
+const AgentWork = S.Literals(AGENT_WORK);
+
+/** A defect a review recorded against a run. */
+export const DefectKind = S.Literals(DEFECT_KINDS);
+export type DefectKind = typeof DefectKind.Type;
 
 export const roleOf = (work: Work): Role =>
   work === "review" || work === "check" ? work : "author";
@@ -97,6 +99,31 @@ export const NewRun = S.Struct({
 });
 export type NewRun = typeof NewRun.Type;
 export type NewRunInput = typeof NewRun.Encoded;
+
+/**
+ * An agent run recorded after it ended, by someone who ran it outside the
+ * dispatcher. Foreman writes its own runs open and closes them later; a hand
+ * run has no rung, node or ending, so it is written closed in one step.
+ */
+export const HandRun = S.Struct({
+  project: S.String,
+  task: S.String,
+  slice: S.String,
+  kind: S.String,
+  pool: S.String,
+  model: S.String,
+  work: AgentWork,
+  outcome: Outcome,
+  startedAt: S.Date,
+  closedAt: S.Date,
+  rounds: S.Int,
+  size: S.Int,
+  reportAccurate: S.Boolean,
+  notes: S.OptionFromOptional(S.String),
+  defects: S.Array(S.Struct({ kind: DefectKind, detail: S.String })),
+});
+export type HandRun = typeof HandRun.Type;
+export type HandRunInput = typeof HandRun.Encoded;
 
 /** A check block's run: its command ran on the branch at `commit`. */
 export const CheckRun = S.Struct({
@@ -592,8 +619,33 @@ export class Runs extends Context.Service<Runs>()("Runs", {
         return new Map(rows.map((row) => [row.task, row.reason])) as ReadonlyMap<string, string>;
       });
 
+    /**
+     * Writes a hand run and its defects as one transaction, so a run never
+     * exists without the defects its review recorded. Answers the run's id.
+     */
+    const recordHandRun = (input: HandRunInput) =>
+      Effect.gen(function* () {
+        const run = yield* S.decodeEffect(HandRun)(input).pipe(Effect.orDie);
+        const rows = yield* sql`INSERT INTO runs
+          (project, task, slice, kind, pool, model, work, outcome, started_at, closed_at,
+           rounds, size, report_accurate, notes)
+          VALUES (${run.project}, ${run.task}, ${run.slice}, ${run.kind}, ${run.pool},
+                  ${run.model}, ${run.work}, ${run.outcome},
+                  ${formatGo(run.startedAt)}, ${formatGo(run.closedAt)},
+                  ${run.rounds}, ${run.size}, ${run.reportAccurate ? 1 : 0},
+                  ${Option.getOrNull(run.notes)})
+          RETURNING id`.pipe(Effect.flatMap(rowsOf(IdRow)));
+        const created = yield* Effect.fromOption(Option.fromIterable(rows)).pipe(Effect.orDie);
+        for (const defect of run.defects) {
+          yield* sql`INSERT INTO defects (run_id, kind, detail)
+            VALUES (${created.id}, ${defect.kind}, ${defect.detail})`;
+        }
+        return created.id;
+      }).pipe(sql.withTransaction);
+
     return {
       openRun,
+      recordHandRun,
       recordCheck,
       closeRun,
       deleteOpenRun,

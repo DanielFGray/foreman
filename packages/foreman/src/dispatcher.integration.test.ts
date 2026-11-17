@@ -515,6 +515,8 @@ class World {
     countRound: () => this.write("records.countRound", () => 1),
     // The fake keeps no run times, so it has no history to read.
     history: () => Effect.succeed([]),
+    // Hand runs come from `foreman runs record`, never from the dispatcher.
+    recordHandRun: () => Effect.die("the dispatcher does not record hand runs"),
     closedSince: (since: Date) =>
       Effect.sync(() =>
         this.closedRuns.filter((run) =>

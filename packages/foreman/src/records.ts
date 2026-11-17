@@ -5,6 +5,7 @@ import {
   Tasks,
   type Charge,
   type Ending,
+  type HandRunInput,
   type Item as TaskItem,
   type LogEntry,
   type Role,
@@ -239,6 +240,9 @@ export class Records extends Context.Service<Records>()("Records", {
 
       /** The runs that closed at or after `since`: see `Runs.closedSince`. */
       closedSince: (since: Date) => runs.closedSince(since).pipe(as("read closed runs")),
+
+      /** A run a person or agent ran outside the dispatcher, closed and with its defects: see `Runs.recordHandRun`. */
+      recordHandRun: (run: HandRunInput) => runs.recordHandRun(run).pipe(as("record run")),
 
       /** A task with its log, for a reader showing it whole. */
       detail: (task: string) =>

@@ -3,6 +3,7 @@ import { Clock, Console, DateTime, Effect, Option, Schema } from "effect";
 import { durationOf, type Item, prose, RunRecord } from "tasks";
 import { notesLines, RunSummary, summarizeRuns } from "./run-summary.ts";
 import { Records } from "./records.ts";
+import { recordCommand } from "./runs-record.ts";
 import { Tracker } from "./tracker.ts";
 import { PublishedRow } from "./published-schema.ts";
 import { queueOf, queueRowsOf } from "./host.ts";
@@ -276,4 +277,7 @@ export const runsCommand = Command.make(
         for (const line of rows) yield* Console.log(line);
       }
     }),
-).pipe(Command.withDescription("Print a project's closed runs, oldest first"));
+).pipe(
+  Command.withDescription("Print a project's closed runs, oldest first"),
+  Command.withSubcommands([recordCommand]),
+);

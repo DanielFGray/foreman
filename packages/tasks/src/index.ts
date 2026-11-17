@@ -9,4 +9,5 @@ export * from "./registry.ts";
 export * from "./migrations.ts";
 export * from "./endings.ts";
 export * from "./runs.ts";
+export * from "./run-values.ts";
 export { prose } from "./cli/text.ts";
