@@ -100,7 +100,7 @@ epic by hand.
     tasks log <id> "message"     # log a result or a decision
     tasks done <id>              # mark as done
     tasks open <id>              # reopen a task, or authorise a proposal or draft
-    tasks cancel <id> [reason]   # cancel without completing
+    tasks cancel <id>... [reason] # cancel without completing
     tasks propose <id>           # return to proposed
     tasks draft <id>             # return to draft
 

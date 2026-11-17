@@ -214,7 +214,7 @@ describe("tasks status changes", () => {
     expect(await run(["show", kept])).toContain("Status:      open");
   });
 
-  test("cancel reads bare ids as a bulk list, and a single id's trailing words as its reason", async () => {
+  test("cancel reads leading ids as the list and the words after them as the reason", async () => {
     const first = await created("Bulk one", "-p", "d");
     const second = await created("Bulk two", "-p", "d");
     await run(["cancel", first, second]);
@@ -224,6 +224,12 @@ describe("tasks status changes", () => {
     const single = await created("Single", "-p", "d");
     expect(await run(["cancel", single, "went", "elsewhere"])).toBe(
       `Canceled ${single}: went elsewhere`,
+    );
+
+    const third = await created("Bulk three", "-p", "d");
+    const fourth = await created("Bulk four", "-p", "d");
+    expect(await run(["cancel", third, fourth, "duplicate", "of", first])).toBe(
+      `Canceled ${third}: duplicate of ${first}\nCanceled ${fourth}: duplicate of ${first}`,
     );
   });
 });

@@ -160,20 +160,21 @@ const move = (name: TaskEvent, past: string, description: string) =>
 /**
  * The ids to cancel and the reason, from the arguments of `tasks cancel`.
  *
- * With --reason, every argument is an id. Without it, the arguments are all ids
- * only when every one has the id shape; otherwise the first is the id and the
- * rest are the reason, as `tasks cancel <id> <words>` has always read them.
+ * With --reason, every argument is an id. Without it, the first argument and
+ * every id-shaped argument after it are ids, and the words from the first
+ * other argument on are the reason, so `tasks cancel <id> <words>` reads as it
+ * always has and `tasks cancel <id> <id> <words>` cancels both.
  */
 const cancelTargets = (
   args: ReadonlyArray<string>,
   flagged: Option.Option<string>,
 ): { readonly ids: ReadonlyArray<string>; readonly reason: Option.Option<string> } => {
   if (Option.isSome(flagged)) return { ids: args, reason: flagged };
-  if (args.every((arg) => ITEM_ID.test(arg))) return { ids: args, reason: Option.none() };
-  const [first, ...words] = args;
+  const words = args.findIndex((arg, index) => index > 0 && !ITEM_ID.test(arg));
+  const cut = words === -1 ? args.length : words;
   return {
-    ids: [first!],
-    reason: words.length === 0 ? Option.none() : Option.some(words.join(" ")),
+    ids: args.slice(0, cut),
+    reason: cut === args.length ? Option.none() : Option.some(args.slice(cut).join(" ")),
   };
 };
 
