@@ -33,6 +33,9 @@ import {
   type Intervention,
 } from "./view-names.ts";
 import { publishedOf } from "./published.ts";
+import type { Published } from "./published-schema.ts";
+import { publishedPath } from "./paths.ts";
+import { serveNotice } from "./serve-notice.ts";
 import { Settings } from "./config.ts";
 import { Tracker } from "./tracker.ts";
 import { prose } from "tasks";
@@ -58,21 +61,35 @@ const id = Argument.String("id").pipe(
 
 const json = Flag.Boolean("json").pipe(Flag.withDefault(false), Flag.withDescription("Emit JSON"));
 
+/**
+ * The lines `foreman status` prints: the serve notice first when no serve
+ * runs, then every row with the actions each one takes.
+ */
+export const statusLines = (published: Published, notice: Option.Option<string>): string[] => {
+  const rows = published.rows;
+  const body =
+    rows.length === 0
+      ? ["nothing queued, working or waiting"]
+      : rows.flatMap((row) => [
+          `${row.view.padEnd(9)} ${row.key}  ${row.label}${row.actions.length > 0 ? `  [${row.actions.join(" ")}]` : ""}`,
+          ...(row.detail ? [`${" ".repeat(10)}${row.detail}`] : []),
+        ]);
+  return [...Option.toArray(notice), ...body];
+};
+
 /** Every row of every view, with the actions each one takes. */
 const status = Command.make("status", { json }, ({ json }) =>
   Effect.gen(function* () {
     const dispatcher = yield* Dispatcher;
     yield* dispatcher.read;
     const published = publishedOf(yield* SubscriptionRef.get(dispatcher.state), Option.none());
-    if (json) return yield* Console.log(JSON.stringify(published, null, 2));
-    const rows = published.rows;
-    if (rows.length === 0) return yield* Console.log("nothing queued, working or waiting");
-    for (const row of rows) {
-      yield* Console.log(
-        `${row.view.padEnd(9)} ${row.key}  ${row.label}${row.actions.length > 0 ? `  [${row.actions.join(" ")}]` : ""}`,
-      );
-      if (row.detail) yield* Console.log(`${" ".repeat(10)}${row.detail}`);
+    const notice = yield* serveNotice(publishedPath());
+    if (json) {
+      // stdout stays valid JSON, so the notice goes to stderr.
+      yield* Option.match(notice, { onNone: () => Effect.void, onSome: Console.error });
+      return yield* Console.log(JSON.stringify(published, null, 2));
     }
+    for (const line of statusLines(published, notice)) yield* Console.log(line);
   }),
 ).pipe(
   Command.withDescription("List every row the dashboard would show, with the commands each takes"),
@@ -111,9 +128,17 @@ const runAction = <A, E>(
     return yield* command;
   });
 
-/** The line a row action leaves when it has nothing to report. */
+/**
+ * The line a row action leaves when it has nothing to report, then the serve
+ * notice: the action only writes the world, and a tick settles it.
+ */
 const printDone = (action: Action, key: string) =>
-  Console.log(`${commandName(action)} ${key}: done`);
+  Console.log(`${commandName(action)} ${key}: done`).pipe(
+    Effect.andThen(serveNotice(publishedPath())),
+    Effect.flatMap((notice) =>
+      Option.match(notice, { onNone: () => Effect.void, onSome: Console.log }),
+    ),
+  );
 
 /** Close a queued task by hand. */
 export const taskComplete = (input: { readonly id: string; readonly reason: string }) =>

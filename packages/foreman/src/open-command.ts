@@ -10,7 +10,7 @@ import { Console, Data, Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { publishedPath } from "./paths.ts";
-import { holdLock, lockPath } from "./serve.ts";
+import { serveRunning } from "./serve.ts";
 import { uiPort } from "./ui-server.ts";
 
 export class ServeNotRunning extends Data.TaggedError("ServeNotRunning")<{}> {
@@ -23,18 +23,13 @@ export class ServeNotRunning extends Data.TaggedError("ServeNotRunning")<{}> {
 export const pageUrl = (port: number, project: string) =>
   `http://localhost:${port}/p/${encodeURIComponent(project)}`;
 
-const serveRuns = Effect.scoped(holdLock(lockPath(publishedPath()))).pipe(
-  Effect.as(false),
-  Effect.catchTag("ServeRunning", () => Effect.succeed(true)),
-);
-
 const project = Argument.String("project").pipe(
   Argument.withDescription("The project whose pipeline page opens"),
 );
 
 export const openCommand = Command.make("open", { project }, ({ project }) =>
   Effect.gen(function* () {
-    if (!(yield* serveRuns)) return yield* new ServeNotRunning();
+    if (!(yield* serveRunning(publishedPath()))) return yield* new ServeNotRunning();
     const url = pageUrl(yield* uiPort, project);
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     yield* Effect.scoped(

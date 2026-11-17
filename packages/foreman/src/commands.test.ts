@@ -10,6 +10,10 @@ import {
 import { type Authored, EMPTY_FLEET, type FleetState } from "./dispatcher.ts";
 import type { Item } from "./records.ts";
 import type { Tracker } from "./tracker.ts";
+import { publishedOf } from "./published.ts";
+import type { Published, PublishedRow } from "./published-schema.ts";
+import { statusLines } from "./commands.ts";
+import { SERVE_NOT_RUNNING } from "./serve-notice.ts";
 
 const FILED = "ts-new";
 
@@ -245,5 +249,43 @@ describe("foreman dispatch", () => {
   test("an author that starts nothing is refused with its reason, not reported dispatched", async () => {
     const { refused } = await dispatch("ts-1", { queued: [task("ts-1")], answer: NO_BLOCK });
     expect(refused).toEqual(Option.some(NO_BLOCK_REASON));
+  });
+});
+
+describe("foreman status output", () => {
+  const row: PublishedRow = {
+    view: "queue",
+    key: "ts-1",
+    label: "a queued task",
+    detail: null,
+    project: "foreman",
+    parent: null,
+    epic: false,
+    actions: ["dispatch"],
+    url: null,
+    pr: null,
+  };
+  const reading = (rows: ReadonlyArray<PublishedRow>): Published => ({
+    ...publishedOf(EMPTY_FLEET, Option.none()),
+    rows,
+  });
+
+  test("leads with the notice when no serve runs, before the rows", () => {
+    const lines = statusLines(reading([row]), Option.some(SERVE_NOT_RUNNING));
+    expect(lines[0]).toBe(SERVE_NOT_RUNNING);
+    expect(lines[1]).toContain("ts-1");
+  });
+
+  test("carries no warning while serve runs", () => {
+    const lines = statusLines(reading([row]), Option.none());
+    expect(lines.some((line) => line.includes("serve is not running"))).toBe(false);
+    expect(lines[0]).toContain("ts-1");
+  });
+
+  test("with no rows and no serve, the notice comes before the empty message", () => {
+    expect(statusLines(reading([]), Option.some(SERVE_NOT_RUNNING))).toEqual([
+      SERVE_NOT_RUNNING,
+      "nothing queued, working or waiting",
+    ]);
   });
 });

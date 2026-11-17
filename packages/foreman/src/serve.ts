@@ -241,6 +241,17 @@ export const holdLock = (path: string) =>
     (fd) => Effect.sync(() => closeSync(fd)),
   );
 
+/**
+ * Whether a `foreman serve` holds the lock beside `statePath`. The kernel
+ * answers, not a timestamp, so a serve that is alive but inside a long tick
+ * still reads as running.
+ */
+export const serveRunning = (statePath: string) =>
+  Effect.scoped(holdLock(lockPath(statePath))).pipe(
+    Effect.as(false),
+    Effect.catchTag("ServeRunning", () => Effect.succeed(true)),
+  );
+
 /** The lock file could not be opened at all. */
 export class LockError extends Data.TaggedError("LockError")<{
   readonly lock: string;
