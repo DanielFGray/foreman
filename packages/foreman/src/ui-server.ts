@@ -160,11 +160,19 @@ export const gateMiddleware = (gate: Gate) =>
   );
 
 /** The tags of failures no page can answer (see infraAsDefects). */
-const INFRA_TAGS: ReadonlyArray<string> = ["PlatformError", "SchemaError", "SqlError"];
+const INFRA_TAGS: ReadonlyArray<string> = [
+  "PlatformError",
+  "SchemaError",
+  "SqlError",
+  "RegistryError",
+];
 
 const isInfra = <E>(
   error: E,
-): error is Extract<E, { readonly _tag: "PlatformError" | "SchemaError" | "SqlError" }> =>
+): error is Extract<
+  E,
+  { readonly _tag: "PlatformError" | "SchemaError" | "SqlError" | "RegistryError" }
+> =>
   typeof error === "object" &&
   error !== null &&
   "_tag" in error &&

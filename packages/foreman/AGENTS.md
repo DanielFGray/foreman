@@ -686,9 +686,12 @@ gate, and there the full run is the reviewer's after all.
 
 **The ladder is the registry's.** `src/registry.ts` reads the `ladder` and
 `models` tables of the task store (`TASKS_DB`, else `~/.tasks/tasks.db`), through
-the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. A
-store with no rungs is a startup error, not a fallback, because a
-fallback is a second ladder that can drift. The model row carries the harness.
+the SqlClient the process shares with `Records`; `config.jsonc` has no ladder. The
+tick reads the ladder and reviewers again on every pass, so `foreman ladder disable`
+takes effect on the next one with no restart. A store with no rungs, or with none
+enabled, holds every open project with the reason on its held row, and dispatches
+nothing; there is no fallback ladder, because a fallback is a second ladder that can
+drift. The model row carries the harness.
 Each ladder row and each reviewer row carries its own thinking level, and
 `launchArguments` in `src/harness.ts` turns it into the harness's flag; the
 model has none, so a seat's level has one source. An absent level passes no

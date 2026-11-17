@@ -22,7 +22,7 @@ import { policyPath, readPolicy } from "./policy-file.ts";
 import { Machine } from "./machine.ts";
 import { Quota } from "./quota.ts";
 import { queueFrom } from "./queue.ts";
-import { Registry } from "./registry.ts";
+import { Registry, readLadder } from "./registry.ts";
 import { Repository } from "./repository.ts";
 import { RepositoryError } from "./errors.ts";
 import { telemetry } from "./telemetry.ts";
@@ -50,6 +50,7 @@ export const services = Layer.provideMerge(
   Layer.mergeAll(
     HcFleet,
     settings,
+    Registry.layerSql,
     Records.layer,
     Prompts.Default,
     Quota.Default,
@@ -66,6 +67,7 @@ export const storeServices = Layer.mergeAll(
   settings,
   HcFleet,
   Repository.Default,
+  Registry.layerSql,
 ).pipe(Layer.provideMerge(BunServices.layer), Layer.provide(store));
 
 /**
@@ -111,7 +113,7 @@ export const queueOf = (project: Option.Option<string>) =>
     const epics = yield* records.epicsOver(ready);
     const { queue } = queueFrom({
       ready,
-      ladder: (yield* Settings).ladder,
+      ladder: yield* readLadder,
       projects,
       epics,
       failed: new Set(),

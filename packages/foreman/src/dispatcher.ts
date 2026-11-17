@@ -16,6 +16,7 @@ import {
   Layer,
 } from "effect";
 import { Settings } from "./config.ts";
+import { Registry } from "./registry.ts";
 import {
   type AgentRole,
   type CloseOptions,
@@ -66,6 +67,7 @@ import {
   Repository,
   type Hold,
   type HoldReason,
+  type ProjectHoldReason,
   wrongBranch,
 } from "./repository.ts";
 import { Machine } from "./machine.ts";
@@ -73,11 +75,13 @@ import { Quota, type Usage, walledSeats } from "./quota.ts";
 import {
   authorFor,
   dispatchable as dispatchableRungs,
+  type Ladder,
   isEnabled,
   mayAuthor,
   levelOf,
   levelPeers,
   highestFailure,
+  ladderProblem,
   providersOf,
   providerOf,
   type LastStarts,
@@ -87,7 +91,7 @@ import {
   seatsOn,
 } from "./ladder.ts";
 import { type BlockSeat, drawSeat, type PerRole, seatAt, taskWalls } from "./agent-rung.ts";
-import { type Seats, seatOf } from "./reviewers.ts";
+import { type Reviewer, type Seats, seatOf } from "./reviewers.ts";
 import {
   instructionNames,
   nextAgent,
@@ -130,7 +134,7 @@ import {
   Records,
 } from "./records.ts";
 import { Tracker } from "./tracker.ts";
-import { RepositoryError, TrackerError } from "./errors.ts";
+import { Refused, RegistryError, RepositoryError, TrackerError } from "./errors.ts";
 import {
   authoredBy,
   directBase,
@@ -195,11 +199,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     // command never runs the loop, so it does not ask; its GitHub reads fail
     // with gh's own error instead.
     const signedOut = yield* Ref.make(Option.none<string>());
+    // The registry the ladder and reviewers are read from every tick.
+    const registry = yield* Registry;
+    // The blind-seat warning last logged, so a steady set is logged once.
+    const lastBlind = yield* Ref.make<string | undefined>(undefined);
 
     const runAttributes = (
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
       rung: Seat,
       role: AgentRole,
+      ladder: Ladder,
     ) => ({
       task: task.id,
       project: task.project,
@@ -208,8 +217,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       role,
       // A reviewer has no level, so its attempt counts its own runs alone.
       attempt:
-        attemptsOf(task, role === "author" ? levelPeers(settings.ladder, rung.name) : [rung.name]) +
-        1,
+        attemptsOf(task, role === "author" ? levelPeers(ladder, rung.name) : [rung.name]) + 1,
       labels: task.labels.join(","),
     });
 
@@ -217,9 +225,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Pick<Item, "id" | "project" | "labels" | "runs" | "charges">,
       rung: Seat,
       role: AgentRole,
+      ladder: Ladder,
       effect: Effect.Effect<A, E, R>,
     ) => {
-      const attributes = runAttributes(task, rung, role);
+      const attributes = runAttributes(task, rung, role, ladder);
       return effect.pipe(Effect.tap(() => Effect.annotateCurrentSpan(attributes)));
     };
 
@@ -370,51 +379,55 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * needs before it acts on a row: the command line holds no dashboard, so
      * this is how it learns which rows exist.
      */
-    const read = Effect.gen(function* () {
-      // Read once and handed to both readings. A tick observes twice — before
-      // it acts, and again on fresh eyes before it fills — while an allowance
-      // moves on the order of hours, so asking each provider twice a poll
-      // would be a request every few seconds for a number that cannot have
-      // changed between them.
-      //
-      // Forked rather than awaited, because it is the slowest read in the tick
-      // and the last one any decision needs: a provider is asked over the
-      // network, while everything below is a local store or a git checkout.
-      // Waiting for it first is the tick standing still for as long as the
-      // slowest account takes to answer. It is still this tick's reading — the
-      // join is before anything interprets it — so nothing is decided from a
-      // probe that finished during an earlier tick.
-      //
-      // Asked at all only where the answer has a consumer. A fleet that is not
-      // running dispatches nothing, so no gate reads an allowance, and the
-      // spent accounts in attention are not what stopped it — the policy is,
-      // and the published reading already says so. Probing on regardless is a
-      // network request every poll to explain a halt that has another cause.
-      // The policy is the previous reading's: a pause takes one poll to stop
-      // the probes, and the probe is all that lags.
-      const previousPolicy = (yield* SubscriptionRef.get(state)).policy;
-      const wanted = modeOf(previousPolicy) === "running" || !(yield* Ref.get(everProbed));
-      if (wanted) yield* Ref.set(everProbed, true);
-      const probing = yield* Effect.forkChild(
-        wanted ? readProviders : Effect.succeed<ReadonlyArray<Provider>>([]),
-      );
-      const observation = yield* observe;
-      // A tick that did not ask carries the last answer rather than publishing
-      // an empty set, because "not read" and "no accounts" look identical on a
-      // dashboard and only one of them is true. Carried for the view alone:
-      // the gate that reads an allowance runs only while the fleet is
-      // running, and a running fleet probes on every tick, so no
-      // dispatch is ever decided from a reading this line kept.
-      const previous = yield* SubscriptionRef.get(state);
-      const providers = wanted ? yield* Fiber.join(probing) : previous.providers;
+    const read = (reading: SeatsReading) =>
+      Effect.gen(function* () {
+        const seats = reading._tag === "Usable" ? reading.seats : NO_SEATS;
+        // Read once and handed to both readings. A tick observes twice — before
+        // it acts, and again on fresh eyes before it fills — while an allowance
+        // moves on the order of hours, so asking each provider twice a poll
+        // would be a request every few seconds for a number that cannot have
+        // changed between them.
+        //
+        // Forked rather than awaited, because it is the slowest read in the tick
+        // and the last one any decision needs: a provider is asked over the
+        // network, while everything below is a local store or a git checkout.
+        // Waiting for it first is the tick standing still for as long as the
+        // slowest account takes to answer. It is still this tick's reading — the
+        // join is before anything interprets it — so nothing is decided from a
+        // probe that finished during an earlier tick.
+        //
+        // Asked at all only where the answer has a consumer. A fleet that is not
+        // running dispatches nothing, so no gate reads an allowance, and the
+        // spent accounts in attention are not what stopped it — the policy is,
+        // and the published reading already says so. Probing on regardless is a
+        // network request every poll to explain a halt that has another cause.
+        // The policy is the previous reading's: a pause takes one poll to stop
+        // the probes, and the probe is all that lags.
+        const previousPolicy = (yield* SubscriptionRef.get(state)).policy;
+        const wanted = modeOf(previousPolicy) === "running" || !(yield* Ref.get(everProbed));
+        if (wanted) yield* Ref.set(everProbed, true);
+        const probing = yield* Effect.forkChild(
+          wanted ? readProviders(seats) : Effect.succeed<ReadonlyArray<Provider>>([]),
+        );
+        const observation = yield* observe(seats);
+        // A tick that did not ask carries the last answer rather than publishing
+        // an empty set, because "not read" and "no accounts" look identical on a
+        // dashboard and only one of them is true. Carried for the view alone:
+        // the gate that reads an allowance runs only while the fleet is
+        // running, and a running fleet probes on every tick, so no
+        // dispatch is ever decided from a reading this line kept.
+        const previous = yield* SubscriptionRef.get(state);
+        const providers = wanted ? yield* Fiber.join(probing) : previous.providers;
 
-      const current = yield* interpret(observation, providers);
-      yield* SubscriptionRef.set(state, current);
-      // The file may have changed after this reading took its copy, and then
-      // this set overwrote the watcher's newer copy, so publish the file again.
-      yield* publishPolicy;
-      return { current, providers };
-    });
+        const interpreted = yield* interpret(observation, providers);
+        const current =
+          reading._tag === "Usable" ? interpreted : withLadderHold(interpreted, reading.reason);
+        yield* SubscriptionRef.set(state, current);
+        // The file may have changed after this reading took its copy, and then
+        // this set overwrote the watcher's newer copy, so publish the file again.
+        yield* publishPolicy;
+        return { current, providers };
+      });
 
     /**
      * Reads the whole world and works out what to do about it.
@@ -445,9 +458,22 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const tick = <E, R>(codeMoved: Effect.Effect<boolean, E, R>) =>
       Effect.gen(function* () {
         if (yield* codeMoved) return "moved" as const;
-        const { current, providers } = yield* read;
+        const reading = yield* readSeats;
+        const { current, providers } = yield* read(reading);
         if (modeOf(current.policy) !== "running") return "ran" as const;
-        yield* settle(current);
+        // An unusable ladder runs the passes that choose no seat: tidy, reclaim and
+        // recover. It skips settle, which hands walled work to a seat and reviews
+        // finished work, and fill, which dispatches. Landing is inside settle, so it
+        // stops too. That is a wall, not a settled design: with no rungs, each
+        // drawing's agent blocks fail validation (offersOf), so landing could not run
+        // on this reading even if settle did.
+        if (reading._tag === "Unusable") {
+          yield* tidy(current);
+          yield* reclaim(current);
+          yield* recover(current);
+          return "ran" as const;
+        }
+        yield* settle(current, reading.seats);
         yield* tidy(current);
         yield* reclaim(current);
         yield* recover(current);
@@ -461,7 +487,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // cost a store read per branch and a `git status` per worktree to build.
         // Reading them again here would be work whose one consumer is the
         // discard.
-        yield* fill(yield* readDispatch(providers));
+        yield* fill(yield* readDispatch(providers, reading.seats), reading.seats);
         // A grant with nothing left to cover is removed, so the file says only
         // what still holds.
         if (current.policy.grants.length > 0) {
@@ -469,6 +495,83 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         }
         return "ran" as const;
       }).pipe(Effect.withSpan("foreman.tick"));
+
+    /**
+     * A rung or reviewer whose account cannot be named is dispatched blind:
+     * foreman cannot ask whether it has room left, so the fleet learns it is
+     * out of quota by spending a run on it. Not an error, and the operator is
+     * the one who can say which plan a bare harness is signed in to, so the
+     * warning names the seats. Logged when the set changes, not every poll.
+     */
+    const warnBlind = (ladder: Ladder, reviewers: ReadonlyArray<Reviewer>) =>
+      Effect.gen(function* () {
+        const blind = [...dispatchableRungs(ladder), ...reviewers]
+          .filter((seat) => providerOf(seat) === undefined)
+          .map((seat) => `"${seat.name}"`);
+        const note = blind.length === 0 ? undefined : blind.join(", ");
+        if (note === (yield* Ref.get(lastBlind))) return;
+        yield* Ref.set(lastBlind, note);
+        if (note !== undefined) {
+          yield* Effect.logWarning(
+            `no provider derivable for ${note} in the registry — set "provider" on each so foreman can read its remaining quota before dispatching`,
+          );
+        }
+      });
+
+    /** A registry that cannot be read refuses as an unusable ladder does, naming the read. */
+    const registryUnreadable = (error: RegistryError) =>
+      new Refused({ detail: `registry unreadable: ${error.detail}` });
+
+    /**
+     * The ladder and the reviewers, read from the registry as one reading, or
+     * refused with the reason they cannot dispatch. Every hand command reads
+     * through here, so a command refuses on an unusable ladder instead of
+     * acting on it.
+     */
+    const seatsNow = Effect.gen(function* () {
+      const ladder = yield* registry.readLadder.pipe(Effect.mapError(registryUnreadable));
+      const reviewers = yield* registry.readReviewers.pipe(Effect.mapError(registryUnreadable));
+      const problem = ladderProblem(ladder);
+      if (problem !== undefined) return yield* new Refused({ detail: problem });
+      return { ladder, reviewers } satisfies Seats;
+    });
+
+    /**
+     * A tick's reading of the ladder: `Usable` with its seats, or `Unusable`
+     * with the reason. Read every tick, so `foreman ladder disable` and a
+     * reviewer edit reach the next dispatch with no restart, and serve keeps
+     * running when the ladder cannot dispatch.
+     */
+    const readSeats = seatsNow.pipe(
+      Effect.tap(({ ladder, reviewers }) => warnBlind(ladder, reviewers)),
+      Effect.map((seats): SeatsReading => ({ _tag: "Usable", seats })),
+      Effect.catchTag("Refused", (refused) =>
+        Effect.succeed<SeatsReading>({ _tag: "Unusable", reason: refused.detail }),
+      ),
+    );
+
+    /** The seats an unusable ladder is observed with: none, so nothing is offered or chosen. */
+    const NO_SEATS: Seats = { ladder: [], reviewers: [] };
+
+    /** The world read as a tick reads it, for a command that reads without acting. */
+    const readWorld = readSeats.pipe(Effect.flatMap(read));
+
+    /**
+     * Holds every open project for the ladder's reason, over the reading this
+     * tick took. The rows it adds are the only ones that name the ladder, so a
+     * reading that is usable publishes none.
+     */
+    const withLadderHold = (current: Interpretation, reason: string): Interpretation => ({
+      ...current,
+      held: [
+        ...current.held,
+        ...current.projects.map((project): Held => ({
+          project: project.name,
+          reason: "ladder",
+          detail: reason,
+        })),
+      ],
+    });
 
     /**
      * What each account behind the ladder has left of its allowance.
@@ -479,40 +582,41 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * gate is for. Its rungs stay dispatchable and an agent meets the wall
      * itself.
      */
-    const readProviders = Effect.forEach(
-      providersOf(settings.ladder, settings.reviewers),
-      (provider) =>
-        quota.usage(provider).pipe(
-          Effect.map((usage): Provider => ({
-            provider,
-            plan: usage.plan,
-            allowances: usage.allowances,
-            rungs: rungsOn(settings.ladder, provider),
-            reviewers: seatsOn(settings.reviewers, provider),
-            unreadable: undefined,
-          })),
-          Effect.catch((error) =>
-            (error.permanent
-              ? // A permanent failure — an account with no usage source, a
-                // missing credential, an expired token — repeats on every poll,
-                // so it is carried to the dashboard and never logged. Only a
-                // transient one, which may clear by itself, is worth a line.
-                Effect.void
-              : Effect.logWarning(`quota unreadable for ${provider}: ${error.detail}`)
-            ).pipe(
-              Effect.as<Provider>({
-                provider,
-                plan: undefined,
-                allowances: [],
-                rungs: rungsOn(settings.ladder, provider),
-                reviewers: seatsOn(settings.reviewers, provider),
-                unreadable: error.detail,
-              }),
+    const readProviders = (seats: Seats) =>
+      Effect.forEach(
+        providersOf(seats.ladder, seats.reviewers),
+        (provider) =>
+          quota.usage(provider).pipe(
+            Effect.map((usage): Provider => ({
+              provider,
+              plan: usage.plan,
+              allowances: usage.allowances,
+              rungs: rungsOn(seats.ladder, provider),
+              reviewers: seatsOn(seats.reviewers, provider),
+              unreadable: undefined,
+            })),
+            Effect.catch((error) =>
+              (error.permanent
+                ? // A permanent failure — an account with no usage source, a
+                  // missing credential, an expired token — repeats on every poll,
+                  // so it is carried to the dashboard and never logged. Only a
+                  // transient one, which may clear by itself, is worth a line.
+                  Effect.void
+                : Effect.logWarning(`quota unreadable for ${provider}: ${error.detail}`)
+              ).pipe(
+                Effect.as<Provider>({
+                  provider,
+                  plan: undefined,
+                  allowances: [],
+                  rungs: rungsOn(seats.ladder, provider),
+                  reviewers: seatsOn(seats.reviewers, provider),
+                  unreadable: error.detail,
+                }),
+              ),
             ),
           ),
-        ),
-      { concurrency: "unbounded" },
-    );
+        { concurrency: "unbounded" },
+      );
 
     /**
      * One reading of the world, holding only what every consumer of it needs.
@@ -525,338 +629,348 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * only a person looks at are read in `interpret` instead, so the second
      * reading does not pay for them.
      */
-    const observe = Effect.gen(function* () {
-      // The roster is every dispatcher's: the fleet lists every task's workers
-      // whoever started them, and a label records no ownership — two
-      // foremen against different configs are not competing for the same
-      // slots. The checkout a workspace's worktree belongs to is what the
-      // config's project set scopes, and the fleet reports it, so ownership is
-      // settled before the store is asked anything. Scoping by the task's
-      // project instead means one store read per workspace on the machine
-      // before knowing whether any of them is this dispatcher's — and it cannot
-      // classify a workspace whose task has been deleted at all.
-      const everyone = yield* fleet.roster;
-      const resolved = yield* resolveProjects(everyone);
+    const observe = (seats: Seats) =>
+      Effect.gen(function* () {
+        // The roster is every dispatcher's: the fleet lists every task's workers
+        // whoever started them, and a label records no ownership — two
+        // foremen against different configs are not competing for the same
+        // slots. The checkout a workspace's worktree belongs to is what the
+        // config's project set scopes, and the fleet reports it, so ownership is
+        // settled before the store is asked anything. Scoping by the task's
+        // project instead means one store read per workspace on the machine
+        // before knowing whether any of them is this dispatcher's — and it cannot
+        // classify a workspace whose task has been deleted at all.
+        const everyone = yield* fleet.roster;
+        const resolved = yield* resolveProjects(everyone);
 
-      // The operator's policy, read every pass so an edit takes effect on the
-      // next one.
-      const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
-        Effect.provideContext(platform),
-      );
+        // The operator's policy, read every pass so an edit takes effect on the
+        // next one.
+        const { policy, error: policyError } = yield* readPolicy(policyPath()).pipe(
+          Effect.provideContext(platform),
+        );
 
-      // Each project's tracker reads its tasks once for this reading. A
-      // project whose tracker did not answer leaves the project set: none of
-      // its workers is ours this reading, so none settles or reads as an
-      // orphan, and none of its branches is swept, because the tracker that
-      // would say which tasks still hold them said nothing.
-      const unreachable = yield* Effect.forEach(resolved.projects, (project) =>
-        Effect.gen(function* () {
-          const reason = yield* Ref.get(signedOut);
-          if (trackerOf(policy, project.name) === "github" && Option.isSome(reason)) {
-            return yield* new TrackerError({ command: "gh auth status", detail: reason.value });
-          }
-          yield* tracker.refresh(project.name);
-        }).pipe(
-          Effect.as<ReadonlyArray<Held>>([]),
-          Effect.catch((error) =>
-            Effect.logWarning(`holding ${project.name}: ${error.message}`).pipe(
-              Effect.as<ReadonlyArray<Held>>([
-                { project: project.name, reason: "unreachable", detail: error.message },
-              ]),
+        // Each project's tracker reads its tasks once for this reading. A
+        // project whose tracker did not answer leaves the project set: none of
+        // its workers is ours this reading, so none settles or reads as an
+        // orphan, and none of its branches is swept, because the tracker that
+        // would say which tasks still hold them said nothing.
+        const unreachable = yield* Effect.forEach(resolved.projects, (project) =>
+          Effect.gen(function* () {
+            const reason = yield* Ref.get(signedOut);
+            if (trackerOf(policy, project.name) === "github" && Option.isSome(reason)) {
+              return yield* new TrackerError({ command: "gh auth status", detail: reason.value });
+            }
+            yield* tracker.refresh(project.name);
+          }).pipe(
+            Effect.as<ReadonlyArray<Held>>([]),
+            Effect.catch((error) =>
+              Effect.logWarning(`holding ${project.name}: ${error.message}`).pipe(
+                Effect.as<ReadonlyArray<Held>>([
+                  { project: project.name, reason: "unreachable", detail: error.message },
+                ]),
+              ),
             ),
           ),
-        ),
-      ).pipe(Effect.map((rows) => rows.flat()));
-      const projects = resolved.projects.filter(
-        (project) => !unreachable.some((held) => held.project === project.name),
-      );
-      const { ambiguous } = resolved;
-      const open = new Set(projects.filter((project) => project.open).map((p) => p.name));
-      const roster = ours(everyone, new Set(projects.map((project) => project.directory)));
+        ).pipe(Effect.map((rows) => rows.flat()));
+        const projects = resolved.projects.filter(
+          (project) => !unreachable.some((held) => held.project === project.name),
+        );
+        const { ambiguous } = resolved;
+        const open = new Set(projects.filter((project) => project.open).map((p) => p.name));
+        const roster = ours(everyone, new Set(projects.map((project) => project.directory)));
 
-      // Every workspace's task, read once. The roster is joined to the store
-      // rather than filtered through status queries, because a task leaves a
-      // column's status at the exact moment it moves to another — the durable
-      // join is what lets work that has reached a terminal state still be
-      // settled.
-      //
-      // A store that would not answer is not an answer: the workspace is left
-      // out of this reading entirely and the next tick asks again. Only
-      // `lookup` returning nothing is a fact, and it makes the workspace an
-      // orphan below.
-      const scopedNames = new Set(projects.map((project) => project.name));
-      const readings = yield* Effect.forEach(roster, (worker) =>
-        records.lookup(worker.task).pipe(
-          Effect.map((task) => [{ worker, task }] as const),
-          Effect.catch((error) =>
-            Effect.logWarning(`skipped worker ${worker.task}: ${error}`).pipe(
-              Effect.as<ReadonlyArray<{ worker: Worker; task: Option.Option<Item> }>>([]),
+        // Every workspace's task, read once. The roster is joined to the store
+        // rather than filtered through status queries, because a task leaves a
+        // column's status at the exact moment it moves to another — the durable
+        // join is what lets work that has reached a terminal state still be
+        // settled.
+        //
+        // A store that would not answer is not an answer: the workspace is left
+        // out of this reading entirely and the next tick asks again. Only
+        // `lookup` returning nothing is a fact, and it makes the workspace an
+        // orphan below.
+        const scopedNames = new Set(projects.map((project) => project.name));
+        const readings = yield* Effect.forEach(roster, (worker) =>
+          records.lookup(worker.task).pipe(
+            Effect.map((task) => [{ worker, task }] as const),
+            Effect.catch((error) =>
+              Effect.logWarning(`skipped worker ${worker.task}: ${error}`).pipe(
+                Effect.as<ReadonlyArray<{ worker: Worker; task: Option.Option<Item> }>>([]),
+              ),
             ),
           ),
-        ),
-      ).pipe(
-        Effect.map((entries) => entries.flat()),
-        // A hand worker has no checkout to be scoped by, so its task's project
-        // decides whether it is this dispatcher's to count.
-        Effect.map((entries) =>
-          entries.filter(
-            ({ worker, task }) =>
-              worker.owner === "foreman" ||
-              (Option.isSome(task) && scopedNames.has(task.value.project)),
+        ).pipe(
+          Effect.map((entries) => entries.flat()),
+          // A hand worker has no checkout to be scoped by, so its task's project
+          // decides whether it is this dispatcher's to count.
+          Effect.map((entries) =>
+            entries.filter(
+              ({ worker, task }) =>
+                worker.owner === "foreman" ||
+                (Option.isSome(task) && scopedNames.has(task.value.project)),
+            ),
           ),
-        ),
-      );
+        );
 
-      // Each checkout's tip and its uncommitted paths. A task that works in the
-      // operator's checkout starts only from a clean tree, and a task on the
-      // operator's own branch reads its work at that tip. A checkout that cannot
-      // answer is held as unreadable, so nothing starts or lands there.
-      type CheckoutState = {
-        readonly project: string;
-        readonly changes: ReadonlyArray<string>;
-        readonly head: string | undefined;
-        readonly unanswered: string | undefined;
-      };
-      const checkoutStates = yield* Effect.forEach(
-        projects,
-        (project): Effect.Effect<CheckoutState> =>
-          Effect.all([
-            repository.changes(project.directory),
-            repository.head(project.directory),
-          ]).pipe(
-            Effect.map(([changes, head]): CheckoutState => ({
-              project: project.name,
-              changes,
-              head,
-              unanswered: undefined,
-            })),
-            Effect.catch((error: RepositoryError): Effect.Effect<CheckoutState> =>
-              Effect.succeed({
+        // Each checkout's tip and its uncommitted paths. A task that works in the
+        // operator's checkout starts only from a clean tree, and a task on the
+        // operator's own branch reads its work at that tip. A checkout that cannot
+        // answer is held as unreadable, so nothing starts or lands there.
+        type CheckoutState = {
+          readonly project: string;
+          readonly changes: ReadonlyArray<string>;
+          readonly head: string | undefined;
+          readonly unanswered: string | undefined;
+        };
+        const checkoutStates = yield* Effect.forEach(
+          projects,
+          (project): Effect.Effect<CheckoutState> =>
+            Effect.all([
+              repository.changes(project.directory),
+              repository.head(project.directory),
+            ]).pipe(
+              Effect.map(([changes, head]): CheckoutState => ({
                 project: project.name,
-                changes: [],
-                head: undefined,
-                unanswered: error.detail,
+                changes,
+                head,
+                unanswered: undefined,
+              })),
+              Effect.catch((error: RepositoryError): Effect.Effect<CheckoutState> =>
+                Effect.succeed({
+                  project: project.name,
+                  changes: [],
+                  head: undefined,
+                  unanswered: error.detail,
+                }),
+              ),
+            ),
+        );
+        const changes: ReadonlyMap<string, ReadonlyArray<string>> = new Map(
+          checkoutStates
+            .filter((entry) => entry.unanswered === undefined && entry.changes.length > 0)
+            .map((entry) => [entry.project, entry.changes] as const),
+        );
+        const unanswered = checkoutStates.flatMap((entry): ReadonlyArray<Held> =>
+          entry.unanswered === undefined
+            ? []
+            : [{ project: entry.project, reason: "unreadable", detail: entry.unanswered }],
+        );
+        const heads = new Map(checkoutStates.map((entry) => [entry.project, entry.head] as const));
+
+        // Which checkouts the operator is presently working in. Read every tick
+        // like everything else: you clean a tree up between two ticks and the
+        // project comes back on its own. The reason rides along, because a hold
+        // that clears itself and one that needs a hand-run command must not read
+        // the same on the dashboard.
+        const checkouts = yield* Effect.forEach(projects, (project) =>
+          repository.isFree(project.directory).pipe(
+            Effect.map((result: Hold): ReadonlyArray<Held> =>
+              result._tag === "Clean"
+                ? []
+                : [
+                    {
+                      project: project.name,
+                      reason: result.reason,
+                      detail: result.detail,
+                      ...(result.branch === undefined ? {} : { branch: result.branch }),
+                    },
+                  ],
+            ),
+            // A checkout foreman cannot read is a checkout it must not merge
+            // into either, so an unreadable repository is held rather than free.
+            Effect.catch((error: RepositoryError) =>
+              Effect.logWarning(`holding ${project.name}: ${error}`).pipe(
+                Effect.as<ReadonlyArray<Held>>([
+                  {
+                    project: project.name,
+                    reason: "unreadable",
+                    detail: error.detail,
+                  },
+                ]),
+              ),
+            ),
+          ),
+        ).pipe(
+          Effect.map((rows) =>
+            rows.reduce<ReadonlyArray<Held>>((all, row) => [...all, ...row], []),
+          ),
+        );
+        // Tasks name a project, not a directory, so a name two checkouts share
+        // is held rather than guessed at; closing one of the spaces resolves it.
+        const checkoutHolds: ReadonlyArray<Held> = [
+          ...checkouts,
+          ...unreachable,
+          ...unanswered,
+          ...ambiguous.map((one): Held => ({
+            project: one.name,
+            reason: "ambiguous",
+            detail: `two checkouts are named ${one.name}: ${one.directories.join(", ")}`,
+          })),
+        ];
+
+        // Every claimed task across every tracker, then split: managed projects
+        // keep flowing through settle and fill; the rest surface as stranded so
+        // closing a project's last space cannot silence mid-pipeline work. A
+        // per-project claim query never asks for a project that has left the
+        // managed set, which is exactly the silence this reading closes.
+        // Placement later splits working authors from tasks under review.
+        const everywhere = yield* records.claimedEverywhere;
+        // Open-or-running is judged before the unreachable filter: a project whose
+        // tracker failed this reading is held, not stranded. An ambiguous name is
+        // open too, so it is managed here even though no one checkout is picked.
+        const managedNames = new Set(
+          [...resolved.projects, ...resolved.ambiguous].map((entry) => entry.name),
+        );
+        const reachable = new Set(projects.map((project) => project.name));
+        const inFlight = everywhere.filter((task) => reachable.has(task.project));
+        const stranded = strandedOf(everywhere, managedNames);
+        // One query, gated by the task store: `ready` returns a task only once every task
+        // blocking it is done, whichever project that blocker lives in. The
+        // allowlist is applied afterwards, to the tasks store's answer rather than to the
+        // question, so a blocker outside the fleet still holds its dependents.
+        const queue = yield* records.ready(Option.none());
+        // The queue ranks by the epics over its own tasks; a board groups the
+        // claimed tasks by theirs too.
+        const epics = yield* records.epicsOver([...queue, ...inFlight]);
+
+        // Each project's pipeline, read with the policy and checked against the
+        // ladder on every pass: a ladder edit can make a drawing invalid.
+        const drawings = yield* readPipelines(pipelinesPath()).pipe(
+          Effect.provideContext(platform),
+        );
+        const offers = offersOf(seats);
+        // One expansion per project: instruction names come from those readings.
+        const projectReadings = projects.map(
+          (project) => [project.name, pipelineFor(drawings.value, project.name)] as const,
+        );
+        const instructionSources = [
+          ...projectReadings.flatMap(([, reading]) =>
+            reading._tag === "Expanded" ? [reading.pipeline] : [],
+          ),
+        ];
+        const instructions = yield* prompts.instructions(
+          instructionSources.flatMap(instructionNames),
+        );
+        const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
+          projectReadings.map(([name, reading]) => [
+            name,
+            projectPipeline(reading, drawings.error, offers, instructions),
+          ]),
+        );
+        const targetHolds = yield* Effect.forEach(projects, (project) => {
+          const pipeline = runningPipeline(pipelines, project.name);
+          return pipeline === undefined ? Effect.succeed([]) : targetHoldsOf(project, pipeline);
+        }).pipe(Effect.map((rows) => rows.flat()));
+        const scopes = yield* scopesOf(policy.grants, records.lookup, records.children);
+
+        // Foreman's branches, in every project. One read, three questions: which
+        // branches nothing in the pipeline accounts for, whether a task handed
+        // back for review has anything on it, and which refs the sweep may
+        // delete. One read keeps these answers consistent.
+        const branches = yield* eachProject(projects, (project) =>
+          repository.branches(project.directory).pipe(
+            Effect.map((refs) =>
+              refs.flatMap((ref) => {
+                const task = taskOf(ref.branch);
+                return task
+                  ? [
+                      {
+                        ...ref,
+                        project: project.name,
+                        directory: project.directory,
+                        task,
+                      },
+                    ]
+                  : [];
               }),
             ),
           ),
-      );
-      const changes: ReadonlyMap<string, ReadonlyArray<string>> = new Map(
-        checkoutStates
-          .filter((entry) => entry.unanswered === undefined && entry.changes.length > 0)
-          .map((entry) => [entry.project, entry.changes] as const),
-      );
-      const unanswered = checkoutStates.flatMap((entry): ReadonlyArray<Held> =>
-        entry.unanswered === undefined
-          ? []
-          : [{ project: entry.project, reason: "unreadable", detail: entry.unanswered }],
-      );
-      const heads = new Map(checkoutStates.map((entry) => [entry.project, entry.head] as const));
+        );
 
-      // Which checkouts the operator is presently working in. Read every tick
-      // like everything else: you clean a tree up between two ticks and the
-      // project comes back on its own. The reason rides along, because a hold
-      // that clears itself and one that needs a hand-run command must not read
-      // the same on the dashboard.
-      const checkouts = yield* Effect.forEach(projects, (project) =>
-        repository.isFree(project.directory).pipe(
-          Effect.map((result: Hold): ReadonlyArray<Held> =>
-            result._tag === "Clean"
-              ? []
-              : [
-                  {
-                    project: project.name,
-                    reason: result.reason,
-                    detail: result.detail,
-                    ...(result.branch === undefined ? {} : { branch: result.branch }),
-                  },
-                ],
-          ),
-          // A checkout foreman cannot read is a checkout it must not merge
-          // into either, so an unreadable repository is held rather than free.
-          Effect.catch((error: RepositoryError) =>
-            Effect.logWarning(`holding ${project.name}: ${error}`).pipe(
-              Effect.as<ReadonlyArray<Held>>([
-                {
-                  project: project.name,
-                  reason: "unreadable",
-                  detail: error.detail,
-                },
-              ]),
+        // An approval is bound to the commit the reviewer read, so every task
+        // carries the tip its work has in this reading: its branch's, or, for a
+        // direct task, the checkout's while it holds the checkout.
+        const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
+
+        const withTip = (task: Item): Item => ({
+          ...task,
+          tip:
+            workspaceOf(pipelines, task) === "none"
+              ? occupies(pipelines, task)
+                ? heads.get(task.project)
+                : undefined
+              : tips.get(task.id),
+        });
+
+        const tipped = inFlight.map(withTip);
+        const claimed = tipped.filter((task) => !isUnderReview(placementIn(pipelines, task)));
+        const reviewing = tipped.filter((task) => isUnderReview(placementIn(pipelines, task)));
+
+        const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue]);
+
+        // The pull request of each task at a pull-request land block. It is the
+        // world's record of that landing, so it is read like git, every reading.
+        const pullRequests = new Map(
+          yield* Effect.forEach([...claimed, ...reviewing], (task) => {
+            const placement = placementIn(pipelines, task);
+            const project = projects.find((candidate) => candidate.name === task.project);
+            return placement?._tag === "At" &&
+              placement.node.kind === "land" &&
+              placement.node.how === "pull-request" &&
+              project !== undefined
+              ? readPullRequest(task, project, policy).pipe(
+                  Effect.map((reading) => [[task.id, reading] as const]),
+                )
+              : Effect.succeed([]);
+          }).pipe(Effect.map((entries) => entries.flat())),
+        );
+
+        // The page of each task in hand, for the front ends. It comes from the
+        // read the refresh above made, so it asks nothing new.
+        const urls = new Map(
+          yield* Effect.forEach([...claimed, ...reviewing, ...queue], (task) =>
+            tracker.url(task.id).pipe(
+              Effect.map(
+                Option.match({ onNone: () => [], onSome: (url) => [[task.id, url] as const] }),
+              ),
+              Effect.orElseSucceed(() => []),
             ),
-          ),
-        ),
-      ).pipe(
-        Effect.map((rows) => rows.reduce<ReadonlyArray<Held>>((all, row) => [...all, ...row], [])),
-      );
-      // Tasks name a project, not a directory, so a name two checkouts share
-      // is held rather than guessed at; closing one of the spaces resolves it.
-      const checkoutHolds: ReadonlyArray<Held> = [
-        ...checkouts,
-        ...unreachable,
-        ...unanswered,
-        ...ambiguous.map((one): Held => ({
-          project: one.name,
-          reason: "ambiguous",
-          detail: `two checkouts are named ${one.name}: ${one.directories.join(", ")}`,
-        })),
-      ];
+          ).pipe(Effect.map((entries) => entries.flat())),
+        );
 
-      // Every claimed task across every tracker, then split: managed projects
-      // keep flowing through settle and fill; the rest surface as stranded so
-      // closing a project's last space cannot silence mid-pipeline work. A
-      // per-project claim query never asks for a project that has left the
-      // managed set, which is exactly the silence this reading closes.
-      // Placement later splits working authors from tasks under review.
-      const everywhere = yield* records.claimedEverywhere;
-      // Open-or-running is judged before the unreachable filter: a project whose
-      // tracker failed this reading is held, not stranded. An ambiguous name is
-      // open too, so it is managed here even though no one checkout is picked.
-      const managedNames = new Set(
-        [...resolved.projects, ...resolved.ambiguous].map((entry) => entry.name),
-      );
-      const reachable = new Set(projects.map((project) => project.name));
-      const inFlight = everywhere.filter((task) => reachable.has(task.project));
-      const stranded = strandedOf(everywhere, managedNames);
-      // One query, gated by the task store: `ready` returns a task only once every task
-      // blocking it is done, whichever project that blocker lives in. The
-      // allowlist is applied afterwards, to the tasks store's answer rather than to the
-      // question, so a blocker outside the fleet still holds its dependents.
-      const queue = yield* records.ready(Option.none());
-      // The queue ranks by the epics over its own tasks; a board groups the
-      // claimed tasks by theirs too.
-      const epics = yield* records.epicsOver([...queue, ...inFlight]);
-
-      // Each project's pipeline, read with the policy and checked against the
-      // ladder on every pass: a ladder edit can make a drawing invalid.
-      const drawings = yield* readPipelines(pipelinesPath()).pipe(Effect.provideContext(platform));
-      const offers = offersOf(settings);
-      // One expansion per project: instruction names come from those readings.
-      const projectReadings = projects.map(
-        (project) => [project.name, pipelineFor(drawings.value, project.name)] as const,
-      );
-      const instructionSources = [
-        ...projectReadings.flatMap(([, reading]) =>
-          reading._tag === "Expanded" ? [reading.pipeline] : [],
-        ),
-      ];
-      const instructions = yield* prompts.instructions(
-        instructionSources.flatMap(instructionNames),
-      );
-      const pipelines: ReadonlyMap<string, ProjectPipeline> = new Map(
-        projectReadings.map(([name, reading]) => [
-          name,
-          projectPipeline(reading, drawings.error, offers, instructions),
-        ]),
-      );
-      const targetHolds = yield* Effect.forEach(projects, (project) => {
-        const pipeline = runningPipeline(pipelines, project.name);
-        return pipeline === undefined ? Effect.succeed([]) : targetHoldsOf(project, pipeline);
-      }).pipe(Effect.map((rows) => rows.flat()));
-      const scopes = yield* scopesOf(policy.grants, records.lookup, records.children);
-
-      // Foreman's branches, in every project. One read, three questions: which
-      // branches nothing in the pipeline accounts for, whether a task handed
-      // back for review has anything on it, and which refs the sweep may
-      // delete. One read keeps these answers consistent.
-      const branches = yield* eachProject(projects, (project) =>
-        repository.branches(project.directory).pipe(
-          Effect.map((refs) =>
-            refs.flatMap((ref) => {
-              const task = taskOf(ref.branch);
-              return task
-                ? [
-                    {
-                      ...ref,
-                      project: project.name,
-                      directory: project.directory,
-                      task,
-                    },
-                  ]
-                : [];
-            }),
-          ),
-        ),
-      );
-
-      // An approval is bound to the commit the reviewer read, so every task
-      // carries the tip its work has in this reading: its branch's, or, for a
-      // direct task, the checkout's while it holds the checkout.
-      const tips = new Map(branches.map((entry) => [entry.task, entry.tip] as const));
-
-      const withTip = (task: Item): Item => ({
-        ...task,
-        tip:
-          workspaceOf(pipelines, task) === "none"
-            ? occupies(pipelines, task)
-              ? heads.get(task.project)
-              : undefined
-            : tips.get(task.id),
+        return {
+          projects,
+          open,
+          readings: readings.map(({ worker, task }) => ({
+            worker,
+            task: Option.map(task, withTip),
+          })),
+          roster,
+          held: [...checkoutHolds, ...targetHolds, ...occupancy],
+          seats,
+          claimed,
+          reviewing,
+          stranded,
+          epics,
+          queue: queue.map(withTip),
+          policy,
+          policyError,
+          pipelines,
+          scopes,
+          branches,
+          changes,
+          pullRequests,
+          urls,
+          everyProject: resolved.projects,
+        } as const;
       });
 
-      const tipped = inFlight.map(withTip);
-      const claimed = tipped.filter((task) => !isUnderReview(placementIn(pipelines, task)));
-      const reviewing = tipped.filter((task) => isUnderReview(placementIn(pipelines, task)));
-
-      const occupancy = occupancyOf(pipelines, [...claimed, ...reviewing, ...queue]);
-
-      // The pull request of each task at a pull-request land block. It is the
-      // world's record of that landing, so it is read like git, every reading.
-      const pullRequests = new Map(
-        yield* Effect.forEach([...claimed, ...reviewing], (task) => {
-          const placement = placementIn(pipelines, task);
-          const project = projects.find((candidate) => candidate.name === task.project);
-          return placement?._tag === "At" &&
-            placement.node.kind === "land" &&
-            placement.node.how === "pull-request" &&
-            project !== undefined
-            ? readPullRequest(task, project, policy).pipe(
-                Effect.map((reading) => [[task.id, reading] as const]),
-              )
-            : Effect.succeed([]);
-        }).pipe(Effect.map((entries) => entries.flat())),
-      );
-
-      // The page of each task in hand, for the front ends. It comes from the
-      // read the refresh above made, so it asks nothing new.
-      const urls = new Map(
-        yield* Effect.forEach([...claimed, ...reviewing, ...queue], (task) =>
-          tracker.url(task.id).pipe(
-            Effect.map(
-              Option.match({ onNone: () => [], onSome: (url) => [[task.id, url] as const] }),
-            ),
-            Effect.orElseSucceed(() => []),
-          ),
-        ).pipe(Effect.map((entries) => entries.flat())),
-      );
-
-      return {
-        projects,
-        open,
-        readings: readings.map(({ worker, task }) => ({
-          worker,
-          task: Option.map(task, withTip),
-        })),
-        roster,
-        held: [...checkoutHolds, ...targetHolds, ...occupancy],
-        claimed,
-        reviewing,
-        stranded,
-        epics,
-        queue: queue.map(withTip),
-        policy,
-        policyError,
-        pipelines,
-        scopes,
-        branches,
-        changes,
-        pullRequests,
-        urls,
-        everyProject: resolved.projects,
-      } as const;
-    });
-
-    type Observation = Effect.Success<typeof observe>;
+    type Observation = Effect.Success<ReturnType<typeof observe>>;
     type Dispatchable = ReturnType<typeof dispatchFrom>;
+    /** The tick's ladder and reviewers, or why they cannot dispatch. */
+    type SeatsReading =
+      | { readonly _tag: "Usable"; readonly seats: Seats }
+      | { readonly _tag: "Unusable"; readonly reason: string };
 
     /**
      * Everything one reading of the world implies, without asking it again.
@@ -876,6 +990,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         open,
         readings,
         roster,
+        seats,
         held: observedHeld,
         claimed,
         reviewing,
@@ -997,7 +1112,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const failedIds = new Set(failed.map(([task]) => task));
       const { queue: ordered, yours } = queueFrom({
         ready: queue,
-        ladder: settings.ladder,
+        ladder: seats.ladder,
         projects: [...open],
         epics,
         failed: failedIds,
@@ -1052,7 +1167,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         queue: ordered,
         committed,
         pipelines,
-        seats: settings,
+        seats,
         walled,
         held,
       });
@@ -1120,13 +1235,16 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     };
 
     /** What fill decides from: one reading, narrowed to what a dispatch turns on. */
-    const readDispatch = (providers: ReadonlyArray<Provider>) =>
+    const readDispatch = (providers: ReadonlyArray<Provider>, seats: Seats) =>
       Effect.gen(function* () {
         const failed = failedTasks(yield* Ref.get(dispatchFailures));
         // Read once per tick, for fill alone: which rung of a level is next
         // in turn turns no gate, so the wide reading has no use for it.
         const lastStarts = yield* records.lastStarts;
-        return { ...dispatchFrom(yield* observe, providers, failed), lastStarts };
+        return {
+          ...dispatchFrom(yield* observe(seats), providers, failed),
+          lastStarts,
+        };
       });
 
     /**
@@ -1333,6 +1451,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       worker: Worker,
       wall: UsageWall,
       walled: PerRole<ReadonlySet<string>>,
+      seats: Seats,
       pipeline: Pipeline | undefined,
     ) =>
       Effect.gen(function* () {
@@ -1350,11 +1469,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
 
         // The run just closed `walled` is not in `task`, so its account is added here.
         const next = authorFor(
-          settings.ladder,
+          seats.ladder,
           failuresOf(task),
           new Set([
-            ...taskWalls(settings, task, walled).author,
-            ...rungsOn(settings.ladder, wall.provider),
+            ...taskWalls(seats, task, walled).author,
+            ...rungsOn(seats.ladder, wall.provider),
           ]),
         );
         const takeover =
@@ -1376,7 +1495,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * An author handing off to review is a success, not a completion: the task
      * stays alive and the review queue picks it up next tick.
      */
-    const settle = Effect.fn("foreman.settle")(function* (current: Interpretation) {
+    const settle = Effect.fn("foreman.settle")(function* (current: Interpretation, seats: Seats) {
       const coachCutoff = DateTime.subtract(yield* DateTime.now, {
         minutes: settings.coachWindow,
       });
@@ -1547,7 +1666,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             const ran = reviewedBy(task) ?? authoredBy(task);
             const role = reviewedBy(task) ? "review" : "author";
             const rung =
-              ran === undefined ? undefined : seatOf(settings, { role, rung: Option.some(ran) });
+              ran === undefined ? undefined : seatOf(seats, { role, rung: Option.some(ran) });
             // Only a stop without a verdict can be a wall: an onboarding worker
             // stands in the operator's own tree, which foreman never commits, so
             // it is left to the ordinary path.
@@ -1559,7 +1678,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                 ? Option.none<UsageWall>()
                 : yield* onUsageWall(worker, rung, role);
             if (rung) {
-              const attributes = runAttributes(task, rung, role);
+              const attributes = runAttributes(task, rung, role, seats.ladder);
               yield* Effect.annotateCurrentSpan({
                 ...attributes,
                 outcome: phase,
@@ -1619,7 +1738,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                       { _tag: "Stopped", ending: "vanished" },
                       pipelineOf(task),
                     ),
-                  onSome: (hit) => handOffWall(task, worker, hit, walledNow, pipelineOf(task)),
+                  onSome: (hit) =>
+                    handOffWall(task, worker, hit, walledNow, seats, pipelineOf(task)),
                 }),
               ),
               Match.when("VanishedEmpty", () =>
@@ -1706,7 +1826,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
                             ),
                           ),
                         ),
-                  onSome: (hit) => handOffWall(task, worker, hit, walledNow, pipelineOf(task)),
+                  onSome: (hit) =>
+                    handOffWall(task, worker, hit, walledNow, seats, pipelineOf(task)),
                 }),
               ),
               Match.exhaustive,
@@ -2402,7 +2523,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * dashboard names the project so the reason is visible rather than
      * mysterious.
      */
-    const fill = (current: Dispatchable & { readonly lastStarts: PerRole<LastStarts> }) =>
+    const fill = (
+      current: Dispatchable & { readonly lastStarts: PerRole<LastStarts> },
+      seats: Seats,
+    ) =>
       Effect.gen(function* () {
         yield* Effect.forEach(current.parks, park, { discard: true });
         // A task whose dispatch has failed twice is held out of the plan.
@@ -2423,8 +2547,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           current.dispatches,
           (dispatch) =>
             (dispatch.role === "review"
-              ? dispatchReview(dispatch.task, dispatch.block, started)
-              : dispatchAuthor(dispatch.task, dispatch.block, drawn, started)
+              ? dispatchReview(dispatch.task, dispatch.block, seats, started)
+              : dispatchAuthor(dispatch.task, dispatch.block, seats, drawn, started)
             ).pipe(
               Effect.tap(() => admitted(dispatch.permits, dispatch.task.id)),
               Effect.tap(() => clearFailure(dispatch.task.id)),
@@ -2578,11 +2702,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const seatFor = Effect.fnUntraced(function* (
       task: Item,
       block: AgentNode,
+      seats: Seats,
       drawn?: Set<string>,
       started?: PerRole<Map<string, Date>>,
     ) {
       const walled = walledSeats((yield* SubscriptionRef.get(state)).providers);
-      const choice = drawSeat(settings, block, task, walled, drawn, started);
+      const choice = drawSeat(seats, block, task, walled, drawn, started);
       if (choice._tag !== "Dispatch") {
         yield* Effect.logInfo(
           `${block.role} of ${task.id} at ${block.id} deferred: ${noSeat(block.role, block.model, choice._tag)}`,
@@ -2615,27 +2740,29 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * `rung` when one is named, else on the rung a tick would choose.
      */
     const handAuthor = (task: Item, rung?: Rung) =>
-      blockFor(task, "author").pipe(
-        Effect.flatMap((block) =>
-          block === undefined
-            ? Effect.succeed<Authored>({ _tag: "NoAuthorBlock", project: task.project })
-            : rung === undefined
-              ? dispatchAuthor(task, block)
-              : authorAt(task, rung, block),
-        ),
-      );
+      Effect.gen(function* () {
+        const block = yield* blockFor(task, "author");
+        if (block === undefined) {
+          return { _tag: "NoAuthorBlock", project: task.project } satisfies Authored;
+        }
+        const seats = yield* seatsNow;
+        return rung === undefined
+          ? yield* dispatchAuthor(task, block, seats)
+          : yield* authorAt(task, rung, block, seats);
+      });
 
     /** Starts a reviewer by hand, at the review block on the task's route. */
     const handReview = (task: Item) =>
-      blockFor(task, "review").pipe(
-        Effect.flatMap((block) =>
-          block === undefined ? Effect.void : dispatchReview(task, block),
-        ),
-      );
+      Effect.gen(function* () {
+        const block = yield* blockFor(task, "review");
+        if (block === undefined) return;
+        yield* dispatchReview(task, block, yield* seatsNow);
+      });
 
     const dispatchAuthor = Effect.fn("foreman.dispatch.author")(function* (
       task: Item,
       block: AgentNode,
+      seats: Seats,
       drawn?: Set<string>,
       started?: PerRole<Map<string, Date>>,
     ) {
@@ -2643,11 +2770,11 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // restart, and the allowances are this tick's reading. `drawn` and
       // `started` are this tick's burst, not the task's history: only `fill`
       // has them, so only it spreads.
-      const choice = yield* seatFor(task, block, drawn, started);
+      const choice = yield* seatFor(task, block, seats, drawn, started);
       if (choice._tag !== "Dispatch") {
         return { _tag: "NoSeat", seat: choice._tag, model: block.model } satisfies Authored;
       }
-      return yield* authorAt(task, choice.seat, block);
+      return yield* authorAt(task, choice.seat, block, seats);
     });
 
     /** Opens the task's workspace, claims it and starts its author on this rung. */
@@ -2655,6 +2782,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       rung: Seat,
       block: AgentNode,
+      seats: Seats,
     ) {
       const project = yield* projectFor(task.project);
       if (!project) return { _tag: "Unmanaged", project: task.project } satisfies Authored;
@@ -2686,6 +2814,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         task,
         rung,
         "author",
+        seats.ladder,
         fleet.spawn(worker, spawnAs(rung, prompt, "author")).pipe(
           // The agent never started, so the claim would strand the task until
           // the stale sweep noticed, and its run never happened. Hand both back
@@ -2703,6 +2832,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
     const dispatchReview = Effect.fn("foreman.dispatch.review")(function* (
       task: Item,
       block: AgentNode,
+      seats: Seats,
       started?: PerRole<Map<string, Date>>,
     ) {
       const project = yield* projectFor(task.project);
@@ -2725,7 +2855,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       // Resolved here rather than by each caller, so fill, a retry and an
       // intervention all pick a reviewer the same way. The status is untouched
       // when no reviewer can read the diff, so the task keeps its place.
-      const choice = yield* seatFor(task, block, undefined, started);
+      const choice = yield* seatFor(task, block, seats, undefined, started);
       if (choice._tag !== "Dispatch") return;
       const rung = choice.seat;
       const worker = yield* workspaceFor(task, project);
@@ -2752,6 +2882,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         task,
         rung,
         "review",
+        seats.ladder,
         fleet
           .spawn(worker, spawnAs(rung, prompt, "review"))
           .pipe(Effect.tapError(() => records.abandon(task.id, "review"))),
@@ -2790,8 +2921,9 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       task: Item,
       project: Project,
     ) {
+      const seats = yield* seatsNow;
       // Salvage needs judgement; the dearest author-enabled rung takes it.
-      const authors = settings.ladder.filter((rung) => isEnabled(rung) && mayAuthor(rung));
+      const authors = seats.ladder.filter((rung) => isEnabled(rung) && mayAuthor(rung));
       const rung = authors[authors.length - 1];
       if (rung === undefined) return;
       const block = yield* blockFor(task, "author");
@@ -2818,6 +2950,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         task,
         rung,
         "author",
+        seats.ladder,
         fleet
           .spawn(worker, spawnAs(rung, prompt, "author"))
           .pipe(Effect.tapError(() => records.abandon(task.id, "author"))),
@@ -2833,9 +2966,10 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      */
     const record = (task: Climbing, event: RunEvent, pipeline: Pipeline | undefined) =>
       Effect.gen(function* () {
+        const seats = yield* seatsNow;
         const done = stepOf(task, event, {
-          ladder: settings.ladder,
-          reviewers: settings.reviewers,
+          ladder: seats.ladder,
+          reviewers: seats.reviewers,
           attemptsPerLevel: settings.attemptsPerLevel,
           pipeline,
         });
@@ -2953,11 +3087,12 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         // that step; the failures are the next one.
         if (needsYou(task)) return yield* records.unpark(task.id);
         const failures = failuresOf(task);
-        const highest = highestFailure(settings.ladder, failures);
+        const { ladder } = yield* seatsNow;
+        const highest = highestFailure(ladder, failures);
         if (highest === undefined) return;
-        const level = levelOf(settings.ladder, highest);
+        const level = levelOf(ladder, highest);
         yield* Effect.forEach(
-          failures.filter((failure) => levelOf(settings.ladder, failure) === level),
+          failures.filter((failure) => levelOf(ladder, failure) === level),
           (failure) => records.clearFailure(task.id, failure),
           { discard: true },
         );
@@ -3076,7 +3211,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         const task = yield* records.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
         const project = yield* projectFor(task.project);
-        const rung = settings.ladder.find((candidate) => candidate.name === rungName);
+        const seats = yield* seatsNow;
+        const rung = seats.ladder.find((candidate) => candidate.name === rungName);
         if (!project || !rung || !(yield* holdsIntervenableWork(task, target.worker))) return;
 
         yield* stopAgents(target.worker);
@@ -3090,6 +3226,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             task,
             rung,
             "author",
+            seats.ladder,
             fleet.spawn(worker, spawnAs(rung, prompt, "author")),
           );
           yield* tracker.log(
@@ -3123,15 +3260,17 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
      * A task never names the rung that runs next, so the floor is what keeps
      * the next author from dropping below the chosen level.
      */
-    const raiseFloor = (task: Item, rung: Rung) => {
-      const already = new Set(failuresOf(task));
-      const beneath = settings.ladder.filter(
-        (lower) => lower.level < rung.level && !already.has(lower.name),
-      );
-      return Effect.forEach(beneath, (lower) => records.markFailure(task.id, lower.name), {
-        discard: true,
+    const raiseFloor = (task: Item, rung: Rung) =>
+      Effect.gen(function* () {
+        const { ladder } = yield* seatsNow;
+        const already = new Set(failuresOf(task));
+        const beneath = ladder.filter(
+          (lower) => lower.level < rung.level && !already.has(lower.name),
+        );
+        yield* Effect.forEach(beneath, (lower) => records.markFailure(task.id, lower.name), {
+          discard: true,
+        });
       });
-    };
 
     /**
      * Resumes a task on the rung the operator named, with the floor raised to
@@ -3142,7 +3281,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       Effect.gen(function* () {
         const task = yield* records.show(target.task.id);
         if (task.status === "done" || task.status === "canceled") return;
-        const rung = settings.ladder.find((candidate) => candidate.name === rungName);
+        const rung = (yield* seatsNow).ladder.find((candidate) => candidate.name === rungName);
         if (!rung) return;
         yield* stopAgents(target.worker);
         yield* records.clearDiagnostic(task.id);
@@ -3195,7 +3334,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       wake: nudge,
 
       /** Reads the world once without acting on it. */
-      read: Effect.asVoid(read),
+      read: readWorld.pipe(Effect.asVoid),
 
       /**
        * Runs until interrupted, or until `codeMoved` answers true. A host
@@ -3270,17 +3409,14 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         commanded(
           Option.match(rung, {
             onNone: () => handAuthor(task),
-            onSome: (name) => {
-              const rungs = dispatchableRungs(settings.ladder);
-              const named = rungs.find((candidate) => candidate.name === name);
-              return named
-                ? handAuthor(task, named)
-                : Effect.succeed<Authored>({
-                    _tag: "UnknownRung",
-                    rung: name,
-                    rungs: rungs.map((candidate) => candidate.name),
-                  });
-            },
+            onSome: (name) =>
+              Effect.gen(function* () {
+                const rungs = dispatchableRungs((yield* seatsNow).ladder);
+                const named = rungs.find((candidate) => candidate.name === name);
+                if (named) return yield* handAuthor(task, named);
+                const names: ReadonlyArray<string> = rungs.map((candidate) => candidate.name);
+                return { _tag: "UnknownRung", rung: name, rungs: names } satisfies Authored;
+              }),
           }),
         ),
 
@@ -3374,7 +3510,8 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
             if (!project) return;
             const block = yield* blockFor(task, "author");
             if (block === undefined) return;
-            const choice = yield* seatFor(task, block);
+            const seats = yield* seatsNow;
+            const choice = yield* seatFor(task, block, seats);
             if (choice._tag !== "Dispatch") return;
             const rung = choice.seat;
             // The workspace may be gone — the pane that was its only one closed
@@ -3497,7 +3634,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         commanded(
           Effect.gen(function* () {
             const task = yield* records.show(id);
-            yield* read;
+            yield* readWorld;
             const pipeline = runningPipeline(
               (yield* SubscriptionRef.get(state)).pipelines,
               task.project,
@@ -4696,7 +4833,8 @@ export interface StaleRow {
  */
 export interface Held {
   readonly project: string;
-  readonly reason: HoldReason | "unreachable";
+  /** `ladder`: the registry's ladder cannot dispatch, so every open project is held. */
+  readonly reason: ProjectHoldReason;
   readonly detail: string;
   /** For a `busy` hold, the task branch the checkout has out; that task is not held. */
   readonly branch?: string;

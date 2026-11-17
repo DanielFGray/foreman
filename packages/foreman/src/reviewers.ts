@@ -1,6 +1,6 @@
 import { Array as Arr, Option } from "effect";
 import type { Run } from "tasks";
-import { type Ladder, type LastStarts, leastRecentFirst, type Seat } from "./ladder.ts";
+import { type Ladder, type LastStarts, leastRecentFirst, type Rung, type Seat } from "./ladder.ts";
 
 /**
  * The reviewers: the list a review block takes its reader from.
@@ -69,7 +69,7 @@ export const reviewerFor = (
 
 /** The two lists an agent block takes its seat from: the ladder writes, the reviewers read. */
 export interface Seats {
-  readonly ladder: Ladder;
+  readonly ladder: ReadonlyArray<Rung>;
   readonly reviewers: ReadonlyArray<Reviewer>;
 }
 

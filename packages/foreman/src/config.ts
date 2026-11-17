@@ -1,11 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/sql";
-import { dispatchable, type Ladder, providerOf } from "./ladder.ts";
 import { Paths } from "./paths.ts";
 import { PathsError } from "./errors.ts";
-import { Registry } from "./registry.ts";
-import { RegistryError } from "./errors.ts";
-import type { Reviewer } from "./reviewers.ts";
 
 /** Everything foreman needs to know before it can dispatch anything. */
 export class Settings extends Context.Service<Settings, SettingsShape>()("Settings") {}
@@ -19,8 +14,8 @@ export class Settings extends Context.Service<Settings, SettingsShape>()("Settin
  * The projects are not configured: they are the operator's open spaces, read
  * every tick (`src/projects.ts`).
  */
-const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths | Registry> =
-  Effect.gen(function* () {
+const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths> = Effect.gen(
+  function* () {
     const paths = yield* Paths;
     const file = paths.configFile;
 
@@ -40,65 +35,7 @@ const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths | 
       ),
     );
 
-    // The ladder and the reviewers are the registry's, not the config file's:
-    // one copy of each list, shared with the trial record.
-    const registry = yield* Registry;
-    const { ladder, reviewers } = yield* Effect.all({
-      ladder: registry.readLadder,
-      reviewers: registry.readReviewers,
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ConfigError({
-            detail: cause instanceof RegistryError ? cause.detail : String(cause),
-          }),
-      ),
-    );
-
-    // A duplicate name makes both "the next rung up" and "which rung failed
-    // this task" ambiguous, and the second is durable: tasks record rung
-    // names, so a name that means two things corrupts work already filed.
-    const duplicate = ladder.find(
-      (rung, index) => ladder.findIndex((other) => other.name === rung.name) !== index,
-    );
-    if (duplicate) {
-      return yield* new ConfigError({
-        detail: `two rungs in ${file} are named "${duplicate.name}" — rung names are how tasks record which models have failed them, so they must be unique`,
-      });
-    }
-    // A ladder of nothing but retired rungs has ranks and no models. Every
-    // task in the queue would resolve to the operator, which reads as a
-    // backlog that needs a hundred decisions rather than a config with a
-    // line commented out.
-    if (dispatchable(ladder).length === 0) {
-      return yield* new ConfigError({
-        detail: `every rung in the registry is disabled — a retired rung keeps its place so old failures still position, but at least one rung must be dispatchable`,
-      });
-    }
-
-    // A rung or reviewer whose account cannot be named is dispatched blind: foreman
-    // cannot ask whether it has room left, so the fleet learns it is out of
-    // quota by spending a run on it. Not an error — a ladder that works
-    // today keeps working — but the operator is the only one who can say
-    // which plan a bare harness is signed in to, so they are told which rung
-    // to write it on. The claude harness is never blind: it always spends
-    // the claude.ai account.
-    const blind = [...dispatchable(ladder), ...reviewers].filter(
-      (seat) => providerOf(seat) === undefined,
-    );
-    if (blind.length > 0) {
-      yield* Effect.logWarning(
-        `no provider derivable for ${blind
-          .map((seat) => `"${seat.name}"`)
-          .join(
-            ", ",
-          )} in the registry — set "provider" on each so foreman can read its remaining quota before dispatching`,
-      );
-    }
-
     return Settings.of({
-      ladder,
-      reviewers,
       pollInterval: raw.pollSeconds,
       // The signal path is appended to this, so a trailing slash would send
       // every span to a doubled path the collector does not serve.
@@ -109,22 +46,18 @@ const loadSettings: Effect.Effect<typeof Settings.Service, ConfigError, Paths | 
       landedWindow: raw.landedWindowDays,
       attemptsPerLevel: raw.attemptsPerLevel,
     });
-  });
-
-/** Settings over a `Paths` the caller provides, so tests can freshen paths. */
-export const settingsLayer = Layer.effect(Settings, loadSettings).pipe(
-  Layer.provide(Registry.layerSql),
+  },
 );
 
-/** Settings over the process config file and the shared registry. */
-export const settings: Layer.Layer<Settings, ConfigError | PathsError, SqlClient.SqlClient> =
-  settingsLayer.pipe(Layer.provide(Paths.layer));
+/** Settings over a `Paths` the caller provides, so tests can freshen paths. */
+export const settingsLayer = Layer.effect(Settings, loadSettings);
+
+/** Settings over the process config file. The ladder is not here: it is read from the registry each tick. */
+export const settings: Layer.Layer<Settings, ConfigError | PathsError> = settingsLayer.pipe(
+  Layer.provide(Paths.layer),
+);
 
 interface SettingsShape {
-  readonly ladder: Ladder;
-
-  /** The list a review block takes its reader from (`src/reviewers.ts`). */
-  readonly reviewers: ReadonlyArray<Reviewer>;
   readonly pollInterval: number;
   readonly staleAfter: number;
 

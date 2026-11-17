@@ -11,7 +11,6 @@ import { join } from "node:path";
 import { EMPTY_FLEET } from "../../foreman/src/dispatcher.ts";
 import { Fleet, type Worker } from "../../foreman/src/fleet.ts";
 import { FleetError } from "../../foreman/src/errors.ts";
-import type { Ladder } from "../../foreman/src/ladder.ts";
 import { Settings } from "../../foreman/src/config.ts";
 import { publishedOf } from "../../foreman/src/published.ts";
 import type { Published, PublishedRow } from "foreman/published-schema";
@@ -96,19 +95,6 @@ const fakeFleet = Layer.succeed(
 const testSettings = Layer.succeed(
   Settings,
   Settings.of({
-    ladder: [
-      {
-        name: "cheap",
-        harness: "test",
-        level: 0,
-        model: undefined,
-        provider: undefined,
-        enabled: true,
-        author: true,
-        unmetered: false,
-      },
-    ] satisfies Ladder,
-    reviewers: [],
     otlpEndpoint: "http://localhost:4318",
     pollInterval: 60,
     staleAfter: 24,

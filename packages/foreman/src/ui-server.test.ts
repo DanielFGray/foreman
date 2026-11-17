@@ -21,7 +21,6 @@ import { Settings } from "./config.ts";
 import { EMPTY_FLEET, Dispatcher } from "./dispatcher.ts";
 import { Fleet, type Worker } from "./fleet.ts";
 import { FleetError } from "./errors.ts";
-import type { Ladder } from "./ladder.ts";
 import { publishedOf } from "./published.ts";
 import { pipelineCommand as pipelineCommandWith } from "./pipeline-command.ts";
 import { Records } from "./records.ts";
@@ -126,19 +125,6 @@ const fixedReadings = Layer.effect(
 const testSettings = Layer.succeed(
   Settings,
   Settings.of({
-    ladder: [
-      {
-        name: "cheap",
-        harness: "test",
-        level: 0,
-        model: undefined,
-        provider: undefined,
-        enabled: true,
-        author: true,
-        unmetered: false,
-      },
-    ] satisfies Ladder,
-    reviewers: [],
     otlpEndpoint: "http://localhost:4318",
     pollInterval: 60,
     staleAfter: 24,

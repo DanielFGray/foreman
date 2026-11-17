@@ -266,7 +266,10 @@ export const openAgentOf = (
  */
 export const ranAt = (task: Pick<Item, "runs" | "charges">, ladder: Ladder): string => {
   const next = authorFor(ladder, failuresOf(task));
-  return authoredBy(task) ?? (next._tag === "Dispatch" ? next.rung.name : ladder[0].name);
+  const bottom = ladder[0];
+  // A dispatch only reaches here with rungs to name, so an empty ladder is a caller's bug.
+  if (bottom === undefined) throw new Error("ranAt read an empty ladder");
+  return authoredBy(task) ?? (next._tag === "Dispatch" ? next.rung.name : bottom.name);
 };
 
 /** The row of an event that writes nothing. */

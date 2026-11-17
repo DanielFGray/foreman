@@ -23,7 +23,7 @@ import { Array as Arr, Order } from "effect";
  * a different kind of thing, and an explicit entry invites putting a person in
  * the middle, where every task below them would stall behind somebody asleep.
  */
-export type Ladder = readonly [Rung, ...ReadonlyArray<Rung>];
+export type Ladder = ReadonlyArray<Rung>;
 
 /**
  * A model foreman launches as an agent: a ladder rung, which writes, or a
@@ -220,7 +220,7 @@ export const floorFor = (ladder: Ladder, failures: ReadonlyArray<string>): numbe
   failures.reduce((floor, failure) => {
     const level = levelOf(ladder, failure);
     return level === undefined ? floor : Math.max(floor, level + 1);
-  }, ladder[0].level);
+  }, ladder[0]?.level ?? 0);
 
 /** Where a rung sits in the order of the array, or nothing for one the config has dropped. */
 export const rankOf = (ladder: Ladder, name: string): number | undefined => {
@@ -278,6 +278,34 @@ export const levelSpent = (attempts: number, attemptsPerLevel: number): boolean 
 
 /** The rungs foreman may dispatch, in rating order — what a chooser offers. */
 export const dispatchable = (ladder: Ladder): ReadonlyArray<Rung> => ladder.filter(isEnabled);
+
+/** How an empty ladder tells the operator to seed the registry. */
+export const EMPTY_LADDER =
+  "the ladder table has no rungs; seed one with `foreman models add <model> --harness <kind> --provider <id> --pool <name>`, then `foreman ladder add <rung> <model>`, then `foreman reviewers add <model>`";
+
+/**
+ * Why this ladder cannot dispatch, or undefined when it can. Checked on every
+ * tick, because the ladder is edited while the fleet runs.
+ *
+ * A duplicate name makes both "the next rung up" and "which rung failed this
+ * task" ambiguous, and the second is durable: tasks record rung names, so a
+ * name that means two things corrupts work already filed. A ladder of nothing
+ * but retired rungs has ranks and no models, so every task would resolve to
+ * the operator.
+ */
+export const ladderProblem = (ladder: Ladder): string | undefined => {
+  if (ladder.length === 0) return EMPTY_LADDER;
+  const duplicate = ladder.find(
+    (rung, index) => ladder.findIndex((other) => other.name === rung.name) !== index,
+  );
+  if (duplicate) {
+    return `two rungs are named "${duplicate.name}" — rung names are how tasks record which models have failed them, so they must be unique`;
+  }
+  if (dispatchable(ladder).length === 0) {
+    return "every rung in the registry is disabled — a retired rung keeps its place so old failures still position, but at least one rung must be dispatchable";
+  }
+  return undefined;
+};
 
 /**
  * The account a seat spends, which is what has an allowance.

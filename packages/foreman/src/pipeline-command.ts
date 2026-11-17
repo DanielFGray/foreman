@@ -48,6 +48,7 @@ import {
 } from "./pipeline-draft.ts";
 import { PipelineError } from "./errors.ts";
 import { Settings, settings } from "./config.ts";
+import { readLadder, readReviewers } from "./registry.ts";
 import { traceReport } from "./pipeline-trace.ts";
 import type { TraceStepView } from "./pipeline-trace-view.ts";
 import { TraceRequest } from "./trace-request.ts";
@@ -386,7 +387,9 @@ export const pipelineTrace = (input: {
       draft === undefined
         ? undefined
         : yield* expandedOf(draft.pipeline, { ...file.composites, ...draft.composites });
-    const { ladder, reviewers, attemptsPerLevel } = yield* Settings;
+    const { attemptsPerLevel } = yield* Settings;
+    const ladder = yield* readLadder;
+    const reviewers = yield* readReviewers;
     return traceReport(
       input.project,
       {
@@ -456,7 +459,9 @@ export const pipelineSimulate = (input: {
     const file = yield* pipelinesNow;
     const draft = (yield* draftsNow)[input.project];
     const live = pipelineFor(file, input.project);
-    const { ladder, reviewers, attemptsPerLevel, pollInterval } = yield* Settings;
+    const { attemptsPerLevel, pollInterval } = yield* Settings;
+    const ladder = yield* readLadder;
+    const reviewers = yield* readReviewers;
     const liveForSim =
       live._tag === "Failed"
         ? { pipeline: EMPTY_PIPELINE, drawn: live.drawn, problems: live.problems }

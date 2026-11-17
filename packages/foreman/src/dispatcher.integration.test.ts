@@ -7,6 +7,7 @@ import { Console, Effect, Layer, Option, Schedule, Schema as S, SubscriptionRef 
 import { publishedOf } from "./published.ts";
 import { Published } from "./published-schema.ts";
 import { Command } from "effect/cli";
+import { SqlClient } from "effect/sql";
 import { policyPath, updatePolicy } from "./policy-file.ts";
 import { Dispatcher } from "./dispatcher.ts";
 import { Fleet, type AgentRole, type Worker, type WorkerState } from "./fleet.ts";
@@ -37,7 +38,7 @@ import {
 } from "./pipeline.ts";
 import { factsOf } from "./pipeline-facts.ts";
 import { traceOf, type TraceEvent } from "./pipeline-trace.ts";
-import { scratchStore } from "./scratch-store.ts";
+import { registryOf, scratchStore } from "./scratch-store.ts";
 import { fakeGh } from "./github-fixture.ts";
 import type { GhOptions, GhResult } from "./github.ts";
 import { scheduleLabel } from "./records.ts";
@@ -69,10 +70,8 @@ const testReviewer = (name: string, extra: Partial<Reviewer> = {}): Reviewer => 
 });
 
 /** Poll/window numbers shared by every dispatcher layer in this file. */
-const testSettings = (ladder: Ladder, reviewers: ReadonlyArray<Reviewer> = []) =>
+const testSettings = () =>
   ({
-    ladder,
-    reviewers,
     otlpEndpoint: "http://localhost:4318",
     pollInterval: 60,
     staleAfter: 24,
@@ -81,6 +80,10 @@ const testSettings = (ladder: Ladder, reviewers: ReadonlyArray<Reviewer> = []) =
     landedWindow: 7,
     attemptsPerLevel: 2,
   }) as const;
+
+/** Settings, and the registry holding these rungs and reviewers as a tick reads them. */
+const seatsLayer = (ladder: Ladder, reviewers: ReadonlyArray<Reviewer> = []) =>
+  Layer.merge(Layer.succeed(Settings, testSettings()), registryOf(ladder, reviewers));
 
 const item = (
   id: string,
@@ -727,12 +730,15 @@ afterAll(() => {
   else process.env["FOREMAN_PIPELINES"] = operatorPipelines;
 });
 
-const layerFor = (world: World) =>
+const layerFor = (
+  world: World,
+  // A reviewer with the rung's name, on no account either.
+  seats = seatsLayer([testRung("cheap")], [testReviewer("cheap")]),
+) =>
   Layer.provideMerge(
     Dispatcher.Default,
     Layer.mergeAll(
-      // A reviewer with the rung's name, on no account either.
-      Layer.succeed(Settings, testSettings([testRung("cheap")], [testReviewer("cheap")])),
+      seats,
       Layer.succeed(Fleet, world.fleet),
       Layer.succeed(Records, world.records),
       Layer.succeed(Tracker, world.tracker),
@@ -1602,7 +1608,7 @@ describe("quota probing", () => {
       Dispatcher.Default,
       Layer.mergeAll(
         // A rung whose model names its provider is one the gate can ask about.
-        Layer.succeed(Settings, testSettings([testRung("cheap", { model: "openai/gpt" })])),
+        seatsLayer([testRung("cheap", { model: "openai/gpt" })]),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -1672,18 +1678,15 @@ describe("a spent account and the reviewers", () => {
       Dispatcher.Default,
       Layer.mergeAll(
         // One reviewer on each account; "cheap" shares the author's model.
-        Layer.succeed(
-          Settings,
-          testSettings(
-            [
-              testRung("cheap", { model: "openai/gpt" }),
-              testRung("dear", { level: 1, model: "anthropic/claude" }),
-            ],
-            [
-              testReviewer("cheap", { model: "openai/gpt" }),
-              testReviewer("dear", { model: "anthropic/claude" }),
-            ],
-          ),
+        seatsLayer(
+          [
+            testRung("cheap", { model: "openai/gpt" }),
+            testRung("dear", { level: 1, model: "anthropic/claude" }),
+          ],
+          [
+            testReviewer("cheap", { model: "openai/gpt" }),
+            testReviewer("dear", { model: "anthropic/claude" }),
+          ],
         ),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -2082,7 +2085,7 @@ describe("a usage wall", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, testSettings(ladder, reviewers)),
+        seatsLayer(ladder, reviewers),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -2931,16 +2934,13 @@ describe("a reviewer that stops without naming an exit, and one that names retur
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(
-          Settings,
-          testSettings(
-            [
-              testRung("low", { model: "a/low" }),
-              testRung("mid", { level: 1, model: "b/mid" }),
-              testRung("high", { level: 2, model: "c/high" }),
-            ],
-            [testReviewer("mid", { model: "b/mid" }), testReviewer("high", { model: "c/high" })],
-          ),
+        seatsLayer(
+          [
+            testRung("low", { model: "a/low" }),
+            testRung("mid", { level: 1, model: "b/mid" }),
+            testRung("high", { level: 2, model: "c/high" }),
+          ],
+          [testReviewer("mid", { model: "b/mid" }), testReviewer("high", { model: "c/high" })],
         ),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
@@ -3297,10 +3297,7 @@ describe("a drawn pipeline", () => {
           Layer.provideMerge(
             Dispatcher.Default,
             Layer.mergeAll(
-              Layer.succeed(
-                Settings,
-                testSettings([testRung("cheap"), testRung("dear", { level: 1 })]),
-              ),
+              seatsLayer([testRung("cheap"), testRung("dear", { level: 1 })]),
               Layer.succeed(Fleet, world.fleet),
               Layer.succeed(Records, world.records),
               Layer.succeed(Tracker, world.tracker),
@@ -3455,7 +3452,19 @@ describe("foreman pipeline place", () => {
     const printed: Array<string> = [];
 
     await Effect.runPromise(
-      Command.runWith(pipelineCommand(layerFor(world)), { version: "test" })(["place"]).pipe(
+      // Named models: a seat with no provider logs a blind-seat warning, which would reach the printed output.
+      Command.runWith(
+        pipelineCommand(
+          layerFor(
+            world,
+            seatsLayer(
+              [testRung("cheap", { model: "openai/gpt" })],
+              [testReviewer("cheap", { model: "openai/gpt" })],
+            ),
+          ),
+        ),
+        { version: "test" },
+      )(["place"]).pipe(
         Effect.provideService(Console.Console, {
           ...console,
           log: (...args: ReadonlyArray<string>) => printed.push(args.join(" ")),
@@ -3553,7 +3562,7 @@ describe("foreman pipeline trace", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, testSettings(ladder, reviewersOf(ladder))),
+        seatsLayer(ladder, reviewersOf(ladder)),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -4157,7 +4166,7 @@ describe("ladder levels", () => {
     Layer.provideMerge(
       Dispatcher.Default,
       Layer.mergeAll(
-        Layer.succeed(Settings, testSettings(LEVELS)),
+        seatsLayer(LEVELS),
         Layer.succeed(Fleet, world.fleet),
         Layer.succeed(Records, world.records),
         Layer.succeed(Tracker, world.tracker),
@@ -4490,5 +4499,120 @@ describe("work outside the managed set", () => {
 
     expect(state.held.map((held) => [held.project, held.reason])).toEqual([["test", "ambiguous"]]);
     expect(state.stranded).toEqual([]);
+  });
+});
+
+/**
+ * A dispatcher over one registry. The layer is built once by the caller, so
+ * the registry it holds outlives each tick and a test can change it between
+ * ticks.
+ */
+const ladderLayer = (world: World, ladder: Ladder) =>
+  Layer.provideMerge(
+    Dispatcher.Default,
+    Layer.mergeAll(
+      seatsLayer(ladder),
+      Layer.succeed(Fleet, world.fleet),
+      Layer.succeed(Records, world.records),
+      Layer.succeed(Tracker, world.tracker),
+      Layer.succeed(Repository, world.repository),
+      world.github,
+      Quota.Default,
+      Machine.Default,
+      prompts,
+      BunServices.layer,
+    ),
+  );
+
+describe("the ladder a tick reads", () => {
+  test("a rung disabled between two ticks is skipped by the next tick", async () => {
+    usePolicy({ ...ALLOWED, slots: 3 });
+    const world = new World(item("ts-first", "open", []));
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            ladderLayer(world, [testRung("cheap"), testRung("dear", { level: 1 })]),
+          );
+          const tick = Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+            Effect.provideContext(context),
+          );
+          const sql = yield* SqlClient.SqlClient.pipe(Effect.provideContext(context));
+
+          yield* tick;
+          expect(authoredBy(world.tasks.get("ts-first")!)).toBe("cheap");
+
+          yield* sql`UPDATE ladder SET enabled = 0 WHERE rung = 'cheap'`;
+          world.tasks.set("ts-second", item("ts-second", "open", []));
+          yield* tick;
+          expect(authoredBy(world.tasks.get("ts-second")!)).toBe("dear");
+        }),
+      ),
+    );
+  });
+
+  test("an all-disabled ladder dispatches nothing, holds each open project with the reason, and the next tick still runs", async () => {
+    const world = new World(item("ts-held", "open", []));
+    // Retiring a model is how a rung leaves the ladder: its rungs read as disabled.
+    const seen = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            ladderLayer(world, [testRung("cheap"), testRung("dear", { level: 1 })]),
+          );
+          const sql = yield* SqlClient.SqlClient.pipe(Effect.provideContext(context));
+          const tick = Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+            Effect.provideContext(context),
+          );
+          const state = Dispatcher.use((dispatcher) => SubscriptionRef.get(dispatcher.state)).pipe(
+            Effect.provideContext(context),
+          );
+
+          yield* sql`UPDATE models SET retired = 1`;
+          yield* tick;
+          yield* tick;
+          const held = yield* state;
+          const spawnedWhileHeld = world.spawned.length;
+
+          yield* sql`UPDATE models SET retired = 0`;
+          yield* tick;
+          return { held, spawnedWhileHeld, after: yield* state };
+        }),
+      ),
+    );
+
+    expect(seen.spawnedWhileHeld).toBe(0);
+    expect(seen.held.held.map((row) => row.reason)).toEqual(["ladder"]);
+    expect(seen.held.held[0]?.detail).toContain("disabled");
+    // Re-enabled: the next tick dispatches, and the hold is gone with the reason it named.
+    expect(world.spawned).toEqual([["ts-held", "author"]]);
+    expect(seen.after.held.map((row) => row.reason)).not.toContain("ladder");
+  });
+
+  test("an unreadable registry holds each open project, naming the read, and the next tick still runs", async () => {
+    const world = new World(item("ts-unreadable", "open", []));
+    const state = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(ladderLayer(world, [testRung("cheap")]));
+          const sql = yield* SqlClient.SqlClient.pipe(Effect.provideContext(context));
+          // A store whose ladder table is gone: the registry's read fails with a SQL error.
+          yield* sql`DROP TABLE ladder`;
+          yield* Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+            Effect.provideContext(context),
+          );
+          yield* Dispatcher.use((dispatcher) => dispatcher.tick).pipe(
+            Effect.provideContext(context),
+          );
+          return yield* Dispatcher.use((dispatcher) => SubscriptionRef.get(dispatcher.state)).pipe(
+            Effect.provideContext(context),
+          );
+        }),
+      ),
+    );
+
+    expect(world.spawned).toEqual([]);
+    expect(state.held.map((row) => row.reason)).toEqual(["ladder"]);
+    expect(state.held[0]?.detail).toMatch(/^registry unreadable: /);
   });
 });

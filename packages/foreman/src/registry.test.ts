@@ -42,6 +42,22 @@ describe("the registry ladder", () => {
       }),
     ));
 
+  test("an unmetered flag round-trips through the store, true and false", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const ladder = yield* readLadder;
+        expect(ladder.find((rung) => rung.name === "promo")?.unmetered).toBe(true);
+        expect(ladder.find((rung) => rung.name === "cheap")?.unmetered).toBe(false);
+
+        const rows = yield* readRows;
+        yield* writeRows(rows.map((row) => ({ ...row, unmetered: row.rung === "cheap" })));
+        const flipped = yield* readLadder;
+        expect(flipped.find((rung) => rung.name === "cheap")?.unmetered).toBe(true);
+        expect(flipped.find((rung) => rung.name === "promo")?.unmetered).toBe(false);
+      }),
+    ));
+
   test("an edit round-trips through its text, and moving a block re-ranks it", () =>
     withStore(
       rig,

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect } from "effect";
 import { Command } from "effect/cli";
-import { EMPTY_LADDER, readLadder, readModels, readReviewers } from "./registry.ts";
+import { readLadder, readModels, readReviewers } from "./registry.ts";
+import { EMPTY_LADDER, ladderProblem } from "./ladder.ts";
 import { ladderCommand } from "./ladder-command.ts";
 import { modelsCommand } from "./models-command.ts";
 import { reviewersCommand } from "./reviewers-command.ts";
@@ -27,8 +28,7 @@ describe("foreman models add", () => {
       "",
       Effect.gen(function* () {
         expect(yield* readModels).toEqual([]);
-        const empty = yield* Effect.flip(readLadder);
-        expect(empty.detail).toBe(EMPTY_LADDER);
+        expect(ladderProblem(yield* readLadder)).toBe(EMPTY_LADDER);
 
         yield* models(
           "add",

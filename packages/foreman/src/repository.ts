@@ -9,6 +9,9 @@ const ours = "foreman/";
 /** Why a checkout is not free to work against. */
 export type HoldReason = "dirty" | "noBranch" | "busy" | "unreadable" | "ambiguous";
 
+/** Why a project is held: a checkout reason, a tracker that did not answer, or a ladder that cannot dispatch. */
+export type ProjectHoldReason = HoldReason | "unreachable" | "ladder";
+
 /**
  * Whether a checkout is free to work against, and if not, why.
  *

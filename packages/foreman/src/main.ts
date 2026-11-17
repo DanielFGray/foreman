@@ -4,7 +4,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Cause, Console, Effect, FileSystem, Layer, Logger, Runtime } from "effect";
 import { Runs, store } from "tasks";
 import { settings, Settings } from "./config.ts";
-import { Registry } from "./registry.ts";
+import { Registry, readLadder, readReviewers } from "./registry.ts";
 import { resetsLabel, quotaJson, usedLabel } from "./format.ts";
 import { dispatchable, providerOf, providersOf, rungsOn } from "./ladder.ts";
 import { exhausted, freeAt, Quota } from "./quota.ts";
@@ -49,16 +49,17 @@ const json = Flag.Boolean("json").pipe(
 
 const quotaCommand = Command.make("quota", { json }, ({ json }) =>
   Effect.gen(function* () {
-    const config = yield* Settings;
+    const ladder = yield* readLadder;
+    const reviewers = yield* readReviewers;
     const quota = yield* Quota;
 
-    const blind = dispatchable(config.ladder)
+    const blind = dispatchable(ladder)
       .filter((rung) => providerOf(rung) === undefined)
       .map((rung) => rung.name);
-    const rungsOf = (provider: string) => rungsOn(config.ladder, provider);
+    const rungsOf = (provider: string) => rungsOn(ladder, provider);
 
     const readings = yield* Effect.forEach(
-      providersOf(config.ladder, config.reviewers),
+      providersOf(ladder, reviewers),
       (provider) =>
         quota.usage(provider).pipe(
           Effect.map((usage) => ({ _tag: "usage", provider, usage }) as const),
@@ -105,7 +106,11 @@ const quotaCommand = Command.make("quota", { json }, ({ json }) =>
         yield* Console.log(`${reading.provider}  unreadable: ${reading.detail}`);
       }
     }
-  }).pipe(Effect.provide(Layer.mergeAll(Quota.Default, settings).pipe(Layer.provide(store)))),
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Quota.Default, settings, Registry.layerSql).pipe(Layer.provide(store)),
+    ),
+  ),
 ).pipe(
   Command.withDescription(
     "Report how much of each provider's allowance the ladder has left, and which rungs are stopped",

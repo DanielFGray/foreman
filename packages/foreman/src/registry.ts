@@ -1,7 +1,7 @@
 import { Array as Arr, Context, Effect, Layer, Option, Order, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { store } from "tasks";
-import type { Ladder, Rung } from "./ladder.ts";
+import type { Rung } from "./ladder.ts";
 import type { Reviewer } from "./reviewers.ts";
 import { RegistryError } from "./errors.ts";
 
@@ -91,10 +91,6 @@ export interface NewModel {
   /** The catalog identity (`provider/model`), when the model has one. */
   readonly modelsDev: Option.Option<string>;
 }
-
-/** How an empty ladder tells the operator to seed the registry. */
-export const EMPTY_LADDER =
-  "the ladder table has no rungs; seed one with `foreman models add <model> --harness <kind> --provider <id> --pool <name>`, then `foreman ladder add <rung> <model>`, then `foreman reviewers add <model>`";
 
 const PoolNameRow = Schema.Struct({ pool: Schema.String });
 
@@ -194,7 +190,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
             l.unmetered, l.thinking, m.harness, m.retired
        FROM ladder l JOIN models m USING (model)
       ORDER BY l.level, l.rank`.pipe(Effect.flatMap(rowsOf(RungRow)));
-      const [bottom, ...rest] = rungs.map((row): Rung => ({
+      return rungs.map((row): Rung => ({
         name: row.rung,
         harness: row.harness,
         level: row.level,
@@ -205,10 +201,6 @@ export class Registry extends Context.Service<Registry>()("Registry", {
         unmetered: row.unmetered,
         thinking: Option.getOrUndefined(row.thinking),
       }));
-      if (bottom === undefined) {
-        return yield* new RegistryError({ detail: EMPTY_LADDER });
-      }
-      return [bottom, ...rest] as Ladder;
     }).pipe(Effect.mapError(registryError("reading the ladder")));
 
     /** The ladder joined to `model_status`, for `foreman ladder` to print. */
