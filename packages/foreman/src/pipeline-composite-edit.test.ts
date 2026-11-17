@@ -490,3 +490,15 @@ describe("the written drawing of a multi-entry instance", () => {
     expect(into.map((wire) => wire.entry)).toEqual([undefined, undefined, "entry-start"]);
   });
 });
+
+describe("a standard pipeline is no start for a definition", () => {
+  test("StartFrom is refused, so the definition keeps its blocks and gains no source", () => {
+    const made = makeComposite(STANDARD_PIPELINES.checkout, ["author"], "solo");
+    if (made._tag !== "Made") throw new Error("expected Made");
+    const result = applyDefinitionChange(made.definition, {
+      _tag: "StartFrom",
+      standard: "direct",
+    });
+    expect(result._tag).toBe("Refused");
+  });
+});

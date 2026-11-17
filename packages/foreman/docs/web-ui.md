@@ -180,7 +180,10 @@ the page's files. `foreman serve` provides it beside `supervise`.
   `PipelineDiscard`; Save is disabled while the drawing has problems. A loose
   end is no problem (`docs/pipeline-engine.md`, "Loose ends").
 - **Building a pipeline.** A project with no drawing shows an empty canvas,
-  and the operator builds its pipeline from blocks. The palette above the
+  and the operator builds its pipeline from blocks. While the drawing has no
+  blocks, the palette also offers Start from: pick checkout, worktree or direct
+  and press Start, and the page sends `StartFrom`, which draws that standard
+  pipeline into the draft to edit and save. The palette above the
   canvas places a block: pick a kind (`PLACEABLE`), type an id, and press
   Place. The page sends `Place`, and selects the new block. Placing is a click,
   not a drag, because a block has no stored position until the free-form

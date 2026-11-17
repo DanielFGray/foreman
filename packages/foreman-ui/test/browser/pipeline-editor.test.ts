@@ -554,6 +554,25 @@ const gesture = async (change: PipelineChange): Promise<void> => {
 };
 
 describe("pipeline editor from nothing", () => {
+  // Runs before the build below, which saves the undrawn project's pipeline; Discard leaves it undrawn.
+  it("starts an undrawn project from a standard pipeline, and hides the control once it has blocks", async () => {
+    mountProject(UNDRAWN);
+    await expect.element(page.getByTestId("palette-start")).toBeInTheDocument();
+    await userEvent.selectOptions(page.getByTestId("palette-standard"), "worktree");
+    await userEvent.click(page.getByTestId("palette-start"));
+
+    await expect
+      .poll(() => editRequests().map((request) => request.payload.change))
+      .toEqual([{ _tag: "StartFrom", standard: "worktree" }]);
+    await expect
+      .poll(async () => withoutExitIds(await commands.draftPipeline(UNDRAWN)), { timeout: 15_000 })
+      .toEqual(withoutExitIds(STANDARD_PIPELINES.worktree));
+    await expect.element(page.getByTestId("palette-start")).not.toBeInTheDocument();
+
+    await userEvent.click(page.getByTestId("pipeline-discard"));
+    await expect.poll(() => commands.draftPipeline(UNDRAWN)).toBeNull();
+  }, 180_000);
+
   it("builds the standard checkout pipeline on an undrawn project with the palette, drags and the inspector, and saves it", async () => {
     mountProject(UNDRAWN);
     await expect.element(page.getByTestId("pipeline-palette")).toBeInTheDocument();

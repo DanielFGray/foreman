@@ -5,7 +5,7 @@
  * sends one PipelineChange through the editor's queue, so the server checks it
  * as it checks a dragged rejoin.
  */
-import type { DrawnNode } from "foreman/pipeline";
+import { type DrawnNode, WORKSPACE_CHOICES, type WorkspaceChoice } from "foreman/pipeline";
 import { PLACEABLE, type Placeable } from "foreman/pipeline-belt";
 import type { PipelineChange } from "foreman/pipeline-edit";
 import type { ChoicesView, SeatOffersView } from "foreman/pipeline-view";
@@ -13,18 +13,25 @@ import { type FormEvent, type ReactNode, useState } from "react";
 
 type Edit = (change: PipelineChange) => void;
 
-/** Places a new block of the chosen kind, named by the operator, wired to nothing. */
+/**
+ * Places a new block of the chosen kind, named by the operator, wired to
+ * nothing. While the drawing has no blocks, it also starts the drawing from a
+ * standard pipeline; once a block exists, that control is gone.
+ */
 export const Palette = ({
   composites,
+  empty,
   onEdit,
 }: {
   readonly composites: ReadonlyArray<string>;
+  readonly empty: boolean;
   readonly onEdit: Edit;
 }) => {
   const kinds = PLACEABLE.filter((kind) => kind !== "composite" || composites.length > 0);
   const [kind, setKind] = useState<Placeable>("gate");
   const [of, setOf] = useState(composites[0] ?? "");
   const [id, setId] = useState("");
+  const [standard, setStandard] = useState<WorkspaceChoice>("checkout");
   const name = id.trim();
 
   const place = (event: FormEvent) => {
@@ -36,6 +43,30 @@ export const Palette = ({
 
   return (
     <form className="pipeline-palette" data-testid="pipeline-palette" onSubmit={place}>
+      {empty ? (
+        <>
+          <select
+            aria-label="Start from"
+            data-testid="palette-standard"
+            value={standard}
+            onChange={(event) => setStandard(workspaceOf(event.target.value))}
+          >
+            {WORKSPACE_CHOICES.map((one) => (
+              <option key={one} value={one}>
+                {one}
+              </option>
+            ))}
+          </select>
+          {/* type="button": a submit here would also send the Place form's change. */}
+          <button
+            type="button"
+            data-testid="palette-start"
+            onClick={() => onEdit({ _tag: "StartFrom", standard })}
+          >
+            Start
+          </button>
+        </>
+      ) : null}
       <select
         aria-label="Block kind"
         data-testid="palette-kind"
@@ -557,3 +588,4 @@ const oneOf = <A extends string>(options: ReadonlyArray<A>, value: string, fallb
   options.find((one) => one === value) ?? fallback;
 
 const placeableOf = (value: string): Placeable => oneOf(PLACEABLE, value, "gate");
+const workspaceOf = (value: string): WorkspaceChoice => oneOf(WORKSPACE_CHOICES, value, "checkout");

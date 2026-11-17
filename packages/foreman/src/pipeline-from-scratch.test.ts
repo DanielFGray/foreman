@@ -8,6 +8,7 @@ import {
   problemsOf,
   type SeatOffers,
   STANDARD_PIPELINES,
+  WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import { applyChange, type PipelineChange } from "./pipeline-edit.ts";
 import { CHECKOUT_STAGES, pipelineOf, stagesOf } from "./pipeline-fixture.ts";
@@ -124,5 +125,22 @@ describe("a new source in an empty drawing", () => {
         ? result.pipeline.nodes[0].next
         : "wired",
     ).toBeUndefined();
+  });
+});
+
+describe("starting an empty drawing from a standard pipeline", () => {
+  test.each(WORKSPACE_CHOICES)("%s draws exactly the standard pipeline", (standard) => {
+    const result = applyChange(EMPTY_PIPELINE, { _tag: "StartFrom", standard });
+    expect(result).toEqual({
+      _tag: "Changed",
+      pipeline: STANDARD_PIPELINES[standard],
+      added: undefined,
+      composites: {},
+    });
+  });
+
+  test("is refused on a drawing with a block, which is left as it was", () => {
+    const one = stagesOf([{ _tag: "Place", kind: "source", id: "queue" }]).at(-1)!;
+    expect(applyChange(one, { _tag: "StartFrom", standard: "checkout" })._tag).toBe("Refused");
   });
 });

@@ -68,8 +68,9 @@ it off, or onto Reviewers to make it a reviewer.
 
 A project starts with an empty pipeline and takes no task until you build one
 from blocks, on the project's page (`foreman open <project>`) or with
-`foreman pipeline edit`. `foreman pipeline show <project>` prints the one it
-runs.
+`foreman pipeline edit`. An empty drawing can also start from a standard
+pipeline (checkout, worktree or direct), which you then edit and save.
+`foreman pipeline show <project>` prints the one it runs.
 
 Tasks come from a tracker that you choose for each project:
 

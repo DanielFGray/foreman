@@ -13,6 +13,8 @@ import {
   LandNode,
   LANDINGS,
   ParamValue,
+  STANDARD_PIPELINES,
+  WORKSPACE_CHOICES,
 } from "./pipeline.ts";
 import {
   addEntry,
@@ -89,6 +91,8 @@ export const PipelineChange = S.Union([
     id: S.String,
     of: S.optional(S.String),
   }),
+  /** The standard pipeline `standard` as the whole drawing, for a drawing with no blocks (`STANDARD_PIPELINES`). */
+  S.TaggedStruct("StartFrom", { standard: S.Literals(WORKSPACE_CHOICES) }),
   S.TaggedStruct("Remove", { id: S.String }),
   S.TaggedStruct("AddRoute", { router: S.String, when: S.String }),
   S.TaggedStruct("RemoveRoute", { router: S.String, index: S.Int }),
@@ -155,7 +159,8 @@ export type ApplyDefinitionResult =
  * name the block already has, an exit added, renamed or removed on a check,
  * whose exits are passed and failed, a claim on a block that is no author, an
  * insert on a way out the pipeline lacks, a removal of a block it lacks, or a
- * placed block whose id is taken or holds a `/`. Any other change that names
+ * placed block whose id is taken or holds a `/`, or a start from a standard on
+ * a drawing that already has blocks. Any other change that names
  * a block, wire or exit the pipeline lacks leaves it as it was.
  *
  * `composites` are the definitions the drawing may use: InsertOn of a
@@ -178,6 +183,13 @@ export const applyChange = (
       composites: created,
     }) as const;
   switch (change._tag) {
+    case "StartFrom":
+      return pipeline.nodes.length === 0
+        ? changed(STANDARD_PIPELINES[change.standard])
+        : {
+            _tag: "Refused",
+            reason: `the drawing has blocks, so it cannot start from ${change.standard}: discard the draft or remove its blocks first`,
+          };
     case "InsertOn": {
       const unknown = definitionProblem(change._tag, change.kind, change.of, composites);
       if (unknown !== undefined) return { _tag: "Refused", reason: unknown };
@@ -368,6 +380,11 @@ export const applyDefinitionChange = (
     }
     case "AddSource":
       return { _tag: "Refused", reason: "a composite definition holds no source" };
+    case "StartFrom":
+      return {
+        _tag: "Refused",
+        reason: "a composite definition starts from MakeComposite, not a standard pipeline",
+      };
     default: {
       const outs = new Set(definition.exits.map((exit) => exit.id));
       const result = applyChange({ nodes: definition.blocks }, change, composites, outs);

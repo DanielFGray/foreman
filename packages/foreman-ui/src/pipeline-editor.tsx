@@ -125,7 +125,11 @@ export const PipelineEditor = ({ project }: { readonly project: string }) => {
             message={message}
             onMessage={setMessage}
           />
-          <Palette composites={view.choices.composites} onEdit={queueEdit} />
+          <Palette
+            composites={view.choices.composites}
+            empty={base.pipeline.nodes.length === 0}
+            onEdit={queueEdit}
+          />
           {Option.match(hint, {
             onNone: () => null,
             onSome: (shownHint) => (

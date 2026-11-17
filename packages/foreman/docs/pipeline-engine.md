@@ -5,8 +5,9 @@ A **pipeline** is the flow each project runs. It is a graph of **blocks**
 runs the block where the task stands. A project with no pipeline runs the
 **empty pipeline** (`EMPTY_PIPELINE`): no block, so it takes no task, and it is
 valid. The operator builds each project's pipeline from blocks, in the page or
-with `foreman pipeline edit`; foreman draws none for them. The standard
-pipelines (`STANDARD_PIPELINES`) stay in code as test fixtures and as the
+with `foreman pipeline edit`, or starts an empty drawing from a standard
+pipeline (`StartFrom`, one of `STANDARD_PIPELINES`) and edits it. Foreman
+applies none by default. The standard pipelines are those starts, and the
 drawing a pipeline built from nothing must be able to reach.
 
 The executors do the work inside a block: dispatching an agent into the task's
