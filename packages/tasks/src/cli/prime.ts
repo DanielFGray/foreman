@@ -47,8 +47,8 @@ with no task needs no \`tasks\` entry.
 - An unresolved decision is a task with \`-l question\`, never prose in a description.
   \`tasks status\` lists questions under "Questions (open decisions)", and
   \`tasks list -l question\` lists them per project. A question is never ready work at
-  any status, so keep it at proposed until it is answered. Answer it with
-  \`tasks done <id>\`, and gate follow-on work with \`tasks blocks <question> <task>\`.
+  any status, so file it at \`open\` (the default). Answer it with \`tasks done <id>\`,
+  and gate follow-on work with \`tasks blocks <question> <task>\`.
 - Record each prerequisite as an edge: \`tasks blocks <first> <second>\` means <second>
   cannot start until <first> is done. Text in a description is invisible to
   \`tasks ready\`; only an edge keeps a task out of it.
