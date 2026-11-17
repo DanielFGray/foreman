@@ -405,7 +405,7 @@ const planOf = (sim: Sim) => {
     scopes: new Map(),
     pipelines,
     placed: tasks.map((task) => ({ task, placement: placementOf(sim, task) })),
-    dirty: new Set(),
+    changes: new Map(),
     // The simulation reads no GitHub, so a pull-request landing never takes a step in it.
     pullRequests: new Map(),
   });

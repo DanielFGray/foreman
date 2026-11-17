@@ -349,9 +349,12 @@ records whether they are passed, so tasks in flight place as before.
   branch is absent from the checkout, holds nothing. The hold covers every other task in the
   project, landings included. A dispatch the
   planner sends into a free checkout takes it in the same pass, and needs a clean
-  tree (`Repository.dirty`), because git carries uncommitted edits into the
-  agent's commits. That dirty tree is not a held row: a row would hold
-  the project's worktree tasks too, which uncommitted work must not do.
+  tree (`Repository.changes` is empty), because git carries uncommitted edits
+  into the agent's commits. A checkout with changes is a `dirty` hold while a
+  waiting agent step starts in it and no task holds it; the hold names the
+  changed paths. Its gates hold only starts into the checkout: worktree tasks,
+  parks, checks and landings are not held by it (a landing answers a dirty tree
+  per path in `merge`).
 - **Branch-only routes use checkout git operations.** `Fleet.open` with the
   checkout as the directory runs `Repository.checkoutBranch`, which sets the
   branch it left as the upstream; `trunkOf` reads that upstream as the trunk while
@@ -973,7 +976,7 @@ To change how foreman works, edit one of these.
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | where tasks come from               | write a `Tracker` (`src/tracker.ts`); `TasksTracker` is the example                                                             |
 | where agents run                    | write a `Fleet` (`src/fleet.ts`); `HcFleet` in `src/hc.ts` is the example                                                       |
-| the steps a task goes through       | the project's drawing, built from blocks on the page or with `foreman pipeline edit` (an undrawn project runs `EMPTY_PIPELINE` and takes no task) |
+| the steps a task goes through       | the project's drawing, built from blocks on the page or with `foreman pipeline edit`, or started from a standard pipeline while it has no blocks (an undrawn project runs `EMPTY_PIPELINE` and takes no task) |
 | what an agent is told               | the files in `~/.config/foreman/prompts/`                                                                                       |
 | which models run, and in what order | the ladder, with `foreman ladder edit` (`src/registry.ts`)                                                                      |
 | which models review                 | the reviewers, with `foreman reviewers add` and `remove` (`src/registry.ts`)                                                    |
@@ -1168,6 +1171,10 @@ not to have been earned.
   deleting a concept, not adding one. Report a blocker instead.
 - Use `tasks` for task tracking.
 - Bun, not node. Effect-TS throughout.
+- Run tests with `./scripts/test-changed.sh` (repository root), not the full
+  suite: it tests only the workspace packages changed since the merge-base with
+  develop, and every package when a root file changed. The landing's
+  `scripts/verify` still runs everything.
 - Edit only this repository. When a sweep reaches another project the operator
   owns, list those files and file the work with `tasks -p <project> add`. A
   project the operator does not own gets no task of its own.

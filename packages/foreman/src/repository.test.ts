@@ -783,7 +783,7 @@ describe("Repository in branch mode", () => {
   const ofCheckout = (here: string) => ({
     checkoutBranch: () => run((repository) => repository.checkoutBranch(here, task, undefined)),
     isFree: () => run((repository) => repository.isFree(here)),
-    dirty: () => run((repository) => repository.dirty(here)),
+    changes: () => run((repository) => repository.changes(here)),
     base: () => run((repository) => repository.base(here, task)),
     branches: () => run((repository) => repository.branches(here)),
     // Lands by the commit id the reviewer read, as the dispatcher does.
@@ -811,7 +811,7 @@ describe("Repository in branch mode", () => {
     try {
       await writeFile(join(here, "notes.md"), "operator's\n");
       expect(await repo.isFree()).toEqual(clean);
-      expect(await repo.dirty()).toBe(true);
+      expect(await repo.changes()).toEqual(["notes.md"]);
       await expect(repo.checkoutBranch()).rejects.toThrow(/uncommitted changes/);
       expect(await head()).toBe("trunk");
     } finally {

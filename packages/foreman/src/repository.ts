@@ -772,13 +772,15 @@ export class Repository extends Context.Service<Repository>()("Repository", {
       leaveBranch,
 
       /**
-       * Whether the checkout has uncommitted changes, untracked files included.
-       * A task starts in the operator's checkout only from a clean tree: git
-       * carries edits across a branch switch, and an agent on the operator's
-       * branch would commit them as its own.
+       * The paths with uncommitted changes, untracked files included; empty
+       * when the tree is clean. A task starts in the operator's checkout only
+       * from a clean tree: git carries edits across a branch switch, and an
+       * agent on the operator's branch would commit them as its own.
        */
-      dirty: (directory: string) =>
-        status(directory, "all").pipe(Effect.map((text) => text !== "")),
+      changes: (directory: string) =>
+        gitRaw(directory, "status", "--porcelain", "-z", "--untracked-files=all").pipe(
+          Effect.map(dirtyPaths),
+        ),
 
       /** The commit HEAD names: the operator's branch tip, where a direct task works. */
       head: (directory: string) => gitOutput(directory, "rev-parse", "HEAD"),

@@ -299,7 +299,7 @@ const placedStep = (item: Item): string => {
       ["foreman", { _tag: "Runs", pipeline: STANDARD_PIPELINES.worktree, drawn: false }],
     ]),
     placed: [],
-    dirty: new Set<string>(),
+    changes: new Map(),
     pullRequests: new Map(),
   }).asks.map(({ step }) => step);
   return steps.length === 0 ? "none" : steps.join(",");

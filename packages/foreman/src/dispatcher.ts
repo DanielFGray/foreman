@@ -595,22 +595,48 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         ),
       ).pipe(Effect.map((entries) => entries.flat()));
 
-      // Each checkout's tip and whether it has uncommitted changes. A task that
-      // works in the operator's checkout starts only from a clean tree, and a
-      // task on the operator's own branch reads its work at that tip. A
-      // checkout that cannot answer reads as dirty, so nothing starts there.
-      const checkoutStates = yield* Effect.forEach(projects, (project) =>
-        Effect.all([repository.dirty(project.directory), repository.head(project.directory)]).pipe(
-          Effect.map(([dirty, head]) => ({ project: project.name, dirty, head })),
-          Effect.orElseSucceed(() => ({
-            project: project.name,
-            dirty: true,
-            head: undefined as string | undefined,
-          })),
-        ),
+      // Each checkout's tip and its uncommitted paths. A task that works in the
+      // operator's checkout starts only from a clean tree, and a task on the
+      // operator's own branch reads its work at that tip. A checkout that cannot
+      // answer is held as unreadable, so nothing starts or lands there.
+      type CheckoutState = {
+        readonly project: string;
+        readonly changes: ReadonlyArray<string>;
+        readonly head: string | undefined;
+        readonly unanswered: string | undefined;
+      };
+      const checkoutStates = yield* Effect.forEach(
+        projects,
+        (project): Effect.Effect<CheckoutState> =>
+          Effect.all([
+            repository.changes(project.directory),
+            repository.head(project.directory),
+          ]).pipe(
+            Effect.map(([changes, head]): CheckoutState => ({
+              project: project.name,
+              changes,
+              head,
+              unanswered: undefined,
+            })),
+            Effect.catch((error: RepositoryError): Effect.Effect<CheckoutState> =>
+              Effect.succeed({
+                project: project.name,
+                changes: [],
+                head: undefined,
+                unanswered: error.detail,
+              }),
+            ),
+          ),
       );
-      const dirty: ReadonlySet<string> = new Set(
-        checkoutStates.filter((entry) => entry.dirty).map((entry) => entry.project),
+      const changes: ReadonlyMap<string, ReadonlyArray<string>> = new Map(
+        checkoutStates
+          .filter((entry) => entry.unanswered === undefined && entry.changes.length > 0)
+          .map((entry) => [entry.project, entry.changes] as const),
+      );
+      const unanswered = checkoutStates.flatMap((entry): ReadonlyArray<Held> =>
+        entry.unanswered === undefined
+          ? []
+          : [{ project: entry.project, reason: "unreadable", detail: entry.unanswered }],
       );
       const heads = new Map(checkoutStates.map((entry) => [entry.project, entry.head] as const));
 
@@ -655,6 +681,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
       const checkoutHolds: ReadonlyArray<Held> = [
         ...checkouts,
         ...unreachable,
+        ...unanswered,
         ...ambiguous.map((one): Held => ({
           project: one.name,
           reason: "ambiguous",
@@ -809,7 +836,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         pipelines,
         scopes,
         branches,
-        dirty,
+        changes,
         pullRequests,
         urls,
         everyProject: resolved.projects,
@@ -837,7 +864,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         open,
         readings,
         roster,
-        held,
+        held: observedHeld,
         claimed,
         reviewing,
         stranded,
@@ -848,7 +875,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         pipelines,
         scopes,
         branches,
-        dirty,
+        changes,
         pullRequests,
         urls,
         everyProject,
@@ -979,6 +1006,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         task,
         placement: placementIn(pipelines, task),
       }));
+      const held = [...observedHeld, ...dirtyHoldsOf(changes, observedHeld, placed, pipelines)];
       // A task whose last exit the drawing lost waits for the operator: no
       // column works it and no reclaim releases it, since nothing says where
       // it would go.
@@ -1026,7 +1054,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
           scopes,
           pipelines,
           placed,
-          dirty,
+          changes,
           pullRequests,
         },
         failedIds,
@@ -3569,17 +3597,20 @@ export const planFrom = (
   const taken = new Map<string, string>();
   const holder = (task: Item) => (entry: Held) =>
     entry.project === task.project && entry.branch === labelFor(task.id);
+  // The `dirty` hold is the view of the changes that gate the start, so the
+  // gate reads `changes` and not that row. Holds with reason `dirty` are not
+  // read here: landings answer a dirty tree per path in `merge`, and a worktree
+  // task never touches the checkout.
   const held = (task: Item) =>
-    current.held.some((entry) => entry.project === task.project && !holder(task)(entry)) ||
-    (taken.get(task.project) ?? task.id) !== task.id;
+    current.held.some(
+      (entry) => entry.project === task.project && entry.reason !== "dirty" && !holder(task)(entry),
+    ) || (taken.get(task.project) ?? task.id) !== task.id;
   // A task that works in the checkout starts there from a clean tree, unless
   // it already holds the checkout and the changes are its own.
-  const intoCheckout = (task: Item) => {
-    const workspace = workspaceOf(current.pipelines, task);
-    return workspace !== undefined && workspace !== "worktree";
-  };
   const enters = (task: Item) =>
-    !intoCheckout(task) || current.held.some(holder(task)) || !current.dirty.has(task.project);
+    !intoCheckout(current.pipelines, task) ||
+    current.held.some(holder(task)) ||
+    !current.changes.has(task.project);
   const admitting = (given: Permit, task: string) => {
     if (given._tag === "Granted" && given.admits) policy = admit(policy, given.scope, task);
   };
@@ -3690,7 +3721,7 @@ export const planFrom = (
       for (const given of permits) admitting(given, task.id);
       free -= 1;
       running.add(task.project, node);
-      if (intoCheckout(task)) taken.set(task.project, task.id);
+      if (intoCheckout(current.pipelines, task)) taken.set(task.project, task.id);
       dispatches.push({ role: node.role, task, permits, block: node });
     }
   }
@@ -3756,7 +3787,7 @@ export const candidatesFrom = (reading: {
     // A park is a step: a paused project takes none, and a live pane is
     // still finishing its turn.
     ({ task, worker }) =>
-      !held.some((entry) => entry.project === task.project) &&
+      !held.some((entry) => entry.project === task.project && entry.reason !== "dirty") &&
       (worker === undefined || !isBusy(worker)),
   );
   const parked = new Set(parks.map(({ task }) => task.id));
@@ -3836,8 +3867,11 @@ export interface DispatchState {
   readonly pipelines: ReadonlyMap<string, ProjectPipeline>;
   /** Where every queued and owned task stands, from which each block's running tasks are counted. */
   readonly placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>;
-  /** The projects whose checkout has uncommitted changes. */
-  readonly dirty: ReadonlySet<string>;
+  /**
+   * The uncommitted paths of each checkout that has any. The start gate reads
+   * this fact; the `dirty` hold is only its published view.
+   */
+  readonly changes: ReadonlyMap<string, ReadonlyArray<string>>;
   /** What the pull request of each task at a pull-request land block reads. */
   readonly pullRequests: ReadonlyMap<string, PullRequestReading>;
 }
@@ -3939,6 +3973,52 @@ export const workspaceOf = (
   const pipeline = runningPipeline(pipelines, task.project);
   return pipeline === undefined ? undefined : routeWorkspace(pipeline, factsOf(task, pipeline));
 };
+
+/**
+ * Whether the task's route starts it in the operator's checkout, on its branch
+ * or the operator's own. Only such a start is kept out by uncommitted changes.
+ */
+const intoCheckout = (pipelines: ReadonlyMap<string, ProjectPipeline>, task: Item): boolean => {
+  const workspace = workspaceOf(pipelines, task);
+  return workspace !== undefined && workspace !== "worktree";
+};
+
+/** The paths a dirty hold names before it says how many more it leaves out. */
+const DIRTY_PATHS_SHOWN = 3;
+
+/**
+ * The `dirty` holds: a project whose checkout has uncommitted changes while a
+ * task waits at an agent step that starts in that checkout. A project another
+ * task holds (`busy`) gets none, because that hold already says why the work
+ * waits, and the uncommitted edits are then that task's own.
+ */
+const dirtyHoldsOf = (
+  changes: ReadonlyMap<string, ReadonlyArray<string>>,
+  held: ReadonlyArray<Held>,
+  placed: ReadonlyArray<{ readonly task: Item; readonly placement: Placement }>,
+  pipelines: ReadonlyMap<string, ProjectPipeline>,
+): ReadonlyArray<Held> =>
+  [...changes].flatMap(([project, paths]): ReadonlyArray<Held> => {
+    if (held.some((entry) => entry.project === project && entry.reason === "busy")) return [];
+    const kept = placed.some(
+      ({ task, placement }) =>
+        task.project === project &&
+        placement._tag === "At" &&
+        placement.state === "waiting" &&
+        placement.node.kind === "agent" &&
+        intoCheckout(pipelines, task),
+    );
+    if (!kept) return [];
+    const shown = paths.slice(0, DIRTY_PATHS_SHOWN).join(", ");
+    const more = paths.length - DIRTY_PATHS_SHOWN;
+    return [
+      {
+        project,
+        reason: "dirty",
+        detail: `uncommitted changes to ${shown}${more > 0 ? ` and ${more} more` : ""}; a start in the checkout waits for them`,
+      },
+    ];
+  });
 
 /**
  * The branch the task's route lands on, when its lands name one. Nothing when

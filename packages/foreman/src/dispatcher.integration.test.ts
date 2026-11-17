@@ -522,12 +522,12 @@ class World {
     isFree: () =>
       Effect.succeed<Hold>(
         this.clean === "held"
-          ? { _tag: "Held", reason: "dirty", detail: "held" }
+          ? { _tag: "Held", reason: "noBranch", detail: "held" }
           : this.checkedOut !== undefined
             ? { _tag: "Held", reason: "busy", detail: "busy", branch: this.checkedOut }
             : { _tag: "Clean" },
       ),
-    dirty: () => Effect.sync(() => this.treeDirty),
+    changes: () => Effect.sync(() => (this.treeDirty ? ["uncommitted.txt"] : [])),
     head: () => Effect.sync(() => this.headCommit),
     holdsWork: (directory: string) => Effect.sync(() => this.dirty.has(directory)),
     commitWork: (directory: string, _branch: string, message: string) =>
@@ -2755,6 +2755,71 @@ describe("a route's workspace blocks", () => {
     expect(world.merged).toEqual(["c1"]);
   });
 
+  test("a dirty checkout holds a checkout start, and does not hold an approved worktree task's landing", async () => {
+    // Tasks labelled `direct` take a route with no branch; the rest take the standard one.
+    draw([
+      { kind: "source", id: "queue", filter: "", next: "which" },
+      {
+        kind: "router",
+        id: "which",
+        routes: [{ when: "label:direct", to: "d-start" }],
+        else: "branch",
+      },
+      ...STANDARD_PIPELINES.worktree.nodes.filter((node) => node.kind !== "source"),
+      { kind: "gate", id: "d-start", step: "author", next: "d-author" },
+      {
+        kind: "agent",
+        id: "d-author",
+        role: "author",
+        model: "ladder",
+        exits: [
+          { id: "done", name: "done", to: "d-review-gate" },
+          { id: "already-done", name: "already-done", to: "d-review-gate" },
+        ],
+      },
+      { kind: "gate", id: "d-review-gate", step: "review", next: "d-review" },
+      {
+        kind: "agent",
+        id: "d-review",
+        role: "review",
+        model: "reviewers",
+        exits: [
+          { id: "approved", name: "approved", to: "d-land-gate" },
+          { id: "returned", name: "returned", to: "queue", fails: "author" },
+        ],
+      },
+      { kind: "gate", id: "d-land-gate", step: "land", next: "d-done" },
+      { kind: "done", id: "d-done" },
+    ]);
+    const waiting = item("ts-direct-waiting", "open", ["direct"]);
+    const approved = item("ts-worktree-approved", "in_progress", [], "test", [
+      authorDone("cheap"),
+      reviewRun("cheap", { ending: "approved", commit: "c1", open: false }),
+    ]);
+    const world = new World(waiting, approved);
+    world.treeDirty = true;
+    world.workers.set(approved.id, worker(approved.id, "review", "settled"));
+    world.branches.set(`foreman/${approved.id}`, {
+      branch: `foreman/${approved.id}`,
+      merged: false,
+      empty: false,
+      stale: undefined,
+      tip: "c1",
+    });
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(state.held).toEqual([
+      {
+        project: "test",
+        reason: "dirty",
+        detail: "uncommitted changes to uncommitted.txt; a start in the checkout waits for them",
+      },
+    ]);
+    expect(world.merged).toEqual(["c1"]);
+  });
+
   test("a dirty checkout holds a start there, and not a worktree start", async () => {
     draw(DIRECT);
     const direct = item("ts-dirty", "open", []);
@@ -2766,6 +2831,50 @@ describe("a route's workspace blocks", () => {
 
     draw(STANDARD_PIPELINES.worktree.nodes);
     await tick(world);
+    expect(world.spawned).toEqual([[direct.id, "author"]]);
+  });
+
+  test("a dirty checkout publishes a dirty hold naming the changed file, and starts nothing there", async () => {
+    draw(DIRECT);
+    const direct = item("ts-dirty-hold", "open", []);
+    const world = new World(direct);
+    world.treeDirty = true;
+
+    const state = await reading(world);
+
+    expect(world.spawned).toEqual([]);
+    expect(state.held).toEqual([
+      {
+        project: "test",
+        reason: "dirty",
+        detail: "uncommitted changes to uncommitted.txt; a start in the checkout waits for them",
+      },
+    ]);
+  });
+
+  test("a dirty worktree project publishes no hold, and the worktree start goes ahead", async () => {
+    draw(STANDARD_PIPELINES.worktree.nodes);
+    const task = item("ts-dirty-worktree", "open", []);
+    const world = new World(task);
+    world.treeDirty = true;
+
+    const state = await reading(world);
+
+    expect(state.held).toEqual([]);
+    expect(world.spawned).toEqual([[task.id, "author"]]);
+  });
+
+  test("the dirty hold clears on the first tick after the tree is clean, and the start goes ahead", async () => {
+    draw(DIRECT);
+    const direct = item("ts-dirty-clears", "open", []);
+    const world = new World(direct);
+    world.treeDirty = true;
+    expect((await reading(world)).held.map((entry) => entry.reason)).toEqual(["dirty"]);
+
+    world.treeDirty = false;
+    const state = await reading(world);
+
+    expect(state.held).toEqual([]);
     expect(world.spawned).toEqual([[direct.id, "author"]]);
   });
 

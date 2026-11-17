@@ -425,13 +425,32 @@ describe("the policy gate on dispatch", () => {
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: PROJECT_PIPELINES,
     placed: [],
-    dirty: new Set<string>(),
+    changes: new Map(),
     pullRequests: new Map(),
     ...overrides,
   });
 
   const planned = (dispatches: ReturnType<typeof dispatchesFor>) =>
     dispatches.map(({ role, task }) => `${role}:${task.id}`);
+
+  test("a checkout start waits while its project has uncommitted changes, whether or not a dirty hold is published", () => {
+    // The gate reads the changes themselves, so a reading that publishes no
+    // dirty row cannot let the start into the tree.
+    const checkout = new Map([
+      ["foreman", { _tag: "Runs" as const, pipeline: STANDARD_PIPELINES.checkout, drawn: false }],
+    ]);
+    const policy = allowing({ author: "on" });
+
+    const clean = dispatchState(policy, { queue: [ready("ts-a")], pipelines: checkout });
+    expect(planned(dispatchesFor(clean))).toEqual(["author:ts-a"]);
+
+    const dirty = dispatchState(policy, {
+      queue: [ready("ts-a")],
+      pipelines: checkout,
+      changes: new Map([["foreman", ["notes.md"]]]),
+    });
+    expect(dispatchesFor(dirty)).toEqual([]);
+  });
 
   test("a paused policy starts nothing, with every slot free", () => {
     const policy = allowing({ author: "on", review: "on" }, { paused: true });
@@ -845,7 +864,7 @@ describe("the quota gate", () => {
     scopes: new Map<string, ReadonlySet<string>>(),
     pipelines: PROJECT_PIPELINES,
     placed: [],
-    dirty: new Set<string>(),
+    changes: new Map(),
     pullRequests: new Map(),
     ...overrides,
   });
