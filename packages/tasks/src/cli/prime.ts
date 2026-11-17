@@ -37,8 +37,10 @@ with no task needs no \`tasks\` entry.
 
 ## Filing conventions
 
-- Scoped work awaiting authorisation: \`tasks add --status proposed\`. Work still being
-  scoped: \`tasks add --status draft\`. A first-line apology does not keep a task out of
+- Work the user asked for, or confirmed at the end of a design talk, is authorised: file
+  it at \`open\` (the default). File at \`--status proposed\` only work an agent thought of
+  that the user has not approved; file at \`--status draft\` work still being scoped. A
+  first-line apology does not keep a task out of
   \`tasks ready\`: it filters on status, never on the description. Promote with
   \`tasks open <id>\`; reject with \`tasks cancel <id>\`; return scoped work with
   \`tasks propose <id>\`.
