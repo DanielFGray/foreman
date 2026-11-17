@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
+import { SqlClient } from "effect/sql";
 import {
   addRow,
   moveRow,
@@ -23,6 +24,21 @@ describe("the registry ladder", () => {
         const ladder = yield* readLadder;
         expect(ladder.map((rung) => rung.name)).toEqual(["cheap", "strong", "promo"]);
         expect(ladder[0]).toMatchObject({ harness: "opencode", thinking: "medium" });
+      }),
+    ));
+
+  test("a rung whose model is retired reads as disabled, so dispatch never picks it", () =>
+    withStore(
+      rig,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE models SET retired = 1 WHERE model = 'opencode/deepseek-v4-pro'`;
+        const ladder = yield* readLadder;
+        expect(ladder.map((rung) => [rung.name, rung.enabled])).toEqual([
+          ["cheap", false],
+          ["strong", true],
+          ["promo", true],
+        ]);
       }),
     ));
 

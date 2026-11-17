@@ -133,6 +133,7 @@ const RungRow = Schema.Struct({
   unmetered: Schema.BooleanFromBit,
   harness: Schema.String,
   thinking: Schema.OptionFromNullOr(Schema.String),
+  retired: Schema.BooleanFromBit,
 });
 
 const StatusRow = Schema.Struct({
@@ -183,10 +184,14 @@ export class Registry extends Context.Service<Registry>()("Registry", {
   make: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
-    /** The ladder, cheapest level first, with each rung's harness from its model. */
+    /**
+     * The ladder, cheapest level first, with each rung's harness from its model.
+     * A rung whose model is retired reads as disabled: retirement is how a model
+     * leaves for quality, and it must leave dispatch with it.
+     */
     const readLadder = Effect.gen(function* () {
       const rungs = yield* sql`SELECT l.rung, l.level, l.model, l.enabled, l.author, l.provider,
-            l.unmetered, l.thinking, m.harness
+            l.unmetered, l.thinking, m.harness, m.retired
        FROM ladder l JOIN models m USING (model)
       ORDER BY l.level, l.rank`.pipe(Effect.flatMap(rowsOf(RungRow)));
       const [bottom, ...rest] = rungs.map((row): Rung => ({
@@ -195,7 +200,7 @@ export class Registry extends Context.Service<Registry>()("Registry", {
         level: row.level,
         model: row.model,
         provider: Option.getOrUndefined(row.provider),
-        enabled: row.enabled,
+        enabled: row.enabled && !row.retired,
         author: row.author,
         unmetered: row.unmetered,
         thinking: Option.getOrUndefined(row.thinking),
