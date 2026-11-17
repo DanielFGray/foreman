@@ -54,8 +54,7 @@ const add = Command.make(
       if (project === undefined) {
         return yield* new TaskError({ id: "add", detail: "project is required (-p)" });
       }
-      const description = yield* optionalProse(args.description);
-      const definitionOfDone = yield* optionalProse(args.dod);
+      const { description, definitionOfDone } = yield* proseFields("add", args);
       if (Option.isSome(args.blocks)) yield* tasks.require(args.blocks.value);
       const added = yield* tasks.add({
         title: args.title,
@@ -212,8 +211,7 @@ const edit = Command.make(
       const tasks = yield* Tasks;
       const change = {
         title: Option.getOrUndefined(args.title),
-        description: yield* optionalProse(args.description),
-        definitionOfDone: yield* optionalProse(args.dod),
+        ...(yield* proseFields(args.id, args)),
       };
       if (Object.values(change).every((value) => value === undefined)) {
         return yield* new TaskError({
@@ -417,3 +415,25 @@ export const tasksCommand = root.pipe(
 
 const optionalProse = (value: Option.Option<string>) =>
   Option.isSome(value) ? prose(value.value) : Effect.undefined;
+
+/**
+ * The description and definition of done of `add` or `edit`. Standard input
+ * can be read only once, so when both are `-` the second would be silently
+ * empty; that is refused instead.
+ */
+const proseFields = (
+  id: string,
+  args: { readonly description: Option.Option<string>; readonly dod: Option.Option<string> },
+) =>
+  Option.contains(args.description, "-") && Option.contains(args.dod, "-")
+    ? Effect.fail(
+        new TaskError({
+          id,
+          detail:
+            "--description and --dod cannot both read standard input (-): pass one as text, or set the other with tasks edit",
+        }),
+      )
+    : Effect.all({
+        description: optionalProse(args.description),
+        definitionOfDone: optionalProse(args.dod),
+      });

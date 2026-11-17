@@ -304,6 +304,12 @@ describe("tasks CLI shape", () => {
     );
     const piped = await run(["add", "Piped", "-p", "l", "-d", "-"], "from stdin\n");
     expect(await run(["show", piped])).toContain("from stdin");
+    expect(await refusal(["add", "Both", "-p", "l", "-d", "-", "--dod", "-"])).toContain(
+      "cannot both read standard input",
+    );
+    expect(await refusal(["edit", piped, "--description", "-", "--dod", "-"])).toContain(
+      "cannot both read standard input",
+    );
   });
 
   test("list and ready print JSON with stable field names", async () => {
