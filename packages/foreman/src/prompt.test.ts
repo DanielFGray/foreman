@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Option, Schema as S } from "effect";
@@ -16,6 +16,10 @@ import { pipelineOf } from "./pipeline-fixture.ts";
 import { Prompts } from "./prompt.ts";
 import type { Item } from "./records.ts";
 import { authorRun } from "./task-fixture.ts";
+
+// Each test makes its own config folder under this one, so one afterAll removes them all.
+const scratch = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 // Prompts are prose wrapped at about 85 columns; the tests check what a rule says,
 // not where a line happens to break, so whitespace runs read as one space.
@@ -365,7 +369,7 @@ describe("Prompts", () => {
   // The operator draws the contract: a new exit, a park on a stop and their
   // own instructions file all reach the agent with no change to foreman.
   test("an operator's drawing and instructions file make the prompt", async () => {
-    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    const config = mkdtempSync(join(scratch, "prompts-"));
     mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
     writeFileSync(
       join(config, "foreman", "prompts", "careful.md"),
@@ -428,7 +432,7 @@ describe("Prompts", () => {
       ),
     ).toEqual([]);
 
-    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    const config = mkdtempSync(join(scratch, "prompts-"));
     mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
     writeFileSync(join(config, "foreman", "prompts", "typo.md"), "Read {{ title }}.");
     const previous = process.env["XDG_CONFIG_HOME"];
@@ -455,7 +459,7 @@ describe("Prompts", () => {
   });
 
   test("an operator's file wins over the instructions foreman ships", async () => {
-    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    const config = mkdtempSync(join(scratch, "prompts-"));
     mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
     writeFileSync(join(config, "foreman", "prompts", "author.md"), "Operator text for {{ task }}.");
     const previous = process.env["XDG_CONFIG_HOME"];
@@ -551,7 +555,7 @@ describe("the instructions foreman ships for agent blocks", () => {
 
 describe("a schedule's template read through the real reader", () => {
   const withConfigDirectory = async <A>(files: Record<string, string>, f: () => Promise<A>) => {
-    const root = mkdtempSync(join(tmpdir(), "foreman-config-"));
+    const root = mkdtempSync(join(scratch, "config-"));
     mkdirSync(join(root, "foreman", "prompts"), { recursive: true });
     for (const [name, text] of Object.entries(files)) {
       writeFileSync(join(root, "foreman", "prompts", `${name}.md`), text);
@@ -617,7 +621,7 @@ describe("vars", () => {
   });
 
   test("a var's value reaches the rendered prompt", async () => {
-    const config = mkdtempSync(join(tmpdir(), "foreman-prompts-"));
+    const config = mkdtempSync(join(scratch, "prompts-"));
     mkdirSync(join(config, "foreman", "prompts"), { recursive: true });
     writeFileSync(join(config, "foreman", "prompts", "focused.md"), "Look at {{ focus }}.");
     const previous = process.env["XDG_CONFIG_HOME"];
