@@ -1,6 +1,14 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Effect, Option } from "effect";
-import { dependencyMermaid, STATUSES, TaskError, Tasks, Runs, type TaskEvent } from "tasks";
+import {
+  dependencyMermaid,
+  ITEM_ID,
+  STATUSES,
+  TaskError,
+  Tasks,
+  Runs,
+  type TaskEvent,
+} from "tasks";
 import { PRIME } from "./prime.ts";
 import { detail, detailJson, json, lines } from "./render.ts";
 import { prose } from "./text.ts";
@@ -149,21 +157,68 @@ const move = (name: TaskEvent, past: string, description: string) =>
     }),
   ).pipe(Command.withDescription(description));
 
+/**
+ * The ids to cancel and the reason, from the arguments of `tasks cancel`.
+ *
+ * With --reason, every argument is an id. Without it, the arguments are all ids
+ * only when every one has the id shape; otherwise the first is the id and the
+ * rest are the reason, as `tasks cancel <id> <words>` has always read them.
+ */
+const cancelTargets = (
+  args: ReadonlyArray<string>,
+  flagged: Option.Option<string>,
+): { readonly ids: ReadonlyArray<string>; readonly reason: Option.Option<string> } => {
+  if (Option.isSome(flagged)) return { ids: args, reason: flagged };
+  if (args.every((arg) => ITEM_ID.test(arg))) return { ids: args, reason: Option.none() };
+  const [first, ...words] = args;
+  return {
+    ids: [first!],
+    reason: words.length === 0 ? Option.none() : Option.some(words.join(" ")),
+  };
+};
+
 const cancel = Command.make(
   "cancel",
-  { id, reason: Argument.String("reason").pipe(Argument.atLeast(0)) },
-  ({ id, reason }) =>
+  {
+    targets: Argument.String("id").pipe(Argument.atLeast(1)),
+    reason: Flag.String("reason").pipe(Flag.optional),
+  },
+  ({ targets, reason }) =>
     Effect.gen(function* () {
       const tasks = yield* Tasks;
-      yield* tasks.send(id, "cancel");
-      if (reason.length === 0) return yield* Console.log(`Canceled ${id}`);
-      const why = yield* prose(reason.join(" "));
-      yield* tasks.log(id, `Canceled: ${why}`);
-      yield* Console.log(`Canceled ${id}: ${why}`);
+      const picked = cancelTargets(targets, reason);
+      const why = Option.isSome(picked.reason)
+        ? Option.some(yield* prose(picked.reason.value))
+        : Option.none<string>();
+      yield* tasks.cancelAll(picked.ids, why);
+      for (const id of picked.ids) {
+        yield* Console.log(
+          Option.match(why, {
+            onNone: () => `Canceled ${id}`,
+            onSome: (text) => `Canceled ${id}: ${text}`,
+          }),
+        );
+      }
     }),
 ).pipe(
-  Command.withDescription("Cancel a task that is no longer relevant. An optional reason is logged"),
+  Command.withDescription(
+    "Cancel one or more tasks that are no longer relevant, all or none. --reason logs the reason on each. With one id, trailing words are the reason too",
+  ),
 );
+
+/**
+ * The text of `log` or `append`, refused when blank: a blank entry is almost
+ * always an empty standard input, so the error names the stdin form.
+ */
+const nonBlank = (id: string, command: string, value: string) =>
+  value.trim() === ""
+    ? Effect.fail(
+        new TaskError({
+          id,
+          detail: `empty message: pass the text, or read it from standard input: tasks ${command} ${id} - <<'EOF'`,
+        }),
+      )
+    : Effect.succeed(value);
 
 const log = Command.make(
   "log",
@@ -171,7 +226,8 @@ const log = Command.make(
   ({ id, message }) =>
     Effect.gen(function* () {
       const tasks = yield* Tasks;
-      yield* tasks.log(id, yield* prose(message.join(" ")));
+      const entry = yield* nonBlank(id, "log", yield* prose(message.join(" ")));
+      yield* tasks.log(id, entry);
       yield* Console.log(`Logged to ${id}`);
     }),
 ).pipe(Command.withDescription("Add a log entry to a task. Log results and decisions, not steps"));
@@ -182,7 +238,8 @@ const append = Command.make(
   ({ id, text }) =>
     Effect.gen(function* () {
       const tasks = yield* Tasks;
-      yield* tasks.append(id, yield* prose(text.join(" ")));
+      const added = yield* nonBlank(id, "append", yield* prose(text.join(" ")));
+      yield* tasks.append(id, added);
       yield* Console.log(`Appended to ${id}`);
     }),
 ).pipe(Command.withDescription("Add text to the end of a task's description"));

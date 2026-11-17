@@ -35,6 +35,13 @@ export const TaskState = S.Literals([
   "canceled",
 ] as const);
 
+/**
+ * The shape every item id has: `ts-` for a task, `ep-` for an epic, then six
+ * hex digits. The store mints ids of this shape, so an argument that matches
+ * it names an item and not a word.
+ */
+export const ITEM_ID = /^(ts|ep)-[0-9a-f]{6}$/;
+
 /** One item of the task store. */
 export class Item extends S.Class<Item>("tasks/Item")({
   id: S.String,

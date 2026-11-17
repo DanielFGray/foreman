@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { TASK_MACHINE, type TaskEvent, type TaskState } from "./item.ts";
-import { toMermaid, transition } from "./machine.ts";
+import { type Machine, routeTo, toMermaid, transition } from "./machine.ts";
 
 const move = (state: TaskState, event: TaskEvent) =>
   Option.getOrUndefined(transition(TASK_MACHINE, state, event));
@@ -47,3 +47,29 @@ describe("the task machine", () => {
     expect(arrows.every((arrow) => !arrow.includes("reviewing"))).toBe(true);
   });
 });
+
+describe("routeTo", () => {
+  test("one hop: a proposal reaches done through open", () => {
+    expect(routeTo(TASK_MACHINE, "proposed", "done")).toEqual(Option.some(["open", "done"]));
+  });
+
+  test("two hops: the moves come in order, then the event", () => {
+    expect(routeTo(LINE, "a", "fin")).toEqual(Option.some(["go", "go", "fin"]));
+  });
+
+  test("none: no move reaches the event", () => {
+    expect(routeTo(LINE, "d", "fin")).toEqual(Option.none());
+  });
+});
+
+/** a -go-> b -go-> c, and `fin` is allowed only at c. */
+const LINE: Machine<"a" | "b" | "c" | "d", "go" | "fin"> = {
+  id: "line",
+  states: ["a", "b", "c", "d"],
+  events: ["go", "fin"],
+  initial: ["a"],
+  on: {
+    go: { a: "b", b: "c" },
+    fin: { c: "d" },
+  },
+};

@@ -20,7 +20,7 @@ import {
   TaskState,
 } from "./item.ts";
 import { cycleIn, type Dependency } from "./graph.ts";
-import { transition } from "./machine.ts";
+import { routeTo, transition } from "./machine.ts";
 import { rank } from "./rank.ts";
 import { formatGo, parseStored } from "./time.ts";
 
@@ -267,7 +267,7 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
             Effect.fail(
               new TaskError({
                 id,
-                detail: `cannot ${event} an item that is ${current.status}`,
+                detail: `cannot ${event} an item that is ${current.status}${refusalHint(id, current.type, current.status, event)}`,
               }),
             ),
           onSome: Effect.succeed,
@@ -284,6 +284,28 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
         }
         return next;
       });
+
+    /**
+     * Cancels each item in one transaction, logging the reason on each when one
+     * is given. An unknown id or a refused move fails the whole call, so no item
+     * changes unless every item does.
+     */
+    const cancelAll = (ids: ReadonlyArray<string>, reason: Option.Option<string>) =>
+      sql.withTransaction(
+        Effect.forEach(
+          ids,
+          (id) =>
+            send(id, "cancel").pipe(
+              Effect.andThen(
+                Option.match(reason, {
+                  onNone: () => Effect.void,
+                  onSome: (why) => log(id, `Canceled: ${why}`),
+                }),
+              ),
+            ),
+          { discard: true },
+        ),
+      );
 
     /**
      * Rewrites an item's labels in one transaction: `change` gets the labels it
@@ -560,6 +582,7 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
       setParent,
       logs,
       send,
+      cancelAll,
       relabel,
       label,
       unlabel,
@@ -663,6 +686,19 @@ const itemOf = (
 
 /** A stored time; an unreadable one reads as the epoch, which sorts oldest. */
 const storedDate = (text: string): Date => Option.getOrElse(parseStored(text), () => new Date(0));
+
+/**
+ * The end of a refusal that names the moves reaching the event, such as `; run
+ * tasks open <id>, then tasks done <id>`. Epics get none: their status is
+ * derived, so no route of task moves applies to them.
+ */
+const refusalHint = (id: string, type: ItemType, status: TaskState, event: TaskEvent): string => {
+  if (type === "epic") return "";
+  return Option.match(routeTo(TASK_MACHINE, status, event), {
+    onNone: () => "",
+    onSome: (run) => `; run ${run.map((step) => `tasks ${step} ${id}`).join(", then ")}`,
+  });
+};
 
 const hex = (bytes: number): string =>
   [...crypto.getRandomValues(new Uint8Array(bytes))]

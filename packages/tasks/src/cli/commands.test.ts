@@ -177,7 +177,9 @@ describe("tasks status changes", () => {
   test("a refused move names the status and the command", async () => {
     const id = await created("Stuck", "-p", "d");
     await run(["start", id]);
-    expect(await refusal(["start", id])).toBe(`${id}: cannot start an item that is in_progress`);
+    expect(await refusal(["start", id])).toBe(
+      `${id}: cannot start an item that is in_progress; run tasks open ${id}, then tasks start ${id}`,
+    );
     expect(await refusal(["start", "ts-000000"])).toBe("ts-000000: item not found: ts-000000");
   });
 
@@ -191,6 +193,38 @@ describe("tasks status changes", () => {
     const shown = await run(["show", id]);
     expect(shown).toContain("Status:      canceled");
     expect(shown).toContain("Canceled: no longer needed");
+  });
+
+  test("cancel takes many ids, logs the flag's reason on each, and applies all or none", async () => {
+    const first = await created("Dup one", "-p", "d");
+    const second = await created("Dup two", "-p", "d");
+    expect(await run(["cancel", first, second, "--reason", "superseded"])).toBe(
+      `Canceled ${first}: superseded\nCanceled ${second}: superseded`,
+    );
+    expect(await run(["show", first])).toContain("Canceled: superseded");
+    expect(await run(["show", second])).toContain("Status:      canceled");
+
+    const kept = await created("Kept", "-p", "d");
+    expect(await refusal(["cancel", kept, "ts-000000"])).toBe(
+      "ts-000000: item not found: ts-000000",
+    );
+    expect(await refusal(["cancel", kept, first])).toBe(
+      `${first}: cannot cancel an item that is canceled; run tasks open ${first}, then tasks cancel ${first}`,
+    );
+    expect(await run(["show", kept])).toContain("Status:      open");
+  });
+
+  test("cancel reads bare ids as a bulk list, and a single id's trailing words as its reason", async () => {
+    const first = await created("Bulk one", "-p", "d");
+    const second = await created("Bulk two", "-p", "d");
+    await run(["cancel", first, second]);
+    expect(await run(["show", first])).toContain("Status:      canceled");
+    expect(await run(["show", second])).toContain("Status:      canceled");
+
+    const single = await created("Single", "-p", "d");
+    expect(await run(["cancel", single, "went", "elsewhere"])).toBe(
+      `Canceled ${single}: went elsewhere`,
+    );
   });
 });
 
@@ -210,6 +244,27 @@ describe("tasks text commands", () => {
     await run(["edit", id, "--dod", ""]);
     expect(await run(["show", id])).not.toContain("Definition of Done");
     expect(await refusal(["edit", id])).toContain("nothing to edit");
+  });
+});
+
+describe("tasks log and append refuse a blank message", () => {
+  test("a blank argument or empty standard input stores nothing and names the stdin form", async () => {
+    const id = await created("Blank", "-p", "d");
+    const before = await run(["show", id]);
+    expect(await refusal(["log", id, "   "])).toBe(
+      `${id}: empty message: pass the text, or read it from standard input: tasks log ${id} - <<'EOF'`,
+    );
+    expect(await refusal(["append", id, " "])).toBe(
+      `${id}: empty message: pass the text, or read it from standard input: tasks append ${id} - <<'EOF'`,
+    );
+    const emptyStdin = await Effect.runPromise(
+      runCommand(["log", id, "-"], "\n").pipe(
+        Effect.flip,
+        Effect.map((error) => ("detail" in error ? error.detail : String(error))),
+      ),
+    );
+    expect(emptyStdin).toContain("empty message");
+    expect(await run(["show", id])).toBe(before);
   });
 });
 

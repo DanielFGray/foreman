@@ -83,7 +83,7 @@ proposed, draft, open, in_progress, done, canceled.
 not a status: foreman derives it from the task's last exit and the drawing.
 
 A status change that the rules do not allow gives an error that names the status and
-the command. An epic's status comes from its tasks. Only \`done\` and \`cancel\` close an
+the commands that reach the change, in order, such as \`tasks open <id>\` then \`tasks done <id>\`. An epic's status comes from its tasks. Only \`done\` and \`cancel\` close an
 epic by hand.
 
 ## Essential commands

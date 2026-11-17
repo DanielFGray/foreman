@@ -32,6 +32,38 @@ export const sourcesOf = <State extends string, Event extends string>(
   event: Event,
 ): ReadonlyArray<State> => machine.states.filter((state) => machine.on[event][state] !== undefined);
 
+/**
+ * The shortest run of events that takes `state` to a state where `event` is
+ * allowed, ending with `event` itself. A refusal names this run, so the caller
+ * tells the user the moves to make instead of leaving them to find them.
+ *
+ * Breadth-first, so the run is shortest. Ties go to the event listed first in
+ * `machine.events`, which keeps the answer the same from one call to the next.
+ * Answers nothing when no run reaches `event`.
+ */
+export const routeTo = <State extends string, Event extends string>(
+  machine: Machine<State, Event>,
+  state: State,
+  event: Event,
+): Option.Option<ReadonlyArray<Event>> => {
+  const seen = new Set<State>([state]);
+  let frontier: ReadonlyArray<readonly [State, ReadonlyArray<Event>]> = [[state, []]];
+  while (frontier.length > 0) {
+    const next: Array<readonly [State, ReadonlyArray<Event>]> = [];
+    for (const [at, run] of frontier) {
+      if (machine.on[event][at] !== undefined) return Option.some([...run, event]);
+      for (const by of machine.events) {
+        const to = machine.on[by][at];
+        if (to === undefined || seen.has(to)) continue;
+        seen.add(to);
+        next.push([to, [...run, by]]);
+      }
+    }
+    frontier = next;
+  }
+  return Option.none();
+};
+
 /** The machine as a Mermaid `stateDiagram-v2`: one arrow per allowed move, labelled with its event. */
 export const toMermaid = <State extends string, Event extends string>(
   machine: Machine<State, Event>,

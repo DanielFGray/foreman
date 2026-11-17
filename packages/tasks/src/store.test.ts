@@ -194,7 +194,27 @@ describe("refusals", () => {
     const refused = await withTasks((tasks) => tasks.send(ids.working!, "start").pipe(Effect.flip));
     expect(refused).toMatchObject({
       _tag: "TaskError",
-      detail: "cannot start an item that is in_progress",
+      detail: `cannot start an item that is in_progress; run tasks open ${ids.working}, then tasks start ${ids.working}`,
+    });
+  });
+
+  test("a refused move names the moves that reach it", async () => {
+    const proposed = await withTasks((tasks) =>
+      tasks.add({ title: "Proposed", project: "demo", status: "proposed" }),
+    );
+    const refused = await withTasks((tasks) => tasks.send(proposed, "done").pipe(Effect.flip));
+    expect(refused).toMatchObject({
+      _tag: "TaskError",
+      detail: `cannot done an item that is proposed; run tasks open ${proposed}, then tasks done ${proposed}`,
+    });
+  });
+
+  test("an epic's refused move names no route, since its status is derived", async () => {
+    const refused = await withTasks((tasks) => tasks.send(ids.epic!, "start").pipe(Effect.flip));
+    expect(refused).toMatchObject({
+      _tag: "TaskError",
+      detail:
+        "epic status is derived from children; only 'done' and 'canceled' can be set manually (to force-close)",
     });
   });
 
