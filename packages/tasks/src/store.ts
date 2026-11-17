@@ -110,7 +110,9 @@ export class Tasks extends Context.Service<Tasks>()("Tasks", {
           epics.length === 0
             ? ([] as ReadonlyArray<typeof ChildRow.Type>)
             : yield* retrying(
-                sql`SELECT parent_id, status FROM items WHERE ${sql.in("parent_id", epics)}`,
+                sql`SELECT parent_id, status, EXISTS (SELECT 1 FROM item_labels il JOIN labels l ON il.label_id = l.id
+                  WHERE il.item_id = items.id AND l.name = 'question') AS question
+                  FROM items WHERE ${sql.in("parent_id", epics)}`,
               ).pipe(
                 Effect.flatMap((raw) =>
                   S.decodeUnknownEffect(S.Array(ChildRow))(raw).pipe(Effect.orDie),
@@ -602,6 +604,7 @@ const LabelRow = S.Struct({
 const ChildRow = S.Struct({
   parent_id: S.String,
   status: Status,
+  question: S.BooleanFromBit,
 });
 
 const ProgressRow = S.Struct({
@@ -643,7 +646,7 @@ const itemOf = (
       row.type === "epic"
         ? epicStatus(
             row.status,
-            children.filter((child) => child.parent_id === row.id).map((child) => child.status),
+            children.filter((child) => child.parent_id === row.id),
           )
         : row.status,
     priority: row.priority,

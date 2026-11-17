@@ -112,17 +112,25 @@ export const TASK_MACHINE: Machine<TaskState, TaskEvent> = {
  * Closed by hand (`done` or `canceled` stored) wins. With no children the epic
  * is a draft. Otherwise: every child resolved is done; every unresolved child
  * blocked is blocked; any child started or finished is in progress; every
- * unresolved child a draft or a proposal is a draft; else open.
+ * unresolved work child a draft or a proposal is a draft; else open.
+ *
+ * A question child is a decision, not work: it is filed at `open` and is never
+ * ready, so it keeps the epic unresolved but does not make a draft epic open.
  */
-export const epicStatus = (stored: Status, children: ReadonlyArray<Status>): Status => {
+export const epicStatus = (
+  stored: Status,
+  children: ReadonlyArray<{ readonly status: Status; readonly question: boolean }>,
+): Status => {
   if (stored === "done" || stored === "canceled") return stored;
   if (children.length === 0) return "draft";
-  const count = (...statuses: ReadonlyArray<Status>) =>
-    children.filter((child) => statuses.includes(child)).length;
-  const unresolved = children.length - count("done", "canceled");
+  const count = (of: typeof children, ...statuses: ReadonlyArray<Status>) =>
+    of.filter((child) => statuses.includes(child.status)).length;
+  const unresolved = children.length - count(children, "done", "canceled");
   if (unresolved === 0) return "done";
-  if (count("blocked") === unresolved) return "blocked";
-  if (count("in_progress", "done") > 0) return "in_progress";
-  if (count("draft", "proposed") === unresolved) return "draft";
+  if (count(children, "blocked") === unresolved) return "blocked";
+  if (count(children, "in_progress", "done") > 0) return "in_progress";
+  const work = children.filter((child) => !child.question);
+  const unresolvedWork = work.length - count(work, "done", "canceled");
+  if (count(work, "draft", "proposed") === unresolvedWork) return "draft";
   return "open";
 };

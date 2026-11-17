@@ -198,6 +198,18 @@ describe("refusals", () => {
     });
   });
 
+  test("an open question under a draft epic leaves the epic a draft", async () => {
+    const epic = await withTasks((tasks) =>
+      Effect.gen(function* () {
+        const epic = yield* tasks.add({ title: "Scoping", project: "demo", type: "epic" });
+        yield* tasks.add({ title: "Sketch", project: "demo", parent: epic, status: "draft" });
+        yield* tasks.add({ title: "Which?", project: "demo", parent: epic, labels: ["question"] });
+        return yield* tasks.get(epic);
+      }),
+    );
+    expect(Option.map(epic, (item) => item.status)).toEqual(Option.some("draft"));
+  });
+
   test("an epic's status is derived, so only done and cancel set it", async () => {
     const refused = await withTasks((tasks) => tasks.send(ids.epic!, "start").pipe(Effect.flip));
     expect(refused).toMatchObject({
