@@ -230,15 +230,15 @@ describe("decisions", () => {
     expect(decisions.map((decision) => decision.task.id)).toEqual(["ts-1", "ts-2"]);
   });
 
-  // A session that claims a task and ends leaves it in progress with nobody on
-  // it, and nothing else would ever send an agent to it.
-  test("surfaces a claim made outside foreman that no worker holds", () => {
+  // A claim made by hand or by another session is work in progress on that
+  // session's own branch, which no foreman answer would continue.
+  test("does not ask about a claim made outside foreman that no worker holds", () => {
     const claimed = [active(task("ts-1", [], "in_progress"), undefined)];
-    expect(decisionsOf(claimed, [], []).map((decision) => decision.task.id)).toEqual(["ts-1"]);
+    expect(decisionsOf(claimed, [], [])).toEqual([]);
   });
 
   // A coordinator's hand-started agent is working the task, so the claim is
-  // not an orphan. The same claim with no terminal is still a decision above.
+  // not an orphan.
   test("a hand-started agent that exited is not a vanished decision", () => {
     const claimed = [
       active(task("ts-1", [], "in_progress"), { ...worker("gone", "ts-1"), owner: "hand" }),

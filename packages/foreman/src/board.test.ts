@@ -133,11 +133,10 @@ describe("the task board", () => {
       decisions: [{ task: claimed, worker: undefined, kind: undefined }],
     });
     expect(columns(published)).toEqual({ "ts-claimed": "needs-you" });
-    // The report says which task and that nobody foreman knows holds it, and
-    // retry sends an agent to it.
+    // The report names the kind and the task, and retry sends an agent to it.
     expect(published.rows.find((row) => row.key === "ts-claimed")).toMatchObject({
       view: "attention",
-      label: expect.stringMatching(/^claimed outside foreman {2}\S/),
+      label: expect.stringMatching(/^author vanished {2}\S/),
       actions: expect.arrayContaining(["retry"]),
     });
   });

@@ -12,7 +12,7 @@ import type {
   Stranded,
   Unreviewed,
 } from "./dispatcher.ts";
-import { authoredBy, reviewedBy } from "./lap.ts";
+import { reviewedBy } from "./lap.ts";
 import { blockOf } from "./pipeline.ts";
 import { exhausted, type Allowance } from "./quota.ts";
 import { idleLabel, resetsLabel, usedLabel } from "./format.ts";
@@ -48,7 +48,6 @@ export type ColumnName = (typeof COLUMNS)[number];
 
 export type DecisionKind =
   | "author vanished"
-  | "claimed outside foreman"
   | "reviewer vanished"
   | "orphaned workspace"
   | "dispatch failed"
@@ -65,9 +64,7 @@ export type DecisionKind =
  * failure, a lost exit and a returned landing are the kinds status cannot
  * name: a failed task and a returned one are ordinary queue work, and a task
  * whose last exit the drawing lost is an ordinary claim, so the cause itself
- * is what marks the row. A claim with no foreman author behind it was made by
- * hand or by another session: nothing vanished, foreman just cannot see anyone
- * working on it.
+ * is what marks the row.
  */
 export const decisionKind = (
   task: Item,
@@ -82,9 +79,7 @@ export const decisionKind = (
         : reviewedBy(task) !== undefined
           ? "reviewer vanished"
           : task.status === "in_progress"
-            ? authoredBy(task) === undefined
-              ? "claimed outside foreman"
-              : "author vanished"
+            ? "author vanished"
             : "orphaned workspace";
 
 /**
@@ -206,10 +201,6 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "intervene", "release"],
-  // The claim is a person's or another session's. Only the operator can say it
-  // is abandoned: release hands it back, retry or intervene sends foreman's own
-  // agent to it.
-  "claimed outside foreman": ["retry", "intervene", "release"],
   "reviewer vanished": ["retry", "takeOver", "intervene", "release"],
   "orphaned workspace": ["intervene", "close", "unassign"],
   // Nothing to take over or release: the agent never started. The one answer
@@ -432,8 +423,14 @@ const activeRow = (
   return {
     column,
     key: task.id,
-    label: `${diagnosticIntent(task) ?? kind ?? "?"}  ${task.title}`,
-    detail: step === undefined ? undefined : `at ${step}`,
+    // A claim with no rung was made by hand or by another session.
+    label: `${diagnosticIntent(task) ?? kind ?? "outside foreman"}  ${task.title}`,
+    // With no worker to watch, how long the task has been still is the one
+    // sign of whether anybody is on it.
+    detail: joined([
+      step === undefined ? undefined : `at ${step}`,
+      worker === undefined ? idleOf(task, state) : undefined,
+    ]),
     task,
     ready: undefined,
     worker,
@@ -483,9 +480,7 @@ const decisionRow = ({ task, worker, kind, cause }: Active, state: FleetState): 
   label: `${decisionKind(task, cause)}  ${task.title}`,
   detail: joined([
     decisionWhy(task, kind, cause),
-    state.observedAt === undefined
-      ? undefined
-      : `idle ${idleLabel(task.lastActivityAt, DateTime.toDateUtc(state.observedAt))}`,
+    idleOf(task, state),
     // Only positive evidence: the commits are read off foreman's own branch or
     // the operator's checkout, so a claim worked on another branch reads as none.
     state.committed.has(task.id) ? "has commits" : undefined,
@@ -522,6 +517,11 @@ const decisionWhy = (
   (task.status === "done" || task.status === "canceled" || task.status === "open"
     ? task.status
     : kind);
+
+const idleOf = (task: Item, state: FleetState): string | undefined =>
+  state.observedAt === undefined
+    ? undefined
+    : `idle ${idleLabel(task.lastActivityAt, DateTime.toDateUtc(state.observedAt))}`;
 
 /** The parts of a row's second line that are known, or none. */
 const joined = (parts: ReadonlyArray<string | undefined>): string | undefined => {

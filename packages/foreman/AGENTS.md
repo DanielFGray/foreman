@@ -220,7 +220,9 @@ author. After
 `staleAfterHours` of no activity the claim is released with a log line — only a
 claim foreman's own agent made, which its author run records. A claim made by
 hand or by another session is its owner's to give up: foreman cannot tell an
-abandoned one from one whose owner is away.
+abandoned one from one whose owner is away. So such a claim shows as working, with
+how long it has been idle, and is never a decision: its work sits on that
+session's own branch, which no foreman answer would continue.
 
 A lost exit is a decision too. A run stores the id of the exit it named, and a
 rename changes only the name, so a rename leaves the task where it was. When
@@ -1096,8 +1098,7 @@ read to decide what the queue under it should do next. An epic row takes no
 action: it has no branch and no worker.
 
 Attention combines the exceptional states in urgency order: decisions
-(vanished workers, claims made outside foreman, failed dispatches, lost exits and
-returned landings), yours, stranded
+(vanished workers, failed dispatches, lost exits and returned landings), yours, stranded
 projects (authored mid-pipeline work outside the managed set), stale reviews,
 unreviewed branches, orphaned workers, held projects, and last the spent
 accounts. Each row keeps its source kind, so

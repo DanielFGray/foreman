@@ -1235,7 +1235,7 @@ export class Dispatcher extends Context.Service<Dispatcher>()("Dispatcher", {
         queue: ordered,
         yours,
         stranded,
-        working: claimedActive.filter(isFleetWork),
+        working: claimedActive,
         ...reviews,
         dispatches: plan.dispatches,
         lands: plan.lands,
@@ -4490,9 +4490,10 @@ export const strandedOf = (
 
 /**
  * Whether a claimed task is the fleet's: foreman labelled its author, or one of
- * its workers holds it. Any other claim was made by hand or by another session,
- * so the working column leaves it out; `decisionsOf` reports it while no
- * worker holds it.
+ * its workers holds it. Any other claim was made by hand or by another session:
+ * it is work in progress that foreman cannot see, so it shows as working, and
+ * `decisionsOf` never asks about it — nothing foreman could do would continue
+ * the work on that session's own branch.
  */
 export const isFleetWork = (claimed: Active): boolean =>
   claimed.worker !== undefined || authoredBy(claimed.task) !== undefined;
@@ -4500,10 +4501,9 @@ export const isFleetWork = (claimed: Active): boolean =>
 /**
  * What the dashboard must ask about.
  *
- * Three kinds, and each answers differently. A claimed task with no worker in
- * its workspace is either an author that vanished, which can be retried, or a
- * claim made by hand or by another session, which foreman cannot see working
- * and so reports for the operator to release or send an agent to; a
+ * Three kinds, and each answers differently. A claimed task of the fleet's
+ * with no worker in its workspace is an author that vanished and can be
+ * retried; a
  * reviewing task with an open review run and an empty workspace is a reviewer
  * that vanished mid-verdict; a workspace whose task is neither claimed nor
  * under review is residue — the task is unclaimed, so nobody owns the
@@ -4525,7 +4525,10 @@ export const decisionsOf = (
   // A hand-started worker that exited is its coordinator's to answer, not a
   // vanished worker foreman must decide about.
   ...claimed.filter(
-    ({ worker }) => worker === undefined || (worker.owner === "foreman" && worker.state === "gone"),
+    (claim) =>
+      isFleetWork(claim) &&
+      (claim.worker === undefined ||
+        (claim.worker.owner === "foreman" && claim.worker.state === "gone")),
   ),
   ...reviewing.filter(
     ({ task, worker }) =>
