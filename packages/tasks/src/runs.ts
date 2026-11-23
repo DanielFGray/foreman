@@ -252,6 +252,10 @@ export const RunRecord = S.Struct({
   /** Absent while the run is open. */
   closedAt: S.OptionFromNullOr(S.Date),
   costUsd: S.OptionFromNullOr(S.Finite),
+  /** The minutes the harness reported its agent active; absent where it reported none. */
+  activeMinutes: S.OptionFromNullOr(S.Finite),
+  /** Input, cache and output tokens together; absent where the harness reported none. */
+  tokens: S.OptionFromNullOr(S.Int),
 });
 export type RunRecord = typeof RunRecord.Type;
 
@@ -280,15 +284,19 @@ const RecordRow = S.Struct({
   started_at: S.OptionFromNullOr(S.String),
   closed_at: S.OptionFromNullOr(S.String),
   actual_cost_usd: S.OptionFromNullOr(S.Finite),
+  active_minutes: S.OptionFromNullOr(S.Finite),
+  tokens: S.OptionFromNullOr(S.Int),
 });
 
 const recordOf = ({
   started_at,
   closed_at,
   actual_cost_usd,
+  active_minutes,
   ...row
 }: typeof RecordRow.Type): RunRecord => ({
   ...row,
+  activeMinutes: active_minutes,
   startedAt: Option.flatMap(started_at, parseStored),
   closedAt: Option.flatMap(closed_at, parseStored),
   costUsd: actual_cost_usd,
@@ -492,7 +500,10 @@ export class Runs extends Context.Service<Runs>()("Runs", {
       });
 
     const RECORD_COLUMNS = sql.literal(`id, project, task, work, rung, model, node, "commit",
-      ending, outcome, rounds, notes, started_at, closed_at, actual_cost_usd`);
+      ending, outcome, rounds, notes, started_at, closed_at, actual_cost_usd, active_minutes,
+      CASE WHEN input_tokens IS NULL THEN NULL
+        ELSE input_tokens + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0)
+          + coalesce(output_tokens, 0) END AS tokens`);
 
     /** The history of these tasks' runs, oldest first. */
     const recordsOf = (ids: ReadonlyArray<string>) =>

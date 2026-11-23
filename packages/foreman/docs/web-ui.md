@@ -159,7 +159,10 @@ the page's files. `foreman serve` provides it beside `supervise`.
 ## The page
 
 - **One project per URL**: `/p/<project>`, and its task graph at
-  `/p/<project>/graph`. `/` is the dashboard; see "The dashboard" below. Any
+  `/p/<project>/graph`. `/` is the dashboard; see "The dashboard" below.
+  `/metrics` is the metrics page; see "The metrics page" below. The server
+  sends the page at those paths and a 404 at any other path that is no built
+  asset. Any
   other path under `/p/` shows "No page at this address" with a link to
   the dashboard. The page has no other state of its own besides what the operator is
   in the middle of (a drag, an open inspector).
@@ -316,6 +319,39 @@ pane's picked cards and send through.
 - **Flow.** The graph runs across, left to right, in a landscape viewport and
   down in a portrait one, by the same rule as the pipeline editor. The SVG sits
   in a container that scrolls.
+
+## The metrics page
+
+`/metrics` charts the closed agent runs of a window: what they spent, which
+models ran them, how long they took and how each rung ended. The dashboard's
+header links to it. `foreman stats` writes a static report from the same
+runs; the page is the live view of them.
+
+- **Data.** `Metrics { days }` is a verb: the page asks once per window, and
+  `days: null` reads all time. It answers one `MetricsRun` per closed agent run
+  (`src/metrics.ts`), checks left out. The pure folds each card draws from are
+  in the same module, which the page imports.
+- **Coverage.** The harnesses report tokens, billed cost and active time for
+  only some runs. Each card and total says how many runs it read, as "n of N
+  runs". Billed cost is only what a harness reported: the page adds no
+  list-price estimate to it.
+- **Filters.** One row above the cards: the window (7, 30 or 90 days, or all)
+  and who launched the runs (all, foreman or by hand; a run foreman launched
+  has a rung). They are the route's `window` and `launcher` search params, a
+  default left out. A change replaces the history entry.
+- **Cards.** Totals (runs, tokens, billed cost, median run time); spend over
+  time as a running total of tokens or billed cost; each model's share of runs,
+  tokens or billed cost, the ten largest and the rest as one bar; run time,
+  start to close or active, in bins that widen with the time, marked at the
+  median and the 90th percentile; and per rung the runs that ended, with the
+  part that failed (`stopped`, `vanished`, `walled`). A run launched by hand
+  has no rung and no ending, so it is not in the last card.
+- **Every chart has a table.** Each card switches between its chart and a
+  table of the same values. A hover, a tap or keyboard focus on a mark shows
+  its values.
+- **Colours.** One blue for every mark and a red for the failed part, as
+  `--viz-*` tokens in `styles.css`, each with a dark-mode value checked against
+  the panel colour. Text stays in the text colours.
 
 ## Tests
 

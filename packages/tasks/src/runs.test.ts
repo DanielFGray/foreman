@@ -774,3 +774,25 @@ describe("hand runs", () => {
     expect(outcome).toEqual({ refused: true, defects: 0 });
   });
 });
+
+describe("closedSince", () => {
+  test("a closed run reads its active minutes and its tokens summed, a missing cache count as none", async () => {
+    const read = await inRuns(
+      Effect.gen(function* () {
+        const runs = yield* Runs;
+        const sql = yield* SqlClient;
+        const reported = yield* runs.openRun(run());
+        const silent = yield* runs.openRun(run({ task: "ts-2" }));
+        yield* runs.closeRun(reported, { ending: "done", commit: "a" });
+        yield* runs.closeRun(silent, { ending: "done", commit: "b" });
+        yield* sql`UPDATE runs SET active_minutes = 12.5, input_tokens = 1000,
+          cache_read_tokens = 300, output_tokens = 40 WHERE id = ${reported}`;
+        return yield* runs.closedSince(new Date(0));
+      }),
+    );
+    expect(read.map(({ task, activeMinutes, tokens }) => ({ task, activeMinutes, tokens }))).toEqual([
+      { task: "ts-1", activeMinutes: Option.some(12.5), tokens: Option.some(1340) },
+      { task: "ts-2", activeMinutes: Option.none(), tokens: Option.none() },
+    ]);
+  });
+});

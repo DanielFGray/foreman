@@ -1,7 +1,8 @@
 /**
  * The page's root: the disconnect banner, the wait for the first reading, and
  * the routes (docs/web-ui.md, "The page"): the dashboard at `/`, a project at
- * `/p/<project>`, and the project's task graph at `/p/<project>/graph`.
+ * `/p/<project>`, the project's task graph at `/p/<project>/graph`, and the
+ * metrics of closed agent runs at `/metrics`.
  */
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -16,6 +17,13 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { Published } from "foreman/published-schema";
 import { createContext, use, useCallback, useMemo, useState } from "react";
 import { Dashboard } from "./dashboard.tsx";
+import {
+  MetricsPage,
+  metricsQueryOf,
+  metricsSearchOf,
+  queryOfMetrics,
+  type MetricsSearch,
+} from "./metrics-page.tsx";
 import { graphSearchOf, graphStateOf, searchOf, type SetGraphState } from "./graph-url.ts";
 import { PipelineEditor } from "./pipeline-editor.tsx";
 import { connectionAtom, readingsAtom } from "./rpc.ts";
@@ -178,6 +186,18 @@ const GraphPage = () => {
   );
 };
 
+const MetricsRoutePage = () => {
+  const query = metricsRoute.useSearch();
+  const search = useMemo(() => metricsSearchOf(query), [query]);
+  const navigate = metricsRoute.useNavigate();
+  // `replace`: a filter is not a step the Back button should undo.
+  const setSearch = useCallback(
+    (next: MetricsSearch) => void navigate({ search: queryOfMetrics(next), replace: true }),
+    [navigate],
+  );
+  return <MetricsPage search={search} setSearch={setSearch} />;
+};
+
 const NotFound = () => (
   <div className="app" data-testid="not-found">
     <p>No page at this address.</p>
@@ -206,7 +226,14 @@ const graphRoute = createRoute({
   component: GraphPage,
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, projectRoute, graphRoute]);
+const metricsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/metrics",
+  validateSearch: metricsQueryOf,
+  component: MetricsRoutePage,
+});
+
+const routeTree = rootRoute.addChildren([dashboardRoute, projectRoute, graphRoute, metricsRoute]);
 
 // The query is flat strings, lists joined with commas, so a link stays
 // readable and a typed value stays text: each route decodes its own keys

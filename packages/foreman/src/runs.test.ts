@@ -19,6 +19,8 @@ function run(fields: Partial<RunRecord> & Pick<RunRecord, "id" | "work">): RunRe
     startedAt: Option.none(),
     closedAt: Option.none(),
     costUsd: Option.none(),
+    activeMinutes: Option.none(),
+    tokens: Option.none(),
     notes: Option.none(),
     ...fields,
   };

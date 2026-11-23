@@ -134,6 +134,9 @@ const FleetHeader = ({
         onSend={(count) => void send(setSlots({ payload: { count } }))}
         onProblem={setProblem}
       />
+      <Link className="dash-link" to="/metrics" data-testid="metrics-link">
+        Metrics
+      </Link>
       {reading.policyError === null ? null : (
         <p className="problem" role="alert">
           Policy file: {reading.policyError}

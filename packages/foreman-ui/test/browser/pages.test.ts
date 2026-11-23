@@ -66,6 +66,25 @@ describe("foreman-ui pages", () => {
       .toBeInTheDocument();
   });
 
+  it("charts the closed runs at /metrics, and narrows them to the runs launched by hand", async () => {
+    // The fixture store holds 160 closed agent runs; every fifth has no rung.
+    mountPage("/metrics?window=all");
+    const totals = page.getByTestId("metrics-totals");
+    await expect.element(totals.getByText("160", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByTestId("card-endings").getByText("cheap")).toBeInTheDocument();
+
+    await page.getByTestId("launcher-hand").click();
+    await expect.element(totals.getByText("32", { exact: true })).toBeInTheDocument();
+    await expect
+      .element(page.getByTestId("card-endings").getByText(/a run launched by hand has neither/))
+      .toBeInTheDocument();
+
+    await page.getByTestId("view-models-table").click();
+    await expect
+      .element(page.getByTestId("card-models").getByRole("columnheader", { name: "Share" }))
+      .toBeInTheDocument();
+  });
+
   it("shows disconnected while the server is down, then reloads once it is back", async () => {
     let reloads = 0;
     mountPage("/", () => {

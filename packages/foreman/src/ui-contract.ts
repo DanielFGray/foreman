@@ -35,6 +35,7 @@ import {
   ShownPipeline,
 } from "./pipeline-view.ts";
 import { TraceRequest } from "./trace-request.ts";
+import { MetricsRun } from "./metrics.ts";
 import { Published, PublishedRow } from "./published-schema.ts";
 import { INTERVENTIONS, KEY_ONLY_ACTIONS } from "./view-names.ts";
 
@@ -123,6 +124,13 @@ export const PipelineGraph = Rpc.make("PipelineGraph", {
   },
   success: GraphView,
   error: S.Union([PipelineError, RecordsError, TrackerError]),
+});
+
+/** The closed agent runs of the last `days` days, or of all time for null. */
+export const Metrics = Rpc.make("Metrics", {
+  payload: { days: S.NullOr(S.Int) },
+  success: S.Array(MetricsRun),
+  error: S.Union([RecordsError, TrackerError]),
 });
 
 /** Policy verbs: one Rpc per exported Effect in `policy-command.ts`. */
@@ -235,6 +243,7 @@ export const UiContract = RpcGroup.make(
   PipelineTrace,
   PipelineSimulate,
   PipelineGraph,
+  Metrics,
   PolicyGrant,
   PolicyRevoke,
   PolicyPause,

@@ -8,6 +8,7 @@
  * address and the names in `FOREMAN_UI_HOSTS`; page tests pass vitest's
  * browser-page origin.
  */
+import { metricsRuns } from "./metrics-command.ts";
 import { BunHttpServer, BunServices } from "@effect/platform-bun";
 import {
   Config,
@@ -214,6 +215,7 @@ export const uiHandlersLayer = UiContract.toLayer(
       PipelineTrace: (payload) => infraAsDefects(pipelineTrace(payload)),
       PipelineSimulate: (payload) => infraAsDefects(pipelineSimulate(payload)),
       PipelineGraph: (payload) => infraAsDefects(pipelineGraph(payload)),
+      Metrics: (payload) => metricsRuns(payload.days),
       PolicyGrant: (payload) => infraAsDefects(policyGrant(payload)),
       PolicyRevoke: (payload) => infraAsDefects(policyRevoke(payload)),
       PolicyPause: (payload) => infraAsDefects(policyPause(payload)),
@@ -354,13 +356,17 @@ ${cssLink}
       : new PageBuildError({ detail: cause instanceof Error ? cause.message : String(cause) }),
 });
 
-/** Serves built page assets; unknown paths fall through to the SPA shell at `/`. */
+/**
+ * Serves built page assets, and the page itself at each of its routes (`/`,
+ * `/metrics`, `/p/…`), where the page's router takes over. Any other path is a
+ * 404.
+ */
 export const pageRoutesLayer = (assets: PageAssets) =>
   HttpRouter.add("GET", "*", (request) => {
     // Bun's request.url is the path (e.g. `/main.js`), not an absolute URL.
     const path = request.url.split("?")[0] ?? request.url;
-    const asset =
-      assets.get(path) ?? (path.startsWith("/p/") || path === "/" ? assets.get("/") : undefined);
+    const isPageRoute = path === "/" || path === "/metrics" || path.startsWith("/p/");
+    const asset = assets.get(path) ?? (isPageRoute ? assets.get("/") : undefined);
     if (asset === undefined) {
       return Effect.succeed(HttpServerResponse.empty({ status: 404 }));
     }

@@ -24,7 +24,8 @@
     "./board-columns": "./src/board-columns.ts",
     "./view-names": "./src/view-names.ts",
     "./policy": "./src/policy.ts",
-    "./policy-file": "./src/policy-file.ts"
+    "./policy-file": "./src/policy-file.ts",
+    "./metrics": "./src/metrics.ts"
   },
   "scripts": {
     "test": "run-s format:check lint typecheck test:unit",

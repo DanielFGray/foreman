@@ -19,6 +19,8 @@ const run: RunRecord = {
   startedAt: Option.none(),
   closedAt: Option.some(new Date("2026-01-01T00:00:00.000Z")),
   costUsd: Option.none(),
+  activeMinutes: Option.none(),
+  tokens: Option.none(),
 };
 
 const closed = new TaskItem({

@@ -151,6 +151,27 @@ export const startFixtureServer = async (options?: {
         ('ts-g4', 'amux', 'task', 'Read the store once', 'done', 2, NULL);
       INSERT INTO deps (item_id, depends_on) VALUES
         ('ts-g2', 'ts-g1'), ('ts-g3', 'ts-g2'), ('ts-g1', 'ts-g4');
+      -- Closed runs over the last 40 days, for the metrics page. Every fifth is
+      -- launched by hand, so it has no rung and no ending; every third reports
+      -- no tokens, and only every fourth a billed cost, as the harnesses do.
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 160)
+      INSERT INTO runs (project, task, slice, kind, pool, model, rung, work, started_at,
+        closed_at, outcome, ending, active_minutes, input_tokens, output_tokens, actual_cost_usd)
+      SELECT 'amux', 'ts-g' || (i % 4 + 1), 'fixture', 'pi', 'Pool',
+        CASE i % 6 WHEN 0 THEN 'opus' WHEN 1 THEN 'sonnet' WHEN 2 THEN 'm1'
+          WHEN 3 THEN 'gpt-6.1-sol' WHEN 4 THEN 'm1' ELSE 'haiku' END,
+        CASE WHEN i % 5 = 0 THEN NULL WHEN i % 2 = 0 THEN 'cheap' ELSE 'strong' END,
+        CASE WHEN i % 3 = 0 THEN 'review' ELSE 'build' END,
+        datetime('now', printf('-%d minutes', i * 360 + 1 + (i * i * 7) % 90)),
+        datetime('now', printf('-%d minutes', i * 360)),
+        'committed',
+        CASE WHEN i % 5 = 0 THEN NULL WHEN i % 7 = 0 THEN 'stopped' WHEN i % 11 = 0 THEN 'vanished'
+          ELSE 'done' END,
+        CASE WHEN i % 3 = 0 THEN NULL ELSE ((i * i * 7) % 90) * 0.6 END,
+        CASE WHEN i % 3 = 0 THEN NULL ELSE 20000 + (i * 7919) % 400000 END,
+        CASE WHEN i % 3 = 0 THEN NULL ELSE 1000 + (i * 31) % 9000 END,
+        CASE WHEN i % 4 = 0 THEN 0.05 + ((i * 13) % 40) / 100.0 ELSE NULL END
+      FROM n;
     `).pipe(Effect.provide(store.layer)),
   );
 

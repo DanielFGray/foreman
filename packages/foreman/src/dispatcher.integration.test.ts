@@ -4530,6 +4530,8 @@ const landedRun = (
   startedAt: Option.some(closedAt),
   closedAt: Option.some(closedAt),
   costUsd: Option.none(),
+  activeMinutes: Option.none(),
+  tokens: Option.none(),
 });
 
 describe("Dispatcher schedules", () => {

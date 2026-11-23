@@ -118,3 +118,12 @@ export const graphAtom = Atom.family((project: string) =>
     ),
   ),
 );
+
+/**
+ * The closed agent runs of a window, keyed by its days or "all". A window
+ * read once stays cached; the page reads closed runs, which a new close only
+ * adds to.
+ */
+export const metricsAtom = Atom.family((window: string) =>
+  UiRpc.query("Metrics", { days: window === "all" ? null : Number(window) }),
+);
