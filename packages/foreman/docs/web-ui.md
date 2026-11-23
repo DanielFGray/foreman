@@ -249,7 +249,9 @@ the page's files. `foreman serve` provides it beside `supervise`.
   and `close`, which show one button to send first, because a stray tap on a
   phone would return a task to the queue or close it. `complete`, `kill` and
   `intervene` open a form for what they take first. Each sends
-  `TaskAction`. The reply's refusal, if any, shows under the row; the row
+  `TaskAction`. Each button's hover text is the action's `ACTION_HELP`
+  sentence, and the confirm button or form repeats it, since a touch screen
+  has no hover. The reply's refusal, if any, shows under the row; the row
   itself changes with the next reading.
 - **Projects.** One line per project: how many placed tasks stand in each
   board column, whether the project is paused, its tracker or pipeline

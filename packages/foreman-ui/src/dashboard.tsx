@@ -11,6 +11,7 @@ import type { Published, PublishedRow } from "foreman/published-schema";
 import type { Policy } from "foreman/policy";
 import type { RowAction } from "foreman/ui-contract";
 import {
+  ACTION_HELP,
   actionNamed,
   commandName,
   INTERVENTIONS,
@@ -262,6 +263,7 @@ const RowActions = ({
             type="button"
             disabled={busy}
             aria-pressed={form === action}
+            title={ACTION_HELP[action]}
             data-testid={`action-${row.key}-${commandName(action)}`}
             onClick={() =>
               isKeyOnly(action) && !ASKS_FIRST.has(action)
@@ -273,6 +275,8 @@ const RowActions = ({
           </button>
         ))}
       </div>
+      {/* The hover hint does not reach a touch screen, so the panel says it too. */}
+      {form === null ? null : <p className="muted">{ACTION_HELP[form]}</p>}
       {form === null ? null : isKeyOnly(form) ? (
         <div className="action-form" data-testid={`action-form-${form}`}>
           <button

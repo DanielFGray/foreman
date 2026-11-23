@@ -26,6 +26,19 @@ export const resetsLabel = (at: Date, now: Date = new Date()): string => {
 };
 
 /**
+ * How long something has been still, coarsely: "40m", "5h", "4d".
+ *
+ * A decision row is read to judge whether a claim is abandoned, and at that
+ * scale the minutes of a four-day silence are noise.
+ */
+export const idleLabel = (since: Date, now: Date): string => {
+  const minutes = Math.max(0, Math.floor((now.getTime() - since.getTime()) / 60000));
+  if (minutes < 120) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+};
+
+/**
  * A window's spent share as a whole percent, "28%".
  *
  * Providers report fractions — cursor derives its figure from a ratio — and a

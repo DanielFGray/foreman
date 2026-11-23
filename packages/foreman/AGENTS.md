@@ -1096,7 +1096,8 @@ read to decide what the queue under it should do next. An epic row takes no
 action: it has no branch and no worker.
 
 Attention combines the exceptional states in urgency order: decisions
-(vanished workers, failed dispatches, lost exits and returned landings), yours, stranded
+(vanished workers, claims made outside foreman, failed dispatches, lost exits and
+returned landings), yours, stranded
 projects (authored mid-pipeline work outside the managed set), stale reviews,
 unreviewed branches, orphaned workers, held projects, and last the spent
 accounts. Each row keeps its source kind, so

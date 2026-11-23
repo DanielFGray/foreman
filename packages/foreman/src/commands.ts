@@ -1,7 +1,6 @@
 import { Argument, Command, Flag } from "effect/cli";
 import { Console, Duration, Effect, type Layer, Option, Schema, SubscriptionRef } from "effect";
 import {
-  ACTION_HELP,
   performAdopt,
   performApprove,
   performClose,
@@ -25,6 +24,7 @@ import { roundsOf } from "./lap.ts";
 import { Records } from "./records.ts";
 import { actionsFor, rowsForView, type ColumnRow } from "./view.ts";
 import {
+  ACTION_HELP,
   ACTIONS_LIST,
   commandName,
   INTERVENTIONS,

@@ -4501,9 +4501,9 @@ export const isFleetWork = (claimed: Active): boolean =>
  * What the dashboard must ask about.
  *
  * Three kinds, and each answers differently. A claimed task with no worker in
- * its workspace is an author that vanished and can be retried: foreman's own
- * author, or a claim made by hand or by another session, which foreman cannot
- * see working and so reports for the operator to send an agent to; a
+ * its workspace is either an author that vanished, which can be retried, or a
+ * claim made by hand or by another session, which foreman cannot see working
+ * and so reports for the operator to release or send an agent to; a
  * reviewing task with an open review run and an empty workspace is a reviewer
  * that vanished mid-verdict; a workspace whose task is neither claimed nor
  * under review is residue — the task is unclaimed, so nobody owns the

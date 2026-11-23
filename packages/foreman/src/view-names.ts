@@ -52,3 +52,28 @@ export const KEY_ONLY_ACTIONS = [
   "approve",
   "preview",
 ] as const satisfies ReadonlyArray<Action>;
+
+/**
+ * What each action does: a subcommand's help, `--skill`, and the hint on the
+ * page's button, so the operator reads the effect before choosing.
+ */
+export const ACTION_HELP: Record<Action, string> = {
+  complete: "Close a queued task by hand, without a workspace or a landing",
+  retry: "Start a fresh agent where a worker vanished or a dispatch failed",
+  release:
+    "Hand a claimed task back to the queue and remove its worktree: commits stay on its branch, uncommitted edits are lost",
+  requeueFresh:
+    "Delete a returned task's branch and worktree, so its next author starts from the current trunk",
+  cancel: "Delete a returned task's branch and worktree, and cancel the task",
+  close: "Take down a workspace whose task nothing owns",
+  takeOver: "Focus a vanished worker's pane so you can continue by hand",
+  focus: "Focus the pane of a task's live agent",
+  kill: "Stop a live attempt, log why, and requeue the task on the same rung",
+  intervene: "Resume a task at a rung, or send an agent to diagnose or review its last attempt",
+  descend: "Take back the last recorded failure, moving the task one rung down",
+  unassign: "End an open review run that no reviewer is behind",
+  onboard: "Send an agent to salvage the uncommitted work holding a project",
+  adopt: "Put an unread branch in front of a reviewer",
+  approve: "Allow the step a task is waiting on, once, for that task alone",
+  preview: "Run the project's scripts/preview in a task's worktree, in the terminal preview-<task>",
+};

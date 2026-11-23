@@ -24,7 +24,7 @@ import {
 } from "./published.ts";
 import { Published, type DispatcherStatus } from "./published-schema.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Option, Schema as S } from "effect";
+import { DateTime, Effect, Option, Schema as S } from "effect";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
@@ -196,6 +196,9 @@ describe("decisionKind", () => {
         withRuns(authoredOn(task("ts-1", "in_progress", []), "flash", true), [reviewRun("pro")]),
       ),
     ).toBe("reviewer vanished");
+    // A claim no foreman author ever ran on was made by hand or by another
+    // session, so nothing vanished.
+    expect(decisionKind(task("ts-1", "in_progress", []))).toBe("claimed outside foreman");
     expect(decisionKind(authoredOn(task("ts-1", "done", []), "flash"))).toBe("orphaned workspace");
     // A failed spawn leaves the by-* label on a task that is back in the
     // queue, which is the same shape as an author that vanished.
@@ -205,6 +208,29 @@ describe("decisionKind", () => {
         detail: "no worktree",
       }),
     ).toBe("dispatch failed");
+  });
+});
+
+describe("a decision row", () => {
+  test("names the task, how long it has been idle, and commits only when there are some", () => {
+    const now = new Date("2026-11-22T12:00:00Z");
+    const claimed = {
+      ...task("ts-h1", "in_progress", []),
+      lastActivityAt: new Date("2026-11-18T09:00:00Z"),
+    };
+    const reading = (committed: ReadonlySet<string>) => ({
+      ...state,
+      observedAt: DateTime.makeUnsafe(now),
+      committed,
+      decisions: [active(claimed, undefined)],
+    });
+    const found = (committed: ReadonlySet<string>) =>
+      rowsForView("attention", reading(committed)).find((each) => each.key === "ts-h1");
+    expect(found(new Set())).toMatchObject({
+      label: "claimed outside foreman  task ts-h1",
+      detail: "idle 4d",
+    });
+    expect(found(new Set(["ts-h1"]))?.detail).toBe("idle 4d · has commits");
   });
 });
 
@@ -323,7 +349,7 @@ describe("actionsFor", () => {
       ],
     };
     const gone = rowsForView("attention", lost).find((each) => each.key === "ts-g1");
-    expect(gone?.label).toBe("exit gone");
+    expect(gone?.label).toBe("exit gone  task ts-g1");
     expect(actionsFor("decisions", gone)).toEqual(["release", "intervene"]);
   });
 

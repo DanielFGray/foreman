@@ -1,4 +1,4 @@
-import { Match, Option } from "effect";
+import { DateTime, Match, Option } from "effect";
 import { VIEWS, type Action, type ViewName } from "./view-names.ts";
 import type {
   Active,
@@ -12,10 +12,10 @@ import type {
   Stranded,
   Unreviewed,
 } from "./dispatcher.ts";
-import { reviewedBy } from "./lap.ts";
+import { authoredBy, reviewedBy } from "./lap.ts";
 import { blockOf } from "./pipeline.ts";
 import { exhausted, type Allowance } from "./quota.ts";
-import { resetsLabel, usedLabel } from "./format.ts";
+import { idleLabel, resetsLabel, usedLabel } from "./format.ts";
 import type { Worker } from "./fleet.ts";
 import { diagnosticIntent, failuresOf, needsYou, type EpicProgress, type Item } from "./records.ts";
 
@@ -48,6 +48,7 @@ export type ColumnName = (typeof COLUMNS)[number];
 
 export type DecisionKind =
   | "author vanished"
+  | "claimed outside foreman"
   | "reviewer vanished"
   | "orphaned workspace"
   | "dispatch failed"
@@ -64,7 +65,9 @@ export type DecisionKind =
  * failure, a lost exit and a returned landing are the kinds status cannot
  * name: a failed task and a returned one are ordinary queue work, and a task
  * whose last exit the drawing lost is an ordinary claim, so the cause itself
- * is what marks the row.
+ * is what marks the row. A claim with no foreman author behind it was made by
+ * hand or by another session: nothing vanished, foreman just cannot see anyone
+ * working on it.
  */
 export const decisionKind = (
   task: Item,
@@ -79,7 +82,9 @@ export const decisionKind = (
         : reviewedBy(task) !== undefined
           ? "reviewer vanished"
           : task.status === "in_progress"
-            ? "author vanished"
+            ? authoredBy(task) === undefined
+              ? "claimed outside foreman"
+              : "author vanished"
             : "orphaned workspace";
 
 /**
@@ -201,6 +206,10 @@ const ACTIONS: Record<ColumnName, ReadonlyArray<Action>> = {
  */
 const DECISION_ACTIONS: Record<DecisionKind, ReadonlyArray<Action>> = {
   "author vanished": ["retry", "takeOver", "intervene", "release"],
+  // The claim is a person's or another session's. Only the operator can say it
+  // is abandoned: release hands it back, retry or intervene sends foreman's own
+  // agent to it.
+  "claimed outside foreman": ["retry", "intervene", "release"],
   "reviewer vanished": ["retry", "takeOver", "intervene", "release"],
   "orphaned workspace": ["intervene", "close", "unassign"],
   // Nothing to take over or release: the agent never started. The one answer
@@ -468,19 +477,19 @@ const landedRow = (task: Item, state: FleetState): ColumnRow => ({
 const decisionRow = ({ task, worker, kind, cause }: Active, state: FleetState): ColumnRow => ({
   column: "decisions",
   key: task.id,
-  // The kind leads: it is the question the column exists to answer. What is
-  // behind it goes on the row's second line, so a narrow pane truncates
-  // neither. An orphaned workspace names its status rather than the kind that
-  // left it: done and canceled are pure cleanup, a queued task will be
-  // dispatched again into a fresh workspace once this one is closed. A
-  // dispatch failure names the error, because that is what the operator must
-  // clear before retrying, and a lost exit names which exit and block. A claim with no rung was made outside foreman.
-  label: decisionKind(task, cause),
-  detail:
-    cause?.detail ??
-    (task.status === "done" || task.status === "canceled" || task.status === "open"
-      ? task.status
-      : (kind ?? "claimed outside foreman")),
+  // The kind leads: it is the question the column exists to answer. The title
+  // follows, so a row says which task it asks about. What is behind it goes on
+  // the row's second line, so a narrow pane truncates neither.
+  label: `${decisionKind(task, cause)}  ${task.title}`,
+  detail: joined([
+    decisionWhy(task, kind, cause),
+    state.observedAt === undefined
+      ? undefined
+      : `idle ${idleLabel(task.lastActivityAt, DateTime.toDateUtc(state.observedAt))}`,
+    // Only positive evidence: the commits are read off foreman's own branch or
+    // the operator's checkout, so a claim worked on another branch reads as none.
+    state.committed.has(task.id) ? "has commits" : undefined,
+  ]),
   task,
   ready: undefined,
   worker,
@@ -495,6 +504,30 @@ const decisionRow = ({ task, worker, kind, cause }: Active, state: FleetState): 
   hasWork: worker !== undefined || state.resumable.has(task.id),
   committed: state.committed.has(task.id),
 });
+
+/**
+ * What is behind a decision. An orphaned workspace names its status rather
+ * than the kind that left it: done and canceled are pure cleanup, a queued task
+ * will be dispatched again into a fresh workspace once this one is closed. A
+ * dispatch failure names the error, because that is what the operator must
+ * clear before retrying, and a lost exit names which exit and block. A vanished
+ * worker names its rung.
+ */
+const decisionWhy = (
+  task: Item,
+  kind: string | undefined,
+  cause: DecisionCause | undefined,
+): string | undefined =>
+  cause?.detail ??
+  (task.status === "done" || task.status === "canceled" || task.status === "open"
+    ? task.status
+    : kind);
+
+/** The parts of a row's second line that are known, or none. */
+const joined = (parts: ReadonlyArray<string | undefined>): string | undefined => {
+  const present = parts.filter((part) => part !== undefined);
+  return present.length === 0 ? undefined : present.join(" · ");
+};
 
 /**
  * A workspace in one of foreman's projects whose task the store has deleted.
