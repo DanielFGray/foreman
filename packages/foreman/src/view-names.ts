@@ -61,7 +61,7 @@ export const ACTION_HELP: Record<Action, string> = {
   complete: "Close a queued task by hand, without a workspace or a landing",
   retry: "Start a fresh agent where a worker vanished or a dispatch failed",
   release:
-    "Hand a claimed task back to the queue and remove its worktree: commits stay on its branch, uncommitted edits are lost",
+    "Hand a claimed task back to the queue and end its agents: commits stay on its branch, and a worktree of its own is removed with any uncommitted edits in it",
   requeueFresh:
     "Delete a returned task's branch and worktree, so its next author starts from the current trunk",
   cancel: "Delete a returned task's branch and worktree, and cancel the task",
